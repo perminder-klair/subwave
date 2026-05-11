@@ -57,11 +57,34 @@ app.use(express.json());
 // CORS for the Next.js frontend
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
+
+// Admin basic auth — opt-in via env. When ADMIN_USER + ADMIN_PASS are unset
+// the gate is a no-op so local dev stays frictionless. The web SettingsDialog
+// stores the credentials in localStorage and attaches them as an Authorization
+// header to every admin-side fetch.
+const ADMIN_USER = process.env.ADMIN_USER || '';
+const ADMIN_PASS = process.env.ADMIN_PASS || '';
+const ADMIN_AUTH_REQUIRED = Boolean(ADMIN_USER && ADMIN_PASS);
+
+function requireAdmin(req, res, next) {
+  if (!ADMIN_AUTH_REQUIRED) return next();
+  const header = req.headers.authorization || '';
+  if (header.startsWith('Basic ')) {
+    try {
+      const [u, p] = Buffer.from(header.slice(6), 'base64').toString('utf8').split(':');
+      if (u === ADMIN_USER && p === ADMIN_PASS) return next();
+    } catch {}
+  }
+  res.setHeader('WWW-Authenticate', 'Basic realm="SUB/WAVE admin"');
+  return res.status(401).json({ error: 'admin auth required' });
+}
+
+console.log(`[auth] admin gate ${ADMIN_AUTH_REQUIRED ? 'ENABLED' : 'disabled (set ADMIN_USER+ADMIN_PASS to enable)'}`);
 
 // ---------------------------------------------------------------------------
 // GET /now-playing — current track + context snapshot
@@ -184,7 +207,7 @@ app.post('/request', async (req, res) => {
 // POST /auto-pick — toggle whether the LLM picks the next track
 // Body: { "on": true | false }
 // ---------------------------------------------------------------------------
-app.post('/auto-pick', express.json(), (req, res) => {
+app.post('/auto-pick', requireAdmin, express.json(), (req, res) => {
   if (typeof req.body?.on === 'boolean') queue.autoPick = req.body.on;
   queue.log('scheduler', `auto-pick ${queue.autoPick ? 'enabled' : 'disabled'}`);
   res.json({ autoPick: queue.autoPick });
@@ -198,7 +221,7 @@ app.get('/health', (req, res) => res.json({ status: 'on-air' }));
 // ---------------------------------------------------------------------------
 // JINGLES — list / create / delete pre-recorded TTS stingers
 // ---------------------------------------------------------------------------
-app.get('/jingles', async (req, res) => {
+app.get('/jingles', requireAdmin, async (req, res) => {
   try {
     res.json({ jingles: await jingles.list() });
   } catch (err) {
@@ -206,7 +229,7 @@ app.get('/jingles', async (req, res) => {
   }
 });
 
-app.post('/jingles', async (req, res) => {
+app.post('/jingles', requireAdmin, async (req, res) => {
   const text = (req.body?.text || '').trim();
   if (!text) return res.status(400).json({ error: 'text is required' });
   if (text.length > 500) return res.status(400).json({ error: 'text too long (max 500)' });
@@ -219,7 +242,7 @@ app.post('/jingles', async (req, res) => {
   }
 });
 
-app.delete('/jingles/:filename', async (req, res) => {
+app.delete('/jingles/:filename', requireAdmin, async (req, res) => {
   try {
     res.json(await jingles.remove(req.params.filename));
   } catch (err) {
@@ -230,7 +253,7 @@ app.delete('/jingles/:filename', async (req, res) => {
 // ---------------------------------------------------------------------------
 // SETTINGS — single endpoint that returns everything the /settings UI needs
 // ---------------------------------------------------------------------------
-app.get('/settings', async (req, res) => {
+app.get('/settings', requireAdmin, async (req, res) => {
   try {
     await library.load();
     await settings.load();
@@ -261,7 +284,7 @@ app.get('/settings', async (req, res) => {
 // POST /settings — update values. Returns { requiresRestart } so the UI can
 // prompt the user to restart the mixer for jingle freq / crossfade changes.
 // ---------------------------------------------------------------------------
-app.post('/settings', async (req, res) => {
+app.post('/settings', requireAdmin, async (req, res) => {
   try {
     const result = await settings.update(req.body || {});
     // Apply live: weather location flows through config.weather to context.js
@@ -285,7 +308,7 @@ app.post('/settings', async (req, res) => {
 // POST /restart-mixer — telnet → Liquidsoap → shutdown → container restart
 // Brief gap of dead air covered by Icecast burst buffer + emergency.mp3.
 // ---------------------------------------------------------------------------
-app.post('/restart-mixer', async (req, res) => {
+app.post('/restart-mixer', requireAdmin, async (req, res) => {
   try {
     await restartLiquidsoap();
     queue.log('scheduler', 'mixer restart requested');
@@ -299,7 +322,7 @@ app.post('/restart-mixer', async (req, res) => {
 // TAG-LIBRARY — kick off the tagger as a background child process.
 // Polls /settings to see progress (library.total grows; tagger.running flips).
 // ---------------------------------------------------------------------------
-app.post('/tag-library', (req, res) => {
+app.post('/tag-library', requireAdmin, (req, res) => {
   if (tagger.running) return res.status(409).json({ error: 'tagger already running', tagger });
   const limit = parseInt(req.body?.limit, 10);
   const args = ['src/tag-library.js'];
@@ -330,7 +353,7 @@ app.post('/tag-library', (req, res) => {
 // ---------------------------------------------------------------------------
 // GET /debug — everything-at-a-glance for the debug UI
 // ---------------------------------------------------------------------------
-app.get('/debug', async (req, res) => {
+app.get('/debug', requireAdmin, async (req, res) => {
   const out = { t: new Date().toISOString() };
 
   // 1. now-playing.json (what Liquidsoap last wrote)

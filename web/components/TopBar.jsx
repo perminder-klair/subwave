@@ -1,9 +1,9 @@
 'use client';
 
-import { Settings } from 'lucide-react';
+import { Settings, Radio } from 'lucide-react';
 import { useClock } from '../lib/hooks';
 
-export default function TopBar({ tunedIn, context, transmission, djName, onOpenSettings }) {
+export default function TopBar({ tunedIn, context, transmission, djName, onOpenSettings, tickerOn, onToggleTicker }) {
   const clock = useClock();
   const time = clock ? clock.toLocaleTimeString('en-GB', { hour12: false }) : '--:--:--';
   const city = context?.weather?.locationName || context?.city;
@@ -42,6 +42,17 @@ export default function TopBar({ tunedIn, context, transmission, djName, onOpenS
         <span className="v3-tab-num" style={{ color: 'var(--ink)', fontWeight: 600 }}>
           {time}
         </span>
+        {onToggleTicker && (
+          <button
+            onClick={onToggleTicker}
+            className="v3-focus cursor-pointer"
+            style={{ color: tickerOn ? 'var(--accent)' : 'var(--muted)' }}
+            aria-label={tickerOn ? 'Hide booth feed ticker' : 'Show booth feed ticker'}
+            title={tickerOn ? 'Hide booth ticker' : 'Show booth ticker'}
+          >
+            <Radio className="w-3.5 h-3.5" />
+          </button>
+        )}
         <button
           onClick={onOpenSettings}
           className="v3-focus cursor-pointer"

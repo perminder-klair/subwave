@@ -7,6 +7,7 @@ import CenterStage from '../components/CenterStage';
 import Waveform from '../components/Waveform';
 import TransportBar from '../components/TransportBar';
 import DotRail from '../components/DotRail';
+import BroadcastTicker from '../components/BroadcastTicker';
 import { Sheet } from '../components/ui/sheet';
 import { Toaster } from '../components/ui/toaster';
 import SettingsDialog from '../components/SettingsDialog';
@@ -38,6 +39,22 @@ export default function ListenerPage() {
   const [drawer, setDrawer] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [tickerOn, setTickerOn] = useState(true);
+
+  // Hydrate ticker preference from localStorage (avoids SSR hydration mismatch).
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem('subwave:ticker');
+      if (v != null) setTickerOn(v === '1');
+    } catch {}
+  }, []);
+  const toggleTicker = () => {
+    setTickerOn(v => {
+      const next = !v;
+      try { localStorage.setItem('subwave:ticker', next ? '1' : '0'); } catch {}
+      return next;
+    });
+  };
   const audioRef = useRef(null);
   const trackStartRef = useRef(null);
 
@@ -132,7 +149,11 @@ export default function ListenerPage() {
         transmission={state.djLog?.length || 241}
         djName={dj?.name}
         onOpenSettings={() => setSettingsOpen(true)}
+        tickerOn={tickerOn}
+        onToggleTicker={toggleTicker}
       />
+
+      <BroadcastTicker items={state.djLog} enabled={tickerOn} />
 
       <CenterStage nowPlaying={nowPlaying} elapsed={elapsed} />
 

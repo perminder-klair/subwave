@@ -15,6 +15,8 @@ const FREQUENCY_HINTS = {
   aggressive: 'Aggressive — talks every 1-3 tracks · station IDs four times an hour · weather every 15 min on change.',
 };
 
+const AUTH_STORAGE_KEY = 'subwave_admin_auth';
+
 export default function SettingsDialog({ open, onOpenChange }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
@@ -25,17 +27,53 @@ export default function SettingsDialog({ open, onOpenChange }) {
   const [pendingRestart, setPendingRestart] = useState(false);
   const [saveMsg, setSaveMsg] = useState(null);
   const [themeMode, setThemeMode] = useState('system');
+  // Base64-encoded `user:pass` for Basic auth. Null means we haven't been
+  // challenged yet; `needsAuth` flips true when the controller returns 401.
+  const [auth, setAuth] = useState(null);
+  const [needsAuth, setNeedsAuth] = useState(false);
 
-  useEffect(() => { setThemeMode(getStoredTheme()); }, []);
+  useEffect(() => {
+    setThemeMode(getStoredTheme());
+    try {
+      const stored = localStorage.getItem(AUTH_STORAGE_KEY);
+      if (stored) setAuth(stored);
+    } catch {}
+  }, []);
 
   const pickTheme = (m) => { setTheme(m); setThemeMode(m); };
+
+  // Wraps fetch so every admin call carries the Authorization header (when
+  // we have credentials) and flips us into the sign-in flow on 401.
+  const adminFetch = async (path, init = {}) => {
+    const headers = { ...(init.headers || {}) };
+    if (auth) headers.Authorization = `Basic ${auth}`;
+    const r = await fetch(`${API_URL}${path}`, { ...init, headers });
+    if (r.status === 401) {
+      try { localStorage.removeItem(AUTH_STORAGE_KEY); } catch {}
+      setAuth(null);
+      setNeedsAuth(true);
+    } else if (needsAuth) {
+      setNeedsAuth(false);
+    }
+    return r;
+  };
+
+  const signIn = (user, pass) => {
+    const token = (typeof window !== 'undefined' ? window.btoa : (s => Buffer.from(s).toString('base64')))(`${user}:${pass}`);
+    try { localStorage.setItem(AUTH_STORAGE_KEY, token); } catch {}
+    setAuth(token);
+    setNeedsAuth(false);
+    setData(null);
+    setForm(null);
+  };
 
   // Refresh only updates the read-only `data` view — never touches `form`.
   // The form is hydrated exactly once via the effect below; otherwise the 3s
   // poll's stale closure would clobber unsaved edits every tick.
   const refresh = async () => {
     try {
-      const r = await fetch(`${API_URL}/settings`);
+      const r = await adminFetch('/settings');
+      if (!r.ok) return;
       const j = await r.json();
       setData(j); setErr(null);
     } catch (e) { setErr(e.message); }
@@ -61,23 +99,23 @@ export default function SettingsDialog({ open, onOpenChange }) {
   }, [data, form]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || needsAuth) return;
     refresh();
     const id = setInterval(refresh, 3000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, needsAuth, auth]);
 
   const saveSettings = async (patch) => {
     setBusy(true); setSaveMsg(null);
     try {
-      const r = await fetch(`${API_URL}/settings`, {
+      const r = await adminFetch('/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch),
       });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'failed');
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       if (j.requiresRestart) setPendingRestart(true);
       setSaveMsg({ tone: 'ok', text: j.requiresRestart ? 'saved — restart the mixer to apply' : 'saved' });
       await refresh();
@@ -90,9 +128,9 @@ export default function SettingsDialog({ open, onOpenChange }) {
     if (!confirm('Restart the mixer? Broadcast will drop for ~3-5 seconds.')) return;
     setBusy(true);
     try {
-      const r = await fetch(`${API_URL}/restart-mixer`, { method: 'POST' });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'failed');
+      const r = await adminFetch('/restart-mixer', { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setPendingRestart(false);
       setSaveMsg({ tone: 'ok', text: 'mixer restarting — give it a few seconds' });
     } catch (e) {
@@ -104,13 +142,13 @@ export default function SettingsDialog({ open, onOpenChange }) {
     if (!jingleText.trim() || busy) return;
     setBusy(true);
     try {
-      const r = await fetch(`${API_URL}/jingles`, {
+      const r = await adminFetch('/jingles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: jingleText.trim() }),
       });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'failed');
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setJingleText('');
       await refresh();
     } catch (e) { alert(`Jingle creation failed: ${e.message}`); }
@@ -121,9 +159,9 @@ export default function SettingsDialog({ open, onOpenChange }) {
     if (!confirm(`Delete ${filename}?`)) return;
     setBusy(true);
     try {
-      const r = await fetch(`${API_URL}/jingles/${encodeURIComponent(filename)}`, { method: 'DELETE' });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'failed');
+      const r = await adminFetch(`/jingles/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       await refresh();
     } catch (e) { alert(`Delete failed: ${e.message}`); }
     finally { setBusy(false); }
@@ -133,7 +171,7 @@ export default function SettingsDialog({ open, onOpenChange }) {
     if (!data) return;
     setBusy(true);
     try {
-      await fetch(`${API_URL}/auto-pick`, {
+      await adminFetch('/auto-pick', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ on: !data.autoPick }),
@@ -146,13 +184,13 @@ export default function SettingsDialog({ open, onOpenChange }) {
     setBusy(true);
     try {
       const limit = parseInt(taggerLimit, 10);
-      const r = await fetch(`${API_URL}/tag-library`, {
+      const r = await adminFetch('/tag-library', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(Number.isFinite(limit) && limit > 0 ? { limit } : {}),
       });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'failed');
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       await refresh();
     } catch (e) { alert(`Tagger start failed: ${e.message}`); }
     finally { setBusy(false); }
@@ -161,10 +199,13 @@ export default function SettingsDialog({ open, onOpenChange }) {
   return (
     <FullDialog open={open} onOpenChange={onOpenChange} title="Settings">
       <div className="max-w-3xl mx-auto space-y-7">
-        {err && <Alert tone="err">controller error: {err}</Alert>}
-        {!data && !err && <div style={{ color: 'var(--muted)' }} className="italic">loading…</div>}
+        {needsAuth && <SignInForm onSubmit={signIn} />}
+        {!needsAuth && err && <Alert tone="err">controller error: {err}</Alert>}
+        {!needsAuth && !data && !err && (
+          <div style={{ color: 'var(--muted)' }} className="italic">loading…</div>
+        )}
 
-        {data && (
+        {data && !needsAuth && (
           <>
             <Section title="Appearance">
               <Row>
@@ -599,7 +640,7 @@ export default function SettingsDialog({ open, onOpenChange }) {
               </div>
             </Section>
 
-            <div className="flex justify-center pt-2">
+            <div className="flex justify-center items-center gap-3 pt-2">
               <a
                 href="/debug"
                 target="_blank"
@@ -615,6 +656,19 @@ export default function SettingsDialog({ open, onOpenChange }) {
               >
                 open debug ↗
               </a>
+              {auth && (
+                <OutlineButton
+                  onClick={() => {
+                    try { localStorage.removeItem(AUTH_STORAGE_KEY); } catch {}
+                    setAuth(null);
+                    setData(null);
+                    setForm(null);
+                    setNeedsAuth(true);
+                  }}
+                >
+                  sign out
+                </OutlineButton>
+              )}
             </div>
           </>
         )}
@@ -805,6 +859,80 @@ function ThemeSegmented({ value, onChange }) {
         );
       })}
     </div>
+  );
+}
+
+function SignInForm({ onSubmit }) {
+  const [user, setUser] = useState('');
+  const [pass, setPass] = useState('');
+
+  const submit = (e) => {
+    e?.preventDefault?.();
+    if (!user || !pass) return;
+    onSubmit(user, pass);
+  };
+
+  return (
+    <form onSubmit={submit} style={{ border: '1px solid var(--ink)' }}>
+      <div className="px-4 py-2" style={{ borderBottom: '1px solid var(--ink)' }}>
+        <span className="v3-eyebrow" style={{ fontSize: 11 }}>Sign in</span>
+      </div>
+      <div className="p-5 space-y-3">
+        <div style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.5 }}>
+          The controller requires admin credentials for these settings.
+          They're cached in this browser only.
+        </div>
+        <input
+          type="text"
+          autoComplete="username"
+          placeholder="username"
+          value={user}
+          onChange={e => setUser(e.target.value)}
+          className="w-full v3-focus"
+          style={{
+            boxSizing: 'border-box',
+            border: '1px solid var(--ink)',
+            background: 'transparent',
+            padding: 10,
+            fontSize: 13,
+            fontFamily: 'inherit',
+            color: 'var(--ink)',
+          }}
+          autoFocus
+        />
+        <input
+          type="password"
+          autoComplete="current-password"
+          placeholder="password"
+          value={pass}
+          onChange={e => setPass(e.target.value)}
+          className="w-full v3-focus"
+          style={{
+            boxSizing: 'border-box',
+            border: '1px solid var(--ink)',
+            background: 'transparent',
+            padding: 10,
+            fontSize: 13,
+            fontFamily: 'inherit',
+            color: 'var(--ink)',
+          }}
+        />
+        <button
+          type="submit"
+          disabled={!user || !pass}
+          className="v3-eyebrow v3-focus cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          style={{
+            background: 'var(--accent)',
+            color: '#fff',
+            border: 'none',
+            padding: '10px 20px',
+            fontSize: 10,
+          }}
+        >
+          sign in
+        </button>
+      </div>
+    </form>
   );
 }
 

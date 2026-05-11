@@ -126,6 +126,18 @@ body::after {
   50%, 100% { opacity: 0; }
 }
 
+/* Ticker marquee — the rendered row contains three copies of the feed, so
+   shifting by -33.333% lands the second copy exactly where the first started,
+   producing a seamless loop. v3-ticker-right just reverses the offset. */
+@keyframes v3-ticker-left {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-33.333%); }
+}
+@keyframes v3-ticker-right {
+  from { transform: translateX(-33.333%); }
+  to   { transform: translateX(0); }
+}
+
 .v3-drawer-content { animation: v3-slide-in-right 220ms cubic-bezier(.2,.7,.2,1); }
 .v3-drawer-overlay { animation: v3-fade-in 220ms ease-out; }
 .v3-blink { animation: v3-blink 1s steps(1) infinite; }
@@ -149,6 +161,9 @@ body::after {
   .v3-drawer-content,
   .v3-drawer-overlay,
   .v3-blink {
+    animation: none !important;
+  }
+  [style*="v3-ticker-"] {
     animation: none !important;
   }
 }
