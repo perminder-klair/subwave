@@ -198,3 +198,1126 @@ body::after {
 }
 /* Mono is already tabular by design, but keep the class as a no-op alias. */
 .v3-tab-num { font-variant-numeric: tabular-nums; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   MASTHEAD NAV — sits inside the broadsheet header, between the rules.
+   ───────────────────────────────────────────────────────────────────────── */
+.bs-masthead-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 12px 0;
+  flex-wrap: wrap;
+}
+.bs-masthead-link {
+  font-size: 11px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--ink);
+  text-decoration: none;
+  padding: 4px 0;
+  transition: color 120ms;
+}
+.bs-masthead-link:hover { color: var(--accent); }
+.bs-masthead-sep {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   BROADSHEET — landing-page newspaper utilities.
+   All prefixed `.bs-` so they don't collide with the V3 player utilities.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Outer landing page container — like a single broadsheet page. Centered,
+   max-width like a newspaper, with internal padding that breathes on mobile. */
+.bs-paper {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px clamp(16px, 4vw, 56px) 80px;
+  position: relative;
+  z-index: 1;
+}
+
+/* Masthead wordmark — outsized mono, extreme weight, tight tracking. */
+.bs-wordmark {
+  font-size: clamp(48px, 9vw, 128px);
+  line-height: 0.85;
+  letter-spacing: -0.04em;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+/* Headline (the lead track title) — newspaper headline scale. Allows wrapping
+   on the natural breaks; balances for two-line aesthetics. */
+.bs-headline {
+  font-size: clamp(40px, 6.5vw, 88px);
+  line-height: 0.95;
+  letter-spacing: -0.025em;
+  font-weight: 800;
+  text-wrap: balance;
+}
+
+.bs-deck {
+  font-size: clamp(14px, 1.4vw, 18px);
+  line-height: 1.35;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+/* Eyebrow — vermilion small-caps section label, sits above each section. */
+.bs-eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.bs-eyebrow::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.4;
+  min-width: 24px;
+}
+
+/* Rules — single, double, thick. The double rule is two stacked 1px lines
+   with a gap, evoking a real broadsheet ornament. */
+.bs-rule {
+  height: 1px;
+  background: var(--ink);
+  width: 100%;
+}
+.bs-rule-double {
+  height: 5px;
+  width: 100%;
+  border-top: 1px solid var(--ink);
+  border-bottom: 1px solid var(--ink);
+}
+.bs-rule-thick {
+  height: 3px;
+  background: var(--ink);
+  width: 100%;
+}
+
+/* Vertical column rule — used between the lead story and right rail. */
+.bs-column-rule {
+  width: 1px;
+  background: var(--separator-strong);
+  align-self: stretch;
+}
+
+/* Drop cap on the first letter of a body paragraph — vermilion, oversized,
+   sits on the baseline of the first three lines. */
+.bs-drop-cap::first-letter {
+  font-size: 3.6em;
+  line-height: 0.85;
+  float: left;
+  font-weight: 800;
+  color: var(--accent);
+  padding: 4px 8px 0 0;
+}
+
+/* Pull quote — DJ persona soul rendered like a newspaper pull quote.
+   Big open-quote glyph, italic-feel even in mono. */
+.bs-pull-quote {
+  font-size: clamp(18px, 1.8vw, 22px);
+  line-height: 1.4;
+  font-weight: 500;
+  position: relative;
+  padding: 12px 4px 4px 28px;
+}
+.bs-pull-quote::before {
+  content: "\201C";
+  position: absolute;
+  left: -6px;
+  top: -8px;
+  font-size: 56px;
+  line-height: 1;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* "Continued below" rule — a soft horizontal rule with centered ornament. */
+.bs-continued {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  margin: 32px 0;
+}
+.bs-continued::before,
+.bs-continued::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--separator-strong);
+}
+
+/* LIVE dot — pulsing vermilion. */
+.bs-live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: bs-live-pulse 1.6s ease-in-out infinite;
+  box-shadow: 0 0 0 0 var(--accent);
+}
+@keyframes bs-live-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 70%, transparent); }
+  50%      { box-shadow: 0 0 0 6px color-mix(in oklab, var(--accent) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bs-live-dot { animation: none; }
+}
+
+/* TUNE IN action button — black box, cream type. The negative-space anchor
+   of the whole landing. */
+.bs-tune {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--ink);
+  color: var(--bg);
+  padding: 14px 22px;
+  font-size: 12px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  font-weight: 700;
+  border: 1px solid var(--ink);
+  cursor: pointer;
+  transition: transform 80ms ease, background 120ms;
+}
+.bs-tune:hover { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.bs-tune:active { transform: translateY(1px); }
+.bs-tune[data-tuned="true"] {
+  background: var(--bg);
+  color: var(--ink);
+}
+
+/* Ghost link — used for "Open full player", footer links. */
+.bs-link {
+  color: var(--ink);
+  border-bottom: 1px solid currentColor;
+  padding-bottom: 1px;
+  font-weight: 600;
+  letter-spacing: 0;
+  transition: color 120ms;
+}
+.bs-link:hover { color: var(--accent); border-color: var(--accent); }
+
+/* Booth / history rows — tabular feed style. */
+.bs-row {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--separator-strong);
+  font-size: 13px;
+  align-items: baseline;
+}
+.bs-row:last-child { border-bottom: 0; }
+.bs-row time {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Architecture box — used in HowWeBroadcast. */
+.bs-box {
+  border: 1px solid var(--ink);
+  padding: 14px 16px;
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 700;
+  text-align: center;
+  background: var(--bg);
+}
+.bs-box[data-tone="accent"] {
+  background: var(--ink);
+  color: var(--bg);
+}
+.bs-arrow {
+  font-size: 18px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Two-column landing grids — lead story + right rail, and the fold split. */
+.bs-grid-lead {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) 1px minmax(0, 5fr);
+  gap: clamp(20px, 3vw, 40px);
+  align-items: flex-start;
+}
+.bs-grid-split {
+  display: grid;
+  grid-template-columns: minmax(0, 6fr) 1px minmax(0, 6fr);
+  gap: clamp(20px, 3vw, 40px);
+  align-items: flex-start;
+}
+
+@media (max-width: 900px) {
+  .bs-grid-lead,
+  .bs-grid-split {
+    grid-template-columns: 1fr;
+  }
+  .bs-grid-lead .bs-column-rule,
+  .bs-grid-split .bs-column-rule {
+    display: none;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   FRAME — browser-window mock around the embedded /listen iframe.
+   ───────────────────────────────────────────────────────────────────────── */
+.bs-frame {
+  width: 100%;
+  border: 1px solid var(--ink);
+  background: var(--bg);
+  box-shadow:
+    0 0 0 1px var(--bg),
+    0 30px 80px -30px rgba(0, 0, 0, 0.35),
+    0 8px 24px -16px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  isolation: isolate;
+}
+:root[data-theme="dark"] .bs-frame,
+:root:not([data-theme="light"]) .bs-frame {
+  box-shadow:
+    0 0 0 1px var(--bg),
+    0 30px 80px -30px rgba(0, 0, 0, 0.8),
+    0 8px 24px -16px rgba(0, 0, 0, 0.6);
+}
+
+.bs-frame-bar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 14px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--ink);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  position: relative;
+  z-index: 2;
+}
+
+.bs-frame-dots {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.bs-frame-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid var(--ink);
+  background: transparent;
+  display: inline-block;
+}
+.bs-frame-dot[data-tone="r"] { background: var(--accent); border-color: var(--accent); }
+.bs-frame-dot[data-tone="y"] { background: transparent; }
+.bs-frame-dot[data-tone="g"] { background: var(--ink); }
+
+.bs-frame-url {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 6px 12px;
+  background: color-mix(in oklab, var(--ink) 6%, transparent);
+  border: 1px solid var(--separator-strong);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  color: var(--ink);
+  font-weight: 500;
+  max-width: 360px;
+  margin: 0 auto;
+}
+
+.bs-frame-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.bs-frame-screen {
+  position: relative;
+  width: 100%;
+  /* Default desktop aspect — 16:10 area for the embedded player. */
+  aspect-ratio: 16 / 10;
+  background: var(--bg);
+  overflow: hidden;
+}
+.bs-frame-screen iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--bg);
+  display: block;
+}
+
+/* Phone: drop the aspect lock and give a tall fixed-ish height so the player
+   has room to render without being squashed. */
+@media (max-width: 720px) {
+  .bs-frame-screen {
+    aspect-ratio: auto;
+    height: 560px;
+  }
+  .bs-frame-url { max-width: 200px; font-size: 10px; }
+  .bs-frame-live span:not(.bs-live-dot) { display: none; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   HERO — tagline above, live frame in the middle, caption beneath.
+   ───────────────────────────────────────────────────────────────────────── */
+.bs-hero {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(24px, 4vw, 48px);
+  padding: clamp(24px, 5vw, 56px) 0 clamp(20px, 4vw, 40px);
+}
+.bs-hero-head {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 920px;
+}
+.bs-hero-title {
+  margin: 0;
+  font-size: clamp(36px, 5.4vw, 76px);
+  line-height: 0.98;
+  letter-spacing: -0.035em;
+  font-weight: 800;
+  text-wrap: balance;
+}
+.bs-hero-deck {
+  margin: 0;
+  font-size: clamp(15px, 1.4vw, 19px);
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 64ch;
+}
+.bs-hero-foot {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  text-align: center;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+.bs-hero-foot strong {
+  font-weight: 700;
+  letter-spacing: 0.18em;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   SECTION — vertical content blocks between hero and footer.
+   ───────────────────────────────────────────────────────────────────────── */
+.bs-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: clamp(40px, 6vw, 72px) 0;
+  border-top: 1px solid var(--separator-strong);
+}
+.bs-section h2 {
+  margin: 0;
+  font-size: clamp(28px, 3.4vw, 44px);
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  font-weight: 800;
+  text-wrap: balance;
+  max-width: 22ch;
+}
+.bs-section p {
+  margin: 0;
+  font-size: clamp(15px, 1.3vw, 18px);
+  line-height: 1.55;
+  max-width: 64ch;
+}
+.bs-section p.muted { color: var(--muted); }
+
+.bs-whatis-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(20px, 3vw, 36px);
+}
+.bs-whatis-card {
+  padding: 24px 0 0;
+  border-top: 1px solid var(--separator-strong);
+}
+@media (max-width: 720px) {
+  .bs-whatis-grid { grid-template-columns: 1fr; gap: 28px; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   MEET THE DJ — playful character profile, vinyl glyph, three rule cards.
+   ───────────────────────────────────────────────────────────────────────── */
+.bs-dj {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(28px, 4vw, 48px);
+  padding: clamp(40px, 6vw, 72px) 0;
+  border-top: 1px solid var(--separator-strong);
+}
+
+.bs-dj-hero {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) 1fr;
+  gap: clamp(24px, 4vw, 56px);
+  align-items: center;
+}
+@media (max-width: 720px) {
+  .bs-dj-hero { grid-template-columns: 1fr; gap: 24px; }
+  .bs-dj-glyph { justify-self: start; }
+}
+
+.bs-dj-glyph {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  max-width: 280px;
+  width: 100%;
+  border: 1px solid var(--ink);
+  background:
+    repeating-conic-gradient(
+      from 0deg,
+      var(--ink) 0deg 6deg,
+      transparent 6deg 12deg
+    );
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: bs-dj-spin 22s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bs-dj-glyph { animation: none; }
+}
+@keyframes bs-dj-spin {
+  to { transform: rotate(360deg); }
+}
+.bs-dj-vinyl {
+  width: 38%;
+  height: 38%;
+  border-radius: 50%;
+  background: var(--accent);
+  position: relative;
+  box-shadow:
+    0 0 0 1px var(--bg),
+    0 0 0 2px var(--ink);
+}
+.bs-dj-vinyl::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 14%;
+  height: 14%;
+  background: var(--bg);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--ink);
+}
+
+.bs-dj-handle {
+  margin: 0 0 16px;
+  font-size: clamp(40px, 6vw, 84px);
+  line-height: 0.92;
+  letter-spacing: -0.04em;
+  font-weight: 800;
+  text-transform: lowercase;
+}
+.bs-dj-soul {
+  margin: 0 0 12px;
+  font-size: clamp(16px, 1.6vw, 20px);
+  line-height: 1.4;
+  font-weight: 500;
+  position: relative;
+  padding-left: 22px;
+}
+.bs-dj-quote {
+  position: absolute;
+  left: -4px;
+  top: -10px;
+  color: var(--accent);
+  font-size: 56px;
+  line-height: 1;
+  font-weight: 700;
+}
+.bs-dj-byline {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+  max-width: 56ch;
+}
+
+.bs-dj-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(20px, 2.4vw, 28px);
+}
+@media (max-width: 900px)  { .bs-dj-cards { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 600px)  { .bs-dj-cards { grid-template-columns: 1fr; } }
+
+.bs-dj-card {
+  border: 1px solid var(--ink);
+  padding: 22px 22px 20px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.bs-dj-card header {
+  /* eyebrow already styles itself */
+}
+
+.bs-dj-rules { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.bs-dj-rules li {
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  gap: 12px;
+  align-items: baseline;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.bs-dj-tag {
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  font-weight: 700;
+  text-align: center;
+  padding: 3px 0;
+  border: 1px solid var(--ink);
+}
+.bs-dj-tag-always { background: var(--ink); color: var(--bg); }
+.bs-dj-tag-never  { background: var(--bg); color: var(--accent); border-color: var(--accent); }
+
+.bs-dj-tags { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.bs-dj-tags li {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 6px 10px;
+  border: 1px solid var(--separator-strong);
+  color: var(--ink);
+}
+
+.bs-dj-tools { width: 100%; border-collapse: collapse; font-size: 13px; }
+.bs-dj-tools td {
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--separator-strong);
+  vertical-align: baseline;
+}
+.bs-dj-tools tr:last-child td { border-bottom: 0; }
+.bs-dj-tools td:first-child {
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  width: 38%;
+  padding-right: 8px;
+}
+.bs-dj-tools td:last-child { color: var(--muted); }
+
+.bs-dj-foot {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+  border-top: 1px solid var(--separator-strong);
+  padding-top: 12px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   SETUP — quickstart walkthrough page styles.
+   ───────────────────────────────────────────────────────────────────────── */
+.bs-setup-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: clamp(28px, 5vw, 56px) 0 clamp(20px, 3vw, 32px);
+  max-width: 800px;
+}
+.bs-setup-hero h1 {
+  margin: 0;
+  font-size: clamp(36px, 5vw, 64px);
+  line-height: 0.98;
+  letter-spacing: -0.03em;
+  font-weight: 800;
+  text-wrap: balance;
+}
+.bs-setup-hero p {
+  margin: 0;
+  font-size: clamp(15px, 1.3vw, 18px);
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 64ch;
+}
+
+.bs-step {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 20px;
+  padding: clamp(24px, 3vw, 36px) 0;
+  border-top: 1px solid var(--separator-strong);
+}
+.bs-step-num {
+  font-size: 32px;
+  letter-spacing: -0.02em;
+  font-weight: 800;
+  color: var(--accent);
+  line-height: 1;
+}
+.bs-step-body { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.bs-step-body h3 {
+  margin: 0;
+  font-size: clamp(22px, 2.4vw, 30px);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-weight: 800;
+}
+.bs-step-body p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--muted);
+  max-width: 64ch;
+}
+
+.bs-code {
+  display: block;
+  background: color-mix(in oklab, var(--ink) 6%, transparent);
+  border: 1px solid var(--separator-strong);
+  border-left: 3px solid var(--accent);
+  padding: 14px 16px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink);
+  font-family: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  position: relative;
+  overflow-x: auto;
+}
+.bs-code-inline {
+  display: inline-block;
+  padding: 1px 6px;
+  background: color-mix(in oklab, var(--ink) 8%, transparent);
+  border: 1px solid var(--separator-strong);
+  font-size: 0.92em;
+  color: var(--ink);
+}
+.bs-copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 700;
+  background: var(--bg);
+  border: 1px solid var(--ink);
+  color: var(--ink);
+  padding: 4px 8px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.bs-copy[data-copied="true"] { color: var(--accent); border-color: var(--accent); }
+.bs-copy:hover { background: var(--ink); color: var(--bg); }
+.bs-copy[data-copied="true"]:hover { background: var(--accent); color: var(--bg); }
+
+.bs-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.bs-list li { margin-bottom: 4px; }
+.bs-list li strong { color: var(--ink); font-weight: 700; }
+
+.bs-callout {
+  border: 1px solid var(--ink);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+.bs-callout .bs-eyebrow { color: var(--accent); }
+.bs-callout p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--ink); }
+
+.bs-rebuild-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin: 8px 0;
+}
+.bs-rebuild-table th,
+.bs-rebuild-table td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--separator-strong);
+  vertical-align: top;
+}
+.bs-rebuild-table th {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--accent);
+  border-bottom-color: var(--ink);
+}
+.bs-rebuild-table tr:last-child td { border-bottom: 0; }
+.bs-rebuild-table td:first-child { width: 50%; color: var(--ink); }
+.bs-rebuild-table td:last-child  { color: var(--muted); }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   REQUEST CAROUSEL — single-card rotating thread of example exchanges.
+   ───────────────────────────────────────────────────────────────────────── */
+.bs-carousel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 880px;
+  border: 1px solid var(--separator-strong);
+  padding: clamp(20px, 3vw, 28px);
+  background: color-mix(in oklab, var(--ink) 3%, transparent);
+}
+
+.bs-carousel-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 280px;
+  animation: bs-carousel-in 360ms ease-out;
+}
+@keyframes bs-carousel-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bs-carousel-stage { animation: none; }
+}
+
+.bs-carousel-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-top: 1px solid var(--separator-strong);
+  padding-top: 16px;
+}
+
+.bs-carousel-arrow {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  border: 1px solid var(--ink);
+  color: var(--ink);
+  font-size: 16px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 120ms, color 120ms;
+}
+.bs-carousel-arrow:hover { background: var(--ink); color: var(--bg); }
+
+.bs-carousel-dots {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  justify-content: center;
+}
+.bs-carousel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--ink);
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  transition: background 120ms, transform 120ms;
+}
+.bs-carousel-dot[data-active="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  transform: scale(1.3);
+}
+
+.bs-carousel-count {
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  min-width: 70px;
+  text-align: right;
+}
+
+.bs-bubble {
+  max-width: 72%;
+  padding: 14px 18px;
+  border: 1px solid var(--ink);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bs-bubble p {
+  margin: 0;
+  font-size: clamp(15px, 1.4vw, 18px);
+  line-height: 1.45;
+  color: var(--ink);
+}
+.bs-bubble-tag {
+  font-size: 9px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+/* Listener side — left-aligned, cream */
+.bs-bubble-you {
+  align-self: flex-start;
+}
+.bs-bubble-you .bs-bubble-tag { color: var(--muted); }
+
+/* DJ side — right-aligned, inverted */
+.bs-bubble-dj {
+  align-self: flex-end;
+  background: var(--ink);
+  border-color: var(--ink);
+  text-align: left;
+}
+.bs-bubble-dj p { color: var(--bg); font-style: italic; }
+.bs-bubble-dj .bs-bubble-tag { color: var(--accent); }
+
+/* Track played — small line below the DJ bubble, right-aligned */
+.bs-bubble-track {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 4px;
+  font-size: 12px;
+}
+.bs-bubble-track-arrow {
+  color: var(--accent);
+  font-weight: 700;
+}
+.bs-bubble-track-eyebrow {
+  font-size: 9px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted);
+}
+.bs-bubble-track-name {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+@media (max-width: 600px) {
+  .bs-bubble { max-width: 92%; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   NAVIDROME — "works with your library" integration section.
+   ───────────────────────────────────────────────────────────────────────── */
+.bs-navidrome { gap: clamp(28px, 4vw, 44px); }
+
+.bs-navidrome-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: clamp(32px, 5vw, 64px);
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .bs-navidrome-grid { grid-template-columns: 1fr; }
+}
+
+.bs-navidrome-copy { display: flex; flex-direction: column; gap: 18px; }
+.bs-navidrome-copy h2 {
+  margin: 0;
+  font-size: clamp(28px, 3.4vw, 44px);
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  font-weight: 800;
+  max-width: 18ch;
+}
+.bs-navidrome-copy p {
+  margin: 0;
+  font-size: clamp(14px, 1.2vw, 16px);
+  line-height: 1.55;
+}
+.bs-navidrome-copy p.muted { color: var(--muted); max-width: 56ch; }
+
+.bs-navidrome-bullets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.bs-navidrome-bullets li {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  padding-left: 18px;
+  position: relative;
+}
+.bs-navidrome-bullets li::before {
+  content: '→';
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--accent);
+  font-weight: 700;
+}
+.bs-navidrome-bullets strong { color: var(--ink); font-weight: 700; }
+
+.bs-navidrome-cta {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+/* Pipe diagram on the right */
+.bs-navidrome-diagram { display: flex; flex-direction: column; gap: 0; }
+
+.bs-pipe-card {
+  border: 1px solid var(--ink);
+  background: var(--bg);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.bs-pipe-card-accent {
+  background: var(--ink);
+  color: var(--bg);
+}
+.bs-pipe-card-accent .bs-pipe-sub { color: color-mix(in oklab, var(--bg) 60%, transparent); }
+.bs-pipe-card-accent .bs-pipe-tag { color: var(--accent); }
+
+.bs-pipe-tag {
+  font-size: 9px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted);
+}
+.bs-pipe-row {
+  display: grid;
+  grid-template-columns: 36px 1fr auto;
+  gap: 12px;
+  align-items: center;
+}
+.bs-pipe-icon {
+  font-size: 20px;
+  color: var(--accent);
+  text-align: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid currentColor;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.bs-pipe-card-accent .bs-pipe-icon { color: var(--accent); }
+.bs-pipe-name {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.bs-pipe-sub {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.bs-pipe-status {
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  font-weight: 700;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bs-pipe-arrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  font-size: 9px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted);
+}
+.bs-pipe-line {
+  flex: 1;
+  height: 1px;
+  background: var(--separator-strong);
+  position: relative;
+}
+.bs-pipe-line::after {
+  content: '▼';
+  position: absolute;
+  right: -2px;
+  top: -7px;
+  color: var(--accent);
+  font-size: 8px;
+}
+
+.bs-navidrome-compat {
+  margin: 0;
+  padding-top: clamp(16px, 2vw, 24px);
+  border-top: 1px solid var(--separator-strong);
+  font-size: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 4px;
+  line-height: 1.8;
+}
+.bs-navidrome-pill {
+  display: inline-block;
+  padding: 3px 9px;
+  border: 1px solid var(--separator-strong);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+}

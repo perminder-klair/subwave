@@ -41,14 +41,22 @@ A real internet radio station. Single Icecast stream — every listener hears th
 
                     ┌─────────────────────────────────────────┐
                     │       NEXT.JS WEB UI (V3 "Frequency")   │
-                    │  • /        — listener page             │
-                    │    └─ TopBar shows "SUB/WAVE with X"    │
-                    │    └─ drawers: Queue · Played · Booth · │
-                    │       Request                           │
-                    │    └─ Settings dialog (admin-gated)     │
+                    │  • /        — listener page OR landing  │
+                    │               (SUBWAVE_HOMEPAGE flag)   │
+                    │  • /listen  — always the player         │
+                    │  • /landing — always the broadsheet     │
                     │  • /debug   — live diagnostics          │
                     └─────────────────────────────────────────┘
 ```
+
+### Marketing landing vs player
+
+`web/app/page.js` reads the `SUBWAVE_HOMEPAGE` env var at request time:
+
+- `SUBWAVE_HOMEPAGE=landing` → renders the broadsheet landing with the live player embedded inline. This is what `subwave.zeiq.co` serves.
+- `SUBWAVE_HOMEPAGE=player` (default) → renders the fullscreen listener UI directly. Use this on private/Tailscale-only instances that don't need marketing.
+
+The landing fetches a public `/api/dj` endpoint for the DJ's name and persona soul; everything else (now-playing, history, booth log) comes through the same 5-second polling used by the player.
 
 ## Why this architecture
 

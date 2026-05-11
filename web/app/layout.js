@@ -10,8 +10,19 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata = {
-  title: 'SUB/WAVE',
-  description: 'Personal radio frequency from the homelab',
+  title: { default: 'SUB/WAVE', template: '%s · SUB/WAVE' },
+  description:
+    'A real internet radio station. Single Icecast stream — every listener hears the same broadcast at the same time, picked and announced by an LLM-driven DJ.',
+  openGraph: {
+    title: 'SUB/WAVE',
+    description: 'Personal radio frequency from the homelab.',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'SUB/WAVE',
+    description: 'Personal radio frequency from the homelab.',
+  },
 };
 
 export const viewport = {

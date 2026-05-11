@@ -17,7 +17,7 @@ const FREQUENCY_HINTS = {
 
 const AUTH_STORAGE_KEY = 'subwave_admin_auth';
 
-export default function SettingsDialog({ open, onOpenChange }) {
+export default function SettingsDialog({ open, onOpenChange, container }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -197,7 +197,7 @@ export default function SettingsDialog({ open, onOpenChange }) {
   };
 
   return (
-    <FullDialog open={open} onOpenChange={onOpenChange} title="Settings">
+    <FullDialog open={open} onOpenChange={onOpenChange} title="Settings" container={container}>
       <div className="max-w-3xl mx-auto space-y-7">
         {needsAuth && <SignInForm onSubmit={signIn} />}
         {!needsAuth && err && <Alert tone="err">controller error: {err}</Alert>}

@@ -103,6 +103,26 @@ app.get('/now-playing', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /dj — public-safe DJ + station info for the landing page.
+// Exposes only fields the DJ already says on-air; no secrets.
+// ---------------------------------------------------------------------------
+app.get('/dj', async (req, res) => {
+  try {
+    await settings.load();
+    const s = settings.get();
+    res.json({
+      name: s.dj?.name || 'Frequency',
+      soul: s.dj?.soul || '',
+      frequency: s.dj?.frequency || 'moderate',
+      station: 'SUB/WAVE',
+      location: s.weather?.locationName || '',
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /state — queue + history + DJ log
 // ---------------------------------------------------------------------------
 app.get('/state', (req, res) => {

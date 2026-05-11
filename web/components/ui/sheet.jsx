@@ -5,19 +5,27 @@ import { cn } from '../../lib/cn';
 
 /* V3 Sheet — right-side drawer between the top and bottom bars (offset 80px
    each), 460px wide, cream background, 1px ink borders, animates in from the
-   right via v3-drawer-content keyframe in globals.css. No exit animation. */
-export function Sheet({ open, onOpenChange, title, children }) {
+   right via v3-drawer-content keyframe in globals.css. No exit animation.
+   When `container` is supplied the drawer is scoped to that element (used
+   for the embedded player on the landing page); otherwise it covers the
+   whole viewport as before. */
+export function Sheet({ open, onOpenChange, title, children, container }) {
+  const contained = !!container;
+  const pos = contained ? 'absolute' : 'fixed';
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
+      <Dialog.Portal container={container}>
         <Dialog.Overlay
-          className="v3-drawer-overlay fixed inset-0 z-40"
+          className={cn('v3-drawer-overlay inset-0 z-40', pos)}
           style={{ background: 'var(--overlay)' }}
         />
         <Dialog.Content
           className={cn(
-            'v3-drawer-content fixed z-50 bg-bg text-ink flex flex-col',
-            'top-[80px] bottom-[80px] right-[96px] w-[460px]',
+            'v3-drawer-content z-50 bg-bg text-ink flex flex-col',
+            pos,
+            contained
+              ? 'top-[64px] bottom-[64px] right-[16px] w-[min(420px,calc(100%-32px))]'
+              : 'top-[80px] bottom-[80px] right-[96px] w-[460px]',
             'p-7 outline-none',
           )}
           style={{

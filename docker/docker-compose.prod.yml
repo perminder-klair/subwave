@@ -106,6 +106,10 @@ services:
       - controller
     environment:
       - NODE_ENV=production
+      # Marketing host renders the landing at /. Flip to `player` for private
+      # boxes that should boot straight into the listener UI. /listen and
+      # /landing are always available regardless.
+      - SUBWAVE_HOMEPAGE=${SUBWAVE_HOMEPAGE:-landing}
     # Same-origin is the default baked into the image — Caddy routes /api/*
     # and /stream.mp3 to the right backend, so nothing extra needs setting.
 
