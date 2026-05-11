@@ -92,8 +92,10 @@ export default function ListenerPage() {
     }
   };
 
+  // Returns the parsed response so the drawer can render its own success card.
+  // Drawer also owns auto-close; page just clears the textarea on success.
   const submitRequest = async () => {
-    if (!requestText.trim() || isSubmitting) return;
+    if (!requestText.trim() || isSubmitting) return null;
     setIsSubmitting(true);
     try {
       const res = await fetch(`${API_URL}/request`, {
@@ -102,14 +104,11 @@ export default function ListenerPage() {
         body: JSON.stringify({ text: requestText.trim(), name: requesterName.trim() }),
       });
       const data = await res.json();
-      if (data.success) {
-        toast.success(`${data.ack || 'Request received.'} — ${data.track.title} · ${data.track.artist}`);
-        setRequestText('');
-      } else {
-        toast(data.message || 'No match.');
-      }
+      if (data.success) setRequestText('');
+      return data;
     } catch {
       toast.error('Request failed. Is the controller up?');
+      return { success: false, message: 'Network error.' };
     } finally {
       setIsSubmitting(false);
     }
@@ -169,6 +168,7 @@ export default function ListenerPage() {
             requesterName={requesterName} setRequesterName={setRequesterName}
             isSubmitting={isSubmitting}
             onSubmit={submitRequest}
+            onClose={() => setDrawer(null)}
           />
         )}
       </Sheet>

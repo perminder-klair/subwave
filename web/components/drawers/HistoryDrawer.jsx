@@ -16,7 +16,7 @@ export default function HistoryDrawer({ items }) {
         <div
           key={i}
           className="flex justify-between items-baseline gap-3"
-          style={{ padding: '11px 0', borderBottom: '1px solid rgba(0,0,0,0.08)' }}
+          style={{ padding: '11px 0', borderBottom: '1px solid var(--separator-soft)' }}
         >
           <div className="min-w-0">
             <div style={{ fontSize: 14, color: 'var(--ink)' }} className="truncate">{t.title}</div>

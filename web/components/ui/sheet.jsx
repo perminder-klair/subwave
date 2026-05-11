@@ -12,7 +12,7 @@ export function Sheet({ open, onOpenChange, title, children }) {
       <Dialog.Portal>
         <Dialog.Overlay
           className="v3-drawer-overlay fixed inset-0 z-40"
-          style={{ background: 'rgba(0,0,0,0.05)' }}
+          style={{ background: 'var(--overlay)' }}
         />
         <Dialog.Content
           className={cn(

@@ -14,7 +14,7 @@ export default function QueueDrawer({ items }) {
         <div
           key={i}
           className="flex gap-[14px] items-baseline"
-          style={{ padding: '14px 0', borderBottom: '1px solid rgba(0,0,0,0.1)' }}
+          style={{ padding: '14px 0', borderBottom: '1px solid var(--separator-strong)' }}
         >
           <span
             className="v3-tab-num"

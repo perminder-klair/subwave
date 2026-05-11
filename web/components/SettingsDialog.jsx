@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { FullDialog } from './ui/dialog';
 import { V3Switch } from './ui/switch';
 import { fmtSize } from '../lib/format';
+import { getStoredTheme, setTheme, THEME_MODES } from '../lib/theme';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
@@ -16,6 +17,11 @@ export default function SettingsDialog({ open, onOpenChange }) {
   const [form, setForm] = useState(null);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [saveMsg, setSaveMsg] = useState(null);
+  const [themeMode, setThemeMode] = useState('system');
+
+  useEffect(() => { setThemeMode(getStoredTheme()); }, []);
+
+  const pickTheme = (m) => { setTheme(m); setThemeMode(m); };
 
   const refresh = async () => {
     try {
@@ -142,6 +148,18 @@ export default function SettingsDialog({ open, onOpenChange }) {
 
         {data && (
           <>
+            <Section title="Appearance">
+              <Row>
+                <div>
+                  <Lead>Theme</Lead>
+                  <Hint>
+                    System follows your OS preference. Manual overrides persist in this browser only.
+                  </Hint>
+                </div>
+                <ThemeSegmented value={themeMode} onChange={pickTheme} />
+              </Row>
+            </Section>
+
             <Section title="Auto-DJ">
               <Row>
                 <div>
@@ -294,7 +312,7 @@ export default function SettingsDialog({ open, onOpenChange }) {
                 </div>
               </div>
 
-              <div className="mt-5" style={{ borderTop: '1px solid rgba(0,0,0,0.1)' }}>
+              <div className="mt-5" style={{ borderTop: '1px solid var(--separator-strong)' }}>
                 {data.jingles.length === 0 && (
                   <div className="py-4 italic" style={{ color: 'var(--muted)', fontSize: 12 }}>none yet</div>
                 )}
@@ -302,7 +320,7 @@ export default function SettingsDialog({ open, onOpenChange }) {
                   <div
                     key={j.filename}
                     className="py-3 flex items-start gap-3"
-                    style={{ borderBottom: '1px solid rgba(0,0,0,0.08)' }}
+                    style={{ borderBottom: '1px solid var(--separator-soft)' }}
                   >
                     <div className="flex-1 min-w-0">
                       <div style={{ color: 'var(--ink)' }} className="break-words">{j.text}</div>
@@ -385,7 +403,7 @@ export default function SettingsDialog({ open, onOpenChange }) {
 
                   <div
                     className="flex flex-wrap items-center gap-3 pt-3"
-                    style={{ borderTop: '1px solid rgba(0,0,0,0.1)' }}
+                    style={{ borderTop: '1px solid var(--separator-strong)' }}
                   >
                     <SolidButton
                       onClick={() => saveSettings({
@@ -562,6 +580,36 @@ function NumInput({ style, ...props }) {
     />
   );
 }
+function ThemeSegmented({ value, onChange }) {
+  const labels = { system: 'system', light: 'light', dark: 'dark' };
+  return (
+    <div style={{ display: 'inline-flex', border: '1px solid var(--ink)' }}>
+      {THEME_MODES.map((m, i) => {
+        const active = value === m;
+        return (
+          <button
+            key={m}
+            type="button"
+            onClick={() => onChange(m)}
+            className="v3-eyebrow v3-focus cursor-pointer"
+            style={{
+              background: active ? 'var(--ink)' : 'transparent',
+              color: active ? 'var(--bg)' : 'var(--ink)',
+              border: 'none',
+              borderLeft: i === 0 ? 'none' : '1px solid var(--ink)',
+              padding: '8px 14px',
+              fontSize: 10,
+            }}
+            aria-pressed={active}
+          >
+            {labels[m]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function Alert({ tone, children }) {
   return (
     <div

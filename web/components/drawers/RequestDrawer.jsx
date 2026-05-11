@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 const MOOD_CHIPS = [
   'late-night driving',
@@ -10,19 +10,49 @@ const MOOD_CHIPS = [
   'rainy day',
 ];
 
+const SUCCESS_HOLD_MS = 2800;
+
 export default function RequestDrawer({
   requestText, setRequestText,
   requesterName, setRequesterName,
-  isSubmitting, onSubmit,
+  isSubmitting, onSubmit, onClose,
 }) {
   const taRef = useRef(null);
+  // `result` mirrors the controller response: { success, ack, track, message }.
+  // Null while idle; rendered as a success card or inline miss banner.
+  const [result, setResult] = useState(null);
+  const closeTimerRef = useRef(null);
+
+  useEffect(() => () => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+  }, []);
+
+  const handleSubmit = async () => {
+    const data = await onSubmit();
+    if (!data) return;
+    setResult(data);
+    if (data.success && onClose) {
+      // Hold the success card briefly so the listener sees what got queued,
+      // then slide the drawer shut and reset for next time.
+      closeTimerRef.current = setTimeout(() => {
+        onClose();
+        // Defer state reset until after the close animation so the form
+        // doesn't flash back in during the slide.
+        setTimeout(() => setResult(null), 300);
+      }, SUCCESS_HOLD_MS);
+    }
+  };
 
   const onKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      onSubmit();
+      handleSubmit();
     }
   };
+
+  if (result?.success) {
+    return <SuccessCard result={result} />;
+  }
 
   return (
     <div>
@@ -73,7 +103,7 @@ export default function RequestDrawer({
       <textarea
         ref={taRef}
         value={requestText}
-        onChange={e => setRequestText(e.target.value)}
+        onChange={e => { setRequestText(e.target.value); if (result) setResult(null); }}
         onKeyDown={onKeyDown}
         placeholder='"something for late-night driving"…'
         rows={3}
@@ -91,8 +121,24 @@ export default function RequestDrawer({
         }}
       />
 
+      {result && !result.success && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: '10px 12px',
+            border: '1px solid #c0392b',
+            background: 'rgba(192, 57, 43, 0.06)',
+            color: '#7a2218',
+            fontSize: 12,
+            lineHeight: 1.5,
+          }}
+        >
+          {result.message || 'No match — try different words.'}
+        </div>
+      )}
+
       <button
-        onClick={onSubmit}
+        onClick={handleSubmit}
         disabled={isSubmitting || !requestText.trim()}
         className="w-full v3-eyebrow v3-focus mt-3 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
         style={{
@@ -104,6 +150,107 @@ export default function RequestDrawer({
       >
         {isSubmitting ? 'Sending…' : 'Send to the booth'}
       </button>
+    </div>
+  );
+}
+
+function SuccessCard({ result }) {
+  const { ack, track, queuePosition } = result;
+  return (
+    <div
+      style={{
+        padding: '8px 0',
+        animation: 'sw-success-in 240ms ease-out both',
+      }}
+    >
+      <style>{`
+        @keyframes sw-success-in {
+          from { opacity: 0; transform: translateY(6px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
+
+      <div
+        style={{
+          fontSize: 9,
+          letterSpacing: '0.4em',
+          textTransform: 'uppercase',
+          color: 'var(--accent)',
+          marginBottom: 14,
+        }}
+      >
+        ✓ Queued
+      </div>
+
+      {ack && (
+        <div
+          style={{
+            fontSize: 18,
+            fontFamily: 'Georgia, "Times New Roman", serif',
+            fontStyle: 'italic',
+            color: 'var(--ink)',
+            lineHeight: 1.3,
+            borderLeft: '2px solid var(--accent)',
+            paddingLeft: 14,
+            marginBottom: 22,
+          }}
+        >
+          “{ack}”
+        </div>
+      )}
+
+      <div
+        style={{
+          padding: '16px 0',
+          borderTop: '1px solid var(--soft-border)',
+          borderBottom: '1px solid var(--soft-border)',
+        }}
+      >
+        <div
+          style={{
+            fontSize: 9,
+            letterSpacing: '0.3em',
+            textTransform: 'uppercase',
+            color: 'var(--muted)',
+            marginBottom: 6,
+          }}
+        >
+          Now in the booth
+        </div>
+        <div style={{ fontSize: 22, fontWeight: 600, lineHeight: 1.15, color: 'var(--ink)' }}>
+          {track?.title}
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
+          {track?.artist}
+        </div>
+      </div>
+
+      {typeof queuePosition === 'number' && queuePosition > 0 && (
+        <div
+          className="v3-tab-num"
+          style={{
+            fontSize: 11,
+            color: 'var(--muted)',
+            marginTop: 14,
+            letterSpacing: '0.15em',
+            textTransform: 'uppercase',
+          }}
+        >
+          Position #{queuePosition} in queue
+        </div>
+      )}
+
+      <div
+        style={{
+          marginTop: 26,
+          fontSize: 10,
+          letterSpacing: '0.3em',
+          textTransform: 'uppercase',
+          color: 'var(--muted)',
+        }}
+      >
+        Closing…
+      </div>
     </div>
   );
 }
