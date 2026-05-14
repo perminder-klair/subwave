@@ -1,5 +1,7 @@
 'use client';
 
+import { isValidElement } from 'react';
+
 const ITEMS = [
   { k: 'queue',   l: 'Queue' },
   { k: 'history', l: 'Played' },
@@ -23,6 +25,7 @@ export default function DotRail({ counts, active, onSelect }) {
         const isActive = active === item.k;
         const isRequest = item.k === 'request';
         const n = isRequest ? '+' : (counts?.[item.k] ?? 0);
+        const isIcon = isValidElement(n);
         return (
           <button
             key={item.k}
@@ -50,6 +53,10 @@ export default function DotRail({ counts, active, onSelect }) {
                 fontSize: isRequest ? 26 : 22,
                 fontWeight: isRequest ? 600 : 200,
                 lineHeight: 1,
+                display: isIcon ? 'inline-flex' : undefined,
+                alignItems: isIcon ? 'center' : undefined,
+                justifyContent: isIcon ? 'center' : undefined,
+                height: isIcon ? 22 : undefined,
                 color: isActive
                   ? 'var(--accent)'
                   : isRequest

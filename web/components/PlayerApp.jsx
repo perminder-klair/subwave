@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { History, Mic } from 'lucide-react';
 import TopBar from './TopBar';
 import CenterStage from './CenterStage';
 import Waveform from './Waveform';
@@ -16,12 +17,9 @@ import BoothDrawer from './drawers/BoothDrawer';
 import RequestDrawer from './drawers/RequestDrawer';
 import { useStationFeed } from '../hooks/useStationFeed';
 import { usePlayer } from '../hooks/usePlayer';
-import { relTime } from '../lib/format';
 import { getStoredTheme, setTheme as persistTheme } from '../lib/theme';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
-
-const VOICE_KINDS = new Set(['dj-speak', 'station-id', 'link', 'hourly-check', 'weather']);
 
 const DRAWER_TITLES = {
   queue: 'Up next',
@@ -121,11 +119,8 @@ export default function PlayerApp({ contained = false }) {
       <DotRail
         counts={{
           queue: state.upcoming?.length ?? 0,
-          history: elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m`,
-          booth: (() => {
-            const lastVoice = state.djLog?.find(e => VOICE_KINDS.has(e.kind));
-            return lastVoice ? relTime(lastVoice.t) : '—';
-          })(),
+          history: <History size={18} strokeWidth={1.5} />,
+          booth: <Mic size={18} strokeWidth={1.5} />,
         }}
         active={drawer}
         onSelect={setDrawer}
