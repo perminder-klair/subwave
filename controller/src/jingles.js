@@ -9,7 +9,7 @@ import { readFile, writeFile, unlink, mkdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { speak } from './piper.js';
+import { speak } from './tts.js';
 
 const DIR = '/var/sub-wave/jingles';
 const PLAYLIST = '/var/sub-wave/jingles.m3u';
@@ -74,7 +74,7 @@ export async function create(text, { builtin = false } = {}) {
   const filename = builtin ? DEFAULT_IDENT.filename : `jingle_${id}.wav`;
   const outPath = `${DIR}/${filename}`;
 
-  await speak(text, { outPath });
+  await speak(text, { kind: 'jingle', outPath });
 
   const meta = await loadMeta();
   meta.items[filename] = {

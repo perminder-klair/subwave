@@ -12,7 +12,7 @@ import * as ollama from './ollama.js';
 import * as library from './library.js';
 import { getFullContext } from './context.js';
 import { queue } from './queue.js';
-import { cleanupOldVoices } from './piper.js';
+import { cleanupOldVoices } from './tts.js';
 import * as settings from './settings.js';
 
 // Gate scheduled DJ events on the current talk frequency. Crons are scheduled

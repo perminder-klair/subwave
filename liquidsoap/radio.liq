@@ -265,7 +265,7 @@ music_bus =
     bed = mksafe(single(id="bed", bed_path))
     add(
       normalize=false,
-      weights=[1.0, 0.18],   # bed sits ~15 dB below music
+      weights=[1.0, 0.02],   # bed sits ~34 dB below music — barely there
       [music, bed]
     )
   else
@@ -274,65 +274,46 @@ music_bus =
   end
 
 # ---------------------------------------------------------------------------
-# SIDECHAIN DUCKING — signal-keyed, like a real broadcast desk
+# DUCKING — gated talkbax, like a broadcast desk
 # ---------------------------------------------------------------------------
-# Previously we used two stacked `smooth_add(p=...)` layers. That's a gated
-# volume blend, not a sidechain — the music drops to a fixed percentage
-# whenever the voice source is "on", regardless of how loud the voice
-# actually is. A quiet TTS phrase would punch the same hole as a loud one.
+# `smooth_add` drops the music to a fixed ratio whenever a voice source has
+# audio to play, then ramps back to unity when it doesn't. Two layers stacked
+# because we have two voice channels with different duck depths:
 #
-# Here we attach `rms.smooth` to voice and intro to expose a smoothed RMS
-# getter (`.rms`), then run a 50 Hz follower that maps the max of the two
-# envelopes through a one-pole filter with fast attack / slow release. The
-# resulting gain coefficient drives an `amplify` on music_bus, so the music
-# actually ducks in response to voice *level*. Quiet phrases get a gentle
-# duck, loud announcements get the full -12 dB.
+#   voice_queue (say.txt)  → HEAVY duck. Request intros, station IDs, hourly
+#                            time checks, weather. The voice is the focus;
+#                            music drops well underneath to ~10%.
+#   intro_queue (intro.txt) → LIGHT duck. Between-track auto-DJ links. The
+#                            song that just started should still be audible
+#                            under the voice, so we only dip to ~40%.
 #
-# Because music_bus already contains the studio bed, the bed ducks along
-# with the music — bed never competes with the voice.
-
-# Attach RMS meters. `rms.smooth` is a pass-through that exposes `.rms` as
-# a getter, so we can keep using `voice` / `intro` downstream untouched.
-voice = rms.smooth(duration=0.05, voice)
-intro = rms.smooth(duration=0.05, intro)
-
-# Sidechain follower state + tuning.
-# - threshold: below this, no ducking (silence / room noise floor)
-# - duck_floor_db: how far down the music drops at the peak of the voice
-# - attack_s: how fast we ramp INTO the duck when voice appears
-# - release_s: how fast we ramp BACK OUT when voice stops
-# Broadcast-tight feel: fast attack so voice never collides with peaks,
-# moderate release so brief gaps between phrases don't pump the music.
-sidechain_gain = ref(1.0)
-sidechain_threshold = 0.01            # ~-40 dBFS — voice "on" detector
-sidechain_floor = lin_of_dB(-12.0)    # -12 dB target duck depth
-sidechain_attack_s = 0.05             # 50 ms
-sidechain_release_s = 0.30            # 300 ms
-sidechain_dt = 0.02                   # 50 Hz follower
-
-def update_sidechain() =
-  level = max(voice.rms(), intro.rms())
-  target = if level > sidechain_threshold then sidechain_floor else 1.0 end
-  cur = sidechain_gain()
-  tau = if target < cur then sidechain_attack_s else sidechain_release_s end
-  coef = 1.0 - exp(0.0 - sidechain_dt / tau)
-  sidechain_gain := cur + coef * (target - cur)
-end
-thread.run(every=sidechain_dt, update_sidechain)
-
-# Mix voice + intro on top of the music bus at unity. `normalize=false` is
-# critical: voice has already been brought to broadcast level by mic_chain
-# (compressor + 1.4× makeup), so we don't want `add` quietly halving
-# everything to "fit" the bus.
+# Why gated and not RMS-keyed: an earlier RMS sidechain follower drove the
+# music bus to -91 dB even with voice_queue empty (see git log f38a9af).
+# `smooth_add` is what real radio talkbax buttons emulate — it doesn't care
+# how loud the voice is, it cares whether the mic channel has signal. The
+# only downside is that quiet TTS phrases get the same duck as loud ones,
+# which on a single-tenant station is fine.
 #
-# Sidechain bypass: gain is pinned to 1.0. When this was hooked up as
-# `amplify({sidechain_gain()}, music_bus)`, the music bus measured -91 dB
-# at the icecast output (true silence) on the rebuilt container — even
-# with voice_queue empty. The update_sidechain follower is left in place
-# for now (it computes a value but nothing consumes it) so future work
-# can re-enable signal-keyed ducking once the root cause is found.
-music_bus = amplify(1.0, music_bus)
-radio = add(normalize=false, [music_bus, voice, intro])
+# Tuning: delay controls how long the duck "holds" between words so brief
+# pauses don't make the music pump. p is the ratio while voice is active.
+
+# Heavy duck for request intros / station IDs / hourly / weather.
+# duration = fade time into/out of the duck. p is a getter (curly braces).
+ducked = smooth_add(
+  duration=0.5,
+  p={0.25},         # music drops to 25% (~-12 dB) while voice plays
+  normal=music_bus,
+  special=voice
+)
+
+# Light duck on top for talk-over links — leaves the song you just queued
+# audible under the DJ's voice.
+radio = smooth_add(
+  duration=0.5,
+  p={0.40},         # music drops to 40% (~-8 dB) while intro plays
+  normal=ducked,
+  special=intro
+)
 
 # ---------------------------------------------------------------------------
 # JINGLES & STATION ID — every 30 mins, rotate a jingle in

@@ -10,6 +10,7 @@ import * as ollama from './ollama.js';
 import * as library from './library.js';
 import * as jingles from './jingles.js';
 import * as settings from './settings.js';
+import * as tts from './tts.js';
 import { restartLiquidsoap } from './liquidsoap-control.js';
 import { getFullContext, invalidateWeatherCache } from './context.js';
 import { queue } from './queue.js';
@@ -505,9 +506,17 @@ app.get('/settings', requireAdmin, async (req, res) => {
         crossfadeDuration: s.crossfadeDuration,
         weather: s.weather,
         dj: s.dj,
+        tts: s.tts,
       },
       defaults: {
         dj: settings.getDefaults().dj,
+        tts: settings.getDefaults().tts,
+      },
+      tts: {
+        engines: tts.ENGINES,
+        kinds: tts.VOICE_KINDS.filter(k => k !== 'default'),
+        available: tts.availableEngines(),
+        kokoroVoices: settings.KOKORO_VOICES_BRITISH,
       },
     });
   } catch (err) {

@@ -1,11 +1,14 @@
 FROM node:22-bookworm-slim
 
-# Piper TTS dependencies
+# Shared build deps + espeak-ng for Kokoro phonemization (British English)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates wget tar \
+    python3 python3-venv \
+    espeak-ng libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Piper (CPU-only, fine for short DJ segments)
+# --- Piper -----------------------------------------------------------------
+# CPU-only, ~30ms/word. Default engine; remains the fast path even after Kokoro.
 ARG PIPER_VERSION=2023.11.14-2
 RUN cd /tmp && \
     wget -q https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/piper_linux_x86_64.tar.gz && \
@@ -20,11 +23,32 @@ RUN mkdir -p /opt/piper/voices && \
     wget -q -O /opt/piper/voices/en_GB-alan-medium.onnx.json \
       https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx.json
 
-# Controller app
+# --- Kokoro ---------------------------------------------------------------
+# Optional second engine. Slower than Piper (~300-800ms/line on CPU) but a lot
+# more natural. Lives in an isolated venv so its Python deps don't tangle with
+# anything else in the image. Worker loads the model once on first use and
+# stays resident (see controller/scripts/kokoro_worker.py).
+RUN python3 -m venv /opt/kokoro/venv && \
+    /opt/kokoro/venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /opt/kokoro/venv/bin/pip install --no-cache-dir \
+      kokoro-onnx==0.4.9 soundfile==0.12.1
+
+RUN mkdir -p /opt/kokoro/models && \
+    wget -q -O /opt/kokoro/models/kokoro-v1.0.onnx \
+      https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx && \
+    wget -q -O /opt/kokoro/models/voices-v1.0.bin \
+      https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+
+ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
+    KOKORO_VOICES=/opt/kokoro/models/voices-v1.0.bin \
+    KOKORO_PYTHON=/opt/kokoro/venv/bin/python
+
+# --- Controller app -------------------------------------------------------
 WORKDIR /app
 COPY controller/package*.json ./
 RUN npm install --omit=dev
 COPY controller/src ./src
+COPY controller/scripts ./scripts
 
 # State dir shared with Liquidsoap
 RUN mkdir -p /var/sub-wave/voice && chmod 777 /var/sub-wave

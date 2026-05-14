@@ -37,6 +37,32 @@ export const DJ_SOULS = [
 
 const FREQUENCIES = ['quiet', 'moderate', 'aggressive'];
 
+// TTS engines + voice-kinds. Engine `null` (or missing) for a kind means
+// "use defaultEngine". Keeping `null` instead of duplicating defaultEngine
+// per kind keeps the UI honest: changing the default applies live to any
+// kind the operator hasn't explicitly overridden.
+export const TTS_ENGINES = ['piper', 'kokoro'];
+export const TTS_KINDS   = ['dj-speak', 'link', 'station-id', 'hourly-check', 'weather', 'jingle'];
+
+// British English Kokoro voices — the ones that fit a BBC 6 Music tone. The
+// underlying model ships 54 voices total (American, Spanish, Hindi, Japanese,
+// Chinese etc.); we expose only the British subset to keep the UI tidy. Anyone
+// who wants a non-British voice can set it via KOKORO_VOICE env or extend this
+// list, and they'll still pass validation if they match the {bf,bm,af,am,...}_name
+// pattern below.
+export const KOKORO_VOICES_BRITISH = [
+  { id: 'bm_george',    label: 'George (M)' },
+  { id: 'bm_fable',     label: 'Fable (M)' },
+  { id: 'bm_daniel',    label: 'Daniel (M)' },
+  { id: 'bm_lewis',     label: 'Lewis (M)' },
+  { id: 'bf_emma',      label: 'Emma (F)' },
+  { id: 'bf_isabella',  label: 'Isabella (F)' },
+  { id: 'bf_alice',     label: 'Alice (F)' },
+  { id: 'bf_lily',      label: 'Lily (F)' },
+];
+
+const KOKORO_VOICE_RE = /^[a-z]{2}_[a-z0-9]+$/;
+
 const DEFAULTS = {
   jingleRatio: 30,                    // 1 jingle per N music tracks
   crossfadeDuration: 10.0,            // seconds
@@ -46,6 +72,11 @@ const DEFAULTS = {
     souls: [...DJ_SOULS],
     systemPrompt: DEFAULT_DJ_PROMPT_TEMPLATE,
     frequency: 'moderate',
+  },
+  tts: {
+    defaultEngine: 'piper',
+    byKind: Object.fromEntries(TTS_KINDS.map(k => [k, null])),
+    kokoro: { voice: 'bf_isabella' },
   },
 };
 
@@ -103,6 +134,21 @@ export async function load() {
       })(),
       systemPrompt: stored.dj?.systemPrompt ?? DEFAULTS.dj.systemPrompt,
       frequency: FREQUENCIES.includes(stored.dj?.frequency) ? stored.dj.frequency : DEFAULTS.dj.frequency,
+    },
+    tts: {
+      defaultEngine: TTS_ENGINES.includes(stored.tts?.defaultEngine)
+        ? stored.tts.defaultEngine
+        : DEFAULTS.tts.defaultEngine,
+      byKind: Object.fromEntries(TTS_KINDS.map(k => {
+        const v = stored.tts?.byKind?.[k];
+        return [k, TTS_ENGINES.includes(v) ? v : null];
+      })),
+      kokoro: {
+        voice: (typeof stored.tts?.kokoro?.voice === 'string'
+                && KOKORO_VOICE_RE.test(stored.tts.kokoro.voice))
+          ? stored.tts.kokoro.voice
+          : DEFAULTS.tts.kokoro.voice,
+      },
     },
   };
   return cache;
@@ -180,6 +226,43 @@ export async function update(patch) {
         throw new Error(`dj.frequency must be one of: ${FREQUENCIES.join(', ')}`);
       }
       next.dj.frequency = d.frequency;
+    }
+  }
+  if ('tts' in patch) {
+    const t = patch.tts || {};
+    if (t.defaultEngine !== undefined) {
+      if (!TTS_ENGINES.includes(t.defaultEngine)) {
+        throw new Error(`tts.defaultEngine must be one of: ${TTS_ENGINES.join(', ')}`);
+      }
+      next.tts.defaultEngine = t.defaultEngine;
+    }
+    if (t.byKind !== undefined) {
+      if (t.byKind === null || typeof t.byKind !== 'object') {
+        throw new Error('tts.byKind must be an object');
+      }
+      for (const [k, v] of Object.entries(t.byKind)) {
+        if (!TTS_KINDS.includes(k)) {
+          throw new Error(`tts.byKind has unknown kind: ${k}`);
+        }
+        if (v === null || v === '' || v === undefined) {
+          next.tts.byKind[k] = null;
+          continue;
+        }
+        if (!TTS_ENGINES.includes(v)) {
+          throw new Error(`tts.byKind.${k} must be null or one of: ${TTS_ENGINES.join(', ')}`);
+        }
+        next.tts.byKind[k] = v;
+      }
+    }
+    if (t.kokoro !== undefined) {
+      const k = t.kokoro || {};
+      if (k.voice !== undefined) {
+        const v = String(k.voice).trim();
+        if (!KOKORO_VOICE_RE.test(v)) {
+          throw new Error('tts.kokoro.voice must match <lang><gender>_<name>, e.g. bf_isabella');
+        }
+        next.tts.kokoro.voice = v;
+      }
     }
   }
 

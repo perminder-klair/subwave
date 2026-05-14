@@ -18,6 +18,15 @@ export const config = {
     voiceConfig: process.env.PIPER_VOICE_CONFIG || '/opt/piper/voices/en_GB-alan-medium.onnx.json',
     outDir: process.env.PIPER_OUT || '/var/sub-wave/voice',
   },
+  kokoro: {
+    python: process.env.KOKORO_PYTHON || '/opt/kokoro/venv/bin/python',
+    workerScript: process.env.KOKORO_WORKER || '/app/scripts/kokoro_worker.py',
+    model: process.env.KOKORO_MODEL || '/opt/kokoro/models/kokoro-v1.0.onnx',
+    voices: process.env.KOKORO_VOICES || '/opt/kokoro/models/voices-v1.0.bin',
+    voice: process.env.KOKORO_VOICE || 'bf_isabella',   // British female, BBC-ish
+    lang: process.env.KOKORO_LANG || 'en-gb',
+    speed: parseFloat(process.env.KOKORO_SPEED || '1.0'),
+  },
   liquidsoap: {
     queueFile: '/var/sub-wave/next.txt',
     sayFile: '/var/sub-wave/say.txt',

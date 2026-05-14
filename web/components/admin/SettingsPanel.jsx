@@ -12,6 +12,23 @@ const FREQUENCY_HINTS = {
   aggressive: 'Aggressive — talks every 1-3 tracks · station IDs four times an hour · weather every 15 min on change.',
 };
 
+const TTS_KIND_LABEL = {
+  'dj-speak':     'Track intros',
+  'link':         'Between-track links',
+  'station-id':   'Station IDs',
+  'hourly-check': 'Hourly check-ins',
+  'weather':      'Weather updates',
+  'jingle':       'Jingle rendering',
+};
+const TTS_KIND_HINT = {
+  'dj-speak':     'Played before a listener-requested track.',
+  'link':         'Short talkover links between back-to-back auto tracks.',
+  'station-id':   'Identification at :15 and :45 (frequency-dependent).',
+  'hourly-check': 'Top-of-hour time/weather mention.',
+  'weather':      'Fired when conditions change since the last announcement.',
+  'jingle':       'Engine used when you create a new jingle from text in the Jingles section.',
+};
+
 export default function SettingsPanel() {
   const { adminFetch, needsAuth } = useAdminAuth();
   const [data, setData] = useState(null);
@@ -52,6 +69,11 @@ export default function SettingsPanel() {
           : (data.values.dj?.soul ?? ''),
         systemPrompt: data.values.dj?.systemPrompt ?? '',
         frequency: data.values.dj?.frequency ?? 'moderate',
+      },
+      tts: {
+        defaultEngine: data.values.tts?.defaultEngine ?? 'piper',
+        byKind: { ...(data.values.tts?.byKind || {}) },
+        kokoro: { voice: data.values.tts?.kokoro?.voice ?? 'bf_isabella' },
       },
     });
   }, [data, form]);
@@ -334,6 +356,113 @@ export default function SettingsPanel() {
               </div>
               <Footnote>
                 All persona changes apply live — no mixer restart needed.
+              </Footnote>
+            </Section>
+          )}
+
+          {form && data.tts && (
+            <Section title="TTS voice">
+              <Hint>
+                Pick the text-to-speech engine for each kind of spoken segment.
+                <strong> Piper</strong> is fast and CPU-cheap; <strong>Kokoro</strong> is more
+                natural but ~3-5× slower per line. The first Kokoro request after boot also
+                pays a one-off model-load cost of a few seconds.
+                {data.tts.available?.kokoro === false && (
+                  <span style={{ color: '#c5302a' }}> Kokoro is unavailable in this build.</span>
+                )}
+              </Hint>
+
+              <FormRow
+                label="Default engine"
+                hint="Used for any voice kind set to “use default” below."
+              >
+                <EngineSelect
+                  engines={data.tts.engines || ['piper']}
+                  available={data.tts.available || {}}
+                  value={form.tts.defaultEngine}
+                  onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, defaultEngine: v } }))}
+                  allowDefault={false}
+                />
+              </FormRow>
+
+              {(data.tts.kokoroVoices?.length || 0) > 0 && (
+                <FormRow
+                  label="Kokoro voice"
+                  hint="British English voices only. Applies to every kind routed through Kokoro."
+                >
+                  <select
+                    value={form.tts.kokoro?.voice ?? 'bf_isabella'}
+                    onChange={e => setForm(f => ({
+                      ...f,
+                      tts: { ...f.tts, kokoro: { ...f.tts.kokoro, voice: e.target.value } },
+                    }))}
+                    className="v3-focus"
+                    style={{
+                      boxSizing: 'border-box',
+                      border: '1px solid var(--ink)',
+                      background: 'transparent',
+                      padding: '8px 12px',
+                      fontSize: 13,
+                      fontFamily: 'inherit',
+                      color: 'var(--ink)',
+                      outline: 'none',
+                      minWidth: 240,
+                    }}
+                  >
+                    {data.tts.kokoroVoices.map(v => (
+                      <option key={v.id} value={v.id}>{v.label} — {v.id}</option>
+                    ))}
+                  </select>
+                </FormRow>
+              )}
+
+              <div className="space-y-3 mt-2">
+                {(data.tts.kinds || []).map(k => (
+                  <FormRow
+                    key={k}
+                    label={TTS_KIND_LABEL[k] || k}
+                    hint={TTS_KIND_HINT[k]}
+                  >
+                    <EngineSelect
+                      engines={data.tts.engines || ['piper']}
+                      available={data.tts.available || {}}
+                      value={form.tts.byKind?.[k] ?? null}
+                      onChange={v => setForm(f => ({
+                        ...f,
+                        tts: { ...f.tts, byKind: { ...f.tts.byKind, [k]: v } },
+                      }))}
+                      allowDefault
+                      defaultEngine={form.tts.defaultEngine}
+                    />
+                  </FormRow>
+                ))}
+              </div>
+
+              <div
+                className="flex flex-wrap items-center gap-3 pt-3 mt-3"
+                style={{ borderTop: '1px solid var(--separator-strong)' }}
+              >
+                <SolidButton
+                  onClick={() => saveSettings({
+                    tts: {
+                      defaultEngine: form.tts.defaultEngine,
+                      byKind: form.tts.byKind,
+                      kokoro: { voice: form.tts.kokoro?.voice },
+                    },
+                  })}
+                  disabled={busy}
+                >
+                  save TTS settings
+                </SolidButton>
+                {saveMsg && (
+                  <span style={{ fontSize: 12, color: saveMsg.tone === 'err' ? '#c5302a' : 'var(--accent)' }}>
+                    {saveMsg.text}
+                  </span>
+                )}
+              </div>
+              <Footnote>
+                Applies to the next spoken segment — no mixer restart needed. Jingle changes
+                only affect newly generated jingles; existing files keep whichever voice rendered them.
               </Footnote>
             </Section>
           )}
@@ -724,6 +853,49 @@ function NumInput({ style, ...props }) {
     />
   );
 }
+function EngineSelect({ engines, available, value, onChange, allowDefault, defaultEngine }) {
+  // value is either an engine name or null (= use default).
+  // Render as a segmented control. "Default" pill is only shown when allowDefault.
+  const options = [];
+  if (allowDefault) options.push({ key: '__default__', label: `default (${defaultEngine || 'piper'})` });
+  for (const e of engines) {
+    options.push({ key: e, label: e });
+  }
+
+  const selected = value == null ? '__default__' : value;
+
+  return (
+    <div style={{ display: 'inline-flex', border: '1px solid var(--ink)', flexWrap: 'wrap' }}>
+      {options.map((opt, i) => {
+        const active = selected === opt.key;
+        const isEngine = opt.key !== '__default__';
+        const disabled = isEngine && available[opt.key] === false;
+        return (
+          <button
+            key={opt.key}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(opt.key === '__default__' ? null : opt.key)}
+            className="v3-eyebrow v3-focus cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+            style={{
+              background: active ? 'var(--ink)' : 'transparent',
+              color: active ? 'var(--bg)' : 'var(--ink)',
+              border: 'none',
+              borderLeft: i === 0 ? 'none' : '1px solid var(--ink)',
+              padding: '8px 14px',
+              fontSize: 10,
+            }}
+            aria-pressed={active}
+            title={disabled ? `${opt.key} is not installed in this build` : opt.label}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function FrequencySegmented({ value, onChange }) {
   return (
     <div style={{ display: 'inline-flex', border: '1px solid var(--ink)' }}>

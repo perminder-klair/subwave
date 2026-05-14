@@ -6,7 +6,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { config } from './config.js';
 import * as subsonic from './subsonic.js';
 import * as ollama from './ollama.js';
-import { speak } from './piper.js';
+import { speak } from './tts.js';
 import { pickAndEnqueue } from './picker.js';
 import { getFullContext } from './context.js';
 import * as settings from './settings.js';
@@ -143,7 +143,7 @@ class Queue {
 
         if (item.introScript) {
           try {
-            const wavPath = await speak(item.introScript);
+            const wavPath = await speak(item.introScript, { kind: 'dj-speak' });
             await writeFile(config.liquidsoap.sayFile, wavPath);
             this.log('dj-speak', item.introScript);
             await sleep(250);
@@ -176,7 +176,7 @@ class Queue {
   async announce(text, kind = 'announcement') {
     if (!text || !text.trim()) return;
     try {
-      const wavPath = await speak(text);
+      const wavPath = await speak(text, { kind });
       const targetFile = kind === 'link'
         ? config.liquidsoap.introFile
         : config.liquidsoap.sayFile;
