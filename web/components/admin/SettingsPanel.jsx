@@ -80,6 +80,20 @@ export default function SettingsPanel() {
         defaultEngine: data.values.tts?.defaultEngine ?? 'piper',
         byKind: { ...(data.values.tts?.byKind || {}) },
         kokoro: { voice: data.values.tts?.kokoro?.voice ?? 'bf_isabella' },
+        cloud: {
+          provider: data.values.tts?.cloud?.provider ?? 'openai',
+          model: data.values.tts?.cloud?.model ?? '',
+          voice: data.values.tts?.cloud?.voice ?? '',
+          apiKey: '',                                            // never prefill a secret
+          apiKeySet: data.values.tts?.cloud?.apiKey === 'set',
+        },
+      },
+      llm: {
+        provider: data.values.llm?.provider ?? 'ollama',
+        model: data.values.llm?.model ?? '',
+        apiKey: '',                                              // never prefill a secret
+        apiKeySet: data.values.llm?.apiKey === 'set',
+        pickerAgent: !!data.values.llm?.pickerAgent,
       },
     });
   }, [data, form]);
@@ -214,7 +228,7 @@ export default function SettingsPanel() {
                 {data.pickerBusy ? 'thinking' : 'idle'}
               </span>
             </Row>
-            <Footnote>model: {data.ollama.model} @ {data.ollama.url}</Footnote>
+            <Footnote>picker model: {data.llm?.active ?? `${data.ollama.model} @ ${data.ollama.url}`}</Footnote>
           </Section>
 
           {form && (
@@ -422,6 +436,48 @@ export default function SettingsPanel() {
                 </FormRow>
               )}
 
+              {(data.tts.engines || []).includes('cloud') && (
+                <div className="space-y-3 mt-2 pt-3" style={{ borderTop: '1px dashed var(--separator-strong)' }}>
+                  <Hint>
+                    The <strong>cloud</strong> engine routes through the AI SDK to OpenAI or
+                    ElevenLabs speech models. Leave it unconfigured and the system stays fully
+                    local; any cloud failure falls back to Piper automatically.
+                  </Hint>
+                  <FormRow label="Cloud provider">
+                    <SettingSelect
+                      value={form.tts.cloud.provider}
+                      onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, provider: v } } }))}
+                      options={(data.tts.cloudProviders || ['openai', 'elevenlabs']).map(p => ({ value: p, label: p }))}
+                    />
+                  </FormRow>
+                  <FormRow label="Cloud model" hint='e.g. "gpt-4o-mini-tts" (OpenAI) or "eleven_flash_v2_5" (ElevenLabs).'>
+                    <TextInput
+                      value={form.tts.cloud.model}
+                      onChange={e => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))}
+                      placeholder="gpt-4o-mini-tts"
+                      style={{ minWidth: 240 }}
+                    />
+                  </FormRow>
+                  <FormRow label="Cloud voice" hint="OpenAI: alloy, nova, … — ElevenLabs: a voice ID.">
+                    <TextInput
+                      value={form.tts.cloud.voice}
+                      onChange={e => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, voice: e.target.value } } }))}
+                      placeholder="alloy"
+                      style={{ minWidth: 240 }}
+                    />
+                  </FormRow>
+                  <FormRow label="API key" hint={form.tts.cloud.apiKeySet ? 'A key is set. Leave blank to keep it; type to replace.' : 'Or set OPENAI_API_KEY / ELEVENLABS_API_KEY in the environment.'}>
+                    <TextInput
+                      type="password"
+                      value={form.tts.cloud.apiKey}
+                      onChange={e => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, apiKey: e.target.value } } }))}
+                      placeholder={form.tts.cloud.apiKeySet ? '•••••••• (set)' : 'paste key'}
+                      style={{ minWidth: 240 }}
+                    />
+                  </FormRow>
+                </div>
+              )}
+
               <div className="space-y-3 mt-2">
                 {(data.tts.kinds || []).map(k => (
                   <FormRow
@@ -454,6 +510,14 @@ export default function SettingsPanel() {
                       defaultEngine: form.tts.defaultEngine,
                       byKind: form.tts.byKind,
                       kokoro: { voice: form.tts.kokoro?.voice },
+                      cloud: {
+                        provider: form.tts.cloud.provider,
+                        model: form.tts.cloud.model,
+                        voice: form.tts.cloud.voice,
+                        // Only send the key when the operator typed one — an
+                        // empty string would otherwise clear the stored key.
+                        ...(form.tts.cloud.apiKey ? { apiKey: form.tts.cloud.apiKey } : {}),
+                      },
                     },
                   })}
                   disabled={busy}
@@ -470,6 +534,98 @@ export default function SettingsPanel() {
                 Applies to the next spoken segment — no mixer restart needed. Jingle changes
                 only affect newly generated jingles; existing files keep whichever voice rendered them.
               </Footnote>
+            </Section>
+          )}
+
+          {form && data.llm && (
+            <Section title="LLM provider">
+              <Hint>
+                Which language model writes DJ scripts, matches listener requests, and picks
+                tracks. <strong>Ollama</strong> runs on the homelab box and needs no key;
+                the cloud providers are opt-in. Switching here reroutes every LLM call —
+                no redeploy.
+              </Hint>
+
+              <FormRow label="Provider">
+                <SettingSelect
+                  value={form.llm.provider}
+                  onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, provider: v } }))}
+                  options={(data.llm.providers || ['ollama']).map(p => ({ value: p, label: p }))}
+                />
+              </FormRow>
+
+              <FormRow
+                label="Model"
+                hint={form.llm.provider === 'ollama'
+                  ? 'Leave blank to use the OLLAMA_MODEL default.'
+                  : form.llm.provider === 'gateway'
+                    ? 'Gateway model id, e.g. "anthropic/claude-sonnet-4-5".'
+                    : 'Model id for the chosen provider — required.'}
+              >
+                <TextInput
+                  value={form.llm.model}
+                  onChange={e => setForm(f => ({ ...f, llm: { ...f.llm, model: e.target.value } }))}
+                  placeholder={form.llm.provider === 'ollama' ? '(OLLAMA_MODEL default)' : 'model id'}
+                  style={{ minWidth: 280 }}
+                />
+              </FormRow>
+
+              {form.llm.provider !== 'ollama' && (
+                <FormRow
+                  label="API key"
+                  hint={form.llm.apiKeySet
+                    ? 'A key is set. Leave blank to keep it; type to replace.'
+                    : 'Or set the provider env var (ANTHROPIC_API_KEY / OPENAI_API_KEY / AI_GATEWAY_API_KEY).'}
+                >
+                  <TextInput
+                    type="password"
+                    value={form.llm.apiKey}
+                    onChange={e => setForm(f => ({ ...f, llm: { ...f.llm, apiKey: e.target.value } }))}
+                    placeholder={form.llm.apiKeySet ? '•••••••• (set)' : 'paste key'}
+                    style={{ minWidth: 280 }}
+                  />
+                </FormRow>
+              )}
+
+              <FormRow
+                label="Agentic picker"
+                hint="When on, the next-track picker is a tool-using agent that explores the library itself. Needs a model that handles multi-step tool calls well — leave off for small local models."
+              >
+                <label className="flex items-center gap-2" style={{ fontSize: 13, color: 'var(--ink)' }}>
+                  <input
+                    type="checkbox"
+                    checked={form.llm.pickerAgent}
+                    onChange={e => setForm(f => ({ ...f, llm: { ...f.llm, pickerAgent: e.target.checked } }))}
+                  />
+                  {form.llm.pickerAgent ? 'agent' : 'candidate pool (default)'}
+                </label>
+              </FormRow>
+
+              <div
+                className="flex flex-wrap items-center gap-3 pt-3 mt-3"
+                style={{ borderTop: '1px solid var(--separator-strong)' }}
+              >
+                <SolidButton
+                  onClick={() => saveSettings({
+                    llm: {
+                      provider: form.llm.provider,
+                      model: form.llm.model,
+                      pickerAgent: form.llm.pickerAgent,
+                      // Only send the key when the operator typed one.
+                      ...(form.llm.apiKey ? { apiKey: form.llm.apiKey } : {}),
+                    },
+                  })}
+                  disabled={busy}
+                >
+                  save LLM provider
+                </SolidButton>
+                {saveMsg && (
+                  <span style={{ fontSize: 12, color: saveMsg.tone === 'err' ? '#c5302a' : 'var(--accent)' }}>
+                    {saveMsg.text}
+                  </span>
+                )}
+              </div>
+              <Footnote>Active model: {data.llm.active}. Applies to the next LLM call — no restart needed.</Footnote>
             </Section>
           )}
 
@@ -857,6 +1013,31 @@ function NumInput({ style, ...props }) {
         ...(style || {}),
       }}
     />
+  );
+}
+// Plain styled <select> for simple { value, label } option lists.
+function SettingSelect({ value, onChange, options }) {
+  return (
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      className="v3-focus"
+      style={{
+        boxSizing: 'border-box',
+        border: '1px solid var(--ink)',
+        background: 'transparent',
+        padding: '8px 12px',
+        fontSize: 13,
+        fontFamily: 'inherit',
+        color: 'var(--ink)',
+        outline: 'none',
+        minWidth: 240,
+      }}
+    >
+      {options.map(o => (
+        <option key={o.value} value={o.value}>{o.label}</option>
+      ))}
+    </select>
   );
 }
 function EngineSelect({ engines, available, value, onChange, allowDefault, defaultEngine }) {

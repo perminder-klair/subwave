@@ -8,7 +8,7 @@ import cron from 'node-cron';
 import { writeFile } from 'node:fs/promises';
 import { config } from './config.js';
 import * as subsonic from './subsonic.js';
-import * as ollama from './ollama.js';
+import * as dj from './llm/dj.js';
 import * as library from './library.js';
 import { getFullContext } from './context.js';
 import { queue } from './queue.js';
@@ -139,7 +139,7 @@ async function hourlyCheck() {
   if (!shouldFire('hourly')) return;
   const ctx = await getFullContext();
   try {
-    const script = await ollama.generateHourlyTime(ctx.time, ctx.weather, {
+    const script = await dj.generateHourlyTime(ctx.time, ctx.weather, {
       recap: queue.getDjRecap(),
       context: ctx,
       recentOpeners: queue.getRecentOpeners(),
@@ -175,7 +175,7 @@ async function stationId() {
   if (!shouldFire('stationId')) return;
   try {
     const ctx = await getFullContext();
-    const script = await ollama.generateStationId({
+    const script = await dj.generateStationId({
       recap: queue.getDjRecap(),
       context: ctx,
       recentOpeners: queue.getRecentOpeners(),

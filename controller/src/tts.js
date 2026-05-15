@@ -6,9 +6,10 @@
 
 import * as piper from './piper.js';
 import * as kokoro from './kokoro.js';
+import * as cloud from './llm/speech.js';
 import * as settings from './settings.js';
 
-export const ENGINES = ['piper', 'kokoro'];
+export const ENGINES = ['piper', 'kokoro', 'cloud'];
 
 // Voice kinds the system speaks. `kind` is passed by the caller and used to
 // look up an engine override in settings. Unknown kinds fall back to default.
@@ -30,6 +31,11 @@ function resolveEngine(kind) {
   const override = (tts.byKind && tts.byKind[kind]) || null;
   const chosen = override || tts.defaultEngine || 'piper';
   if (!ENGINES.includes(chosen)) return 'piper';
+  // `cloud` without a configured key would just throw and fall back — skip
+  // the wasted API attempt and resolve straight to a local engine.
+  if (chosen === 'cloud' && !cloud.isConfigured()) {
+    return tts.defaultEngine && tts.defaultEngine !== 'cloud' ? tts.defaultEngine : 'piper';
+  }
   return chosen;
 }
 
@@ -38,17 +44,21 @@ async function speakWith(engine, text, opts) {
     const voice = settings.get().tts?.kokoro?.voice;
     return kokoro.speak(text, { ...opts, voice });
   }
+  if (engine === 'cloud') {
+    return cloud.speak(text, opts);
+  }
   return piper.speak(text, opts);
 }
 
 // Public entry point. Tries the configured engine; on failure, falls back to
-// the other engine so the DJ never goes silent because a model crashed.
+// a local engine so the DJ never goes silent because a model (or the network)
+// failed. Piper is the universal fallback — local, keyless, fast.
 export async function speak(text, { kind = 'default', outPath } = {}) {
   const primary = resolveEngine(kind);
   try {
     return await speakWith(primary, text, { outPath });
   } catch (err) {
-    const fallback = primary === 'kokoro' ? 'piper' : 'kokoro';
+    const fallback = primary === 'piper' ? 'kokoro' : 'piper';
     if (fallback === 'kokoro' && !kokoro.isAvailable()) throw err;
     console.error(`[tts] ${primary} failed for kind=${kind}: ${err.message} — falling back to ${fallback}`);
     return speakWith(fallback, text, { outPath });
@@ -64,5 +74,6 @@ export function availableEngines() {
   return {
     piper: true,
     kokoro: kokoro.isAvailable(),
+    cloud: cloud.isConfigured(),
   };
 }

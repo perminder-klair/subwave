@@ -6,7 +6,8 @@ import { spawn } from 'node:child_process';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { config } from './config.js';
 import * as subsonic from './subsonic.js';
-import * as ollama from './ollama.js';
+import * as dj from './llm/dj.js';
+import * as llmProvider from './llm/provider.js';
 import * as library from './library.js';
 import * as jingles from './jingles.js';
 import * as settings from './settings.js';
@@ -296,7 +297,7 @@ app.post('/request', async (req, res) => {
         });
       }
       const ctx = await getFullContext();
-      const introScript = await ollama.generateIntro({
+      const introScript = await dj.generateIntro({
         track: pick,
         context: ctx,
         requestedBy: requester,
@@ -323,7 +324,7 @@ app.post('/request', async (req, res) => {
     // interpreted against what's actually on-air ("match this energy",
     // "something slower than this", etc.).
     const currentTrack = queue.current?.track || null;
-    const matched = await ollama.matchRequest(text, {
+    const matched = await dj.matchRequest(text, {
       listenerName: requester,
       nowPlaying: currentTrack,
     });
@@ -442,7 +443,7 @@ app.post('/request', async (req, res) => {
 
     // 3. Generate DJ intro that mentions the request
     const ctx = await getFullContext();
-    const introScript = await ollama.generateIntro({
+    const introScript = await dj.generateIntro({
       track: pick,
       context: ctx,
       requestedBy: requester,
@@ -528,7 +529,9 @@ app.get('/settings', requireAdmin, async (req, res) => {
   try {
     await library.load();
     await settings.load();
-    const s = settings.get();
+    // Redacted view — masks llm.apiKey / tts.cloud.apiKey so secrets never
+    // leave the process. The UI shows "set"/"" and round-trips it harmlessly.
+    const s = settings.getRedacted();
     res.json({
       autoPick: queue.autoPick,
       pickerBusy: queue.pickerBusy,
@@ -542,16 +545,23 @@ app.get('/settings', requireAdmin, async (req, res) => {
         weather: s.weather,
         dj: s.dj,
         tts: s.tts,
+        llm: s.llm,
       },
       defaults: {
         dj: settings.getDefaults().dj,
         tts: settings.getDefaults().tts,
+        llm: settings.getDefaults().llm,
       },
       tts: {
         engines: tts.ENGINES,
         kinds: tts.VOICE_KINDS.filter(k => k !== 'default'),
         available: tts.availableEngines(),
         kokoroVoices: settings.KOKORO_VOICES_BRITISH,
+        cloudProviders: settings.TTS_CLOUD_PROVIDERS,
+      },
+      llm: {
+        providers: settings.LLM_PROVIDERS,
+        active: llmProvider.activeModelLabel(),
       },
     });
   } catch (err) {
@@ -712,11 +722,13 @@ app.get('/debug', requireAdmin, async (req, res) => {
     out.stateFiles = { error: err.message };
   }
 
-  // 6. Recent Ollama calls
-  out.ollama = {
-    url: config.ollama.url,
-    model: config.ollama.model,
-    recentCalls: ollama.recentCalls,
+  // 6. Recent LLM calls — `llm` reflects the active provider/model resolved
+  // by the registry; `ollama.url` is still shown as the homelab endpoint.
+  out.llm = {
+    provider: llmProvider.providerName(),
+    activeModel: llmProvider.activeModelLabel(),
+    ollamaUrl: config.ollama.url,
+    recentCalls: dj.recentCalls,
   };
 
   // 6b. Library tagging stats

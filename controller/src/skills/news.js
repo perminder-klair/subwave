@@ -8,7 +8,7 @@
 
 import { config } from '../config.js';
 import { djText } from '../llm/sdk.js';
-import { djSystem, buildContextLines, decoratePrompt } from '../ollama.js';
+import { djSystem, buildContextLines, decoratePrompt } from '../llm/dj.js';
 
 const ITEM_RE = /<item\b[^>]*>([\s\S]*?)<\/item>/gi;
 const TITLE_RE = /<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i;

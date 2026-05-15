@@ -41,8 +41,19 @@ const FREQUENCIES = ['quiet', 'moderate', 'aggressive'];
 // "use defaultEngine". Keeping `null` instead of duplicating defaultEngine
 // per kind keeps the UI honest: changing the default applies live to any
 // kind the operator hasn't explicitly overridden.
-export const TTS_ENGINES = ['piper', 'kokoro'];
+//
+// `cloud` routes through the AI SDK (OpenAI / ElevenLabs speech models) —
+// see llm/speech.js. `piper` and `kokoro` stay local CLI/worker engines.
+export const TTS_ENGINES = ['piper', 'kokoro', 'cloud'];
 export const TTS_KINDS   = ['dj-speak', 'link', 'station-id', 'hourly-check', 'weather', 'news', 'traffic', 'random-facts', 'jingle'];
+
+// LLM provider abstraction. `ollama` is the homelab default; the cloud
+// providers are opt-in and resolved by llm/provider.js. `gateway` routes
+// through the Vercel AI Gateway (a single key, any vendor).
+export const LLM_PROVIDERS = ['ollama', 'anthropic', 'openai', 'gateway'];
+
+// Cloud TTS vendors usable by the `cloud` engine.
+export const TTS_CLOUD_PROVIDERS = ['openai', 'elevenlabs'];
 
 // British English Kokoro voices — the ones that fit a BBC 6 Music tone. The
 // underlying model ships 54 voices total (American, Spanish, Hindi, Japanese,
@@ -77,6 +88,19 @@ const DEFAULTS = {
     defaultEngine: 'piper',
     byKind: Object.fromEntries(TTS_KINDS.map(k => [k, null])),
     kokoro: { voice: 'bf_isabella' },
+    // Cloud engine config — used when an engine resolves to 'cloud'. `apiKey`
+    // empty means "read the provider's env var" (OPENAI_API_KEY etc.).
+    cloud: { provider: 'openai', model: 'gpt-4o-mini-tts', voice: 'alloy', apiKey: '' },
+  },
+  // LLM provider. `model` empty means "provider default" (config.ollama.model
+  // for ollama). `apiKey` empty means "read the provider's env var".
+  // `pickerAgent` gates the agentic ToolLoopAgent picker — only worth turning
+  // on with a model that handles multi-step tool calls well.
+  llm: {
+    provider: 'ollama',
+    model: '',
+    apiKey: '',
+    pickerAgent: false,
   },
 };
 
@@ -149,6 +173,28 @@ export async function load() {
           ? stored.tts.kokoro.voice
           : DEFAULTS.tts.kokoro.voice,
       },
+      cloud: {
+        provider: TTS_CLOUD_PROVIDERS.includes(stored.tts?.cloud?.provider)
+          ? stored.tts.cloud.provider
+          : DEFAULTS.tts.cloud.provider,
+        model: (typeof stored.tts?.cloud?.model === 'string' && stored.tts.cloud.model.trim())
+          ? stored.tts.cloud.model.trim()
+          : DEFAULTS.tts.cloud.model,
+        voice: (typeof stored.tts?.cloud?.voice === 'string' && stored.tts.cloud.voice.trim())
+          ? stored.tts.cloud.voice.trim()
+          : DEFAULTS.tts.cloud.voice,
+        apiKey: typeof stored.tts?.cloud?.apiKey === 'string' ? stored.tts.cloud.apiKey : '',
+      },
+    },
+    llm: {
+      provider: LLM_PROVIDERS.includes(stored.llm?.provider)
+        ? stored.llm.provider
+        : DEFAULTS.llm.provider,
+      model: typeof stored.llm?.model === 'string' ? stored.llm.model.trim() : DEFAULTS.llm.model,
+      apiKey: typeof stored.llm?.apiKey === 'string' ? stored.llm.apiKey : DEFAULTS.llm.apiKey,
+      pickerAgent: typeof stored.llm?.pickerAgent === 'boolean'
+        ? stored.llm.pickerAgent
+        : DEFAULTS.llm.pickerAgent,
     },
   };
   return cache;
@@ -160,6 +206,18 @@ export function get() {
 
 export function getDefaults() {
   return DEFAULTS;
+}
+
+// Settings with secret fields masked — for anything that leaves the process
+// (the admin /settings response). A non-empty key becomes "set"; empty stays
+// "". The UI shows whether a key is configured without exposing its value;
+// sending "set" back in an update() patch is ignored (treated as unchanged).
+export function getRedacted() {
+  const s = get();
+  const clone = JSON.parse(JSON.stringify(s));
+  if (clone.llm) clone.llm.apiKey = s.llm?.apiKey ? 'set' : '';
+  if (clone.tts?.cloud) clone.tts.cloud.apiKey = s.tts?.cloud?.apiKey ? 'set' : '';
+  return clone;
 }
 
 // Validate + persist. Returns { saved, requiresRestart } so the UI can react.
@@ -263,6 +321,50 @@ export async function update(patch) {
         }
         next.tts.kokoro.voice = v;
       }
+    }
+    if (t.cloud !== undefined) {
+      const c = t.cloud || {};
+      if (c.provider !== undefined) {
+        if (!TTS_CLOUD_PROVIDERS.includes(c.provider)) {
+          throw new Error(`tts.cloud.provider must be one of: ${TTS_CLOUD_PROVIDERS.join(', ')}`);
+        }
+        next.tts.cloud.provider = c.provider;
+      }
+      if (c.model !== undefined) {
+        const v = String(c.model).trim();
+        if (v.length < 1 || v.length > 100) throw new Error('tts.cloud.model must be 1-100 chars');
+        next.tts.cloud.model = v;
+      }
+      if (c.voice !== undefined) {
+        const v = String(c.voice).trim();
+        if (v.length < 1 || v.length > 100) throw new Error('tts.cloud.voice must be 1-100 chars');
+        next.tts.cloud.voice = v;
+      }
+      // 'set' is the redaction sentinel from getRedacted() — ignore it so a
+      // round-tripped settings form doesn't overwrite the real key.
+      if (c.apiKey !== undefined && c.apiKey !== 'set') {
+        next.tts.cloud.apiKey = String(c.apiKey);
+      }
+    }
+  }
+  if ('llm' in patch) {
+    const l = patch.llm || {};
+    if (l.provider !== undefined) {
+      if (!LLM_PROVIDERS.includes(l.provider)) {
+        throw new Error(`llm.provider must be one of: ${LLM_PROVIDERS.join(', ')}`);
+      }
+      next.llm.provider = l.provider;
+    }
+    if (l.model !== undefined) {
+      const v = String(l.model).trim();
+      if (v.length > 100) throw new Error('llm.model must be 0-100 chars');
+      next.llm.model = v;
+    }
+    if (l.apiKey !== undefined && l.apiKey !== 'set') {
+      next.llm.apiKey = String(l.apiKey);
+    }
+    if (l.pickerAgent !== undefined) {
+      next.llm.pickerAgent = !!l.pickerAgent;
     }
   }
 

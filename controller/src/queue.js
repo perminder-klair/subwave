@@ -5,7 +5,7 @@
 import { writeFile, readFile } from 'node:fs/promises';
 import { config } from './config.js';
 import * as subsonic from './subsonic.js';
-import * as ollama from './ollama.js';
+import * as dj from './llm/dj.js';
 import { speak } from './tts.js';
 import { pickAndEnqueue } from './picker.js';
 import { getFullContext } from './context.js';
@@ -246,7 +246,7 @@ class Queue {
         (async () => {
           try {
             const ctx = await getFullContext();
-            const script = await ollama.generateLink({
+            const script = await dj.generateLink({
               previous,
               current,
               context: ctx,

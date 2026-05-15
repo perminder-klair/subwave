@@ -5,7 +5,7 @@
 // Only eligible during commute windows so it doesn't appear at 3am.
 
 import { djText } from '../llm/sdk.js';
-import { djSystem, buildContextLines, decoratePrompt } from '../ollama.js';
+import { djSystem, buildContextLines, decoratePrompt } from '../llm/dj.js';
 
 export default {
   name: 'traffic',

@@ -8,6 +8,9 @@
     "tag": "node src/tag-library.js"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.77",
+    "@ai-sdk/elevenlabs": "^2.0.33",
+    "@ai-sdk/openai": "^3.0.63",
     "ai": "^6.0.182",
     "express": "^4.21.0",
     "node-cron": "^3.0.3",

@@ -3,7 +3,7 @@
 // Always eligible; cooldown does the rate-limiting.
 
 import { djText } from '../llm/sdk.js';
-import { djSystem, buildContextLines, decoratePrompt } from '../ollama.js';
+import { djSystem, buildContextLines, decoratePrompt } from '../llm/dj.js';
 
 export default {
   name: 'random-facts',

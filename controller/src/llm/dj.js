@@ -1,9 +1,18 @@
-// Ollama client — handles two distinct LLM tasks:
-//   1. Request matching: natural language → search params (structured output)
-//   2. DJ script generation: context → spoken segment (creative output)
+// DJ prompt layer — builds the system/user prompts for every LLM task and
+// hands them to the AI SDK wrapper (sdk.js). The actual provider is resolved
+// by provider.js, so this file is provider-agnostic.
+//
+// Two task shapes:
+//   1. Request matching / track picking: structured output (Zod-validated)
+//   2. DJ script generation: free text under a persona system prompt
 
-import { config } from './config.js';
-import * as settings from './settings.js';
+import { z } from 'zod';
+import * as settings from '../settings.js';
+import { djText, djObject } from './sdk.js';
+import { recentCalls, record } from './log.js';
+
+// Re-exported so server.js /debug can read the recent-call ring buffer.
+export { recentCalls, record };
 
 // Random micro-persona per call so the DJ shifts register across segments.
 // The rotation pool is exactly the souls list in Settings — edit it there to
@@ -137,67 +146,8 @@ export function decoratePrompt(prompt, { kind, recap, recentOpeners }) {
   return out.join('\n');
 }
 
-// Ring buffer of recent LLM calls for the /debug endpoint
-export const recentCalls = [];
-export function record(call) {
-  recentCalls.unshift(call);
-  if (recentCalls.length > 30) recentCalls.length = 30;
-}
-
-async function ollamaChat(messages, {
-  format = null,
-  temperature = 0.7,
-  topP = null,
-  repeatPenalty = null,
-  seed = null,
-  kind = 'chat',
-} = {}) {
-  const options = { temperature };
-  if (topP != null) options.top_p = topP;
-  if (repeatPenalty != null) options.repeat_penalty = repeatPenalty;
-  if (seed != null) options.seed = seed;
-  const body = {
-    model: config.ollama.model,
-    messages,
-    stream: false,
-    options,
-  };
-  if (format === 'json') body.format = 'json';
-
-  const started = Date.now();
-  try {
-    const res = await fetch(`${config.ollama.url}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`Ollama chat failed: ${res.status}`);
-    const data = await res.json();
-    const content = data.message?.content || '';
-    record({
-      kind, ok: true, ms: Date.now() - started,
-      model: config.ollama.model,
-      sampling: { temperature, top_p: options.top_p, repeat_penalty: options.repeat_penalty, seed: options.seed },
-      systemPreview: messages.find(m => m.role === 'system')?.content?.slice(0, 200),
-      user: messages.find(m => m.role === 'user')?.content,
-      response: content,
-      t: new Date().toISOString(),
-    });
-    return content;
-  } catch (err) {
-    record({
-      kind, ok: false, ms: Date.now() - started,
-      model: config.ollama.model,
-      user: messages.find(m => m.role === 'user')?.content,
-      error: err.message,
-      t: new Date().toISOString(),
-    });
-    throw err;
-  }
-}
-
 // ---------------------------------------------------------------------------
-// REQUEST MATCHING — strict JSON schema
+// REQUEST MATCHING — structured output, Zod-validated
 // ---------------------------------------------------------------------------
 
 const REQUEST_SYSTEM = `You are the music librarian for a personal Navidrome library that runs an AI radio station. A listener sends a request; you turn it into structured search parameters.
@@ -254,6 +204,20 @@ Worked examples (your output must mirror this structure exactly):
 "play <title> by <artist>"
 {"search_terms":["<title>","<artist>"],"artist":"<artist>","sort":null,"scope":"song","mood":null,"intent":"Wants a specific song by a specific artist.","ack":"Coming right up."}`;
 
+// Lenient schema — it enforces the SHAPE; the system prompt enforces the
+// SEMANTICS. `mood`/`sort` stay free strings (not enums) so a near-miss from a
+// weaker model doesn't 500 a listener request — server.js tolerates unknown
+// moods by falling through to its other pick sources.
+const REQUEST_SCHEMA = z.object({
+  search_terms: z.array(z.string()),
+  artist: z.string().nullable(),
+  sort: z.string().nullable(),
+  scope: z.enum(['album', 'song']),
+  mood: z.string().nullable(),
+  intent: z.string(),
+  ack: z.string(),
+});
+
 export async function matchRequest(userQuery, { listenerName = null, nowPlaying = null } = {}) {
   const ctxLines = [];
   if (nowPlaying?.title) {
@@ -265,22 +229,13 @@ export async function matchRequest(userQuery, { listenerName = null, nowPlaying 
     ctxLines.length ? `\n[Context for resolving references like "similar", "more like this", "match this vibe":\n${ctxLines.join('\n')}]` : '',
   ].filter(Boolean).join(' ');
 
-  const text = await ollamaChat(
-    [
-      { role: 'system', content: REQUEST_SYSTEM },
-      { role: 'user', content: userPrompt },
-    ],
-    { format: 'json', temperature: 0.4, kind: 'matchRequest' }
-  );
-
-  try {
-    return JSON.parse(text);
-  } catch (err) {
-    // Best-effort recovery
-    const match = text.match(/\{[\s\S]*\}/);
-    if (match) return JSON.parse(match[0]);
-    throw new Error(`Failed to parse Ollama response: ${text.slice(0, 200)}`);
-  }
+  return djObject({
+    system: REQUEST_SYSTEM,
+    prompt: userPrompt,
+    schema: REQUEST_SCHEMA,
+    temperature: 0.4,
+    kind: 'matchRequest',
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -299,41 +254,63 @@ export async function generateIntro({ track, context, requestedBy = null, reques
 
   const prompt = `Write a brief intro for this track. If the listener said something specific, acknowledge their words naturally — don't quote them verbatim, but weave the gist in. Never read the request out loud as-is.\n\n${ctxLines.join('\n')}`;
 
-  return ollamaChat(
-    [
-      { role: 'system', content: djSystem() },
-      { role: 'user', content: decoratePrompt(prompt, { kind: 'intro', recap, recentOpeners }) },
-    ],
-    { temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(), kind: 'generateIntro' }
-  );
+  return djText({
+    system: djSystem(),
+    prompt: decoratePrompt(prompt, { kind: 'intro', recap, recentOpeners }),
+    temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(),
+    kind: 'generateIntro',
+  });
 }
 
 export async function generateWeatherSegment(weather, time, { recap = null, context = null, recentOpeners = null } = {}) {
   const ctx = context || { weather, time };
   const ctxLines = buildContextLines(ctx);
   ctxLines.push(`Task: a brief weather check, in character. 1-2 sentences.`);
-  const prompt = ctxLines.join('\n');
-  return ollamaChat(
-    [
-      { role: 'system', content: djSystem() },
-      { role: 'user', content: decoratePrompt(prompt, { kind: 'weather', recap, recentOpeners }) },
-    ],
-    { temperature: 0.9, topP: 0.95, repeatPenalty: 1.15, seed: randomSeed(), kind: 'generateWeatherSegment' }
-  );
+  return djText({
+    system: djSystem(),
+    prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'weather', recap, recentOpeners }),
+    temperature: 0.9, topP: 0.95, repeatPenalty: 1.15, seed: randomSeed(),
+    kind: 'generateWeatherSegment',
+  });
 }
 
 export async function generateStationId({ recap = null, context = null, recentOpeners = null } = {}) {
   const djName = settings.get().dj?.name || 'your host';
   const ctxLines = buildContextLines(context);
   ctxLines.push(`Task: a 1-sentence station ident for SUB/WAVE with ${djName}. Brief, a little understated.`);
-  const prompt = ctxLines.join('\n');
-  return ollamaChat(
-    [
-      { role: 'system', content: djSystem() },
-      { role: 'user', content: decoratePrompt(prompt, { kind: 'station_id', recap, recentOpeners }) },
-    ],
-    { temperature: 1.0, topP: 0.9, repeatPenalty: 1.25, seed: randomSeed(), kind: 'generateStationId' }
-  );
+  return djText({
+    system: djSystem(),
+    prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'station_id', recap, recentOpeners }),
+    temperature: 1.0, topP: 0.9, repeatPenalty: 1.25, seed: randomSeed(),
+    kind: 'generateStationId',
+  });
+}
+
+export async function generateLink({ previous, current, context, recap = null, recentTracks = null, recentOpeners = null }) {
+  const ctxLines = buildContextLines(context, { recentTracks });
+  if (previous?.title) ctxLines.push(`Just played: "${previous.title}" by ${previous.artist || 'unknown'}`);
+  if (current?.title) ctxLines.push(`Now playing: "${current.title}" by ${current.artist || 'unknown'}`);
+
+  const prompt = `Write a short DJ link between tracks. Back-announce what just played and ease into what's playing now. 1-2 sentences, conversational, don't list both titles like a robot — pick one to mention specifically and treat the other lightly.\n\n${ctxLines.join('\n')}`;
+
+  return djText({
+    system: djSystem(),
+    prompt: decoratePrompt(prompt, { kind: 'link', recap, recentOpeners }),
+    temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(),
+    kind: 'generateLink',
+  });
+}
+
+export async function generateHourlyTime(time, weather, { recap = null, context = null, recentOpeners = null } = {}) {
+  const ctx = context || { time, weather };
+  const ctxLines = buildContextLines(ctx);
+  ctxLines.push(`Task: a brief top-of-the-hour time check, in character. 1 sentence.`);
+  return djText({
+    system: djSystem(),
+    prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'hourly', recap, recentOpeners }),
+    temperature: 0.9, topP: 0.95, repeatPenalty: 1.15, seed: randomSeed(),
+    kind: 'generateHourlyTime',
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +329,11 @@ Selection criteria, in order:
 You MUST pick from the candidates only. Output JSON only:
 { "id": "<exact id from candidates>", "reason": "<one short sentence why this one>" }`;
 
+const PICK_SCHEMA = z.object({
+  id: z.string(),
+  reason: z.string(),
+});
+
 export async function pickNextTrack({ candidates, recentPlays, context }) {
   const user = JSON.stringify({
     now: {
@@ -365,51 +347,11 @@ export async function pickNextTrack({ candidates, recentPlays, context }) {
     candidates,
   }, null, 2);
 
-  const text = await ollamaChat(
-    [
-      { role: 'system', content: PICKER_SYSTEM },
-      { role: 'user', content: user },
-    ],
-    { format: 'json', temperature: 0.5, kind: 'pickNextTrack' }
-  );
-
-  try {
-    return JSON.parse(text);
-  } catch (firstErr) {
-    const m = text.match(/\{[\s\S]*\}/);
-    if (m) {
-      try { return JSON.parse(m[0]); } catch { /* fall through to descriptive throw */ }
-    }
-    throw new Error(`picker response not JSON (${firstErr.message}): ${text.slice(0, 200)}`);
-  }
-}
-
-export async function generateLink({ previous, current, context, recap = null, recentTracks = null, recentOpeners = null }) {
-  const ctxLines = buildContextLines(context, { recentTracks });
-  if (previous?.title) ctxLines.push(`Just played: "${previous.title}" by ${previous.artist || 'unknown'}`);
-  if (current?.title) ctxLines.push(`Now playing: "${current.title}" by ${current.artist || 'unknown'}`);
-
-  const prompt = `Write a short DJ link between tracks. Back-announce what just played and ease into what's playing now. 1-2 sentences, conversational, don't list both titles like a robot — pick one to mention specifically and treat the other lightly.\n\n${ctxLines.join('\n')}`;
-
-  return ollamaChat(
-    [
-      { role: 'system', content: djSystem() },
-      { role: 'user', content: decoratePrompt(prompt, { kind: 'link', recap, recentOpeners }) },
-    ],
-    { temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(), kind: 'generateLink' }
-  );
-}
-
-export async function generateHourlyTime(time, weather, { recap = null, context = null, recentOpeners = null } = {}) {
-  const ctx = context || { time, weather };
-  const ctxLines = buildContextLines(ctx);
-  ctxLines.push(`Task: a brief top-of-the-hour time check, in character. 1 sentence.`);
-  const prompt = ctxLines.join('\n');
-  return ollamaChat(
-    [
-      { role: 'system', content: djSystem() },
-      { role: 'user', content: decoratePrompt(prompt, { kind: 'hourly', recap, recentOpeners }) },
-    ],
-    { temperature: 0.9, topP: 0.95, repeatPenalty: 1.15, seed: randomSeed(), kind: 'generateHourlyTime' }
-  );
+  return djObject({
+    system: PICKER_SYSTEM,
+    prompt: user,
+    schema: PICK_SCHEMA,
+    temperature: 0.5,
+    kind: 'pickNextTrack',
+  });
 }

@@ -3,11 +3,11 @@
 // context.getFullContext(); this skill doesn't fetch its own weather.
 //
 // Replaces the old scheduler.maybeWeatherUpdate handler. ctx.weather stays
-// in the shared context so picker.js, ollama.buildContextLines, and the
+// in the shared context so picker.js, dj.buildContextLines, and the
 // festival > weather > time mood priority keep working untouched.
 
 import { djText } from '../llm/sdk.js';
-import { djSystem, buildContextLines, decoratePrompt } from '../ollama.js';
+import { djSystem, buildContextLines, decoratePrompt } from '../llm/dj.js';
 
 export default {
   name: 'weather',
