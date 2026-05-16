@@ -39,6 +39,10 @@ export function Modal({
             'v3-modal-pop fixed z-50 left-1/2 top-1/2 outline-none flex flex-col',
           )}
           style={{
+            // Persistent centering transform — the v3-modal-pop keyframe
+            // overrides this while animating, then falls back to it on finish.
+            // Without it the element snaps to its own top-left at 50%/50%.
+            transform: 'translate(-50%, -50%)',
             width: `min(${width}px, calc(100vw - 2rem))`,
             maxHeight: 'calc(100vh - 3rem)',
             background: 'var(--card-bg, var(--bg))',
