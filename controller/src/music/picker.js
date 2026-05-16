@@ -18,7 +18,7 @@ import * as dj from '../llm/dj.js';
 import * as settings from '../settings.js';
 import { languageModel, providerName } from '../llm/provider.js';
 import { buildPickerTools } from '../llm/tools.js';
-import { record } from '../llm/log.js';
+import { record, recordPick } from '../llm/log.js';
 import { getFullContext } from '../context.js';
 
 const CANDIDATE_CAP = 18;
@@ -108,22 +108,26 @@ async function buildCandidates(mood, recentIds, currentTrack) {
     } catch {}
   }
 
-  // 4. Recently-added albums — "new in the crates".
+  // 4. Recently-added albums — "new in the crates". The memo caches a WIDE
+  // (~40-track) pool; the per-pick `shuffle` then draws a fresh sample from it.
+  // Memoising the narrow CAP_RECENT slice instead would freeze the same 4
+  // tracks for the whole TTL — see the library-search review, finding C.
   try {
-    const recentTracks = await memo('recent-tracks', CACHE_TTL_MS, async () => {
-      const albums = await subsonic.getRecentlyAddedAlbums({ size: 10 });
-      return tracksFromAlbums(shuffle(albums).slice(0, 5), 2, 12);
+    const recentPool = await memo('recent-track-pool', CACHE_TTL_MS, async () => {
+      const albums = await subsonic.getRecentlyAddedAlbums({ size: 12 });
+      return tracksFromAlbums(shuffle(albums), 3, 40);
     });
-    add('recent', recentTracks.filter(notRecent(recentIds)).slice(0, CAP_RECENT));
+    add('recent', shuffle(recentPool).filter(notRecent(recentIds)).slice(0, CAP_RECENT));
   } catch {}
 
-  // 5. Frequent albums — scrobble-backed favourites.
+  // 5. Frequent albums — scrobble-backed favourites. Same wide-pool-then-
+  // shuffle pattern as recently-added above.
   try {
-    const freqTracks = await memo('frequent-tracks', CACHE_TTL_MS, async () => {
-      const albums = await subsonic.getFrequentAlbums({ size: 10 });
-      return tracksFromAlbums(shuffle(albums).slice(0, 5), 2, 12);
+    const freqPool = await memo('frequent-track-pool', CACHE_TTL_MS, async () => {
+      const albums = await subsonic.getFrequentAlbums({ size: 12 });
+      return tracksFromAlbums(shuffle(albums), 3, 40);
     });
-    add('frequent', freqTracks.filter(notRecent(recentIds)).slice(0, CAP_FREQUENT));
+    add('frequent', shuffle(freqPool).filter(notRecent(recentIds)).slice(0, CAP_FREQUENT));
   } catch {}
 
   // 6. Similar-artist top songs — adjacency through Last.fm artist graph.
@@ -159,10 +163,19 @@ async function buildCandidates(mood, recentIds, currentTrack) {
     } catch {}
   }
 
-  // De-dup, shuffle, cap.
+  // De-dup by id, cap per artist so one name can't dominate the pool (the LLM
+  // can only rotate artists across what it's handed), shuffle, cap.
+  const MAX_PER_ARTIST = 3;
   const seen = new Set();
+  const perArtist = new Map();
   const final = shuffle(pool).filter(t => {
     if (!t.id || seen.has(t.id)) return false;
+    const artistKey = (t.artist || '').toLowerCase().trim();
+    if (artistKey) {
+      const n = perArtist.get(artistKey) || 0;
+      if (n >= MAX_PER_ARTIST) return false;
+      perArtist.set(artistKey, n + 1);
+    }
     seen.add(t.id);
     return true;
   }).slice(0, CANDIDATE_CAP);
@@ -212,8 +225,12 @@ async function pickViaPool(queue, ctx) {
         id: c.id,
         title: c.title,
         artist: c.artist,
+        album: c.album || null,
+        year: c.year || null,
+        genre: c.genre || null,
         moods: c.moods || [],
         energy: c.energy || null,
+        source: c._source || null,
       })),
       recentPlays,
       context: ctx,
@@ -245,13 +262,11 @@ candidates, then choose ONE track. Strategy:
 - tracksByMood matches the room's dominant mood.
 - starredSongs / recentlyAdded / randomSongs add variety.
 
-Selection criteria, in order:
-1. FLOW — transitions naturally from what just played (energy, mood, tempo).
-2. CONTEXT — fits the time of day, weather, and dominant mood.
-3. VARIETY — never the same artist back-to-back; rotate energy; avoid the predictable.
-4. INTEREST — pick something that makes a moment.
+${dj.PICKER_CRITERIA}
 
-The final track id MUST be one that a tool actually returned. Do not invent ids.`;
+The final track id MUST be one that a tool actually returned. Do not invent ids.
+Respond with a JSON object only — no prose, no markdown:
+{ "id": "<exact id a tool returned>", "reason": "<one short sentence>" }`;
 
 const AGENT_PICK_SCHEMA = z.object({
   id: z.string().describe('the exact song id, as returned by a tool call'),
@@ -342,6 +357,7 @@ export async function pickAndEnqueue(queue) {
   if (!result) return;
   const { song, reason, source } = result;
   queue.log('ai-pick', `${song.title} — ${song.artist}`, { reason, source });
+  recordPick({ song, reason, source });
   await queue.push({
     track: {
       id: song.id,

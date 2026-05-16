@@ -42,8 +42,8 @@ async function call(endpoint, params = {}) {
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function search(query, { songCount = 20 } = {}) {
-  const r = await call('search3', { query, songCount, artistCount: 5, albumCount: 5 });
+export async function search(query, { songCount = 20, songOffset = 0 } = {}) {
+  const r = await call('search3', { query, songCount, songOffset, artistCount: 5, albumCount: 5 });
   return r.searchResult3?.song || [];
 }
 
@@ -55,6 +55,14 @@ export async function getRandomSongs({ size = 20, genre, fromYear, toYear } = {}
 export async function getSongsByGenre(genre, { count = 20 } = {}) {
   const r = await call('getSongsByGenre', { genre, count });
   return r.songsByGenre?.song || [];
+}
+
+// All genre tags present in the library, each with { value, songCount,
+// albumCount }. Used to resolve a listener's free-text genre ("hip hop") to
+// the exact tag the library actually carries ("Hip-Hop").
+export async function getGenres() {
+  const r = await call('getGenres');
+  return r.genres?.genre || [];
 }
 
 export async function getSimilarSongs(id, { count = 20 } = {}) {

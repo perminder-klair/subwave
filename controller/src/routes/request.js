@@ -14,6 +14,8 @@ import {
 
 export const router = express.Router();
 
+const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
+
 // Resolve "latest album by Diljit" style requests: find the artist, sort their
 // albums by year, pick a song from the right album. Returns a Subsonic song or null.
 async function pickByArtistAndSort({ artistName, sort, scope, recentIds }) {
@@ -28,8 +30,13 @@ async function pickByArtistAndSort({ artistName, sort, scope, recentIds }) {
       albums = [...albums].sort((a, b) => (b.year || 0) - (a.year || 0));
     } else if (sort === 'oldest') {
       albums = [...albums].sort((a, b) => (a.year || 9999) - (b.year || 9999));
+    } else if (!sort) {
+      // No explicit sort (a bare "play <artist>") → shuffle so the pick
+      // spreads across the whole catalogue instead of always hitting the
+      // first album Subsonic returns.
+      albums = shuffle(albums);
     }
-    // sort=popular or null → leave order as Subsonic returned
+    // sort=popular → leave order as Subsonic returned
 
     // Try the top-ranked album first; if its tracks are all recently played,
     // walk down the list before giving up.
@@ -45,6 +52,31 @@ async function pickByArtistAndSort({ artistName, sort, scope, recentIds }) {
     queue.log('error', `pickByArtistAndSort failed: ${err.message}`);
   }
   return null;
+}
+
+// Resolve a listener's free-text genre ("hip hop", "punjabi") to a genre value
+// that actually exists in the library. search3 is a title/artist/album text
+// match and can't query the genre tag, so genre requests must go through
+// getSongsByGenre with an exact genre name. Returns the matched name or null.
+async function resolveGenre(name) {
+  if (!name) return null;
+  const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const target = norm(name);
+  if (!target) return null;
+  try {
+    const genres = await subsonic.getGenres();
+    let hit = genres.find(g => norm(g.value) === target);
+    if (!hit) {
+      hit = genres.find(g => {
+        const gv = norm(g.value);
+        return gv && (gv.includes(target) || target.includes(gv));
+      });
+    }
+    return hit?.value || null;
+  } catch (err) {
+    queue.log('error', `resolveGenre failed: ${err.message}`);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -156,9 +188,18 @@ router.post('/request', async (req, res) => {
     let pick = null;
     let pickSource = null;
 
-    // 2a. Smart artist + sort path — if the listener asked for "latest/oldest
-    // album by X", resolve the artist's albums and pick from the right one.
-    if (!pick && matched.artist && (matched.sort || matched.scope === 'album')) {
+    // A specific song title was named if any search term differs from the
+    // artist name. Without one, an artist request is a bare "play <artist>".
+    const artistLc = (matched.artist || '').toLowerCase().trim();
+    const namedSongTitle = (matched.search_terms || []).some(t =>
+      t && typeof t === 'string' && t.toLowerCase().trim() && t.toLowerCase().trim() !== artistLc
+    );
+
+    // 2a. Artist path — resolve the artist's albums and pick a track. Used for
+    // "latest/oldest album by X", album requests, AND bare "play <artist>"
+    // requests with no song title: walking artist → albums → songs reaches the
+    // whole catalogue, where a flat search3 only sees the top ~25 hits.
+    if (!pick && matched.artist && (matched.sort || matched.scope === 'album' || !namedSongTitle)) {
       pick = await pickByArtistAndSort({
         artistName: matched.artist,
         sort: matched.sort,
@@ -168,20 +209,42 @@ router.post('/request', async (req, res) => {
       if (pick) pickSource = 'artist-sort';
     }
 
-    // 2b. Search by terms — only when the LLM gave us terms that look like
-    // real library values (artist/song/genre), not vibe words. The system
-    // prompt forbids vibe terms here, but defensively skip search if the
-    // only term equals the mood string.
+    // 2b. Genre path — match the listener's genre against the library's real
+    // genre tags. search3 can't query genre, so route through getSongsByGenre.
+    if (!pick && matched.genre) {
+      const genre = await resolveGenre(matched.genre);
+      if (genre) {
+        try {
+          const songs = await subsonic.getSongsByGenre(genre, { count: 100 });
+          pick = randomFresh(songs);
+          if (pick) pickSource = `genre:${genre}`;
+        } catch (err) {
+          queue.log('error', `genre pick failed: ${err.message}`);
+        }
+      }
+    }
+
+    // 2c. Search by terms — artist names / song titles only (the system prompt
+    // routes genres and vibes elsewhere; defensively drop a term that equals
+    // the mood or genre string). A random page offset means repeated requests
+    // for the same artist don't always cycle the same top-25 search3 hits.
     if (!pick) {
       const terms = (matched.search_terms || []).filter(t => {
         if (!t || typeof t !== 'string') return false;
         if (matched.mood && t.toLowerCase() === matched.mood.toLowerCase()) return false;
+        if (matched.genre && t.toLowerCase() === matched.genre.toLowerCase()) return false;
         return true;
       });
       if (terms.length > 0) {
         let candidates = [];
         for (const term of terms) {
-          const r = await subsonic.search(term, { songCount: 25 });
+          const songOffset = Math.floor(Math.random() * 3) * 25;
+          let r = await subsonic.search(term, { songCount: 25, songOffset });
+          // A deep offset can land past the end of the result set — fall back
+          // to the first page so a valid query never comes back empty.
+          if (r.length === 0 && songOffset > 0) {
+            r = await subsonic.search(term, { songCount: 25 });
+          }
           candidates = [...candidates, ...r];
         }
         const seen = new Set();
@@ -195,7 +258,7 @@ router.post('/request', async (req, res) => {
       }
     }
 
-    // 2c. Mood-tagged library — the right vocabulary for vibe queries. The
+    // 2d. Mood-tagged library — the right vocabulary for vibe queries. The
     // tagger writes moods like "calm", "rainy", "night" to state/moods.json;
     // matchRequest's "mood" field uses the same vocabulary.
     if (!pick && matched.mood) {
@@ -204,7 +267,7 @@ router.post('/request', async (req, res) => {
       if (pick) pickSource = `library-mood:${matched.mood}`;
     }
 
-    // 2d. Similar-songs from the current track — when the listener's intent
+    // 2e. Similar-songs from the current track — when the listener's intent
     // is vibe-adjacent and we have something playing, Subsonic can surface
     // adjacency that wasn't captured in our local mood tags.
     if (!pick && currentTrack?.id && (matched.mood || /similar|like|match/i.test(text))) {
@@ -215,7 +278,7 @@ router.post('/request', async (req, res) => {
       } catch {}
     }
 
-    // 2e. Dominant-mood fallback — if the listener gave us nothing actionable
+    // 2f. Dominant-mood fallback — if the listener gave us nothing actionable
     // but the station has a mood for the current moment (weather/time/festival),
     // play something that fits the room rather than refusing.
     if (!pick) {
@@ -229,7 +292,7 @@ router.post('/request', async (req, res) => {
       } catch {}
     }
 
-    // 2f. Starred — operator's hand-picked favourites are always a safe pick.
+    // 2g. Starred — operator's hand-picked favourites are always a safe pick.
     if (!pick) {
       try {
         const starred = await subsonic.getStarred();

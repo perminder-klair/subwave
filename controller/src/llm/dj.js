@@ -158,17 +158,16 @@ export function decoratePrompt(prompt, { kind, recap, recentOpeners }) {
 
 const REQUEST_SYSTEM = `You are the music librarian for a personal Navidrome library that runs an AI radio station. A listener sends a request; you turn it into structured search parameters.
 
-You MUST respond with a JSON object containing ALL of these keys, in this exact order. Do not omit any key. Use null where a value does not apply.
+Fill in every field. Use null where a value does not apply — never omit a field.
 
-{
-  "search_terms": [array of 1-3 strings to search the library — ARTIST NAMES, SONG TITLES, or REAL GENRES like "punjabi", "lofi", "jazz". NEVER mood/vibe words like "calm", "rainy", "overcast" — those go in the "mood" field],
-  "artist": string or null — the artist name if the listener named one (use the artist's common name, e.g. "Diljit Dosanjh"),
-  "sort": one of "latest" | "oldest" | "popular" | null — set to "latest" for words like latest/new/newest/recent, "oldest" for old/classic, "popular" for popular/best/top. Otherwise null,
-  "scope": one of "album" | "song" — what the listener wants. Default "song",
-  "mood": one of energetic|calm|reflective|celebratory|romantic|spiritual|focus|workout|driving|cooking|rainy|sunny|night|morning|evening|festival|cultural — or null. ALWAYS set this for vibe/feeling requests (e.g. "overcast mood" → calm or reflective, "cosy" → calm, "pumped up" → energetic, "late night drive" → night+driving — pick the strongest single match),
-  "intent": one short sentence describing what the listener wants,
-  "ack": short on-air acknowledgment the DJ reads aloud, max 20 words, sounds like a real radio DJ — no "thank you for listening" or self-intros
-}
+- search_terms: 1-3 strings to look up in the library — ARTIST NAMES or SONG TITLES only. NEVER genres, and NEVER mood/vibe words like "calm", "rainy", "overcast". Genres go in "genre"; vibes go in "mood".
+- artist: the artist's common name if the listener named one (e.g. "Diljit Dosanjh"), else null.
+- genre: a real music genre if the listener asked for one (e.g. "punjabi", "hip hop", "jazz", "lofi", "rock", "bhangra"), else null. A genre is a kind of music — not a mood and not a feeling.
+- sort: "latest" for latest/new/newest/recent, "oldest" for old/classic, "popular" for popular/best/top, else null.
+- scope: "album" or "song" — what the listener wants. Default "song".
+- mood: one of energetic|calm|reflective|celebratory|romantic|spiritual|focus|workout|driving|cooking|rainy|sunny|night|morning|evening|festival|cultural — or null. ALWAYS set this for vibe/feeling requests ("overcast mood" → calm or reflective, "cosy" → calm, "pumped up" → energetic, "late night drive" → night — pick the strongest single match).
+- intent: one short sentence describing what the listener wants.
+- ack: short on-air acknowledgment the DJ reads aloud, max 20 words, sounds like a real radio DJ — no "thank you for listening" or self-intros.
 
 Vibe-to-mood mapping (use these when the request describes a feeling, weather, or moment rather than naming an artist/song):
 - overcast, cloudy, grey day, drizzly → calm or reflective
@@ -187,28 +186,31 @@ Vibe-to-mood mapping (use these when the request describes a feeling, weather, o
 - diwali, vaisakhi, holi → festival + cultural
 - shabad, kirtan, devotional → spiritual
 
-Worked examples (your output must mirror this structure exactly):
+Worked examples (these show how the fields map — values only; the response format is handled for you):
 
 "<artist> latest album"
-{"search_terms":["<artist>"],"artist":"<artist>","sort":"latest","scope":"album","mood":null,"intent":"Wants a track from the newest album.","ack":"Pulling their latest for you now."}
+{"search_terms":["<artist>"],"artist":"<artist>","genre":null,"sort":"latest","scope":"album","mood":null,"intent":"Wants a track from the newest album.","ack":"Pulling their latest for you now."}
 
 "old <artist> track"
-{"search_terms":["<artist>"],"artist":"<artist>","sort":"oldest","scope":"song","mood":null,"intent":"Wants an early track.","ack":"Going back in the catalogue for you."}
+{"search_terms":["<artist>"],"artist":"<artist>","genre":null,"sort":"oldest","scope":"song","mood":null,"intent":"Wants an early track.","ack":"Going back in the catalogue for you."}
+
+"play some punjabi music"
+{"search_terms":[],"artist":null,"genre":"punjabi","sort":null,"scope":"song","mood":null,"intent":"Wants Punjabi-genre music.","ack":"Some Punjabi heat coming your way."}
 
 "something romantic"
-{"search_terms":[],"artist":null,"sort":null,"scope":"song","mood":"romantic","intent":"Wants a romantic track.","ack":"Slowing things down for you."}
+{"search_terms":[],"artist":null,"genre":null,"sort":null,"scope":"song","mood":"romantic","intent":"Wants a romantic track.","ack":"Slowing things down for you."}
 
 "overcast mood"
-{"search_terms":[],"artist":null,"sort":null,"scope":"song","mood":"calm","intent":"Wants something to match an overcast feel.","ack":"Something to sit under the grey with."}
+{"search_terms":[],"artist":null,"genre":null,"sort":null,"scope":"song","mood":"calm","intent":"Wants something to match an overcast feel.","ack":"Something to sit under the grey with."}
 
 "rainy day"
-{"search_terms":[],"artist":null,"sort":null,"scope":"song","mood":"rainy","intent":"Wants weather-appropriate calm music.","ack":"Soundtrack for the rain, coming up."}
+{"search_terms":[],"artist":null,"genre":null,"sort":null,"scope":"song","mood":"rainy","intent":"Wants weather-appropriate calm music.","ack":"Soundtrack for the rain, coming up."}
 
 "late-night driving"
-{"search_terms":[],"artist":null,"sort":null,"scope":"song","mood":"driving","intent":"Wants night-drive music.","ack":"Keep the road quiet — this one's for you."}
+{"search_terms":[],"artist":null,"genre":null,"sort":null,"scope":"song","mood":"driving","intent":"Wants night-drive music.","ack":"Keep the road quiet — this one's for you."}
 
 "play <title> by <artist>"
-{"search_terms":["<title>","<artist>"],"artist":"<artist>","sort":null,"scope":"song","mood":null,"intent":"Wants a specific song by a specific artist.","ack":"Coming right up."}`;
+{"search_terms":["<title>","<artist>"],"artist":"<artist>","genre":null,"sort":null,"scope":"song","mood":null,"intent":"Wants a specific song by a specific artist.","ack":"Coming right up."}`;
 
 // Lenient schema — it enforces the SHAPE; the system prompt enforces the
 // SEMANTICS. `mood`/`sort` stay free strings (not enums) so a near-miss from a
@@ -217,6 +219,7 @@ Worked examples (your output must mirror this structure exactly):
 const REQUEST_SCHEMA = z.object({
   search_terms: z.array(z.string()),
   artist: z.string().nullable(),
+  genre: z.string().nullable(),
   sort: z.string().nullable(),
   scope: z.enum(['album', 'song']),
   mood: z.string().nullable(),
@@ -338,17 +341,34 @@ export async function generateHourlyTime(time, weather, { recap = null, context 
 // LLM PICKER — choose the next track from a candidate pool
 // ---------------------------------------------------------------------------
 
-const PICKER_SYSTEM = `You are the DJ for SUB/WAVE, a personal internet radio station.
-Pick the single best NEXT track to play, given recent plays, current context, and a candidate pool.
-
-Selection criteria, in order:
+// Shared selection criteria — used by both the pool picker (PICKER_SYSTEM
+// below) and the agent picker (AGENT_INSTRUCTIONS in music/picker.js) so the
+// two strategies can't drift apart.
+export const PICKER_CRITERIA = `Selection criteria, in order:
 1. FLOW — does it transition naturally from what just played (energy, mood, tempo)?
 2. CONTEXT — does it fit the time of day, weather, and dominant mood?
-3. VARIETY — avoid same artist back-to-back; rotate energy levels; don't be predictable.
-4. INTEREST — prefer something that creates a moment, not the most generic option.
+3. VARIETY — avoid the same artist back-to-back; rotate energy levels; don't be predictable.
+4. INTEREST — prefer something that creates a moment, not the most generic option.`;
 
-You MUST pick from the candidates only. Output JSON only:
-{ "id": "<exact id from candidates>", "reason": "<one short sentence why this one>" }`;
+const PICKER_SYSTEM = `You are the DJ for SUB/WAVE, a personal internet radio station.
+Pick the single best NEXT track from the candidate pool, given recent plays and the current context.
+
+${PICKER_CRITERIA}
+
+Each candidate carries a "source" tag — a hint about where it came from:
+- similar / similar-artist: flows from what's playing now
+- recent: newly added to the library
+- frequent / starred / playlist: an established favourite
+- mood-library: matches the room's mood
+- random: a wildcard for breaking a predictable run
+Use it to balance familiarity against discovery.
+
+recentPlays is context for judging flow — every candidate is already guaranteed
+unplayed, so you never need to reject one for being recent.
+
+Pick exactly one candidate. Respond with a JSON object only — no prose, no
+markdown, no reasoning outside the object:
+{ "id": "<exact id from a candidate>", "reason": "<one short sentence on why this one>" }`;
 
 const PICK_SCHEMA = z.object({
   id: z.string(),
