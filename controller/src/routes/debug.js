@@ -7,6 +7,7 @@ import * as llmProvider from '../llm/provider.js';
 import * as tts from '../audio/tts.js';
 import * as library from '../music/library.js';
 import { getFullContext } from '../context.js';
+import * as settings from '../settings.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { requireAdmin } from '../middleware/auth.js';
@@ -136,13 +137,17 @@ router.get('/debug', requireAdmin, async (req, res) => {
     out.session = { error: err.message };
   }
 
-  // 8. Config (redacted)
+  // 8. Config (redacted) — show *effective* values: the admin UI's location
+  // setting overrides the env-derived config, so read that from settings
+  // (falling back to config) rather than the stale env default. The LLM
+  // provider/model/endpoint is provider-agnostic (any AI SDK provider or
+  // router) and already reported in `out.llm` — not duplicated here.
+  let s = null;
+  try { s = settings.get(); } catch { s = null; }
   out.config = {
     navidromeUrl: config.navidrome.url,
     navidromeUser: config.navidrome.user,
-    ollamaUrl: config.ollama.url,
-    ollamaModel: config.ollama.model,
-    location: config.weather.locationName,
+    location: s?.weather?.locationName || config.weather.locationName,
     port: config.server.port,
   };
 

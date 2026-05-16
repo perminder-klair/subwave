@@ -251,7 +251,7 @@ export default function DashPanel() {
             {booth.length === 0 ? (
               <div style={{ fontStyle: 'italic', color: 'var(--muted)' }}>no session turns yet</div>
             ) : (
-              <div ref={logRef} style={{ flex: 1, minHeight: 220, overflowY: 'auto' }}>
+              <div ref={logRef} style={{ flex: 1, minHeight: 220, maxHeight: 360, overflowY: 'auto' }}>
                 {booth.map((turn, i) => (
                   <div key={turnKey(turn, i)} className={`log ${classTone(turnClass(turn))}`}>
                     <span className="t">{new Date(turn.t).toLocaleTimeString('en-GB', { hour12: false })}</span>
