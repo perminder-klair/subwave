@@ -1,7 +1,7 @@
 'use client';
 
 // DJ command center — /admin/dash. Lets the operator step into the autonomous
-// booth: speak custom text on-air, fire any voice segment or skill on demand,
+// booth: speak custom text on-air, fire any voice segment on demand,
 // flip the autonomous toggles, and watch live on-air status + the booth log.
 import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -26,7 +26,6 @@ const SEGMENTS = [
 export default function DashPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [status, setStatus] = useState(null);   // { nowPlaying, context, listeners, dj, queue }
-  const [skills, setSkills] = useState([]);
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(null);       // key of the running action
   const [feedback, setFeedback] = useState(null); // { tone, text }
@@ -57,21 +56,6 @@ export default function DashPanel() {
     tick();
     const id = setInterval(tick, 3000);
     return () => { cancelled = true; clearInterval(id); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, needsAuth]);
-
-  // Skill catalogue — fetched once.
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/dj/skills');
-        const j = await r.json();
-        if (!cancelled && Array.isArray(j?.skills)) setSkills(j.skills);
-      } catch {}
-    })();
-    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, needsAuth]);
 
@@ -111,14 +95,6 @@ export default function DashPanel() {
   // Skip is disruptive — it cuts the track for every listener — so the Skip
   // button opens a confirm dialog; this runs only after the operator accepts.
   const doSkip = () => act('skip', '/dj/skip', {}, 'skip track');
-
-  // Toggle a skill's autonomous firing. Server returns the fresh catalogue.
-  const toggleSkill = async (s) => {
-    const next = s.enabled === false;
-    const j = await act(`skilltoggle:${s.name}`, '/dj/skill-toggle',
-      { name: s.name, on: next }, `${s.name} ${next ? 'enable' : 'disable'}`);
-    if (Array.isArray(j?.skills)) setSkills(j.skills);
-  };
 
   const np = status?.nowPlaying;
   const ctx = status?.context;
@@ -341,44 +317,6 @@ export default function DashPanel() {
                 );
               })}
             </div>
-          </Card>
-
-          <Card title="Skills" sub="autonomous firing">
-            {skills.length === 0 ? (
-              <div style={{ fontStyle: 'italic', color: 'var(--muted)' }}>no skills reported</div>
-            ) : (
-              <div style={{ display: 'grid', gap: 8 }}>
-                {skills.map(s => {
-                  const enabled = s.enabled !== false;
-                  return (
-                    <div key={s.name} style={{
-                      display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 10,
-                      alignItems: 'center', padding: '6px 0',
-                      borderBottom: '1px dashed var(--separator-strong)',
-                    }}>
-                      <div>
-                        <div style={{ fontSize: 12, fontWeight: 700 }}>{s.name}</div>
-                        {s.description && (
-                          <div style={{ fontSize: 10, color: 'var(--muted)' }}>{s.description}</div>
-                        )}
-                      </div>
-                      <Btn
-                        sm
-                        disabled={!!busy}
-                        onClick={() => act(`skill:${s.name}`, '/dj/skill', { name: s.name }, s.name)}
-                      >
-                        {busy === `skill:${s.name}` ? '…' : 'Fire'}
-                      </Btn>
-                      <Toggle
-                        on={enabled}
-                        disabled={!!busy}
-                        onClick={() => toggleSkill(s)}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            )}
           </Card>
 
           <Card title="Broadcast">
