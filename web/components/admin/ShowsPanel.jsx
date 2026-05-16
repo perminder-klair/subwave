@@ -352,7 +352,7 @@ export default function ShowsPanel() {
     <div style={{ display: 'grid', gap: 16 }}>
       {/* ── HERO ─────────────────────────────────────────────────────────── */}
       <section className="card">
-        <div style={{
+        <div className="stack-mobile" style={{
           padding: 16, borderBottom: '1px solid var(--ink)',
           display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 16, alignItems: 'center',
         }}>
@@ -374,7 +374,7 @@ export default function ShowsPanel() {
         </div>
 
         {/* Now / Up next / After that strip */}
-        <div style={{
+        <div className="stack-mobile" style={{
           display: 'grid', gridTemplateColumns: '1fr 1fr 1fr',
           borderBottom: '1px solid var(--separator-strong)',
         }}>
@@ -631,7 +631,7 @@ export default function ShowsPanel() {
               <span className="field-hint">{draft.name.trim().length}/{NAME_MAX}</span>
             </label>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <label className="field">
                 <span className="field-label">persona owner</span>
                 <select

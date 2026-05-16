@@ -69,7 +69,7 @@ export default function DebugPanel() {
             <Btn sm onClick={() => setPaused(!paused)}>{paused ? 'Resume' : 'Pause'}</Btn>
           </span>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)' }}>
+        <div className="strip-mobile" style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)' }}>
           <HealthCell
             label="Icecast"
             status={data?.icecast && !data.icecast.error ? 'ok' : err ? 'down' : 'idle'}
@@ -120,7 +120,7 @@ export default function DebugPanel() {
       {data && (
         <>
           {/* ── ROW 1 — NOW PLAYING / ICECAST / DJ CONTEXT ──────────────── */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+          <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
             <Card title="Now playing" sub="now-playing.json" bodyStyle={{ maxHeight: 320, overflowY: 'auto' }}>
               <KvTable obj={data.nowPlaying} />
             </Card>
@@ -135,7 +135,7 @@ export default function DebugPanel() {
           </div>
 
           {/* ── ROW 2 — LLM + LIQUIDSOAP ────────────────────────────────── */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 16 }}>
+          <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 16 }}>
             <Card
               title="LLM recent calls"
               sub={`${data.llm?.recentCalls?.length ?? 0} · ${data.llm?.provider || '—'} / ${data.llm?.activeModel || '—'}`}
@@ -201,7 +201,7 @@ export default function DebugPanel() {
           </div>
 
           {/* ── ROW 3 — STATE DIR + VOICE WAVS + LIBRARY ────────────────── */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.2fr', gap: 16 }}>
+          <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.2fr', gap: 16 }}>
             <Card title="State dir" sub="/var/sub-wave" bodyStyle={{ maxHeight: 320, overflowY: 'auto' }}>
               <FilesTable files={data.stateFiles} />
             </Card>
@@ -248,7 +248,7 @@ export default function DebugPanel() {
           </div>
 
           {/* ── QUEUE — current request + upcoming ──────────────────────── */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 16 }}>
+          <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 16 }}>
             <Card title="Queue" sub="current served request">
               {data.queue?.current ? (
                 <KvTable obj={data.queue.current} />

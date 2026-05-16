@@ -143,7 +143,7 @@ export default function DashPanel() {
 
       {/* ── ON AIR HERO ────────────────────────────────────────────────── */}
       <section className="card" style={{ borderColor: 'var(--ink)' }}>
-        <div style={{
+        <div className="stack-mobile" style={{
           padding: 18, display: 'grid', gridTemplateColumns: '1fr auto', gap: 24,
           alignItems: 'center', borderBottom: '1px solid var(--ink)',
         }}>
@@ -178,7 +178,7 @@ export default function DashPanel() {
         </div>
 
         {/* status strip */}
-        <div style={{
+        <div className="strip-mobile" style={{
           display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)',
         }}>
           {strip.map((c, i) => (
@@ -201,7 +201,7 @@ export default function DashPanel() {
       </section>
 
       {/* ── 2-COL OPS ──────────────────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16 }}>
+      <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16 }}>
         {/* LEFT */}
         <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr', gap: 16 }}>
           <Card

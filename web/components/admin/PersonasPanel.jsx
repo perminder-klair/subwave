@@ -308,7 +308,7 @@ export default function PersonasPanel() {
       )}
 
       {/* ── 2-COL ───────────────────────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16, alignItems: 'flex-start' }}>
+      <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16, alignItems: 'flex-start' }}>
         {/* ROSTER */}
         <div style={{ display: 'grid', gap: 10 }}>
           <span className="caption">roster · {form.personas.length} / {PERSONA_MAX}</span>
@@ -393,7 +393,7 @@ export default function PersonasPanel() {
               </>
             }
           >
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               <div className="field">
                 <label className="field-label">On-air name</label>
                 <input
@@ -445,7 +445,7 @@ export default function PersonasPanel() {
 
             <div className="rule-label">talk frequency</div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+            <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
               {FREQUENCIES.map(f => {
                 const active = f.id === focused.frequency;
                 return (
@@ -515,7 +515,7 @@ export default function PersonasPanel() {
             )}
 
             {focused.tts.engine === 'cloud' && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                 <div className="field">
                   <label className="field-label">Cloud provider</label>
                   <Seg

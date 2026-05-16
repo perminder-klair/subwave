@@ -1435,6 +1435,20 @@ body::after {
   .admin-root .shell-nav .nav-foot { display: none; }
 }
 
+/* Mobile — collapse the panels' multi-column inline-grid layouts so every
+   admin page reads as a single column. `!important` is required because the
+   panels set `grid-template-columns` via inline styles. */
+@media (max-width: 640px) {
+  .admin-root .stack-mobile { grid-template-columns: 1fr !important; }
+  .admin-root .strip-mobile { grid-template-columns: repeat(2, 1fr) !important; }
+  /* Re-flow the status-strip cell rules for two columns: left dividers only
+     between columns, top dividers between the new rows. */
+  .admin-root .strip-mobile > *:nth-child(odd) { border-left: none !important; }
+  .admin-root .strip-mobile > *:nth-child(n + 3) {
+    border-top: 1px solid var(--separator-strong);
+  }
+}
+
 /* ── Card ── */
 .admin-root .card { border: 1px solid var(--ink); background: var(--card-bg); }
 .admin-root .card-head {

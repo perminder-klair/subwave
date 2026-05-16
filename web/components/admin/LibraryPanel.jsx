@@ -205,7 +205,7 @@ export default function LibraryPanel() {
       </section>
 
       {/* ── 2-COL ─────────────────────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 240px', gap: 16, alignItems: 'flex-start' }}>
+      <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '1fr 240px', gap: 16, alignItems: 'flex-start' }}>
         {/* RESULTS */}
         <div style={{ display: 'grid', gap: 16 }}>
           <Card

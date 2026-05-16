@@ -172,7 +172,7 @@ export default function SettingsPanel() {
   };
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 24, alignItems: 'flex-start' }}>
+    <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 24, alignItems: 'flex-start' }}>
       {/* Section rail */}
       <aside style={{ display: 'grid', gap: 4, position: 'sticky', top: 24 }}>
         <span className="caption" style={{ padding: '0 0 8px' }}>settings</span>
