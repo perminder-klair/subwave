@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useEffect } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import SignInForm from './SignInForm';
+import { Toaster } from '../ui/toaster';
 
 const NAV = [
   { href: '/admin/dash',     label: 'Dash' },
@@ -70,6 +71,7 @@ export default function AdminShell({ children }) {
           </main>
         </div>
       </div>
+      <Toaster />
     </div>
   );
 }

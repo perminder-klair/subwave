@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { fmtSize } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { V3Alert } from '../ui/alert';
 
 export default function DebugPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
@@ -79,17 +80,7 @@ export default function DebugPanel() {
         <span style={{ color: 'var(--muted)' }} className="v3-caption">refresh 2s</span>
       </div>
 
-      {err && (
-        <div
-          style={{
-            border: '1px solid #c5302a',
-            color: '#c5302a',
-            padding: '8px 12px',
-          }}
-        >
-          controller error: {err}
-        </div>
-      )}
+      {err && <V3Alert tone="error" title="controller error">{err}</V3Alert>}
 
       {data && (
         <div className="grid lg:grid-cols-2 gap-4">

@@ -1,8 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import { fmtSize } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { V3AlertDialog } from '../ui/alert-dialog';
+import { V3Alert } from '../ui/alert';
 
 const TTS_KIND_LABEL = {
   'dj-speak':     'Track intros',
@@ -37,6 +40,8 @@ export default function SettingsPanel() {
   const [form, setForm] = useState(null);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [saveMsg, setSaveMsg] = useState(null);
+  const [confirmRestart, setConfirmRestart] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(null);  // jingle filename, or null
 
   // Refresh only updates the read-only `data` view — never touches `form`.
   // The form is hydrated exactly once via the effect below; otherwise the 3s
@@ -110,8 +115,8 @@ export default function SettingsPanel() {
     } finally { setBusy(false); }
   };
 
+  // Confirmed via the dialog before this runs — the broadcast drops briefly.
   const restartMixer = async () => {
-    if (!confirm('Restart the mixer? Broadcast will drop for ~3-5 seconds.')) return;
     setBusy(true);
     try {
       const r = await adminFetch('/restart-mixer', { method: 'POST' });
@@ -137,19 +142,19 @@ export default function SettingsPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setJingleText('');
       await refresh();
-    } catch (e) { alert(`Jingle creation failed: ${e.message}`); }
+    } catch (e) { toast.error(`Jingle creation failed: ${e.message}`); }
     finally { setBusy(false); }
   };
 
+  // Confirmed via the dialog before this runs.
   const deleteJingle = async (filename) => {
-    if (!confirm(`Delete ${filename}?`)) return;
     setBusy(true);
     try {
       const r = await adminFetch(`/jingles/${encodeURIComponent(filename)}`, { method: 'DELETE' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       await refresh();
-    } catch (e) { alert(`Delete failed: ${e.message}`); }
+    } catch (e) { toast.error(`Delete failed: ${e.message}`); }
     finally { setBusy(false); }
   };
 
@@ -165,13 +170,13 @@ export default function SettingsPanel() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       await refresh();
-    } catch (e) { alert(`Tagger start failed: ${e.message}`); }
+    } catch (e) { toast.error(`Tagger start failed: ${e.message}`); }
     finally { setBusy(false); }
   };
 
   return (
     <div className="space-y-7">
-      {err && <Alert tone="err">controller error: {err}</Alert>}
+      {err && <V3Alert tone="error" title="controller error">{err}</V3Alert>}
       {!data && !err && <div style={{ color: 'var(--muted)' }} className="italic">loading…</div>}
 
       {data && (
@@ -489,7 +494,7 @@ export default function SettingsPanel() {
                     save settings
                   </SolidButton>
                   {pendingRestart && (
-                    <SolidButton onClick={restartMixer} disabled={busy} danger>
+                    <SolidButton onClick={() => setConfirmRestart(true)} disabled={busy} danger>
                       restart mixer
                     </SolidButton>
                   )}
@@ -677,7 +682,7 @@ export default function SettingsPanel() {
                     </div>
                   </div>
                   <OutlineButton
-                    onClick={() => deleteJingle(j.filename)}
+                    onClick={() => setConfirmDelete(j.filename)}
                     disabled={busy || j.builtin}
                     title={j.builtin ? "Can't delete the built-in ident" : 'Delete this jingle'}
                   >
@@ -689,6 +694,25 @@ export default function SettingsPanel() {
           </Section>
         </>
       )}
+
+      <V3AlertDialog
+        open={confirmRestart}
+        onOpenChange={setConfirmRestart}
+        title="Restart mixer"
+        description="Restart the mixer to apply pending settings? The broadcast will drop for roughly 3–5 seconds."
+        confirmLabel="restart mixer"
+        danger
+        onConfirm={restartMixer}
+      />
+      <V3AlertDialog
+        open={confirmDelete != null}
+        onOpenChange={(o) => { if (!o) setConfirmDelete(null); }}
+        title="Delete jingle"
+        description={confirmDelete ? `Delete the jingle "${confirmDelete}"? This removes the rendered audio file permanently.` : ''}
+        confirmLabel="delete"
+        danger
+        onConfirm={() => { if (confirmDelete) deleteJingle(confirmDelete); setConfirmDelete(null); }}
+      />
     </div>
   );
 }
@@ -875,21 +899,6 @@ function EngineSelect({ engines, available, value, onChange, allowDefault, defau
           </button>
         );
       })}
-    </div>
-  );
-}
-
-function Alert({ tone, children }) {
-  return (
-    <div
-      style={{
-        border: `1px solid ${tone === 'err' ? '#c5302a' : 'var(--ink)'}`,
-        color: tone === 'err' ? '#c5302a' : 'var(--ink)',
-        padding: '8px 12px',
-        fontSize: 13,
-      }}
-    >
-      {children}
     </div>
   );
 }

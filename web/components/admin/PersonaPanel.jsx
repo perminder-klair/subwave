@@ -6,6 +6,7 @@
 // applies live — no mixer restart.
 import { useEffect, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { V3Alert } from '../ui/alert';
 
 const FREQUENCIES = [
   { id: 'quiet',      label: 'Quiet',      desc: 'Talks every 8–20 tracks · station ID once an hour · weather hourly on change.' },
@@ -129,7 +130,7 @@ export default function PersonaPanel() {
         intro, link, or station ID picks it up. No mixer restart needed.
       </p>
 
-      {err && <Alert tone="err">controller error: {err}</Alert>}
+      {err && <V3Alert tone="error" title="controller error">{err}</V3Alert>}
       {!form && !err && <div style={{ color: 'var(--muted)' }} className="italic">loading…</div>}
 
       {form && (
@@ -427,19 +428,5 @@ function OutlineButton({ onClick, disabled, children }) {
     >
       {children}
     </button>
-  );
-}
-function Alert({ tone, children }) {
-  return (
-    <div
-      style={{
-        border: `1px solid ${tone === 'err' ? '#c5302a' : 'var(--ink)'}`,
-        color: tone === 'err' ? '#c5302a' : 'var(--ink)',
-        padding: '8px 12px',
-        fontSize: 13,
-      }}
-    >
-      {children}
-    </div>
   );
 }

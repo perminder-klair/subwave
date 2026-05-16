@@ -5,6 +5,8 @@
 // flip the autonomous toggles, and watch live on-air status + the booth log.
 import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { V3AlertDialog } from '../ui/alert-dialog';
+import { V3Alert } from '../ui/alert';
 
 const SAY_KINDS = [
   { id: 'dj-speak', label: 'Heavy duck (solo)' },
@@ -31,6 +33,7 @@ export default function DashPanel() {
   const [sayText, setSayText] = useState('');
   const [sayMode, setSayMode] = useState('raw');
   const [sayKind, setSayKind] = useState('dj-speak');
+  const [confirmSkip, setConfirmSkip] = useState(false);
 
   const logRef = useRef(null);
 
@@ -104,11 +107,9 @@ export default function DashPanel() {
     if (j?.ok) setSayText('');
   };
 
-  // Skip is disruptive — it cuts the track for every listener — so confirm.
-  const skipCurrent = async () => {
-    if (!window.confirm('Skip the current track for all listeners?')) return;
-    await act('skip', '/dj/skip', {}, 'skip track');
-  };
+  // Skip is disruptive — it cuts the track for every listener — so the Skip
+  // button opens a confirm dialog; this runs only after the operator accepts.
+  const doSkip = () => act('skip', '/dj/skip', {}, 'skip track');
 
   // Toggle a skill's autonomous firing. Server returns the fresh catalogue.
   const toggleSkill = async (s) => {
@@ -137,11 +138,7 @@ export default function DashPanel() {
         )}
       </div>
 
-      {err && (
-        <div style={{ border: '1px solid #c5302a', color: '#c5302a', padding: '8px 12px' }}>
-          controller error: {err}
-        </div>
-      )}
+      {err && <V3Alert tone="error" title="controller error">{err}</V3Alert>}
 
       {/* ── ON AIR ───────────────────────────────────────────────────── */}
       <Section title="On air">
@@ -157,7 +154,7 @@ export default function DashPanel() {
                 label="Skip"
                 busy={busy === 'skip'}
                 disabled={!!busy}
-                onClick={skipCurrent}
+                onClick={() => setConfirmSkip(true)}
               />
             </div>
             <div className="flex flex-wrap gap-x-5 gap-y-1 v3-caption" style={{ color: 'var(--muted)' }}>
@@ -347,6 +344,16 @@ export default function DashPanel() {
       </Section>
 
       {!status && !err && <div className="italic" style={{ color: 'var(--muted)' }}>connecting…</div>}
+
+      <V3AlertDialog
+        open={confirmSkip}
+        onOpenChange={setConfirmSkip}
+        title="Skip current track"
+        description="Skip the current track for all listeners? Everyone tuned in jumps straight to the next track."
+        confirmLabel="skip track"
+        danger
+        onConfirm={doSkip}
+      />
     </div>
   );
 }
