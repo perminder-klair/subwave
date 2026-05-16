@@ -7,8 +7,11 @@ import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import { queue } from '../broadcast/queue.js';
 import * as dj from '../llm/dj.js';
+import * as subsonic from '../music/subsonic.js';
+import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { skillCatalog, runSkill } from '../skills/_registry.js';
+import { skipTrack } from '../broadcast/liquidsoap-control.js';
 import { getFullContext } from '../context.js';
 
 export const router = express.Router();
@@ -120,4 +123,93 @@ router.post('/dj/auto-link', requireAdmin, (req, res) => {
   if (typeof req.body?.on === 'boolean') queue.autoLink = req.body.on;
   queue.log('scheduler', `auto-link ${queue.autoLink ? 'enabled' : 'disabled'}`);
   res.json({ autoLink: queue.autoLink });
+});
+
+// ---------------------------------------------------------------------------
+// POST /dj/skip — force-end the current track (operator override)
+// There is no listener-facing skip by design; this is admin-gated only.
+// ---------------------------------------------------------------------------
+router.post('/dj/skip', requireAdmin, async (req, res) => {
+  try {
+    await skipTrack();
+    queue.log('scheduler', 'track skipped by operator');
+    res.json({ ok: true });
+  } catch (err) {
+    queue.log('error', `/dj/skip failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /dj/search?q=<terms> — library search for the manual queue UI
+// ---------------------------------------------------------------------------
+router.get('/dj/search', requireAdmin, async (req, res) => {
+  const q = (typeof req.query?.q === 'string' ? req.query.q : '').trim();
+  if (!q) return res.status(400).json({ error: 'q is required' });
+  try {
+    const songs = await subsonic.search(q, { songCount: 12 });
+    const results = songs.map(s => ({
+      id: s.id,
+      title: s.title,
+      artist: s.artist,
+      album: s.album,
+      year: s.year ?? null,
+      genre: s.genre ?? null,
+      duration: s.duration ?? null,
+      // path lets getLocalPath() use the on-disk file when MUSIC_LIBRARY_PATH
+      // is mounted, matching how listener-requested tracks are queued.
+      path: s.path ?? null,
+    }));
+    res.json({ results });
+  } catch (err) {
+    queue.log('error', `/dj/search failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /dj/queue-track — push a specific track to the queue (operator pick)
+// Body: { id, title, artist, album, year?, genre? } — a /dj/search result.
+// No DJ intro is generated; an auto-link still fires if auto-link is on.
+// ---------------------------------------------------------------------------
+router.post('/dj/queue-track', requireAdmin, async (req, res) => {
+  const track = req.body || {};
+  if (!track.id || !track.title) {
+    return res.status(400).json({ error: 'id and title are required' });
+  }
+  try {
+    const queuePosition = await queue.push({ track, requestedBy: 'studio' });
+    res.json({
+      ok: true,
+      track: { title: track.title, artist: track.artist || null },
+      queuePosition,
+    });
+  } catch (err) {
+    queue.log('error', `/dj/queue-track failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /dj/skill-toggle — enable/disable a skill's autonomous firing
+// Body: { name, on: true | false }
+// Manual /dj/skill firing still works on a disabled skill (operator override).
+// ---------------------------------------------------------------------------
+router.post('/dj/skill-toggle', requireAdmin, async (req, res) => {
+  const name = req.body?.name;
+  const on = req.body?.on;
+  if (!name || typeof name !== 'string' || typeof on !== 'boolean') {
+    return res.status(400).json({ error: 'name (string) and on (boolean) are required' });
+  }
+  if (!skillCatalog().some(s => s.name === name)) {
+    return res.status(400).json({ error: `unknown skill: ${name}` });
+  }
+  try {
+    await settings.update({ skills: { enabled: { [name]: on } } });
+    queue.log('scheduler', `skill ${name} ${on ? 'enabled' : 'disabled'}`);
+    res.json({ skills: skillCatalog() });
+  } catch (err) {
+    queue.log('error', `/dj/skill-toggle failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
 });

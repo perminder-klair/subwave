@@ -436,3 +436,19 @@ server.register(
     "OK"
   end
 )
+
+# Skip the currently playing track. `radio` is the final broadcast source;
+# .skip() propagates down through compress → blank.skip → fallback → rotate →
+# smooth_add → cross → music, force-ending the current track. `cross` then
+# runs the normal dj_transition crossfade into the next track (next dj_queue
+# item, else auto_playlist). Operator-only — listeners can't reach this.
+server.register(
+  "skip",
+  description="Skip the currently playing track",
+  usage="skip",
+  fun(_) -> begin
+    log("Skip requested via server command")
+    radio.skip()
+    "OK"
+  end
+)

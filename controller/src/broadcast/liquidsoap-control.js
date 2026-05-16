@@ -45,3 +45,9 @@ export async function restartLiquidsoap() {
     if (!/ECONNRESET|EPIPE|timeout/i.test(err.message)) throw err;
   }
 }
+
+// Skip the currently playing track via the custom "skip" command in radio.liq.
+// Unlike restart, this returns a normal "OK" response — Liquidsoap stays up.
+export async function skipTrack() {
+  return sendCommand('skip', 2000);
+}

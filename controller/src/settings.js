@@ -102,6 +102,12 @@ const DEFAULTS = {
     apiKey: '',
     pickerAgent: false,
   },
+  // Per-skill enable map. A skill missing from this object is treated as
+  // enabled — only an explicit `false` disables a skill's autonomous firing.
+  // Operator manual-fire (/dj/skill) ignores this map.
+  skills: {
+    enabled: {},
+  },
 };
 
 const SOULS_LIMIT = 10;
@@ -195,6 +201,12 @@ export async function load() {
       pickerAgent: typeof stored.llm?.pickerAgent === 'boolean'
         ? stored.llm.pickerAgent
         : DEFAULTS.llm.pickerAgent,
+    },
+    skills: {
+      // Keep only boolean values — anything else falls back to "enabled".
+      enabled: Object.fromEntries(
+        Object.entries(stored.skills?.enabled || {}).filter(([, v]) => typeof v === 'boolean')
+      ),
     },
   };
   return cache;
@@ -373,6 +385,20 @@ export async function update(patch) {
     }
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
+    }
+  }
+  if ('skills' in patch) {
+    const sk = patch.skills || {};
+    if (sk.enabled !== undefined) {
+      if (sk.enabled === null || typeof sk.enabled !== 'object') {
+        throw new Error('skills.enabled must be an object of name → boolean');
+      }
+      for (const [name, on] of Object.entries(sk.enabled)) {
+        if (typeof on !== 'boolean') {
+          throw new Error(`skills.enabled.${name} must be a boolean`);
+        }
+        next.skills.enabled[name] = on;
+      }
     }
   }
 

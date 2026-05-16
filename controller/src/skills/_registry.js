@@ -20,6 +20,7 @@
 
 import { queue } from '../broadcast/queue.js';
 import { shouldFire as gateAllows } from '../broadcast/dj-gate.js';
+import * as settings from '../settings.js';
 
 import weather from './weather.js';
 import news from './news.js';
@@ -40,6 +41,9 @@ for (const s of SKILLS) {
 }
 
 function eligible(skill, ctx, now) {
+  // Operator can disable a skill's autonomous firing via settings.skills.
+  // Missing or non-false → enabled. Manual /dj/skill firing bypasses this.
+  if (settings.get().skills?.enabled?.[skill.name] === false) return false;
   if (!gateAllows(skill.kind, now)) return false;
   const last = lastFired.get(skill.name) || 0;
   if (now.getTime() - last < (skill.cooldownMs || 0)) return false;
@@ -98,7 +102,13 @@ export function listSkills() {
 
 // Skill metadata for the admin command-center UI.
 export function skillCatalog() {
-  return SKILLS.map(s => ({ name: s.name, kind: s.kind, cooldownMs: s.cooldownMs || 0 }));
+  const enabledMap = settings.get().skills?.enabled || {};
+  return SKILLS.map(s => ({
+    name: s.name,
+    kind: s.kind,
+    cooldownMs: s.cooldownMs || 0,
+    enabled: enabledMap[s.name] !== false,
+  }));
 }
 
 // Run a named skill on demand — operator override from the /dj/skill route.

@@ -104,6 +104,20 @@ export default function DashPanel() {
     if (j?.ok) setSayText('');
   };
 
+  // Skip is disruptive — it cuts the track for every listener — so confirm.
+  const skipCurrent = async () => {
+    if (!window.confirm('Skip the current track for all listeners?')) return;
+    await act('skip', '/dj/skip', {}, 'skip track');
+  };
+
+  // Toggle a skill's autonomous firing. Server returns the fresh catalogue.
+  const toggleSkill = async (s) => {
+    const next = s.enabled === false;
+    const j = await act(`skilltoggle:${s.name}`, '/dj/skill-toggle',
+      { name: s.name, on: next }, `${s.name} ${next ? 'enable' : 'disable'}`);
+    if (Array.isArray(j?.skills)) setSkills(j.skills);
+  };
+
   const np = status?.nowPlaying;
   const ctx = status?.context;
   const q = status?.queue || {};
@@ -135,8 +149,16 @@ export default function DashPanel() {
           <Empty>nothing reported playing</Empty>
         ) : (
           <div className="space-y-2">
-            <div style={{ fontSize: 15, color: 'var(--ink)' }}>
-              {np.title} <span style={{ color: 'var(--muted)' }}>— {np.artist}</span>
+            <div className="flex items-start justify-between gap-3">
+              <div style={{ fontSize: 15, color: 'var(--ink)' }}>
+                {np.title} <span style={{ color: 'var(--muted)' }}>— {np.artist}</span>
+              </div>
+              <ActionButton
+                label="Skip"
+                busy={busy === 'skip'}
+                disabled={!!busy}
+                onClick={skipCurrent}
+              />
             </div>
             <div className="flex flex-wrap gap-x-5 gap-y-1 v3-caption" style={{ color: 'var(--muted)' }}>
               {status?.dj?.name && <span>dj · {status.dj.name}</span>}
@@ -236,16 +258,36 @@ export default function DashPanel() {
         {skills.length === 0 ? (
           <Empty>no skills reported</Empty>
         ) : (
-          <div className="flex flex-wrap gap-2">
-            {skills.map(s => (
-              <ActionButton
-                key={s.name}
-                label={s.name}
-                busy={busy === `skill:${s.name}`}
-                disabled={!!busy}
-                onClick={() => act(`skill:${s.name}`, '/dj/skill', { name: s.name }, s.name)}
-              />
-            ))}
+          <div className="space-y-2">
+            <div className="v3-caption" style={{ color: 'var(--muted)' }}>
+              fire on demand · toggle autonomous firing
+            </div>
+            {skills.map(s => {
+              const enabled = s.enabled !== false;
+              return (
+                <div key={s.name} className="flex items-center justify-between gap-3">
+                  <ActionButton
+                    label={s.name}
+                    busy={busy === `skill:${s.name}`}
+                    disabled={!!busy}
+                    onClick={() => act(`skill:${s.name}`, '/dj/skill', { name: s.name }, s.name)}
+                  />
+                  <button
+                    onClick={() => toggleSkill(s)}
+                    disabled={!!busy}
+                    className="v3-eyebrow v3-focus cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{
+                      border: `1px solid ${enabled ? 'var(--accent)' : 'var(--ink)'}`,
+                      background: enabled ? 'var(--accent)' : 'transparent',
+                      color: enabled ? '#fff' : 'var(--ink)',
+                      padding: '5px 14px', fontSize: 10, minWidth: 56,
+                    }}
+                  >
+                    {busy === `skilltoggle:${s.name}` ? '…' : (enabled ? 'auto on' : 'auto off')}
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
       </Section>
