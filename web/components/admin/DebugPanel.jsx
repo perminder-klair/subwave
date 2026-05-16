@@ -129,7 +129,7 @@ export default function DebugPanel() {
               <KvTable obj={data.icecast} />
             </Card>
 
-            <Card title="DJ context" bodyStyle={{ maxHeight: 320, overflowY: 'auto' }}>
+            <Card title="DJ context" bodyStyle={{ maxHeight: 200, overflowY: 'auto' }}>
               <KvTable obj={data.context} />
             </Card>
           </div>
@@ -139,7 +139,7 @@ export default function DebugPanel() {
             <Card
               title="LLM recent calls"
               sub={`${data.llm?.recentCalls?.length ?? 0} · ${data.llm?.provider || '—'} / ${data.llm?.activeModel || '—'}`}
-              style={{ display: 'flex', flexDirection: 'column' }}
+              style={{ display: 'flex', flexDirection: 'column', height: 360 }}
               bodyStyle={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
             >
               <div style={{ display: 'grid', gap: 6, flex: 1, minHeight: 0, overflowY: 'auto' }}>
@@ -178,7 +178,7 @@ export default function DebugPanel() {
             <Card
               title="Liquidsoap log"
               sub="last 100 lines"
-              style={{ display: 'flex', flexDirection: 'column' }}
+              style={{ display: 'flex', flexDirection: 'column', height: 360 }}
               bodyStyle={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
               right={
                 <label style={{
@@ -194,7 +194,7 @@ export default function DebugPanel() {
                 </label>
               }
             >
-              <pre ref={logRef} className="term" style={{ flex: 1, minHeight: 0 }}>
+              <pre ref={logRef} className="term" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
                 {data.liquidsoapLog || '— no log —'}
               </pre>
             </Card>
@@ -206,7 +206,7 @@ export default function DebugPanel() {
               <FilesTable files={data.stateFiles} />
             </Card>
 
-            <Card title="DJ voice WAVs" sub={`${data.voiceFiles?.length ?? 0} files`} bodyStyle={{ maxHeight: 320, overflowY: 'auto' }}>
+            <Card title="DJ voice WAVs" sub={`${data.voiceFiles?.length ?? 0} files`} bodyStyle={{ height: 240, overflowY: 'auto' }}>
               <FilesTable files={data.voiceFiles} />
             </Card>
 
