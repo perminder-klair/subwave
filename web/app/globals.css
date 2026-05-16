@@ -205,6 +205,11 @@ body::after {
 /* Mono is already tabular by design, but keep the class as a no-op alias. */
 .v3-tab-num { font-variant-numeric: tabular-nums; }
 
+/* Player header runs a touch larger than the shared v3 scale — the masthead
+   reads better at arm's length without disturbing the landing broadsheet. */
+.player-topbar .v3-eyebrow { font-size: 13px; }
+.player-topbar .v3-caption { font-size: 12px; }
+
 /* ─────────────────────────────────────────────────────────────────────────
    MASTHEAD NAV — sits inside the broadsheet header, between the rules.
    ───────────────────────────────────────────────────────────────────────── */

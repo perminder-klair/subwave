@@ -39,7 +39,7 @@ export default function TopBar({ tunedIn, context, djName, activeShow, listeners
       // baseline gutter; left/right max() against the gutter so landscape
       // on a notched phone doesn't clip the wordmark, while desktop keeps
       // its wider sm: gutters.
-      className="absolute top-0 left-0 right-0 flex items-baseline justify-between gap-3 z-20
+      className="player-topbar absolute top-0 left-0 right-0 flex items-baseline justify-between gap-3 z-20
         pt-[calc(env(safe-area-inset-top)_+_1rem)] pb-4
         pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))]
         sm:pt-[calc(env(safe-area-inset-top)_+_1.5rem)] sm:pb-6
