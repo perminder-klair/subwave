@@ -1,6 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Input } from '../ui/input';
+import { Textarea } from '../ui/textarea';
+import { Button } from '../ui/button';
 
 const SUCCESS_HOLD_MS = 2800;
 const POLL_INTERVAL_MS = 1500;
@@ -185,43 +188,23 @@ export default function RequestDrawer({
         onPick={text => { setRequestText(text); taRef.current?.focus(); }}
       />
 
-      <input
+      <Input
         type="text"
         value={requesterName}
         onChange={e => setRequesterName(e.target.value)}
         placeholder="your name (optional)"
-        className="w-full v3-focus"
-        style={{
-          boxSizing: 'border-box',
-          border: '1px solid var(--ink)',
-          background: 'transparent',
-          padding: 10,
-          fontSize: 13,
-          fontFamily: 'inherit',
-          color: 'var(--ink)',
-          marginBottom: 8,
-        }}
+        className="mb-2"
       />
 
-      <textarea
+      <Textarea
         ref={taRef}
         value={requestText}
         onChange={e => { setRequestText(e.target.value); if (result) setResult(null); }}
         onKeyDown={onKeyDown}
         placeholder='"something for late-night driving"…'
         rows={3}
-        className="w-full v3-focus"
-        style={{
-          resize: 'none',
-          boxSizing: 'border-box',
-          border: '1px solid var(--ink)',
-          background: 'transparent',
-          padding: 14,
-          fontSize: 16,
-          fontFamily: 'inherit',
-          color: 'var(--ink)',
-          outline: 'none',
-        }}
+        /* 16px text avoids iOS zoom-on-focus on this listener-facing field. */
+        className="resize-none p-3.5 text-[16px]"
       />
 
       {result && !result.success && (
@@ -240,19 +223,14 @@ export default function RequestDrawer({
         </div>
       )}
 
-      <button
+      <Button
         onClick={handleSubmit}
         disabled={isSubmitting || !requestText.trim()}
-        className="w-full v3-eyebrow v3-focus mt-3 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-        style={{
-          background: 'var(--accent)',
-          color: '#fff',
-          border: 'none',
-          padding: '14px 24px',
-        }}
+        variant="accent"
+        className="mt-3 w-full px-6 py-3.5"
       >
         {isSubmitting ? 'Sending…' : 'Send to the booth'}
-      </button>
+      </Button>
     </div>
   );
 }

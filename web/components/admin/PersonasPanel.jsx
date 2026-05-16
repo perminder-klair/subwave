@@ -9,6 +9,12 @@
 import { useEffect, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { CLOUD_VOICES } from '../../lib/cloudVoices';
+import { Input } from '../ui/input';
+import { Textarea } from '../ui/textarea';
+import { Label } from '../ui/label';
+import {
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
+} from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Seg, Toggle } from './ui';
 
 const FREQUENCIES = [
@@ -300,14 +306,12 @@ export default function PersonasPanel() {
             </div>
           ) : (
             <div style={{ marginTop: 12 }}>
-              <textarea
-                className="textarea"
+              <Textarea
                 rows={12}
                 value={form.systemPrompt}
                 maxLength={PROMPT_MAX}
                 onChange={e => setForm(f => ({ ...f, systemPrompt: e.target.value }))}
                 style={{
-                  width: '100%', boxSizing: 'border-box',
                   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12,
                   borderColor: promptOk ? 'var(--ink)' : 'var(--danger)',
                 }}
@@ -418,9 +422,8 @@ export default function PersonasPanel() {
           >
             <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               <div className="field">
-                <label className="field-label">On-air name</label>
-                <input
-                  className="input"
+                <Label>On-air name</Label>
+                <Input
                   value={focused.name}
                   maxLength={NAME_MAX}
                   onChange={e => setPersona(safeIdx, { name: e.target.value })}
@@ -432,9 +435,8 @@ export default function PersonasPanel() {
                 </div>
               </div>
               <div className="field">
-                <label className="field-label">Tagline</label>
-                <input
-                  className="input"
+                <Label>Tagline</Label>
+                <Input
                   value={focused.tagline}
                   maxLength={TAGLINE_MAX}
                   placeholder="e.g. late-night drift"
@@ -450,9 +452,8 @@ export default function PersonasPanel() {
             <div className="rule-label">soul</div>
 
             <div className="field">
-              <textarea
-                className="textarea"
-                rows="7"
+              <Textarea
+                rows={7}
                 value={focused.soul}
                 placeholder="e.g. warm and dry, never corny — observant, favours one good image over a list"
                 onChange={e => setPersona(safeIdx, { soul: e.target.value })}
@@ -503,7 +504,7 @@ export default function PersonasPanel() {
 
           <Card title="Voice" sub="text-to-speech engine">
             <div className="field" style={{ marginBottom: 14 }}>
-              <label className="field-label">Engine</label>
+              <Label>Engine</Label>
               <Seg
                 value={focused.tts.engine}
                 options={ENGINES}
@@ -533,17 +534,21 @@ export default function PersonasPanel() {
 
             {focused.tts.engine === 'kokoro' && (
               <div className="field" style={{ maxWidth: 320 }}>
-                <label className="field-label">Kokoro voice</label>
-                <select
-                  className="select"
+                <Label>Kokoro voice</Label>
+                <Select
                   value={focused.tts.voice}
-                  onChange={e => setPersonaTts(safeIdx, { voice: e.target.value })}
+                  onValueChange={val => setPersonaTts(safeIdx, { voice: val })}
                 >
-                  {!kokoroVoices.some(v => v.id === focused.tts.voice) && (
-                    <option value={focused.tts.voice}>{focused.tts.voice}</option>
-                  )}
-                  {kokoroVoices.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
-                </select>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {!kokoroVoices.some(v => v.id === focused.tts.voice) && (
+                        <SelectItem value={focused.tts.voice}>{focused.tts.voice}</SelectItem>
+                      )}
+                      {kokoroVoices.map(v => <SelectItem key={v.id} value={v.id}>{v.label}</SelectItem>)}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
                 <div className="field-hint">The kokoro-onnx voice id for this persona.</div>
               </div>
             )}
@@ -566,7 +571,7 @@ export default function PersonasPanel() {
                 )}
                 <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                   <div className="field">
-                    <label className="field-label">Cloud provider</label>
+                    <Label>Cloud provider</Label>
                     <Seg
                       value={focused.tts.cloudProvider}
                       options={cloudProviders.map(id => ({ id, label: id }))}
@@ -580,24 +585,27 @@ export default function PersonasPanel() {
                     <div className="field-hint">Uses the shared API key + model from Settings.</div>
                   </div>
                   <div className="field">
-                    <label className="field-label">Cloud voice</label>
-                    <select
-                      className="select"
+                    <Label>Cloud voice</Label>
+                    <Select
                       value={isPreset ? voice : '__custom__'}
-                      onChange={e => {
-                        if (e.target.value !== '__custom__') {
-                          setPersonaTts(safeIdx, { voice: e.target.value });
+                      onValueChange={val => {
+                        if (val !== '__custom__') {
+                          setPersonaTts(safeIdx, { voice: val });
                         }
                       }}
                     >
-                      {provVoices.map(v => (
-                        <option key={v.id} value={v.id}>{v.label}</option>
-                      ))}
-                      <option value="__custom__">Custom voice id…</option>
-                    </select>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {provVoices.map(v => (
+                            <SelectItem key={v.id} value={v.id}>{v.label}</SelectItem>
+                          ))}
+                          <SelectItem value="__custom__">Custom voice id…</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
                     {!isPreset && (
-                      <input
-                        className="input"
+                      <Input
                         style={{ marginTop: 8, borderColor: voice ? 'var(--ink)' : 'var(--danger)' }}
                         value={focused.tts.voice}
                         maxLength={100}

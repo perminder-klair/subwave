@@ -6,6 +6,12 @@ import { fmtSize } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { CLOUD_VOICES, CLOUD_MODELS } from '../../lib/cloudVoices';
 import { V3AlertDialog } from '../ui/alert-dialog';
+import { Input } from '../ui/input';
+import { Textarea } from '../ui/textarea';
+import { Label } from '../ui/label';
+import {
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
+} from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
 
 const SECTIONS = [
@@ -473,7 +479,7 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
       {/* One engine selector — then only that engine's settings show. */}
       <Card title="Voice engine" sub="pick one — then configure it">
         <div className="field">
-          <label className="field-label">Engine</label>
+          <Label>Engine</Label>
           <Seg
             accent
             value={form.tts.defaultEngine}
@@ -499,7 +505,7 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
         {/* ── KOKORO ───────────────────────────────────────────────── */}
         {form.tts.defaultEngine === 'kokoro' && (
           <div className="field" style={{ marginTop: 16 }}>
-            <label className="field-label">Kokoro voice</label>
+            <Label>Kokoro voice</Label>
             {available.kokoro === false && (
               <div className="field-hint" style={{ color: 'var(--danger)' }}>
                 Kokoro is not installed in this build — it will fall back to Piper.
@@ -507,17 +513,21 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
             )}
             {(data.tts.kokoroVoices?.length || 0) > 0 ? (
               <>
-                <select
-                  className="select"
+                <Select
                   value={form.tts.kokoro?.voice ?? 'bf_isabella'}
-                  onChange={e => setForm(f => ({
-                    ...f, tts: { ...f.tts, kokoro: { ...f.tts.kokoro, voice: e.target.value } },
+                  onValueChange={val => setForm(f => ({
+                    ...f, tts: { ...f.tts, kokoro: { ...f.tts.kokoro, voice: val } },
                   }))}
                 >
-                  {data.tts.kokoroVoices.map(v => (
-                    <option key={v.id} value={v.id}>{v.label} — {v.id}</option>
-                  ))}
-                </select>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {data.tts.kokoroVoices.map(v => (
+                        <SelectItem key={v.id} value={v.id}>{v.label} — {v.id}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
                 <div className="field-hint">British English only. Applies to every kind routed through Kokoro.</div>
               </>
             ) : (
@@ -530,7 +540,7 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
         {form.tts.defaultEngine === 'cloud' && (
           <div style={{ marginTop: 16 }}>
             <div className="field">
-              <label className="field-label">Provider</label>
+              <Label>Provider</Label>
               <Seg
                 accent
                 value={form.tts.cloud.provider}
@@ -540,9 +550,8 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 18, marginTop: 14 }}>
               <div className="field">
-                <label className="field-label">Model</label>
-                <input
-                  className="input"
+                <Label>Model</Label>
+                <Input
                   value={form.tts.cloud.model}
                   onChange={e => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))}
                   placeholder={CLOUD_MODELS[form.tts.cloud.provider]?.[0] || 'gpt-4o-mini-tts'}
@@ -555,24 +564,27 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
                 const isPreset = provVoices.some(v => v.id === voice);
                 return (
                   <div className="field">
-                    <label className="field-label">Default voice</label>
-                    <select
-                      className="select"
+                    <Label>Default voice</Label>
+                    <Select
                       value={isPreset ? voice : '__custom__'}
-                      onChange={e => {
-                        if (e.target.value !== '__custom__') {
-                          setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, voice: e.target.value } } }));
+                      onValueChange={val => {
+                        if (val !== '__custom__') {
+                          setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, voice: val } } }));
                         }
                       }}
                     >
-                      {provVoices.map(v => (
-                        <option key={v.id} value={v.id}>{v.label}</option>
-                      ))}
-                      <option value="__custom__">Custom voice id…</option>
-                    </select>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {provVoices.map(v => (
+                            <SelectItem key={v.id} value={v.id}>{v.label}</SelectItem>
+                          ))}
+                          <SelectItem value="__custom__">Custom voice id…</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
                     {!isPreset && (
-                      <input
-                        className="input"
+                      <Input
                         style={{ marginTop: 8, borderColor: voice ? 'var(--ink)' : 'var(--danger)' }}
                         value={form.tts.cloud.voice}
                         maxLength={100}
@@ -633,7 +645,7 @@ function LlmSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
       <Card title="Provider" sub="active routing">
         <div style={{ display: 'grid', gap: 18 }}>
           <div className="field">
-            <label className="field-label">Provider</label>
+            <Label>Provider</Label>
             <Seg
               accent
               value={form.llm.provider}
@@ -643,9 +655,8 @@ function LlmSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
           </div>
 
           <div className="field">
-            <label className="field-label">Model</label>
-            <input
-              className="input"
+            <Label>Model</Label>
+            <Input
               value={form.llm.model}
               onChange={e => setForm(f => ({ ...f, llm: { ...f.llm, model: e.target.value } }))}
               placeholder={
@@ -674,9 +685,8 @@ function LlmSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
 
           {form.llm.provider === 'ollama' && (
             <div className="field">
-              <label className="field-label">Ollama server URL</label>
-              <input
-                className="input"
+              <Label>Ollama server URL</Label>
+              <Input
                 value={form.llm.ollamaUrl}
                 onChange={e => setForm(f => ({ ...f, llm: { ...f.llm, ollamaUrl: e.target.value } }))}
                 placeholder="http://localhost:11434"
@@ -757,12 +767,12 @@ function MixerSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
       <Card title="Crossfade" sub="track transition overlap">
         <div className="field">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <label className="field-label">Crossfade duration</label>
+            <Label>Crossfade duration</Label>
             <Pill tone="ink">restart required</Pill>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <input
-              className="input mono-num"
+            <Input
+              className="mono-num"
               type="number"
               step={0.5}
               max={30}
@@ -781,17 +791,16 @@ function MixerSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
 
       <Card title="Station location" sub="DJ context + Open-Meteo weather">
         <div className="field">
-          <label className="field-label">Location</label>
+          <Label>Location</Label>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            <input
-              className="input"
+            <Input
               placeholder="name"
               value={form.weather.locationName}
               onChange={e => setForm(f => ({ ...f, weather: { ...f.weather, locationName: e.target.value } }))}
               style={{ width: 200 }}
             />
-            <input
-              className="input mono-num"
+            <Input
+              className="mono-num"
               type="number"
               step="any"
               placeholder="lat"
@@ -799,8 +808,8 @@ function MixerSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
               onChange={e => setForm(f => ({ ...f, weather: { ...f.weather, lat: e.target.value } }))}
               style={{ width: 132 }}
             />
-            <input
-              className="input mono-num"
+            <Input
+              className="mono-num"
               type="number"
               step="any"
               placeholder="lng"
@@ -847,12 +856,12 @@ function JinglesSection({ data, form, setForm, busy, jingleText, setJingleText, 
       <Card title="Frequency" sub="needs mixer restart">
         <div className="field">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <label className="field-label">Jingle ratio</label>
+            <Label>Jingle ratio</Label>
             <Pill tone="ink">restart required</Pill>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <input
-              className="input mono-num"
+            <Input
+              className="mono-num"
               type="number"
               min={1}
               max={1000}
@@ -877,9 +886,8 @@ function JinglesSection({ data, form, setForm, busy, jingleText, setJingleText, 
 
       <Card title="Create jingle" sub="rendered via Piper TTS">
         <div className="field">
-          <label className="field-label">Jingle text</label>
-          <textarea
-            className="textarea"
+          <Label>Jingle text</Label>
+          <Textarea
             rows={2}
             value={jingleText}
             onChange={e => setJingleText(e.target.value)}

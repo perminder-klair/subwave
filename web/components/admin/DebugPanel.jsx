@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { fmtSize } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { V3Alert } from '../ui/alert';
+import { Checkbox } from '../ui/checkbox';
+import { Label } from '../ui/label';
 import { Card, Btn, Pill, Eyebrow } from './ui';
 
 export default function DebugPanel() {
@@ -151,17 +153,16 @@ export default function DebugPanel() {
             style={{ display: 'flex', flexDirection: 'column', height: 440 }}
             bodyStyle={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
             right={
-              <label style={{
-                display: 'flex', alignItems: 'center', gap: 6, fontSize: 10,
-                color: 'var(--muted)', letterSpacing: '0.18em', textTransform: 'uppercase',
-              }}>
-                <input
-                  type="checkbox"
+              <Label
+                className="flex cursor-pointer items-center gap-1.5 text-[10px] uppercase tracking-[0.18em]"
+                style={{ color: 'var(--muted)' }}
+              >
+                <Checkbox
                   checked={autoScroll}
-                  onChange={e => setAutoScroll(e.target.checked)}
+                  onCheckedChange={v => setAutoScroll(v === true)}
                 />
                 auto-scroll
-              </label>
+              </Label>
             }
           >
             <pre ref={logRef} className="term" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
@@ -199,9 +200,9 @@ export default function DebugPanel() {
                       {Object.entries(data.library.byMood || {})
                         .sort((a, b) => b[1] - a[1])
                         .map(([m, n]) => (
-                          <span key={m} className="tag" style={{ fontSize: 10 }}>
+                          <Pill key={m}>
                             {m} <span className="mono-num" style={{ marginLeft: 4, color: 'var(--muted)' }}>{n}</span>
-                          </span>
+                          </Pill>
                         ))}
                     </div>
                   </div>
@@ -209,9 +210,9 @@ export default function DebugPanel() {
                     <div className="caption" style={{ marginBottom: 6 }}>by energy</div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                       {Object.entries(data.library.byEnergy || {}).map(([e, n]) => (
-                        <span key={e} className="tag" style={{ fontSize: 10 }}>
+                        <Pill key={e}>
                           {e} <span className="mono-num" style={{ marginLeft: 4, color: 'var(--muted)' }}>{n}</span>
-                        </span>
+                        </Pill>
                       ))}
                     </div>
                   </div>

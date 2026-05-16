@@ -1,6 +1,7 @@
 'use client';
 
 import { buildTagline } from '../lib/tagline';
+import { Slider } from './ui/slider';
 
 export default function TransportBar({
   tunedIn,
@@ -104,15 +105,16 @@ export default function TransportBar({
                 }}
               />
             ))}
-            <input
-              type="range"
+            {/* Interaction layer only — the lit cells above are the visible
+                control, so the Slider is overlaid invisibly. */}
+            <Slider
               min={0}
               max={1}
               step={0.01}
-              value={volume}
-              onChange={e => setVolume(parseFloat(e.target.value))}
-              className="absolute inset-0 opacity-0 cursor-pointer w-full"
+              value={[volume]}
+              onValueChange={([v]) => setVolume(v)}
               aria-label="Volume"
+              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
             />
           </div>
         </div>

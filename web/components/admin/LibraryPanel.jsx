@@ -6,7 +6,11 @@
 // added" section surfaces the most recently added music for one-click queuing,
 // and the mood tagger runs the resumable library tagger that classifies tracks.
 import { useCallback, useEffect, useState } from 'react';
+import { Search } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { Input } from '../ui/input';
+import { InputGroup, InputGroupAddon, InputGroupInput } from '../ui/input-group';
+import { Field, FieldLabel } from '../ui/field';
 import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
 
 export default function LibraryPanel() {
@@ -152,16 +156,16 @@ export default function LibraryPanel() {
 
         <div style={{ padding: 16 }}>
           <form onSubmit={runSearch} style={{ display: 'flex', gap: 8 }}>
-            <div style={{ position: 'relative', flex: 1 }}>
-              <input
-                className="input"
-                style={{ width: '100%', boxSizing: 'border-box', fontSize: 14, padding: '12px 12px 12px 36px' }}
+            <InputGroup className="flex-1">
+              <InputGroupAddon>
+                <Search />
+              </InputGroupAddon>
+              <InputGroupInput
                 placeholder="floating points, kingdoms in colour, 2018…"
                 value={query}
                 onChange={e => setQuery(e.target.value)}
               />
-              <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)', fontSize: 14 }}>⌕</span>
-            </div>
+            </InputGroup>
             <Btn lg tone="accent" type="submit" disabled={searching || !query.trim() || !ready}>
               {searching ? 'Searching…' : 'Search'}
             </Btn>
@@ -315,17 +319,17 @@ export default function LibraryPanel() {
               tagged tracks are skipped.
             </div>
 
-            <div className="field" style={{ marginTop: 12 }}>
-              <span className="field-label">limit</span>
-              <input
+            <Field className="mt-3">
+              <FieldLabel htmlFor="tagger-limit">limit</FieldLabel>
+              <Input
+                id="tagger-limit"
                 type="number"
-                className="input mono-num"
+                className="mono-num"
                 value={taggerLimit}
                 onChange={e => setTaggerLimit(e.target.value)}
                 disabled={tagger?.running}
-                style={{ width: '100%', boxSizing: 'border-box' }}
               />
-            </div>
+            </Field>
             <Btn
               tone="accent"
               onClick={startTagger}

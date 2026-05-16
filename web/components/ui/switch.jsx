@@ -1,28 +1,23 @@
-'use client';
+import * as React from "react"
+import * as SwitchPrimitives from "@radix-ui/react-switch"
 
-import * as Switch from '@radix-ui/react-switch';
+import { cn } from "@/lib/cn"
 
-/* V3 Switch — sharp 48×24, 1px ink border, accent fill when on, no rounding. */
-export function V3Switch({ checked, onCheckedChange, disabled }) {
-  return (
-    <Switch.Root
-      checked={checked}
-      onCheckedChange={onCheckedChange}
-      disabled={disabled}
-      className="relative w-12 h-6 v3-focus disabled:opacity-40 cursor-pointer"
-      style={{
-        border: '1px solid var(--ink)',
-        background: checked ? 'var(--accent)' : 'transparent',
-      }}
-    >
-      <Switch.Thumb
-        className="block w-4 h-4 transition-transform"
-        style={{
-          background: checked ? 'var(--bg)' : 'var(--ink)',
-          transform: checked ? 'translateX(28px)' : 'translateX(2px)',
-          marginTop: 3,
-        }}
-      />
-    </Switch.Root>
-  );
-}
+/* Retuned for SUB/WAVE's newsprint aesthetic: sharp 38×20 box, 1px ink
+   border, square ink thumb that fills white when the accent-filled track
+   is on. Matches the legacy `.toggle` control. */
+const Switch = React.forwardRef(({ className, ...props }, ref) => (
+  <SwitchPrimitives.Root
+    className={cn(
+      "peer relative inline-flex h-5 w-[38px] shrink-0 cursor-pointer items-center border border-ink bg-transparent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40 data-[state=checked]:border-[var(--accent)] data-[state=checked]:bg-[var(--accent)]",
+      className
+    )}
+    {...props}
+    ref={ref}>
+    <SwitchPrimitives.Thumb
+      className="pointer-events-none block size-3.5 translate-x-[2px] bg-ink transition-transform data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-white" />
+  </SwitchPrimitives.Root>
+))
+Switch.displayName = SwitchPrimitives.Root.displayName
+
+export { Switch }

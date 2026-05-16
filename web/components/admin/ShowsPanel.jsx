@@ -12,6 +12,13 @@
 // cells; click a day label or hour header to fill a whole row/column.
 import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { Input } from '../ui/input';
+import { Textarea } from '../ui/textarea';
+import { Label } from '../ui/label';
+import { Field } from '../ui/field';
+import {
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
+} from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Metric } from './ui';
 import { Modal } from '../ui/modal';
 
@@ -630,45 +637,56 @@ export default function ShowsPanel() {
       >
         {draft && (
           <div style={{ display: 'grid', gap: 14 }}>
-            <label className="field">
-              <span className="field-label">show name</span>
-              <input
+            <Field>
+              <Label htmlFor="show-name">show name</Label>
+              <Input
+                id="show-name"
                 type="text" value={draft.name} maxLength={NAME_MAX}
                 onChange={e => setDraftField({ name: e.target.value })}
-                className="input" placeholder="e.g. The Late Shift"
+                placeholder="e.g. The Late Shift"
                 style={{ fontSize: 15, fontWeight: 700 }}
                 autoFocus
               />
               <span className="field-hint">{draft.name.trim().length}/{NAME_MAX}</span>
-            </label>
+            </Field>
 
             <div className="stack-mobile" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <label className="field">
-                <span className="field-label">persona owner</span>
-                <select
-                  value={draft.personaId}
-                  onChange={e => setDraftField({ personaId: e.target.value })}
-                  className="select"
+              <Field>
+                <Label>persona owner</Label>
+                <Select
+                  value={draft.personaId || undefined}
+                  onValueChange={val => setDraftField({ personaId: val })}
                 >
-                  <option value="">— pick persona —</option>
-                  {personas.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              </label>
-              <label className="field">
-                <span className="field-label">music mood</span>
-                <select
-                  value={draft.mood}
-                  onChange={e => setDraftField({ mood: e.target.value })}
-                  className="select"
+                  <SelectTrigger>
+                    <SelectValue placeholder="— pick persona —" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {personas.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <Label>music mood</Label>
+                <Select
+                  value={draft.mood || undefined}
+                  onValueChange={val => setDraftField({ mood: val })}
                 >
-                  <option value="">— pick mood —</option>
-                  {moods.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </label>
+                  <SelectTrigger>
+                    <SelectValue placeholder="— pick mood —" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {moods.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
             </div>
 
-            <label className="field">
-              <span className="field-label">topic — fed to the DJ as the show theme</span>
+            <Field>
+              <Label htmlFor="show-topic">topic — fed to the DJ as the show theme</Label>
               <span className="field-hint">
                 This is the brief the AI DJ works from. The more you describe,
                 the better it picks music and writes links — name genres, eras,
@@ -676,14 +694,14 @@ export default function ShowsPanel() {
                 of listener, and how the host should sound. Write it like
                 you're briefing a real DJ before their slot.
               </span>
-              <textarea
+              <Textarea
+                id="show-topic"
                 rows={7} value={draft.topic} maxLength={TOPIC_MAX}
                 onChange={e => setDraftField({ topic: e.target.value })}
                 placeholder="e.g. Slow ambient, modern classical and downtempo for the late shift. Think Nils Frahm, Hammock, Bonobo's quieter side — nothing with a hard beat. Keep the host calm and unhurried, like a friend talking you down at 1am."
-                className="textarea"
               />
               <span className="field-hint">{draft.topic.trim().length}/{TOPIC_MAX}</span>
-            </label>
+            </Field>
 
             {!draftValid && (
               <div style={{ fontSize: 11, color: 'var(--danger)' }}>

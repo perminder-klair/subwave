@@ -2,8 +2,18 @@
 
 /* Shared newsprint primitives for the redesigned admin panels.
    Every panel renders inside AdminShell's `.admin-root` wrapper, so the
-   unprefixed class names (.card / .btn / .tag …) resolve to the admin-scoped
-   rules in globals.css. */
+   unprefixed class names (.card / .tag …) resolve to the admin-scoped
+   rules in globals.css.
+
+   Btn / Seg / Toggle are thin wrappers over shadcn/ui primitives (Button,
+   ToggleGroup, Switch) — retuned in components/ui/* to the newsprint look —
+   keeping the original prop API so existing call sites need no changes. */
+
+import { cn } from '../../lib/cn';
+import { Button } from '../ui/button';
+import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group';
+import { Switch } from '../ui/switch';
+import { Badge } from '../ui/badge';
 
 export function Eyebrow({ children, color, style }) {
   return (
@@ -28,51 +38,78 @@ export function Card({ title, sub, right, children, bodyStyle, headStyle, bodyCl
   );
 }
 
+/* Tag pill over shadcn Badge. `tone` ∈ ink | accent | solid (default =
+   muted outline); `dot` prepends a small currentColor dot. */
 export function Pill({ children, tone, dot, style, onClick, title }) {
   return (
-    <span
-      className={`tag ${tone || ''} ${dot ? 'dot' : ''}`}
+    <Badge
+      variant={tone || 'default'}
       style={{ ...(onClick ? { cursor: 'pointer' } : null), ...style }}
       onClick={onClick}
       title={title}
     >
+      {dot && <span className="size-1.5 rounded-full bg-current" />}
       {children}
-    </span>
+    </Badge>
   );
 }
 
-export function Btn({ children, tone, sm, lg, style, onClick, disabled, type, title }) {
-  const cls = `btn ${tone ? 'btn-' + tone : ''} ${sm ? 'btn-sm' : ''} ${lg ? 'btn-lg' : ''}`;
+/* Legacy `tone` → shadcn Button `variant`. `danger` maps to `destructive`. */
+const BTN_VARIANT = { solid: 'solid', accent: 'accent', danger: 'destructive' };
+
+export function Btn({ children, tone, sm, lg, style, onClick, disabled, type, title, className }) {
   return (
-    <button className={cls} style={style} onClick={onClick} disabled={disabled} type={type || 'button'} title={title}>
+    <Button
+      variant={BTN_VARIANT[tone] || 'default'}
+      size={sm ? 'sm' : lg ? 'lg' : 'default'}
+      style={style}
+      onClick={onClick}
+      disabled={disabled}
+      type={type || 'button'}
+      title={title}
+      className={className}
+    >
       {children}
-    </button>
+    </Button>
   );
 }
 
-/* Segmented control. `options` is [{ id, label }]; `onChange(id)` fires on click. */
+/* Segmented control over shadcn ToggleGroup. `options` is [{ id, label }];
+   `onChange(id)` fires on selection. Clicking the active item is a no-op
+   (the group always keeps a value, matching the original behaviour). */
 export function Seg({ value, options, accent, onChange }) {
   return (
-    <div className={`seg ${accent ? 'accent' : ''}`}>
-      {options.map(o => (
-        <button
+    <ToggleGroup
+      type="single"
+      value={value}
+      onValueChange={v => { if (v && onChange) onChange(v); }}
+      className="inline-flex flex-wrap gap-0 border border-ink"
+    >
+      {options.map((o, i) => (
+        <ToggleGroupItem
           key={o.id}
-          className={o.id === value ? 'active' : ''}
-          onClick={onChange ? () => onChange(o.id) : undefined}
+          value={o.id}
+          className={cn(
+            'h-auto min-w-0 rounded-none border-0 px-[13px] py-[7px] text-[10px] font-bold uppercase tracking-[0.18em] text-ink',
+            'hover:bg-[var(--ink-soft)] hover:text-ink',
+            i > 0 && 'border-l border-ink',
+            accent
+              ? 'data-[state=on]:bg-[var(--accent)] data-[state=on]:text-white'
+              : 'data-[state=on]:bg-ink data-[state=on]:text-bg',
+          )}
         >
           {o.label}
-        </button>
+        </ToggleGroupItem>
       ))}
-    </div>
+    </ToggleGroup>
   );
 }
 
 export function Toggle({ on, onClick, disabled }) {
   return (
-    <button
-      className={`toggle ${on ? 'on' : ''}`}
-      aria-pressed={!!on}
-      onClick={onClick}
+    <Switch
+      checked={!!on}
+      onCheckedChange={onClick ? () => onClick() : undefined}
       disabled={disabled}
     />
   );

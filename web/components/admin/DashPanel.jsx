@@ -8,6 +8,7 @@ import { useAdminAuth } from '../../lib/adminAuth';
 import { turnClass, turnKey, turnText } from '../../lib/sessionFeed';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { V3Alert } from '../ui/alert';
+import { Textarea } from '../ui/textarea';
 import { Card, Btn, Pill, Eyebrow, Seg, Toggle } from './ui';
 
 const SAY_KINDS = [
@@ -267,9 +268,8 @@ export default function DashPanel() {
         {/* RIGHT */}
         <div style={{ display: 'grid', gap: 16 }}>
           <Card title="Manual voice DJ" sub="speak now">
-            <textarea
-              className="textarea"
-              style={{ width: '100%', minHeight: 88, boxSizing: 'border-box' }}
+            <Textarea
+              style={{ minHeight: 88 }}
               value={sayText}
               onChange={e => setSayText(e.target.value)}
               maxLength={500}
