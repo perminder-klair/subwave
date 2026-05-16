@@ -1,6 +1,6 @@
 # SUB/WAVE
 
-A real internet radio station. Single Icecast stream — every listener hears the same broadcast at the same time. An LLM-driven DJ picks tracks based on what just played, the time of day, weather, festivals, and listener requests; TTS (Piper or Kokoro) speaks intros, links, and time-checks between tracks. The DJ has a name, a rotating pool of personas, and a configurable talk frequency — all editable from a web Settings panel under `/admin`.
+A real internet radio station. Single Icecast stream — every listener hears the same broadcast at the same time. An LLM-driven DJ picks tracks based on what just played, the time of day, weather, festivals, and listener requests; TTS (Piper, Kokoro, or a cloud voice) speaks intros, links, and time-checks between tracks. The station runs a roster of DJ personas — one on air at a time, each with its own name, voice, talk frequency, and skills — and a weekly show schedule can hand any hour to a specific persona. Everything is editable from the `/admin` operator console.
 
 ```
                     ┌─────────────────────────────────────────┐
@@ -36,18 +36,18 @@ A real internet radio station. Single Icecast stream — every listener hears th
                     │  • now-playing watcher (1.5s)           │
                     │  • LLM via AI SDK: request match, DJ    │
                     │    scripts, mood tagging, track picker  │
-                    │  • TTS dispatcher (Piper + Kokoro) with │
-                    │    per-kind engine override + fallback  │
-                    │  • Scheduler: auto.m3u, time/weather/   │
-                    │    station-ID — gated by DJ frequency   │
-                    │  • settings.json (DJ persona, souls[],  │
-                    │    mixer, weather, TTS routing)         │
+                    │  • TTS: Piper / Kokoro / Cloud engines, │
+                    │    per-persona voice + auto-fallback    │
+                    │  • Scheduler + skills: auto.m3u, IDs,   │
+                    │    weather, news — gated by frequency   │
+                    │  • settings.json: persona roster,       │
+                    │    weekly shows, mixer, TTS routing     │
                     │  • /cover/:id proxy for MediaSession    │
                     └─┬──────────┬──────────┬──────────────┬──┘
                       │          │          │              │
                   ┌───▼───┐  ┌───▼────┐ ┌───▼────────┐  ┌──▼──────────┐
-                  │  LLM  │  │Navidrm │ │Piper+Kokoro│  │ Open-Meteo  │
-                  │       │  │Subsonic│ │   TTS      │  │  (weather)  │
+                  │  LLM  │  │Navidrm │ │TTS: Piper, │  │ Open-Meteo  │
+                  │       │  │Subsonic│ │Kokoro,Cloud│  │  (weather)  │
                   └───────┘  └────────┘ └────────────┘  └─────────────┘
 
                     ┌─────────────────────────────────────────┐
@@ -56,7 +56,7 @@ A real internet radio station. Single Icecast stream — every listener hears th
                     │               (SUBWAVE_HOMEPAGE flag)   │
                     │  • /listen  — always the player         │
                     │  • /landing — always the broadsheet     │
-                    │  • /admin   — settings + debug          │
+                    │  • /admin   — 7-page operator console   │
                     │               (single sign-in gate)     │
                     │  • PWA: installable, lock-screen        │
                     │    media controls, real cover art       │
@@ -79,10 +79,11 @@ Real radio = one stream, synced listeners. That needs a server-side audio mixer.
 ## What runs where
 
 - **Icecast / Liquidsoap / Controller / Web / Caddy** — Docker Compose stack. Defaults assume `host.docker.internal` for the local Ollama.
-- **LLM** — every model call goes through the Vercel AI SDK, so the provider is swappable from the admin Settings UI: Ollama (homelab default, no key), Anthropic, OpenAI, or the Vercel AI Gateway. Ollama runs on the host or any reachable host; default model `qwen2.5:7b`. Cloud API keys are read from the standard env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AI_GATEWAY_API_KEY`) — see `controller/.env.example`.
+- **LLM** — every model call goes through the Vercel AI SDK, so the provider is swappable from the admin Settings UI: Ollama (homelab default, no key), Anthropic, OpenAI, Google, OpenRouter, or the Vercel AI Gateway. Ollama runs on the host or any reachable host; default model `qwen2.5:7b`. Cloud API keys are read from each provider's standard env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `OPENROUTER_API_KEY`, `AI_GATEWAY_API_KEY`) — see `controller/.env.example`.
 - **Navidrome** — anywhere reachable. Controller talks Subsonic API.
-- **Piper** — baked into the controller image, CPU-only. Default voice: `en_GB-alan-medium`.
+- **Piper** — baked into the controller image, CPU-only. Default voice: `en_GB-alan-medium`. The universal TTS fallback.
 - **Kokoro** — also baked into the controller image. Slower (~300–800 ms/line on CPU) but much more natural. British voice subset surfaced in Settings; default `bf_isabella`.
+- **Cloud TTS** — optional third engine, routed through the AI SDK to OpenAI or ElevenLabs. Needs an API key (`OPENAI_API_KEY` / `ELEVENLABS_API_KEY`); falls back to a local engine when unconfigured.
 - **Web UI** — Next.js dev server on port 7700 (dev) or behind Caddy as part of the prod compose file.
 
 ## Directory layout
@@ -92,13 +93,13 @@ sub-wave/
 ├── controller/
 │   ├── src/
 │   │   ├── server.js          # Express entry: middleware + route mounting
-│   │   ├── settings.js        # Durable settings (DJ persona/souls, mixer,
-│   │   │                      # weather, TTS routing) + renderDjPrompt
+│   │   ├── settings.js        # Durable settings (personas, shows, skills,
+│   │   │                      # mixer, TTS routing) + renderDjPrompt
 │   │   ├── config.js          # Env-derived config (single source of truth)
 │   │   ├── context.js         # Time / weather / festival → dominantMood;
 │   │   │                      # getDateContext / getClockContext helpers
 │   │   ├── routes/            # Express routers by surface: public, request,
-│   │   │                      # settings, jingles, debug
+│   │   │                      # dj, settings, jingles, debug
 │   │   ├── middleware/        # cors, admin auth, request rate-limiting
 │   │   ├── music/             # subsonic client, moods.json store, LLM picker,
 │   │   │                      # standalone library tagger
@@ -118,10 +119,15 @@ sub-wave/
 │   │   ├── listen/page.js     # Always the listener
 │   │   ├── landing/page.js    # Always the broadsheet
 │   │   ├── setup/             # Interactive onboarding walkthrough
-│   │   ├── admin/             # Settings + debug, behind one sign-in gate
-│   │   │   ├── page.js              # Overview
-│   │   │   ├── settings/page.js     # SettingsPanel
-│   │   │   └── debug/page.js        # DebugPanel
+│   │   ├── admin/             # 7-page operator console, one sign-in gate
+│   │   │   ├── page.js              # /admin → redirects to dash
+│   │   │   ├── dash/page.js         # DJ command center
+│   │   │   ├── library/page.js      # Search + queue, mood tagger
+│   │   │   ├── personas/page.js     # Persona roster editor
+│   │   │   ├── skills/page.js       # Autonomous-segment toggles
+│   │   │   ├── shows/page.js        # Weekly schedule grid
+│   │   │   ├── settings/page.js     # Station config + danger zone
+│   │   │   └── debug/page.js        # Read-only system inspector
 │   │   ├── manifest.js        # PWA manifest (icons, screenshots, display)
 │   │   ├── icon.js / apple-icon.js  # Static launcher tiles
 │   │   ├── icons/[size]/route.js    # Adaptive PNG icons
@@ -159,6 +165,9 @@ sub-wave/
 │   └── Dockerfile.liquidsoap
 ├── bin/
 │   └── subwave                # `npm run setup` entry — interactive TUI
+├── docs/                      # Deeper docs; docs/admin/ is the operator manual
+├── mcp-subwave/               # Optional MCP server exposing station controls
+├── DEPLOY.md                  # Production single-host deploy guide
 ├── package.json               # Root manifest: wizard + dev/down/logs/rebuild aliases
 ├── scripts/
 │   ├── setup.mjs              # Interactive setup wizard (@clack/prompts)
@@ -168,7 +177,7 @@ sub-wave/
 │   ├── health-check.sh        # On-air probe
 │   └── update.sh              # Prod: git pull + rebuild + rolling recreate
 └── state/                     # Bind-mounted shared volume
-    ├── settings.json          # DJ persona + souls[], mixer, weather, TTS routing
+    ├── settings.json          # Persona roster, shows, skills, mixer, TTS routing
     ├── auto.m3u               # Fallback playlist, refreshed every 60 min by default
     ├── jingles.m3u + jingles/ # Pre-recorded TTS stingers
     ├── emergency.mp3          # Pink-noise safety net
@@ -234,7 +243,7 @@ cd ../web && npm install && npm run dev
 
 Open:
 - **Listener** — http://localhost:7700
-- **Admin (settings + debug)** — http://localhost:7700/admin (admin-gated if `ADMIN_USER`/`ADMIN_PASS` are set)
+- **Admin console** — http://localhost:7700/admin (admin-gated if `ADMIN_USER`/`ADMIN_PASS` are set)
 - **Raw stream** — http://localhost:7702/stream.mp3
 - **Icecast status** — http://localhost:7702/status-json.xsl
 
@@ -274,50 +283,57 @@ The web app ships as an installable PWA:
 - **Safe-area handling** — `viewport-fit: cover` plus `env(safe-area-inset-*)` padding on the top/transport bars, so installed mode on notched iPhones clears the Dynamic Island and home indicator.
 - **Service worker** — minimal stub at `web/public/sw.js` so installs don't 404 on `/sw.js`.
 
-## Admin (`/admin`)
+## Admin console (`/admin`)
 
-Everything used to live in an in-player modal + a standalone `/debug` route. As of `19e9514`, both are now under `/admin` behind a single sign-in gate (`AdminShell` + `useAdminAuth`):
+The operator console is a seven-page shell behind a single sign-in gate (`AdminShell` + `useAdminAuth`). `/admin` redirects to the Dash. The full operator manual lives in [`docs/admin/`](docs/admin/README.md).
 
-- `/admin` — overview
-- `/admin/settings` — DJ persona, mixer, weather, TTS routing, library tagger, jingles
-- `/admin/debug` — live diagnostics: queue snapshot, recent LLM calls, library stats, scheduler info
+| Page | What it's for |
+|---|---|
+| **Dash** (`/admin/dash`) | DJ command center — speak on air, fire any segment, skip the current track, flip the autonomous toggles, watch the live booth. |
+| **Library** (`/admin/library`) | Search Navidrome and queue tracks directly; run the mood tagger. |
+| **Personas** (`/admin/personas`) | The roster of DJ identities — name, soul, voice, talk frequency, skills. |
+| **Skills** (`/admin/skills`) | Toggle the autonomous between-track segments (weather, news, …) station-wide. |
+| **Shows** (`/admin/shows`) | The weekly schedule grid — assign shows to hours of the week. |
+| **Settings** (`/admin/settings`) | Station config — TTS engine, LLM provider, mixer, jingles, danger zone. |
+| **Debug** (`/admin/debug`) | Read-only system inspector — health, logs, recent LLM calls, state files. |
 
-### DJ persona
+Most changes apply live: Personas, Skills, Shows, the LLM provider, station location, and the TTS fallback engine all take effect on the next spoken line or next pick. Crossfade duration and jingle ratio need a mixer restart (a ~3–5 s broadcast drop), flagged in the Settings danger zone. API keys are never entered in the UI — cloud LLM and TTS keys are read from `controller/.env`.
 
-- **Name** — shown in the TopBar (`SUB/WAVE with <name>`) and injected into LLM prompts as `{name}`. Required.
-- **Souls** — a list of 1–10 short persona descriptions. The DJ picks one at random per spoken line, layered with a random narrative "angle" (and opener-anti-repeat using recent on-air history), so back-to-back segments differ in register as well as content. Legacy single-`soul` settings.json files are migrated forward on load.
-- **Talk frequency** — `quiet` / `moderate` / `aggressive`. Maps to:
-  - DJ link interval between auto-played tracks (`pickLinkInterval` in `queue.js`).
-  - Station ID cadence (once/twice/four times an hour).
-  - Hourly time-check and weather-update gating in `scheduler.js`.
-  - **Music selection is untouched** — frequency only controls how chatty the DJ is.
-- **System prompt template (advanced)** — full editable template. Placeholders: `{name}` (required), `{soul}`, `{station}`, `{location}`. "Reset to default" restores the original.
+### Personas
 
-All persona changes apply live — no mixer restart needed.
+The station keeps a roster of 1–12 personas; **one is on air at a time**, and a scheduled show can hand its hour to a different one. Each persona owns:
 
-### TTS routing
+- **Name** — shown in the player (`SUB/WAVE with <name>`) and injected into LLM prompts as `{name}`. Required.
+- **Soul** — a short personality sketch injected as `{soul}`. Layered with a random narrative "angle" and opener-anti-repeat so back-to-back lines differ in register.
+- **Talk frequency** — `quiet` / `moderate` / `aggressive`. Controls DJ link interval, station-ID cadence, and skill gating. **Music selection is untouched** — frequency only controls how chatty the DJ is.
+- **Voice** — the TTS engine + voice for this persona's spoken lines.
+- **Skills** — which autonomous segments this persona may run.
 
-- **Default engine** — Piper or Kokoro. Piper is the fast path (~30 ms/word). Kokoro is slower but more natural.
-- **Per-kind override** — pin a specific engine for any of: `dj-speak`, `link`, `station-id`, `hourly-check`, `weather`, `jingle`. `null` (the default) falls back to the default engine.
-- **Kokoro voice** — picker pre-loaded with the British subset (`bf_isabella`, `bm_george`, etc.). Any valid Kokoro voice id (`<lang><gender>_<name>`) is accepted.
-- **Automatic failure fallback** — if the chosen engine errors out (e.g. Python worker crash), `tts.speak` retries on the other engine so the DJ never goes silent.
+The system prompt template (advanced) is editable per station — placeholders `{name}` (required), `{soul}`, `{station}`, `{location}`. Legacy single-DJ `settings.json` files (a `dj` block with `souls[]`) are migrated forward into the persona roster on load.
 
-### Mixer settings (require Liquidsoap restart)
+### Skills
 
-- **Crossfade duration** (sec) — feeds the full-buffer fade.in / fade.out used in the `cross` operator.
-- **Jingle ratio** — 1 jingle every N music tracks.
-- **Weather location** — lat / lng / display name (applies live; only crossfade + jingles need the restart).
+A skill is an autonomous between-track segment — weather, news, traffic, random facts, web search. A skill fires only when it is **enabled** station-wide (on this page) **and assigned** to the persona on air. Each skill has its own cooldown; the persona's talk frequency gates timing. **Run now** fires one immediately, bypassing every gate.
 
-### Library mood tags
+### Shows
 
-- Track count by mood, last-update timestamp
-- Run the tagger with an optional `--limit` ceiling
-- Tagger log preview
+A show is a reusable programme — a name, topic, owning persona, and music mood — assigned to one-hour cells in a Mon–Sun grid. When the current hour has a show, its persona goes on air, its mood overrides the autonomous mood, and its topic is fed to the DJ as the theme. Empty hours run autonomously.
 
-### Jingles
+### TTS engines
 
-- Create new TTS stingers from text (engine = whatever is selected for `jingle`)
-- List + delete (built-in default ident is protected)
+Three engines, with a per-persona override and automatic fallback:
+
+- **Piper** — fast local path (~30 ms/word); the universal fallback.
+- **Kokoro** — local, slower but more natural; British voice subset surfaced in the UI.
+- **Cloud** — routed via the AI SDK to OpenAI or ElevenLabs; needs an API key.
+
+Each persona picks its own engine + voice (Personas page). The station-level default engine (Settings) renders jingles and is the fallback when a persona's engine fails. If the chosen engine errors, `tts.speak` retries on a local engine so the DJ never goes silent.
+
+### Mixer & jingles
+
+- **Crossfade duration** / **jingle ratio** — require a mixer restart.
+- **Station location** — name / lat / lng; applies live, drives weather and `{location}`.
+- **Jingles** — create TTS stingers from text, list and delete (the built-in default ident is protected).
 
 ## Admin auth
 
@@ -330,7 +346,7 @@ ADMIN_PASS=<something good>
 
 Then `docker compose up -d controller` (not `restart`). The prod compose file forces `NODE_ENV=production`, which makes both vars mandatory — the controller exits on startup if either is missing.
 
-What's protected: `/settings` GET+POST, `/restart-mixer`, `/jingles` GET+POST+DELETE, `/auto-pick`, `/tag-library`, `/debug`.
+What's protected: every admin endpoint — `/settings`, the `/dj/*` command-center routes, `/jingles`, `/restart-mixer`, `/stream-start`, `/stream-stop`, `/auto-pick`, `/tag-library`, `/debug`.
 
 What stays public: `/now-playing`, `/state`, `/request`, `/dj`, `/cover/:id`, `/health`.
 
@@ -397,22 +413,22 @@ User requests jump to the front of the controller's `upcoming` queue. **Caveat:*
 
 The web Request drawer renders a success card on match (with the DJ's ack + queue position) and auto-closes after ~2.8 s; on no-match it shows an inline error so you can retry without losing the textbox contents.
 
-## Scheduler segments
+## Scheduler & skills
 
-The DJ talk-frequency setting gates these (`quiet`/`moderate`/`aggressive`):
+A node-cron driver fires the scheduled segments; the persona on air and its talk frequency (`quiet`/`moderate`/`aggressive`) gate most of them:
 
-| When | What | quiet | moderate | aggressive |
-|---|---|---|---|---|
-| Top of every hour | Time-check | every 2nd hour | every hour | every hour |
-| `:00`/`:15`/`:30`/`:45` | Station ID | `:45` only | `:15` + `:45` | all four |
-| Every 15 min (on change) | Weather update | `:00` only | `:00` + `:30` | every 15 min |
-| Every `AUTO_QUEUE_REFRESH_MINUTES` (default 60) | `auto.m3u` refresh | always | always | always |
-| Hourly | Old voice WAV cleanup | always | always | always |
+| When | What |
+|---|---|
+| Top of every hour | Time-check — `quiet` every 2nd hour, `moderate`/`aggressive` every hour |
+| `:00`/`:15`/`:30`/`:45` | Station ID — `quiet` `:45` only, `moderate` `:15`+`:45`, `aggressive` all four |
+| Every 5 min | Skills tick — the registry picks at most one eligible skill (weather, news, traffic, random facts, web search); per-skill cooldown + frequency + persona assignment gate it |
+| Every `AUTO_QUEUE_REFRESH_MINUTES` (default 60) | `auto.m3u` refresh for the current mood |
+| Hourly | Old voice WAV cleanup |
 
 Plus randomised DJ links between auto-played tracks — interval scales with frequency (`quiet` 8-20 tracks, `moderate` 1-9 / 10-15, `aggressive` 1-3).
 
 Voice routing:
-- **Solo voice** (station ID, hourly, weather, listener-request intros) goes through `voice_queue` → **heavy duck** (`smooth_add` p=0.25, music drops to ~25%).
+- **Solo voice** (station ID, hourly, weather, skills, listener-request intros) goes through `voice_queue` → **heavy duck** (`smooth_add` p=0.25, music drops to ~25%).
 - **Talk-over links** between auto tracks go through `intro_queue` → **light duck** (p=0.40, ~40%) so the song you just queued stays audibly underneath.
 
 ## Endpoints (controller, port 7701)
@@ -432,8 +448,10 @@ Admin (gated when `ADMIN_USER`/`ADMIN_PASS` are set; mandatory in production):
 
 | Method | Path | What |
 |---|---|---|
-| GET / POST | `/settings` | Read or update DJ persona / souls / mixer / weather / TTS routing |
+| GET / POST | `/settings` | Read or update station config — personas, shows, skills, mixer, TTS routing |
+| POST | `/dj/*` | Command-center actions — `say`, `segment`, `skill`, `skip`, `queue-track`, `search`, `recent`, … |
 | POST | `/restart-mixer` | Telnet → Liquidsoap shutdown → container restart |
+| POST | `/stream-start`, `/stream-stop` | Take the broadcast on / off air |
 | GET / POST / DELETE | `/jingles[/:filename]` | Manage pre-rendered TTS stingers |
 | POST | `/auto-pick` | Toggle the LLM picker |
 | POST | `/tag-library` | Kick off the mood tagger as a background process |
@@ -454,13 +472,13 @@ State (`settings.json`, `moods.json`, voice WAVs, archives) is persisted in `./s
 - **Pre-picked AI tracks play before subsequent listener requests** (see [Listener requests](#listener-requests)).
 - **Mood biasing only works after `npm run tag`.** Until then the picker pulls from similar-songs, recently-added, frequent, similar-artist, and starred without a tag filter.
 - **Liquidsoap log can grow unbounded.** `state/logs/radio.log` has no rotation configured.
-- **No `/skip` endpoint** — Liquidsoap controls pacing. Track-end is the only natural transition.
+- **No listener-facing skip** — Liquidsoap controls pacing; track-end is the natural transition. An operator can force-end the current track from the admin Dash (`POST /dj/skip`), but there is no public skip — a stray AirPods tap shouldn't skip the song for everyone.
 - **Admin auth uses Basic auth over HTTP** — fine behind Cloudflare/Caddy with TLS, but don't expose port 7701 raw to the internet.
 - **Kokoro adds ~30 s of cold-start latency** on the first segment after a controller boot while the model loads in the Python worker. Subsequent calls reuse the resident process.
 
 ## Customisation (code-level, beyond Settings)
 
-Things you can change without touching code now live in the Settings dialog (DJ name, souls, mixer, TTS routing, weather, jingles). Everything below still requires editing source:
+Things you can change without touching code now live in the `/admin` console (personas, shows, skills, mixer, TTS routing, weather, jingles). Everything below still requires editing source:
 
 - **Mood vocabulary** — `MOOD_VOCAB` in `controller/src/music/tag-library.js` (and the matching `mood` enum in the request-matcher's system prompt).
 - **Picker behaviour** — `PICKER_SYSTEM` in `controller/src/llm/dj.js` defines the selection criteria; per-source caps (`CAP_SIMILAR`, `CAP_MOOD_LIBRARY`, …) live at the top of `controller/src/music/picker.js`.
