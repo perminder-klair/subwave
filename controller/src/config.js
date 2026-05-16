@@ -47,6 +47,10 @@ export const config = {
     feedUrl: process.env.NEWS_FEED_URL || 'http://feeds.bbci.co.uk/news/rss.xml',
     maxItems: parseInt(process.env.NEWS_MAX_ITEMS || '10', 10),
   },
+  search: {
+    // Tavily API key for the web-search skill. Blank → the skill stays inert.
+    apiKey: process.env.SEARCH_API_KEY || '',
+  },
   server: {
     port: parseInt(process.env.PORT || '7701', 10),
   },

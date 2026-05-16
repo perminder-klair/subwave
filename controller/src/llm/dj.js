@@ -90,6 +90,13 @@ export const ANGLES = {
     'Keep it one sentence. Avoid the words "interestingly" and "fun fact".',
     'A fact that earns the next song, not one that competes with it.',
   ],
+  web_search: [
+    'Drop one current detail about the artist like a half-remembered thing you read, then back to the music.',
+    'Treat it as news from the wider world about who is on air — light, never a press release.',
+    'Land one specific, recent fact; skip the context and skip the source.',
+    'Keep it one sentence. The detail should make the next play feel timely.',
+    'Mention what the artist has been up to lately as if the listener might not have heard.',
+  ],
 };
 
 export function pickAngle(kind) {

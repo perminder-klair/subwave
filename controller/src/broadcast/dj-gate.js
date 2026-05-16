@@ -27,8 +27,9 @@ export function shouldFire(kind, now = new Date()) {
 
   // Skills that have a "could fire any minute" rhythm and want the
   // frequency setting to throttle them. Used by weather (in the skill) and
-  // the news/traffic/random-facts skills.
-  if (kind === 'weather' || kind === 'news' || kind === 'traffic' || kind === 'random-facts') {
+  // the news/traffic/random-facts/web-search skills.
+  if (kind === 'weather' || kind === 'news' || kind === 'traffic'
+      || kind === 'random-facts' || kind === 'web-search') {
     if (f === 'quiet')    return m === 0;
     if (f === 'moderate') return m === 0 || m === 30;
     return true;

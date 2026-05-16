@@ -26,8 +26,9 @@ import weather from './weather.js';
 import news from './news.js';
 import traffic from './traffic.js';
 import randomFacts from './random-facts.js';
+import webSearch from './web-search.js';
 
-const SKILLS = [weather, news, traffic, randomFacts];
+const SKILLS = [weather, news, traffic, randomFacts, webSearch];
 
 const state = new Map();   // name → per-skill state object
 const lastFired = new Map(); // name → ms timestamp
