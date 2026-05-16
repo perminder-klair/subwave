@@ -160,7 +160,9 @@ export default function DashPanel() {
             <div className="flex flex-wrap gap-x-5 gap-y-1 v3-caption" style={{ color: 'var(--muted)' }}>
               {status?.dj?.name && <span>dj · {status.dj.name}</span>}
               {listeners && <span>listeners · {listeners.current} (peak {listeners.peak})</span>}
-              {ctx?.time?.period && <span>show · {ctx.time.period}</span>}
+              {status?.activeShow?.name
+                ? <span style={{ color: 'var(--accent)' }}>show · {status.activeShow.name}</span>
+                : (ctx?.time?.period && <span>show · {ctx.time.period}</span>)}
               {ctx?.dominantMood && <span>mood · {ctx.dominantMood}</span>}
               {ctx?.weather?.condition && (
                 <span>weather · {ctx.weather.condition}{ctx.weather.temp != null ? ` ${Math.round(ctx.weather.temp)}°` : ''}</span>

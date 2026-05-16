@@ -29,7 +29,7 @@ const DRAWER_TITLES = {
 };
 
 export default function PlayerApp({ contained = false }) {
-  const { nowPlaying, context, dj, listeners, state, elapsed, progress } = useStationFeed();
+  const { nowPlaying, context, dj, activeShow, listeners, state, elapsed, progress } = useStationFeed();
   const { audioRef, tunedIn, volume, setVolume, tune } = usePlayer();
 
   // Wire OS-level media controls (lock screen, headphones, car display).
@@ -110,6 +110,7 @@ export default function PlayerApp({ contained = false }) {
         tunedIn={tunedIn}
         context={context}
         djName={dj?.name}
+        activeShow={activeShow}
         listeners={listeners}
         theme={theme}
         onToggleTheme={toggleTheme}

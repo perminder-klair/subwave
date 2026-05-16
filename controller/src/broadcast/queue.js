@@ -17,7 +17,7 @@ import * as settings from '../settings.js';
 //   moderate   → current behaviour (1-9 85% of the time, 10-15 the other 15%)
 //   aggressive → uniform 1-3 tracks
 function pickLinkInterval() {
-  const f = settings.get().dj?.frequency || 'moderate';
+  const f = settings.getEffectivePersona()?.frequency || 'moderate';
   if (f === 'quiet')      return 8 + Math.floor(Math.random() * 13);
   if (f === 'aggressive') return 1 + Math.floor(Math.random() * 3);
   if (Math.random() < 0.15) return 10 + Math.floor(Math.random() * 6);

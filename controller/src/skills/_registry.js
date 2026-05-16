@@ -14,7 +14,7 @@
 // every tick; skills mutate it freely (e.g. weather.lastCondition,
 // news.seenHashes). It lives in memory only — restarts wipe it, that's fine.
 //
-// The frequency gate (settings.dj.frequency) is enforced at the registry
+// The frequency gate (the effective persona's frequency) is enforced at the registry
 // level via dj-gate.shouldFire(skill.kind), so adding a new skill doesn't
 // need to know how quiet/moderate/aggressive maps to cron minutes.
 

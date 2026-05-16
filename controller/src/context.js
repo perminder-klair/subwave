@@ -2,6 +2,7 @@
 // Used by the autonomous scheduler to pick mood-appropriate tracks.
 
 import { config } from './config.js';
+import { resolveActiveShow } from './settings.js';
 
 export function getTimeContext(date = new Date()) {
   const h = date.getHours();
@@ -155,8 +156,12 @@ export async function getFullContext() {
   const date = getDateContext(now);
   const clock = getClockContext(now);
 
-  // Festival > weather > time, in that order of priority for mood selection
-  const dominantMood = festival?.mood || weather.mood || time.mood;
+  // A scheduled show for this hour, if any. Its mood wins everything below —
+  // an empty hour leaves the station running autonomously.
+  const activeShow = resolveActiveShow(now);
 
-  return { time, weather, festival, dominantMood, date, clock };
+  // Show > festival > weather > time, in that order of priority for mood.
+  const dominantMood = activeShow?.mood || festival?.mood || weather.mood || time.mood;
+
+  return { time, weather, festival, dominantMood, date, clock, activeShow };
 }

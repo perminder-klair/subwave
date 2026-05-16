@@ -27,8 +27,11 @@ function buildTagline(context) {
   return parts.length ? parts.join(' · ') : null;
 }
 
-export default function TopBar({ tunedIn, context, djName, listeners, theme, onToggleTheme }) {
+export default function TopBar({ tunedIn, context, djName, activeShow, listeners, theme, onToggleTheme }) {
   const tagline = buildTagline(context);
+  // When a programmed show is on air, name it and prefer its host.
+  const showName = activeShow?.name || null;
+  const onAirName = activeShow?.persona?.name || djName;
   return (
     <div
       // viewport-fit=cover lets the header extend under the iPhone notch /
@@ -45,9 +48,14 @@ export default function TopBar({ tunedIn, context, djName, listeners, theme, onT
     >
       <div className="flex items-baseline gap-2 sm:gap-[14px] min-w-0">
         <span className="v3-eyebrow shrink-0">SUB/WAVE</span>
-        {djName && (
+        {showName && (
+          <span className="v3-caption truncate shrink-0" style={{ color: 'var(--ink)' }} title={showName}>
+            ▸ {showName}
+          </span>
+        )}
+        {onAirName && (
           <span className="v3-caption truncate" style={{ color: 'var(--accent)' }}>
-            with {djName}
+            with {onAirName}
           </span>
         )}
         {tagline && (

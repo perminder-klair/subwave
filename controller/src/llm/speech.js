@@ -41,9 +41,12 @@ export function isConfigured() {
 
 // Generate speech and write it to a file. Returns the path — same contract as
 // piper.speak / kokoro.speak so tts.js treats all three engines alike.
-export async function speak(text, { outPath } = {}) {
+//
+// `cloudOverride` ({ provider, voice }) lets a persona pick its own cloud
+// provider + voice while still sharing the global model + apiKey from Settings.
+export async function speak(text, { outPath, cloudOverride = null } = {}) {
   if (!text || !text.trim()) throw new Error('Empty TTS text');
-  const c = cloudCfg();
+  const c = { ...cloudCfg(), ...(cloudOverride || {}) };
 
   const result = await generateSpeech({
     model: speechModel(c),

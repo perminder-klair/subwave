@@ -10,7 +10,8 @@ import { Toaster } from '../ui/toaster';
 const NAV = [
   { href: '/admin/dash',     label: 'Dash' },
   { href: '/admin/library',  label: 'Library' },
-  { href: '/admin/persona',  label: 'Persona' },
+  { href: '/admin/personas', label: 'Personas' },
+  { href: '/admin/shows',    label: 'Shows' },
   { href: '/admin/settings', label: 'Settings' },
   { href: '/admin/debug',    label: 'Debug' },
 ];

@@ -10,6 +10,7 @@ export function useStationFeed() {
   const [nowPlaying, setNowPlaying] = useState(null);
   const [context, setContext] = useState(null);
   const [dj, setDj] = useState(null);
+  const [activeShow, setActiveShow] = useState(null);
   const [listeners, setListeners] = useState(null);
   const [state, setState] = useState({ upcoming: [], history: [], djLog: [] });
   const [elapsed, setElapsed] = useState(0);
@@ -30,6 +31,8 @@ export function useStationFeed() {
         });
         setContext(npRes.context);
         if (npRes.dj) setDj(npRes.dj);
+        // activeShow is { name, persona:{name} } | null — null = no show this hour.
+        setActiveShow(npRes.activeShow ?? npRes.context?.activeShow ?? null);
         if (npRes.listeners) setListeners(npRes.listeners);
         setState(stRes);
       } catch {}
@@ -51,5 +54,5 @@ export function useStationFeed() {
   const duration = nowPlaying?.duration ?? 0;
   const progress = duration > 0 ? Math.min(1, elapsed / duration) : 0;
 
-  return { nowPlaying, context, dj, listeners, state, elapsed, progress };
+  return { nowPlaying, context, dj, activeShow, listeners, state, elapsed, progress };
 }

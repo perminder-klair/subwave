@@ -2,7 +2,8 @@
 //
 // Crons + the skills registry tick at their most aggressive cadence; this
 // function decides whether a given tick is allowed to fire under the
-// operator's current `settings.dj.frequency` (quiet | moderate | aggressive).
+// frequency of the effective persona (the scheduled show's owner this hour,
+// or the active persona) — quiet | moderate | aggressive.
 //
 // Lives outside scheduler.js so both the scheduler crons and the skill
 // registry can import it without a circular dependency.
@@ -10,7 +11,7 @@
 import * as settings from '../settings.js';
 
 export function shouldFire(kind, now = new Date()) {
-  const f = settings.get().dj?.frequency || 'moderate';
+  const f = settings.getEffectivePersona(now)?.frequency || 'moderate';
   const m = now.getMinutes();
 
   if (kind === 'stationId') {

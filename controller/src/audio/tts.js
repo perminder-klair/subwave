@@ -26,10 +26,27 @@ export const VOICE_KINDS = [
   'default',        // fallback when a kind isn't explicitly mapped
 ];
 
-function resolveEngine(kind) {
+// DJ-spoken kinds — these are voiced by the persona on air, so their engine
+// and voice come from the effective persona's `tts` config rather than the
+// global byKind/defaultEngine routing. Everything else (weather, news,
+// jingles…) stays on the global routing.
+const DJ_SPOKEN_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check']);
+
+// The effective persona's TTS config for a DJ-spoken kind, else null.
+function djPersonaTts(kind) {
+  if (!DJ_SPOKEN_KINDS.has(kind)) return null;
+  return settings.getEffectivePersona()?.tts || null;
+}
+
+function resolveEngine(kind, personaTts) {
   const tts = settings.get().tts || {};
-  const override = (tts.byKind && tts.byKind[kind]) || null;
-  const chosen = override || tts.defaultEngine || 'piper';
+  let chosen;
+  if (personaTts && ENGINES.includes(personaTts.engine)) {
+    chosen = personaTts.engine;          // persona owns the DJ-spoken engine
+  } else {
+    const override = (tts.byKind && tts.byKind[kind]) || null;
+    chosen = override || tts.defaultEngine || 'piper';
+  }
   if (!ENGINES.includes(chosen)) return 'piper';
   // `cloud` without a configured key would just throw and fall back — skip
   // the wasted API attempt and resolve straight to a local engine.
@@ -39,13 +56,19 @@ function resolveEngine(kind) {
   return chosen;
 }
 
-async function speakWith(engine, text, opts) {
+async function speakWith(engine, text, opts, personaTts) {
   if (engine === 'kokoro') {
-    const voice = settings.get().tts?.kokoro?.voice;
+    const voice = (personaTts && personaTts.engine === 'kokoro' && personaTts.voice)
+      ? personaTts.voice
+      : settings.get().tts?.kokoro?.voice;
     return kokoro.speak(text, { ...opts, voice });
   }
   if (engine === 'cloud') {
-    return cloud.speak(text, opts);
+    // Persona picks provider + voice; the shared tts.cloud holds key + model.
+    const cloudOverride = (personaTts && personaTts.engine === 'cloud')
+      ? { provider: personaTts.cloudProvider, voice: personaTts.voice }
+      : null;
+    return cloud.speak(text, { ...opts, cloudOverride });
   }
   return piper.speak(text, opts);
 }
@@ -54,14 +77,15 @@ async function speakWith(engine, text, opts) {
 // a local engine so the DJ never goes silent because a model (or the network)
 // failed. Piper is the universal fallback — local, keyless, fast.
 export async function speak(text, { kind = 'default', outPath } = {}) {
-  const primary = resolveEngine(kind);
+  const personaTts = djPersonaTts(kind);
+  const primary = resolveEngine(kind, personaTts);
   try {
-    return await speakWith(primary, text, { outPath });
+    return await speakWith(primary, text, { outPath }, personaTts);
   } catch (err) {
     const fallback = primary === 'piper' ? 'kokoro' : 'piper';
     if (fallback === 'kokoro' && !kokoro.isAvailable()) throw err;
     console.error(`[tts] ${primary} failed for kind=${kind}: ${err.message} — falling back to ${fallback}`);
-    return speakWith(fallback, text, { outPath });
+    return speakWith(fallback, text, { outPath }, personaTts);
   }
 }
 

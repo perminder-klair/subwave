@@ -64,8 +64,18 @@ router.get('/now-playing', async (req, res) => {
       getFullContext(),
       getListenerStats(),
     ]);
-    const s = settings.get();
-    res.json({ nowPlaying, context: ctx, dj: { name: s.dj?.name }, listeners });
+    const persona = settings.getEffectivePersona();
+    // activeShow is { name, persona:{ name } } | null — surfaced to listeners.
+    const activeShow = ctx.activeShow
+      ? { name: ctx.activeShow.name, persona: ctx.activeShow.persona }
+      : null;
+    res.json({
+      nowPlaying,
+      context: ctx,
+      dj: { name: persona?.name || 'Frequency', tagline: persona?.tagline || '' },
+      activeShow,
+      listeners,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -79,10 +89,12 @@ router.get('/dj', async (req, res) => {
   try {
     await settings.load();
     const s = settings.get();
+    const persona = settings.getEffectivePersona();
     res.json({
-      name: s.dj?.name || 'Frequency',
-      soul: s.dj?.soul || '',
-      frequency: s.dj?.frequency || 'moderate',
+      name: persona?.name || 'Frequency',
+      tagline: persona?.tagline || '',
+      soul: persona?.soul || '',
+      frequency: persona?.frequency || 'moderate',
       station: 'SUB/WAVE',
       location: s.weather?.locationName || '',
     });

@@ -9,12 +9,7 @@
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
-
-const MOOD_VOCAB = [
-  'energetic', 'calm', 'reflective', 'celebratory', 'romantic', 'spiritual',
-  'focus', 'workout', 'driving', 'cooking', 'rainy', 'sunny',
-  'night', 'morning', 'evening', 'festival', 'cultural',
-];
+import { SHOW_MOODS as MOOD_VOCAB } from '../settings.js';
 
 const SYSTEM = `You tag music tracks with mood and energy for a personal radio station.
 

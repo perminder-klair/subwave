@@ -14,19 +14,14 @@ import { recentCalls, record } from './log.js';
 // Re-exported so server.js /debug can read the recent-call ring buffer.
 export { recentCalls, record };
 
-// Random micro-persona per call so the DJ shifts register across segments.
-// The rotation pool is exactly the souls list in Settings — edit it there to
-// add, remove, or pin a single persona. If the list is somehow empty, falls
-// back to the built-in defaults so a generation never crashes.
+// Resolve the DJ system prompt for the persona on air right now. The effective
+// persona is the current show's owner if a show is scheduled for this hour,
+// otherwise the admin-selected active persona — see settings.getEffectivePersona.
 export function djSystem() {
-  const s = settings.get();
-  const pool = (Array.isArray(s.dj?.souls) && s.dj.souls.length > 0)
-    ? s.dj.souls
-    : settings.DJ_SOULS;
-  const soul = pool[Math.floor(Math.random() * pool.length)];
-  return settings.renderDjPrompt({ ...s.dj, soul }, {
+  const persona = settings.getEffectivePersona();
+  return settings.renderDjPrompt(persona, {
     station: 'SUB/WAVE',
-    location: s.weather?.locationName,
+    location: settings.get().weather?.locationName,
   });
 }
 
@@ -126,6 +121,10 @@ export function buildContextLines(context, { recentTracks } = {}) {
     lines.push(`Weather in ${context.weather.location}: ${context.weather.condition}${context.weather.temp != null ? `, ${context.weather.temp}°C` : ''}`);
   }
   if (context?.festival) lines.push(`Festival: ${context.festival.name}`);
+  if (context?.activeShow) {
+    const topic = context.activeShow.topic ? ` — ${context.activeShow.topic}` : '';
+    lines.push(`On now: the show "${context.activeShow.name}"${topic}. Stay loosely on its theme.`);
+  }
   if (recentTracks && recentTracks.length) {
     const list = recentTracks.slice(0, 5).map(t => `"${t.title}" by ${t.artist || 'unknown'}`).join('; ');
     lines.push(`Recently played (do not mention these artists or titles): ${list}`);
@@ -275,7 +274,7 @@ export async function generateWeatherSegment(weather, time, { recap = null, cont
 }
 
 export async function generateStationId({ recap = null, context = null, recentOpeners = null } = {}) {
-  const djName = settings.get().dj?.name || 'your host';
+  const djName = settings.getEffectivePersona()?.name || 'your host';
   const ctxLines = buildContextLines(context);
   ctxLines.push(`Task: a 1-sentence station ident for SUB/WAVE with ${djName}. Brief, a little understated.`);
   return djText({
