@@ -7,10 +7,11 @@ import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { V3Alert } from '../ui/alert';
+import { Card, Btn, Pill, Eyebrow, Seg, Toggle, Wave } from './ui';
 
 const SAY_KINDS = [
-  { id: 'dj-speak', label: 'Heavy duck (solo)' },
-  { id: 'link',     label: 'Light duck (over track)' },
+  { id: 'dj-speak', label: 'Solo' },
+  { id: 'link',     label: 'Over' },
 ];
 const SAY_MODES = [
   { id: 'raw',    label: 'Raw' },
@@ -18,8 +19,8 @@ const SAY_MODES = [
 ];
 const SEGMENTS = [
   { type: 'station-id', label: 'Station ID' },
-  { type: 'hourly',     label: 'Time Check' },
-  { type: 'link',       label: 'Track Link' },
+  { type: 'hourly',     label: 'Time check' },
+  { type: 'link',       label: 'Track link' },
 ];
 
 export default function DashPanel() {
@@ -123,16 +124,40 @@ export default function DashPanel() {
   const ctx = status?.context;
   const q = status?.queue || {};
   const listeners = status?.listeners;
+  const upcoming = q.upcoming || [];
+  const djLog = q.djLog || [];
+
+  const showName = status?.activeShow?.name || ctx?.time?.period || '—';
+  const weatherText = ctx?.weather?.condition
+    ? `${ctx.weather.condition}${ctx.weather.temp != null ? ` ${Math.round(ctx.weather.temp)}°` : ''}`
+    : '—';
+
+  // 6-cell status strip — real data.
+  const strip = [
+    { l: 'dj on air',  v: status?.dj?.name || '—', accent: true },
+    { l: 'show',       v: showName },
+    { l: 'mood',       v: ctx?.dominantMood || '—' },
+    { l: 'listeners',  v: listeners ? String(listeners.current) : '—',
+      sub: listeners ? `peak ${listeners.peak}` : null },
+    { l: 'weather',    v: weatherText },
+    { l: 'picker',     v: q.pickerBusy ? 'thinking' : 'idle', accent: !!q.pickerBusy },
+  ];
 
   return (
-    <div className="space-y-4" style={{ fontSize: 12 }}>
-      <div className="flex flex-wrap items-center gap-3 pb-3" style={{ borderBottom: '1px solid var(--ink)' }}>
-        <span className="v3-caption" style={{ color: err ? '#c5302a' : 'var(--accent)' }}>
-          ● {err ? 'down' : 'live'}
-        </span>
-        <span className="v3-caption" style={{ color: 'var(--muted)' }}>dj command center</span>
+    <div style={{ display: 'grid', gap: 16 }}>
+      {/* ── HEADER STRIP ───────────────────────────────────────────────── */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+        paddingBottom: 12, borderBottom: '1px solid var(--ink)',
+      }}>
+        <span className="live-dot" style={{ background: err ? 'var(--danger)' : 'var(--accent)' }} />
+        <Eyebrow color={err ? 'var(--danger)' : 'var(--accent)'}>{err ? 'down' : 'live'}</Eyebrow>
+        <span className="caption">dj command center</span>
         {feedback && (
-          <span style={{ marginLeft: 'auto', fontSize: 11, color: feedback.tone === 'err' ? '#c5302a' : 'var(--accent)' }}>
+          <span style={{
+            marginLeft: 'auto', fontSize: 11,
+            color: feedback.tone === 'err' ? 'var(--danger)' : 'var(--accent)',
+          }}>
             {feedback.text}
           </span>
         )}
@@ -140,212 +165,272 @@ export default function DashPanel() {
 
       {err && <V3Alert tone="error" title="controller error">{err}</V3Alert>}
 
-      {/* ── ON AIR ───────────────────────────────────────────────────── */}
-      <Section title="On air">
-        {!np?.title ? (
-          <Empty>nothing reported playing</Empty>
-        ) : (
-          <div className="space-y-2">
-            <div className="flex items-start justify-between gap-3">
-              <div style={{ fontSize: 15, color: 'var(--ink)' }}>
-                {np.title} <span style={{ color: 'var(--muted)' }}>— {np.artist}</span>
-              </div>
-              <ActionButton
-                label="Skip"
-                busy={busy === 'skip'}
-                disabled={!!busy}
-                onClick={() => setConfirmSkip(true)}
-              />
-            </div>
-            <div className="flex flex-wrap gap-x-5 gap-y-1 v3-caption" style={{ color: 'var(--muted)' }}>
-              {status?.dj?.name && <span>dj · {status.dj.name}</span>}
-              {listeners && <span>listeners · {listeners.current} (peak {listeners.peak})</span>}
-              {status?.activeShow?.name
-                ? <span style={{ color: 'var(--accent)' }}>show · {status.activeShow.name}</span>
-                : (ctx?.time?.period && <span>show · {ctx.time.period}</span>)}
-              {ctx?.dominantMood && <span>mood · {ctx.dominantMood}</span>}
-              {ctx?.weather?.condition && (
-                <span>weather · {ctx.weather.condition}{ctx.weather.temp != null ? ` ${Math.round(ctx.weather.temp)}°` : ''}</span>
-              )}
-              <span>auto-pick · {q.autoPick ? 'on' : 'off'}</span>
-              <span>auto-link · {q.autoLink ? 'on' : 'off'}</span>
-              <span style={{ color: q.pickerBusy ? 'var(--accent)' : 'var(--muted)' }}>
-                picker · {q.pickerBusy ? 'thinking' : 'idle'}
+      {/* ── ON AIR HERO ────────────────────────────────────────────────── */}
+      <section className="card" style={{ borderColor: 'var(--ink)' }}>
+        <div style={{
+          padding: 18, display: 'grid', gridTemplateColumns: '1fr auto', gap: 24,
+          alignItems: 'center', borderBottom: '1px solid var(--ink)',
+        }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <span className="live-dot" style={{ background: err ? 'var(--danger)' : 'var(--accent)' }} />
+              <Eyebrow color="var(--accent)">on air</Eyebrow>
+              <span className="caption">
+                auto-pick {q.autoPick ? 'on' : 'off'} · auto-link {q.autoLink ? 'on' : 'off'}
               </span>
             </div>
-            <div>
-              <div className="v3-caption mb-1" style={{ color: 'var(--muted)' }}>
-                upcoming ({q.upcoming?.length ?? 0})
+            {np?.title ? (
+              <>
+                <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.05 }}>
+                  {np.title} <span style={{ color: 'var(--muted)', fontWeight: 600 }}>— {np.artist}</span>
+                </div>
+                {np.album && (
+                  <div className="caption" style={{ marginTop: 6 }}>album · {np.album}</div>
+                )}
+              </>
+            ) : (
+              <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--muted)' }}>
+                nothing reported playing
               </div>
-              {(q.upcoming?.length ?? 0) === 0 ? (
-                <Empty>queue empty — auto-playlist fallback</Empty>
-              ) : (
-                <ol className="space-y-0.5">
-                  {q.upcoming.slice(0, 5).map((t, i) => (
-                    <li key={i} className="flex gap-3">
-                      <span className="v3-tab-num" style={{ color: 'var(--muted)', width: 20 }}>{i + 1}</span>
-                      <span className="truncate flex-1" style={{ color: 'var(--ink)' }}>
-                        {t.title} <span style={{ color: 'var(--muted)' }}>— {t.artist}</span>
-                      </span>
-                      {t.requestedBy && (
-                        <span style={{ color: 'var(--accent)', fontSize: 10, letterSpacing: '0.2em', textTransform: 'uppercase' }}>
-                          ↳ {t.requestedBy}
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </div>
+            )}
           </div>
-        )}
-      </Section>
-
-      {/* ── MANUAL VOICE DJ ──────────────────────────────────────────── */}
-      <Section title="Manual voice DJ">
-        <div className="space-y-3">
-          <textarea
-            value={sayText}
-            onChange={e => setSayText(e.target.value)}
-            rows={3}
-            maxLength={500}
-            placeholder={sayMode === 'raw'
-              ? 'Exact words the DJ will speak, verbatim…'
-              : 'An instruction or topic — the DJ writes it in persona…'}
-            style={{
-              boxSizing: 'border-box', width: '100%', resize: 'vertical',
-              border: '1px solid var(--ink)', background: 'transparent',
-              padding: '8px 12px', fontSize: 13, fontFamily: 'inherit',
-              color: 'var(--ink)', outline: 'none',
-            }}
-          />
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-            <SegGroup label="mode" value={sayMode} options={SAY_MODES} onPick={setSayMode} />
-            <SegGroup label="duck" value={sayKind} options={SAY_KINDS} onPick={setSayKind} />
-            <button
-              onClick={sendVoice}
-              disabled={!!busy || !sayText.trim()}
-              className="v3-eyebrow v3-focus cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{
-                marginLeft: 'auto', background: 'var(--accent)', color: '#fff',
-                border: '1px solid var(--accent)', padding: '8px 18px', fontSize: 10,
-              }}
-            >
-              {busy === 'say' ? 'sending…' : 'send to air'}
-            </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Btn lg tone="danger" disabled={!!busy || !np?.title} onClick={() => setConfirmSkip(true)}>
+              {busy === 'skip' ? 'skipping…' : 'Skip track'}
+            </Btn>
           </div>
         </div>
-      </Section>
 
-      {/* ── DJ SEGMENTS ──────────────────────────────────────────────── */}
-      <Section title="DJ segments">
-        <div className="flex flex-wrap gap-2">
-          {SEGMENTS.map(s => (
-            <ActionButton
-              key={s.type}
-              label={s.label}
-              busy={busy === `seg:${s.type}`}
-              disabled={!!busy}
-              onClick={() => act(`seg:${s.type}`, '/dj/segment', { type: s.type }, s.label)}
-            />
+        {/* waveform band */}
+        <div style={{ padding: '14px 18px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr 40px', gap: 12, alignItems: 'flex-end' }}>
+            <span className="mono-num" style={{ fontSize: 10, color: 'var(--muted)' }}>
+              {np?.title ? 'live' : '—'}
+            </span>
+            <div style={{ position: 'relative' }}>
+              <Wave bars={120} seed={(np?.title?.length || 7)} h={48} tone={err ? 'muted' : 'accent'} />
+            </div>
+            <span className="mono-num" style={{ fontSize: 10, color: 'var(--muted)', textAlign: 'right' }}>
+              {q.pickerBusy ? '···' : '—'}
+            </span>
+          </div>
+        </div>
+
+        {/* status strip */}
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)',
+          borderTop: '1px solid var(--separator-strong)',
+        }}>
+          {strip.map((c, i) => (
+            <div key={i} style={{
+              padding: '12px 14px',
+              borderLeft: i === 0 ? 'none' : '1px solid var(--separator-strong)',
+              display: 'flex', flexDirection: 'column', gap: 2,
+            }}>
+              <span className="caption">{c.l}</span>
+              <span style={{
+                fontSize: 14, fontWeight: 600,
+                color: c.accent ? 'var(--accent)' : 'var(--ink)',
+              }}>
+                {c.v}
+              </span>
+              {c.sub && <span className="caption" style={{ fontSize: 9 }}>{c.sub}</span>}
+            </div>
           ))}
         </div>
-      </Section>
+      </section>
 
-      {/* ── SKILLS ───────────────────────────────────────────────────── */}
-      <Section title="Skills">
-        {skills.length === 0 ? (
-          <Empty>no skills reported</Empty>
-        ) : (
-          <div className="space-y-2">
-            <div className="v3-caption" style={{ color: 'var(--muted)' }}>
-              fire on demand · toggle autonomous firing
+      {/* ── 2-COL OPS ──────────────────────────────────────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16 }}>
+        {/* LEFT */}
+        <div style={{ display: 'grid', gap: 16 }}>
+          <Card
+            title="Queue"
+            sub={`${upcoming.length} upcoming`}
+            right={<>
+              <Pill tone={`accent ${q.autoPick ? 'dot' : ''}`}>auto-pick {q.autoPick ? 'on' : 'off'}</Pill>
+              <Pill tone={`accent ${q.autoLink ? 'dot' : ''}`}>auto-link {q.autoLink ? 'on' : 'off'}</Pill>
+            </>}
+            bodyStyle={{ padding: '4px 14px' }}
+          >
+            {upcoming.length === 0 ? (
+              <div style={{ padding: '10px 0', fontStyle: 'italic', color: 'var(--muted)' }}>
+                queue empty — auto-playlist fallback
+              </div>
+            ) : (
+              upcoming.slice(0, 8).map((t, i) => (
+                <div className="track-row" key={i}>
+                  <span className="idx">{(i + 1).toString().padStart(2, '0')}</span>
+                  <span className="title">{t.title} <span className="artist">— {t.artist}</span></span>
+                  <span className="dur">{t.duration || ''}</span>
+                  <span></span>
+                  {t.requestedBy ? (
+                    <span style={{
+                      fontSize: 9, letterSpacing: '0.2em', textTransform: 'uppercase',
+                      color: 'var(--accent)', textAlign: 'right',
+                    }}>↳ {t.requestedBy}</span>
+                  ) : <span></span>}
+                </div>
+              ))
+            )}
+          </Card>
+
+          <Card
+            title="Booth log"
+            sub={`${djLog.length} recent`}
+            right={<Pill>tail · live</Pill>}
+          >
+            {djLog.length === 0 ? (
+              <div style={{ fontStyle: 'italic', color: 'var(--muted)' }}>nothing logged yet</div>
+            ) : (
+              <div ref={logRef} style={{ maxHeight: 320, overflowY: 'auto' }}>
+                {djLog.map(e => (
+                  <div key={e.id} className={`log ${kindTone(e.kind)}`}>
+                    <span className="t">{new Date(e.t).toLocaleTimeString('en-GB', { hour12: false })}</span>
+                    <span className="k">[{e.kind}]</span>
+                    <span className="msg">{e.message}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+
+        {/* RIGHT */}
+        <div style={{ display: 'grid', gap: 16 }}>
+          <Card title="Manual voice DJ" sub="speak now">
+            <textarea
+              className="textarea"
+              style={{ width: '100%', minHeight: 88, boxSizing: 'border-box' }}
+              value={sayText}
+              onChange={e => setSayText(e.target.value)}
+              maxLength={500}
+              placeholder={sayMode === 'raw'
+                ? 'Exact words the DJ will speak, verbatim…'
+                : 'An instruction or topic — the DJ writes it in persona…'}
+            />
+            <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span className="caption">mode</span>
+                <Seg value={sayMode} options={SAY_MODES} onChange={setSayMode} />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span className="caption">duck</span>
+                <Seg value={sayKind} options={SAY_KINDS} onChange={setSayKind} />
+              </div>
+              <Btn
+                tone="accent"
+                style={{ marginLeft: 'auto' }}
+                disabled={!!busy || !sayText.trim()}
+                onClick={sendVoice}
+              >
+                {busy === 'say' ? 'sending…' : 'Send to air →'}
+              </Btn>
             </div>
-            {skills.map(s => {
-              const enabled = s.enabled !== false;
-              return (
-                <div key={s.name} className="flex items-center justify-between gap-3">
-                  <ActionButton
-                    label={s.name}
-                    busy={busy === `skill:${s.name}`}
-                    disabled={!!busy}
-                    onClick={() => act(`skill:${s.name}`, '/dj/skill', { name: s.name }, s.name)}
-                  />
+          </Card>
+
+          <Card title="DJ segments" sub="fire on demand">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+              {SEGMENTS.map(s => {
+                const k = `seg:${s.type}`;
+                return (
                   <button
-                    onClick={() => toggleSkill(s)}
+                    key={s.type}
                     disabled={!!busy}
-                    className="v3-eyebrow v3-focus cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    onClick={() => act(k, '/dj/segment', { type: s.type }, s.label)}
                     style={{
-                      border: `1px solid ${enabled ? 'var(--accent)' : 'var(--ink)'}`,
-                      background: enabled ? 'var(--accent)' : 'transparent',
-                      color: enabled ? '#fff' : 'var(--ink)',
-                      padding: '5px 14px', fontSize: 10, minWidth: 56,
+                      border: '1px solid var(--ink)', background: 'transparent',
+                      padding: '12px 10px', textAlign: 'left', fontFamily: 'inherit',
+                      display: 'flex', flexDirection: 'column', gap: 4, color: 'var(--ink)',
+                      cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.4 : 1,
                     }}
                   >
-                    {busy === `skilltoggle:${s.name}` ? '…' : (enabled ? 'auto on' : 'auto off')}
+                    <span style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', fontWeight: 700 }}>
+                      {s.label}
+                    </span>
+                    <span className="caption" style={{ fontSize: 9 }}>
+                      {busy === k ? 'firing…' : 'ready'}
+                    </span>
                   </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Section>
+                );
+              })}
+            </div>
+          </Card>
 
-      {/* ── BROADCAST CONTROLS ───────────────────────────────────────── */}
-      <Section title="Broadcast">
-        <div className="space-y-2">
-          <ToggleRow
-            label="Auto-pick" desc="LLM picks the next track when the queue runs dry"
-            on={!!q.autoPick} disabled={!!busy || !status}
-            onToggle={() => act('autopick', '/auto-pick', { on: !q.autoPick }, 'auto-pick')}
-          />
-          <ToggleRow
-            label="Auto-link" desc="DJ talks between auto-played tracks"
-            on={!!q.autoLink} disabled={!!busy || !status}
-            onToggle={() => act('autolink', '/dj/auto-link', { on: !q.autoLink }, 'auto-link')}
-          />
-          <div className="flex items-center justify-between gap-3 pt-1">
-            <div>
-              <div style={{ color: 'var(--ink)' }}>Auto-playlist</div>
-              <div className="v3-caption" style={{ color: 'var(--muted)' }}>
-                rebuild the Liquidsoap fallback playlist now
+          <Card title="Skills" sub="autonomous firing">
+            {skills.length === 0 ? (
+              <div style={{ fontStyle: 'italic', color: 'var(--muted)' }}>no skills reported</div>
+            ) : (
+              <div style={{ display: 'grid', gap: 8 }}>
+                {skills.map(s => {
+                  const enabled = s.enabled !== false;
+                  return (
+                    <div key={s.name} style={{
+                      display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 10,
+                      alignItems: 'center', padding: '6px 0',
+                      borderBottom: '1px dashed var(--separator-strong)',
+                    }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 700 }}>{s.name}</div>
+                        {s.description && (
+                          <div style={{ fontSize: 10, color: 'var(--muted)' }}>{s.description}</div>
+                        )}
+                      </div>
+                      <Btn
+                        sm
+                        disabled={!!busy}
+                        onClick={() => act(`skill:${s.name}`, '/dj/skill', { name: s.name }, s.name)}
+                      >
+                        {busy === `skill:${s.name}` ? '…' : 'Fire'}
+                      </Btn>
+                      <Toggle
+                        on={enabled}
+                        disabled={!!busy}
+                        onClick={() => toggleSkill(s)}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+
+          <Card title="Broadcast">
+            <div style={{ display: 'grid', gap: 10 }}>
+              <ToggleRow
+                label="Auto-pick" desc="picks next track when queue runs dry"
+                on={!!q.autoPick} disabled={!!busy || !status}
+                onToggle={() => act('autopick', '/auto-pick', { on: !q.autoPick }, 'auto-pick')}
+              />
+              <ToggleRow
+                label="Auto-link" desc="DJ talks between auto-played tracks"
+                on={!!q.autoLink} disabled={!!busy || !status}
+                onToggle={() => act('autolink', '/dj/auto-link', { on: !q.autoLink }, 'auto-link')}
+              />
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                paddingTop: 8, borderTop: '1px dashed var(--separator-strong)',
+              }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>Auto-playlist</div>
+                  <div style={{ fontSize: 10, color: 'var(--muted)' }}>rebuild liquidsoap fallback</div>
+                </div>
+                <Btn
+                  sm
+                  disabled={!!busy}
+                  onClick={() => act('refresh', '/dj/refresh-playlist', {}, 'auto-playlist refresh')}
+                >
+                  {busy === 'refresh' ? 'firing…' : 'Refresh'}
+                </Btn>
               </div>
             </div>
-            <ActionButton
-              label="Refresh"
-              busy={busy === 'refresh'}
-              disabled={!!busy}
-              onClick={() => act('refresh', '/dj/refresh-playlist', {}, 'auto-playlist refresh')}
-            />
-          </div>
+          </Card>
         </div>
-      </Section>
+      </div>
 
-      {/* ── BOOTH LOG ────────────────────────────────────────────────── */}
-      <Section title={`Booth log (${q.djLog?.length ?? 0})`}>
-        {(q.djLog?.length ?? 0) === 0 ? (
-          <Empty>nothing logged yet</Empty>
-        ) : (
-          <div ref={logRef} className="v3-scroll" style={{ maxHeight: 320, overflowY: 'auto' }}>
-            {q.djLog.map(e => (
-              <div key={e.id} className="flex gap-3" style={{ lineHeight: 1.6 }}>
-                <span className="v3-tab-num shrink-0" style={{ color: 'var(--muted)', width: 72 }}>
-                  {new Date(e.t).toLocaleTimeString('en-GB', { hour12: false })}
-                </span>
-                <span
-                  className="shrink-0"
-                  style={{ width: 92, color: kindColor(e.kind), fontSize: 10, letterSpacing: '0.15em', textTransform: 'uppercase' }}
-                >
-                  [{e.kind}]
-                </span>
-                <span className="break-all" style={{ color: 'var(--ink)' }}>{e.message}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
-
-      {!status && !err && <div className="italic" style={{ color: 'var(--muted)' }}>connecting…</div>}
+      {!status && !err && (
+        <div style={{ fontStyle: 'italic', color: 'var(--muted)' }}>connecting…</div>
+      )}
 
       <V3AlertDialog
         open={confirmSkip}
@@ -360,105 +445,33 @@ export default function DashPanel() {
   );
 }
 
-function Section({ title, children }) {
-  return (
-    <section style={{ border: '1px solid var(--ink)' }}>
-      <div className="px-3 py-2" style={{ borderBottom: '1px solid var(--ink)' }}>
-        <span className="v3-caption" style={{ color: 'var(--ink)' }}>{title}</span>
-      </div>
-      <div className="p-3">{children}</div>
-    </section>
-  );
-}
-
-function ActionButton({ label, onClick, busy, disabled }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className="v3-eyebrow v3-focus cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-      style={{
-        border: '1px solid var(--ink)', background: 'transparent',
-        color: 'var(--ink)', padding: '6px 14px', fontSize: 10,
-      }}
-    >
-      {busy ? 'firing…' : label}
-    </button>
-  );
-}
-
-// Segmented single-choice control (mode / duck pickers).
-function SegGroup({ label, value, options, onPick }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="v3-caption" style={{ color: 'var(--muted)' }}>{label}</span>
-      <div className="flex">
-        {options.map(o => {
-          const active = o.id === value;
-          return (
-            <button
-              key={o.id}
-              onClick={() => onPick(o.id)}
-              className="v3-focus cursor-pointer"
-              style={{
-                border: '1px solid var(--ink)', marginLeft: -1,
-                background: active ? 'var(--ink)' : 'transparent',
-                color: active ? 'var(--bg)' : 'var(--ink)',
-                padding: '5px 10px', fontSize: 10,
-                letterSpacing: '0.1em', textTransform: 'uppercase',
-              }}
-            >
-              {o.label}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 function ToggleRow({ label, desc, on, disabled, onToggle }) {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <div>
-        <div style={{ color: 'var(--ink)' }}>{label}</div>
-        <div className="v3-caption" style={{ color: 'var(--muted)' }}>{desc}</div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 12, fontWeight: 700 }}>{label}</div>
+        <div style={{ fontSize: 10, color: 'var(--muted)' }}>{desc}</div>
       </div>
-      <button
-        onClick={onToggle}
-        disabled={disabled}
-        className="v3-eyebrow v3-focus cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-        style={{
-          border: `1px solid ${on ? 'var(--accent)' : 'var(--ink)'}`,
-          background: on ? 'var(--accent)' : 'transparent',
-          color: on ? '#fff' : 'var(--ink)',
-          padding: '5px 14px', fontSize: 10, minWidth: 56,
-        }}
-      >
-        {on ? 'on' : 'off'}
-      </button>
+      <Toggle on={on} disabled={disabled} onClick={onToggle} />
     </div>
   );
 }
 
-function Empty({ children }) {
-  return <div className="italic" style={{ color: 'var(--muted)' }}>{children}</div>;
-}
-
-function kindColor(k) {
+function kindTone(k) {
   switch (k) {
     case 'playing':
     case 'request':
     case 'dj-speak':
     case 'hourly-check':
+    case 'hourly':
     case 'weather':
     case 'news':
     case 'traffic':
     case 'random-facts':
     case 'link':
-    case 'station-id': return 'var(--accent)';
+    case 'station-id': return 'accent';
     case 'error':
-    case 'miss': return '#c5302a';
-    default: return 'var(--muted)';
+    case 'miss': return 'danger';
+    default: return 'muted';
   }
 }

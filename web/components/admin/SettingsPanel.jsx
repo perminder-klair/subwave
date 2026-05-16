@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { fmtSize } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { V3AlertDialog } from '../ui/alert-dialog';
-import { V3Alert } from '../ui/alert';
+import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
 
 const TTS_KIND_LABEL = {
   'dj-speak':     'Track intros',
@@ -30,6 +30,13 @@ const TTS_KIND_HINT = {
   'jingle':       'Engine used when you create a new jingle from text in the Jingles section.',
 };
 
+const SECTIONS = [
+  { id: 'tts',     label: 'TTS voice', hint: 'engines per kind' },
+  { id: 'llm',     label: 'LLM provider', hint: 'model routing' },
+  { id: 'mixer',   label: 'Mixer', hint: 'crossfade · weather' },
+  { id: 'jingles', label: 'Jingles', hint: 'stingers' },
+];
+
 export default function SettingsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [data, setData] = useState(null);
@@ -41,6 +48,7 @@ export default function SettingsPanel() {
   const [saveMsg, setSaveMsg] = useState(null);
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);  // jingle filename, or null
+  const [activeSection, setActiveSection] = useState('tts');
 
   // Refresh only updates the read-only `data` view — never touches `form`.
   // The form is hydrated exactly once via the effect below; otherwise the 3s
@@ -158,435 +166,98 @@ export default function SettingsPanel() {
   };
 
   return (
-    <div className="space-y-7">
-      {err && <V3Alert tone="error" title="controller error">{err}</V3Alert>}
-      {!data && !err && <div style={{ color: 'var(--muted)' }} className="italic">loading…</div>}
+    <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 24, alignItems: 'flex-start' }}>
+      {/* Section rail */}
+      <aside style={{ display: 'grid', gap: 4, position: 'sticky', top: 24 }}>
+        <span className="caption" style={{ padding: '0 0 8px' }}>settings</span>
+        {SECTIONS.map(s => {
+          const isActive = activeSection === s.id;
+          return (
+            <button
+              key={s.id}
+              onClick={() => setActiveSection(s.id)}
+              style={{
+                border: '1px solid var(--ink)',
+                background: isActive ? 'var(--ink)' : 'transparent',
+                color: isActive ? 'var(--bg)' : 'var(--ink)',
+                padding: '10px 12px',
+                textAlign: 'left',
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+                display: 'grid', gap: 4,
+              }}
+            >
+              <span style={{ fontSize: 11, letterSpacing: '0.2em', textTransform: 'uppercase', fontWeight: 700 }}>
+                {s.label}
+              </span>
+              <span style={{ fontSize: 9, letterSpacing: '0.18em', textTransform: 'uppercase', opacity: 0.7 }}>
+                {s.id === 'jingles' && data ? `${data.jingles.length} file${data.jingles.length === 1 ? '' : 's'}` : s.hint}
+              </span>
+            </button>
+          );
+        })}
 
-      {data && (
-        <>
-          {form && data.tts && (
-            <Section title="TTS voice">
-              <Hint>
-                Pick the text-to-speech engine for each kind of spoken segment.
-                <strong> Piper</strong> is fast and CPU-cheap; <strong>Kokoro</strong> is more
-                natural but ~3-5× slower per line. The first Kokoro request after boot also
-                pays a one-off model-load cost of a few seconds.
-                {data.tts.available?.kokoro === false && (
-                  <span style={{ color: '#c5302a' }}> Kokoro is unavailable in this build.</span>
-                )}
-              </Hint>
-
-              <FormRow
-                label="Default engine"
-                hint="Used for any voice kind set to “use default” below."
-              >
-                <EngineSelect
-                  engines={data.tts.engines || ['piper']}
-                  available={data.tts.available || {}}
-                  value={form.tts.defaultEngine}
-                  onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, defaultEngine: v } }))}
-                  allowDefault={false}
-                />
-              </FormRow>
-
-              {(data.tts.kokoroVoices?.length || 0) > 0 && (
-                <FormRow
-                  label="Kokoro voice"
-                  hint="British English voices only. Applies to every kind routed through Kokoro."
-                >
-                  <select
-                    value={form.tts.kokoro?.voice ?? 'bf_isabella'}
-                    onChange={e => setForm(f => ({
-                      ...f,
-                      tts: { ...f.tts, kokoro: { ...f.tts.kokoro, voice: e.target.value } },
-                    }))}
-                    className="v3-focus"
-                    style={{
-                      boxSizing: 'border-box',
-                      border: '1px solid var(--ink)',
-                      background: 'transparent',
-                      padding: '8px 12px',
-                      fontSize: 13,
-                      fontFamily: 'inherit',
-                      color: 'var(--ink)',
-                      outline: 'none',
-                      minWidth: 240,
-                    }}
-                  >
-                    {data.tts.kokoroVoices.map(v => (
-                      <option key={v.id} value={v.id}>{v.label} — {v.id}</option>
-                    ))}
-                  </select>
-                </FormRow>
-              )}
-
-              {(data.tts.engines || []).includes('cloud') && (
-                <div className="space-y-3 mt-2 pt-3" style={{ borderTop: '1px dashed var(--separator-strong)' }}>
-                  <Hint>
-                    The <strong>cloud</strong> engine routes through the AI SDK to OpenAI or
-                    ElevenLabs speech models. Leave it unconfigured and the system stays fully
-                    local; any cloud failure falls back to Piper automatically.
-                  </Hint>
-                  <FormRow label="Cloud provider">
-                    <SettingSelect
-                      value={form.tts.cloud.provider}
-                      onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, provider: v } } }))}
-                      options={(data.tts.cloudProviders || ['openai', 'elevenlabs']).map(p => ({ value: p, label: p }))}
-                    />
-                  </FormRow>
-                  <FormRow label="Cloud model" hint='e.g. "gpt-4o-mini-tts" (OpenAI) or "eleven_flash_v2_5" (ElevenLabs).'>
-                    <TextInput
-                      value={form.tts.cloud.model}
-                      onChange={e => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))}
-                      placeholder="gpt-4o-mini-tts"
-                      style={{ minWidth: 240 }}
-                    />
-                  </FormRow>
-                  <FormRow label="Cloud voice" hint="OpenAI: alloy, nova, … — ElevenLabs: a voice ID.">
-                    <TextInput
-                      value={form.tts.cloud.voice}
-                      onChange={e => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, voice: e.target.value } } }))}
-                      placeholder="alloy"
-                      style={{ minWidth: 240 }}
-                    />
-                  </FormRow>
-                  <FormRow label="API key" hint={form.tts.cloud.apiKeySet ? 'A key is set. Leave blank to keep it; type to replace.' : 'Or set OPENAI_API_KEY / ELEVENLABS_API_KEY in the environment.'}>
-                    <TextInput
-                      type="password"
-                      value={form.tts.cloud.apiKey}
-                      onChange={e => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, apiKey: e.target.value } } }))}
-                      placeholder={form.tts.cloud.apiKeySet ? '•••••••• (set)' : 'paste key'}
-                      style={{ minWidth: 240 }}
-                    />
-                  </FormRow>
-                </div>
-              )}
-
-              <div className="space-y-3 mt-2">
-                {(data.tts.kinds || []).map(k => (
-                  <FormRow
-                    key={k}
-                    label={TTS_KIND_LABEL[k] || k}
-                    hint={TTS_KIND_HINT[k]}
-                  >
-                    <EngineSelect
-                      engines={data.tts.engines || ['piper']}
-                      available={data.tts.available || {}}
-                      value={form.tts.byKind?.[k] ?? null}
-                      onChange={v => setForm(f => ({
-                        ...f,
-                        tts: { ...f.tts, byKind: { ...f.tts.byKind, [k]: v } },
-                      }))}
-                      allowDefault
-                      defaultEngine={form.tts.defaultEngine}
-                    />
-                  </FormRow>
-                ))}
-              </div>
-
-              <div
-                className="flex flex-wrap items-center gap-3 pt-3 mt-3"
-                style={{ borderTop: '1px solid var(--separator-strong)' }}
-              >
-                <SolidButton
-                  onClick={() => saveSettings({
-                    tts: {
-                      defaultEngine: form.tts.defaultEngine,
-                      byKind: form.tts.byKind,
-                      kokoro: { voice: form.tts.kokoro?.voice },
-                      cloud: {
-                        provider: form.tts.cloud.provider,
-                        model: form.tts.cloud.model,
-                        voice: form.tts.cloud.voice,
-                        // Only send the key when the operator typed one — an
-                        // empty string would otherwise clear the stored key.
-                        ...(form.tts.cloud.apiKey ? { apiKey: form.tts.cloud.apiKey } : {}),
-                      },
-                    },
-                  })}
-                  disabled={busy}
-                >
-                  save TTS settings
-                </SolidButton>
-                {saveMsg && (
-                  <span style={{ fontSize: 12, color: saveMsg.tone === 'err' ? '#c5302a' : 'var(--accent)' }}>
-                    {saveMsg.text}
-                  </span>
-                )}
-              </div>
-              <Footnote>
-                Applies to the next spoken segment — no mixer restart needed. Jingle changes
-                only affect newly generated jingles; existing files keep whichever voice rendered them.
-              </Footnote>
-            </Section>
-          )}
-
-          {form && data.llm && (
-            <Section title="LLM provider">
-              <Hint>
-                Which language model writes DJ scripts, matches listener requests, and picks
-                tracks. <strong>Ollama</strong> runs on the homelab box and needs no key;
-                the cloud providers are opt-in. Switching here reroutes every LLM call —
-                no redeploy.
-              </Hint>
-
-              <FormRow label="Provider">
-                <SettingSelect
-                  value={form.llm.provider}
-                  onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, provider: v } }))}
-                  options={(data.llm.providers || ['ollama']).map(p => ({ value: p, label: p }))}
-                />
-              </FormRow>
-
-              <FormRow
-                label="Model"
-                hint={form.llm.provider === 'ollama'
-                  ? 'Leave blank to use the OLLAMA_MODEL default.'
-                  : form.llm.provider === 'gateway'
-                    ? 'Gateway model id, e.g. "anthropic/claude-sonnet-4-5".'
-                    : 'Model id for the chosen provider — required.'}
-              >
-                <TextInput
-                  value={form.llm.model}
-                  onChange={e => setForm(f => ({ ...f, llm: { ...f.llm, model: e.target.value } }))}
-                  placeholder={form.llm.provider === 'ollama' ? '(OLLAMA_MODEL default)' : 'model id'}
-                  style={{ minWidth: 280 }}
-                />
-              </FormRow>
-
-              {form.llm.provider !== 'ollama' && (
-                <FormRow
-                  label="API key"
-                  hint={form.llm.apiKeySet
-                    ? 'A key is set. Leave blank to keep it; type to replace.'
-                    : 'Or set the provider env var (ANTHROPIC_API_KEY / OPENAI_API_KEY / AI_GATEWAY_API_KEY).'}
-                >
-                  <TextInput
-                    type="password"
-                    value={form.llm.apiKey}
-                    onChange={e => setForm(f => ({ ...f, llm: { ...f.llm, apiKey: e.target.value } }))}
-                    placeholder={form.llm.apiKeySet ? '•••••••• (set)' : 'paste key'}
-                    style={{ minWidth: 280 }}
-                  />
-                </FormRow>
-              )}
-
-              <FormRow
-                label="Agentic picker"
-                hint="When on, the next-track picker is a tool-using agent that explores the library itself. Needs a model that handles multi-step tool calls well — leave off for small local models."
-              >
-                <label className="flex items-center gap-2" style={{ fontSize: 13, color: 'var(--ink)' }}>
-                  <input
-                    type="checkbox"
-                    checked={form.llm.pickerAgent}
-                    onChange={e => setForm(f => ({ ...f, llm: { ...f.llm, pickerAgent: e.target.checked } }))}
-                  />
-                  {form.llm.pickerAgent ? 'agent' : 'candidate pool (default)'}
-                </label>
-              </FormRow>
-
-              <div
-                className="flex flex-wrap items-center gap-3 pt-3 mt-3"
-                style={{ borderTop: '1px solid var(--separator-strong)' }}
-              >
-                <SolidButton
-                  onClick={() => saveSettings({
-                    llm: {
-                      provider: form.llm.provider,
-                      model: form.llm.model,
-                      pickerAgent: form.llm.pickerAgent,
-                      // Only send the key when the operator typed one.
-                      ...(form.llm.apiKey ? { apiKey: form.llm.apiKey } : {}),
-                    },
-                  })}
-                  disabled={busy}
-                >
-                  save LLM provider
-                </SolidButton>
-                {saveMsg && (
-                  <span style={{ fontSize: 12, color: saveMsg.tone === 'err' ? '#c5302a' : 'var(--accent)' }}>
-                    {saveMsg.text}
-                  </span>
-                )}
-              </div>
-              <Footnote>Active model: {data.llm.active}. Applies to the next LLM call — no restart needed.</Footnote>
-            </Section>
-          )}
-
-          {form && (
-            <Section title="Mixer settings">
-              <div className="space-y-5">
-                <FormRow
-                  label="Crossfade duration"
-                  hint={`Seconds of overlap between tracks (current: ${data.values?.crossfadeDuration}s)`}
-                  requiresRestart
-                >
-                  <NumInput
-                    value={form.crossfadeDuration}
-                    onChange={e => setForm(f => ({ ...f, crossfadeDuration: e.target.value }))}
-                    style={{ width: 112 }}
-                    step={0.5}
-                    max={30}
-                  />
-                  <span style={{ color: 'var(--muted)', fontSize: 12, marginLeft: 8 }}>sec</span>
-                </FormRow>
-
-                <FormRow
-                  label="Weather location"
-                  hint={`Used for DJ context + Open-Meteo lookups (current: ${data.values?.weather?.locationName} @ ${data.values?.weather?.lat}, ${data.values?.weather?.lng})`}
-                >
-                  <div className="flex flex-wrap gap-2">
-                    <TextInput
-                      placeholder="name"
-                      value={form.weather.locationName}
-                      onChange={e => setForm(f => ({ ...f, weather: { ...f.weather, locationName: e.target.value } }))}
-                      style={{ width: 176 }}
-                    />
-                    <NumInput
-                      step="any"
-                      placeholder="lat"
-                      value={form.weather.lat}
-                      onChange={e => setForm(f => ({ ...f, weather: { ...f.weather, lat: e.target.value } }))}
-                      style={{ width: 128 }}
-                    />
-                    <NumInput
-                      step="any"
-                      placeholder="lng"
-                      value={form.weather.lng}
-                      onChange={e => setForm(f => ({ ...f, weather: { ...f.weather, lng: e.target.value } }))}
-                      style={{ width: 128 }}
-                    />
-                  </div>
-                </FormRow>
-
-                <div
-                  className="flex flex-wrap items-center gap-3 pt-3"
-                  style={{ borderTop: '1px solid var(--separator-strong)' }}
-                >
-                  <SolidButton
-                    onClick={() => saveSettings({
-                      crossfadeDuration: parseFloat(form.crossfadeDuration),
-                      weather: {
-                        lat: parseFloat(form.weather.lat),
-                        lng: parseFloat(form.weather.lng),
-                        locationName: form.weather.locationName,
-                      },
-                    })}
-                    disabled={busy}
-                  >
-                    save settings
-                  </SolidButton>
-                  {pendingRestart && (
-                    <SolidButton onClick={() => setConfirmRestart(true)} disabled={busy} danger>
-                      restart mixer
-                    </SolidButton>
-                  )}
-                  {saveMsg && (
-                    <span style={{ fontSize: 12, color: saveMsg.tone === 'err' ? '#c5302a' : 'var(--accent)' }}>
-                      {saveMsg.text}
-                    </span>
-                  )}
-                </div>
-                <Footnote>
-                  Weather location applies live · Crossfade requires a mixer restart
-                </Footnote>
-              </div>
-            </Section>
-          )}
-
-          <Section title={`Jingles · ${data.jingles.length}`}>
-            <Hint>
-              Pre-recorded TTS stingers. A default station ident is generated on first boot;
-              you can add your own here.
-            </Hint>
-
-            {form && (
-              <div
-                className="flex flex-wrap items-end gap-3 mt-4 pb-4"
-                style={{ borderBottom: '1px solid var(--separator-strong)' }}
-              >
-                <div>
-                  <div style={{ color: 'var(--ink)', fontSize: 13, fontWeight: 600 }}>
-                    Frequency
-                  </div>
-                  <Hint>1 jingle every N music tracks · current: {data.values?.jingleRatio}</Hint>
-                </div>
-                <NumInput
-                  value={form.jingleRatio}
-                  onChange={e => setForm(f => ({ ...f, jingleRatio: e.target.value }))}
-                  style={{ width: 96 }}
-                  min={1}
-                  max={1000}
-                />
-                <SolidButton
-                  onClick={() => saveSettings({ jingleRatio: parseInt(form.jingleRatio, 10) })}
-                  disabled={busy || form.jingleRatio === String(data.values?.jingleRatio)}
-                >
-                  save · needs restart
-                </SolidButton>
-              </div>
+        <div style={{ marginTop: 16, padding: 12, border: '1px dashed var(--separator-strong)', display: 'grid', gap: 8 }}>
+          <span className="caption">danger zone</span>
+          <Btn sm tone="danger" onClick={() => setConfirmRestart(true)} disabled={busy || !data}>
+            Restart mixer
+          </Btn>
+          <div style={{ fontSize: 10, color: 'var(--muted)', lineHeight: 1.4 }}>
+            Drops the broadcast for ~3–5s. Use after crossfade or jingle frequency changes.
+            {pendingRestart && (
+              <strong style={{ display: 'block', marginTop: 4, color: 'var(--accent)' }}>
+                Pending settings need a restart to apply.
+              </strong>
             )}
+          </div>
+        </div>
+      </aside>
 
-            <div className="space-y-2 mt-3">
-              <textarea
-                rows={2}
-                value={jingleText}
-                onChange={e => setJingleText(e.target.value)}
-                placeholder='e.g. "You are listening to SUB slash WAVE. Requests open all night."'
-                className="w-full v3-focus"
-                style={{
-                  boxSizing: 'border-box',
-                  border: '1px solid var(--ink)',
-                  background: 'transparent',
-                  padding: 10,
-                  fontSize: 13,
-                  fontFamily: 'inherit',
-                  color: 'var(--ink)',
-                  resize: 'none',
-                }}
+      {/* Active section */}
+      <div style={{ display: 'grid', gap: 16 }}>
+        {err && (
+          <div className="card" style={{ borderColor: 'var(--danger)' }}>
+            <div className="card-body" style={{ color: 'var(--danger)', fontSize: 12 }}>
+              <strong style={{ letterSpacing: '0.12em', textTransform: 'uppercase' }}>controller error</strong>
+              <div style={{ marginTop: 4 }}>{err}</div>
+            </div>
+          </div>
+        )}
+        {!data && !err && (
+          <div style={{ color: 'var(--muted)', fontStyle: 'italic', fontSize: 13 }}>loading…</div>
+        )}
+
+        {data && form && (
+          <>
+            {activeSection === 'tts' && data.tts && (
+              <TtsSection
+                data={data} form={form} setForm={setForm} busy={busy}
+                saveMsg={saveMsg} saveSettings={saveSettings}
               />
-              <div className="flex items-center gap-2">
-                <SolidButton onClick={createJingle} disabled={busy || !jingleText.trim()}>
-                  {busy ? 'generating…' : 'create jingle'}
-                </SolidButton>
-                <span style={{ color: 'var(--muted)', fontSize: 11 }}>
-                  {jingleText.length}/500 chars · Piper TTS
-                </span>
-              </div>
-            </div>
-
-            <div className="mt-5" style={{ borderTop: '1px solid var(--separator-strong)' }}>
-              {data.jingles.length === 0 && (
-                <div className="py-4 italic" style={{ color: 'var(--muted)', fontSize: 12 }}>none yet</div>
-              )}
-              {data.jingles.map(j => (
-                <div
-                  key={j.filename}
-                  className="py-3 flex items-start gap-3"
-                  style={{ borderBottom: '1px solid var(--separator-soft)' }}
-                >
-                  <div className="flex-1 min-w-0">
-                    <div style={{ color: 'var(--ink)' }} className="break-words">{j.text}</div>
-                    <div className="mt-1 flex flex-wrap gap-3 v3-caption" style={{ color: 'var(--muted)' }}>
-                      <span>{j.filename}</span>
-                      <span>{fmtSize(j.size)}</span>
-                      {j.createdAt && <span>{new Date(j.createdAt).toLocaleString('en-GB')}</span>}
-                      {j.builtin && <span style={{ color: 'var(--accent)' }}>builtin</span>}
-                    </div>
-                  </div>
-                  <OutlineButton
-                    onClick={() => setConfirmDelete(j.filename)}
-                    disabled={busy || j.builtin}
-                    title={j.builtin ? "Can't delete the built-in ident" : 'Delete this jingle'}
-                  >
-                    delete
-                  </OutlineButton>
-                </div>
-              ))}
-            </div>
-          </Section>
-        </>
-      )}
+            )}
+            {activeSection === 'llm' && data.llm && (
+              <LlmSection
+                data={data} form={form} setForm={setForm} busy={busy}
+                saveMsg={saveMsg} saveSettings={saveSettings}
+              />
+            )}
+            {activeSection === 'mixer' && (
+              <MixerSection
+                data={data} form={form} setForm={setForm} busy={busy}
+                saveMsg={saveMsg} saveSettings={saveSettings}
+              />
+            )}
+            {activeSection === 'jingles' && (
+              <JinglesSection
+                data={data} form={form} setForm={setForm} busy={busy}
+                jingleText={jingleText} setJingleText={setJingleText}
+                createJingle={createJingle} saveSettings={saveSettings}
+                onDelete={setConfirmDelete}
+              />
+            )}
+          </>
+        )}
+      </div>
 
       <V3AlertDialog
         open={confirmRestart}
@@ -610,182 +281,569 @@ export default function SettingsPanel() {
   );
 }
 
-function Section({ title, children }) {
+/* ── Shared bits ─────────────────────────────────────────────────────── */
+
+function SectionHeader({ eyebrow, title, sub, metrics }) {
   return (
-    <section style={{ border: '1px solid var(--ink)' }}>
-      <div className="px-4 py-2" style={{ borderBottom: '1px solid var(--ink)' }}>
-        <span className="v3-eyebrow" style={{ fontSize: 11 }}>{title}</span>
+    <div style={{ padding: 16, border: '1px solid var(--ink)', display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
+      <div style={{ flex: 1, minWidth: 240 }}>
+        <Eyebrow color="var(--accent)">{eyebrow}</Eyebrow>
+        <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em', marginTop: 6 }}>
+          {title}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6, maxWidth: 540, lineHeight: 1.5 }}>
+          {sub}
+        </div>
       </div>
-      <div className="p-5 space-y-2">{children}</div>
-    </section>
-  );
-}
-function FormRow({ label, hint, requiresRestart, children }) {
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-baseline gap-2">
-        <span style={{ color: 'var(--ink)', fontSize: 14, fontWeight: 600 }}>{label}</span>
-        {requiresRestart && (
-          <span
-            className="v3-caption"
-            style={{ fontSize: 9, border: '1px solid var(--ink)', padding: '1px 6px' }}
-          >
-            restart required
-          </span>
-        )}
-      </div>
-      {hint && <Hint>{hint}</Hint>}
-      <div className="flex items-center flex-wrap">{children}</div>
+      {metrics && metrics.length > 0 && (
+        <div style={{ display: 'grid', gridAutoFlow: 'column', gap: 18, paddingTop: 4 }}>
+          {metrics.map((m, i) => <Metric key={i} n={m.n} l={m.l} accent={m.accent} />)}
+        </div>
+      )}
     </div>
   );
 }
-function Hint({ children }) {
-  return <div style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.5, marginTop: 4 }}>{children}</div>;
-}
-function Footnote({ children }) {
-  return <div className="v3-caption mt-3" style={{ color: 'var(--muted)' }}>{children}</div>;
-}
-function SolidButton({ onClick, disabled, danger, children }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className="v3-eyebrow v3-focus cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-      style={{
-        background: danger ? '#c5302a' : 'var(--accent)',
-        color: '#fff',
-        border: 'none',
-        padding: '8px 16px',
-        fontSize: 10,
-      }}
-    >
-      {children}
-    </button>
-  );
-}
-function OutlineButton({ onClick, disabled, title, children }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      className="v3-eyebrow v3-focus cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
-      style={{
-        background: 'transparent',
-        color: 'var(--ink)',
-        border: '1px solid var(--ink)',
-        padding: '4px 10px',
-        fontSize: 10,
-      }}
-    >
-      {children}
-    </button>
-  );
-}
-function TextInput(props) {
-  return (
-    <input
-      type="text"
-      {...props}
-      className="v3-focus"
-      style={{
-        boxSizing: 'border-box',
-        border: '1px solid var(--ink)',
-        background: 'transparent',
-        padding: '8px 12px',
-        fontSize: 13,
-        fontFamily: 'inherit',
-        color: 'var(--ink)',
-        outline: 'none',
-        ...(props.style || {}),
-      }}
-    />
-  );
-}
-function NumInput({ style, ...props }) {
-  return (
-    <input
-      type="number"
-      {...props}
-      className="v3-focus v3-tab-num"
-      style={{
-        boxSizing: 'border-box',
-        border: '1px solid var(--ink)',
-        background: 'transparent',
-        padding: '8px 12px',
-        fontSize: 13,
-        fontFamily: 'inherit',
-        color: 'var(--ink)',
-        outline: 'none',
-        ...(style || {}),
-      }}
-    />
-  );
-}
-// Plain styled <select> for simple { value, label } option lists.
-function SettingSelect({ value, onChange, options }) {
-  return (
-    <select
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      className="v3-focus"
-      style={{
-        boxSizing: 'border-box',
-        border: '1px solid var(--ink)',
-        background: 'transparent',
-        padding: '8px 12px',
-        fontSize: 13,
-        fontFamily: 'inherit',
-        color: 'var(--ink)',
-        outline: 'none',
-        minWidth: 240,
-      }}
-    >
-      {options.map(o => (
-        <option key={o.value} value={o.value}>{o.label}</option>
-      ))}
-    </select>
-  );
-}
-function EngineSelect({ engines, available, value, onChange, allowDefault, defaultEngine }) {
-  // value is either an engine name or null (= use default).
-  // Render as a segmented control. "Default" pill is only shown when allowDefault.
-  const options = [];
-  if (allowDefault) options.push({ key: '__default__', label: `default (${defaultEngine || 'piper'})` });
-  for (const e of engines) {
-    options.push({ key: e, label: e });
-  }
 
+function SaveBar({ note, busy, saveMsg, onSave, saveLabel, extra }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+      padding: 12, border: '1px solid var(--ink)', background: 'var(--ink-softer)',
+    }}>
+      <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />
+      <span style={{ fontSize: 11, color: 'var(--muted)' }}>{note}</span>
+      {saveMsg && (
+        <span style={{ fontSize: 11, color: saveMsg.tone === 'err' ? 'var(--danger)' : 'var(--accent)' }}>
+          {saveMsg.text}
+        </span>
+      )}
+      <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+        {extra}
+        <Btn tone="accent" onClick={onSave} disabled={busy}>{saveLabel}</Btn>
+      </span>
+    </div>
+  );
+}
+
+/* Segmented engine picker built on the shared Seg primitive.
+   value is an engine name, or null when allowDefault and "use default". */
+function EngineSeg({ engines, available, value, onChange, allowDefault, defaultEngine }) {
+  const options = [];
+  if (allowDefault) options.push({ id: '__default__', label: `default · ${defaultEngine || 'piper'}` });
+  for (const e of engines) options.push({ id: e, label: e });
   const selected = value == null ? '__default__' : value;
 
+  // Seg renders every option; disable unavailable engines by intercepting onChange.
   return (
-    <div style={{ display: 'inline-flex', border: '1px solid var(--ink)', flexWrap: 'wrap' }}>
-      {options.map((opt, i) => {
-        const active = selected === opt.key;
-        const isEngine = opt.key !== '__default__';
-        const disabled = isEngine && available[opt.key] === false;
+    <div className="seg accent" style={{ flexWrap: 'wrap' }}>
+      {options.map(opt => {
+        const isEngine = opt.id !== '__default__';
+        const disabled = isEngine && available[opt.id] === false;
         return (
           <button
-            key={opt.key}
+            key={opt.id}
             type="button"
             disabled={disabled}
-            onClick={() => onChange(opt.key === '__default__' ? null : opt.key)}
-            className="v3-eyebrow v3-focus cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-            style={{
-              background: active ? 'var(--ink)' : 'transparent',
-              color: active ? 'var(--bg)' : 'var(--ink)',
-              border: 'none',
-              borderLeft: i === 0 ? 'none' : '1px solid var(--ink)',
-              padding: '8px 14px',
-              fontSize: 10,
-            }}
-            aria-pressed={active}
-            title={disabled ? `${opt.key} is not installed in this build` : opt.label}
+            className={opt.id === selected ? 'active' : ''}
+            onClick={() => onChange(opt.id === '__default__' ? null : opt.id)}
+            title={disabled ? `${opt.id} is not installed in this build` : opt.label}
           >
             {opt.label}
           </button>
         );
       })}
     </div>
+  );
+}
+
+/* ── TTS ─────────────────────────────────────────────────────────────── */
+
+function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
+  const engines = data.tts.engines || ['piper'];
+  const available = data.tts.available || {};
+  const kinds = data.tts.kinds || [];
+  const hasCloud = engines.includes('cloud');
+
+  const save = () => saveSettings({
+    tts: {
+      defaultEngine: form.tts.defaultEngine,
+      byKind: form.tts.byKind,
+      kokoro: { voice: form.tts.kokoro?.voice },
+      cloud: {
+        provider: form.tts.cloud.provider,
+        model: form.tts.cloud.model,
+        voice: form.tts.cloud.voice,
+        // Only send the key when the operator typed one — an empty string
+        // would otherwise clear the stored key.
+        ...(form.tts.cloud.apiKey ? { apiKey: form.tts.cloud.apiKey } : {}),
+      },
+    },
+  });
+
+  return (
+    <>
+      <SectionHeader
+        eyebrow="tts voice"
+        title="Pick a voice engine for every kind of segment."
+        sub={<>
+          Piper is fast and CPU-cheap. Kokoro is more natural but 3–5× slower per line.
+          Cloud routes through OpenAI or ElevenLabs. Failures fall back to Piper.
+          {available.kokoro === false && (
+            <span style={{ color: 'var(--danger)' }}> Kokoro is unavailable in this build.</span>
+          )}
+        </>}
+        metrics={[
+          { n: String(kinds.length), l: 'kinds' },
+          { n: String(engines.length), l: 'engines', accent: true },
+        ]}
+      />
+
+      {/* Defaults */}
+      <Card title="Defaults">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 18 }}>
+          <div className="field">
+            <label className="field-label">Default engine</label>
+            <EngineSeg
+              engines={engines}
+              available={available}
+              value={form.tts.defaultEngine}
+              onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, defaultEngine: v || 'piper' } }))}
+              allowDefault={false}
+            />
+            <div className="field-hint">Used for any kind below set to “default”.</div>
+          </div>
+          {(data.tts.kokoroVoices?.length || 0) > 0 && (
+            <div className="field">
+              <label className="field-label">Kokoro voice</label>
+              <select
+                className="select"
+                value={form.tts.kokoro?.voice ?? 'bf_isabella'}
+                onChange={e => setForm(f => ({
+                  ...f, tts: { ...f.tts, kokoro: { ...f.tts.kokoro, voice: e.target.value } },
+                }))}
+              >
+                {data.tts.kokoroVoices.map(v => (
+                  <option key={v.id} value={v.id}>{v.label} — {v.id}</option>
+                ))}
+              </select>
+              <div className="field-hint">British English only. Applies to every kind routed through Kokoro.</div>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* By kind */}
+      <Card title="Engine by kind" sub={`${kinds.length} segment types`}>
+        <div style={{ display: 'grid', gap: 0 }}>
+          {kinds.map(k => (
+            <div
+              key={k}
+              style={{
+                display: 'grid', gridTemplateColumns: '1fr auto', gap: 16,
+                padding: '14px 0', alignItems: 'center',
+                borderBottom: '1px dashed var(--separator-strong)',
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: '-0.005em' }}>
+                  {TTS_KIND_LABEL[k] || k}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+                  {TTS_KIND_HINT[k]}
+                </div>
+              </div>
+              <EngineSeg
+                engines={engines}
+                available={available}
+                value={form.tts.byKind?.[k] ?? null}
+                onChange={v => setForm(f => ({
+                  ...f, tts: { ...f.tts, byKind: { ...f.tts.byKind, [k]: v } },
+                }))}
+                allowDefault
+                defaultEngine={form.tts.defaultEngine}
+              />
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* Cloud engine */}
+      {hasCloud && (
+        <Card title="Cloud engine" sub="optional · routes to OpenAI / ElevenLabs">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 18 }}>
+            <div className="field">
+              <label className="field-label">Provider</label>
+              <Seg
+                accent
+                value={form.tts.cloud.provider}
+                options={(data.tts.cloudProviders || ['openai', 'elevenlabs']).map(p => ({ id: p, label: p }))}
+                onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, provider: v } } }))}
+              />
+            </div>
+            <div className="field">
+              <label className="field-label">Model</label>
+              <input
+                className="input"
+                value={form.tts.cloud.model}
+                onChange={e => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))}
+                placeholder="gpt-4o-mini-tts"
+              />
+              <div className="field-hint">e.g. “gpt-4o-mini-tts” (OpenAI) or “eleven_flash_v2_5” (ElevenLabs).</div>
+            </div>
+            <div className="field">
+              <label className="field-label">Default voice</label>
+              <input
+                className="input"
+                value={form.tts.cloud.voice}
+                onChange={e => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, voice: e.target.value } } }))}
+                placeholder="alloy"
+              />
+              <div className="field-hint">OpenAI: alloy, nova, … — ElevenLabs: a voice ID.</div>
+            </div>
+          </div>
+          <div className="field" style={{ marginTop: 14 }}>
+            <label className="field-label">API key</label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                className="input"
+                type="password"
+                value={form.tts.cloud.apiKey}
+                onChange={e => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, apiKey: e.target.value } } }))}
+                placeholder={form.tts.cloud.apiKeySet ? '•••••••• (set)' : 'paste key'}
+                style={{ flex: 1, minWidth: 240, maxWidth: 360 }}
+              />
+              {form.tts.cloud.apiKeySet && <Pill tone="accent" dot>set</Pill>}
+            </div>
+            <div className="field-hint">
+              {form.tts.cloud.apiKeySet
+                ? 'A key is set. Leave blank to keep it; type to replace.'
+                : 'Or set OPENAI_API_KEY / ELEVENLABS_API_KEY in the environment.'}
+            </div>
+          </div>
+        </Card>
+      )}
+
+      <SaveBar
+        note="Applies to the next spoken segment · no mixer restart. Jingle changes only affect newly generated jingles."
+        busy={busy}
+        saveMsg={saveMsg}
+        onSave={save}
+        saveLabel="Save TTS settings"
+      />
+    </>
+  );
+}
+
+/* ── LLM ─────────────────────────────────────────────────────────────── */
+
+function LlmSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
+  const save = () => saveSettings({
+    llm: {
+      provider: form.llm.provider,
+      model: form.llm.model,
+      pickerAgent: form.llm.pickerAgent,
+      // Only send the key when the operator typed one.
+      ...(form.llm.apiKey ? { apiKey: form.llm.apiKey } : {}),
+    },
+  });
+
+  return (
+    <>
+      <SectionHeader
+        eyebrow="llm provider"
+        title="The model that writes scripts and picks tracks."
+        sub="Ollama runs on the homelab box and needs no key; the cloud providers are opt-in. Switching here reroutes every LLM call — no redeploy."
+        metrics={[{ n: String((data.llm.providers || []).length), l: 'providers' }]}
+      />
+
+      <Card title="Provider" sub="active routing">
+        <div style={{ display: 'grid', gap: 18 }}>
+          <div className="field">
+            <label className="field-label">Provider</label>
+            <Seg
+              accent
+              value={form.llm.provider}
+              options={(data.llm.providers || ['ollama']).map(p => ({ id: p, label: p }))}
+              onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, provider: v } }))}
+            />
+          </div>
+
+          <div className="field">
+            <label className="field-label">Model</label>
+            <input
+              className="input"
+              value={form.llm.model}
+              onChange={e => setForm(f => ({ ...f, llm: { ...f.llm, model: e.target.value } }))}
+              placeholder={form.llm.provider === 'ollama' ? '(OLLAMA_MODEL default)' : 'model id'}
+              style={{ maxWidth: 360 }}
+            />
+            <div className="field-hint">
+              {form.llm.provider === 'ollama'
+                ? 'Leave blank to use the OLLAMA_MODEL default.'
+                : form.llm.provider === 'gateway'
+                  ? 'Gateway model id, e.g. “anthropic/claude-sonnet-4-5”.'
+                  : 'Model id for the chosen provider — required.'}
+            </div>
+          </div>
+
+          {form.llm.provider !== 'ollama' && (
+            <div className="field">
+              <label className="field-label">API key</label>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input
+                  className="input"
+                  type="password"
+                  value={form.llm.apiKey}
+                  onChange={e => setForm(f => ({ ...f, llm: { ...f.llm, apiKey: e.target.value } }))}
+                  placeholder={form.llm.apiKeySet ? '•••••••• (set)' : 'paste key'}
+                  style={{ flex: 1, minWidth: 240, maxWidth: 360 }}
+                />
+                {form.llm.apiKeySet && <Pill tone="accent" dot>set</Pill>}
+              </div>
+              <div className="field-hint">
+                {form.llm.apiKeySet
+                  ? 'A key is set. Leave blank to keep it; type to replace.'
+                  : 'Or set the provider env var (ANTHROPIC_API_KEY / OPENAI_API_KEY / AI_GATEWAY_API_KEY).'}
+              </div>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      <Card title="Next-track picker" sub="how the DJ chooses">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 16, alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>Agentic picker</div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, maxWidth: 480, lineHeight: 1.5 }}>
+              When on, the next-track picker is a tool-using agent that explores the library
+              itself. Needs a model that handles multi-step tool calls well — leave off for
+              small local models.
+            </div>
+          </div>
+          <Seg
+            accent
+            value={form.llm.pickerAgent ? 'agent' : 'pool'}
+            options={[
+              { id: 'pool', label: 'Candidate pool' },
+              { id: 'agent', label: 'Agent' },
+            ]}
+            onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, pickerAgent: v === 'agent' } }))}
+          />
+        </div>
+      </Card>
+
+      <SaveBar
+        note={`Active model: ${data.llm.active}. Applies to the next LLM call — no restart needed.`}
+        busy={busy}
+        saveMsg={saveMsg}
+        onSave={save}
+        saveLabel="Save LLM provider"
+      />
+    </>
+  );
+}
+
+/* ── Mixer ───────────────────────────────────────────────────────────── */
+
+function MixerSection({ data, form, setForm, busy, saveMsg, saveSettings }) {
+  const save = () => saveSettings({
+    crossfadeDuration: parseFloat(form.crossfadeDuration),
+    weather: {
+      lat: parseFloat(form.weather.lat),
+      lng: parseFloat(form.weather.lng),
+      locationName: form.weather.locationName,
+    },
+  });
+
+  return (
+    <>
+      <SectionHeader
+        eyebrow="mixer"
+        title="Crossfade and the DJ’s weather context."
+        sub="Crossfade overlap shapes every track transition. Weather location drives the Open-Meteo lookups the DJ reads on air."
+        metrics={[
+          { n: `${data.values?.crossfadeDuration}s`, l: 'crossfade', accent: true },
+        ]}
+      />
+
+      <Card title="Crossfade" sub="track transition overlap">
+        <div className="field">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label className="field-label">Crossfade duration</label>
+            <Pill tone="ink">restart required</Pill>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              className="input mono-num"
+              type="number"
+              step={0.5}
+              max={30}
+              value={form.crossfadeDuration}
+              onChange={e => setForm(f => ({ ...f, crossfadeDuration: e.target.value }))}
+              style={{ width: 112 }}
+            />
+            <span style={{ color: 'var(--muted)', fontSize: 12 }}>sec</span>
+          </div>
+          <div className="field-hint">
+            Seconds of overlap between tracks (current: {data.values?.crossfadeDuration}s).
+            Requires a mixer restart to apply.
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Weather location" sub="Open-Meteo + DJ context">
+        <div className="field">
+          <label className="field-label">Location</label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <input
+              className="input"
+              placeholder="name"
+              value={form.weather.locationName}
+              onChange={e => setForm(f => ({ ...f, weather: { ...f.weather, locationName: e.target.value } }))}
+              style={{ width: 200 }}
+            />
+            <input
+              className="input mono-num"
+              type="number"
+              step="any"
+              placeholder="lat"
+              value={form.weather.lat}
+              onChange={e => setForm(f => ({ ...f, weather: { ...f.weather, lat: e.target.value } }))}
+              style={{ width: 132 }}
+            />
+            <input
+              className="input mono-num"
+              type="number"
+              step="any"
+              placeholder="lng"
+              value={form.weather.lng}
+              onChange={e => setForm(f => ({ ...f, weather: { ...f.weather, lng: e.target.value } }))}
+              style={{ width: 132 }}
+            />
+          </div>
+          <div className="field-hint">
+            Used for DJ context + Open-Meteo lookups (current: {data.values?.weather?.locationName} @ {data.values?.weather?.lat}, {data.values?.weather?.lng}). Applies live.
+          </div>
+        </div>
+      </Card>
+
+      <SaveBar
+        note="Weather location applies live · Crossfade requires a mixer restart (danger zone)."
+        busy={busy}
+        saveMsg={saveMsg}
+        onSave={save}
+        saveLabel="Save mixer settings"
+      />
+    </>
+  );
+}
+
+/* ── Jingles ─────────────────────────────────────────────────────────── */
+
+function JinglesSection({ data, form, setForm, busy, jingleText, setJingleText, createJingle, saveSettings, onDelete }) {
+  const ratioDirty = form.jingleRatio !== String(data.values?.jingleRatio);
+
+  return (
+    <>
+      <SectionHeader
+        eyebrow="jingles"
+        title="Pre-recorded TTS station stingers."
+        sub="A default station ident is generated on first boot; you can add your own here. The built-in ident can’t be deleted."
+        metrics={[
+          { n: String(data.jingles.length), l: 'files' },
+          { n: String(data.values?.jingleRatio), l: 'ratio', accent: true },
+        ]}
+      />
+
+      <Card title="Frequency" sub="needs mixer restart">
+        <div className="field">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label className="field-label">Jingle ratio</label>
+            <Pill tone="ink">restart required</Pill>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <input
+              className="input mono-num"
+              type="number"
+              min={1}
+              max={1000}
+              value={form.jingleRatio}
+              onChange={e => setForm(f => ({ ...f, jingleRatio: e.target.value }))}
+              style={{ width: 96 }}
+            />
+            <span style={{ color: 'var(--muted)', fontSize: 12 }}>music tracks per jingle</span>
+            <Btn
+              tone="solid"
+              onClick={() => saveSettings({ jingleRatio: parseInt(form.jingleRatio, 10) })}
+              disabled={busy || !ratioDirty}
+            >
+              Save · needs restart
+            </Btn>
+          </div>
+          <div className="field-hint">
+            1 jingle every N music tracks (current: {data.values?.jingleRatio}). Restart the mixer from the danger zone to apply.
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Create jingle" sub="rendered via Piper TTS">
+        <div className="field">
+          <label className="field-label">Jingle text</label>
+          <textarea
+            className="textarea"
+            rows={2}
+            value={jingleText}
+            onChange={e => setJingleText(e.target.value)}
+            placeholder='e.g. "You are listening to SUB slash WAVE. Requests open all night."'
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <Btn tone="accent" onClick={createJingle} disabled={busy || !jingleText.trim()}>
+              {busy ? 'Generating…' : 'Create jingle'}
+            </Btn>
+            <span style={{ color: 'var(--muted)', fontSize: 11 }}>
+              {jingleText.length}/500 chars · Piper TTS
+            </span>
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Jingles" sub={`${data.jingles.length} file${data.jingles.length === 1 ? '' : 's'}`}>
+        {data.jingles.length === 0 && (
+          <div style={{ color: 'var(--muted)', fontStyle: 'italic', fontSize: 12, padding: '8px 0' }}>
+            none yet
+          </div>
+        )}
+        {data.jingles.map(j => (
+          <div
+            key={j.filename}
+            style={{
+              display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 0',
+              borderBottom: '1px dashed var(--separator-strong)',
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: 'var(--ink)', fontSize: 13, wordBreak: 'break-word' }}>{j.text}</div>
+              <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                <span className="caption">{j.filename}</span>
+                <span className="caption">{fmtSize(j.size)}</span>
+                {j.createdAt && (
+                  <span className="caption">{new Date(j.createdAt).toLocaleString('en-GB')}</span>
+                )}
+                {j.builtin && <Pill tone="accent">builtin</Pill>}
+              </div>
+            </div>
+            <Btn
+              sm
+              tone="danger"
+              onClick={() => onDelete(j.filename)}
+              disabled={busy || j.builtin}
+              title={j.builtin ? "Can't delete the built-in ident" : 'Delete this jingle'}
+            >
+              Delete
+            </Btn>
+          </div>
+        ))}
+      </Card>
+    </>
   );
 }

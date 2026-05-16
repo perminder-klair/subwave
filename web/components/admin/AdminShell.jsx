@@ -4,47 +4,41 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
 import { Toaster } from '../ui/toaster';
 
 const NAV = [
-  { href: '/admin/dash',     label: 'Dash' },
-  { href: '/admin/library',  label: 'Library' },
-  { href: '/admin/personas', label: 'Personas' },
-  { href: '/admin/shows',    label: 'Shows' },
-  { href: '/admin/settings', label: 'Settings' },
-  { href: '/admin/debug',    label: 'Debug' },
+  { href: '/admin/dash',     id: 'dash',     label: 'Dash' },
+  { href: '/admin/library',  id: 'library',  label: 'Library' },
+  { href: '/admin/personas', id: 'personas', label: 'Personas' },
+  { href: '/admin/shows',    id: 'shows',    label: 'Shows' },
+  { href: '/admin/settings', id: 'settings', label: 'Settings' },
+  { href: '/admin/debug',    id: 'debug',    label: 'Debug' },
 ];
 
-// Wraps every page under /admin. Renders the sidebar nav + sign-in gate.
-// Children are admin panels that take an `adminFetch` and `auth` from the
-// hook — they re-call useAdminAuth themselves to avoid prop-drilling.
+// Wraps every page under /admin. Renders the newsprint shell + sign-in gate.
+// Children are admin panels that re-call useAdminAuth themselves to avoid
+// prop-drilling the adminFetch.
 export default function AdminShell({ children }) {
   const pathname = usePathname();
   const router = useRouter();
   const { auth, needsAuth, hydrated, signIn, signOut, adminFetch } = useAdminAuth();
 
-  // After a successful sign-in, land the operator on the dashboard regardless
-  // of which admin URL surfaced the gate.
   const handleSignIn = useCallback(async (user, pass) => {
     const res = await signIn(user, pass);
     if (res?.ok && pathname !== '/admin/dash') router.push('/admin/dash');
     return res;
   }, [signIn, pathname, router]);
 
-  // On first paint after hydration, probe an admin endpoint so we surface
-  // the sign-in form proactively if the cached token has been revoked.
+  // Probe an admin endpoint on first paint so a revoked token surfaces the
+  // sign-in form proactively.
   useEffect(() => {
     if (!hydrated || !auth) return;
     let cancelled = false;
     (async () => {
-      try {
-        const r = await adminFetch('/settings');
-        if (cancelled) return;
-        if (!r.ok && r.status !== 401) {
-          // any non-auth failure surfaces inside the child page; ignore here
-        }
-      } catch {}
+      try { await adminFetch('/settings'); } catch {}
+      if (cancelled) return;
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -52,8 +46,8 @@ export default function AdminShell({ children }) {
 
   if (!hydrated) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: 'var(--bg)', color: 'var(--muted)' }}>
-        <span className="italic">loading…</span>
+      <div className="admin-root paper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <span className="caption">loading…</span>
       </div>
     );
   }
@@ -61,9 +55,9 @@ export default function AdminShell({ children }) {
   // Authentication gate — covers both "no token yet" and "token rejected".
   if (!auth || needsAuth) {
     return (
-      <div className="min-h-screen" style={{ background: 'var(--bg)', color: 'var(--ink)' }}>
-        <Header pathname={pathname} onSignOut={null} />
-        <div className="max-w-7xl mx-auto px-4 lg:px-6 py-12">
+      <div className="admin-root paper">
+        <ShellHeader pathname={pathname} signedIn={false} />
+        <div style={{ maxWidth: 1440, margin: '0 auto', padding: '48px 28px' }}>
           <SignInForm onSubmit={handleSignIn} />
         </div>
       </div>
@@ -71,85 +65,69 @@ export default function AdminShell({ children }) {
   }
 
   return (
-    <div className="min-h-screen" style={{ background: 'var(--bg)', color: 'var(--ink)' }}>
-      <Header pathname={pathname} onSignOut={signOut} />
-      <div className="max-w-7xl mx-auto px-4 lg:px-6 py-6">
-        <div className="grid gap-6" style={{ gridTemplateColumns: 'minmax(0, 180px) minmax(0, 1fr)' }}>
-          <SideNav pathname={pathname} />
-          <main style={{ minWidth: 0 }}>
-            {children}
-          </main>
-        </div>
+    <div className="admin-root paper">
+      <ShellHeader pathname={pathname} signedIn onSignOut={signOut} />
+      <div className="shell-body">
+        <nav className="shell-nav">
+          {NAV.map(n => {
+            const active = pathname?.startsWith(n.href);
+            return (
+              <Link key={n.id} href={n.href} className={`nav-item ${active ? 'active' : ''}`}>
+                <span>{n.label}</span>
+                {n.id === 'dash' && <span className="pill">live</span>}
+              </Link>
+            );
+          })}
+          <div className="nav-foot">
+            sub / wave<br />
+            admin console<br />
+            newsprint v3
+          </div>
+        </nav>
+        <main style={{ minWidth: 0 }}>{children}</main>
       </div>
       <Toaster />
     </div>
   );
 }
 
-function Header({ pathname, onSignOut }) {
+// Header — wordmark, breadcrumb, and (when signed in) the live station strip.
+function ShellHeader({ pathname, signedIn, onSignOut }) {
   const current = NAV.find(n => pathname?.startsWith(n.href))?.label || 'Admin';
+  const { nowPlaying, listeners } = useStationFeed();
+  const onAir = !!nowPlaying?.title;
+  const count = listeners?.current ?? listeners?.count ?? (typeof listeners === 'number' ? listeners : null);
+
   return (
-    <header
-      className="flex flex-wrap items-center gap-3 px-4 lg:px-6 py-3"
-      style={{ borderBottom: '1px solid var(--ink)' }}
-    >
-      <h1 className="v3-eyebrow" style={{ fontSize: 13 }}>
-        SUB/WAVE · ADMIN · {current}
-      </h1>
-      <Link
-        href="/"
-        className="v3-caption underline underline-offset-4 v3-focus"
-        style={{ color: 'var(--muted)', textDecoration: 'underline' }}
-      >
-        ← player
-      </Link>
-      {onSignOut && (
-        <button
-          onClick={onSignOut}
-          className="ml-auto v3-eyebrow v3-focus cursor-pointer"
-          style={{
-            border: '1px solid var(--ink)',
-            background: 'transparent',
-            color: 'var(--ink)',
-            padding: '4px 10px',
-            fontSize: 10,
-          }}
-        >
-          sign out
-        </button>
+    <header className="shell-header">
+      <span className="wordmark">SUB / WAVE</span>
+      <span className="caption" style={{ color: 'var(--muted)' }}>· admin</span>
+      <span className="crumb">/ <b>{current}</b></span>
+      {signedIn && (
+        <span className="right">
+          <span className="live-dot" style={{ background: onAir ? 'var(--accent)' : 'var(--muted)' }} />
+          <span>{onAir ? 'on air' : 'off air'}</span>
+          {count != null && (
+            <>
+              <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--separator-strong)' }} />
+              <span>{count} listening</span>
+            </>
+          )}
+          <Link href="/" className="caption" style={{ color: 'var(--muted)', textDecoration: 'none' }}>
+            ← player
+          </Link>
+          {onSignOut && (
+            <button className="sign-out" onClick={onSignOut}>sign out</button>
+          )}
+        </span>
+      )}
+      {!signedIn && (
+        <span className="right">
+          <Link href="/" className="caption" style={{ color: 'var(--muted)', textDecoration: 'none' }}>
+            ← player
+          </Link>
+        </span>
       )}
     </header>
-  );
-}
-
-function SideNav({ pathname }) {
-  return (
-    <nav style={{ borderRight: '1px solid var(--separator-strong)', paddingRight: 16 }}>
-      <ul className="space-y-1">
-        {NAV.map(item => {
-          const active = pathname?.startsWith(item.href);
-          return (
-            <li key={item.href}>
-              <Link
-                href={item.href}
-                className="v3-focus block"
-                style={{
-                  textDecoration: 'none',
-                  color: active ? 'var(--bg)' : 'var(--ink)',
-                  background: active ? 'var(--ink)' : 'transparent',
-                  border: '1px solid var(--ink)',
-                  padding: '8px 12px',
-                  fontSize: 12,
-                  letterSpacing: '0.15em',
-                  textTransform: 'uppercase',
-                }}
-              >
-                {item.label}
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
-    </nav>
   );
 }

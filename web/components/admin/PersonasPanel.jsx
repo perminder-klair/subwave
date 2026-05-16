@@ -8,6 +8,7 @@
 // Everything POSTs to /settings and applies live — no mixer restart.
 import { useEffect, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { Card, Btn, Pill, Eyebrow, Seg } from './ui';
 
 const FREQUENCIES = [
   { id: 'quiet',      label: 'Quiet',      desc: 'Talks every 8–20 tracks · station ID once an hour · weather hourly on change.' },
@@ -26,18 +27,6 @@ const PROMPT_MIN = 50;
 const PROMPT_MAX = 4000;
 const PERSONA_MAX = 12;
 const KOKORO_RE = /^[a-z]{2}_[a-z0-9]+$/;
-
-const textareaStyle = {
-  boxSizing: 'border-box', width: '100%',
-  border: '1px solid var(--ink)', background: 'transparent',
-  padding: 10, fontSize: 13, fontFamily: 'inherit', color: 'var(--ink)',
-  resize: 'vertical', lineHeight: 1.5,
-};
-const inputStyle = {
-  boxSizing: 'border-box', border: '1px solid var(--ink)',
-  background: 'transparent', padding: '8px 12px', fontSize: 14,
-  fontFamily: 'inherit', color: 'var(--ink)', outline: 'none',
-};
 
 function clientMintId() {
   const b = crypto.getRandomValues(new Uint8Array(3));
@@ -64,6 +53,10 @@ export default function PersonasPanel() {
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
   const [saveMsg, setSaveMsg] = useState(null);
+  // index of the persona being edited in the right pane
+  const [focusIdx, setFocusIdx] = useState(0);
+  // toggles the system-prompt editor card
+  const [showPrompt, setShowPrompt] = useState(false);
 
   const load = async () => {
     try {
@@ -177,333 +170,395 @@ export default function PersonasPanel() {
   const kokoroVoices = data?.tts?.kokoroVoices || [];
   const cloudProviders = data?.tts?.cloudProviders || ['openai', 'elevenlabs'];
 
+  if (err) {
+    return (
+      <div style={{ display: 'grid', gap: 16 }}>
+        <Card title="Personas">
+          <div style={{ color: 'var(--danger)', fontSize: 13 }}>controller error: {err}</div>
+        </Card>
+      </div>
+    );
+  }
+  if (!form) {
+    return (
+      <div style={{ display: 'grid', gap: 16 }}>
+        <Card title="Personas">
+          <div style={{ color: 'var(--muted)', fontSize: 13, fontStyle: 'italic' }}>loading…</div>
+        </Card>
+      </div>
+    );
+  }
+
+  // clamp focus to a valid index after add/remove
+  const safeIdx = Math.min(focusIdx, form.personas.length - 1);
+  const focused = form.personas[safeIdx];
+  const activePersona = form.personas.find(p => p.id === form.activePersonaId);
+  const focusedFreq = FREQUENCIES.find(f => f.id === focused.frequency);
+  const focusedSoulLen = focused.soul.trim().length;
+  const focusedSoulOver = focusedSoulLen > SOUL_MAX;
+  const focusedOk = personaValid(focused);
+
+  const engineLabel = (p) => {
+    if (p.tts.engine === 'kokoro') return `kokoro / ${p.tts.voice.trim() || '—'}`;
+    if (p.tts.engine === 'cloud') return `cloud / ${p.tts.cloudProvider} / ${p.tts.voice.trim() || '—'}`;
+    return 'piper';
+  };
+
   return (
-    <div className="space-y-4">
-      <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6 }}>
-        The station&apos;s DJ roster. One persona is on air at a time — pick it below.
-        A scheduled <strong>Show</strong> can hand the hour to a different persona.
-        Every change applies live; no mixer restart.
-      </p>
+    <div style={{ display: 'grid', gap: 16 }}>
+      {/* ── HERO ─────────────────────────────────────────────────────────── */}
+      <section className="card">
+        <div style={{ padding: 16, borderBottom: '1px solid var(--ink)', display: 'grid', gridTemplateColumns: '1fr auto', gap: 16, alignItems: 'center' }}>
+          <div>
+            <Eyebrow color="var(--accent)">personas</Eyebrow>
+            <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em', marginTop: 6 }}>
+              The voices on your station.
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, lineHeight: 1.6 }}>
+              One persona is on air at a time. A scheduled show can hand the hour to a different one.
+              Every change applies live; no mixer restart.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Btn onClick={() => setShowPrompt(s => !s)}>
+              {showPrompt ? 'Hide system prompt' : 'System prompt'}
+            </Btn>
+            <Btn tone="accent" onClick={addPersona} disabled={form.personas.length >= PERSONA_MAX}>
+              + Add persona
+            </Btn>
+          </div>
+        </div>
 
-      {err && <Alert tone="err">controller error: {err}</Alert>}
-      {!form && !err && <div style={{ color: 'var(--muted)' }} className="italic">loading…</div>}
+        {/* Active strip */}
+        <div style={{ padding: 14, display: 'flex', gap: 12, alignItems: 'center', background: 'var(--ink-softer)', flexWrap: 'wrap' }}>
+          <span className="caption" style={{ color: 'var(--accent)' }}>● live</span>
+          <span style={{ fontSize: 13, fontWeight: 700 }}>
+            {activePersona ? (activePersona.name.trim() || 'Persona') : '—'}
+          </span>
+          {activePersona?.tagline.trim() && (
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>— {activePersona.tagline.trim()}</span>
+          )}
+          <span className="caption" style={{ marginLeft: 16 }}>
+            frequency · {activePersona ? activePersona.frequency : '—'}
+          </span>
+          <span className="caption">voice · {activePersona ? engineLabel(activePersona) : '—'}</span>
+          <span className="caption">override · — (a scheduled show may reassign the hour)</span>
+        </div>
+      </section>
 
-      {form && (
-        <>
-          {/* ── ACTIVE PERSONA ───────────────────────────────────────── */}
-          <Section title="Active persona">
-            <p style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.6, marginBottom: 4 }}>
-              The persona on air right now, unless a Show overrides it for the current hour.
-            </p>
-            <div className="flex flex-col gap-1.5">
-              {form.personas.map((p, i) => {
-                const active = p.id === form.activePersonaId;
+      {/* ── SYSTEM PROMPT (folded-in feature, toggled from hero) ─────────── */}
+      {showPrompt && (
+        <Card title="System prompt" sub="shared by every persona">
+          <p style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.6, marginBottom: 10 }}>
+            One template wrapped around every DJ generation, shared by all personas.
+            Placeholders: <code>{'{name}'}</code> · <code>{'{soul}'}</code> ·{' '}
+            <code>{'{station}'}</code> · <code>{'{location}'}</code>. Most stations never touch this.
+          </p>
+          <Seg
+            value={form.useCustomPrompt ? 'custom' : 'default'}
+            options={[{ id: 'default', label: 'Built-in default' }, { id: 'custom', label: 'Custom' }]}
+            onChange={v => setForm(f => ({ ...f, useCustomPrompt: v === 'custom' }))}
+          />
+          {!form.useCustomPrompt ? (
+            <div style={{ marginTop: 12 }}>
+              <div className="caption" style={{ marginBottom: 6 }}>the DJ uses this built-in template</div>
+              <pre className="term" style={{ maxHeight: 220 }}>
+                {data?.defaults?.djPrompt || '(default unavailable)'}
+              </pre>
+            </div>
+          ) : (
+            <div style={{ marginTop: 12 }}>
+              <textarea
+                className="textarea"
+                rows={12}
+                value={form.systemPrompt}
+                maxLength={PROMPT_MAX}
+                onChange={e => setForm(f => ({ ...f, systemPrompt: e.target.value }))}
+                style={{
+                  width: '100%', boxSizing: 'border-box',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12,
+                  borderColor: promptOk ? 'var(--ink)' : 'var(--danger)',
+                }}
+              />
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginTop: 10 }}>
+                <Btn
+                  onClick={() => setForm(f => ({ ...f, systemPrompt: data?.defaults?.djPrompt || '' }))}
+                  disabled={busy || !data?.defaults?.djPrompt}
+                >
+                  Restore default text
+                </Btn>
+                <span className="caption" style={{ color: promptOk ? 'var(--muted)' : 'var(--danger)' }}>
+                  {promptText.length}/{PROMPT_MAX} chars
+                  {!promptText.includes('{name}') && ' · missing {name}'}
+                  {promptText.length > 0 && promptText.length < PROMPT_MIN && ` · min ${PROMPT_MIN}`}
+                </span>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* ── 2-COL ───────────────────────────────────────────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16, alignItems: 'flex-start' }}>
+        {/* ROSTER */}
+        <div style={{ display: 'grid', gap: 10 }}>
+          <span className="caption">roster · {form.personas.length} / {PERSONA_MAX}</span>
+          {form.personas.map((p, i) => {
+            const isActive = p.id === form.activePersonaId;
+            const isFocused = i === safeIdx;
+            const valid = personaValid(p);
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setFocusIdx(i)}
+                style={{
+                  border: `1px solid ${isFocused ? 'var(--accent)' : 'var(--ink)'}`,
+                  background: isFocused ? 'var(--bg)' : 'transparent',
+                  padding: 12,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  display: 'grid', gap: 6,
+                  outline: isFocused ? '2px solid var(--accent-soft)' : 'none',
+                  outlineOffset: -4,
+                  fontFamily: 'inherit',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {isActive && <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />}
+                  <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: '-0.01em', color: 'var(--ink)' }}>
+                    {p.name.trim() || `Persona ${i + 1}`}
+                  </span>
+                  {isActive && <Pill tone="accent" style={{ fontSize: 8, marginLeft: 'auto' }}>on air</Pill>}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                  {p.tagline.trim() || 'no tagline'}
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+                  <Pill style={{ fontSize: 8 }}>{p.frequency}</Pill>
+                  <Pill style={{ fontSize: 8 }}>{p.tts.engine}</Pill>
+                  {p.tts.engine !== 'piper' && p.tts.voice.trim() && (
+                    <Pill style={{ fontSize: 8 }}>{p.tts.voice.trim()}</Pill>
+                  )}
+                  {!valid && <Pill style={{ fontSize: 8, color: 'var(--danger)', borderColor: 'var(--danger)' }}>incomplete</Pill>}
+                </div>
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            onClick={addPersona}
+            disabled={form.personas.length >= PERSONA_MAX}
+            style={{
+              border: '1px dashed var(--muted)', background: 'transparent',
+              padding: 12, cursor: form.personas.length >= PERSONA_MAX ? 'not-allowed' : 'pointer',
+              color: 'var(--muted)', opacity: form.personas.length >= PERSONA_MAX ? 0.4 : 1,
+              fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', fontWeight: 700,
+              fontFamily: 'inherit',
+            }}
+          >
+            {form.personas.length >= PERSONA_MAX ? `maximum ${PERSONA_MAX}` : '+ new persona'}
+          </button>
+        </div>
+
+        {/* EDITOR */}
+        <div style={{ display: 'grid', gap: 16 }}>
+          <Card
+            title={`Editing · ${focused.name.trim() || `Persona ${safeIdx + 1}`}`}
+            sub={`persona ${safeIdx + 1} of ${form.personas.length}`}
+            right={
+              <>
+                {focused.id === form.activePersonaId
+                  ? <Pill tone="accent" style={{ fontSize: 8 }}>on air</Pill>
+                  : <Btn sm onClick={() => setForm(f => ({ ...f, activePersonaId: focused.id }))}>Set on air</Btn>}
+                <Btn
+                  sm
+                  tone="danger"
+                  onClick={() => { removePersona(safeIdx); setFocusIdx(i => Math.max(0, i - 1)); }}
+                  disabled={form.personas.length <= 1}
+                  title={form.personas.length <= 1 ? 'At least one persona is required' : 'Remove this persona'}
+                >
+                  Remove
+                </Btn>
+              </>
+            }
+          >
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <div className="field">
+                <label className="field-label">On-air name</label>
+                <input
+                  className="input"
+                  value={focused.name}
+                  maxLength={NAME_MAX}
+                  onChange={e => setPersona(safeIdx, { name: e.target.value })}
+                  style={{ borderColor: focused.name.trim() ? 'var(--ink)' : 'var(--danger)' }}
+                />
+                <div className="field-hint">
+                  Shown in the player and injected into every prompt as <code>{'{name}'}</code>.
+                  <span style={{ marginLeft: 8, color: 'var(--muted)' }}>{focused.name.trim().length} / {NAME_MAX}</span>
+                </div>
+              </div>
+              <div className="field">
+                <label className="field-label">Tagline</label>
+                <input
+                  className="input"
+                  value={focused.tagline}
+                  maxLength={TAGLINE_MAX}
+                  placeholder="e.g. late-night drift"
+                  onChange={e => setPersona(safeIdx, { tagline: e.target.value })}
+                />
+                <div className="field-hint">
+                  A short line shown alongside the persona. Optional.
+                  <span style={{ marginLeft: 8, color: 'var(--muted)' }}>{focused.tagline.trim().length} / {TAGLINE_MAX}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="rule-label">soul</div>
+
+            <div className="field">
+              <textarea
+                className="textarea"
+                rows="3"
+                value={focused.soul}
+                placeholder="e.g. warm and dry, never corny — observant, favours one good image over a list"
+                onChange={e => setPersona(safeIdx, { soul: e.target.value })}
+                style={{ borderColor: focusedSoulOver || focusedSoulLen === 0 ? 'var(--danger)' : 'var(--ink)' }}
+              />
+              <div className="field-hint">
+                One short personality sketch. Injected into the prompt as <code>{'{soul}'}</code>.
+                <span style={{ marginLeft: 8, color: focusedSoulOver ? 'var(--danger)' : 'var(--muted)' }}>
+                  {focusedSoulLen} / {SOUL_MAX}
+                </span>
+              </div>
+            </div>
+
+            <div className="rule-label">talk frequency</div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+              {FREQUENCIES.map(f => {
+                const active = f.id === focused.frequency;
                 return (
                   <button
-                    key={p.id}
+                    key={f.id}
                     type="button"
-                    onClick={() => setForm(f => ({ ...f, activePersonaId: p.id }))}
-                    className="v3-focus cursor-pointer text-left"
+                    onClick={() => setPersona(safeIdx, { frequency: f.id })}
                     style={{
                       border: `1px solid ${active ? 'var(--accent)' : 'var(--ink)'}`,
-                      background: active ? 'var(--accent)' : 'transparent',
-                      color: active ? '#fff' : 'var(--ink)',
-                      padding: '8px 12px', fontSize: 13,
+                      background: active ? 'var(--accent-soft)' : 'transparent',
+                      padding: 12, cursor: 'pointer', textAlign: 'left',
+                      display: 'grid', gap: 6, fontFamily: 'inherit',
                     }}
                   >
-                    {active ? '● ' : '○ '}{p.name.trim() || `Persona ${i + 1}`}
-                    {p.tagline.trim() && (
-                      <span style={{ opacity: 0.75, marginLeft: 8, fontSize: 12 }}>
-                        — {p.tagline.trim()}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{
+                        width: 10, height: 10,
+                        border: `1px solid ${active ? 'var(--accent)' : 'var(--ink)'}`,
+                        borderRadius: '50%',
+                        background: active ? 'var(--accent)' : 'transparent',
+                      }} />
+                      <span style={{ fontSize: 11, letterSpacing: '0.2em', textTransform: 'uppercase', fontWeight: 700, color: active ? 'var(--accent)' : 'var(--ink)' }}>
+                        {f.label}
                       </span>
-                    )}
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--muted)', lineHeight: 1.5 }}>{f.desc}</div>
                   </button>
                 );
               })}
             </div>
-          </Section>
+          </Card>
 
-          {/* ── PERSONA CARDS ────────────────────────────────────────── */}
-          {form.personas.map((p, i) => {
-            const freq = FREQUENCIES.find(f => f.id === p.frequency);
-            const soulLen = p.soul.trim().length;
-            const soulOver = soulLen > SOUL_MAX;
-            const ok = personaValid(p);
-            return (
-              <Section
-                key={p.id}
-                title={`Persona ${i + 1}`}
-                extra={
-                  <div className="flex items-center gap-3">
-                    {p.id === form.activePersonaId && (
-                      <span className="v3-caption" style={{ color: 'var(--accent)' }}>active</span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => removePersona(i)}
-                      disabled={form.personas.length <= 1}
-                      title={form.personas.length <= 1 ? 'At least one persona is required' : 'Remove this persona'}
-                      className="v3-focus cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                      style={{ border: '1px solid var(--ink)', background: 'transparent', color: 'var(--ink)', padding: '3px 9px', fontSize: 12, lineHeight: 1 }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                }
-              >
-                <Field label="Name" hint="Shown in the player and injected into every prompt as the DJ's on-air name.">
-                  <input
-                    type="text" value={p.name} maxLength={NAME_MAX}
-                    onChange={e => setPersona(i, { name: e.target.value })}
-                    className="v3-focus"
-                    style={{ ...inputStyle, width: 280, border: `1px solid ${p.name.trim() ? 'var(--ink)' : '#c5302a'}` }}
-                  />
-                  <span className="v3-caption" style={{ color: 'var(--muted)', marginLeft: 10 }}>
-                    {p.name.trim().length}/{NAME_MAX}
-                  </span>
-                </Field>
+          <Card title="Voice" sub="text-to-speech engine">
+            <div className="field" style={{ marginBottom: 14 }}>
+              <label className="field-label">Engine</label>
+              <Seg
+                value={focused.tts.engine}
+                options={ENGINES}
+                onChange={v => setPersonaTts(safeIdx, { engine: v })}
+              />
+              <div className="field-hint">
+                Piper is local &amp; fast. Kokoro is more natural but slower. Cloud routes through OpenAI / ElevenLabs.
+              </div>
+            </div>
 
-                <Field label="Tagline" hint="A short line shown alongside the persona. Optional.">
-                  <input
-                    type="text" value={p.tagline} maxLength={TAGLINE_MAX}
-                    onChange={e => setPersona(i, { tagline: e.target.value })}
-                    className="v3-focus" placeholder="e.g. late-night drift"
-                    style={{ ...inputStyle, width: 280 }}
-                  />
-                  <span className="v3-caption" style={{ color: 'var(--muted)', marginLeft: 10 }}>
-                    {p.tagline.trim().length}/{TAGLINE_MAX}
-                  </span>
-                </Field>
-
-                <Field label="Talk frequency" hint="How often this persona speaks between tracks and at the top of the hour.">
-                  <Segmented value={p.frequency} options={FREQUENCIES} onChange={v => setPersona(i, { frequency: v })} />
-                </Field>
-                {freq && (
-                  <div style={{ borderLeft: '2px solid var(--accent)', paddingLeft: 12, color: 'var(--muted)', fontSize: 12, lineHeight: 1.6 }}>
-                    {freq.desc}
-                  </div>
-                )}
-
-                <Field label="Soul" hint="One short personality sketch. Injected into the prompt as {soul}.">
-                  <div className="w-full">
-                    <textarea
-                      rows={2} value={p.soul}
-                      onChange={e => setPersona(i, { soul: e.target.value })}
-                      placeholder="e.g. warm and dry, never corny — observant, favours one good image over a list"
-                      className="v3-focus"
-                      style={{ ...textareaStyle, border: `1px solid ${soulOver || soulLen === 0 ? '#c5302a' : 'var(--ink)'}` }}
-                    />
-                    <div className="v3-caption" style={{ color: soulOver ? '#c5302a' : 'var(--muted)', marginTop: 2 }}>
-                      {soulLen}/{SOUL_MAX}
-                    </div>
-                  </div>
-                </Field>
-
-                {/* ── VOICE ── */}
-                <div style={{ borderTop: '1px dashed var(--separator-strong)', paddingTop: 12 }}>
-                  <Field label="Voice engine" hint="Cloud uses the shared API key + model from Settings; provider and voice are per-persona.">
-                    <Segmented value={p.tts.engine} options={ENGINES} onChange={v => setPersonaTts(i, { engine: v })} />
-                  </Field>
-
-                  {p.tts.engine === 'piper' && (
-                    <div className="v3-caption" style={{ color: 'var(--muted)' }}>
-                      Piper uses its built-in local voice — fast, keyless.
-                    </div>
-                  )}
-                  {p.tts.engine === 'kokoro' && (
-                    <Field label="Kokoro voice" hint="">
-                      <select
-                        value={p.tts.voice}
-                        onChange={e => setPersonaTts(i, { voice: e.target.value })}
-                        className="v3-focus"
-                        style={{ ...inputStyle, width: 240 }}
-                      >
-                        {!kokoroVoices.some(v => v.id === p.tts.voice) && (
-                          <option value={p.tts.voice}>{p.tts.voice}</option>
-                        )}
-                        {kokoroVoices.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
-                      </select>
-                    </Field>
-                  )}
-                  {p.tts.engine === 'cloud' && (
-                    <>
-                      <Field label="Cloud provider" hint="">
-                        <Segmented
-                          value={p.tts.cloudProvider}
-                          options={cloudProviders.map(id => ({ id, label: id }))}
-                          onChange={v => setPersonaTts(i, { cloudProvider: v })}
-                        />
-                      </Field>
-                      <Field label="Cloud voice" hint="The voice id for the chosen provider, e.g. 'alloy' (OpenAI) or an ElevenLabs voice id.">
-                        <input
-                          type="text" value={p.tts.voice} maxLength={100}
-                          onChange={e => setPersonaTts(i, { voice: e.target.value })}
-                          className="v3-focus"
-                          style={{ ...inputStyle, width: 240, border: `1px solid ${p.tts.voice.trim() ? 'var(--ink)' : '#c5302a'}` }}
-                        />
-                      </Field>
-                    </>
-                  )}
-                </div>
-
-                {!ok && (
-                  <div className="v3-caption" style={{ color: '#c5302a' }}>
-                    this persona has a missing or invalid field
-                  </div>
-                )}
-              </Section>
-            );
-          })}
-
-          <div className="flex items-center gap-2">
-            <OutlineButton onClick={addPersona} disabled={form.personas.length >= PERSONA_MAX}>
-              + add persona
-            </OutlineButton>
-            {form.personas.length >= PERSONA_MAX && (
-              <span className="v3-caption" style={{ color: 'var(--muted)' }}>maximum {PERSONA_MAX}</span>
+            {focused.tts.engine === 'piper' && (
+              <div className="field-hint">
+                Piper uses its built-in local voice — fast, keyless. No voice selection needed.
+              </div>
             )}
-          </div>
 
-          {/* ── SYSTEM PROMPT ────────────────────────────────────────── */}
-          <Section title="System prompt">
-            <p style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.6, marginBottom: 6 }}>
-              One template wrapped around every DJ generation, shared by all personas.
-              Placeholders: <code>{'{name}'}</code> · <code>{'{soul}'}</code> ·{' '}
-              <code>{'{station}'}</code> · <code>{'{location}'}</code>. Most stations never touch this.
-            </p>
-            <Segmented
-              value={form.useCustomPrompt ? 'custom' : 'default'}
-              options={[{ id: 'default', label: 'Built-in default' }, { id: 'custom', label: 'Custom' }]}
-              onChange={v => setForm(f => ({ ...f, useCustomPrompt: v === 'custom' }))}
-            />
-            {!form.useCustomPrompt ? (
-              <div className="mt-3">
-                <div className="v3-caption mb-1" style={{ color: 'var(--muted)' }}>the DJ uses this built-in template</div>
-                <pre
-                  className="v3-scroll"
-                  style={{ ...textareaStyle, color: 'var(--muted)', maxHeight: 220, overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12 }}
+            {focused.tts.engine === 'kokoro' && (
+              <div className="field" style={{ maxWidth: 320 }}>
+                <label className="field-label">Kokoro voice</label>
+                <select
+                  className="select"
+                  value={focused.tts.voice}
+                  onChange={e => setPersonaTts(safeIdx, { voice: e.target.value })}
                 >
-                  {data?.defaults?.djPrompt || '(default unavailable)'}
-                </pre>
+                  {!kokoroVoices.some(v => v.id === focused.tts.voice) && (
+                    <option value={focused.tts.voice}>{focused.tts.voice}</option>
+                  )}
+                  {kokoroVoices.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                </select>
+                <div className="field-hint">The kokoro-onnx voice id for this persona.</div>
               </div>
-            ) : (
-              <div className="mt-3">
-                <textarea
-                  rows={12} value={form.systemPrompt} maxLength={PROMPT_MAX}
-                  onChange={e => setForm(f => ({ ...f, systemPrompt: e.target.value }))}
-                  className="v3-focus"
-                  style={{ ...textareaStyle, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, border: `1px solid ${promptOk ? 'var(--ink)' : '#c5302a'}` }}
-                />
-                <div className="flex flex-wrap items-center gap-3 mt-2">
-                  <OutlineButton
-                    onClick={() => setForm(f => ({ ...f, systemPrompt: data?.defaults?.djPrompt || '' }))}
-                    disabled={busy || !data?.defaults?.djPrompt}
-                  >
-                    restore default text
-                  </OutlineButton>
-                  <span className="v3-caption" style={{ color: promptOk ? 'var(--muted)' : '#c5302a' }}>
-                    {promptText.length}/{PROMPT_MAX} chars
-                    {!promptText.includes('{name}') && ' · missing {name}'}
-                    {promptText.length > 0 && promptText.length < PROMPT_MIN && ` · min ${PROMPT_MIN}`}
-                  </span>
+            )}
+
+            {focused.tts.engine === 'cloud' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                <div className="field">
+                  <label className="field-label">Cloud provider</label>
+                  <Seg
+                    value={focused.tts.cloudProvider}
+                    options={cloudProviders.map(id => ({ id, label: id }))}
+                    onChange={v => setPersonaTts(safeIdx, { cloudProvider: v })}
+                  />
+                  <div className="field-hint">Uses the shared API key + model from Settings.</div>
+                </div>
+                <div className="field">
+                  <label className="field-label">Cloud voice</label>
+                  <input
+                    className="input"
+                    value={focused.tts.voice}
+                    maxLength={100}
+                    onChange={e => setPersonaTts(safeIdx, { voice: e.target.value })}
+                    style={{ borderColor: focused.tts.voice.trim() ? 'var(--ink)' : 'var(--danger)' }}
+                  />
+                  <div className="field-hint">
+                    The voice id for the chosen provider, e.g. <code>alloy</code> (OpenAI) or an ElevenLabs voice id.
+                  </div>
                 </div>
               </div>
             )}
-          </Section>
+          </Card>
 
-          {/* ── SAVE ─────────────────────────────────────────────────── */}
-          <div className="flex flex-wrap items-center gap-3" style={{ paddingTop: 4 }}>
-            <SolidButton onClick={save} disabled={busy || !canSave}>
-              {busy ? 'saving…' : 'save personas'}
-            </SolidButton>
-            {!canSave && !busy && (
-              <span className="v3-caption" style={{ color: '#c5302a' }}>
-                {allPersonasOk ? '' : 'fix the highlighted persona · '}
-                {promptOk ? '' : 'fix the custom prompt'}
-              </span>
-            )}
-            {saveMsg && (
-              <span style={{ fontSize: 12, color: saveMsg.tone === 'err' ? '#c5302a' : 'var(--accent)' }}>
-                {saveMsg.text}
-              </span>
-            )}
+          {/* Save bar */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 12,
+            padding: 12, border: '1px solid var(--ink)',
+            background: 'var(--ink-softer)', flexWrap: 'wrap',
+          }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: canSave ? 'var(--accent)' : 'var(--danger)', flex: 'none' }} />
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+              {saveMsg
+                ? <span style={{ color: saveMsg.tone === 'err' ? 'var(--danger)' : 'var(--accent)' }}>{saveMsg.text}</span>
+                : !canSave && !focusedOk
+                  ? <span style={{ color: 'var(--danger)' }}>this persona has a missing or invalid field</span>
+                  : !canSave && !allPersonasOk
+                    ? <span style={{ color: 'var(--danger)' }}>another persona in the roster is incomplete</span>
+                    : !canSave && !promptOk
+                      ? <span style={{ color: 'var(--danger)' }}>fix the custom system prompt</span>
+                      : 'changes apply on the next spoken line · no mixer restart'}
+            </span>
+            <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <Btn onClick={load} disabled={busy}>Discard</Btn>
+              <Btn tone="accent" onClick={save} disabled={busy || !canSave}>
+                {busy ? 'Saving…' : 'Save persona'}
+              </Btn>
+            </span>
           </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function Section({ title, extra, children }) {
-  return (
-    <section style={{ border: '1px solid var(--ink)' }}>
-      <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: '1px solid var(--ink)' }}>
-        <span className="v3-eyebrow" style={{ fontSize: 11 }}>{title}</span>
-        {extra}
+        </div>
       </div>
-      <div className="p-5 space-y-3">{children}</div>
-    </section>
-  );
-}
-function Field({ label, hint, children }) {
-  return (
-    <div className="space-y-1.5">
-      <span style={{ color: 'var(--ink)', fontSize: 14, fontWeight: 600 }}>{label}</span>
-      {hint && <div style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.5 }}>{hint}</div>}
-      <div className="flex items-center flex-wrap gap-2 pt-0.5">{children}</div>
-    </div>
-  );
-}
-function Segmented({ value, options, onChange }) {
-  return (
-    <div style={{ display: 'inline-flex', border: '1px solid var(--ink)', flexWrap: 'wrap' }}>
-      {options.map((o, i) => {
-        const active = value === o.id;
-        return (
-          <button
-            key={o.id} type="button" onClick={() => onChange(o.id)}
-            className="v3-eyebrow v3-focus cursor-pointer"
-            style={{
-              background: active ? 'var(--ink)' : 'transparent',
-              color: active ? 'var(--bg)' : 'var(--ink)',
-              border: 'none', borderLeft: i === 0 ? 'none' : '1px solid var(--ink)',
-              padding: '8px 14px', fontSize: 10,
-            }}
-            aria-pressed={active}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-function SolidButton({ onClick, disabled, children }) {
-  return (
-    <button
-      onClick={onClick} disabled={disabled}
-      className="v3-eyebrow v3-focus cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-      style={{ background: 'var(--accent)', color: '#fff', border: 'none', padding: '8px 16px', fontSize: 10 }}
-    >
-      {children}
-    </button>
-  );
-}
-function OutlineButton({ onClick, disabled, children }) {
-  return (
-    <button
-      type="button" onClick={onClick} disabled={disabled}
-      className="v3-eyebrow v3-focus cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
-      style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--ink)', padding: '5px 11px', fontSize: 10 }}
-    >
-      {children}
-    </button>
-  );
-}
-function Alert({ tone, children }) {
-  return (
-    <div style={{ border: `1px solid ${tone === 'err' ? '#c5302a' : 'var(--ink)'}`, color: tone === 'err' ? '#c5302a' : 'var(--ink)', padding: '8px 12px', fontSize: 13 }}>
-      {children}
     </div>
   );
 }
