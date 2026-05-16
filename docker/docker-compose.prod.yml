@@ -59,6 +59,8 @@ services:
       - icecast
     environment:
       - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:?must be set}
+      # Keeps the hourly archive paths (%Y-%m-%d/%H-00.mp3) on local wall time.
+      - TZ=${TZ:-Europe/London}
     extra_hosts:
       # Lets Liquidsoap fetch Subsonic stream URLs that point at host services
       # (e.g. NAVIDROME_URL=http://host.docker.internal:4533) without leaking
@@ -87,6 +89,11 @@ services:
       # ADMIN_USER + ADMIN_PASS are set in controller/.env. Local dev (using
       # docker-compose.yml) leaves NODE_ENV unset so admin auth stays opt-in.
       - NODE_ENV=production
+      # Schedule slots are stored by day-of-week + hour; resolveActiveShow()
+      # reads them with date.getHours(). Without TZ the container runs in UTC
+      # and fires shows an hour early during BST, out of sync with the admin UI
+      # (which computes the on-air slot in the browser's timezone).
+      - TZ=${TZ:-Europe/London}
     env_file:
       - ../controller/.env
     extra_hosts:

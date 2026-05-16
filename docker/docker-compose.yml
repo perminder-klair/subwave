@@ -38,6 +38,7 @@ services:
       - icecast
     environment:
       - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:-changeme}
+      - TZ=${TZ:-Europe/London}
     extra_hosts:
       # Lets Liquidsoap fetch Subsonic stream URLs that point at host services
       # (e.g. NAVIDROME_URL=http://host.docker.internal:4533) without leaking
@@ -59,6 +60,10 @@ services:
     platform: linux/amd64
     container_name: sub-wave-controller
     restart: unless-stopped
+    environment:
+      # Without TZ the container runs in UTC; schedule slots (day-of-week +
+      # hour) would then resolve an hour off from the admin UI during BST.
+      - TZ=${TZ:-Europe/London}
     depends_on:
       - liquidsoap
     ports:
