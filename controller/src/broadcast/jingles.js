@@ -18,7 +18,7 @@ const META = `${STATE_DIR}/jingles.json`;
 
 const DEFAULT_IDENT = {
   filename: 'station_ident_default.wav',
-  text: "You're listening to SUB slash WAVE. Personal frequency, broadcasting from the homelab.",
+  text: "You're listening to SUB/WAVE. Personal frequency, broadcasting from the homelab.",
   builtin: true,
 };
 

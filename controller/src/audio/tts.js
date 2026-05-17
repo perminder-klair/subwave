@@ -80,6 +80,13 @@ async function speakWith(engine, text, opts, personaTts) {
   return piper.speak(text, opts);
 }
 
+// TTS engines read "SUB/WAVE" as "sub slash wave". Spell the station name
+// phonetically before synthesis — visual branding keeps the slash, audio doesn't.
+function normalizeForSpeech(text) {
+  if (!text) return text;
+  return text.replace(/\bSUB\s*(?:\/|slash)\s*WAVE\b/gi, 'Subwave');
+}
+
 // Public entry point. Tries the configured engine; on failure, falls back to
 // a local engine so the DJ never goes silent because a model (or the network)
 // failed. Piper is the universal fallback — local, keyless, fast.
@@ -87,12 +94,13 @@ async function speakWith(engine, text, opts, personaTts) {
 // Every call is timed and recorded into the TTS ring buffer (stats.js) so the
 // admin Stats page can show per-engine usage, latency, and the fallback rate.
 export async function speak(text, { kind = 'default', outPath } = {}) {
+  const speakText = normalizeForSpeech(text);
   const personaTts = djPersonaTts(kind);
   const primary = resolveEngine(kind, personaTts);
   const started = Date.now();
-  const chars = (text || '').length;
+  const chars = (speakText || '').length;
   try {
-    const result = await speakWith(primary, text, { outPath }, personaTts);
+    const result = await speakWith(primary, speakText, { outPath }, personaTts);
     recordTts({
       kind, engine: primary, requested: primary, fellBack: false,
       ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
@@ -110,7 +118,7 @@ export async function speak(text, { kind = 'default', outPath } = {}) {
     }
     console.error(`[tts] ${primary} failed for kind=${kind}: ${err.message} — falling back to ${fallback}`);
     try {
-      const result = await speakWith(fallback, text, { outPath }, personaTts);
+      const result = await speakWith(fallback, speakText, { outPath }, personaTts);
       recordTts({
         kind, engine: fallback, requested: primary, fellBack: true,
         ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),

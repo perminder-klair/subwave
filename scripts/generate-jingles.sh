@@ -17,11 +17,11 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker/docker-compose.prod.yml}"
 COMPOSE="docker compose -f ${COMPOSE_FILE}"
 
 JINGLES=(
-  "You're listening to SUB/WAVE. Personal frequency from the homelab."
-  "SUB/WAVE radio. The signal continues."
-  "This is SUB/WAVE. Late night sounds for the connected few."
-  "You're tuned to SUB/WAVE. Single stream, one frequency."
-  "SUB/WAVE — broadcasting on whatever wavelength reaches you."
+  "You're listening to Subwave. Personal frequency from the homelab."
+  "Subwave radio. The signal continues."
+  "This is Subwave. Late night sounds for the connected few."
+  "You're tuned to Subwave. Single stream, one frequency."
+  "Subwave — broadcasting on whatever wavelength reaches you."
 )
 
 JINGLE_DIR_HOST="${STATE_DIR}/jingles"
