@@ -4,7 +4,7 @@ export default function ArticleHead() {
       <div className="bs-hero-head">
         <p className="bs-eyebrow">A REAL INTERNET RADIO STATION</p>
         <h1 className="bs-hero-title">
-          SUB/WAVE — the radio station with a DJ who never sleeps.
+          The radio station with a DJ who never sleeps.
         </h1>
         <p className="bs-hero-deck">
           One stream, an LLM behind the desk, and a music library that already
