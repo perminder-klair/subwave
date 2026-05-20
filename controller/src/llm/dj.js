@@ -9,10 +9,12 @@
 import { z } from 'zod';
 import * as settings from '../settings.js';
 import { djText, djObject } from './sdk.js';
-import { recentCalls, record } from './log.js';
+import { recentCalls } from './log.js';
 
-// Re-exported so server.js /debug can read the recent-call ring buffer.
-export { recentCalls, record };
+// Re-exported so routes/debug.js can read the LLM call ring buffer through the
+// same module that produces the calls. record() is internal — sdk.js writes,
+// nothing else should.
+export { recentCalls };
 
 // Resolve the DJ system prompt for the persona on air right now. The effective
 // persona is the current show's owner if a show is scheduled for this hour,
@@ -33,7 +35,6 @@ const LENGTH_PHRASES = {
   concise: {
     intro:     'Keep it brief — 2 to 4 sentences.',
     link:      '1-2 sentences',
-    weather:   '1-2 sentences',
     stationId: 'a 1-sentence station ident',
     hourly:    '1 sentence',
     adlib:     '1-2 sentences',
@@ -42,7 +43,6 @@ const LENGTH_PHRASES = {
   extended: {
     intro:     'Take your time — 5 to 8 sentences. Set a scene, tell a small story around the track.',
     link:      '4-6 sentences',
-    weather:   '3-4 sentences',
     stationId: 'a 2-3 sentence station ident',
     hourly:    '2-3 sentences',
     adlib:     '4-6 sentences',
@@ -62,8 +62,11 @@ export function lengthPhrase(kind, persona) {
 
 // Narrative angles per call type. One is picked at random and injected into
 // the user prompt as "Tone for this segment:" so consecutive generations
-// don't fall back to the same shape. Add freely — the more variety here,
-// the less the DJ repeats itself.
+// don't fall back to the same shape. Only the generate* callers in this file
+// consume these — the segment director (skills/_agent.js) gets its variety
+// from its CAPABILITIES descriptions and from picking a different capability
+// each tick, so it doesn't go through pickAngle. Add freely — the more
+// variety here, the less the DJ repeats itself.
 export const ANGLES = {
   intro: [
     'Open with one specific image from right now (weather, time, day, season) and slide into the track.',
@@ -90,47 +93,12 @@ export const ANGLES = {
     'Open with the time or weather, then drop the station name in the middle of the sentence.',
     'A single observation about broadcasting from a homelab, with the station name woven in.',
   ],
-  weather: [
-    'One concrete sensory detail about the weather, no temperature recital.',
-    'Compare it to what it was earlier, or what it might be tonight — give it a small arc.',
-    'Tie the weather to a recommendation about how to spend the next hour.',
-    'Skip the forecast voice — just say what it actually feels like outside right now.',
-    'Acknowledge weather as a co-conspirator with the music, not as a news item.',
-  ],
   hourly: [
     'State the time as a small fact, then anchor it with one observation about the day.',
     'Treat the hour mark like a quiet check-in, not a bulletin.',
     'Open with where in the day we are (mid-afternoon lull, evening getting started, etc.) before the actual time.',
     'Just one short sentence that happens to mention the time.',
     'Acknowledge what kind of listener might be tuning in at this exact hour, without naming them.',
-  ],
-  news: [
-    'Read it like a half-distracted DJ skimming the wire, not a news anchor.',
-    'Land one specific image or phrase from the headline, skip the editorial.',
-    'Treat it as something you just noticed on a second screen, then slide back to music.',
-    'Keep it one sentence. The next sentence is the song.',
-    'Acknowledge the world outside the room without dwelling on it.',
-  ],
-  traffic: [
-    'Tongue-in-cheek traffic for a station that has none — invent a SUB/WAVE-shaped obstacle (a cat on the cable, slow buffering on the M6, a queue at the kettle).',
-    'Mock the format of a real traffic report. Keep it a single sentence.',
-    'Make the "delay" tiny and domestic, not a real road incident.',
-    'Treat traffic as a metaphor for the listening room itself.',
-    'Land one absurd detail, then ease into the next track.',
-  ],
-  random_facts: [
-    'One small "did you know" — concrete, oddly specific, no Wikipedia rote.',
-    'Frame the fact like something you half-remember telling a friend at 1am.',
-    'Tie the fact to the time of day or season if it lands naturally; otherwise drop it cold.',
-    'Keep it one sentence. Avoid the words "interestingly" and "fun fact".',
-    'A fact that earns the next song, not one that competes with it.',
-  ],
-  web_search: [
-    'Drop one current detail about the artist like a half-remembered thing you read, then back to the music.',
-    'Treat it as news from the wider world about who is on air — light, never a press release.',
-    'Land one specific, recent fact; skip the context and skip the source.',
-    'Keep it one sentence. The detail should make the next play feel timely.',
-    'Mention what the artist has been up to lately as if the listener might not have heard.',
   ],
 };
 
@@ -144,8 +112,9 @@ export function randomSeed() {
   return Math.floor(Math.random() * 1_000_000_000);
 }
 
-// Build the shared "right now" context block fed to every generate* call.
-// Pulled out so all five DJ functions show the model the same picture.
+// Build the shared "right now" context block. Used by every generate* function
+// in this file, by matchRequest, and by the segment director (skills/_agent.js)
+// — so they all show the model the same picture of the current moment.
 export function buildContextLines(context, { recentTracks } = {}) {
   const lines = [];
   if (context?.date) {
@@ -312,18 +281,6 @@ export async function generateIntro({ track, context, requestedBy = null, reques
   });
 }
 
-export async function generateWeatherSegment(weather, time, { recap = null, context = null, recentOpeners = null } = {}) {
-  const ctx = context || { weather, time };
-  const ctxLines = buildContextLines(ctx);
-  ctxLines.push(`Task: a brief weather check, in character. ${lengthPhrase('weather')}.`);
-  return djText({
-    system: djSystem(),
-    prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'weather', recap, recentOpeners }),
-    temperature: 0.9, topP: 0.95, repeatPenalty: 1.15, seed: randomSeed(),
-    kind: 'generateWeatherSegment',
-  });
-}
-
 export async function generateStationId({ recap = null, context = null, recentOpeners = null } = {}) {
   const djName = settings.getEffectivePersona()?.name || 'your host';
   const ctxLines = buildContextLines(context);
@@ -383,8 +340,8 @@ export async function generateHourlyTime(time, weather, { recap = null, context 
 // ---------------------------------------------------------------------------
 
 // Shared selection criteria — used by both the pool picker (PICKER_SYSTEM
-// below) and the agent picker (AGENT_INSTRUCTIONS in music/picker.js) so the
-// two strategies can't drift apart.
+// below) and the conversational agent picker (pickSystem in broadcast/
+// dj-agent.js) so the two strategies can't drift apart on selection rules.
 export const PICKER_CRITERIA = `Selection criteria, in order:
 1. FLOW — does it transition naturally from what just played (energy, mood, tempo)?
 2. CONTEXT — does it fit the time of day, weather, and dominant mood?

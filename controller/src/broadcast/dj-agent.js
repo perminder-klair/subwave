@@ -22,52 +22,38 @@ import { recordPick } from '../llm/log.js';
 import { withTrace } from '../observability/events.js';
 
 const PICK_SCHEMA = z.object({
-  id: z.string().describe('the exact song id, as returned by a tool call'),
-  reason: z.string().describe('one short internal sentence on why this track'),
-  say: z.string().nullable().describe('a spoken link in the DJ voice, or null to stay silent'),
+  id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
+  reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just label (e.g. "flow from previous, new artist")'),
+  say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice (back-announce what just played, ease into what is coming, vary your opener); when the event says stay silent, set this to null'),
 });
 
 const REQUEST_SCHEMA = z.object({
-  id: z.string().describe('the exact song id, as returned by a tool call'),
-  ack: z.string().describe('short on-air acknowledgement, max 20 words'),
-  intro: z.string().describe('a natural DJ intro for the track, in the DJ voice'),
+  id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
+  ack: z.string().describe('short on-air acknowledgement of the listener, in character — max 20 words; no "thank you for listening" or self-intros'),
+  intro: z.string().describe('a natural DJ intro for the track in the DJ voice; weave in what the listener asked for without reading the request back verbatim'),
 });
 
-function persona() {
-  const p = settings.getEffectivePersona();
-  return {
-    name: p?.name || 'the DJ',
-    soul: p?.soul || '',
-  };
-}
+// Ultra-minimal — persona + editorial criteria, nothing else. The AI SDK
+// already conveys everything else through its own channels: tool descriptions
+// (llm/tools.js), the done-tool description (llm/sdk.js), schema field
+// descriptions (PICK_SCHEMA above), and the per-pick event message in the
+// session window ("Stay silent — no link this time." vs "Also write a short
+// link to speak over this track now."). Duplicating those in prompt text
+// competes with the framework's structural signals and derails smaller
+// models. PICKER_CRITERIA stays because it's editorial preference (flow,
+// context, variety, interest) — that's not in any tool or schema.
+function pickSystem() {
+  return `${settings.agentPersonaPreamble(settings.getEffectivePersona(), { rules: false })}
 
-function pickSystem(wantLink) {
-  const p = persona();
-  return `You are ${p.name}, the on-air DJ for SUB/WAVE, a personal internet radio station. ${p.soul}.
+You run the station as one continuous shift. The messages above are the live session.
 
-You run the station as one continuous shift. The messages above are the live session: tracks that have aired, things you have said, events as they happened. Read them so you do not repeat an artist back-to-back or reuse the same phrasing.
-
-TASK: choose the single best NEXT track. Use the tools to explore the library — make 2 to 4 tool calls, then choose ONE track whose id a tool actually returned. Do not invent ids.
-
-${dj.PICKER_CRITERIA}
-
-Respond with a JSON object only — no prose, no markdown:
-{ "id": "<exact id a tool returned>", "reason": "<one internal sentence>", "say": ${
-    wantLink
-      ? `"<a natural spoken link in your voice (${dj.lengthPhrase('link')}): ease on from what just played into what is coming, vary your opener>"`
-      : 'null'
-  } }
-${wantLink ? '' : 'Set "say" to null this time — do not talk over the music.'}`;
+${dj.PICKER_CRITERIA}`;
 }
 
 function requestSystem() {
-  const p = persona();
-  return `You are ${p.name}, the on-air DJ for SUB/WAVE, a personal internet radio station. ${p.soul}.
+  return `${settings.agentPersonaPreamble(settings.getEffectivePersona(), { rules: false })}
 
-The messages above are the live session. The last message is a listener request. Use the tools to find a track in the library that genuinely fits what they asked for, then choose ONE whose id a tool returned. Do not invent ids.
-
-Respond with a JSON object only — no prose, no markdown:
-{ "id": "<exact id a tool returned>", "ack": "<short on-air acknowledgement, max 20 words>", "intro": "<a natural intro (${dj.lengthPhrase('intro')}) that weaves in what the listener asked for without reading it back verbatim>" }`;
+The messages above are the live session — the last user turn is a listener request.`;
 }
 
 function trackFields(song) {
@@ -108,10 +94,11 @@ async function pickViaAgent(queue, { wantLink }) {
   const { tools, seen } = buildPickerTools({ recentIds, recentArtists });
 
   const { object, steps, toolCalls } = await djAgent({
-    system: pickSystem(wantLink),
+    system: pickSystem(),
     messages: session.windowMessages(),
     tools,
     schema: PICK_SCHEMA,
+    maxSteps: 6,
     kind: 'djAgentPick',
   });
 
@@ -138,9 +125,19 @@ async function pickViaPool(queue, ctx, { wantLink, previous, current }) {
     return;
   }
   await enqueuePick(queue, result.song, result.reason, result.source || 'pool');
+  // The reason text is concise on a successful pool pick and useful context for
+  // the next turn — but on a failed pool LLM (picker.js returns the sentinel
+  // 'fallback (LLM pick failed)'), recording it as the DJ's session turn primes
+  // the next agent run with "you failed before", which derails models that read
+  // the window. Substitute a neutral phrasing in that case so the conversation
+  // still alternates (avoiding user-message coalescing) without the defeatist
+  // signal.
+  const sessionText = (result.reason && result.reason !== 'fallback (LLM pick failed)')
+    ? result.reason
+    : `Selected "${result.song.title}".`;
   session.appendTurn({
     role: 'dj', kind: 'pick',
-    text: result.reason || `Selected "${result.song.title}".`,
+    text: sessionText,
     meta: { trackId: result.song.id, title: result.song.title, artist: result.song.artist },
   });
   if (wantLink && previous) {
@@ -205,6 +202,7 @@ export async function runRequest(queue, ctx, { requester, text }) {
       messages: session.windowMessages(),
       tools,
       schema: REQUEST_SCHEMA,
+      maxSteps: 6,
       kind: 'djAgentRequest',
     });
 

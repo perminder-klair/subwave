@@ -4,6 +4,7 @@
 // without an import cycle.
 
 import { appendFile } from 'node:fs/promises';
+import { statSync, renameSync } from 'node:fs';
 import { STATE_DIR } from '../config.js';
 import { logEvent } from '../observability/events.js';
 
@@ -21,6 +22,26 @@ const songCoverage = new Map();
 // patterns stay reviewable over days. Best-effort — a write failure must never
 // break a request.
 const CALLS_LOG = `${STATE_DIR}/logs/subsonic.log`;
+// A busy station writes ~40 MB/month to this log. Rotate when it hits this
+// cap; one .old backup is kept (older content is overwritten). Tuned tight
+// because the in-memory ring + logEvent stream cover real observability —
+// this file just provides a few days of audit history.
+const CALLS_LOG_MAX_BYTES = 10 * 1024 * 1024;
+
+// Rotate on module load (catches the cap across redeploys) AND every ~1000
+// writes (catches it during long uptimes — a controller running a month would
+// otherwise blow past the cap with only the startup check). Sync calls are
+// fine: the startup check runs once, and the periodic check runs ~once an hour
+// at typical pick rates. Missing file or missing logs/ dir is fine.
+function maybeRotateLog() {
+  try {
+    if (statSync(CALLS_LOG).size > CALLS_LOG_MAX_BYTES) {
+      renameSync(CALLS_LOG, `${CALLS_LOG}.old`);
+    }
+  } catch {}
+}
+maybeRotateLog();
+let _appendsSinceRotateCheck = 0;
 
 export function record(entry) {
   recentCalls.unshift(entry);
@@ -49,6 +70,10 @@ export function record(entry) {
     entry.ok ? 'ok' : 'err',
     entry.count,
   ].join('\t') + '\n';
+  if (++_appendsSinceRotateCheck >= 1000) {
+    _appendsSinceRotateCheck = 0;
+    maybeRotateLog();
+  }
   appendFile(CALLS_LOG, line).catch(() => {});
 
   // Durable, trace-correlated event — logEvent stamps the active traceId, so

@@ -35,7 +35,7 @@ import { config } from '../config.js';
 import { queue } from '../broadcast/queue.js';
 import * as settings from '../settings.js';
 import { djAgent } from '../llm/sdk.js';
-import { buildContextLines, lengthPhrase } from '../llm/dj.js';
+import { buildContextLines } from '../llm/dj.js';
 import { buildSegmentTools } from '../llm/segment-tools.js';
 import * as sfx from '../broadcast/sfx.js';
 
@@ -86,18 +86,19 @@ const CAPABILITIES = [
 
 const SEGMENT_SCHEMA = z.object({
   segment: z.object({
-    kind: z.enum(['weather', 'news', 'traffic', 'random-facts', 'web-search']),
-    text: z.string().describe('the spoken line — one sentence, in the DJ voice'),
-    sfx: z.string().nullable().describe('the exact name of one sound effect to play under this line, or null for none'),
-  }).nullable().describe('the segment to air, or null to stay silent'),
-  reason: z.string().describe('one short internal sentence on the decision'),
+    kind: z.enum(['weather', 'news', 'traffic', 'random-facts', 'web-search'])
+      .describe('the segment kind — MUST be one offered in the system prompt for this tick'),
+    text: z.string().describe('the spoken line in the DJ voice — typically one short sentence, never more than three'),
+    sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect (null is usually right — most segments need none)'),
+  }).nullable().describe('the segment to air, or null to stay silent — silence is a perfectly good answer, often the best one, when the data is dull, stale, unchanged, or there is nothing fresh worth a listener\'s attention'),
+  reason: z.string().describe('one short internal sentence on why this segment (or why silent) — never shown to the listener'),
 });
 
 // Operator-override schema: the segment is mandatory, the kind is already
 // known, so the agent only returns the spoken line.
 const FORCED_SCHEMA = z.object({
-  text: z.string().describe('the spoken line — one sentence, in the DJ voice'),
-  sfx: z.string().nullable().describe('the exact name of one sound effect to play under the line, or null for none'),
+  text: z.string().describe('the spoken line in the DJ voice — typically one short sentence, never more than three'),
+  sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect'),
 });
 
 // The optional sound-effects block appended to the agent's system prompt.
@@ -149,33 +150,26 @@ function availableCapabilities(ctx, now) {
   return out;
 }
 
+// Ultra-minimal — persona + per-tick dynamic context (capability list, station
+// tone, sfx catalog). Everything else (response shape, silent-null option,
+// "call done", length, tool exploration) is conveyed via the AI SDK's
+// channels: the segment-tools.js tool descriptions, the schema field
+// descriptions on SEGMENT_SCHEMA above, the done-tool description in sdk.js,
+// and the buildSituation() user message. Same principle as pickSystem.
 function directorSystem(persona, caps, freq, sfxCatalog) {
-  const name = persona?.name || 'the DJ';
-  const soul = persona?.soul || '';
   const capList = caps.map(c => `- ${c.kind}: ${c.desc}`).join('\n');
   const tone = freq === 'quiet'
-    ? 'This is a quiet station — speak rarely; silence should be your default.'
+    ? 'This is a quiet station — silence is your default.'
     : freq === 'aggressive'
-      ? 'This is a lively station — a more frequent presence is welcome, but never filler for its own sake.'
-      : 'This is a measured station — speak when there is something worth saying, not on a timer.';
+      ? 'This is a lively station — frequent presence welcome, never filler.'
+      : 'This is a measured station — speak only when there is something worth saying.';
 
-  return `You are ${name}, the on-air DJ for SUB/WAVE, a personal internet radio station. ${soul}
+  return `${settings.agentPersonaPreamble(persona)}
 
-${settings.DJ_HUMANNESS_RULES}
+Your job: decide whether to air ONE between-track segment, or stay silent. You are NOT choosing music. ${tone}
 
-YOUR ONLY JOB right now: decide whether to air ONE short spoken segment between tracks, or to stay silent. You are NOT choosing music — track selection is handled by another part of the station. Do not reason about which song should play next; that is not your decision.
-
-Staying silent is a perfectly good — often the best — answer. Only speak when there is something genuinely fresh and worth a listener's attention.
-
-Capabilities available to you this tick (you may air at most ONE):
-${capList}
-
-Use the tools to look at the real data before you decide. If the data is dull, stale, unchanged, or you have nothing fresh to add, return null and stay silent. ${tone}${sfxBlock(sfxCatalog)}
-
-Length: write ${lengthPhrase('segment', persona)} — any "one sentence" length hints in the briefs above are only a floor, not a cap.
-
-Respond with a JSON object only — no prose, no markdown:
-{ "segment": { "kind": "<one of: ${caps.map(c => c.kind).join(', ')}>", "text": "<one spoken sentence in your voice>", "sfx": "<an effect name from the list, or null>" } or null, "reason": "<one short internal sentence about the SEGMENT decision — not about music>" }`;
+Capabilities available this tick (pick one of these kinds, or stay silent):
+${capList}${sfxBlock(sfxCatalog)}`;
 }
 
 // The concrete situation handed to the agent as its single user turn. Built
@@ -265,33 +259,61 @@ export async function agenticTick(ctx) {
       }
     }
   } catch (err) {
-    queue.log('error', `Segment agent failed: ${err.message}`);
+    // Distinguish a model that couldn't produce parseable JSON from a real
+    // outage. The schema explicitly allows {segment: null} as "stay silent",
+    // and the system prompt actively encourages silence — so a model that
+    // emits unparseable output was most likely TRYING to stay silent but
+    // expressing it wrong. The listener-facing outcome is the same either way
+    // (silence), so report it as silence with a parse note instead of
+    // flooding /debug with errors. Real failures (network, model not loaded,
+    // retries exhausted) still log as errors so operators see them.
+    if (isBareNullSilent(err)) {
+      queue.log('scheduler', `Segment agent stayed silent — model emitted bare null (treating as intended silence)`);
+    } else if (isSilentFailure(err)) {
+      queue.log('scheduler', `Segment agent stayed silent — output not parseable (${err.message.slice(0, 80)})`);
+    } else {
+      queue.log('error', `Segment agent failed: ${err.message}`);
+    }
   } finally {
     tickBusy = false;
   }
 }
 
+// True for "the model produced no parseable object" errors thrown by the AI
+// SDK — these usually mean the model wanted to stay silent but botched the
+// JSON, not that the network or provider is broken. Used by agenticTick (not
+// by runCapability — the operator override demands real output, so a parse
+// failure there IS a failure).
+function isSilentFailure(err) {
+  const msg = String(err?.message || err || '').toLowerCase();
+  return msg.includes('no object generated')
+      || msg.includes('no output generated')
+      || msg.includes('did not match schema');
+}
+
+// Detect the specific "model emitted bare `null`" failure pattern (observed on
+// minimax-m2.7:cloud and likely others). The model is trying to say "stay
+// silent" but encoding it at the wrong nesting level — the schema requires
+// {segment: null, reason: "..."} but the model returns top-level null.
+// Treating this as intentional silence is strictly safer than failing the
+// tick: same listener-facing outcome (silence) with cleaner logs.
+function isBareNullSilent(err) {
+  const text = String(err?.text || '').trim();
+  if (text !== 'null') return false;
+  const cause = String(err?.cause?.message || '').toLowerCase();
+  return cause.includes('expected object') && cause.includes('received null');
+}
+
 // Operator-override variant of directorSystem: exactly one capability, and the
 // segment is mandatory — the agent does not get the option to stay silent.
+// Same ultra-minimal treatment as directorSystem — the FORCED_SCHEMA's text
+// description and the segment-tools.js tool descriptions carry the rest.
 function forcedSystem(persona, cap, sfxCatalog) {
-  const name = persona?.name || 'the DJ';
-  const soul = persona?.soul || '';
+  return `${settings.agentPersonaPreamble(persona)}
 
-  return `You are ${name}, the on-air DJ for SUB/WAVE, a personal internet radio station. ${soul}
+The operator asked you to air ONE ${cap.kind} segment now — you must produce a line, silence is not an option. You are NOT choosing music.
 
-${settings.DJ_HUMANNESS_RULES}
-
-The operator has asked you to air ONE ${cap.kind} segment right now. You are NOT choosing music — track selection is handled by another part of the station. Your only job is to write the spoken line.
-
-What this segment is:
-${cap.desc}
-
-Use any tools available to you to look at the real data first, then write the line. You MUST produce a segment — staying silent is not an option here. If the data is thin, do the best you can with what you have.${sfxBlock(sfxCatalog)}
-
-Length: write ${lengthPhrase('segment', persona)} — any "one sentence" length hint in the brief above is only a floor, not a cap.
-
-Respond with a JSON object only — no prose, no markdown:
-{ "text": "<one spoken sentence in your voice>", "sfx": "<an effect name from the list, or null>" }`;
+${cap.desc}${sfxBlock(sfxCatalog)}`;
 }
 
 // Operator override — fire one capability on demand, bypassing cooldowns, the

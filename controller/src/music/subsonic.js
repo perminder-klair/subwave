@@ -29,20 +29,45 @@ function buildUrl(endpoint, params = {}) {
   return url.toString();
 }
 
-// Response keys that carry item arrays, checked in order — first match wins.
-// Key-driven (not endpoint-switched) so new callers are covered automatically.
-const ITEM_PATHS = [
+// Song-carrying response paths — hand-curated. Add an entry when a NEW
+// endpoint returns SONGS that should count toward the song-coverage map in
+// subsonic-log.js ("is the picker drawing from the whole library or a narrow
+// pool?"). Not auto-derived from response shape: only endpoints whose array
+// elements are individual tracks belong here.
+const SONG_PATHS = [
   ['searchResult3', 'song'], ['randomSongs', 'song'], ['songsByGenre', 'song'],
   ['similarSongs2', 'song'], ['starred2', 'song'], ['topSongs', 'song'],
-  ['album', 'song'], ['playlist', 'entry'], ['albumList2', 'album'],
+  ['album', 'song'], ['playlist', 'entry'],
 ];
 
-function extractItems(sub) {
-  for (const [a, b] of ITEM_PATHS) {
+// Non-song response paths — albums, artists, genres, playlists. Used only to
+// populate the log's `count` field so /debug reflects how many items every
+// endpoint actually returned (a getGenres call that returns 40 genres used to
+// log as count:0). These shapes do NOT feed song-coverage analytics.
+const OTHER_PATHS = [
+  ['albumList2', 'album'], ['searchResult3', 'album'],
+  ['searchResult3', 'artist'], ['genres', 'genre'],
+  ['playlists', 'playlist'], ['artist', 'album'],
+];
+
+function extractSongs(sub) {
+  for (const [a, b] of SONG_PATHS) {
     const v = sub[a]?.[b];
     if (Array.isArray(v)) return v;
   }
   return [];
+}
+
+// Total items in the response: songs if any, else the first non-song shape
+// that matches. Both paths are checked because search3 returns songs AND
+// artists in the same response — songs win when present.
+function extractCount(sub, songs) {
+  if (songs.length > 0) return songs.length;
+  for (const [a, b] of OTHER_PATHS) {
+    const v = sub[a]?.[b];
+    if (Array.isArray(v)) return v.length;
+  }
+  return 0;
 }
 
 async function call(endpoint, params = {}) {
@@ -50,17 +75,24 @@ async function call(endpoint, params = {}) {
   try {
     const url = buildUrl(endpoint, params);
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`Subsonic ${endpoint} failed: ${res.status}`);
+    if (!res.ok) {
+      // Capture the first 200 chars of the body so outage triage gets the
+      // actual server message (Cloudflare 522, Navidrome 5xx detail, etc.)
+      // instead of just a bare status code.
+      let body = '';
+      try { body = (await res.text()).slice(0, 200); } catch {}
+      throw new Error(`Subsonic ${endpoint} failed: ${res.status}${body ? ` — ${body}` : ''}`);
+    }
     const data = await res.json();
     const sub = data['subsonic-response'];
     if (sub.status !== 'ok') throw new Error(`Subsonic error: ${sub.error?.message || 'unknown'}`);
-    const items = extractItems(sub);
+    const songs = extractSongs(sub);
     subLog.record({
       t: new Date().toISOString(), endpoint, params, ms: Date.now() - started,
-      ok: true, count: items.length,
-      // Songs carry both id and title; albumList2 rows have no title — keep
-      // them out of song coverage but still counted via `count` above.
-      songIds: items
+      ok: true, count: extractCount(sub, songs),
+      // Songs carry both id and title; non-song shapes (albums, artists,
+      // genres, playlists) are reflected in `count` above but not here.
+      songIds: songs
         .filter(i => i?.id && i?.title)
         .map(i => ({ id: i.id, title: i.title, artist: i.artist })),
     });

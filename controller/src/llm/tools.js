@@ -43,7 +43,11 @@ export function buildPickerTools({ recentIds = new Set(), recentArtists = new Se
   // Filter recents, slim, and record into `seen` so the picker can resolve
   // the agent's final id choice to a full track. Drops songs by an artist that
   // played in the recent window, and caps any one artist's share of the pool.
-  const collect = (list, cap = 12) => {
+  // cap=8 (down from 12) keeps per-tool input tokens lower for the picker
+  // agent — see picker-latency notes in dj-agent.js. The seen map still
+  // accumulates across the whole loop, so the agent's id space grows with
+  // each tool call regardless.
+  const collect = (list, cap = 8) => {
     const out = [];
     for (const s of list || []) {
       if (!s?.id || recentIds.has(s.id) || seen.has(s.id)) continue;

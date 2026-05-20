@@ -169,6 +169,13 @@ export async function maybeRoll(ctx) {
 // mapped to AI SDK message roles. The full log stays on disk for the UI.
 // Consecutive same-role turns are coalesced because some providers (Anthropic)
 // require strictly alternating user/assistant messages.
+//
+// Scenario-kind events (controller restart notes, session boundaries) are
+// filtered OUT of the window — they're meta about our infra, not part of the
+// DJ's conversation, and they accumulate into user-role noise that derails
+// the picker agent (every controller restart leaves "Controller restarted —
+// session resumed" stuck in the window, eventually appearing 3-4 times in a
+// single coalesced user message).
 export function windowMessages() {
   if (!_session) return [];
   const raw = [];
@@ -177,6 +184,7 @@ export function windowMessages() {
   }
   for (const m of _session.messages.slice(-WINDOW_TURNS)) {
     if (!m.text) continue;
+    if (m.kind === 'scenario') continue;  // infra noise — not for the model
     const role = (m.role === 'dj' || m.role === 'segment') ? 'assistant' : 'user';
     raw.push({ role, content: m.text });
   }

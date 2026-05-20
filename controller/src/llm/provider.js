@@ -131,8 +131,18 @@ export function languageModel() {
     }
     case 'ollama':
     default: {
+      // CRITICAL: use `provider.chat(id)`, not `provider(id)`. The default
+      // callable returns the package's "responses" model (named after OpenAI's
+      // Responses API — identifies itself as "ollama.responses" in warnings),
+      // which doesn't properly translate tools/toolChoice/activeTools to
+      // Ollama's payload format. The result was every cloud :cloud model
+      // emitting prose instead of tool calls, regardless of which model.
+      // `.chat(id)` routes through the package's chat-completions path
+      // (`/api/chat`) where tool calls work natively. Verified against the
+      // raw Ollama API: `POST /api/chat` with tools returns a proper
+      // `tool_calls` field on these same cloud models.
       const provider = createOllama({ baseURL: `${ollamaBaseUrl(cfg)}/api` });
-      model = provider(id);
+      model = provider.chat(id);
       break;
     }
   }

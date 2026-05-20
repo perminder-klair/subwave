@@ -9,7 +9,6 @@ import { randomBytes } from 'node:crypto';
 import { STATE_DIR } from './config.js';
 
 const SETTINGS_PATH = `${STATE_DIR}/settings.json`;
-const LIQ_SETTINGS_PATH = `${STATE_DIR}/liquidsoap_settings.json`;
 
 // Default DJ system-prompt template. Placeholders are substituted at LLM
 // call time via renderDjPrompt(). Keep {name} mandatory — update() refuses
@@ -24,8 +23,10 @@ Hard rules:
 - Reference the actual context (time, weather, what's coming) naturally.
 - Vary your opener and shape every time — never start the same way twice in a row, never use the same metaphor or framing as your last few lines.`;
 
-// Seed souls — the SEED_PERSONAS roster picks from these, and djSystem() falls
-// back to DJ_SOULS[0] when a persona has no soul of its own.
+// Seed souls — the SEED_PERSONAS roster picks from these. renderDjPrompt()
+// falls back to DJ_SOULS[0] when the substituted persona has no soul of its
+// own; the agent path (agentPersonaPreamble) instead substitutes an empty
+// string, since its template doesn't require a soul to read cleanly.
 export const DJ_SOULS = [
   'warm, slightly understated, never corny — late-night BBC 6 Music presenter; observant, dry humour, specific',
   'thoughtful and a little wistful; finds small details in tracks and rooms; favours one well-chosen image over a list',
@@ -35,9 +36,16 @@ export const DJ_SOULS = [
 ];
 
 // Distilled from the "Signs of AI writing" guide — the subset that matters for
-// short spoken radio links. Appended to every DJ system prompt by renderDjPrompt()
-// and directorSystem(), so it survives custom operator templates. Kept tight on
-// purpose: a long forbidden-word list degrades small local models.
+// short spoken radio links. Reaches every DJ system prompt through one of two
+// channels: renderDjPrompt() for the legacy dj.generateXxx callers (always
+// included), and agentPersonaPreamble() for tool-loop agents (opt-in per
+// caller). The segment director opts in; the track-picker and request agents
+// opt OUT, because the ~600-char block competes with their tool-loop
+// instructions and reliably derails small cloud models. See
+// agentPersonaPreamble() for the full rationale. Never hand-roll an agent
+// system prompt — go through one of these so the rules choice stays explicit.
+// Kept tight on purpose: a long forbidden-word list degrades small local
+// models even when it IS appropriate.
 export const DJ_HUMANNESS_RULES = `Sound like a person talking, not a write-up:
 - Skip AI-essay vocabulary: "delve", "tapestry", "testament", "boasts", "vibrant", "bustling", "elevate", "realm", "whilst", "moreover", "furthermore".
 - No significance inflation — a song is just a song; don't call it "more than just" anything or "a testament to" something.
@@ -828,6 +836,30 @@ export function renderDjPrompt(persona, ctx = {}) {
     .replaceAll('{station}', station)
     .replaceAll('{location}', location);
   return `${rendered}\n\n${DJ_HUMANNESS_RULES}`;
+}
+
+// Persona prelude shared by every tool-loop agent system prompt — the picker
+// and request agents in broadcast/dj-agent.js, and the segment director in
+// skills/_agent.js. These agents build task-specific templates (with tools,
+// schemas, and JSON shapes the legacy generateXxx prompts don't need), so they
+// can't go through renderDjPrompt — but they still need the same persona
+// opener everywhere. Paste this at the top of any new agent system prompt;
+// never hand-roll the opener.
+//
+// `rules` is OPT-IN, defaulting to true. Pass `false` for tool-loop agents
+// whose primary task is structured exploration + strict JSON output (the
+// track picker and the request agent): the ~600-char humanness block at the
+// top of the prompt competes for the model's attention with the tool-loop
+// instructions and reliably derails small cloud models — they read "sound
+// like a person talking" and emit conversational prose instead of executing
+// the tool loop. The rules belong on agents whose primary task IS spoken
+// output (the segment director), not on agents whose primary task is
+// orchestration with an incidental spoken side-channel.
+export function agentPersonaPreamble(persona, { rules = true } = {}) {
+  const name = persona?.name || 'the DJ';
+  const soul = persona?.soul || '';
+  const opener = `You are ${name}, the on-air DJ for SUB/WAVE, a personal internet radio station. ${soul}`;
+  return rules ? `${opener}\n\n${DJ_HUMANNESS_RULES}` : opener;
 }
 
 // Liquidsoap reads two tiny text files instead of JSON.
