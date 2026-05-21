@@ -21,10 +21,9 @@ export { recentCalls };
 // otherwise the admin-selected active persona — see settings.getEffectivePersona.
 export function djSystem() {
   const persona = settings.getEffectivePersona();
-  return settings.renderDjPrompt(persona, {
-    station: 'SUB/WAVE',
-    location: settings.get().weather?.locationName,
-  });
+  // No explicit location passed — renderDjPrompt resolves world.location
+  // (themed override) before falling back to the real weather.locationName.
+  return settings.renderDjPrompt(persona, { station: 'SUB/WAVE' });
 }
 
 // Persona-driven verbosity. 'concise' reproduces the historical one-liner

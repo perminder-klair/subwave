@@ -232,6 +232,30 @@ const DEFAULTS = {
   sfx: {
     enabled: true,
   },
+  // Themed-station overrides. Real lat/lng + weather.locationName still drive
+  // Open-Meteo; these reshape what the DJ *thinks* the world looks like so
+  // operators can run themed stations (deep space, fantasy kingdom, etc.)
+  // without the DJ breaking character with real Earth weather/holidays.
+  world: {
+    // Free-text location, e.g. "deep space, year 2387". Empty = use the real
+    // weather.locationName for {location} substitution.
+    location: '',
+    weather: {
+      // When true, real Open-Meteo conditions are suppressed in the DJ context.
+      enabled: false,
+      // Verbatim flavour string read on air ("solar wind quiet, magnetosphere
+      // stable"). Empty + enabled = weather line dropped entirely.
+      text: '',
+    },
+    festivals: {
+      // When false, the hardcoded Western/UK FESTIVALS list is ignored.
+      enabled: true,
+      // Operator-supplied custom calendar entries. Same shape as the hardcoded
+      // list: { month: 1-12, day: 1-31, name, mood, windowDays? }. Layered on
+      // top of the built-in list when enabled; replaces it when not.
+      custom: [],
+    },
+  },
 };
 
 const BOUNDS = {
@@ -457,8 +481,56 @@ export async function load() {
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
     },
+    world: normalizeWorld(stored.world),
   };
   return cache;
+}
+
+// Lenient on load: clamp/coerce, never throw. The strict counterpart
+// validateWorldStrict() runs from update() with the operator's edits.
+function normalizeWorld(raw: any) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  const w = r.weather && typeof r.weather === 'object' ? r.weather : {};
+  const f = r.festivals && typeof r.festivals === 'object' ? r.festivals : {};
+  return {
+    location: typeof r.location === 'string' ? r.location.trim().slice(0, 120) : '',
+    weather: {
+      enabled: typeof w.enabled === 'boolean' ? w.enabled : false,
+      text: typeof w.text === 'string' ? w.text.trim().slice(0, 200) : '',
+    },
+    festivals: {
+      enabled: typeof f.enabled === 'boolean' ? f.enabled : true,
+      custom: normalizeCustomFestivals(f.custom),
+    },
+  };
+}
+
+function normalizeCustomFestivals(raw: any) {
+  if (!Array.isArray(raw)) return [];
+  const out: any[] = [];
+  for (const item of raw) {
+    const f = normalizeCustomFestival(item);
+    if (f) out.push(f);
+    if (out.length >= 60) break;
+  }
+  return out;
+}
+
+function normalizeCustomFestival(raw: any) {
+  if (!raw || typeof raw !== 'object') return null;
+  const month = Number.parseInt(raw.month, 10);
+  const day = Number.parseInt(raw.day, 10);
+  if (!Number.isFinite(month) || month < 1 || month > 12) return null;
+  if (!Number.isFinite(day) || day < 1 || day > 31) return null;
+  const name = typeof raw.name === 'string' ? raw.name.trim().slice(0, 60) : '';
+  if (!name) return null;
+  const mood = typeof raw.mood === 'string' && SHOW_MOODS.includes(raw.mood) ? raw.mood : 'celebratory';
+  const out: any = { month, day, name, mood };
+  if (raw.windowDays !== undefined && raw.windowDays !== null && raw.windowDays !== '') {
+    const wd = Number.parseInt(raw.windowDays, 10);
+    if (Number.isFinite(wd) && wd >= 0 && wd <= 14) out.windowDays = wd;
+  }
+  return out;
 }
 
 export function get() {
@@ -598,6 +670,80 @@ function validateShowsStrict(raw, personas) {
     seen.add(id);
     return { id, name, topic, personaId: item.personaId, mood: item.mood };
   });
+}
+
+function validateWorldStrict(raw, cur) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  const out = JSON.parse(JSON.stringify(cur));
+
+  if (r.location !== undefined) {
+    const v = String(r.location ?? '').trim();
+    if (v.length > 120) throw new Error('world.location must be 0-120 chars');
+    out.location = v;
+  }
+
+  if (r.weather !== undefined) {
+    const w = r.weather && typeof r.weather === 'object' ? r.weather : {};
+    if (w.enabled !== undefined) out.weather.enabled = !!w.enabled;
+    if (w.text !== undefined) {
+      const v = String(w.text ?? '').trim();
+      if (v.length > 200) throw new Error('world.weather.text must be 0-200 chars');
+      out.weather.text = v;
+    }
+  }
+
+  if (r.festivals !== undefined) {
+    const f = r.festivals && typeof r.festivals === 'object' ? r.festivals : {};
+    if (f.enabled !== undefined) out.festivals.enabled = !!f.enabled;
+    if (f.custom !== undefined) {
+      if (!Array.isArray(f.custom)) {
+        throw new Error('world.festivals.custom must be an array');
+      }
+      if (f.custom.length > 60) {
+        throw new Error('world.festivals.custom must be at most 60 entries');
+      }
+      const seen = new Set<string>();
+      out.festivals.custom = f.custom.map((item: any, i: number) => {
+        if (!item || typeof item !== 'object') {
+          throw new Error(`world.festivals.custom[${i}] must be an object`);
+        }
+        const month = Number.parseInt(item.month, 10);
+        if (!Number.isFinite(month) || month < 1 || month > 12) {
+          throw new Error(`world.festivals.custom[${i}].month must be 1-12`);
+        }
+        const day = Number.parseInt(item.day, 10);
+        if (!Number.isFinite(day) || day < 1 || day > 31) {
+          throw new Error(`world.festivals.custom[${i}].day must be 1-31`);
+        }
+        const name = String(item.name ?? '').trim();
+        if (name.length < 1 || name.length > 60) {
+          throw new Error(`world.festivals.custom[${i}].name must be 1-60 chars`);
+        }
+        const moodRaw = String(item.mood ?? 'celebratory').trim();
+        if (!SHOW_MOODS.includes(moodRaw)) {
+          throw new Error(
+            `world.festivals.custom[${i}].mood must be one of: ${SHOW_MOODS.join(', ')}`,
+          );
+        }
+        const key = `${month}-${day}-${name.toLowerCase()}`;
+        if (seen.has(key)) {
+          throw new Error(`world.festivals.custom[${i}] duplicates an earlier entry`);
+        }
+        seen.add(key);
+        const entry: any = { month, day, name, mood: moodRaw };
+        if (item.windowDays !== undefined && item.windowDays !== null && item.windowDays !== '') {
+          const wd = Number.parseInt(item.windowDays, 10);
+          if (!Number.isFinite(wd) || wd < 0 || wd > 14) {
+            throw new Error(`world.festivals.custom[${i}].windowDays must be 0-14`);
+          }
+          entry.windowDays = wd;
+        }
+        return entry;
+      });
+    }
+  }
+
+  return out;
 }
 
 function validateScheduleStrict(raw, shows) {
@@ -816,6 +962,9 @@ export async function update(patch) {
       next.sfx.enabled = !!sx.enabled;
     }
   }
+  if ('world' in patch) {
+    next.world = validateWorldStrict(patch.world, next.world);
+  }
 
   // Post-patch integrity sweep — a personas/shows change in this patch may
   // have orphaned a show owner, a schedule slot, or the active persona.
@@ -887,7 +1036,11 @@ export function getEffectivePersona(date: Date = new Date()) {
 // the global djPrompt (falling back to DEFAULT_DJ_PROMPT_TEMPLATE).
 export function renderDjPrompt(persona: any, ctx: any = {}) {
   const station = ctx.station || 'SUB/WAVE';
-  const location = ctx.location || (cache?.weather?.locationName ?? DEFAULTS.weather.locationName);
+  const worldLocation = cache?.world?.location?.trim?.() || '';
+  const location =
+    ctx.location ||
+    worldLocation ||
+    (cache?.weather?.locationName ?? DEFAULTS.weather.locationName);
   const tpl =
     cache?.djPrompt && cache.djPrompt.trim() ? cache.djPrompt : DEFAULT_DJ_PROMPT_TEMPLATE;
   const rendered = tpl
