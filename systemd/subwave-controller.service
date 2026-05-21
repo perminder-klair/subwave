@@ -1,0 +1,40 @@
+[Unit]
+Description=SUB/WAVE — Controller (Express + DJ agent)
+# Soft dependency on icecast/liquidsoap — the controller can boot first;
+# it just no-ops until liquidsoap drains next.txt. Keeping it loose lets
+# `systemctl --user restart subwave-controller` work without cascading.
+PartOf=subwave.target
+
+[Service]
+Type=simple
+WorkingDirectory=${REPO}/controller
+
+# Operator-edited; holds Navidrome creds, LLM key, ADMIN_USER/ADMIN_PASS.
+# install-native.sh seeds this from controller/.env.example on first run.
+EnvironmentFile=${REPO}/controller/.env
+
+# Same envs the Dockerfile.controller image hardcodes — point native runtime
+# at the binaries/models installed under STATE_DIR/runtime by install-native.sh.
+Environment=NODE_ENV=production
+Environment=STATE_DIR=${STATE_DIR}
+Environment=SOUNDS_DIR=${SOUNDS_DIR}
+Environment=PIPER_BIN=${PIPER_BIN}
+Environment=PIPER_VOICE=${PIPER_VOICE}
+Environment=PIPER_VOICE_CONFIG=${PIPER_VOICE_CONFIG}
+Environment=KOKORO_PYTHON=${KOKORO_PYTHON}
+Environment=KOKORO_WORKER=${KOKORO_WORKER}
+Environment=KOKORO_MODEL=${KOKORO_MODEL}
+Environment=KOKORO_VOICES=${KOKORO_VOICES}
+Environment=ICECAST_STATUS_URL=http://127.0.0.1:7702/status-json.xsl
+
+# tsx is in controller/dependencies (not devDeps) — same entry point as the
+# Docker image (CMD ["node_modules/.bin/tsx", "src/server.ts"]). No build step.
+ExecStart=${TSX_BIN} src/server.ts
+Restart=on-failure
+RestartSec=3s
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=subwave.target

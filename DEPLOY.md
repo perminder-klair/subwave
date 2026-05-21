@@ -210,3 +210,96 @@ is ephemeral and regenerates within minutes of a fresh boot.
 
 A nightly tar of `state/archive/` to an external box is
 sufficient.
+
+## 10. Native install (no Docker)
+
+For homelabs, NAS boxes, or SBCs that already run other services and don't
+want a Docker daemon, SUB/WAVE has a parallel "native install" path that uses
+systemd user units (Linux) or LaunchAgents (macOS). It lives alongside the
+Docker stack — pick one or the other; no shared state besides `docker/.env`
+(which the installer reuses for the Icecast source password).
+
+```bash
+# fresh checkout
+./scripts/install-native.sh
+$EDITOR controller/.env             # Navidrome creds, LLM key, ADMIN_USER/PASS
+systemctl --user enable --now subwave.target
+```
+
+The installer detects Debian/Ubuntu, Arch, Fedora, or macOS; installs system
+packages (`icecast2`/`icecast`, `liquidsoap`, `nodejs`, `ffmpeg`, `caddy` if
+available); fetches Piper + the British voice into `state/runtime/piper/`;
+builds the Kokoro venv at `state/runtime/kokoro/` on Linux (skipped on macOS,
+see *Risks* below); runs `npm ci && npm run build` in `web/` to produce the
+Next.js standalone output; and renders the systemd units / launchd plists into
+your user-scoped unit dir. Re-running it is safe — every step is idempotent.
+
+### Day-to-day (Linux)
+
+```bash
+systemctl --user status 'subwave-*'
+journalctl --user -u subwave-controller -f
+systemctl --user restart subwave-controller            # picks up .env changes
+systemctl --user enable --now subwave-caddy.service    # optional :4800 edge
+```
+
+To keep the stack running across logout / boot without you being logged in:
+
+```bash
+loginctl enable-linger "$USER"
+```
+
+### Day-to-day (macOS)
+
+```bash
+launchctl print "gui/$UID/com.subwave.controller"      # status
+launchctl kickstart -k "gui/$UID/com.subwave.controller"  # restart
+tail -f state/logs/controller.err
+```
+
+macOS launchd has no `EnvironmentFile=` equivalent — the installer inlines
+`controller/.env` into the controller plist. **Re-run the installer after
+editing `controller/.env`**, then `launchctl kickstart -k`.
+
+### Risks and caveats
+
+- **Kokoro on macOS** — `kokoro-onnx` on Apple Silicon has fiddly ONNX
+  runtime wheel issues. The installer skips the Kokoro venv on macOS; the
+  controller falls back to Piper / cloud TTS automatically (every codepath
+  is covered). Flip back on by building the venv manually and re-running
+  the installer; the env vars in the plist are already wired up.
+- **Debian's icecast2 service** — `apt install icecast2` enables a system
+  service on port 7702. The installer disables it (`systemctl disable --now
+  icecast2`) so our user unit can bind the port. Look out for the prompt.
+- **Pi 4 / Pi 5 (aarch64)** — installer picks the `linux_aarch64` Piper
+  release via `uname -m`. Kokoro on aarch64 is supported but slow.
+- **Caddy and port 80/443** — rootless `systemctl --user` can't bind
+  ports < 1024. The Caddy unit listens on `:4800` (matches the Docker
+  prod compose). To listen on `:80`/`:443`, either:
+  - `sudo setcap 'cap_net_bind_service=+ep' $(command -v caddy)`, edit the
+    `Caddyfile` at `state/caddy/Caddyfile` to listen on `:80`, and restart
+    the user unit; or
+  - Convert `subwave-caddy.service` to a system unit (copy into
+    `/etc/systemd/system/`, drop the `--user` flag everywhere) so it can
+    bind privileged ports.
+- **Node version** — controller targets Node 22. Debian 12's distro `nodejs`
+  package is v18; the installer warns and points you at NodeSource for the
+  upgrade path.
+- **Caddy not in Debian default repos** — installer tries the upstream Caddy
+  apt repo first. Failure isn't fatal because Caddy is optional (only needed
+  for the edge proxy).
+
+### Files the native install drops
+
+| Path | What |
+|------|------|
+| `~/.config/systemd/user/subwave*.service` | Unit files, envsubst-rendered from `systemd/` templates |
+| `~/.config/systemd/user/subwave.target`   | Umbrella target |
+| `~/Library/LaunchAgents/com.subwave.*.plist` | macOS analogues, from `launchd/` templates |
+| `state/runtime/piper/`                    | Piper binary + voice |
+| `state/runtime/kokoro/venv/`              | Kokoro Python venv (Linux only) |
+| `state/runtime/kokoro/models/`            | Kokoro ONNX + voices bundle |
+| `state/caddy/Caddyfile`                   | Native Caddyfile (loopback upstreams, `:4800`) |
+| `state/icecast.xml`                       | Icecast config (same as Docker — `setup.sh` renders it) |
+| `web/.next/standalone/`                   | Next.js standalone bundle + copied static + public |
+

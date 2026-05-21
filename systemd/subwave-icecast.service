@@ -1,0 +1,20 @@
+[Unit]
+Description=SUB/WAVE — Icecast2 broadcast server
+PartOf=subwave.target
+
+[Service]
+Type=simple
+# install-native.sh renders ${STATE_DIR}/icecast.xml from
+# docker/icecast.xml.template using the source/admin/relay passwords in
+# docker/.env, then chmods it 644. We pass it explicitly so we don't pick
+# up Debian's /etc/icecast2/icecast.xml.
+ExecStart=${ICECAST_BIN} -c ${STATE_DIR}/icecast.xml
+Restart=on-failure
+RestartSec=3s
+
+# Crash logs land in journald — `journalctl --user -u subwave-icecast -f`.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=subwave.target

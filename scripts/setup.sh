@@ -32,13 +32,34 @@ ICECAST_RENDERED="$STATE_DIR/icecast.xml"
 say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
 
-# ffmpeg is borrowed from the Liquidsoap image (which already ships it) so the
-# host never needs an ffmpeg install. STATE_DIR is mounted at /out — it is
-# chmod 777, so the image's liquidsoap UID can write the rendered files.
+# Render audio with the host's ffmpeg when present (native installs); fall back
+# to running it inside the Liquidsoap image (the original Docker code path).
+# Returns 127 when neither is available, which the callers treat as "skip and
+# warn" — Liquidsoap will play silence on dead air without these files, which
+# is recoverable.
+#
+# The Docker path mounts STATE_DIR at /out (chmod 777, so the image's
+# liquidsoap UID can write) and SOUNDS_DIR at /sounds. The host path rewrites
+# those container paths back to their real host equivalents so a single set of
+# call sites covers both.
 LIQUIDSOAP_IMAGE="savonet/liquidsoap:v2.2.5"
 ff() {
-  docker run --rm --entrypoint ffmpeg \
-    -v "$STATE_DIR":/out -v "$SOUNDS_DIR":/sounds "$LIQUIDSOAP_IMAGE" "$@"
+  if command -v ffmpeg &>/dev/null; then
+    local args=() a
+    for a in "$@"; do
+      case "$a" in
+        /sounds/*) args+=("${SOUNDS_DIR}${a#/sounds}") ;;
+        /out/*)    args+=("${STATE_DIR}${a#/out}") ;;
+        *)         args+=("$a") ;;
+      esac
+    done
+    ffmpeg "${args[@]}"
+  elif command -v docker &>/dev/null; then
+    docker run --rm --entrypoint ffmpeg \
+      -v "$STATE_DIR":/out -v "$SOUNDS_DIR":/sounds "$LIQUIDSOAP_IMAGE" "$@"
+  else
+    return 127
+  fi
 }
 
 # ---- 1. State dirs ----------------------------------------------------------
@@ -117,14 +138,11 @@ chmod 644 "$ICECAST_RENDERED"
 # ---- 5. Emergency audio -----------------------------------------------------
 mkdir -p "$SOUNDS_DIR"
 if [[ ! -f "$SOUNDS_DIR/emergency.mp3" ]]; then
-  if command -v docker &>/dev/null; then
-    say "Generating emergency.mp3 (30 s of pink noise) via the Liquidsoap image"
-    ff -hide_banner -loglevel error \
-      -f lavfi -i "anoisesrc=color=pink:duration=30:amplitude=0.05" \
-      -codec:a libmp3lame -b:a 128k /sounds/emergency.mp3 -y \
-      || warn "ffmpeg render failed — Liquidsoap will play silence on dead air"
-  else
-    warn "docker not on PATH — skipping emergency.mp3 (Liquidsoap will play silence on dead air)"
+  say "Generating emergency.mp3 (30 s of pink noise)"
+  if ! ff -hide_banner -loglevel error \
+       -f lavfi -i "anoisesrc=color=pink:duration=30:amplitude=0.05" \
+       -codec:a libmp3lame -b:a 128k /sounds/emergency.mp3 -y; then
+    warn "No ffmpeg or docker found — skipping emergency.mp3 (Liquidsoap plays silence on dead air)"
   fi
 fi
 
@@ -133,15 +151,12 @@ fi
 # Masked by music, audible under ducked music when the DJ talks solo. Replace
 # sounds/bed.mp3 with your own ambient loop any time.
 if [[ ! -f "$SOUNDS_DIR/bed.mp3" ]]; then
-  if command -v docker &>/dev/null; then
-    say "Generating bed.mp3 (60 s warm pink-noise studio bed) via the Liquidsoap image"
-    ff -hide_banner -loglevel error -y \
-      -f lavfi -i "anoisesrc=color=pink:duration=60:amplitude=0.4" \
-      -af "highpass=f=80,lowpass=f=700,volume=0.5" \
-      -codec:a libmp3lame -b:a 128k /sounds/bed.mp3 \
-      || warn "ffmpeg render failed — Liquidsoap will run without studio bed"
-  else
-    warn "docker not on PATH — skipping bed.mp3 (Liquidsoap will run without studio bed)"
+  say "Generating bed.mp3 (60 s warm pink-noise studio bed)"
+  if ! ff -hide_banner -loglevel error -y \
+       -f lavfi -i "anoisesrc=color=pink:duration=60:amplitude=0.4" \
+       -af "highpass=f=80,lowpass=f=700,volume=0.5" \
+       -codec:a libmp3lame -b:a 128k /sounds/bed.mp3; then
+    warn "No ffmpeg or docker found — skipping bed.mp3 (Liquidsoap runs without studio bed)"
   fi
 fi
 

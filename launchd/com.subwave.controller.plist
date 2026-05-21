@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.subwave.controller</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${TSX_BIN}</string>
+    <string>src/server.ts</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${REPO}/controller</string>
+  <!-- launchd has no EnvironmentFile equivalent — install-native.sh sources
+       controller/.env and injects each KEY=VAL into the EnvironmentVariables
+       dict below at render time. Re-run the installer after editing the .env
+       so launchd picks up the new values, then `launchctl kickstart -k …`. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key>
+    <string>production</string>
+    <key>STATE_DIR</key>
+    <string>${STATE_DIR}</string>
+    <key>SOUNDS_DIR</key>
+    <string>${SOUNDS_DIR}</string>
+    <key>PIPER_BIN</key>
+    <string>${PIPER_BIN}</string>
+    <key>PIPER_VOICE</key>
+    <string>${PIPER_VOICE}</string>
+    <key>PIPER_VOICE_CONFIG</key>
+    <string>${PIPER_VOICE_CONFIG}</string>
+    <key>ICECAST_STATUS_URL</key>
+    <string>http://127.0.0.1:7702/status-json.xsl</string>
+${CONTROLLER_DOTENV_PLIST_DICT}
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${STATE_DIR}/logs/controller.out</string>
+  <key>StandardErrorPath</key>
+  <string>${STATE_DIR}/logs/controller.err</string>
+</dict>
+</plist>

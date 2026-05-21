@@ -1,0 +1,29 @@
+[Unit]
+Description=SUB/WAVE — Caddy edge router (optional)
+# Optional: only enable this unit if you want the docker-prod-style edge
+# routing (/stream.mp3 → icecast, /api/* → controller, everything else → web).
+# Without it, listeners reach :7700 (web), :7701 (controller), :7702 (icecast)
+# on their own ports.
+#
+# Not pulled in by subwave.target. Enable explicitly:
+#   systemctl --user enable --now subwave-caddy.service
+After=subwave-web.service subwave-controller.service subwave-icecast.service
+Wants=subwave-web.service subwave-controller.service subwave-icecast.service
+
+[Service]
+Type=simple
+WorkingDirectory=${STATE_DIR}/caddy
+
+# Listens on :4800 by default (matches docker-compose.prod.yml's 4800:80
+# binding). Rootless --user units can't bind <1024 — for :80/:443 either
+# `sudo setcap CAP_NET_BIND_SERVICE+ep ${CADDY_BIN}` or convert this into a
+# system unit. See DEPLOY.md for both flavours.
+ExecStart=${CADDY_BIN} run --config ${STATE_DIR}/caddy/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=3s
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

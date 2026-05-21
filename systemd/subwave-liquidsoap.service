@@ -1,0 +1,37 @@
+[Unit]
+Description=SUB/WAVE — Liquidsoap broadcast engine
+# Icecast must be accepting source connections before liquidsoap tries to
+# stream to it. RestartSec on liquidsoap is short, so a transient race
+# during boot recovers within a few seconds even without strict ordering.
+Wants=subwave-icecast.service
+After=subwave-icecast.service
+PartOf=subwave.target
+
+[Service]
+Type=simple
+WorkingDirectory=${REPO}/liquidsoap
+
+# Path knobs read by radio.liq (environment.get with /var/sub-wave + /sounds
+# defaults). Native installs override both so the script writes to host paths
+# instead of the container layout.
+Environment=STATE_DIR=${STATE_DIR}
+Environment=SOUNDS_DIR=${SOUNDS_DIR}
+
+# Icecast source password is sourced from docker/.env (the installer keeps a
+# single canonical copy there — both Docker and native installs read it).
+EnvironmentFile=${REPO}/docker/.env
+
+# ICECAST_HOST is read by radio.liq for the output.icecast block. Defaults to
+# "icecast" (the compose service name) in Docker; native installs talk to
+# localhost.
+Environment=ICECAST_HOST=127.0.0.1
+
+ExecStart=${LIQUIDSOAP_BIN} ${REPO}/liquidsoap/radio.liq
+Restart=on-failure
+RestartSec=3s
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=subwave.target

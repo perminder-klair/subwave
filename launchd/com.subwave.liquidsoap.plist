@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.subwave.liquidsoap</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${LIQUIDSOAP_BIN}</string>
+    <string>${REPO}/liquidsoap/radio.liq</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${REPO}/liquidsoap</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>STATE_DIR</key>
+    <string>${STATE_DIR}</string>
+    <key>SOUNDS_DIR</key>
+    <string>${SOUNDS_DIR}</string>
+    <key>ICECAST_HOST</key>
+    <string>127.0.0.1</string>
+    <!-- ICECAST_SOURCE_PASSWORD: launchd plists can't EnvironmentFile= the way
+         systemd can, so install-native.sh inlines the password the installer
+         already wrote to docker/.env. Re-running the installer overwrites this
+         plist with the current password. -->
+    <key>ICECAST_SOURCE_PASSWORD</key>
+    <string>${ICECAST_SOURCE_PASSWORD}</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${STATE_DIR}/logs/liquidsoap.out</string>
+  <key>StandardErrorPath</key>
+  <string>${STATE_DIR}/logs/liquidsoap.err</string>
+</dict>
+</plist>

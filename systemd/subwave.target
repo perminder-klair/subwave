@@ -1,0 +1,9 @@
+[Unit]
+Description=SUB/WAVE radio stack (umbrella)
+# Caddy is intentionally absent from Wants/After — it's optional. Enable it
+# separately with: systemctl --user enable --now subwave-caddy.service
+Wants=subwave-icecast.service subwave-liquidsoap.service subwave-controller.service subwave-web.service
+After=subwave-icecast.service subwave-liquidsoap.service subwave-controller.service subwave-web.service
+
+[Install]
+WantedBy=default.target

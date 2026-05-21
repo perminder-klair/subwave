@@ -1,0 +1,29 @@
+[Unit]
+Description=SUB/WAVE — Next.js web UI
+PartOf=subwave.target
+
+[Service]
+Type=simple
+# Next.js standalone output bundles its own minimal server.js + the runtime
+# files into .next/standalone. install-native.sh runs `npm ci && npm run build`
+# in web/ to produce it. Static assets (.next/static, public/) live next to it
+# only after the installer copies them — see install-native.sh.
+WorkingDirectory=${REPO}/web/.next/standalone
+
+# Production mode + same-origin defaults (no NEXT_PUBLIC_* needed). The web
+# app talks to Caddy at /api and /stream.mp3, which proxies to the controller
+# and icecast respectively. Direct-hit (no Caddy) works too: override
+# NEXT_PUBLIC_API_URL / NEXT_PUBLIC_STREAM_URL at install time if you want.
+Environment=NODE_ENV=production
+Environment=PORT=7700
+Environment=HOSTNAME=127.0.0.1
+
+ExecStart=${NODE_BIN} server.js
+Restart=on-failure
+RestartSec=3s
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=subwave.target

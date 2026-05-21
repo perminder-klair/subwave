@@ -4,7 +4,10 @@
 
 settings.log.level := 4
 settings.log.file := true
-settings.log.file.path := "/var/log/liquidsoap/radio.log"
+# Log path moved below the path-roots block so it can sit under state_dir —
+# Docker prod already mounts state/logs at /var/log/liquidsoap, so the effective
+# host path is unchanged; Docker dev gains a persistent log; native installs
+# get logs alongside everything else under STATE_DIR.
 
 # Telnet server — used by the controller to send a "restart" command after
 # changing settings that this script reads at startup. Bound to all interfaces
@@ -14,6 +17,19 @@ settings.server.telnet.bind_addr := "0.0.0.0"
 settings.server.telnet.port := 1234
 
 # ---------------------------------------------------------------------------
+# PATH ROOTS — Docker mounts /var/sub-wave + /sounds; native installs point
+# STATE_DIR + SOUNDS_DIR at host paths via the systemd unit's Environment=.
+# Defaults match the existing container layout so Docker users see no change.
+# ---------------------------------------------------------------------------
+
+state_dir = environment.get(default="/var/sub-wave", "STATE_DIR")
+sounds_dir = environment.get(default="/sounds", "SOUNDS_DIR")
+log("paths: state_dir=#{state_dir} sounds_dir=#{sounds_dir}")
+
+# See settings.log.file.path note above.
+settings.log.file.path := "#{state_dir}/logs/radio.log"
+
+# ---------------------------------------------------------------------------
 # RUNTIME SETTINGS — written by the controller at startup, read here.
 # Two tiny text files: one int, one float. Falls back to defaults if missing.
 # ---------------------------------------------------------------------------
@@ -21,14 +37,14 @@ settings.server.telnet.port := 1234
 jingle_ratio = ref(30)
 crossfade_duration = ref(10.0)
 
-if file.exists("/var/sub-wave/liquidsoap_jingle_ratio.txt") then
-  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_jingle_ratio.txt"))
+if file.exists("#{state_dir}/liquidsoap_jingle_ratio.txt") then
+  raw = string.trim(file.contents("#{state_dir}/liquidsoap_jingle_ratio.txt"))
   v = int_of_string(default=30, raw)
   if v > 0 then jingle_ratio := v end
 end
 
-if file.exists("/var/sub-wave/liquidsoap_crossfade.txt") then
-  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_crossfade.txt"))
+if file.exists("#{state_dir}/liquidsoap_crossfade.txt") then
+  raw = string.trim(file.contents("#{state_dir}/liquidsoap_crossfade.txt"))
   v = float_of_string(default=10.0, raw)
   if v >= 0.0 then crossfade_duration := v end
 end
@@ -79,9 +95,9 @@ dj_queue = request.queue(id="dj_queue")
 
 # Periodically drain the queue file into request.queue
 def poll_queue() =
-  if file.exists("/var/sub-wave/next.txt") then
-    contents = file.contents("/var/sub-wave/next.txt")
-    file.remove("/var/sub-wave/next.txt")
+  if file.exists("#{state_dir}/next.txt") then
+    contents = file.contents("#{state_dir}/next.txt")
+    file.remove("#{state_dir}/next.txt")
     if contents != "" then
       log("Queueing: #{contents}")
       ignore(dj_queue.push(request.create(contents)))
@@ -100,7 +116,7 @@ auto_playlist = playlist(
   id="auto",
   reload_mode="watch",
   mode="randomize",
-  "/var/sub-wave/auto.m3u"
+  "#{state_dir}/auto.m3u"
 )
 
 # ---------------------------------------------------------------------------
@@ -193,7 +209,7 @@ sfx_queue = request.queue(id="sfx_queue")
 # once the speech finishes. request.queue plays the two pushes back to back
 # with no gap, so the duck holds continuously across the join. Engine-agnostic:
 # the speech file itself may be a WAV (Piper/Kokoro) or an mp3 (ElevenLabs).
-leadin_path = "/sounds/leadin.wav"
+leadin_path = "#{sounds_dir}/leadin.wav"
 has_leadin = file.exists(leadin_path)
 if has_leadin then
   log("Voice lead-in enabled: #{leadin_path}")
@@ -202,9 +218,9 @@ else
 end
 
 def poll_voice() =
-  if file.exists("/var/sub-wave/say.txt") then
-    contents = file.contents("/var/sub-wave/say.txt")
-    file.remove("/var/sub-wave/say.txt")
+  if file.exists("#{state_dir}/say.txt") then
+    contents = file.contents("#{state_dir}/say.txt")
+    file.remove("#{state_dir}/say.txt")
     if contents != "" then
       log("DJ says: #{contents}")
       if has_leadin then
@@ -217,9 +233,9 @@ end
 thread.run(every=0.5, poll_voice)
 
 def poll_intro() =
-  if file.exists("/var/sub-wave/intro.txt") then
-    contents = file.contents("/var/sub-wave/intro.txt")
-    file.remove("/var/sub-wave/intro.txt")
+  if file.exists("#{state_dir}/intro.txt") then
+    contents = file.contents("#{state_dir}/intro.txt")
+    file.remove("#{state_dir}/intro.txt")
     if contents != "" then
       log("DJ talk-over: #{contents}")
       if has_leadin then
@@ -232,9 +248,9 @@ end
 thread.run(every=0.5, poll_intro)
 
 def poll_sfx() =
-  if file.exists("/var/sub-wave/sfx.txt") then
-    contents = file.contents("/var/sub-wave/sfx.txt")
-    file.remove("/var/sub-wave/sfx.txt")
+  if file.exists("#{state_dir}/sfx.txt") then
+    contents = file.contents("#{state_dir}/sfx.txt")
+    file.remove("#{state_dir}/sfx.txt")
     if contents != "" then
       log("DJ sound effect: #{contents}")
       # No lead-in: an SFX clip is already-rendered audio, and it is meant to
@@ -299,7 +315,7 @@ intro = mic_chain(intro_queue)
 # Replace sounds/bed.mp3 with any ambient loop — the repo ships one, and
 # scripts/setup.sh renders a warm pink-noise fallback if it's ever missing.
 
-bed_path = "/sounds/bed.mp3"
+bed_path = "#{sounds_dir}/bed.mp3"
 
 # Studio bed disabled — the looping ambient bed was audible/annoying under the
 # DJ's voice during links. Flip back to `true` to restore it.
@@ -385,7 +401,7 @@ jingles = playlist(
   id="jingles",
   mode="randomize",
   reload_mode="watch",
-  "/var/sub-wave/jingles.m3u"
+  "#{state_dir}/jingles.m3u"
 )
 
 radio = rotate(
@@ -398,7 +414,7 @@ radio = rotate(
 # ---------------------------------------------------------------------------
 
 # If the source dies, play a static "technical difficulties" loop
-emergency = single("/sounds/emergency.mp3")
+emergency = single("#{sounds_dir}/emergency.mp3")
 radio = fallback(track_sensitive=false, [radio, emergency])
 
 # Blank detection — skip if more than 5s of silence
@@ -473,7 +489,7 @@ def on_meta(m) =
       filename = filename,
       timestamp = ts
     })
-    file.write(data=json, "/var/sub-wave/now-playing.json")
+    file.write(data=json, "#{state_dir}/now-playing.json")
     # Push the same metadata onto the Icecast stream so the ICY title
     # tracks the current song instead of lagging a transition behind.
     radio.insert_metadata([
@@ -549,7 +565,7 @@ output.file(
   %mp3(bitrate=128),
   fallible=true,
   reopen_when={0m0s},
-  "/var/sub-wave/archive/%Y-%m-%d/%H-00.mp3",
+  "#{state_dir}/archive/%Y-%m-%d/%H-00.mp3",
   radio
 )
 
