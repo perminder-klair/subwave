@@ -20,6 +20,7 @@ const SECTIONS = [
   { id: 'tts',     label: 'TTS voice', hint: 'default engine' },
   { id: 'llm',     label: 'LLM provider', hint: 'model routing' },
   { id: 'mixer',   label: 'Mixer', hint: 'crossfade · weather' },
+  { id: 'world',   label: 'World', hint: 'themed overrides' },
   { id: 'jingles', label: 'Jingles', hint: 'stingers' },
   { id: 'sfx',     label: 'Sound FX', hint: 'agent stingers' },
 ] as const;
@@ -79,12 +80,27 @@ interface LlmForm {
   pauseWhenEmpty: boolean;
 }
 
+interface CustomFestival {
+  month: string;
+  day: string;
+  name: string;
+  mood: string;
+  windowDays: string;
+}
+
+interface WorldForm {
+  location: string;
+  weather: { enabled: boolean; text: string };
+  festivals: { enabled: boolean; custom: CustomFestival[] };
+}
+
 interface FormState {
   jingleRatio: string;
   crossfadeDuration: string;
   weather: WeatherCfg;
   tts: TtsForm;
   llm: LlmForm;
+  world: WorldForm;
 }
 
 interface JingleEntry {
@@ -120,6 +136,14 @@ interface SettingsData {
     };
     llm?: Partial<LlmForm>;
     sfx?: { enabled?: boolean };
+    world?: {
+      location?: string;
+      weather?: { enabled?: boolean; text?: string };
+      festivals?: {
+        enabled?: boolean;
+        custom?: Array<{ month?: number; day?: number; name?: string; mood?: string; windowDays?: number }>;
+      };
+    };
   };
   tts?: {
     engines?: string[];
@@ -214,6 +238,23 @@ export default function SettingsPanel() {
         reasoning: !!v.llm?.reasoning,
         pickerAgent: !!v.llm?.pickerAgent,
         pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
+      },
+      world: {
+        location: v.world?.location ?? '',
+        weather: {
+          enabled: !!v.world?.weather?.enabled,
+          text: v.world?.weather?.text ?? '',
+        },
+        festivals: {
+          enabled: v.world?.festivals?.enabled !== false,
+          custom: (v.world?.festivals?.custom ?? []).map(c => ({
+            month: c.month != null ? String(c.month) : '',
+            day: c.day != null ? String(c.day) : '',
+            name: c.name ?? '',
+            mood: c.mood ?? 'celebratory',
+            windowDays: c.windowDays != null ? String(c.windowDays) : '',
+          })),
+        },
       },
     });
   }, [data, form]);
@@ -451,6 +492,12 @@ export default function SettingsPanel() {
             )}
             {activeSection === 'mixer' && (
               <MixerSection
+                data={data} form={form} setForm={updateForm} busy={busy}
+                saveMsg={saveMsg} saveSettings={saveSettings}
+              />
+            )}
+            {activeSection === 'world' && (
+              <WorldSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveMsg={saveMsg} saveSettings={saveSettings}
               />
@@ -1160,6 +1207,8 @@ function MixerSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sect
           <div className="field-hint">
             Where the station broadcasts from — sets the DJ’s {'{location}'} and the Open-Meteo
             weather it reads on air (current: {data.values?.weather?.locationName} @ {data.values?.weather?.lat}, {data.values?.weather?.lng}). Applies live.
+            For themed stations (deep space, fantasy kingdom, etc.) use the <strong>World</strong>{' '}
+            tab to override what the DJ <em>thinks</em> these values are.
           </div>
         </div>
       </Card>
@@ -1170,6 +1219,306 @@ function MixerSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sect
         saveMsg={saveMsg}
         onSave={save}
         saveLabel="Save mixer settings"
+      />
+    </>
+  );
+}
+
+/* ── World ───────────────────────────────────────────────────────────── */
+
+const WORLD_MOODS = [
+  'celebratory',
+  'reflective',
+  'festival',
+  'cultural',
+  'spiritual',
+  'romantic',
+  'energetic',
+  'calm',
+  'night',
+  'morning',
+  'evening',
+  'rainy',
+  'sunny',
+  'focus',
+  'workout',
+  'driving',
+  'cooking',
+];
+
+function emptyCustomFestival(): CustomFestival {
+  return { month: '', day: '', name: '', mood: 'celebratory', windowDays: '' };
+}
+
+function WorldSection({ data, form, setForm, busy, saveMsg, saveSettings }: SectionProps) {
+  const w = form.world;
+
+  const save = () => {
+    // Strict-side wants numeric month/day; trim out blank rows entirely.
+    const custom = w.festivals.custom
+      .map(c => ({
+        month: c.month.trim(),
+        day: c.day.trim(),
+        name: c.name.trim(),
+        mood: c.mood,
+        windowDays: c.windowDays.trim(),
+      }))
+      .filter(c => c.month || c.day || c.name)
+      .map(c => {
+        const entry: Record<string, unknown> = {
+          month: Number.parseInt(c.month, 10),
+          day: Number.parseInt(c.day, 10),
+          name: c.name,
+          mood: c.mood,
+        };
+        if (c.windowDays) entry.windowDays = Number.parseInt(c.windowDays, 10);
+        return entry;
+      });
+    saveSettings({
+      world: {
+        location: w.location,
+        weather: { enabled: w.weather.enabled, text: w.weather.text },
+        festivals: { enabled: w.festivals.enabled, custom },
+      },
+    });
+  };
+
+  const setWorld = (mut: (curr: WorldForm) => WorldForm) =>
+    setForm(f => ({ ...f, world: mut(f.world) }));
+
+  const addFestival = () => setWorld(curr => ({
+    ...curr,
+    festivals: { ...curr.festivals, custom: [...curr.festivals.custom, emptyCustomFestival()] },
+  }));
+
+  const removeFestival = (i: number) => setWorld(curr => ({
+    ...curr,
+    festivals: { ...curr.festivals, custom: curr.festivals.custom.filter((_, j) => j !== i) },
+  }));
+
+  const updateFestival = (i: number, patch: Partial<CustomFestival>) => setWorld(curr => ({
+    ...curr,
+    festivals: {
+      ...curr.festivals,
+      custom: curr.festivals.custom.map((c, j) => (j === i ? { ...c, ...patch } : c)),
+    },
+  }));
+
+  const realLocation = data.values?.weather?.locationName ?? '—';
+  const themedActive = !!data.values?.world?.location?.trim();
+  const weatherActive = !!data.values?.world?.weather?.enabled;
+  const festivalsHardcodedOff = data.values?.world?.festivals?.enabled === false;
+
+  return (
+    <>
+      <SectionHeader
+        eyebrow="world"
+        title="Themed-station overrides."
+        sub={<>
+          Reshape what the DJ <em>thinks</em> the world looks like, without
+          touching the real station location. Useful for themed stations
+          (deep space, fantasy kingdom, post-apocalyptic city) where the DJ
+          shouldn’t break character by reading real Earth weather or wishing
+          listeners a happy Bonfire Night. The Mixer tab still owns the real
+          lat/lng that Open-Meteo queries — these settings change how the
+          fetched values are presented to the DJ.
+        </>}
+        metrics={[
+          { n: themedActive ? 'on' : 'off', l: 'location', accent: themedActive },
+          { n: weatherActive ? 'on' : 'off', l: 'weather', accent: weatherActive },
+          { n: festivalsHardcodedOff ? 'off' : 'on', l: 'earth fests', accent: !festivalsHardcodedOff },
+        ]}
+      />
+
+      <Card title="Themed location" sub="overrides {location} in DJ prompts">
+        <div className="field">
+          <Label>Themed location</Label>
+          <Input
+            placeholder="e.g. deep space, year 2387"
+            value={w.location}
+            maxLength={120}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setWorld(curr => ({ ...curr, location: e.target.value }))
+            }
+          />
+          <div className="field-hint">
+            Replaces the {'{location}'} placeholder in DJ prompts. Leave empty
+            to use the Mixer station name (currently <strong>{realLocation}</strong>).
+            The Mixer lat/lng still drive Open-Meteo regardless. Applies live.
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Weather override" sub="silence or rewrite the on-air weather line">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-[13px] font-bold">Override real weather</div>
+            <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+              When on, the DJ stops reading the real Open-Meteo conditions and
+              uses the text below instead. Empty text + on = the weather line
+              is dropped entirely.
+            </div>
+          </div>
+          <Seg
+            accent
+            value={w.weather.enabled ? 'on' : 'off'}
+            options={[
+              { id: 'off', label: 'Off' },
+              { id: 'on', label: 'On' },
+            ]}
+            onChange={v => setWorld(curr => ({
+              ...curr,
+              weather: { ...curr.weather, enabled: v === 'on' },
+            }))}
+          />
+        </div>
+
+        <div className="field mt-4">
+          <Label>Weather flavour</Label>
+          <Input
+            placeholder="e.g. solar wind quiet, magnetosphere stable"
+            value={w.weather.text}
+            maxLength={200}
+            disabled={!w.weather.enabled}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setWorld(curr => ({ ...curr, weather: { ...curr.weather, text: e.target.value } }))
+            }
+          />
+          <div className="field-hint">
+            The DJ reads this verbatim as the current conditions. Keep it short
+            — one clause works best. {w.weather.text.length}/200.
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Festivals" sub="hardcoded Earth calendar + custom entries">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-[13px] font-bold">Use built-in Earth holiday calendar</div>
+            <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+              When off, the hardcoded Western/UK calendar (Christmas, Halloween,
+              Diwali, etc.) is silenced. Any custom entries below still apply.
+            </div>
+          </div>
+          <Seg
+            accent
+            value={w.festivals.enabled ? 'on' : 'off'}
+            options={[
+              { id: 'off', label: 'Off' },
+              { id: 'on', label: 'On' },
+            ]}
+            onChange={v => setWorld(curr => ({
+              ...curr,
+              festivals: { ...curr.festivals, enabled: v === 'on' },
+            }))}
+          />
+        </div>
+
+        <div className="field mt-4">
+          <Label>Custom festivals</Label>
+          <div className="field-hint mb-2">
+            Operator-supplied fixed-date entries. Month 1–12, day 1–31. Window
+            days widens the match around the date (e.g. 1 = also fires the day
+            before and after). Mood drives the autonomous track picker.
+          </div>
+
+          {w.festivals.custom.length === 0 && (
+            <div className="text-[11px] text-muted italic">
+              No custom festivals yet.
+            </div>
+          )}
+
+          <div className="grid gap-2">
+            {w.festivals.custom.map((c, i) => (
+              <div
+                key={i}
+                className="flex flex-wrap items-end gap-2 border border-separator-strong p-2"
+              >
+                <div className="grid gap-1">
+                  <span className="text-[9px] tracking-[0.18em] text-muted uppercase">month</span>
+                  <Input
+                    className="mono-num w-[72px]"
+                    type="number"
+                    min={1}
+                    max={12}
+                    value={c.month}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => updateFestival(i, { month: e.target.value })}
+                  />
+                </div>
+                <div className="grid gap-1">
+                  <span className="text-[9px] tracking-[0.18em] text-muted uppercase">day</span>
+                  <Input
+                    className="mono-num w-[72px]"
+                    type="number"
+                    min={1}
+                    max={31}
+                    value={c.day}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => updateFestival(i, { day: e.target.value })}
+                  />
+                </div>
+                <div className="grid min-w-[180px] flex-1 gap-1">
+                  <span className="text-[9px] tracking-[0.18em] text-muted uppercase">name</span>
+                  <Input
+                    placeholder="e.g. Stardate Eve"
+                    value={c.name}
+                    maxLength={60}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => updateFestival(i, { name: e.target.value })}
+                  />
+                </div>
+                <div className="grid gap-1">
+                  <span className="text-[9px] tracking-[0.18em] text-muted uppercase">mood</span>
+                  <Select
+                    value={c.mood}
+                    onValueChange={(v) => updateFestival(i, { mood: v })}
+                  >
+                    <SelectTrigger className="w-[160px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {WORLD_MOODS.map(m => (
+                          <SelectItem key={m} value={m}>{m}</SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-1">
+                  <span className="text-[9px] tracking-[0.18em] text-muted uppercase">window</span>
+                  <Input
+                    className="mono-num w-[72px]"
+                    type="number"
+                    min={0}
+                    max={14}
+                    placeholder="0"
+                    value={c.windowDays}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => updateFestival(i, { windowDays: e.target.value })}
+                  />
+                </div>
+                <Btn sm tone="danger" onClick={() => removeFestival(i)}>
+                  Remove
+                </Btn>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-3">
+            <Btn sm onClick={addFestival} disabled={w.festivals.custom.length >= 60}>
+              Add festival
+            </Btn>
+            <span className="ml-3 text-[10px] tracking-[0.14em] text-muted uppercase">
+              {w.festivals.custom.length}/60
+            </span>
+          </div>
+        </div>
+      </Card>
+
+      <SaveBar
+        note="World overrides apply live · no mixer restart needed."
+        busy={busy}
+        saveMsg={saveMsg}
+        onSave={save}
+        saveLabel="Save world settings"
       />
     </>
   );

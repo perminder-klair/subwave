@@ -2,7 +2,7 @@
 // Used by the autonomous scheduler to pick mood-appropriate tracks.
 
 import { config } from './config.js';
-import { resolveActiveShow } from './settings.js';
+import { resolveActiveShow, get as getSettings } from './settings.js';
 import { getListenerCount } from './broadcast/listeners.js';
 
 export function getTimeContext(date = new Date()) {
@@ -37,16 +37,24 @@ const FESTIVALS = [
   { month: 12, day: 31, name: "New Year's Eve", mood: 'celebratory' },
 ];
 
-export function getFestivalContext(date = new Date()) {
+// Match a single date against a festival list. Shared by the hardcoded
+// Earth calendar (getFestivalContext) and operator-supplied custom lists
+// (settings.world.festivals.custom).
+function matchFestival(list: any[], date: Date) {
+  if (!Array.isArray(list) || !list.length) return null;
   const m = date.getMonth() + 1;
   const d = date.getDate();
-  for (const f of FESTIVALS) {
+  for (const f of list) {
     const window = f.windowDays || 0;
     if (f.month === m && Math.abs(f.day - d) <= window) {
       return { name: f.name, mood: f.mood };
     }
   }
   return null;
+}
+
+export function getFestivalContext(date = new Date()) {
+  return matchFestival(FESTIVALS, date);
 }
 
 // Weather via Open-Meteo (no API key required)
@@ -152,10 +160,43 @@ export function getClockContext(date = new Date()) {
 export async function getFullContext() {
   const now = new Date();
   const time = getTimeContext(now);
-  const weather = await getWeather();
-  const festival = getFestivalContext(now);
+  const rawWeather = await getWeather();
+  const rawFestival = getFestivalContext(now);
   const date = getDateContext(now);
   const clock = getClockContext(now);
+
+  // Themed-station overrides: rewrite what the DJ *thinks* the world looks
+  // like, before mood derivation, so every downstream consumer (DJ prompts,
+  // picker, scheduler, segment director) sees the rewritten world.
+  const world = (getSettings() as any)?.world || {};
+  const themedLocation =
+    typeof world.location === 'string' && world.location.trim() ? world.location.trim() : null;
+
+  let weather = themedLocation
+    ? { ...rawWeather, location: themedLocation }
+    : rawWeather;
+
+  if (world.weather?.enabled) {
+    const text = typeof world.weather.text === 'string' ? world.weather.text.trim() : '';
+    weather = {
+      condition: text || 'unknown', // 'unknown' suppresses the weather line in buildContextLines
+      mood: null,
+      temp: null,
+      location: themedLocation || rawWeather.location,
+      override: true,
+    } as any;
+  }
+
+  // Festivals: when disabled, hardcoded list is silenced; custom list (if any)
+  // still applies. When enabled, custom entries layer on top of the hardcoded
+  // calendar (hardcoded wins on a tie because matchFestival short-circuits).
+  let festival = rawFestival;
+  const customFestivals = Array.isArray(world.festivals?.custom) ? world.festivals.custom : [];
+  if (world.festivals?.enabled === false) {
+    festival = matchFestival(customFestivals, now);
+  } else if (customFestivals.length) {
+    festival = rawFestival || matchFestival(customFestivals, now);
+  }
 
   // A scheduled show for this hour, if any. Its mood wins everything below —
   // an empty hour leaves the station running autonomously.
