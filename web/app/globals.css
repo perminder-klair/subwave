@@ -491,23 +491,6 @@ body::after {
     text-transform: uppercase;
 }
 
-/* Headline (the lead track title) — newspaper headline scale. Allows wrapping
-   on the natural breaks; balances for two-line aesthetics. */
-.bs-headline {
-    font-size: clamp(40px, 6.5vw, 88px);
-    line-height: 0.95;
-    letter-spacing: -0.025em;
-    font-weight: 800;
-    text-wrap: balance;
-}
-
-.bs-deck {
-    font-size: clamp(14px, 1.4vw, 18px);
-    line-height: 1.35;
-    font-weight: 500;
-    letter-spacing: 0;
-}
-
 /* Eyebrow — vermilion small-caps section label, sits above each section. */
 .bs-eyebrow {
     font-size: 10px;
@@ -541,11 +524,6 @@ body::after {
     border-top: 1px solid var(--ink);
     border-bottom: 1px solid var(--ink);
 }
-.bs-rule-thick {
-    height: 3px;
-    background: var(--ink);
-    width: 100%;
-}
 
 /* Vertical column rule — used between the lead story and right rail. */
 .bs-column-rule {
@@ -563,45 +541,6 @@ body::after {
     font-weight: 800;
     color: var(--accent);
     padding: 4px 8px 0 0;
-}
-
-/* Pull quote — DJ persona soul rendered like a newspaper pull quote.
-   Big open-quote glyph, italic-feel even in mono. */
-.bs-pull-quote {
-    font-size: clamp(18px, 1.8vw, 22px);
-    line-height: 1.4;
-    font-weight: 500;
-    position: relative;
-    padding: 12px 4px 4px 28px;
-}
-.bs-pull-quote::before {
-    content: "\201C";
-    position: absolute;
-    left: -6px;
-    top: -8px;
-    font-size: 56px;
-    line-height: 1;
-    color: var(--accent);
-    font-weight: 700;
-}
-
-/* "Continued below" rule — a soft horizontal rule with centered ornament. */
-.bs-continued {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    color: var(--muted);
-    font-size: 10px;
-    letter-spacing: 0.3em;
-    text-transform: uppercase;
-    margin: 32px 0;
-}
-.bs-continued::before,
-.bs-continued::after {
-    content: "";
-    flex: 1;
-    height: 1px;
-    background: var(--separator-strong);
 }
 
 /* LIVE dot — pulsing vermilion. */
@@ -675,26 +614,6 @@ body::after {
     border-color: var(--accent);
 }
 
-/* Booth / history rows — tabular feed style. */
-.bs-row {
-    display: grid;
-    grid-template-columns: 56px 1fr;
-    gap: 12px;
-    padding: 8px 0;
-    border-bottom: 1px dashed var(--separator-strong);
-    font-size: 13px;
-    align-items: baseline;
-}
-.bs-row:last-child {
-    border-bottom: 0;
-}
-.bs-row time {
-    color: var(--muted);
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    font-variant-numeric: tabular-nums;
-}
-
 /* Architecture box — used in HowWeBroadcast. */
 .bs-box {
     border: 1px solid var(--ink);
@@ -737,13 +656,7 @@ body::after {
     }
 }
 
-/* Two-column landing grids — lead story + right rail, and the fold split. */
-.bs-grid-lead {
-    display: grid;
-    grid-template-columns: minmax(0, 7fr) 1px minmax(0, 5fr);
-    gap: clamp(20px, 3vw, 40px);
-    align-items: flex-start;
-}
+/* Two-column landing grid — the fold split. */
 .bs-grid-split {
     display: grid;
     grid-template-columns: minmax(0, 6fr) 1px minmax(0, 6fr);
@@ -752,11 +665,9 @@ body::after {
 }
 
 @media (max-width: 900px) {
-    .bs-grid-lead,
     .bs-grid-split {
         grid-template-columns: 1fr;
     }
-    .bs-grid-lead .bs-column-rule,
     .bs-grid-split .bs-column-rule {
         display: none;
     }
@@ -915,20 +826,6 @@ body::after {
     color: var(--muted);
     max-width: 64ch;
 }
-.bs-hero-foot {
-    margin: 0;
-    font-size: 12px;
-    letter-spacing: 0.12em;
-    color: var(--muted);
-    text-align: center;
-    text-transform: uppercase;
-    font-weight: 500;
-}
-.bs-hero-foot strong {
-    font-weight: 700;
-    letter-spacing: 0.18em;
-}
-
 /* ─────────────────────────────────────────────────────────────────────────
    SECTION — vertical content blocks between hero and footer.
    ───────────────────────────────────────────────────────────────────────── */
@@ -975,27 +872,9 @@ body::after {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
-   MEET THE DJ — playful character profile, vinyl glyph, three rule cards.
+   MEET THE VOICES — spinning vinyl glyph and persona card grid.
    ───────────────────────────────────────────────────────────────────────── */
-.bs-dj {
-    display: flex;
-    flex-direction: column;
-    gap: clamp(28px, 4vw, 48px);
-    padding: clamp(40px, 6vw, 72px) 0;
-    border-top: 1px solid var(--separator-strong);
-}
-
-.bs-dj-hero {
-    display: grid;
-    grid-template-columns: minmax(180px, 280px) 1fr;
-    gap: clamp(24px, 4vw, 56px);
-    align-items: center;
-}
 @media (max-width: 720px) {
-    .bs-dj-hero {
-        grid-template-columns: 1fr;
-        gap: 24px;
-    }
     .bs-dj-glyph {
         justify-self: start;
     }
@@ -1085,39 +964,6 @@ body::after {
     }
 }
 
-.bs-dj-handle {
-    margin: 0 0 16px;
-    font-size: clamp(40px, 6vw, 84px);
-    line-height: 0.92;
-    letter-spacing: -0.04em;
-    font-weight: 800;
-    text-transform: lowercase;
-}
-.bs-dj-soul {
-    margin: 0 0 12px;
-    font-size: clamp(16px, 1.6vw, 20px);
-    line-height: 1.4;
-    font-weight: 500;
-    position: relative;
-    padding-left: 22px;
-}
-.bs-dj-quote {
-    position: absolute;
-    left: -4px;
-    top: -10px;
-    color: var(--accent);
-    font-size: 56px;
-    line-height: 1;
-    font-weight: 700;
-}
-.bs-dj-byline {
-    margin: 0;
-    font-size: 14px;
-    color: var(--muted);
-    line-height: 1.5;
-    max-width: 56ch;
-}
-
 .bs-dj-cards {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1132,100 +978,6 @@ body::after {
     .bs-dj-cards {
         grid-template-columns: 1fr;
     }
-}
-
-.bs-dj-card {
-    border: 1px solid var(--ink);
-    padding: 22px 22px 20px;
-    background: var(--bg);
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-}
-.bs-dj-card header {
-    /* eyebrow already styles itself */
-}
-
-.bs-dj-rules {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-.bs-dj-rules li {
-    display: grid;
-    grid-template-columns: 60px 1fr;
-    gap: 12px;
-    align-items: baseline;
-    font-size: 13px;
-    line-height: 1.4;
-}
-.bs-dj-tag {
-    font-size: 9px;
-    letter-spacing: 0.22em;
-    font-weight: 700;
-    text-align: center;
-    padding: 3px 0;
-    border: 1px solid var(--ink);
-}
-.bs-dj-tag-always {
-    background: var(--ink);
-    color: var(--bg);
-}
-.bs-dj-tag-never {
-    background: var(--bg);
-    color: var(--accent);
-    border-color: var(--accent);
-}
-
-.bs-dj-tags {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-}
-.bs-dj-tags li {
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    padding: 6px 10px;
-    border: 1px solid var(--separator-strong);
-    color: var(--ink);
-}
-
-.bs-dj-tools {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-}
-.bs-dj-tools td {
-    padding: 8px 0;
-    border-bottom: 1px dashed var(--separator-strong);
-    vertical-align: baseline;
-}
-.bs-dj-tools tr:last-child td {
-    border-bottom: 0;
-}
-.bs-dj-tools td:first-child {
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    width: 38%;
-    padding-right: 8px;
-}
-.bs-dj-tools td:last-child {
-    color: var(--muted);
-}
-
-.bs-dj-foot {
-    margin: 0;
-    font-size: 12px;
-    color: var(--muted);
-    line-height: 1.45;
-    border-top: 1px solid var(--separator-strong);
-    padding-top: 12px;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -1569,183 +1321,6 @@ body::after {
 .bs-manual-pagelink[data-dir="next"] {
     text-align: right;
     margin-left: auto;
-}
-
-/* ─────────────────────────────────────────────────────────────────────────
-   REQUEST CAROUSEL — single-card rotating thread of example exchanges.
-   ───────────────────────────────────────────────────────────────────────── */
-.bs-carousel {
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
-    max-width: 880px;
-    border: 1px solid var(--separator-strong);
-    padding: clamp(20px, 3vw, 28px);
-    background: color-mix(in oklab, var(--ink) 3%, transparent);
-}
-
-.bs-carousel-stage {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    min-height: 280px;
-    animation: bs-carousel-in 360ms ease-out;
-}
-@keyframes bs-carousel-in {
-    from {
-        opacity: 0;
-        transform: translateY(8px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-@media (prefers-reduced-motion: reduce) {
-    .bs-carousel-stage {
-        animation: none;
-    }
-}
-
-.bs-carousel-controls {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    border-top: 1px solid var(--separator-strong);
-    padding-top: 16px;
-}
-
-.bs-carousel-arrow {
-    width: 36px;
-    height: 36px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg);
-    border: 1px solid var(--ink);
-    color: var(--ink);
-    font-size: 16px;
-    cursor: pointer;
-    font-family: inherit;
-    transition:
-        background 120ms,
-        color 120ms;
-}
-.bs-carousel-arrow:hover {
-    background: var(--ink);
-    color: var(--bg);
-}
-
-.bs-carousel-dots {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex: 1;
-    justify-content: center;
-}
-.bs-carousel-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    border: 1px solid var(--ink);
-    background: transparent;
-    padding: 0;
-    cursor: pointer;
-    transition:
-        background 120ms,
-        transform 120ms;
-}
-.bs-carousel-dot[data-active="true"] {
-    background: var(--accent);
-    border-color: var(--accent);
-    transform: scale(1.3);
-}
-
-.bs-carousel-count {
-    font-size: 11px;
-    letter-spacing: 0.22em;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    color: var(--ink);
-    min-width: 70px;
-    text-align: right;
-}
-
-.bs-bubble {
-    max-width: 72%;
-    padding: 14px 18px;
-    border: 1px solid var(--ink);
-    background: var(--bg);
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-.bs-bubble p {
-    margin: 0;
-    font-size: clamp(15px, 1.4vw, 18px);
-    line-height: 1.45;
-    color: var(--ink);
-}
-.bs-bubble-tag {
-    font-size: 9px;
-    letter-spacing: 0.3em;
-    text-transform: uppercase;
-    font-weight: 700;
-    color: var(--muted);
-}
-
-/* Listener side — left-aligned, cream */
-.bs-bubble-you {
-    align-self: flex-start;
-}
-.bs-bubble-you .bs-bubble-tag {
-    color: var(--muted);
-}
-
-/* DJ side — right-aligned, inverted */
-.bs-bubble-dj {
-    align-self: flex-end;
-    background: var(--ink);
-    border-color: var(--ink);
-    text-align: left;
-}
-.bs-bubble-dj p {
-    color: var(--bg);
-    font-style: italic;
-}
-.bs-bubble-dj .bs-bubble-tag {
-    color: var(--accent);
-}
-
-/* Track played — small line below the DJ bubble, right-aligned */
-.bs-bubble-track {
-    align-self: flex-end;
-    display: inline-flex;
-    align-items: baseline;
-    gap: 10px;
-    padding: 0 4px;
-    font-size: 12px;
-}
-.bs-bubble-track-arrow {
-    color: var(--accent);
-    font-weight: 700;
-}
-.bs-bubble-track-eyebrow {
-    font-size: 9px;
-    letter-spacing: 0.3em;
-    text-transform: uppercase;
-    font-weight: 700;
-    color: var(--muted);
-}
-.bs-bubble-track-name {
-    color: var(--ink);
-    font-weight: 600;
-}
-
-@media (max-width: 600px) {
-    .bs-bubble {
-        max-width: 92%;
-    }
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
