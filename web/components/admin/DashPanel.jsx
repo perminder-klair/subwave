@@ -147,32 +147,24 @@ export default function DashPanel() {
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
-      {/* ── HEADER STRIP ───────────────────────────────────────────────── */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          flexWrap: 'wrap',
-        }}
-      >
-        <span
-          className="live-dot"
-          style={{ background: err ? 'var(--danger)' : 'var(--accent)' }}
-        />
-        <Eyebrow color={err ? 'var(--danger)' : 'var(--accent)'}>{err ? 'down' : 'live'}</Eyebrow>
-        {feedback && (
+      {feedback && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+          }}
+        >
           <span
             style={{
-              marginLeft: 'auto',
               fontSize: 11,
               color: feedback.tone === 'err' ? 'var(--danger)' : 'var(--accent)',
             }}
           >
             {feedback.text}
           </span>
-        )}
-      </div>
+        </div>
+      )}
 
       {err && (
         <V3Alert tone="error" title="controller error">

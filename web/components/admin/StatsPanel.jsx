@@ -28,13 +28,6 @@ const fmtTokens = n => {
   return String(n);
 };
 
-const fmtUsd = n => {
-  if (n == null) return '—';
-  if (n === 0) return '$0.00';
-  if (n < 0.01) return '<$0.01';
-  return `$${n.toFixed(2)}`;
-};
-
 // --- small building blocks ---------------------------------------------
 
 function StatCell({ label, value, sub, accent, danger, last }) {
@@ -211,11 +204,6 @@ export default function StatsPanel() {
                     sub={llm.tokens
                       ? `${fmtTokens(llm.tokens.input)} in · ${fmtTokens(llm.tokens.output)} out`
                       : 'provider reports none'} />
-                  <StatCell label="Est. cost" value={fmtUsd(llm.cost?.usd)}
-                    accent={!!llm.cost?.usd}
-                    sub={llm.cost
-                      ? (llm.cost.complete ? 'estimate' : 'partial — some models unpriced')
-                      : 'no token data'} />
                   <StatCell label="Agent runs" value={fmtInt(llm.agent.calls)} last
                     sub={llm.agent.calls
                       ? `${llm.agent.avgSteps} steps · ${llm.agent.avgTools} tools avg`
@@ -252,12 +240,6 @@ export default function StatsPanel() {
                           render: r => <span className="mono-num">{r.count}</span> },
                         { key: 'tokens', label: 'Tokens', align: 'right',
                           render: r => <span className="mono-num">{fmtTokens(r.tokens || null)}</span> },
-                        { key: 'costUsd', label: 'Cost', align: 'right',
-                          render: r => (
-                            <span className="mono-num">
-                              {r.tokens === 0 ? '—' : r.priced ? fmtUsd(r.costUsd) : 'n/a'}
-                            </span>
-                          ) },
                       ]}
                     />
                   </div>
