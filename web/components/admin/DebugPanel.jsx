@@ -71,7 +71,7 @@ export default function DebugPanel() {
             <Btn sm onClick={() => setPaused(!paused)}>{paused ? 'Resume' : 'Pause'}</Btn>
           </span>
         </div>
-        <div className="strip-mobile" style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)' }}>
+        <div className="strip-mobile" style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)' }}>
           <HealthCell
             label="Icecast"
             status={data?.icecast && !data.icecast.error ? 'ok' : err ? 'down' : 'idle'}
@@ -95,12 +95,6 @@ export default function DebugPanel() {
             status={data?.queue?.current ? 'ok' : 'idle'}
             v={data?.queue?.current ? 'request' : 'auto-playlist'}
             sub={`upcoming ${data?.queue?.upcoming?.length ?? 0}`}
-          />
-          <HealthCell
-            label="DJ log"
-            status={data?.queue ? 'ok' : 'idle'}
-            v={data?.queue?.djLogCount != null ? String(data.queue.djLogCount) : '—'}
-            sub="entries total"
           />
           <HealthCell
             label="Tagger"
@@ -701,20 +695,7 @@ function LlmCalls({ llm }) {
   );
 }
 
-// A single headline figure with a caption above and an optional sub-line.
-function Stat({ label, v, sub }) {
-  return (
-    <div style={{ display: 'grid', gap: 2, minWidth: 110 }}>
-      <span className="caption">{label}</span>
-      <span style={{ fontSize: 20, fontWeight: 700 }}>{v}</span>
-      {sub && <span className="caption" style={{ fontSize: 9 }}>{sub}</span>}
-    </div>
-  );
-}
-
-// Full-width Subsonic/Navidrome call browser: library-coverage headline,
-// per-endpoint stats, the most-returned songs, and a browsable recent-calls
-// list. Answers "is the picker drawing from the whole library or a pool?".
+// Full-width Subsonic/Navidrome call browser: a browsable recent-calls list.
 function SubsonicCalls({ subsonic }) {
   const { adminFetch } = useAdminAuth();
   const [filter, setFilter] = useState('all');
@@ -732,12 +713,8 @@ function SubsonicCalls({ subsonic }) {
 
   const calls = subsonic.recentCalls || [];
   const endpoints = subsonic.endpoints || [];
-  const cov = subsonic.coverage || {};
   const totalCalls = endpoints.reduce((s, e) => s + e.calls, 0);
   const shown = filter === 'all' ? calls : calls.filter(c => c.endpoint === filter);
-  const pct = cov.libraryTotal
-    ? Math.round((cov.distinctSongs / cov.libraryTotal) * 100)
-    : null;
 
   const reset = async () => {
     setResetting(true);
@@ -756,80 +733,6 @@ function SubsonicCalls({ subsonic }) {
       }
     >
       <div style={{ display: 'grid', gap: 16 }}>
-        {/* ── coverage headline ─────────────────────────────────────── */}
-        <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
-          <Stat
-            label="library coverage"
-            v={pct != null ? `${pct}%` : '—'}
-            sub={`${cov.distinctSongs ?? 0} of ${cov.libraryTotal ?? '?'} songs`}
-          />
-          <Stat label="distinct songs" v={cov.distinctSongs ?? 0} />
-          <Stat label="total song results" v={cov.totalSongResults ?? 0} />
-        </div>
-
-        {/* ── per-endpoint stats ────────────────────────────────────── */}
-        <div>
-          <div className="caption" style={{ marginBottom: 6 }}>by endpoint</div>
-          {endpoints.length === 0 ? (
-            <span className="field-hint" style={{ fontStyle: 'italic' }}>no calls yet</span>
-          ) : (
-            <div style={{ display: 'grid', gap: 0 }}>
-              <div style={{
-                display: 'grid', gridTemplateColumns: '1fr auto auto auto auto',
-                gap: 12, padding: '4px 0', fontSize: 9,
-                letterSpacing: '0.12em', textTransform: 'uppercase',
-                color: 'var(--muted)', borderBottom: '1px solid var(--separator-strong)',
-              }}>
-                <span>endpoint</span><span>calls</span><span>errors</span>
-                <span>avg ms</span><span>songs</span>
-              </div>
-              {endpoints.map((e, i) => (
-                <div key={e.endpoint} style={{
-                  display: 'grid', gridTemplateColumns: '1fr auto auto auto auto',
-                  gap: 12, padding: '6px 0', fontSize: 11,
-                  borderBottom: i < endpoints.length - 1 ? '1px dashed var(--separator-strong)' : 'none',
-                }}>
-                  <span style={{ fontWeight: 700 }}>{e.endpoint}</span>
-                  <span className="mono-num">{e.calls}</span>
-                  <span className="mono-num" style={{ color: e.errors ? 'var(--danger)' : 'var(--muted)' }}>
-                    {e.errors}
-                  </span>
-                  <span className="mono-num" style={{ color: 'var(--muted)' }}>{e.avgMs}</span>
-                  <span className="mono-num" style={{ color: 'var(--muted)' }}>{e.songResults}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* ── most-returned songs ───────────────────────────────────── */}
-        {(cov.topSongs?.length ?? 0) > 0 && (
-          <div>
-            <div className="caption" style={{ marginBottom: 6 }}>
-              most-returned songs — high counts mean a narrow pool
-            </div>
-            <div style={{ display: 'grid', gap: 0, maxHeight: 240, overflowY: 'auto' }}>
-              {cov.topSongs.map((s, i) => (
-                <div key={s.id} style={{
-                  display: 'grid', gridTemplateColumns: '24px 1fr auto', gap: 10,
-                  padding: '5px 0', fontSize: 11,
-                  borderBottom: i < cov.topSongs.length - 1 ? '1px dashed var(--separator-strong)' : 'none',
-                }}>
-                  <span className="mono-num" style={{ color: 'var(--muted)' }}>{i + 1}</span>
-                  <span style={{ wordBreak: 'break-word' }}>
-                    {s.title} <span style={{ color: 'var(--muted)' }}>— {s.artist}</span>
-                  </span>
-                  <span className="mono-num" style={{
-                    color: s.count > 1 ? 'var(--accent)' : 'var(--muted)', fontWeight: 700,
-                  }}>
-                    ×{s.count}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* ── recent calls ──────────────────────────────────────────── */}
         <div>
           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
