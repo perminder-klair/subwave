@@ -2,7 +2,9 @@
 # Runs: Icecast (broadcast) → Liquidsoap (mixer) → Controller (brain)
 # Web UI runs separately (next.js dev/prod)
 #
-# Navidrome and Ollama are reached over the network (see controller/.env).
+# Ollama is always reached over the network (see controller/.env). Navidrome
+# is too by default — but `subwave setup` can opt into a managed Navidrome
+# container via the `navidrome` compose profile (COMPOSE_PROFILES in docker/.env).
 
 services:
   # -------------------------------------------------------------------------
@@ -83,3 +85,33 @@ services:
     volumes:
       - ../state:/var/sub-wave
       - ../sounds:/sounds:ro
+
+  # -------------------------------------------------------------------------
+  # NAVIDROME — optional managed music server (Subsonic API)
+  # -------------------------------------------------------------------------
+  # Off by default. `subwave setup` opts in by writing COMPOSE_PROFILES=navidrome
+  # to docker/.env; the controller + liquidsoap then reach it on the compose
+  # network as http://navidrome:4533. Operators who run their own Navidrome
+  # leave the profile unset and this service never starts.
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: sub-wave-navidrome
+    restart: unless-stopped
+    profiles: ["navidrome"]
+    # Published so the operator can open the Navidrome UI and complete the
+    # initial library scan. (Prod keeps it internal — see the prod compose.)
+    ports:
+      - "4533:4533"
+    environment:
+      # First-boot auto-provision of the `admin` user. The controller
+      # authenticates as admin/<NAVIDROME_PASS> via the Subsonic API.
+      # `:-` (not `:?`) — interpolation runs file-wide even when the profile
+      # is off, so a required-var would break external-Navidrome operators.
+      # The setup wizard always sets NAVIDROME_PASS when the profile is on.
+      - ND_DEVAUTOCREATEADMINPASSWORD=${NAVIDROME_PASS:-changeme}
+      - TZ=${TZ:-Europe/London}
+    volumes:
+      # Music dir + Navidrome's own data dir — both host paths chosen by the
+      # setup wizard (defaults under state/). Music is mounted read-only.
+      - ${NAVIDROME_MUSIC_DIR:-../state/music}:/music:ro
+      - ${NAVIDROME_DATA_DIR:-../state/navidrome}:/data

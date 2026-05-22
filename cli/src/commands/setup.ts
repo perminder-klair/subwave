@@ -11,13 +11,14 @@
 //   1. Mode (dev / prod)
 //   2. Preflight (node, docker, docker daemon)
 //   3. STATE_DIR (prod only)
-//   4. Navidrome (URL/user/pass) + reachability probe
+//   4. Navidrome — external (URL/user/pass + probe) OR managed (a Navidrome
+//      container the wizard provisions via the `navidrome` compose profile)
 //   5. LLM choice + API key + probe
 //   6. Admin credentials (REQUIRED in prod)
 //   7. Timezone
 //   8. Write controller/.env (template-aware)
 //   9. Shell to scripts/setup.sh — icecast passwords, icecast.xml, sounds
-//  10. Append TZ to docker/.env
+//  10. Write TZ (+ managed-Navidrome keys) to docker/.env
 //  11. docker compose up -d
 //  12. waitForHealth
 //  13. POST /settings to apply the LLM choice (so the operator's first DJ
@@ -29,7 +30,7 @@
 // going if the network isn't ready yet.
 
 import crypto from 'node:crypto';
-import { accessSync, constants, existsSync, mkdirSync } from 'node:fs';
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import {
@@ -37,6 +38,7 @@ import {
   CONTROLLER_ENV_EXAMPLE,
   DOCKER_DIR,
   REPO_ROOT,
+  expandHome,
   parseEnvFile,
   writeEnvFile,
   have,
@@ -103,7 +105,7 @@ export async function runSetupCommand(): Promise<void> {
   }
 
   // --- 4. Navidrome --------------------------------------------------------
-  const navidrome = await collectNavidrome();
+  const navidrome = await collectNavidrome(mode, stateDir);
 
   // --- 5. LLM --------------------------------------------------------------
   const llm = await collectLlm();
@@ -135,14 +137,30 @@ export async function runSetupCommand(): Promise<void> {
     : { ...process.env };
   await runBashSetup(bashEnv);
 
-  // --- 10. TZ to docker/.env ----------------------------------------------
+  // --- 10. TZ (+ managed-Navidrome keys) to docker/.env -------------------
   // docker compose reads docker/.env for ${TZ} expansion in the compose
   // files. Write it alongside the icecast passwords that setup.sh just
   // generated.
+  //
+  // Managed Navidrome is activated entirely through this file: setting
+  // COMPOSE_PROFILES=navidrome makes every `docker compose` invocation pick
+  // up the `navidrome` profile, with no per-command flags. The music/data
+  // paths and the admin password compose needs for ${NAVIDROME_*} expansion
+  // go here too. External mode writes an empty COMPOSE_PROFILES so that a
+  // managed→external switch on a re-run reliably turns the profile off.
   const dockerEnvPath = resolve(DOCKER_DIR, '.env');
   if (existsSync(dockerEnvPath)) {
-    writeEnvFile(dockerEnvPath, { TZ: tz });
-    muted(`set TZ=${tz} in docker/.env`);
+    const dockerEnv: Record<string, string> = { TZ: tz };
+    if (navidrome.managed) {
+      dockerEnv.COMPOSE_PROFILES = 'navidrome';
+      dockerEnv.NAVIDROME_MUSIC_DIR = navidrome.musicDir as string;
+      dockerEnv.NAVIDROME_DATA_DIR = navidrome.dataDir as string;
+      dockerEnv.NAVIDROME_PASS = navidrome.pass;
+    } else {
+      dockerEnv.COMPOSE_PROFILES = '';
+    }
+    writeEnvFile(dockerEnvPath, dockerEnv);
+    muted(`set TZ=${tz} in docker/.env${navidrome.managed ? ' (+ navidrome profile)' : ''}`);
   }
 
   // --- 11. Bring the stack up ---------------------------------------------
@@ -197,6 +215,14 @@ export async function runSetupCommand(): Promise<void> {
     muted(`Controller:  ${accent('http://localhost:7701')}`);
     muted(`Stream:      ${accent('http://localhost:7702/stream.mp3')}`);
     muted(`Web (dev):   ${accent('http://localhost:7700')}  (separate: `+ pc.dim('`npm --prefix web run dev`') + ')');
+  }
+
+  if (navidrome.managed) {
+    console.log();
+    muted(`Navidrome:   ${mode === 'prod'
+      ? 'internal-only — ' + pc.dim('`subwave logs navidrome`')
+      : accent('http://localhost:4533') + pc.dim('  (admin / password in controller/.env)')}`);
+    muted(`Music:       ${navidrome.musicDir}  ${pc.dim('— drop audio files here, Navidrome auto-scans')}`);
   }
 
   console.log();
@@ -278,16 +304,113 @@ async function promptStateDir(): Promise<string> {
   return chosen;
 }
 
-interface NavidromeCreds { url: string; user: string; pass: string; }
+interface NavidromeCreds {
+  url: string;
+  user: string;
+  pass: string;
+  // Managed mode — the wizard provisions a Navidrome container via the
+  // `navidrome` compose profile. musicDir/dataDir are absolute host paths.
+  managed?: boolean;
+  musicDir?: string;
+  dataDir?: string;
+}
 
-async function collectNavidrome(): Promise<NavidromeCreds> {
+// Step 4. Navidrome — branch on whether the operator already runs one.
+// External: today's URL/credentials + live probe. Managed: the wizard adds a
+// Navidrome container (compose `navidrome` profile) with the operator's music
+// folder bind-mounted and an auto-provisioned admin account.
+async function collectNavidrome(mode: Mode, stateDir: string): Promise<NavidromeCreds> {
+  header('Navidrome (Subsonic API)');
+
+  // Re-run detection: if docker/.env already activates the navidrome profile,
+  // default the branch question to "managed".
+  const dockerEnv = parseEnvFile(resolve(DOCKER_DIR, '.env'));
+  const wasManaged = (dockerEnv.COMPOSE_PROFILES ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .includes('navidrome');
+
+  const choice = exitIfCancelled(await p.select<'external' | 'managed'>({
+    message: 'Where does SUB/WAVE get its music?',
+    initialValue: wasManaged ? 'managed' : 'external',
+    options: [
+      {
+        value: 'external',
+        label: 'I already run Navidrome',
+        hint: 'point SUB/WAVE at an existing Subsonic server',
+      },
+      {
+        value: 'managed',
+        label: 'Run one for me',
+        hint: 'adds a Navidrome container with your music folder mounted',
+      },
+    ],
+  }), { backOnCancel: false });
+
+  return choice === 'managed'
+    ? collectManagedNavidrome(stateDir)
+    : collectExternalNavidrome();
+}
+
+// Managed Navidrome — provision a container the operator never has to touch.
+async function collectManagedNavidrome(stateDir: string): Promise<NavidromeCreds> {
+  const existing = parseEnvFile(CONTROLLER_ENV);
+  const dockerEnv = parseEnvFile(resolve(DOCKER_DIR, '.env'));
+
+  const defaultMusic = resolve(stateDir, 'music');
+  const musicInput = exitIfCancelled(await p.text({
+    message: 'Music library folder (host path)',
+    initialValue: dockerEnv.NAVIDROME_MUSIC_DIR || defaultMusic,
+    placeholder: defaultMusic,
+    validate: (v: string) => (!v ? 'required' : undefined),
+  }), { backOnCancel: false });
+  const musicDir = resolve(expandHome(musicInput));
+  const dataDir = resolve(stateDir, 'navidrome');
+
+  // Create both dirs. The music folder may already exist (the operator
+  // pointed at their library) — recursive mkdir is then a no-op. The data
+  // dir is ours; chmod 777 matches scripts/setup.sh's state-dir pattern so
+  // the container can write its database regardless of the UID it runs as.
+  try {
+    mkdirSync(musicDir, { recursive: true });
+    mkdirSync(dataDir, { recursive: true });
+  } catch (e) {
+    err(`Could not create ${musicDir} / ${dataDir}: ${(e as Error).message}`);
+    muted('Pick a path your user can write to, then re-run `subwave setup`.');
+    process.exit(1);
+  }
+  try { chmodSync(dataDir, 0o777); } catch { /* best-effort — non-fatal */ }
+
+  // Admin password — Navidrome auto-creates the `admin` user with this on
+  // first boot. Reuse the one already in controller/.env on a re-run so the
+  // wizard is idempotent; otherwise generate a fresh one.
+  const reused = Boolean(existing.NAVIDROME_PASS) && existing.NAVIDROME_PASS !== 'changeme';
+  const pass = reused
+    ? (existing.NAVIDROME_PASS as string)
+    : crypto.randomBytes(16).toString('hex');
+
+  ok(`Navidrome will run on the compose network as ${pc.dim('http://navidrome:4533')}`);
+  muted(`music:  ${musicDir}`);
+  muted(`data:   ${dataDir}`);
+  muted(`admin:  user ${accent('admin')} · password ${reused ? pc.dim('(kept from controller/.env)') : pc.dim(pass)}`);
+  if (!isNonEmptyDir(musicDir)) {
+    warn(`${musicDir} is empty — add audio files there and let Navidrome scan before the DJ has anything to play.`);
+  }
+
+  return { url: 'http://navidrome:4533', user: 'admin', pass, managed: true, musicDir, dataDir };
+}
+
+// External Navidrome — collect URL + credentials and probe reachability.
+async function collectExternalNavidrome(): Promise<NavidromeCreds> {
   const existing = parseEnvFile(CONTROLLER_ENV);
   let url = existing.NAVIDROME_URL ?? 'http://localhost:4533';
   let user = existing.NAVIDROME_USER ?? '';
   let pass = existing.NAVIDROME_PASS ?? '';
+  // A compose-internal URL from a previous managed run is meaningless for an
+  // external server — don't pre-fill it.
+  if (url === 'http://navidrome:4533') url = 'http://localhost:4533';
 
   while (true) {
-    header('Navidrome (Subsonic API)');
     url = exitIfCancelled(await p.text({
       message: 'Navidrome URL',
       initialValue: url,
@@ -557,6 +680,16 @@ function canWrite(path: string): boolean {
     }
     accessSync(path, constants.W_OK);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+// True if `path` exists and holds at least one entry. Used to warn the
+// operator when a managed-Navidrome music folder is empty.
+function isNonEmptyDir(path: string): boolean {
+  try {
+    return readdirSync(path).length > 0;
   } catch {
     return false;
   }

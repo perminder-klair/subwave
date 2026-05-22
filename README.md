@@ -130,9 +130,12 @@ npm run dev:web        # web UI on :7700 — a separate, hot-reloading process
 ```
 
 In dev the wizard runs Icecast + Liquidsoap + Controller in Docker; only the
-Next.js web UI runs as a separate host process. You'll need a reachable
-**Navidrome** instance and an **LLM provider** — the homelab default is a local
-**Ollama** box (no API key needed); the wizard collects and probes both.
+Next.js web UI runs as a separate host process. You'll need an **LLM
+provider** — the homelab default is a local **Ollama** box (no API key
+needed) — and a music source. For music the wizard either points SUB/WAVE at
+an existing **Navidrome** instance, or, if you don't run one, provisions a
+managed Navidrome container for you (just give it the folder your music lives
+in); both paths are collected and probed by the wizard.
 
 Running the steps by hand instead — see *Common commands* in
 [`CLAUDE.md`](CLAUDE.md).

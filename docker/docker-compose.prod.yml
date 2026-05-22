@@ -111,6 +111,33 @@ services:
       - ../sounds:/sounds:ro
 
   # -------------------------------------------------------------------------
+  # NAVIDROME — optional managed music server (Subsonic API)
+  # -------------------------------------------------------------------------
+  # Off by default. `subwave setup` opts in by writing COMPOSE_PROFILES=navidrome
+  # to docker/.env; the controller + liquidsoap then reach it on the compose
+  # network as http://navidrome:4533. Unlike the dev stack, no host port is
+  # published — only Caddy binds a port in prod. Reach the Navidrome UI via
+  # `docker compose exec` or add a Caddy route.
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: sub-wave-navidrome
+    restart: unless-stopped
+    profiles: ["navidrome"]
+    environment:
+      # First-boot auto-provision of the `admin` user. The controller
+      # authenticates as admin/<NAVIDROME_PASS> via the Subsonic API.
+      # `:-` (not `:?`) — interpolation runs file-wide even when the profile
+      # is off, so a required-var would break external-Navidrome operators.
+      # The setup wizard always sets NAVIDROME_PASS when the profile is on.
+      - ND_DEVAUTOCREATEADMINPASSWORD=${NAVIDROME_PASS:-changeme}
+      - TZ=${TZ:-Europe/London}
+    volumes:
+      # Music dir + Navidrome's own data dir. The setup wizard always writes
+      # absolute paths into docker/.env; these defaults are just a fallback.
+      - ${NAVIDROME_MUSIC_DIR:-../state/music}:/music:ro
+      - ${NAVIDROME_DATA_DIR:-../state/navidrome}:/data
+
+  # -------------------------------------------------------------------------
   # WEB — Next.js listener UI
   # -------------------------------------------------------------------------
   web:
