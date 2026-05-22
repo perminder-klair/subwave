@@ -679,6 +679,10 @@ interface SectionProps {
   saveSettings: SaveSettings;
 }
 
+// Sentinel for the empty-string "use the built-in voice" choice — Radix Select
+// rejects an empty-string SelectItem value.
+const CB_DEFAULT_VOICE = '__cb_default__';
+
 function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }: SectionProps) {
   const engines = data.tts?.engines || ['piper'];
   const available = data.tts?.available || {};
@@ -861,16 +865,16 @@ function TtsSection({ data, form, setForm, busy, saveMsg, saveSettings }: Sectio
             ) : (data.tts?.chatterboxVoices?.length || 0) > 0 ? (
               <>
                 <Select
-                  value={form.tts.chatterbox?.referenceVoice ?? ''}
+                  value={form.tts.chatterbox?.referenceVoice || CB_DEFAULT_VOICE}
                   onValueChange={val => setForm(f => ({
                     ...f,
-                    tts: { ...f.tts, chatterbox: { ...f.tts.chatterbox, referenceVoice: val } },
+                    tts: { ...f.tts, chatterbox: { ...f.tts.chatterbox, referenceVoice: val === CB_DEFAULT_VOICE ? '' : val } },
                   }))}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
-                      <SelectItem value="">Built-in default voice</SelectItem>
+                      <SelectItem value={CB_DEFAULT_VOICE}>Built-in default voice</SelectItem>
                       {data.tts?.chatterboxVoices?.map(v => (
                         <SelectItem key={v} value={v}>{v}</SelectItem>
                       ))}
