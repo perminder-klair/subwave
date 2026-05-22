@@ -10,13 +10,17 @@ Type=simple
 # only after the installer copies them — see install-native.sh.
 WorkingDirectory=${REPO}/web/.next/standalone
 
-# Production mode + same-origin defaults (no NEXT_PUBLIC_* needed). The web
-# app talks to Caddy at /api and /stream.mp3, which proxies to the controller
-# and icecast respectively. Direct-hit (no Caddy) works too: override
-# NEXT_PUBLIC_API_URL / NEXT_PUBLIC_STREAM_URL at install time if you want.
+# Production mode. The API/stream URLs are baked into the build by
+# install-native.sh: same-origin defaults (/api, /stream.mp3) behind the Caddy
+# edge, or absolute URLs when the installer is run with SUBWAVE_EDGE=none.
+# NEXT_PUBLIC_* are build-time constants — setting them here at runtime would
+# have no effect; re-run the installer to change them.
+#
+# HOSTNAME is rendered by the installer: 127.0.0.1 behind the Caddy edge
+# (only Caddy reaches it), 0.0.0.0 under SUBWAVE_EDGE=none (browsers hit it).
 Environment=NODE_ENV=production
 Environment=PORT=7700
-Environment=HOSTNAME=127.0.0.1
+Environment=HOSTNAME=${WEB_HOSTNAME}
 
 ExecStart=${NODE_BIN} server.js
 Restart=on-failure

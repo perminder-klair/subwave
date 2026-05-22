@@ -234,6 +234,28 @@ see *Risks* below); runs `npm ci && npm run build` in `web/` to produce the
 Next.js standalone output; and renders the systemd units / launchd plists into
 your user-scoped unit dir. Re-running it is safe — every step is idempotent.
 
+**Edge mode — Caddy or not.** By default the installer assumes you'll run the
+Caddy edge proxy, so the web build keeps its same-origin defaults (`/api`,
+`/stream.mp3`) — these only resolve when something maps those paths onto the
+web app's origin, which is Caddy's job. To skip Caddy entirely and let
+listeners hit the three services on their own ports, run the installer with
+`SUBWAVE_EDGE=none`:
+
+```bash
+SUBWAVE_EDGE=none SUBWAVE_HOST=radio.lan ./scripts/install-native.sh
+```
+
+That auto-generates `web/.env.production` with absolute URLs
+(`http://$SUBWAVE_HOST:7701` for the API, `http://$SUBWAVE_HOST:7702/stream.mp3`
+for the stream), bakes them into the web build, and binds the web server to
+`0.0.0.0` instead of loopback. `SUBWAVE_HOST` defaults to `localhost` — set it
+to the LAN IP or DNS name listeners actually use. Because `NEXT_PUBLIC_*` are
+build-time constants, switching edge mode means re-running the installer (it
+rebuilds web); switching back to the default `caddy` removes the generated
+file. In `none` mode the controller (`:7701`) and icecast (`:7702`) must be
+reachable from listeners — both bind all interfaces by default, so only a host
+firewall would get in the way.
+
 ### Day-to-day (Linux)
 
 ```bash
@@ -286,8 +308,9 @@ editing `controller/.env`**, then `launchctl kickstart -k`.
   package is v18; the installer warns and points you at NodeSource for the
   upgrade path.
 - **Caddy not in Debian default repos** — installer tries the upstream Caddy
-  apt repo first. Failure isn't fatal because Caddy is optional (only needed
-  for the edge proxy).
+  apt repo first. Failure isn't fatal because Caddy is optional: install with
+  `SUBWAVE_EDGE=none` (see *Edge mode* above) and the web build is wired to
+  reach the controller and icecast directly, no proxy needed.
 
 ### Files the native install drops
 
@@ -300,6 +323,7 @@ editing `controller/.env`**, then `launchctl kickstart -k`.
 | `state/runtime/kokoro/venv/`              | Kokoro Python venv (Linux only) |
 | `state/runtime/kokoro/models/`            | Kokoro ONNX + voices bundle |
 | `state/caddy/Caddyfile`                   | Native Caddyfile (loopback upstreams, `:4800`) |
+| `web/.env.production`                     | Only under `SUBWAVE_EDGE=none` — absolute API/stream URLs baked into the web build |
 | `state/icecast.xml`                       | Icecast config (same as Docker — `setup.sh` renders it) |
 | `web/.next/standalone/`                   | Next.js standalone bundle + copied static + public |
 

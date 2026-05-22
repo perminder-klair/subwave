@@ -18,7 +18,7 @@
     <key>PORT</key>
     <string>7700</string>
     <key>HOSTNAME</key>
-    <string>127.0.0.1</string>
+    <string>${WEB_HOSTNAME}</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
