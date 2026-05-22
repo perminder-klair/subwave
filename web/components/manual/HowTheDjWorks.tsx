@@ -41,8 +41,8 @@ export default function HowTheDjWorks() {
         <h2>Local voices, or the cloud.</h2>
         <p>
           The DJ's words are written by the language model, but turning them into speech
-          is a separate job — handled by one of three text-to-speech engines the operator
-          chooses under <strong>Admin &rarr; TTS voice</strong>. Two run on your own
+          is a separate job — handled by one of four text-to-speech engines the operator
+          chooses under <strong>Admin &rarr; TTS voice</strong>. Three run on your own
           hardware, one is hosted.
         </p>
         <ul className="bs-list">
@@ -60,8 +60,15 @@ export default function HowTheDjWorks() {
             the console.
           </li>
           <li>
+            <strong>Chatterbox</strong> — a local model that clones a voice from a short
+            reference clip, so each persona can have its own distinct sound, and voices
+            paralinguistic cues like <em>[laugh]</em> and <em>[sigh]</em> as real sounds.
+            The most capable local engine and the heaviest — comfortable on a GPU, slow
+            on CPU — and opt-in: the operator bundles it into the controller image.
+          </li>
+          <li>
             <strong>Cloud</strong> — hosted text-to-speech through OpenAI or ElevenLabs,
-            using an API key. The most lifelike and expressive of the three, but it costs
+            using an API key. The most lifelike and expressive of the four, but it costs
             per use and depends on the network being up.
           </li>
         </ul>

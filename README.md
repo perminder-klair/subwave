@@ -65,7 +65,7 @@ there is no socket or RPC channel between them.
    LLM provider ◀── AI SDK ───────│  • AI DJ: picks tracks,   │
    (Ollama / Anthropic / …)       │    writes links & idents  │
                                   │  • session + scheduler    │
-   Open-Meteo ◀── weather ────────│  • TTS (Piper/Kokoro/cloud)│
+   Open-Meteo ◀── weather ────────│  • text-to-speech (TTS)   │
                                   │  • HTTP API (:7701)       │
                                   └─────────────┬─────────────┘
                                                 │  file-based IPC
@@ -178,7 +178,7 @@ controller/        Node.js controller — the AI DJ brain
   src/llm/         LLM layer (AI SDK): provider registry, prompts, tools
   src/broadcast/   queue, session, DJ agent, scheduler, jingles
   src/music/       Subsonic client, pool picker, library tagging
-  src/audio/       TTS engines: Piper, Kokoro, cloud
+  src/audio/       TTS engines: Piper, Kokoro, Chatterbox, cloud
   src/routes/      HTTP API split by surface (public, request, settings, …)
 liquidsoap/        radio.liq — the Liquidsoap mixing pipeline
 web/               Next.js 15 web UI (player, landing, admin, setup)

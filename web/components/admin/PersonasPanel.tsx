@@ -653,7 +653,9 @@ export default function PersonasPanel() {
                 }}
               />
               <div className="field-hint">
-                Piper is local &amp; fast. Kokoro is more natural but slower. Cloud routes through OpenAI / ElevenLabs.
+                Piper is local &amp; fast. Kokoro is more natural but slower. Chatterbox
+                clones a voice from a reference clip (local, opt-in). Cloud routes through
+                OpenAI / ElevenLabs.
               </div>
             </div>
 
