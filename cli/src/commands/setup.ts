@@ -246,16 +246,17 @@ async function pickMode(): Promise<Mode> {
   }
   return exitIfCancelled(await p.select({
     message: 'How are you running SUB/WAVE?',
+    initialValue: 'prod' as const,
     options: [
-      {
-        value: 'dev' as const,
-        label: 'dev — local hacking',
-        hint: 'docker-compose.yml · controller :7701 · web on :7700 separately',
-      },
       {
         value: 'prod' as const,
         label: 'prod — server deploy with bundled Caddy',
         hint: 'docker-compose.prod.yml · Caddy :4800 · web baked into image',
+      },
+      {
+        value: 'dev' as const,
+        label: 'dev — local hacking',
+        hint: 'docker-compose.yml · controller :7701 · web on :7700 separately',
       },
       {
         value: 'prod-byo' as const,
