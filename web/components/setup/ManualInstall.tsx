@@ -20,7 +20,7 @@ const ICECAST_ENV = `# docker/.env
 ICECAST_SOURCE_PASSWORD=replace-me-with-a-strong-string
 ICECAST_ADMIN_PASSWORD=another-strong-string
 ICECAST_RELAY_PASSWORD=another-strong-string
-SUBWAVE_HOMEPAGE=landing
+SUBWAVE_HOMEPAGE=player
 # STATE_DIR=/srv/subwave   # optional — defaults to <repo>/state`;
 
 export default function ManualInstall() {

@@ -138,10 +138,10 @@ services:
       - controller
     environment:
       - NODE_ENV=production
-      # Marketing host renders the landing at /. Flip to `player` for private
-      # boxes that should boot straight into the listener UI. /listen and
-      # /landing are always available regardless.
-      - SUBWAVE_HOMEPAGE=${SUBWAVE_HOMEPAGE:-landing}
+      # Private boxes boot straight into the listener UI at /. Flip to
+      # `landing` for the marketing host. /listen and /landing are always
+      # available regardless.
+      - SUBWAVE_HOMEPAGE=${SUBWAVE_HOMEPAGE:-player}
       # Also needed at RUNTIME: the homepage (/) is force-dynamic, so its
       # share-card tags render per-request. Set SITE_URL to the same value as
       # the build arg above (define it once in docker/.env and both pick it

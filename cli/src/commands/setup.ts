@@ -137,14 +137,24 @@ export async function runSetupCommand(): Promise<void> {
     : { ...process.env };
   await runBashSetup(bashEnv);
 
-  // --- 10. TZ to docker/.env ----------------------------------------------
-  // docker compose reads docker/.env for ${TZ} expansion in the compose
-  // files. Write it alongside the icecast passwords that setup.sh just
-  // generated.
+  // --- 10. TZ + SUBWAVE_HOMEPAGE to docker/.env ---------------------------
+  // docker compose reads docker/.env for ${TZ} / ${SUBWAVE_HOMEPAGE}
+  // expansion in the compose files. Write them alongside the icecast
+  // passwords that setup.sh just generated. SUBWAVE_HOMEPAGE defaults to
+  // `player` — flip to `landing` in docker/.env to expose the marketing
+  // page at /.
   const dockerEnvPath = resolve(DOCKER_DIR, '.env');
   if (existsSync(dockerEnvPath)) {
-    writeEnvFile(dockerEnvPath, { TZ: tz });
+    const existingDocker = parseEnvFile(dockerEnvPath);
+    const dockerEnv: Record<string, string> = { TZ: tz };
+    if (!existingDocker.SUBWAVE_HOMEPAGE) {
+      dockerEnv.SUBWAVE_HOMEPAGE = 'player';
+    }
+    writeEnvFile(dockerEnvPath, dockerEnv);
     muted(`set TZ=${tz} in docker/.env`);
+    if (dockerEnv.SUBWAVE_HOMEPAGE) {
+      muted('set SUBWAVE_HOMEPAGE=player in docker/.env (flip to `landing` to expose marketing page)');
+    }
   }
 
   // --- 11. Bring the stack up ---------------------------------------------
