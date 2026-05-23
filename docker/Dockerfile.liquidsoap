@@ -7,4 +7,19 @@ USER root
 RUN apt-get update -qq \
  && apt-get install -y --no-install-recommends curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+
+# Bake the mixer script + repo-bundled audio (emergency loop + studio bed).
+# Prod no longer bind-mounts these from the repo — operators install via the
+# image-only path. Dev compose can still bind-mount over the top for hot reload.
+COPY liquidsoap/radio.liq /etc/liquidsoap/radio.liq
+COPY sounds /sounds
+
+# Source state/icecast-secrets.env (written by the subwave-icecast container
+# on first boot) so radio.liq's environment.get("ICECAST_SOURCE_PASSWORD")
+# resolves. World-readable, runs as liquidsoap uid.
+COPY docker/wait-for-secrets.sh /usr/local/bin/wait-for-secrets
+RUN chmod +x /usr/local/bin/wait-for-secrets
+
 USER liquidsoap
+ENTRYPOINT ["/usr/local/bin/wait-for-secrets"]
+CMD ["liquidsoap", "/etc/liquidsoap/radio.liq"]

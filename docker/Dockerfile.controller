@@ -93,6 +93,11 @@ RUN npm install --omit=dev
 COPY controller/src ./src
 COPY controller/scripts ./scripts
 
+# Bake repo-bundled audio (emergency loop + studio bed + sfx). Prod no longer
+# bind-mounts ../sounds — operators install via the image-only path. Dev
+# compose can still bind-mount over the top for hot reload of new SFX.
+COPY sounds /sounds
+
 # State dir shared with Liquidsoap
 RUN mkdir -p /var/sub-wave/voice && chmod 777 /var/sub-wave
 
