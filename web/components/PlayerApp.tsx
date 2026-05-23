@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { History, Mic } from 'lucide-react';
 import TopBar from './TopBar';
@@ -246,9 +247,11 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
         )}
       </Sheet>
 
-      {showTuneIn && !offline && (
-        <TuneInOverlay onTune={tuneInFromOverlay} nowPlaying={nowPlaying} />
-      )}
+      <AnimatePresence>
+        {showTuneIn && !offline && (
+          <TuneInOverlay key="tune-in" onTune={tuneInFromOverlay} nowPlaying={nowPlaying} />
+        )}
+      </AnimatePresence>
 
       <CommandPalette
         open={paletteOpen}

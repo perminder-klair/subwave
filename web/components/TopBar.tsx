@@ -3,6 +3,7 @@
 import { Sun, Moon, Headphones } from 'lucide-react';
 import { buildTagline } from '@/lib/tagline';
 import { cn } from '@/lib/cn';
+import OdometerNumber from './OdometerNumber';
 import type { ActiveShow, ListenerCount, StationContext, ThemeMode } from '@/lib/types';
 
 export interface TopBarProps {
@@ -83,7 +84,7 @@ export default function TopBar({
             aria-label={`${listenerObj.current} listening`}
           >
             <Headphones className="h-3.5 w-3.5" aria-hidden="true" />
-            {listenerObj.current}
+            <OdometerNumber value={listenerObj.current} />
           </span>
         )}
         {onToggleTheme && (

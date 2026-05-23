@@ -6,6 +6,7 @@ import { GoogleAnalytics } from '@next/third-parties/google';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { SITE_URL } from '@/lib/site';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
+import MotionProvider from '@/components/MotionProvider';
 
 // Visitor tracking. The gtag.js script only loads when a Measurement ID is
 // configured, so dev and un-instrumented deploys stay analytics-free.
@@ -90,8 +91,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <meta name="twitter:image:alt" content={OG_IMAGE_ALT} />
       </head>
       <body suppressHydrationWarning>
-        <ServiceWorkerRegister />
-        {children}
+        <MotionProvider>
+          <ServiceWorkerRegister />
+          {children}
+        </MotionProvider>
       </body>
       {GA_ID ? <GoogleAnalytics gaId={GA_ID} /> : null}
     </html>
