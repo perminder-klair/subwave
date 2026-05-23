@@ -2,7 +2,7 @@
  * HTTP client for the SUB/WAVE controller API.
  *
  * The controller is a local Express service (default :7701 in dev, or behind
- * the Caddy edge at :4800/api in prod). Two endpoint classes matter here:
+ * the Caddy edge at :7700/api in prod). Two endpoint classes matter here:
  *   - public, rate-limited:   GET /now-playing, GET /state, POST /request
  *   - admin, Basic-auth gated: POST /dj/say, POST /dj/segment
  *
@@ -94,7 +94,7 @@ export class SubwaveClient {
       throw new SubwaveError(
         `Could not reach the SUB/WAVE controller at ${url} (${reason}). ` +
           `Check that the stack is running and that SUBWAVE_API_URL points at it ` +
-          `(dev default http://localhost:7701, prod http://localhost:4800/api).`,
+          `(dev default http://localhost:7701, prod http://localhost:7700/api).`,
       );
     } finally {
       clearTimeout(timer);

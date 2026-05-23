@@ -176,7 +176,7 @@ go install github.com/bjarneo/cliamp@latest`}</CodeBlock>
             command-line player like cliamp can underrun between bursts and show{' '}
             <em>buffering</em>. The stream itself is fine &mdash; ask the station operator
             for a direct address that skips Cloudflare (a LAN or Tailscale URL on the
-            Caddy port, usually <code className="bs-code-inline">:4800</code>), which
+            Caddy port, usually <code className="bs-code-inline">:7700</code>), which
             serves a steady HTTP/1.1 stream.
           </p>
         </div>
@@ -184,8 +184,8 @@ go install github.com/bjarneo/cliamp@latest`}</CodeBlock>
 cliamp https://radio.example.co/stream.mp3
 
 # direct to the station on your network — HTTP/1.1, steady
-cliamp http://192.168.1.20:4800/stream.mp3
-cliamp http://100.x.x.x:4800/stream.mp3   # over Tailscale`}</CodeBlock>
+cliamp http://192.168.1.20:7700/stream.mp3
+cliamp http://100.x.x.x:7700/stream.mp3   # over Tailscale`}</CodeBlock>
       </section>
 
       <section className="bs-section">

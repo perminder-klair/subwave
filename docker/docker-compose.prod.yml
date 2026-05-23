@@ -22,7 +22,7 @@ services:
       - controller
       - icecast
     ports:
-      - "4800:80"
+      - "${CADDY_PORT:-7700}:80"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

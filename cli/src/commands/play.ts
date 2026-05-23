@@ -60,7 +60,7 @@ export async function runPlayCommand(opts: PlayOpts = {}): Promise<void> {
         message: 'Stack is down — which env should the player target?',
         options: [
           { value: 'dev',      label: 'dev',              hint: 'controller :7701 · stream :7702' },
-          { value: 'prod',     label: 'prod',             hint: 'Caddy edge :4800' },
+          { value: 'prod',     label: 'prod',             hint: 'Caddy edge :7700' },
           { value: 'prod-byo', label: 'prod (BYO proxy)', hint: 'controller :7701 · stream :7702' },
         ],
       }));

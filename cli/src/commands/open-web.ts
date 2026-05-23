@@ -2,7 +2,8 @@
 // console in the operator's default browser, pointed at the live stack.
 //
 // The URL depends on the compose env: prod serves the UI through the Caddy
-// edge on :4800, dev runs the Next.js dev server on :7700.
+// edge on :7700; dev runs the Next.js dev server on :7700 (same host
+// binding, just one stack at a time).
 
 import { detectCompose, webBaseFor, type ComposeEnv } from '../compose.ts';
 import { openUrl } from '../util.ts';
@@ -37,7 +38,7 @@ export async function runOpenWebCommand(
         message: 'Stack is down — which env should the browser target?',
         options: [
           { value: 'dev',      label: 'dev',              hint: 'web dev server :7700' },
-          { value: 'prod',     label: 'prod',             hint: 'Caddy edge :4800' },
+          { value: 'prod',     label: 'prod',             hint: 'Caddy edge :7700' },
           { value: 'prod-byo', label: 'prod (BYO proxy)', hint: 'web :7700' },
         ],
       }));

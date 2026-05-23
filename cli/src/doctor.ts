@@ -204,7 +204,7 @@ async function checkIcecast(compose: ComposeStatus): Promise<Finding[]> {
   if (compose.env === 'down') {
     return [{ label: '/stream.mp3', status: 'skip', detail: 'stack down' }];
   }
-  // In prod the stream is exposed via Caddy on :4800; in dev and prod-byo
+  // In prod the stream is exposed via Caddy on :7700; in dev and prod-byo
   // Icecast itself listens on its mapped host port. streamUrlFor() honours
   // the BYO ICECAST_PORT override transparently.
   const url = streamUrlFor(compose.env);

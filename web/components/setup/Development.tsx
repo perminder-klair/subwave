@@ -28,7 +28,7 @@ export default function Development() {
             </tr>
             <tr>
               <td><code className="bs-code-inline">docker/docker-compose.prod.yml</code></td>
-              <td>+ web (built image) + caddy edge on <code className="bs-code-inline">:4800</code></td>
+              <td>+ web (built image) + caddy edge on <code className="bs-code-inline">:7700</code></td>
               <td><code className="bs-code-inline">${'{STATE_DIR:-<repo>/state}'}</code></td>
             </tr>
             <tr>

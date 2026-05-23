@@ -134,7 +134,7 @@ function listServices(f: ComposeFile): Record<string, string> {
 // BYO mode honours the same WEB_PORT / CONTROLLER_PORT / ICECAST_PORT env
 // vars the byo-proxy compose file uses, so the operator can override host
 // bindings without the CLI losing track of where the services actually live.
-function byoPort(name: 'WEB_PORT' | 'CONTROLLER_PORT' | 'ICECAST_PORT', fallback: number): number {
+function byoPort(name: 'WEB_PORT' | 'CONTROLLER_PORT' | 'ICECAST_PORT' | 'CADDY_PORT', fallback: number): number {
   const raw = process.env[name];
   if (!raw) return fallback;
   const n = Number(raw);
@@ -142,30 +142,30 @@ function byoPort(name: 'WEB_PORT' | 'CONTROLLER_PORT' | 'ICECAST_PORT', fallback
 }
 
 // API base URL the controller is reachable on, for the given env. Prod goes
-// via Caddy on :4800 (so the same paths the web UI uses work). prod-byo
-// hits the host-bound controller port directly — the operator's external
-// proxy isn't in the picture for CLI-internal calls. Dev hits the
-// controller's mapped port.
+// via Caddy on :7700 (so the same paths the web UI uses work; override the
+// host binding with CADDY_PORT in docker/.env). prod-byo hits the host-bound
+// controller port directly — the operator's external proxy isn't in the
+// picture for CLI-internal calls. Dev hits the controller's mapped port.
 export function apiBaseFor(env: ComposeEnv): string {
-  if (env === 'prod') return 'http://localhost:4800/api';
+  if (env === 'prod') return `http://localhost:${byoPort('CADDY_PORT', 7700)}/api`;
   if (env === 'prod-byo') return `http://localhost:${byoPort('CONTROLLER_PORT', 7701)}`;
   return 'http://localhost:7701';
 }
 
 // Icecast stream URL for the given env. Prod serves /stream.mp3 through the
-// Caddy edge on :4800; prod-byo and dev expose Icecast directly on its
-// mapped port.
+// Caddy edge on :7700 (CADDY_PORT-overridable); prod-byo and dev expose
+// Icecast directly on its mapped port.
 export function streamUrlFor(env: ComposeEnv): string {
-  if (env === 'prod') return 'http://localhost:4800/stream.mp3';
+  if (env === 'prod') return `http://localhost:${byoPort('CADDY_PORT', 7700)}/stream.mp3`;
   if (env === 'prod-byo') return `http://localhost:${byoPort('ICECAST_PORT', 7702)}/stream.mp3`;
   return 'http://localhost:7702/stream.mp3';
 }
 
 // Browser base URL for the web UI, by env. Prod serves the UI through the
-// Caddy edge on :4800; prod-byo hits the host-bound web port; dev runs the
-// Next.js dev server on :7700.
+// Caddy edge on :7700 (CADDY_PORT-overridable); prod-byo hits the host-bound
+// web port; dev runs the Next.js dev server on :7700.
 export function webBaseFor(env: ComposeEnv): string {
-  if (env === 'prod') return 'http://localhost:4800';
+  if (env === 'prod') return `http://localhost:${byoPort('CADDY_PORT', 7700)}`;
   if (env === 'prod-byo') return `http://localhost:${byoPort('WEB_PORT', 7700)}`;
   return 'http://localhost:7700';
 }

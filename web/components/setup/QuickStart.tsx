@@ -53,7 +53,7 @@ npm run setup`}</CodeBlock>
                 <code className="bs-code-inline">--build</code>
               </li>
               <li>
-                Caddy on <code className="bs-code-inline">:4800</code>
+                Caddy on <code className="bs-code-inline">:7700</code>
               </li>
               <li>
                 state in <code className="bs-code-inline">./state</code> (or{' '}

@@ -8,7 +8,7 @@
 //     existing setup.mjs behaviour).
 //   - Poll /health for up to 30 s and report when the stream comes on-air.
 
-import { COMPOSE_FILES, detectCompose, type ComposeEnv, type ComposeFile } from '../compose.ts';
+import { COMPOSE_FILES, detectCompose, webBaseFor, type ComposeEnv, type ComposeFile } from '../compose.ts';
 import { composeUp } from '../docker.ts';
 import { waitForHealth } from '../api.ts';
 import { loadConfig, saveConfig } from '../config.ts';
@@ -84,7 +84,7 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
 
   console.log();
   if (target.env === 'prod') {
-    muted('→ http://localhost:4800   (stream: /stream.mp3, api: /api/*)');
+    muted(`→ ${webBaseFor('prod')}   (stream: /stream.mp3, api: /api/*)`);
   } else if (target.env === 'prod-byo') {
     muted('→ web :7700   controller :7701   stream :7702/stream.mp3');
     muted('  point your reverse proxy at those ports — see docker/Caddyfile for the route table.');
@@ -124,7 +124,7 @@ async function pickEnv(arg?: StartableEnv): Promise<ComposeFile | null> {
       {
         value: 'prod',
         label: 'prod',
-        hint: 'docker-compose.prod.yml · Caddy on :4800 · web baked into image',
+        hint: 'docker-compose.prod.yml · Caddy on :7700 · web baked into image',
       },
       {
         value: 'prod-byo',

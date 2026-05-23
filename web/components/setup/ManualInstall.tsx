@@ -122,7 +122,7 @@ $EDITOR controller/.env`}</CodeBlock>
               <li><strong>web</strong> — Next.js UI, internal-only</li>
               <li>
                 <strong>caddy</strong> — the only thing bound to a host port (
-                <code className="bs-code-inline">:4800</code>)
+                <code className="bs-code-inline">:7700</code>)
               </li>
             </ul>
             <p>Generate the Piper station idents the first time:</p>
@@ -160,7 +160,7 @@ $EDITOR controller/.env`}</CodeBlock>
           <div className="bs-step-num">05</div>
           <div className="bs-step-body">
             <h3>Tune in</h3>
-            <CodeBlock>{`open http://localhost:4800`}</CodeBlock>
+            <CodeBlock>{`open http://localhost:7700`}</CodeBlock>
             <p>
               Behind a domain? Put it behind Cloudflare or Tailscale; Caddy has{' '}
               <code className="bs-code-inline">auto_https off</code>, so terminate TLS

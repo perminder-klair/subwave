@@ -44,7 +44,7 @@ Add three new things, change one existing file, leave Docker untouched.
 - `systemd/subwave-liquidsoap.service` — depends on icecast being up (`After=`/`Wants=`), runs `/usr/bin/liquidsoap $REPO/liquidsoap/radio.liq` with `Environment=STATE_DIR=…` and `SOUNDS_DIR=…`. Telnet stays bound to 127.0.0.1:1234.
 - `systemd/subwave-controller.service` — `WorkingDirectory=$REPO/controller`, `EnvironmentFile=$REPO/controller/.env`, `ExecStart=/usr/bin/npx tsx src/server.ts` (matches the existing Dockerfile.controller entry). Sets `STATE_DIR`, `SOUNDS_DIR`, `PIPER_BIN`, `KOKORO_*` to point at the runtime tree created above.
 - `systemd/subwave-web.service` — `WorkingDirectory=$REPO/web`, `ExecStart=/usr/bin/node .next/standalone/server.js`, port 7700.
-- `systemd/subwave-caddy.service` — optional; only enabled if the operator wants the prod-style edge proxy on `:4800`. Same `Caddyfile` as `docker/Caddyfile`, with container hostnames swapped for `127.0.0.1`.
+- `systemd/subwave-caddy.service` — optional; only enabled if the operator wants the prod-style edge proxy on `:7700`. Same `Caddyfile` as `docker/Caddyfile`, with container hostnames swapped for `127.0.0.1`.
 - `launchd/com.subwave.{icecast,liquidsoap,controller,web,caddy}.plist` — macOS analogues. `KeepAlive=true` for auto-restart, `RunAtLoad=true` for boot. Logs to `$STATE_DIR/logs/<service>.{out,err}`.
 - `DEPLOY.md` — add a "Native install (no Docker)" section: `./scripts/install-native.sh`, edit `controller/.env`, `systemctl --user enable --now subwave.target`. Document the three day-to-day commands: `systemctl --user status subwave-*`, `journalctl --user -u subwave-controller -f`, `systemctl --user restart subwave-controller`.
 
@@ -64,7 +64,7 @@ The codebase already treats `STATE_DIR` and `SOUNDS_DIR` as the only two host-vs
 - **Kokoro on macOS**: `kokoro-onnx` on Apple Silicon historically has fiddly ONNX runtime / wheel issues. First pass: Linux only. Mac operators get Piper + cloud TTS, which covers every codepath. Revisit if anyone asks.
 - **Piper architecture**: x86_64 only in the Docker image. Pi 4/5 operators (aarch64) get the `linux_aarch64` Piper release — `install-native.sh` picks via `uname -m`.
 - **Icecast packaging conflict**: Debian's `icecast2` ships a default `/etc/icecast2/icecast.xml` and enables a system service on install. Installer must `systemctl disable --now icecast2` (system unit) so our user-mode unit owns port 7702. Worth a clear warning before the disable.
-- **Port 80 / 443**: rootless `systemctl --user` can't bind `<1024`. Caddy unit defaults to `:4800` (matches current Docker setup); operators wanting `:80` need `setcap` on the Caddy binary or a system-mode unit. Document both.
+- **Port 80 / 443**: rootless `systemctl --user` can't bind `<1024`. Caddy unit defaults to `:7700` (matches current Docker setup); operators wanting `:80` need `setcap` on the Caddy binary or a system-mode unit. Document both.
 - **State dir permissions**: no more cross-UID problem (everything runs as the operator), so the `chmod 777` in `setup.sh` becomes unnecessary natively. Leave it alone — harmless and keeps `setup.sh` reusable.
 
 ## Verification

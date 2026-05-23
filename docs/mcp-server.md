@@ -121,12 +121,12 @@ prompt.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SUBWAVE_API_URL` | `http://localhost:7701` | Controller base URL. Prod behind Caddy: `http://localhost:4800/api`. |
+| `SUBWAVE_API_URL` | `http://localhost:7701` | Controller base URL. Prod behind Caddy: `http://localhost:7700/api`. |
 | `SUBWAVE_ADMIN_USER` | — | Matches the controller's `ADMIN_USER`. |
 | `SUBWAVE_ADMIN_PASS` | — | Matches the controller's `ADMIN_PASS`. |
 
 In dev the controller is exposed directly on `:7701`. In prod only Caddy binds
-a host port, so the server must target `:4800/api` — the `handle_path` rule
+a host port, so the server must target `:7700/api` — the `handle_path` rule
 strips the `/api` prefix before the controller sees the route.
 
 ---

@@ -10,7 +10,7 @@
  *
  * Environment:
  *   SUBWAVE_API_URL     controller base URL (default http://localhost:7701;
- *                       prod behind Caddy is http://localhost:4800/api)
+ *                       prod behind Caddy is http://localhost:7700/api)
  *   SUBWAVE_ADMIN_USER  admin Basic-auth user  — required for DJ control tools
  *   SUBWAVE_ADMIN_PASS  admin Basic-auth pass  — required for DJ control tools
  */

@@ -6,7 +6,7 @@ Cloudflare in front terminates TLS; Caddy on the host serves plain HTTP on
 liquidsoap).
 
 ```
-Internet ── HTTPS ──▶ Cloudflare ── HTTP ──▶ host :80 (Caddy)
+Internet ── HTTPS ──▶ Cloudflare ── HTTP ──▶ host :7700 (Caddy)
                                                 ├── /          → web:7700
                                                 ├── /api/*     → controller:7701
                                                 └── /stream.mp3 → icecast:7702
@@ -200,7 +200,7 @@ Hourly stream archives go to `state/archive/YYYY-MM-DD/HH-00.mp3`
 ## 9. Bring your own reverse proxy
 
 If you already run Traefik, nginx, an existing Caddy, or another reverse
-proxy in your homelab, the bundled Caddy will either clash on `:4800` or
+proxy in your homelab, the bundled Caddy will either clash on `:7700` or
 duplicate work you already have. Use the BYO-proxy compose variant instead:
 
 ```bash

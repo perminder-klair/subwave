@@ -14,7 +14,7 @@ The user has authorised free action on this hot path — `scripts/setup.sh`, `gi
 1. **Two compose files, two shapes.**
    - `docker/docker-compose.yml` — dev variant (Mac smoke-test): Icecast + Liquidsoap + Controller only. Web runs separately via `npm run dev`. State at `../state`.
    - `docker/docker-compose.prod.yml` — production single-host: adds `web` and `caddy`. **Only Caddy binds a host port.** State at `${STATE_DIR:-<repo>/state}` — repo-local by default, same as dev.
-   - Detect which is up from `docker compose -f <file> ps`. On this host, prod is the live one and Caddy is mapped to host port `4800` (`0.0.0.0:4800->80/tcp`), not `80` as the README suggests — always read the port from `ps`, never hardcode.
+   - Detect which is up from `docker compose -f <file> ps`. Caddy maps to host port `${CADDY_PORT:-7700}` (`0.0.0.0:7700->80/tcp` by default). Always read the actual port from `ps`, never hardcode — operators can override via `CADDY_PORT` in `docker/.env`.
 
 2. **Controller and Liquidsoap COPY source at build time, they do not bind-mount it.** `docker compose restart <svc>` reruns the *same baked-in code* and does nothing for source changes. Source changes need `up -d --build <svc>`. This is the single most common deploy mistake.
 
@@ -348,7 +348,7 @@ Free to act on: prerequisite checks, `scripts/setup.sh` on a fresh checkout, `gi
 
 ## Helper
 
-`scripts/health-check.sh` (relative to this skill folder) runs the standard probes and emits a compact report. It auto-detects which compose file is live and which host port Caddy is mapped to, so it works whether the user has Caddy on `:80` or `:4800`. It includes the **audio-level probe** — it captures a few seconds of `/stream.mp3` and fails (non-zero exit, `SILENT` line) if the mean volume is below ~−50 dB, catching the wedged-source silent-stream bug that `/api/health` cannot see. Needs `ffmpeg` on PATH; if absent, the probe is skipped with a warning rather than silently passing.
+`scripts/health-check.sh` (relative to this skill folder) runs the standard probes and emits a compact report. It auto-detects which compose file is live and which host port Caddy is mapped to, so it works whether the user has Caddy on `:80`, `:7700`, or any `CADDY_PORT` override. It includes the **audio-level probe** — it captures a few seconds of `/stream.mp3` and fails (non-zero exit, `SILENT` line) if the mean volume is below ~−50 dB, catching the wedged-source silent-stream bug that `/api/health` cannot see. Needs `ffmpeg` on PATH; if absent, the probe is skipped with a warning rather than silently passing.
 
 ## Notes for working on the project (worth carrying forward)
 

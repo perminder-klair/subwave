@@ -42,7 +42,7 @@ import {
   writeEnvFile,
   have,
 } from '../util.ts';
-import { COMPOSE_FILES, isProdEnv, type ComposeEnv } from '../compose.ts';
+import { COMPOSE_FILES, isProdEnv, webBaseFor, streamUrlFor, apiBaseFor, type ComposeEnv } from '../compose.ts';
 import { dockerDaemonOk, composeUp } from '../docker.ts';
 import { makeClient, waitForHealth } from '../api.ts';
 import {
@@ -214,9 +214,9 @@ export async function runSetupCommand(): Promise<void> {
   // --- 16. Summary --------------------------------------------------------
   header('Endpoints');
   if (mode === 'prod') {
-    muted(`Site:    ${accent('http://localhost:4800')}`);
-    muted(`Stream:  ${accent('http://localhost:4800/stream.mp3')}`);
-    muted(`API:     ${accent('http://localhost:4800/api/health')}`);
+    muted(`Site:    ${accent(webBaseFor('prod'))}`);
+    muted(`Stream:  ${accent(streamUrlFor('prod'))}`);
+    muted(`API:     ${accent(`${apiBaseFor('prod')}/health`)}`);
   } else if (mode === 'prod-byo') {
     // The host ports the BYO compose file binds — these are what the
     // operator's reverse proxy should target. See docker/Caddyfile for the
@@ -261,7 +261,7 @@ async function pickMode(): Promise<Mode> {
       {
         value: 'prod' as const,
         label: 'prod — server deploy with bundled Caddy',
-        hint: 'docker-compose.prod.yml · Caddy :4800 · web baked into image',
+        hint: 'docker-compose.prod.yml · Caddy :7700 · web baked into image',
       },
       {
         value: 'dev' as const,

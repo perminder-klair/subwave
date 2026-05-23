@@ -33,7 +33,7 @@ The server is configured entirely through environment variables:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `SUBWAVE_API_URL` | `http://localhost:7701` | Controller base URL. Prod (behind Caddy) is `http://localhost:4800/api`. |
+| `SUBWAVE_API_URL` | `http://localhost:7701` | Controller base URL. Prod (behind Caddy) is `http://localhost:7700/api`. |
 | `SUBWAVE_ADMIN_USER` | — | Controller `ADMIN_USER`. Required for the DJ control tools. |
 | `SUBWAVE_ADMIN_PASS` | — | Controller `ADMIN_PASS`. Required for the DJ control tools. |
 
