@@ -402,27 +402,38 @@ export async function djObject({
 // When a `schema` is provided the structured-output strategy is chosen per
 // provider, gated by needsToolCallObject():
 //
-// - Ollama: use the AI SDK's "done tool" pattern (see
+// - Ollama: use the AI SDK's "done tool" pattern (the canonical forced
+//   tool-calling pattern documented at
 //   /app/node_modules/ai/docs/03-agents/04-loop-control.mdx "Forced Tool
 //   Calling"). A synthetic `done` tool whose inputSchema IS the schema is
-//   added alongside the discovery tools, and `toolChoice: 'required'` forces
-//   the model to call tools every step. The model calls discovery tools to
-//   explore, then calls `done(<final answer>)` to terminate. Required because
-//   Ollama's Output.object path is broken — minimax-m2.7:cloud emits prose,
-//   takes 40-100s per failure (verified empirically).
+//   added alongside the discovery tools, `toolChoice: 'required'` forces a
+//   tool call every step, and prepareStep below corners the model into
+//   discovery-then-done. The split matters because Ollama's structured-output
+//   mode (the `format` field, surfaced as Output.object by the AI SDK) forces
+//   the model to emit schema-valid JSON *now* — incompatible with a tool loop
+//   that needs to call discovery tools first. Confirmed empirically when the
+//   ai-sdk-ollama swap landed: dropping the done-tool pattern collapsed
+//   glm-5.1:cloud from 20/20 → 0/20 (model returns {"id":"","reason":""}
+//   without ever calling discovery). The non-Ollama branch keeps Output.object
+//   because those providers' constrained decoders interleave with tool calls
+//   correctly.
 //
-// - Everything else (Google, DeepSeek, OpenRouter, OpenAI, Anthropic):
-//   use Output.object natively. These providers honour constrained decoding,
-//   so we don't need the done-tool workaround — and avoiding it removes the
-//   intrinsic "agent did not call done before stopping" failure mode that
-//   the done-tool pattern introduces when the model over-explores.
-//
-// Empirical reliability across 5-10 runs each (with picker-test.mjs):
-//   ollama:minimax-m2.7:cloud    done-tool 10/10  Output.object 0/5
-//   ollama:kimi-k2.6:cloud       done-tool  1/10  Output.object 0/5 (bad model fit)
+// Empirical reliability across the picker-test.mjs harness, captured at the
+// ai-sdk-ollama swap (20 short runs each unless noted):
+//   ollama:glm-5.1:cloud         done-tool 20/20  median  8.5s  p95 23.9s
+//   ollama:kimi-k2.6:cloud       done-tool 20/20  median 31.8s  p95 55.3s
+//   ollama:nemotron-3-super:cloud (10 runs) 10/10 median 16.5s  p95 208s
 //   google:gemini-3.5-flash      Output.object 5/5
 //   deepseek:deepseek-chat       Output.object 5/5
 //   openrouter:anthropic/claude-haiku-4-5  Output.object 5/5
+// The Ollama latency p95s exceed the picker's 22s `timeoutMs` ceiling, but
+// agent.generate({ timeout }) is not honoured by the ai-sdk-ollama transport
+// — runs that exceed the cap simply run long. Callers (dj-agent.js) still
+// fall back to the stateless pool picker on throw; a slow run blocks only the
+// next pick decision, never the broadcast (Liquidsoap keeps playing the
+// auto.m3u fallback). If a hard ceiling becomes load-bearing again, wrap the
+// agent call in an explicit Promise.race here rather than relying on the
+// option.
 export async function djAgent({
   system,
   messages,

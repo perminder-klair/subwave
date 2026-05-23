@@ -17,7 +17,7 @@
 // `ollama` is the default and needs no key. The cloud providers are opt-in.
 
 import { gateway, createGateway } from 'ai';
-import { createOllama } from 'ollama-ai-provider-v2';
+import { createOllama } from 'ai-sdk-ollama';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -131,18 +131,13 @@ export function languageModel() {
     }
     case 'ollama':
     default: {
-      // CRITICAL: use `provider.chat(id)`, not `provider(id)`. The default
-      // callable returns the package's "responses" model (named after OpenAI's
-      // Responses API — identifies itself as "ollama.responses" in warnings),
-      // which doesn't properly translate tools/toolChoice/activeTools to
-      // Ollama's payload format. The result was every cloud :cloud model
-      // emitting prose instead of tool calls, regardless of which model.
-      // `.chat(id)` routes through the package's chat-completions path
-      // (`/api/chat`) where tool calls work natively. Verified against the
-      // raw Ollama API: `POST /api/chat` with tools returns a proper
-      // `tool_calls` field on these same cloud models.
-      const provider = createOllama({ baseURL: `${ollamaBaseUrl(cfg)}/api` });
-      model = provider.chat(id);
+      // `ai-sdk-ollama` is built on the official Ollama JS client and uses
+      // its chat-completions path natively. The default factory `provider(id)`
+      // returns a LanguageModelV3 that translates tools / toolChoice / activeTools
+      // correctly — no `.chat(id)` override required. `baseURL` is the bare
+      // Ollama host (no `/api` suffix); the package appends the path itself.
+      const provider = createOllama({ baseURL: ollamaBaseUrl(cfg) });
+      model = provider(id);
       break;
     }
   }
@@ -162,9 +157,8 @@ export function activeModelLabel() {
   }
 }
 
-// Ollama is the only provider whose tool-calling is weak enough to matter for
-// the agentic picker. Callers use this to decide whether to trust the agent
-// path or fall back to the pre-built candidate pool.
+// The active provider id, used by sdk.ts to gate provider-specific sampling
+// (repeat_penalty is Ollama-only) and by /stats and /debug for telemetry.
 export function providerName() {
   return llmCfg().provider;
 }

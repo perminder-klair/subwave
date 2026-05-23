@@ -15,7 +15,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import { generateText } from 'ai';
-import { createOllama } from 'ollama-ai-provider-v2';
+import { createOllama } from 'ai-sdk-ollama';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -147,7 +147,7 @@ router.post('/onboarding/test-llm', requireAdmin, async (req, res) => {
       case 'ollama':
       default: {
         const url = ollamaUrl || 'http://localhost:11434';
-        m = createOllama({ baseURL: `${url}/api` }).chat(model);
+        m = createOllama({ baseURL: url })(model);
         break;
       }
     }
