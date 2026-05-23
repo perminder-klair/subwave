@@ -173,6 +173,22 @@ npm start -- setup     # prod mode — runs scripts/setup.sh, builds and starts
 See **[`DEPLOY.md`](DEPLOY.md)** for the full walkthrough — host prerequisites,
 secrets, Cloudflare setup, updates, and backup.
 
+**Bring your own reverse proxy.** If you already run Traefik, nginx, or your
+own Caddy in your homelab, swap the bundled-Caddy compose for the BYO variant:
+
+```bash
+docker compose -f docker/docker-compose.byo-proxy.yml up -d
+```
+
+That exposes the web UI on `:7700`, the controller API on `:7701`, and the
+Icecast stream on `:7702` (all configurable). Point your proxy at those three —
+`docker/Caddyfile` is a working reference for the route table you need to
+replicate. Details in [`DEPLOY.md`](DEPLOY.md#bring-your-own-reverse-proxy).
+
+**Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-controller`,
+`-liquidsoap`, and `-web`. Both prod compose files pull `:latest` by default;
+pin a version with `SUBWAVE_VERSION=v1.2.3` in `docker/.env`.
+
 ## Repository layout
 
 ```

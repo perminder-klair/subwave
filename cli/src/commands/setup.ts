@@ -42,7 +42,7 @@ import {
   writeEnvFile,
   have,
 } from '../util.ts';
-import { COMPOSE_FILES, type ComposeEnv } from '../compose.ts';
+import { COMPOSE_FILES, isProdEnv, type ComposeEnv } from '../compose.ts';
 import { dockerDaemonOk, composeUp } from '../docker.ts';
 import { makeClient, waitForHealth } from '../api.ts';
 import {
@@ -56,7 +56,7 @@ import {
 import { p, pc, accent, exitIfCancelled, banner, header, ok, warn, err, muted } from '../ui.ts';
 import { maybeStartWebDev, type WebDevState } from '../web-dev.ts';
 
-type Mode = 'dev' | 'prod';
+type Mode = 'dev' | 'prod' | 'prod-byo';
 
 // LLM providers — kept in step with the controller's LLM_PROVIDERS list
 // (controller/src/settings.ts) and the admin Settings UI provider picker.
@@ -98,9 +98,9 @@ export async function runSetupCommand(): Promise<void> {
   // --- 2. Preflight --------------------------------------------------------
   await preflight();
 
-  // --- 3. STATE_DIR (prod only) -------------------------------------------
+  // --- 3. STATE_DIR (prod-style modes only) -------------------------------
   let stateDir = resolve(REPO_ROOT, 'state');
-  if (mode === 'prod') {
+  if (isProdEnv(mode)) {
     stateDir = await promptStateDir();
   }
 
@@ -132,7 +132,7 @@ export async function runSetupCommand(): Promise<void> {
   ok(`wrote ${pc.dim('controller/.env')} (${Object.keys(envValues).length} keys)`);
 
   // --- 9. Bash bootstrap (icecast passwords + icecast.xml + sounds) -------
-  const bashEnv = mode === 'prod'
+  const bashEnv = isProdEnv(mode)
     ? { ...process.env, STATE_DIR: stateDir }
     : { ...process.env };
   await runBashSetup(bashEnv);
@@ -154,10 +154,11 @@ export async function runSetupCommand(): Promise<void> {
     err(`unknown mode: ${mode}`);
     return;
   }
+  const wantBuild = isProdEnv(mode);
   header(`Starting ${mode} stack`);
-  muted(`docker compose -f ${file.file} up -d${mode === 'prod' ? ' --build' : ''}`);
+  muted(`docker compose -f ${file.file} up -d${wantBuild ? ' --build' : ''}`);
   console.log();
-  const upCode = await composeUp(file, { build: mode === 'prod' });
+  const upCode = await composeUp(file, { build: wantBuild });
   if (upCode !== 0) {
     err(`docker compose exited ${upCode}`);
     muted('→ inspect: `subwave logs <service>`. Resolve and re-run setup.');
@@ -201,6 +202,14 @@ export async function runSetupCommand(): Promise<void> {
     muted(`Site:    ${accent('http://localhost:4800')}`);
     muted(`Stream:  ${accent('http://localhost:4800/stream.mp3')}`);
     muted(`API:     ${accent('http://localhost:4800/api/health')}`);
+  } else if (mode === 'prod-byo') {
+    // The host ports the BYO compose file binds — these are what the
+    // operator's reverse proxy should target. See docker/Caddyfile for the
+    // route table to replicate.
+    muted(`Web:         ${accent('http://localhost:7700')}  ${pc.dim('(point your proxy at this for /)')}`);
+    muted(`API:         ${accent('http://localhost:7701')}  ${pc.dim('(route /api/* here, strip the /api prefix)')}`);
+    muted(`Stream:      ${accent('http://localhost:7702/stream.mp3')}  ${pc.dim('(route /stream.mp3 here, disable buffering)')}`);
+    muted(`Reference:   ${pc.dim('docker/Caddyfile — replicate this route table in your proxy')}`);
   } else {
     muted(`Controller:  ${accent('http://localhost:7701')}`);
     muted(`Stream:      ${accent('http://localhost:7702/stream.mp3')}`);
@@ -240,8 +249,13 @@ async function pickMode(): Promise<Mode> {
       },
       {
         value: 'prod' as const,
-        label: 'prod — server deploy',
+        label: 'prod — server deploy with bundled Caddy',
         hint: 'docker-compose.prod.yml · Caddy :4800 · web baked into image',
+      },
+      {
+        value: 'prod-byo' as const,
+        label: 'prod (BYO proxy) — Traefik / nginx / your own Caddy',
+        hint: 'docker-compose.byo-proxy.yml · web :7700 · controller :7701 · icecast :7702',
       },
     ],
   }), { backOnCancel: false });
@@ -452,7 +466,7 @@ interface AdminCreds { user: string; pass: string; }
 
 async function collectAdmin(mode: Mode): Promise<AdminCreds> {
   header('Admin credentials');
-  if (mode === 'prod') {
+  if (isProdEnv(mode)) {
     muted('REQUIRED in prod — the controller exits at boot without these.');
   } else {
     muted('Recommended even in dev (gates /settings, /debug, /jingles, /restart-mixer).');

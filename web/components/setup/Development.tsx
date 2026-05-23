@@ -6,11 +6,11 @@ export default function Development() {
     <SetupPage
       eyebrow="SETUP · 04"
       title="Hacking on SUB/WAVE."
-      intro="Two compose files, two deployment shapes. Dev mode runs the radio backend in Docker and the Next.js UI on the host with hot reload, so you can iterate on the web without a rebuild."
+      intro="Three compose files, three deployment shapes. Dev mode runs the radio backend in Docker and the Next.js UI on the host with hot reload, so you can iterate on the web without a rebuild. The two prod variants differ only at the edge — one bundles Caddy, the other binds host ports for your own reverse proxy."
       current="/setup/development"
     >
       <section className="bs-section">
-        <p className="bs-eyebrow">THE TWO STACKS</p>
+        <p className="bs-eyebrow">THE THREE STACKS</p>
         <h2>Compose files.</h2>
         <table className="bs-rebuild-table mt-3">
           <thead>
@@ -28,7 +28,16 @@ export default function Development() {
             </tr>
             <tr>
               <td><code className="bs-code-inline">docker/docker-compose.prod.yml</code></td>
-              <td>+ web (built image) + caddy edge</td>
+              <td>+ web (built image) + caddy edge on <code className="bs-code-inline">:4800</code></td>
+              <td><code className="bs-code-inline">${'{STATE_DIR:-<repo>/state}'}</code></td>
+            </tr>
+            <tr>
+              <td><code className="bs-code-inline">docker/docker-compose.byo-proxy.yml</code></td>
+              <td>same as prod minus caddy — web, controller, icecast on host ports{' '}
+                <code className="bs-code-inline">:7700</code> /{' '}
+                <code className="bs-code-inline">:7701</code> /{' '}
+                <code className="bs-code-inline">:7702</code> for your own reverse proxy
+              </td>
               <td><code className="bs-code-inline">${'{STATE_DIR:-<repo>/state}'}</code></td>
             </tr>
           </tbody>

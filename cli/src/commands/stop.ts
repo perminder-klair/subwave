@@ -4,7 +4,7 @@
 // with the default flipped on prod (operator has to explicitly approve)
 // versus dev (operator just hits enter).
 
-import { detectCompose } from '../compose.ts';
+import { detectCompose, isProdEnv } from '../compose.ts';
 import { composeDown } from '../docker.ts';
 import { exitIfCancelled, ok, err, info, muted, p, pc, pauseForEnter, header } from '../ui.ts';
 import { stopWebDev } from '../web-dev.ts';
@@ -19,8 +19,8 @@ export async function runStopCommand(): Promise<void> {
   }
 
   const yes = exitIfCancelled(await p.confirm({
-    message: current.env === 'prod'
-      ? `Stop the ${pc.red(pc.bold('prod'))} stack? Listeners will hear silence.`
+    message: isProdEnv(current.env)
+      ? `Stop the ${pc.red(pc.bold(current.env))} stack? Listeners will hear silence.`
       : `Stop the ${pc.bold('dev')} stack?`,
     initialValue: current.env === 'dev',
   }));

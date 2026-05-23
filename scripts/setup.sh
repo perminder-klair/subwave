@@ -202,7 +202,8 @@ Setup complete.
   Icecast cfg: $ICECAST_RENDERED
 
 Next steps:
-  Dev:   cd docker && docker compose up -d
-  Prod:  docker compose -f docker/docker-compose.prod.yml up -d
-  Then : ./scripts/generate-jingles.sh
+  Dev:       cd docker && docker compose up -d
+  Prod:      docker compose -f docker/docker-compose.prod.yml up -d
+  BYO proxy: docker compose -f docker/docker-compose.byo-proxy.yml up -d
+  Then :     ./scripts/generate-jingles.sh
 EOF

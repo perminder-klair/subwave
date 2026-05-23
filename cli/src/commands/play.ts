@@ -33,7 +33,7 @@ const TUI_DIR = resolve(REPO_ROOT, 'tui');
 const TUI_BIN = resolve(TUI_DIR, 'bin', 'subwave-tui.js');
 
 export interface PlayOpts {
-  envArg?: 'dev' | 'prod';
+  envArg?: Exclude<ComposeEnv, 'down'>;
 }
 
 export async function runPlayCommand(opts: PlayOpts = {}): Promise<void> {
@@ -47,7 +47,8 @@ export async function runPlayCommand(opts: PlayOpts = {}): Promise<void> {
   // Which stack are we listening to? Explicit arg wins; otherwise follow
   // whatever's currently up; if nothing's up, ask. (The TUI still runs as
   // a read-only dashboard when the stack is down — env just decides URLs.)
-  let env: 'dev' | 'prod';
+  type PlayableEnv = Exclude<ComposeEnv, 'down'>;
+  let env: PlayableEnv;
   if (opts.envArg) {
     env = opts.envArg;
   } else {
@@ -55,11 +56,12 @@ export async function runPlayCommand(opts: PlayOpts = {}): Promise<void> {
     if (detected.env !== 'down') {
       env = detected.env;
     } else {
-      env = exitIfCancelled(await p.select<'dev' | 'prod'>({
+      env = exitIfCancelled(await p.select<PlayableEnv>({
         message: 'Stack is down — which env should the player target?',
         options: [
-          { value: 'dev', label: 'dev', hint: 'controller :7701 · stream :7702' },
-          { value: 'prod', label: 'prod', hint: 'Caddy edge :4800' },
+          { value: 'dev',      label: 'dev',              hint: 'controller :7701 · stream :7702' },
+          { value: 'prod',     label: 'prod',             hint: 'Caddy edge :4800' },
+          { value: 'prod-byo', label: 'prod (BYO proxy)', hint: 'controller :7701 · stream :7702' },
         ],
       }));
     }

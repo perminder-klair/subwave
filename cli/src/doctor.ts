@@ -10,7 +10,7 @@
 
 import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { detectCompose, type ComposeStatus } from './compose.ts';
+import { detectCompose, isProdEnv, streamUrlFor, type ComposeStatus } from './compose.ts';
 import { dockerDaemonOk, composeExec } from './docker.ts';
 import { makeClient } from './api.ts';
 import { CONTROLLER_ENV, parseEnvFile, REPO_ROOT, STATE_DIR, fetchErrorReason } from './util.ts';
@@ -182,7 +182,7 @@ async function checkController(compose: ComposeStatus): Promise<Finding[]> {
   // warn in dev (auth is optional there).
   const env = parseEnvFile(CONTROLLER_ENV);
   const hasCreds = Boolean(env.ADMIN_USER && env.ADMIN_PASS);
-  if (compose.env === 'prod') {
+  if (isProdEnv(compose.env)) {
     out.push({
       label: 'admin creds',
       status: hasCreds ? 'ok' : 'fail',
@@ -204,11 +204,10 @@ async function checkIcecast(compose: ComposeStatus): Promise<Finding[]> {
   if (compose.env === 'down') {
     return [{ label: '/stream.mp3', status: 'skip', detail: 'stack down' }];
   }
-  // In prod the stream is exposed via Caddy on :4800; in dev Icecast itself
-  // listens on :7702. Either way we just need a 200 + audio content-type.
-  const url = compose.env === 'prod'
-    ? 'http://localhost:4800/stream.mp3'
-    : 'http://localhost:7702/stream.mp3';
+  // In prod the stream is exposed via Caddy on :4800; in dev and prod-byo
+  // Icecast itself listens on its mapped host port. streamUrlFor() honours
+  // the BYO ICECAST_PORT override transparently.
+  const url = streamUrlFor(compose.env);
   try {
     // HEAD wouldn't tell us much (Icecast streams forever); GET with a tight
     // abort once we see the response headers is enough.

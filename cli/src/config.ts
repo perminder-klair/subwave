@@ -11,8 +11,8 @@ import { dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
 export interface CliConfig {
-  // Preferred env when both compose files exist and neither is up.
-  preferredEnv: 'dev' | 'prod' | null;
+  // Preferred env when multiple compose files exist and none is up.
+  preferredEnv: 'dev' | 'prod' | 'prod-byo' | null;
   // Last apiBase the operator manually overrode (rare, keep around).
   apiBaseOverride: string | null;
 }

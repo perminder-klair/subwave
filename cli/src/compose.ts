@@ -11,7 +11,11 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DOCKER_DIR, REPO_ROOT } from './util.ts';
 
-export type ComposeEnv = 'dev' | 'prod' | 'down';
+// `prod-byo` is the "bring your own reverse proxy" variant — same as prod
+// but without the bundled Caddy. Treat it as a prod sibling everywhere
+// except for the URL helpers, which need to point at the host-bound service
+// ports instead of the Caddy edge. Use `isProdEnv()` for "prod or prod-byo".
+export type ComposeEnv = 'dev' | 'prod' | 'prod-byo' | 'down';
 
 export interface ComposeFile {
   env: Exclude<ComposeEnv, 'down'>;
@@ -20,9 +24,19 @@ export interface ComposeFile {
 }
 
 export const COMPOSE_FILES: ComposeFile[] = [
-  { env: 'prod', file: 'docker/docker-compose.prod.yml', abs: resolve(REPO_ROOT, 'docker/docker-compose.prod.yml') },
-  { env: 'dev',  file: 'docker/docker-compose.yml',      abs: resolve(REPO_ROOT, 'docker/docker-compose.yml') },
+  { env: 'prod',     file: 'docker/docker-compose.prod.yml',      abs: resolve(REPO_ROOT, 'docker/docker-compose.prod.yml') },
+  { env: 'prod-byo', file: 'docker/docker-compose.byo-proxy.yml', abs: resolve(REPO_ROOT, 'docker/docker-compose.byo-proxy.yml') },
+  { env: 'dev',      file: 'docker/docker-compose.yml',           abs: resolve(REPO_ROOT, 'docker/docker-compose.yml') },
 ];
+
+// `prod` and `prod-byo` differ in routing surface (bundled Caddy vs external
+// proxy fronting host ports) but share every operational concern — admin
+// gate is mandatory, the stack builds, listeners count, `stop` deserves a
+// confirmation. Anywhere you would have written `env === 'prod'` for one of
+// those concerns, write `isProdEnv(env)` instead.
+export function isProdEnv(env: ComposeEnv): env is 'prod' | 'prod-byo' {
+  return env === 'prod' || env === 'prod-byo';
+}
 
 export interface ComposeStatus {
   env: ComposeEnv;
@@ -117,25 +131,42 @@ function listServices(f: ComposeFile): Record<string, string> {
   return out;
 }
 
-// API base URL the controller is reachable on, for the given env. For prod
-// we go via Caddy on :4800 (so the same paths the web UI uses work). For
-// dev we hit the controller directly on its mapped port.
+// BYO mode honours the same WEB_PORT / CONTROLLER_PORT / ICECAST_PORT env
+// vars the byo-proxy compose file uses, so the operator can override host
+// bindings without the CLI losing track of where the services actually live.
+function byoPort(name: 'WEB_PORT' | 'CONTROLLER_PORT' | 'ICECAST_PORT', fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+// API base URL the controller is reachable on, for the given env. Prod goes
+// via Caddy on :4800 (so the same paths the web UI uses work). prod-byo
+// hits the host-bound controller port directly — the operator's external
+// proxy isn't in the picture for CLI-internal calls. Dev hits the
+// controller's mapped port.
 export function apiBaseFor(env: ComposeEnv): string {
   if (env === 'prod') return 'http://localhost:4800/api';
+  if (env === 'prod-byo') return `http://localhost:${byoPort('CONTROLLER_PORT', 7701)}`;
   return 'http://localhost:7701';
 }
 
 // Icecast stream URL for the given env. Prod serves /stream.mp3 through the
-// Caddy edge on :4800; dev exposes Icecast directly on its mapped port.
+// Caddy edge on :4800; prod-byo and dev expose Icecast directly on its
+// mapped port.
 export function streamUrlFor(env: ComposeEnv): string {
   if (env === 'prod') return 'http://localhost:4800/stream.mp3';
+  if (env === 'prod-byo') return `http://localhost:${byoPort('ICECAST_PORT', 7702)}/stream.mp3`;
   return 'http://localhost:7702/stream.mp3';
 }
 
 // Browser base URL for the web UI, by env. Prod serves the UI through the
-// Caddy edge on :4800; dev runs the Next.js dev server on :7700.
+// Caddy edge on :4800; prod-byo hits the host-bound web port; dev runs the
+// Next.js dev server on :7700.
 export function webBaseFor(env: ComposeEnv): string {
   if (env === 'prod') return 'http://localhost:4800';
+  if (env === 'prod-byo') return `http://localhost:${byoPort('WEB_PORT', 7700)}`;
   return 'http://localhost:7700';
 }
 

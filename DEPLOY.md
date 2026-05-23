@@ -197,7 +197,48 @@ Logs Liquidsoap writes go to `state/logs/radio.log`.
 Hourly stream archives go to `state/archive/YYYY-MM-DD/HH-00.mp3`
 — prune these on a cron if you don't want unbounded growth.
 
-## 9. Backup
+## 9. Bring your own reverse proxy
+
+If you already run Traefik, nginx, an existing Caddy, or another reverse
+proxy in your homelab, the bundled Caddy will either clash on `:4800` or
+duplicate work you already have. Use the BYO-proxy compose variant instead:
+
+```bash
+docker compose -f docker/docker-compose.byo-proxy.yml up -d
+```
+
+It drops the bundled Caddy and binds each user-facing service directly to a
+host port:
+
+| Port (default) | Service | What your proxy should forward |
+|---|---|---|
+| `${WEB_PORT:-7700}` | Next.js web UI | everything not matched below |
+| `${CONTROLLER_PORT:-7701}` | controller HTTP API | `/api/*` (with the `/api` prefix stripped) |
+| `${ICECAST_PORT:-7702}` | Icecast | `/stream.mp3` (disable buffering for live audio) |
+
+Liquidsoap stays internal-only — it has no public surface.
+
+Override any of the host ports by setting `WEB_PORT`, `CONTROLLER_PORT`, or
+`ICECAST_PORT` in `docker/.env`.
+
+**Single-origin routing is the default.** The web UI is built to call `/api`
+and `/stream.mp3` relative to its own origin, so the cleanest setup is one
+hostname (e.g. `https://radio.example.com`) where your proxy fronts all three.
+`docker/Caddyfile` is a working reference for what that route table looks
+like — replicate it in your Traefik labels, nginx `location` blocks, or
+existing Caddyfile.
+
+If you instead want separate hostnames per surface (e.g. `api.example.com`
+and `stream.example.com`), you'll have to rebuild the `web` image with
+`NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_STREAM_URL` set — those values are
+baked into the client bundle at build time, not read at runtime.
+
+Everything else in this guide still applies — secrets in `controller/.env` +
+`docker/.env`, `./scripts/setup.sh` for state and the icecast XML, jingle
+rendering, updates, and backup. Skip section 6 (Cloudflare + Caddy firewall);
+your own proxy handles that.
+
+## 10. Backup
 
 The only stateful path is `state/` (under the repo). Two things really matter:
 

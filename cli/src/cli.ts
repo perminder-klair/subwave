@@ -84,11 +84,11 @@ async function main(): Promise<void> {
     case 'start': {
       const { runStartCommand } = await import('./commands/start.ts');
       const envArg = rest[0];
-      if (envArg && envArg !== 'dev' && envArg !== 'prod') {
-        process.stderr.write(`Unknown env: ${envArg}. Expected 'dev' or 'prod'.\n`);
+      if (envArg && envArg !== 'dev' && envArg !== 'prod' && envArg !== 'prod-byo') {
+        process.stderr.write(`Unknown env: ${envArg}. Expected 'dev', 'prod', or 'prod-byo'.\n`);
         process.exit(2);
       }
-      await runStartCommand({ envArg: envArg as 'dev' | 'prod' | undefined });
+      await runStartCommand({ envArg: envArg as 'dev' | 'prod' | 'prod-byo' | undefined });
       return;
     }
     case 'stop': {
@@ -112,22 +112,22 @@ async function main(): Promise<void> {
     case 'play': {
       const { runPlayCommand } = await import('./commands/play.ts');
       const envArg = rest[0];
-      if (envArg && envArg !== 'dev' && envArg !== 'prod') {
-        process.stderr.write(`Unknown env: ${envArg}. Expected 'dev' or 'prod'.\n`);
+      if (envArg && envArg !== 'dev' && envArg !== 'prod' && envArg !== 'prod-byo') {
+        process.stderr.write(`Unknown env: ${envArg}. Expected 'dev', 'prod', or 'prod-byo'.\n`);
         process.exit(2);
       }
-      await runPlayCommand({ envArg: envArg as 'dev' | 'prod' | undefined });
+      await runPlayCommand({ envArg: envArg as 'dev' | 'prod' | 'prod-byo' | undefined });
       return;
     }
     case 'listen':
     case 'admin': {
       const { runOpenWebCommand } = await import('./commands/open-web.ts');
       const envArg = rest[0];
-      if (envArg && envArg !== 'dev' && envArg !== 'prod') {
-        process.stderr.write(`Unknown env: ${envArg}. Expected 'dev' or 'prod'.\n`);
+      if (envArg && envArg !== 'dev' && envArg !== 'prod' && envArg !== 'prod-byo') {
+        process.stderr.write(`Unknown env: ${envArg}. Expected 'dev', 'prod', or 'prod-byo'.\n`);
         process.exit(2);
       }
-      await runOpenWebCommand(cmd, { envArg: envArg as 'dev' | 'prod' | undefined });
+      await runOpenWebCommand(cmd, { envArg: envArg as 'dev' | 'prod' | 'prod-byo' | undefined });
       return;
     }
     default:

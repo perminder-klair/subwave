@@ -38,6 +38,23 @@ docker compose -f docker/docker-compose.prod.yml up -d --build controller web
 ./scripts/health-check.sh`}</CodeBlock>
 
         <div className="bs-callout">
+          <div className="bs-eyebrow">RUNNING FROM GHCR IMAGES?</div>
+          <p>
+            If you're pulling prebuilt images from{' '}
+            <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-*</code>{' '}
+            instead of building locally, the rebuild step becomes a pull:
+          </p>
+          <CodeBlock>{`# pin SUBWAVE_VERSION in docker/.env, then:
+docker compose -f docker/docker-compose.prod.yml pull
+docker compose -f docker/docker-compose.prod.yml up -d`}</CodeBlock>
+          <p className="text-muted">
+            Same flow if you're on{' '}
+            <code className="bs-code-inline">docker-compose.byo-proxy.yml</code> — just
+            swap the file flag.
+          </p>
+        </div>
+
+        <div className="bs-callout">
           <div className="bs-eyebrow">OR LET CLAUDE CODE DO IT</div>
           <p>
             The <code className="bs-code-inline">subwave-deploy</code> skill at{' '}

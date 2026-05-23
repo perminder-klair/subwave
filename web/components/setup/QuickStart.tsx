@@ -23,8 +23,8 @@ cd subwave
 npm install
 npm run setup`}</CodeBlock>
           <p className="text-muted">
-            Its first question is <em>dev or production?</em> Then it prompts for
-            Navidrome and Ollama, runs{' '}
+            Its first question is <em>dev, prod, or prod-byo?</em> Then it prompts
+            for Navidrome and Ollama, runs{' '}
             <code className="bs-code-inline">scripts/setup.sh</code>, boots the
             stack, and generates jingles.
           </p>
@@ -59,6 +59,25 @@ npm run setup`}</CodeBlock>
                 state in <code className="bs-code-inline">./state</code> (or{' '}
                 <code className="bs-code-inline">STATE_DIR</code>) — re-run with sudo
                 if it isn't writable
+              </li>
+            </ul>
+          </div>
+          <div>
+            <p className="bs-eyebrow">PROD (BYO PROXY)</p>
+            <ul className="bs-list">
+              <li>
+                <code className="bs-code-inline">docker-compose.byo-proxy.yml</code> —
+                no bundled Caddy
+              </li>
+              <li>
+                services on <code className="bs-code-inline">:7700</code> /{' '}
+                <code className="bs-code-inline">:7701</code> /{' '}
+                <code className="bs-code-inline">:7702</code> for your Traefik / nginx
+                / existing Caddy to front
+              </li>
+              <li>
+                <code className="bs-code-inline">docker/Caddyfile</code> is the
+                reference route table to replicate
               </li>
             </ul>
           </div>

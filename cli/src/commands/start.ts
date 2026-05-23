@@ -8,15 +8,19 @@
 //     existing setup.mjs behaviour).
 //   - Poll /health for up to 30 s and report when the stream comes on-air.
 
-import { COMPOSE_FILES, detectCompose, type ComposeFile } from '../compose.ts';
+import { COMPOSE_FILES, detectCompose, isProdEnv, type ComposeEnv, type ComposeFile } from '../compose.ts';
 import { composeUp } from '../docker.ts';
 import { waitForHealth } from '../api.ts';
 import { loadConfig, saveConfig } from '../config.ts';
 import { exitIfCancelled, ok, warn, err, info, muted, p, pc, pauseForEnter, header } from '../ui.ts';
 import { maybeStartWebDev } from '../web-dev.ts';
 
+// Subset of ComposeEnv the operator can pick — excludes 'down' (no stack
+// to start) and matches what the wizard offers in `subwave setup`.
+export type StartableEnv = Exclude<ComposeEnv, 'down'>;
+
 export interface StartOpts {
-  envArg?: 'dev' | 'prod';
+  envArg?: StartableEnv;
 }
 
 export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
@@ -39,11 +43,15 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
     saveConfig(cfg);
   }
 
+  // Prod-style modes build their first-party images locally on the way up;
+  // dev never does (it pulls fully-built upstream images plus a host-side
+  // npm run dev for the web UI).
+  const wantBuild = isProdEnv(target.env);
   header(`Starting ${target.env} stack`);
-  muted(`docker compose -f ${target.file} up -d${target.env === 'prod' ? ' --build' : ''}`);
+  muted(`docker compose -f ${target.file} up -d${wantBuild ? ' --build' : ''}`);
   console.log();
 
-  const code = await composeUp(target, { build: target.env === 'prod' });
+  const code = await composeUp(target, { build: wantBuild });
   console.log();
   if (code !== 0) {
     err(`docker compose exited ${code}`);
@@ -75,6 +83,9 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
   console.log();
   if (target.env === 'prod') {
     muted('→ http://localhost:4800   (stream: /stream.mp3, api: /api/*)');
+  } else if (target.env === 'prod-byo') {
+    muted('→ web :7700   controller :7701   stream :7702/stream.mp3');
+    muted('  point your reverse proxy at those ports — see docker/Caddyfile for the route table.');
   } else {
     muted('→ controller: http://localhost:7701    stream: http://localhost:7702/stream.mp3');
     if (webDevState === 'running') {
@@ -87,7 +98,7 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
   await pauseForEnter();
 }
 
-async function pickEnv(arg?: 'dev' | 'prod'): Promise<ComposeFile | null> {
+async function pickEnv(arg?: StartableEnv): Promise<ComposeFile | null> {
   // Honour the explicit arg first.
   if (arg) {
     const match = COMPOSE_FILES.find((f) => f.env === arg);
@@ -99,7 +110,7 @@ async function pickEnv(arg?: 'dev' | 'prod'): Promise<ComposeFile | null> {
   }
 
   const cfg = loadConfig();
-  const choice = exitIfCancelled(await p.select({
+  const choice = exitIfCancelled(await p.select<StartableEnv>({
     message: 'Which environment?',
     initialValue: cfg.preferredEnv ?? 'dev',
     options: [
@@ -112,6 +123,11 @@ async function pickEnv(arg?: 'dev' | 'prod'): Promise<ComposeFile | null> {
         value: 'prod',
         label: 'prod',
         hint: 'docker-compose.prod.yml · Caddy on :4800 · web baked into image',
+      },
+      {
+        value: 'prod-byo',
+        label: 'prod (BYO proxy)',
+        hint: 'docker-compose.byo-proxy.yml · web :7700 · controller :7701 · icecast :7702',
       },
     ],
   }));

@@ -127,6 +127,32 @@ $EDITOR controller/.env`}</CodeBlock>
             </ul>
             <p>Generate the Piper station idents the first time:</p>
             <CodeBlock>{`./scripts/generate-jingles.sh`}</CodeBlock>
+            <div className="bs-callout">
+              <div className="bs-eyebrow">SKIP THE BUILD STEP</div>
+              <p>
+                Tagged releases publish prebuilt images to{' '}
+                <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-*</code>.
+                Drop <code className="bs-code-inline">--build</code> from the command
+                above and compose will pull instead. Pin a specific version with{' '}
+                <code className="bs-code-inline">SUBWAVE_VERSION=v1.2.3</code> in{' '}
+                <code className="bs-code-inline">docker/.env</code>; without it you get{' '}
+                <code className="bs-code-inline">:latest</code>.
+              </p>
+            </div>
+            <div className="bs-callout">
+              <div className="bs-eyebrow">ALREADY RUNNING TRAEFIK OR NGINX?</div>
+              <p>
+                Swap the compose file for{' '}
+                <code className="bs-code-inline">docker/docker-compose.byo-proxy.yml</code> —
+                same stack minus the bundled Caddy, with web /
+                controller / icecast bound to{' '}
+                <code className="bs-code-inline">:7700</code> /{' '}
+                <code className="bs-code-inline">:7701</code> /{' '}
+                <code className="bs-code-inline">:7702</code> for your own proxy to
+                front. <code className="bs-code-inline">docker/Caddyfile</code> is the
+                reference route table to replicate.
+              </p>
+            </div>
           </div>
         </div>
 

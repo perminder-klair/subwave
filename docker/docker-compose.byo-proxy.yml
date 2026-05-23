@@ -1,7 +1,25 @@
-# SUB/WAVE — production orchestration.
-# Only Caddy is exposed on the host (:80). Cloudflare terminates TLS in front.
-# Icecast, Liquidsoap, Controller, and Web are all internal-only and reachable
-# via Caddy's reverse proxy under one origin (/api, /stream.mp3, /).
+# SUB/WAVE — production orchestration without a bundled reverse proxy.
+# Use this variant if you already run Traefik, nginx, an existing Caddy, or any
+# other reverse proxy in front of your homelab. The three user-facing services
+# bind directly to host ports and your proxy fronts them.
+#
+# Default host ports (override via docker/.env or your shell):
+#   ${WEB_PORT:-7700}        → Next.js listener UI
+#   ${CONTROLLER_PORT:-7701} → controller HTTP API
+#   ${ICECAST_PORT:-7702}    → Icecast MP3 broadcast endpoint
+#
+# Liquidsoap stays internal-only — it has no public surface.
+#
+# The web UI assumes same-origin routing for /api and /stream.mp3 by default
+# (it's baked into the image at build time). To keep that working, point your
+# proxy at a single hostname and replicate the route table from docker/Caddyfile:
+#   /stream.mp3  → host:${ICECAST_PORT}      (disable buffering for live audio)
+#   /api/*       → host:${CONTROLLER_PORT}   (strip the /api prefix)
+#   everything   → host:${WEB_PORT}
+#
+# If you need separate hostnames per surface, you'll have to rebuild the web
+# image with NEXT_PUBLIC_API_URL / NEXT_PUBLIC_STREAM_URL set — those are
+# baked at build time, not runtime.
 #
 # State persists in <repo>/state by default (override with STATE_DIR). It is a
 # bind mount, so `docker compose down -v` (named-volume wipe) won't touch it —
@@ -11,25 +29,7 @@ x-state: &state-mount ${STATE_DIR:-../state}:/var/sub-wave
 
 services:
   # -------------------------------------------------------------------------
-  # CADDY — public edge, the only service bound to a host port
-  # -------------------------------------------------------------------------
-  caddy:
-    image: caddy:2-alpine
-    container_name: sub-wave-caddy
-    restart: unless-stopped
-    depends_on:
-      - web
-      - controller
-      - icecast
-    ports:
-      - "4800:80"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-
-  # -------------------------------------------------------------------------
-  # ICECAST — broadcast endpoint (internal only)
+  # ICECAST — broadcast endpoint, bound to host for your reverse proxy
   # -------------------------------------------------------------------------
   icecast:
     image: moul/icecast:latest
@@ -41,18 +41,17 @@ services:
       - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:?must be set}
       - ICECAST_PASSWORD=${ICECAST_RELAY_PASSWORD:?must be set}
       - ICECAST_HOSTNAME=localhost
+    ports:
+      - "${ICECAST_PORT:-7702}:7702"
     volumes:
       # Rendered by scripts/setup.sh from icecast.xml.template — keeps secrets
       # out of the repo and lets the moul/icecast entrypoint's sed run cleanly.
       - ${STATE_DIR:-../state}/icecast.xml:/etc/icecast2/icecast.xml:ro
 
   # -------------------------------------------------------------------------
-  # LIQUIDSOAP — mixer, pulls from queue file, broadcasts to Icecast
+  # LIQUIDSOAP — mixer, internal only (no public surface)
   # -------------------------------------------------------------------------
   liquidsoap:
-    # Pulls from GHCR by default. Override with `docker compose build liquidsoap`
-    # to rebuild locally from the Dockerfile below. Pin a version via
-    # SUBWAVE_VERSION in docker/.env (e.g. SUBWAVE_VERSION=v1.2.3).
     image: ghcr.io/perminder-klair/subwave-liquidsoap:${SUBWAVE_VERSION:-latest}
     build:
       context: ..
@@ -78,7 +77,7 @@ services:
     command: liquidsoap /etc/liquidsoap/radio.liq
 
   # -------------------------------------------------------------------------
-  # CONTROLLER — AI DJ brain
+  # CONTROLLER — AI DJ brain, bound to host for your reverse proxy
   # -------------------------------------------------------------------------
   controller:
     image: ghcr.io/perminder-klair/subwave-controller:${SUBWAVE_VERSION:-latest}
@@ -92,8 +91,7 @@ services:
       - liquidsoap
     environment:
       # Enables the production-only admin gate: refuses to boot unless
-      # ADMIN_USER + ADMIN_PASS are set in controller/.env. Local dev (using
-      # docker-compose.yml) leaves NODE_ENV unset so admin auth stays opt-in.
+      # ADMIN_USER + ADMIN_PASS are set in controller/.env.
       - NODE_ENV=production
       # Schedule slots are stored by day-of-week + hour; resolveActiveShow()
       # reads them with date.getHours(). Without TZ the container runs in UTC
@@ -111,12 +109,14 @@ services:
       - ../controller/.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    ports:
+      - "${CONTROLLER_PORT:-7701}:7701"
     volumes:
       - *state-mount
       - ../sounds:/sounds:ro
 
   # -------------------------------------------------------------------------
-  # WEB — Next.js listener UI
+  # WEB — Next.js listener UI, bound to host for your reverse proxy
   # -------------------------------------------------------------------------
   web:
     image: ghcr.io/perminder-klair/subwave-web:${SUBWAVE_VERSION:-latest}
@@ -147,9 +147,8 @@ services:
       # the build arg above (define it once in docker/.env and both pick it
       # up). Unset → a localhost origin, which breaks link previews.
       - SITE_URL=${SITE_URL:-}
-    # Same-origin is the default baked into the image — Caddy routes /api/*
-    # and /stream.mp3 to the right backend, so nothing extra needs setting.
-
-volumes:
-  caddy-data:
-  caddy-config:
+    ports:
+      - "${WEB_PORT:-7700}:7700"
+    # Same-origin (/api, /stream.mp3) is the default baked into the image.
+    # Your external proxy is responsible for routing those paths to controller
+    # and icecast — see the header comment for the route table.
