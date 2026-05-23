@@ -1,0 +1,6 @@
+FROM caddy:2-alpine
+
+# Bake the Caddyfile in so prod compose doesn't need a bind mount and operators
+# don't need to clone the repo. To customise the edge config, rebuild the image
+# from a fork or override the file at /etc/caddy/Caddyfile with your own mount.
+COPY docker/Caddyfile /etc/caddy/Caddyfile
