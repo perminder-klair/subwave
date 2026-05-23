@@ -142,8 +142,50 @@ export function writeSetupConfig(patch: Partial<SetupConfig>): SetupConfig {
     navidrome: { ...(current.navidrome || {}), ...(patch.navidrome || {}) },
   };
   mkdirSync(dirname(SETUP_CONFIG_PATH), { recursive: true });
-  writeFileSync(SETUP_CONFIG_PATH, JSON.stringify(next, null, 2));
+  writeFileWithRecover(SETUP_CONFIG_PATH, JSON.stringify(next, null, 2));
   return next;
+}
+
+// Wrap writeFileSync with auto-recovery for the common case of root-owned
+// state files. If the browser wizard ran first (or any Docker container
+// touched the file), it'll be owned by uid 0 with mode 0644 — readable from
+// the host but not writable. Detect EACCES, chown the whole state tree to
+// the current host UID via a one-shot Docker container, retry once. If
+// Docker isn't available, surface a clear error with the manual fix.
+function writeFileWithRecover(path: string, contents: string): void {
+  try {
+    writeFileSync(path, contents);
+    return;
+  } catch (e: unknown) {
+    const err = e as NodeJS.ErrnoException;
+    if (err?.code !== 'EACCES' && err?.code !== 'EPERM') throw err;
+    if (!chownStateDirToCurrentUser()) {
+      throw new Error(
+        `${path} is owned by another user (likely root from a Docker container) and Docker isn't available to fix it. ` +
+        `Fix manually: docker run --rm -v "$PWD/state:/state" alpine chown -R $(id -u):$(id -g) /state`,
+      );
+    }
+    // Retry. If it still fails, propagate (the chown didn't help — bigger
+    // problem like a read-only mount).
+    writeFileSync(path, contents);
+  }
+}
+
+// Shell out to a one-shot Docker container that chowns the state/ tree to
+// the current host UID:GID. Idempotent and safe to call when nothing needs
+// fixing — chown -R on already-owned files is a no-op. Returns true on
+// success, false if Docker isn't on PATH or the chown failed.
+function chownStateDirToCurrentUser(): boolean {
+  if (!have('docker')) return false;
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  if (uid === undefined || gid === undefined) return false; // non-POSIX
+  const r = spawnSync(
+    'docker',
+    ['run', '--rm', '-v', `${STATE_DIR}:/state`, 'alpine', 'chown', '-R', `${uid}:${gid}`, '/state'],
+    { stdio: 'pipe' },
+  );
+  return r.status === 0;
 }
 
 // Keys the wizard is allowed to write to state/secrets.env. Mirrors
@@ -189,7 +231,7 @@ export function writeSecretsEnv(patch: Record<string, string>): void {
     '',
   ].join('\n');
   mkdirSync(dirname(SECRETS_ENV_PATH), { recursive: true });
-  writeFileSync(SECRETS_ENV_PATH, body);
+  writeFileWithRecover(SECRETS_ENV_PATH, body);
   try {
     chmodSync(SECRETS_ENV_PATH, 0o600);
   } catch {
