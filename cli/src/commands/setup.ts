@@ -50,8 +50,6 @@ import {
   parseEnvFile,
   readSetupConfig,
   writeEnvFile,
-  writeSecretsEnv,
-  writeSetupConfig,
   have,
 } from '../util.ts';
 import { detectCompose, getComposeFiles, webBaseFor, streamUrlFor, apiBaseFor, type ComposeEnv } from '../compose.ts';
@@ -65,7 +63,7 @@ import {
   probeOpenRouter,
   type ProbeResult,
 } from '../probes.ts';
-import { p, pc, accent, exitIfCancelled, banner, header, ok, warn, err, muted } from '../ui.ts';
+import { p, pc, accent, exitIfCancelled, banner, header, ok, warn, err, info, muted } from '../ui.ts';
 
 // LLM providers — kept in step with the controller's LLM_PROVIDERS list
 // (controller/src/settings.ts) and the admin Settings UI provider picker.
@@ -149,34 +147,20 @@ export async function runSetupCommand(): Promise<void> {
   writeEnvFile(getRootEnv(), envValues, { templateFallback: getRootEnvExample() });
   ok(`wrote ${pc.dim('.env')} (${Object.keys(envValues).length} keys)`);
 
-  // --- 7. Persist Navidrome creds to state/setup-config.json --------------
-  // Same target the browser wizard writes to. The controller falls back to
-  // this file when NAVIDROME_* env vars are blank; env still wins when set.
-  writeSetupConfig({
-    navidrome: { url: navidrome.url, user: navidrome.user, pass: navidrome.pass },
-    setupCompletedAt: new Date().toISOString(),
-  });
-  ok(`wrote ${pc.dim('state/setup-config.json')} (Navidrome creds + setupCompletedAt)`);
+  // --- 7. Push everything through the controller via /onboarding/save -----
+  // Same endpoint the browser wizard hits. Doing it this way (rather than
+  // writing setup-config.json + secrets.env + POSTing /settings separately)
+  // means the controller handles the side-effects atomically: cache reload,
+  // in-memory config.navidrome.* update, settings.update, and the post-save
+  // refreshAutoPlaylist() that un-sticks the picker after a fresh install.
+  // Bypassing the endpoint (the old "write files from host" flow) left the
+  // controller's in-memory state stale until the next restart.
+  await pushOnboardingSave(mode, navidrome, llm);
 
-  // --- 8. Persist cloud API keys to state/secrets.env (mode 0600) --------
-  // Sourced into process.env on controller boot. We never write secrets to
-  // .env (world-readable) or settings.json — they live in their own 0600 file.
-  if (llm.provider && llm.apiKey && llm.provider in CLOUD_ENV_VAR) {
-    const k = CLOUD_ENV_VAR[llm.provider as CloudProvider];
-    writeSecretsEnv({ [k]: llm.apiKey });
-    ok(`wrote ${pc.dim('state/secrets.env')} (${k}, mode 0600)`);
-  }
-
-  // --- 9. State dir perms (standalone install only) -----------------------
+  // --- 8. State dir perms (standalone install only) -----------------------
   // Idempotent — safe even when running setup against an already-configured
   // install. Container UIDs vary, so chmod 777 is the simplest fix.
   await runBashSetup({ ...process.env });
-
-  // --- 10. POST /settings to apply LLM choice ----------------------------
-  // Stack is guaranteed up (precondition above), so the call should succeed.
-  if (llm.provider) {
-    await applyLlmSetting(mode, llm);
-  }
 
   // --- 11. Optionally render jingles --------------------------------------
   const wantsJingles = exitIfCancelled(await p.confirm({
@@ -189,20 +173,29 @@ export async function runSetupCommand(): Promise<void> {
   }
 
   // --- 12. Summary --------------------------------------------------------
+  // Listen + Admin are the URLs the operator actually clicks right after
+  // setup. Promote them to `info()` (un-dimmed, accent bullet) so they
+  // stand above the secondary Stream / API / Reference lines.
   header('Endpoints');
   if (mode === 'prod') {
-    muted(`Site:    ${accent(webBaseFor('prod'))}`);
+    const base = webBaseFor('prod');
+    info(`Listen:  ${accent(`${base}/listen`)}`);
+    info(`Admin:   ${accent(`${base}/admin`)}`);
     muted(`Stream:  ${accent(streamUrlFor('prod'))}`);
     muted(`API:     ${accent(`${apiBaseFor('prod')}/health`)}`);
   } else if (mode === 'prod-byo') {
     // The host ports the BYO compose file binds — these are what the
     // operator's reverse proxy should target. See docker/Caddyfile for the
     // route table to replicate.
+    info(`Listen:      ${accent('http://localhost:7700/listen')}`);
+    info(`Admin:       ${accent('http://localhost:7700/admin')}`);
     muted(`Web:         ${accent('http://localhost:7700')}  ${pc.dim('(point your proxy at this for /)')}`);
     muted(`API:         ${accent('http://localhost:7701')}  ${pc.dim('(route /api/* here, strip the /api prefix)')}`);
     muted(`Stream:      ${accent('http://localhost:7702/stream.mp3')}  ${pc.dim('(route /stream.mp3 here, disable buffering)')}`);
     muted(`Reference:   ${pc.dim('docker/Caddyfile — replicate this route table in your proxy')}`);
   } else {
+    info(`Listen:      ${accent('http://localhost:7700/listen')}`);
+    info(`Admin:       ${accent('http://localhost:7700/admin')}`);
     muted(`Controller:  ${accent('http://localhost:7701')}`);
     muted(`Stream:      ${accent('http://localhost:7702/stream.mp3')}`);
     muted(`Web (dev):   ${accent('http://localhost:7700')}  (separate: ` + pc.dim('`npm --prefix web run dev`') + ')');
@@ -550,37 +543,57 @@ async function renderJingles(composeFile: string, env: NodeJS.ProcessEnv): Promi
 // Post-boot settings application
 // ---------------------------------------------------------------------------
 
-// Apply the LLM choice via POST /settings so the operator's first DJ action
-// uses the right provider — no admin-UI detour needed. settings.js defaults
-// llm.provider to 'ollama', so the cloud branches must explicitly switch it.
-async function applyLlmSetting(env: ComposeEnv, llm: LlmChoice): Promise<void> {
-  if (!llm.provider) return;
-  header('Applying LLM choice to the controller');
+// POST the wizard's collected values to /onboarding/save — the same endpoint
+// the browser wizard hits. Centralising the persistence here means the
+// controller owns:
+//   - writing state/setup-config.json (with setupCompletedAt)
+//   - writing cloud API keys to state/secrets.env (mode 0600)
+//   - settings.update for LLM provider/model/baseUrl
+//   - reloading config.navidrome.* in-memory (so the picker sees new creds)
+//   - kicking refreshAutoPlaylist() so the stream comes on-air without a restart
+//
+// Bypassing this endpoint (the previous "write files from the host" path)
+// left the running controller's in-memory state stale, requiring an explicit
+// `subwave restart controller` for setup to take effect.
+async function pushOnboardingSave(env: ComposeEnv, navidrome: NavidromeCreds, llm: LlmChoice): Promise<void> {
+  header('Saving via /onboarding/save');
 
-  const client = makeClient(env);
-  const body: { llm: Record<string, unknown> } = { llm: { provider: llm.provider } };
-  if (llm.provider === 'ollama') {
-    if (llm.ollamaUrl) body.llm.ollamaUrl = llm.ollamaUrl;
-    if (llm.ollamaModel) body.llm.model = llm.ollamaModel;
-  } else if (llm.provider === 'openai-compatible') {
-    // openai-compatible has no env var — the server URL and (optional) key
-    // both live in settings, alongside the model id.
-    if (llm.baseUrl) body.llm.baseUrl = llm.baseUrl;
-    if (llm.model) body.llm.model = llm.model;
-    if (llm.apiKey) body.llm.apiKey = llm.apiKey;
-  } else if (llm.model) {
-    // Cloud providers: the API key lives in state/secrets.env (sourced into
-    // process.env on controller boot) and the AI SDK reads <PROVIDER>_API_KEY
-    // automatically — we only carry the model id through to settings.
-    body.llm.model = llm.model;
+  const body: Record<string, unknown> = {
+    navidrome: { url: navidrome.url, user: navidrome.user, pass: navidrome.pass },
+  };
+
+  if (llm.provider) {
+    const llmPatch: Record<string, unknown> = { provider: llm.provider };
+    if (llm.provider === 'ollama') {
+      if (llm.ollamaUrl) llmPatch.ollamaUrl = llm.ollamaUrl;
+      if (llm.ollamaModel) llmPatch.model = llm.ollamaModel;
+    } else if (llm.provider === 'openai-compatible') {
+      // No canonical env var for this provider — server URL and (optional)
+      // key both live in settings.llm.
+      if (llm.baseUrl) llmPatch.baseUrl = llm.baseUrl;
+      if (llm.model) llmPatch.model = llm.model;
+      if (llm.apiKey) llmPatch.apiKey = llm.apiKey;
+    } else if (llm.model) {
+      // Cloud — model id carries through to settings; the API key goes into
+      // body.apiKeys below and lands in state/secrets.env mode 0600.
+      llmPatch.model = llm.model;
+    }
+    body.llm = llmPatch;
   }
 
-  const res = await client.post('/settings', body, { admin: true, timeoutMs: 5000 });
+  if (llm.provider && llm.apiKey && llm.provider in CLOUD_ENV_VAR) {
+    body.apiKeys = { [CLOUD_ENV_VAR[llm.provider as CloudProvider]]: llm.apiKey };
+  }
+
+  const client = makeClient(env);
+  const res = await client.post('/onboarding/save', body, { admin: true, timeoutMs: 10_000 });
   if (res.ok) {
-    ok(`/settings updated — llm.provider=${llm.provider}`);
+    ok('persisted — Navidrome + LLM saved, picker re-triggered');
   } else {
-    warn(`failed to POST /settings: ${res.error ?? 'unknown'}`);
-    muted('You can set the provider manually via the admin UI later.');
+    err(`POST /onboarding/save failed: ${res.error ?? 'unknown'}`);
+    muted('Nothing was persisted. Check `subwave logs controller`, then re-run `subwave setup`.');
+    muted('Or finish in the browser at /onboarding (uses the same endpoint).');
+    process.exit(1);
   }
 }
 
