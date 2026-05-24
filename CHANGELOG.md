@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.8](https://github.com/perminder-klair/subwave/compare/v0.1.7...v0.1.8) (2026-05-24)
+
+
+### Bug Fixes
+
+* **ci:** unblock v0.1.7 web image and CLI binary builds ([72edf43](https://github.com/perminder-klair/subwave/commit/72edf43bfb45807bc59a8edcbe76f733ff3b3213))
+
 ## [0.1.7](https://github.com/perminder-klair/subwave/compare/v0.1.6...v0.1.7) (2026-05-24)
 
 
