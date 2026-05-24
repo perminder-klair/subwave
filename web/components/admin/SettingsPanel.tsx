@@ -24,6 +24,7 @@ const SECTIONS = [
   { id: 'mixer',   label: 'Mixer', hint: 'crossfade · weather' },
   { id: 'jingles', label: 'Jingles', hint: 'stingers' },
   { id: 'sfx',     label: 'Sound FX', hint: 'agent stingers' },
+  { id: 'danger',  label: 'Danger zone', hint: 'broadcast control' },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]['id'];
@@ -99,6 +100,7 @@ interface SearchForm {
 interface FormState {
   jingleRatio: string;
   crossfadeDuration: string;
+  station: string;
   weather: WeatherCfg;
   tts: TtsForm;
   llm: LlmForm;
@@ -130,6 +132,7 @@ interface SettingsData {
   values?: {
     jingleRatio?: number;
     crossfadeDuration?: number;
+    station?: string;
     weather?: { lat?: number; lng?: number; locationName?: string };
     tts?: {
       defaultEngine?: string;
@@ -213,6 +216,7 @@ export default function SettingsPanel() {
     setForm({
       jingleRatio: String(v.jingleRatio ?? ''),
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
+      station: v.station ?? '',
       weather: {
         lat: String(v.weather?.lat ?? ''),
         lng: String(v.weather?.lng ?? ''),
@@ -403,49 +407,6 @@ export default function SettingsPanel() {
             </button>
           );
         })}
-
-        <div className="mt-4 grid gap-2 border border-dashed border-separator-strong p-3">
-          <span className="caption">danger zone</span>
-
-          <div className="flex items-center gap-1.5 text-[10px] tracking-[0.1em] uppercase">
-            <span className="text-muted">broadcast</span>
-            <strong
-              className={cn(
-                data?.streamOnAir === false
-                  ? 'text-[var(--danger)]'
-                  : data?.streamOnAir
-                    ? 'text-vermilion'
-                    : 'text-muted',
-              )}
-            >
-              {data?.streamOnAir == null ? '—' : data.streamOnAir ? 'on air' : 'off air'}
-            </strong>
-          </div>
-          {data?.streamOnAir === false ? (
-            <Btn sm tone="accent" onClick={startStream} disabled={busy || !data}>
-              Start stream
-            </Btn>
-          ) : (
-            <Btn sm tone="danger" onClick={() => setConfirmStop(true)} disabled={busy || !data || data?.streamOnAir == null}>
-              Stop stream
-            </Btn>
-          )}
-          <div className="text-[10px] leading-[1.4] text-muted">
-            Takes the station off air by disconnecting the Icecast mount. A mixer restart brings it back on air.
-          </div>
-
-          <Btn sm tone="danger" onClick={() => setConfirmRestart(true)} disabled={busy || !data}>
-            Restart mixer
-          </Btn>
-          <div className="text-[10px] leading-[1.4] text-muted">
-            Drops the broadcast for ~3–5s. Use after crossfade or jingle frequency changes.
-            {pendingRestart && (
-              <strong className="mt-1 block text-vermilion">
-                Pending settings need a restart to apply.
-              </strong>
-            )}
-          </div>
-        </div>
       </aside>
 
       {/* Active section */}
@@ -508,6 +469,55 @@ export default function SettingsPanel() {
             busy={busy} createSfx={createSfx} onDelete={setConfirmDeleteSfx}
             data={data} saveSettings={saveSettings}
           />
+        )}
+        {activeSection === 'danger' && (
+          <>
+            <SectionHeader
+              eyebrow="danger zone"
+              title="Stop the stream or restart the mixer."
+              sub="Both actions affect every current listener. Restart the mixer after changing crossfade or jingle frequency; stop the stream to take the station off air entirely."
+              metrics={[
+                {
+                  n: data?.streamOnAir == null ? '—' : data.streamOnAir ? 'on air' : 'off air',
+                  l: 'broadcast',
+                  accent: data?.streamOnAir === true,
+                },
+              ]}
+            />
+
+            <Card title="Broadcast" sub={data?.streamOnAir === false ? 'currently off air' : 'currently on air'}>
+              <div className="grid gap-2">
+                {data?.streamOnAir === false ? (
+                  <Btn sm tone="accent" onClick={startStream} disabled={busy || !data}>
+                    Start stream
+                  </Btn>
+                ) : (
+                  <Btn sm tone="danger" onClick={() => setConfirmStop(true)} disabled={busy || !data || data?.streamOnAir == null}>
+                    Stop stream
+                  </Btn>
+                )}
+                <div className="field-hint">
+                  Takes the station off air by disconnecting the Icecast mount. A mixer restart brings it back on air.
+                </div>
+              </div>
+            </Card>
+
+            <Card title="Mixer" sub="apply pending Liquidsoap-level settings">
+              <div className="grid gap-2">
+                <Btn sm tone="danger" onClick={() => setConfirmRestart(true)} disabled={busy || !data}>
+                  Restart mixer
+                </Btn>
+                <div className="field-hint">
+                  Drops the broadcast for ~3–5s. Use after crossfade or jingle frequency changes.
+                  {pendingRestart && (
+                    <strong className="mt-1 block text-vermilion">
+                      Pending settings need a restart to apply.
+                    </strong>
+                  )}
+                </div>
+              </div>
+            </Card>
+          </>
         )}
       </div>
 
@@ -1390,6 +1400,7 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
 function MixerSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const save = () => saveSettings({
     crossfadeDuration: parseFloat(form.crossfadeDuration),
+    station: form.station,
     weather: {
       lat: parseFloat(form.weather.lat),
       lng: parseFloat(form.weather.lng),
@@ -1430,6 +1441,24 @@ function MixerSection({ data, form, setForm, busy, saveSettings }: SectionProps)
           <div className="field-hint">
             Seconds of overlap between tracks (current: {data.values?.crossfadeDuration}s).
             Requires a mixer restart to apply.
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Station name" sub="What the DJ calls this radio on air">
+        <div className="field">
+          <Label>Station name</Label>
+          <Input
+            placeholder="SUB/WAVE"
+            value={form.station}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setForm(f => ({ ...f, station: e.target.value }))
+            }
+            className="w-[260px]"
+            maxLength={80}
+          />
+          <div className="field-hint">
+            Substituted into the DJ prompt’s {'{station}'} placeholder (current: {data.values?.station || 'SUB/WAVE'}). Applies live.
           </div>
         </div>
       </Card>

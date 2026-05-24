@@ -165,7 +165,6 @@ export default function DashPanel() {
   const strip: StripCell[] = [
     { l: 'dj on air', v: djName, accent: true },
     { l: 'show', v: showName },
-    { l: 'mood', v: ctx?.dominantMood || '—' },
     {
       l: 'listeners',
       v: listenersObj?.current != null ? String(listenersObj.current) : '—',
@@ -407,7 +406,7 @@ function HeroSection({ err, np, q, busy, onSkip, strip }: HeroSectionProps) {
           </div>
           {np?.title ? (
             <>
-              <div className="text-[30px] leading-[1.05] font-extrabold tracking-[-0.02em]">
+              <div className="text-[18px] leading-[1.2] font-bold tracking-[-0.01em]">
                 {np.title}{' '}
                 <span className="font-semibold text-muted">— {np.artist}</span>
               </div>

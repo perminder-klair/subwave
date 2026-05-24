@@ -23,8 +23,6 @@ interface DebugIcecast {
 interface DebugLibrary {
   total?: number;
   updatedAt?: string;
-  byMood?: Record<string, number>;
-  byEnergy?: Record<string, number>;
 }
 
 interface DebugQueueEntry {
@@ -300,7 +298,7 @@ export default function DebugPanel() {
           </Card>
 
           {/* ── ROW 3 ───────────────────────────────────────── */}
-          <div className="stack-mobile grid grid-cols-[1fr_1fr_1.2fr] gap-4">
+          <div className="stack-mobile grid grid-cols-2 gap-4">
             <Card title="State dir" sub="/var/sub-wave" bodyClass="max-h-80 overflow-y-auto">
               <FilesTable files={data.stateFiles} />
             </Card>
@@ -311,42 +309,6 @@ export default function DebugPanel() {
               bodyClass="max-h-80 overflow-y-auto"
             >
               <FilesTable files={data.voiceFiles} />
-            </Card>
-
-            <Card
-              title="Library tags"
-              sub={`${data.library?.total ?? 0} tracks${data.library?.updatedAt ? ' · ' + new Date(data.library.updatedAt).toLocaleString('en-GB') : ''}`}
-            >
-              {!data.library?.total ? (
-                <span className="field-hint italic">
-                  not tagged yet — start tagger from settings
-                </span>
-              ) : (
-                <div className="grid gap-2.5">
-                  <div>
-                    <div className="caption mb-1.5">by mood</div>
-                    <div className="flex flex-wrap gap-1">
-                      {Object.entries(data.library.byMood || {})
-                        .sort((a, b) => b[1] - a[1])
-                        .map(([m, n]) => (
-                          <Pill key={m}>
-                            {m} <span className="mono-num ml-1 text-muted">{n}</span>
-                          </Pill>
-                        ))}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="caption mb-1.5">by energy</div>
-                    <div className="flex flex-wrap gap-1">
-                      {Object.entries(data.library.byEnergy || {}).map(([e, n]) => (
-                        <Pill key={e}>
-                          {e} <span className="mono-num ml-1 text-muted">{n}</span>
-                        </Pill>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
             </Card>
           </div>
 
