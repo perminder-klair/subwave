@@ -12,6 +12,7 @@ import { queue } from '../broadcast/queue.js';
 import * as djAgent from '../broadcast/dj-agent.js';
 import * as session from '../broadcast/session.js';
 import * as listeners from '../broadcast/listeners.js';
+import * as webhooks from '../broadcast/webhooks.js';
 import {
   checkRateLimit, clientIp,
   REQUESTS_DISABLED, REQUEST_TEXT_MAX, REQUEST_NAME_MAX,
@@ -432,6 +433,7 @@ router.post('/request', async (req, res) => {
   };
   requests.set(id, entry);
   queue.log('request', `${requester}: "${text}" (id ${id.slice(0, 8)})`);
+  webhooks.notify('request.received', { requestedBy: requester, text });
 
   // Hand the listener a receipt and let go of the connection. The booth does
   // the rest; GET /request/:id reports the outcome.

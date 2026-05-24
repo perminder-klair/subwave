@@ -14,6 +14,7 @@ import { getFullContext } from '../context.js';
 import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
 import { djCallsAllowed } from './listeners.js';
+import * as webhooks from './webhooks.js';
 
 // Random gap between DJ links on auto-played tracks. The frequency setting
 // scales how chatty the DJ is:
@@ -245,6 +246,11 @@ class Queue {
       await writeFile(targetFile, wavPath);
       this.log(kind, text);
       session.appendTurn({ role: 'segment', kind, text });
+      // The auto-DJ link channel is its own event; everything else (station
+      // IDs, weather, hourly) is `dj.say`. Operators that pipe these into
+      // Discord usually want to filter the chatty link stream separately.
+      webhooks.notify(kind === 'link' ? 'dj.link' : 'dj.say',
+        kind === 'link' ? { text } : { text, kind });
     } catch (err: any) {
       this.log('error', `Announce failed: ${err.message}`);
     }
@@ -350,6 +356,15 @@ class Queue {
     logEvent('track.play', {
       title: this.current.track.title,
       artist: this.current.track.artist || null,
+      source: this.current.source,
+      requestedBy: this.current.requestedBy || null,
+    });
+
+    // Outbound fan-out — fire-and-forget; never blocks the picker path.
+    webhooks.notify('track.play', {
+      title: this.current.track.title,
+      artist: this.current.track.artist || null,
+      album: this.current.track.album || null,
       source: this.current.source,
       requestedBy: this.current.requestedBy || null,
     });

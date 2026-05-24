@@ -136,6 +136,17 @@ const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
 const PERSONA_LIMIT = 12;
 const SHOWS_LIMIT = 64;
 const SKILLS_PER_PERSONA_LIMIT = 20;
+const WEBHOOKS_LIMIT = 16;
+
+// Event names the outbound webhook fan-out can subscribe to. Kept in sync
+// with broadcast/webhooks.ts WEBHOOK_EVENTS — duplicated here so settings.ts
+// has no runtime dependency on the broadcast module.
+const WEBHOOK_EVENTS = [
+  'track.play',
+  'dj.say',
+  'dj.link',
+  'request.received',
+];
 
 // Server-minted opaque id, e.g. mintId('p_') -> 'p_a1b2c3'.
 function mintId(prefix) {
@@ -274,6 +285,10 @@ const DEFAULTS = {
   sfx: {
     enabled: true,
   },
+  // Outbound webhooks. Each entry POSTs station events (see broadcast/
+  // webhooks.ts for the event list) to `url` with a fire-and-forget HTTP
+  // call. Empty by default — operators add hooks via the admin UI.
+  webhooks: [] as any[],
 };
 
 const BOUNDS = {
@@ -529,8 +544,39 @@ export async function load() {
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
     },
+    webhooks: normalizeWebhooks(stored.webhooks),
   };
   return cache;
+}
+
+// Lenient normalizer — used by load(). Drops invalid entries silently rather
+// than failing the whole boot.
+function normalizeWebhooks(raw: any) {
+  if (!Array.isArray(raw)) return [];
+  const out: any[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const url = typeof item.url === 'string' ? item.url.trim() : '';
+    if (!/^https?:\/\//.test(url) || url.length > 500) continue;
+    const events = Array.isArray(item.events)
+      ? item.events.filter((e: any) => WEBHOOK_EVENTS.includes(e))
+      : [];
+    if (!events.length) continue;
+    let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('wh_');
+    if (seen.has(id)) id = mintId('wh_');
+    seen.add(id);
+    out.push({
+      id,
+      url,
+      events,
+      enabled: typeof item.enabled === 'boolean' ? item.enabled : true,
+      authHeader:
+        typeof item.authHeader === 'string' ? item.authHeader.slice(0, 500) : '',
+    });
+    if (out.length >= WEBHOOKS_LIMIT) break;
+  }
+  return out;
 }
 
 export function get() {
@@ -548,6 +594,11 @@ export function getRedacted() {
   if (clone.llm) clone.llm.apiKey = s.llm?.apiKey ? 'set' : '';
   if (clone.tts?.cloud) clone.tts.cloud.apiKey = s.tts?.cloud?.apiKey ? 'set' : '';
   if (clone.search) clone.search.apiKey = s.search?.apiKey ? 'set' : '';
+  if (Array.isArray(clone.webhooks)) {
+    for (let i = 0; i < clone.webhooks.length; i++) {
+      clone.webhooks[i].authHeader = s.webhooks?.[i]?.authHeader ? 'set' : '';
+    }
+  }
   return clone;
 }
 
@@ -709,6 +760,57 @@ function validateScheduleStrict(raw, shows) {
     }
   }
   return week;
+}
+
+// Strict validator — used by update(). `existing` is the current list, so
+// the operator can keep a previously-set authHeader by sending the redacted
+// sentinel back unchanged.
+function validateWebhooksStrict(raw: any, existing: any[] = []) {
+  if (!Array.isArray(raw)) throw new Error('webhooks must be an array');
+  if (raw.length > WEBHOOKS_LIMIT) {
+    throw new Error(`webhooks must be at most ${WEBHOOKS_LIMIT} entries`);
+  }
+  const byId = new Map(existing.map((h: any) => [h.id, h]));
+  const seen = new Set<string>();
+  return raw.map((item, i) => {
+    if (!item || typeof item !== 'object') throw new Error(`webhooks[${i}] must be an object`);
+    const url = String(item.url ?? '').trim();
+    if (!/^https?:\/\//.test(url)) {
+      throw new Error(`webhooks[${i}].url must start with http:// or https://`);
+    }
+    if (url.length > 500) throw new Error(`webhooks[${i}].url too long`);
+    if (!Array.isArray(item.events) || item.events.length === 0) {
+      throw new Error(`webhooks[${i}].events must be a non-empty array`);
+    }
+    const events: string[] = [];
+    for (const e of item.events) {
+      if (!WEBHOOK_EVENTS.includes(e)) {
+        throw new Error(
+          `webhooks[${i}].events entries must be one of: ${WEBHOOK_EVENTS.join(', ')}`,
+        );
+      }
+      if (!events.includes(e)) events.push(e);
+    }
+    let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('wh_');
+    if (seen.has(id)) id = mintId('wh_');
+    seen.add(id);
+    // authHeader: sentinel 'set' from getRedacted() means "keep the existing
+    // value" — the UI never re-sends the actual header. Anything else replaces.
+    const prior = byId.get(id);
+    let authHeader = '';
+    if (item.authHeader === 'set' && prior?.authHeader) {
+      authHeader = prior.authHeader;
+    } else if (typeof item.authHeader === 'string') {
+      authHeader = item.authHeader.slice(0, 500);
+    }
+    return {
+      id,
+      url,
+      events,
+      enabled: item.enabled !== false,
+      authHeader,
+    };
+  });
 }
 
 // Validate + persist. Returns { saved, requiresRestart } so the UI can react.
@@ -962,6 +1064,9 @@ export async function update(patch) {
     if (sx.enabled !== undefined) {
       next.sfx.enabled = !!sx.enabled;
     }
+  }
+  if ('webhooks' in patch) {
+    next.webhooks = validateWebhooksStrict(patch.webhooks, next.webhooks || []);
   }
 
   // Post-patch integrity sweep — a personas/shows change in this patch may

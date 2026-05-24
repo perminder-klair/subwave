@@ -15,6 +15,8 @@ import {
   Sparkles,
   SlidersHorizontal,
   Terminal,
+  Archive,
+  Webhook,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -57,6 +59,8 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'System',
     items: [
       { href: '/admin/stats', id: 'stats', label: 'Stats', icon: BarChart3 },
+      { href: '/admin/archives', id: 'archives', label: 'Archives', icon: Archive },
+      { href: '/admin/webhooks', id: 'webhooks', label: 'Webhooks', icon: Webhook },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
     ],

@@ -24,6 +24,9 @@ import { router as statsRoutes } from './routes/stats.js';
 import { router as djRoutes } from './routes/dj.js';
 import { router as libraryRoutes } from './routes/library.js';
 import { router as onboardingRoutes } from './routes/onboarding.js';
+import { router as archivesRoutes } from './routes/archives.js';
+import { router as listenersRoutes } from './routes/listeners.js';
+import { router as webhooksRoutes } from './routes/webhooks.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
 import { loadSetupConfig } from './setup/config.js';
 import { getSetupStatus } from './setup/firstRun.js';
@@ -46,6 +49,9 @@ app.use(statsRoutes);
 app.use(djRoutes);
 app.use(libraryRoutes);
 app.use(onboardingRoutes);
+app.use(archivesRoutes);
+app.use(listenersRoutes);
+app.use(webhooksRoutes);
 
 // (manual skip is not implemented in this build — Liquidsoap controls pacing)
 
