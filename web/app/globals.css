@@ -1959,6 +1959,27 @@ body::after {
 .admin-root .card {
     border: 1px solid var(--ink);
     background: var(--card-bg);
+    /* As a grid item, default min-width: auto would let oversized children
+       (long URIs, JSON dumps in /admin/debug expansions) push the column
+       wider and blow out the page. min-width: 0 lets the grid track shrink
+       and forces wrapping inside instead. */
+    min-width: 0;
+}
+.admin-root .card-body {
+    /* Same reason — pre/code content inside expanded <details> needs a
+       width constraint to actually wrap. */
+    min-width: 0;
+    overflow-x: hidden;
+}
+.admin-root details {
+    min-width: 0;
+}
+/* Unbroken strings (annotated track URIs, base64, raw URLs) inside debug
+   expansions would otherwise force the card wider than the viewport.
+   `anywhere` only breaks when the word truly doesn't fit. */
+.admin-root .card pre,
+.admin-root details pre {
+    overflow-wrap: anywhere;
 }
 .admin-root .card-head {
     display: flex;
