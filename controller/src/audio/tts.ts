@@ -7,11 +7,12 @@
 import * as piper from './piper.js';
 import * as kokoro from './kokoro.js';
 import * as chatterbox from './chatterbox.js';
+import * as pocketTts from './pocketTts.js';
 import * as cloud from '../llm/speech.js';
 import * as settings from '../settings.js';
 import { recordTts } from '../stats.js';
 
-export const ENGINES = ['piper', 'kokoro', 'chatterbox', 'cloud'];
+export const ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud'];
 
 // Voice kinds the system speaks. `kind` is passed by the caller and used to
 // look up an engine override in settings. Unknown kinds fall back to default.
@@ -69,6 +70,12 @@ function resolveEngine(kind: string, personaTts: any) {
   if (chosen === 'chatterbox' && !chatterbox.isAvailable()) {
     return tts.defaultEngine && tts.defaultEngine !== 'chatterbox' ? tts.defaultEngine : 'piper';
   }
+  // Same story for PocketTTS — opt-in via --build-arg WITH_POCKETTTS=1.
+  // When the venv is absent, route to the saved default (or Piper as the
+  // universal local fallback).
+  if (chosen === 'pocket-tts' && !pocketTts.isAvailable()) {
+    return tts.defaultEngine && tts.defaultEngine !== 'pocket-tts' ? tts.defaultEngine : 'piper';
+  }
   return chosen;
 }
 
@@ -87,6 +94,16 @@ async function speakWith(engine: string, text: string, opts: any, personaTts: an
       ? personaTts.voice
       : settings.get().tts?.chatterbox?.referenceVoice;
     return chatterbox.speak(text, { ...opts, voice });
+  }
+  if (engine === 'pocket-tts') {
+    // PocketTTS voice is a built-in id (alba, anna, …). Persona override wins;
+    // otherwise the global pocketTts voice. The worker falls back to the
+    // configured default if the id isn't recognised, so a stale persona
+    // value never causes a silent segment.
+    const voice = (personaTts && personaTts.engine === 'pocket-tts' && personaTts.voice)
+      ? personaTts.voice
+      : settings.get().tts?.pocketTts?.voice;
+    return pocketTts.speak(text, { ...opts, voice });
   }
   if (engine === 'cloud') {
     // Persona picks provider + voice; the shared tts.cloud holds key + model.
@@ -166,6 +183,7 @@ export function availableEngines() {
     piper: true,
     kokoro: kokoro.isAvailable(),
     chatterbox: chatterbox.isAvailable(),
+    'pocket-tts': pocketTts.isAvailable(),
     cloud: cloud.isConfigured(),
     // Per-provider — a persona's cloud voice is only usable if *its* provider
     // is configured, which can differ from the global Cloud-engine provider.
@@ -200,6 +218,10 @@ export function describeRouting() {
     voice = (personaTts?.engine === 'chatterbox' && personaTts.voice)
       ? personaTts.voice
       : (tts.chatterbox?.referenceVoice || null);
+  } else if (engine === 'pocket-tts') {
+    voice = (personaTts?.engine === 'pocket-tts' && personaTts.voice)
+      ? personaTts.voice
+      : (tts.pocketTts?.voice || null);
   }
   return {
     effectivePersona: persona ? { id: persona.id, name: persona.name } : null,

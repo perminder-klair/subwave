@@ -86,6 +86,37 @@ RUN if [ "$WITH_CHATTERBOX" = "1" ]; then \
       echo "Chatterbox not bundled — build with --build-arg WITH_CHATTERBOX=1 to include it" ; \
     fi
 
+# --- PocketTTS (opt-in) ---------------------------------------------------
+# Fifth TTS engine — kyutai-labs' PocketTTS: a 100M-param CPU-only model
+# (~6× real-time on a modern CPU, ~200ms time-to-first-chunk) covering EN/FR/
+# DE/IT/ES/PT built-in voices, MIT-licensed. Sits between Piper (fast, robotic)
+# and Chatterbox (heavy, expressive) in the local-engine ladder. The runtime
+# still drags PyTorch in, so this is deliberately NOT in the default image —
+# build with `--build-arg WITH_POCKETTTS=1` to bundle the venv. Same isolation
+# pattern as Chatterbox (its own venv at /opt/pocket-tts/venv, CPU torch wheels
+# only, model preload doubling as a build-time smoke test). When the venv is
+# absent, pocketTts.isAvailable() reports false and the dispatcher falls back
+# to Piper, so settings can safely reference the engine regardless.
+ARG WITH_POCKETTTS=0
+RUN if [ "$WITH_POCKETTTS" = "1" ]; then \
+      echo "Bundling PocketTTS (PyTorch, CPU-only) — adds ~1-2GB to the image" && \
+      python3 -m venv /opt/pocket-tts/venv && \
+      /opt/pocket-tts/venv/bin/pip install --no-cache-dir --upgrade pip && \
+      /opt/pocket-tts/venv/bin/pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --extra-index-url https://pypi.org/simple \
+        torch scipy pocket-tts && \
+      /opt/pocket-tts/venv/bin/python -c \
+        "from pocket_tts import TTSModel; TTSModel.load_model()" && \
+      find /opt/pocket-tts/venv -depth -type d -name __pycache__ -exec rm -rf {} + && \
+      SP=/opt/pocket-tts/venv/lib/python3.11/site-packages && \
+      rm -rf "$SP/torch/include" "$SP/torch/test" ; \
+    else \
+      echo "PocketTTS not bundled — build with --build-arg WITH_POCKETTTS=1 to include it" ; \
+    fi
+ENV POCKET_TTS_PYTHON=/opt/pocket-tts/venv/bin/python \
+    POCKET_TTS_WORKER=/app/scripts/pocket_tts_worker.py
+
 # --- Controller app -------------------------------------------------------
 WORKDIR /app
 COPY controller/package*.json ./

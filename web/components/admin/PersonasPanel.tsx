@@ -33,6 +33,7 @@ const ENGINES = [
   { id: 'piper',  label: 'Piper' },
   { id: 'kokoro', label: 'Kokoro' },
   { id: 'chatterbox', label: 'Chatterbox' },
+  { id: 'pocket-tts', label: 'PocketTTS' },
   { id: 'cloud',  label: 'Cloud' },
 ];
 // Chatterbox reference voice files are validated against this in audio/chatterbox.ts
@@ -41,6 +42,9 @@ const CHATTERBOX_VOICE_RE = /^[A-Za-z0-9_.-]{1,80}\.wav$/;
 // Sentinel for the empty-string "use the built-in voice" choice — Radix Select
 // rejects an empty-string SelectItem value.
 const CB_DEFAULT_VOICE = '__cb_default__';
+// PocketTTS voice ids — lowercase, allow underscores/hyphens (matches the
+// settings-side POCKET_TTS_VOICE_RE).
+const POCKET_TTS_VOICE_RE = /^[a-z][a-z0-9_-]{0,39}$/;
 const NAME_MAX = 40;
 const TAGLINE_MAX = 80;
 const SOUL_MAX = 400;
@@ -50,7 +54,7 @@ const PERSONA_MAX = 12;
 const KOKORO_RE = /^[a-z]{2}_[a-z0-9]+$/;
 
 interface PersonaTts {
-  engine: 'piper' | 'kokoro' | 'chatterbox' | 'cloud' | string;
+  engine: 'piper' | 'kokoro' | 'chatterbox' | 'pocket-tts' | 'cloud' | string;
   cloudProvider: string;
   voice: string;
 }
@@ -97,6 +101,7 @@ interface SettingsResponse {
     kokoroVoices?: VoiceOption[];
     chatterboxVoices?: string[];
     chatterboxVoiceDir?: string;
+    pocketTtsVoices?: VoiceOption[];
     available?: Record<string, boolean>;
     cloudProviders?: string[];
   };
@@ -120,6 +125,10 @@ function personaValid(p: Persona): boolean {
     const v = p.tts.voice.trim();
     return v === '' || CHATTERBOX_VOICE_RE.test(v);
   }
+  if (e === 'pocket-tts') {
+    const v = p.tts.voice.trim();
+    return v === '' || POCKET_TTS_VOICE_RE.test(v);
+  }
   if (e === 'cloud') {
     const v = p.tts.voice.trim();
     return v.length >= 1 && v.length <= 100;
@@ -135,6 +144,7 @@ function personaValid(p: Persona): boolean {
 function voiceForSave(engine: string, voice: string): string {
   if (engine === 'kokoro') return voice || 'bf_isabella';
   if (engine === 'chatterbox') return CHATTERBOX_VOICE_RE.test(voice) ? voice : '';
+  if (engine === 'pocket-tts') return POCKET_TTS_VOICE_RE.test(voice) ? voice : 'alba';
   return voice; // piper ignores voice; cloud carries its own
 }
 
@@ -309,6 +319,7 @@ export default function PersonasPanel() {
   };
 
   const kokoroVoices = data?.tts?.kokoroVoices || [];
+  const pocketTtsVoices = data?.tts?.pocketTtsVoices || [];
   const cloudProviders = data?.tts?.cloudProviders || ['openai', 'elevenlabs'];
   const skillCatalog = data?.skills?.catalog || [];
 
@@ -354,6 +365,7 @@ export default function PersonasPanel() {
   const engineLabel = (p: Persona) => {
     if (p.tts.engine === 'kokoro') return `kokoro / ${p.tts.voice.trim() || '—'}`;
     if (p.tts.engine === 'chatterbox') return `chatterbox / ${p.tts.voice.trim() || 'built-in'}`;
+    if (p.tts.engine === 'pocket-tts') return `pocket-tts / ${p.tts.voice.trim() || 'alba'}`;
     if (p.tts.engine === 'cloud') return `cloud / ${p.tts.cloudProvider} / ${p.tts.voice.trim() || '—'}`;
     return 'piper';
   };
@@ -644,6 +656,8 @@ export default function PersonasPanel() {
                   } else if (v === 'chatterbox') {
                     // Empty = built-in voice; a real value must be a .wav filename.
                     if (cur && !CHATTERBOX_VOICE_RE.test(cur)) patch.voice = '';
+                  } else if (v === 'pocket-tts') {
+                    if (!POCKET_TTS_VOICE_RE.test(cur)) patch.voice = 'alba';
                   }
                   setPersonaTts(safeIdx, patch);
                 }}
@@ -716,6 +730,42 @@ export default function PersonasPanel() {
                     <code>{cbDir}</code> on the host and they’ll show up here.
                     Chatterbox also voices paralinguistic tags ([laugh], [sigh], …) the
                     DJ may insert.
+                  </div>
+                </div>
+              );
+            })()}
+
+            {focused.tts.engine === 'pocket-tts' && (() => {
+              const ptAvailable = data?.tts?.available?.['pocket-tts'] !== false;
+              return (
+                <div className="field max-w-[360px]">
+                  {!ptAvailable && (
+                    <div className="mb-2.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
+                      PocketTTS isn’t bundled in this controller image — this persona
+                      will fall back to <strong>{defaultEngine}</strong> until the image
+                      is rebuilt with <code>--build-arg WITH_POCKETTTS=1</code>.
+                    </div>
+                  )}
+                  <Label>PocketTTS voice</Label>
+                  <Select
+                    value={focused.tts.voice || 'alba'}
+                    onValueChange={val => setPersonaTts(safeIdx, { voice: val })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {pocketTtsVoices.map(v => (
+                          <SelectItem key={v.id} value={v.id}>{v.label}</SelectItem>
+                        ))}
+                        {focused.tts.voice && !pocketTtsVoices.some(v => v.id === focused.tts.voice) && (
+                          <SelectItem value={focused.tts.voice}>{focused.tts.voice}</SelectItem>
+                        )}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <div className="field-hint">
+                    CPU-only, ~6× real-time. Built-in voices cover English, French, German,
+                    Italian, Spanish and Portuguese.
                   </div>
                 </div>
               );

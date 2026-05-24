@@ -69,6 +69,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         kokoroVoices: settings.KOKORO_VOICES_BRITISH,
         chatterboxVoices: await chatterbox.listReferenceVoices(),
         chatterboxVoiceDir: chatterbox.voiceDir(),
+        pocketTtsVoices: settings.POCKET_TTS_VOICES,
         cloudProviders: settings.TTS_CLOUD_PROVIDERS,
         frequencies: settings.FREQUENCIES,
         moods: settings.SHOW_MOODS,

@@ -80,6 +80,7 @@ interface TtsForm {
   defaultEngine: string;
   kokoro: { voice: string };
   chatterbox: { referenceVoice: string };
+  pocketTts: { voice: string };
   cloud: CloudTtsCfg;
 }
 
@@ -170,6 +171,7 @@ interface SettingsData {
       defaultEngine?: string;
       kokoro?: { voice?: string };
       chatterbox?: { referenceVoice?: string };
+      pocketTts?: { voice?: string };
       cloud?: Partial<CloudTtsCfg>;
     };
     llm?: Partial<LlmForm>;
@@ -186,6 +188,7 @@ interface SettingsData {
     kokoroVoices?: Array<{ id: string; label: string }>;
     chatterboxVoices?: string[];
     chatterboxVoiceDir?: string;
+    pocketTtsVoices?: Array<{ id: string; label: string }>;
     cloudProviders?: string[];
   };
   llm?: {
@@ -266,6 +269,7 @@ export default function SettingsPanel() {
         defaultEngine: v.tts?.defaultEngine ?? 'piper',
         kokoro: { voice: v.tts?.kokoro?.voice ?? 'bf_isabella' },
         chatterbox: { referenceVoice: v.tts?.chatterbox?.referenceVoice ?? '' },
+        pocketTts: { voice: v.tts?.pocketTts?.voice ?? 'alba' },
         cloud: {
           enabled: v.tts?.cloud?.enabled ?? false,
           provider: v.tts?.cloud?.provider ?? 'openai',
@@ -867,7 +871,7 @@ const CB_DEFAULT_VOICE = '__cb_default__';
 function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const engines = data.tts?.engines || ['piper'];
   const available = data.tts?.available || {};
-  const ENGINE_LABELS: Record<string, string> = { piper: 'Piper', kokoro: 'Kokoro', chatterbox: 'Chatterbox', cloud: 'Cloud' };
+  const ENGINE_LABELS: Record<string, string> = { piper: 'Piper', kokoro: 'Kokoro', chatterbox: 'Chatterbox', 'pocket-tts': 'PocketTTS', cloud: 'Cloud' };
   const engineOptions = engines.map(e => ({ id: e, label: ENGINE_LABELS[e] || e }));
 
   const save = () => saveSettings({
@@ -875,6 +879,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
       defaultEngine: form.tts.defaultEngine,
       kokoro: { voice: form.tts.kokoro?.voice },
       chatterbox: { referenceVoice: form.tts.chatterbox?.referenceVoice ?? '' },
+      pocketTts: { voice: form.tts.pocketTts?.voice ?? 'alba' },
       cloud: {
         enabled: true,
         provider: form.tts.cloud.provider,
@@ -908,6 +913,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const savedEngine: string = savedTts.defaultEngine || 'piper';
   const savedKokoroVoice: string = savedTts.kokoro?.voice || '';
   const savedChatterboxVoice: string = savedTts.chatterbox?.referenceVoice || '';
+  const savedPocketTtsVoice: string = savedTts.pocketTts?.voice || '';
   const savedCloud: any = savedTts.cloud || {};
   const savedEngineLabel = ENGINE_LABELS[savedEngine] || savedEngine;
   const formEngineLabel = ENGINE_LABELS[form.tts.defaultEngine] || form.tts.defaultEngine;
@@ -916,6 +922,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
     form.tts.defaultEngine !== savedEngine
     || (form.tts.kokoro?.voice || '') !== savedKokoroVoice
     || (form.tts.chatterbox?.referenceVoice || '') !== savedChatterboxVoice
+    || (form.tts.pocketTts?.voice || '') !== savedPocketTtsVoice
     || form.tts.cloud.provider !== (savedCloud.provider || '')
     || (form.tts.cloud.model || '').trim() !== (savedCloud.model || '').trim()
     || (form.tts.cloud.voice || '').trim() !== (savedCloud.voice || '').trim()
@@ -929,6 +936,10 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   } else if (savedEngine === 'chatterbox') {
     activeDetail = <>
       Reference <code>{savedChatterboxVoice || 'built-in'}</code> — voice cloning + paralinguistic tags. Falls back to Piper if the worker isn’t installed.
+    </>;
+  } else if (savedEngine === 'pocket-tts') {
+    activeDetail = <>
+      Voice <code>{savedPocketTtsVoice || 'alba'}</code> — CPU-only, ~6× real-time, multilingual built-in voices. Falls back to Piper if the worker isn’t installed.
     </>;
   } else if (savedEngine === 'cloud') {
     activeDetail = <>
@@ -1076,6 +1087,44 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                 The engine will use its built-in default voice. Drop a 5-second WAV into
                 that directory to enable cloning.
               </div>
+            )}
+          </div>
+        )}
+
+        {form.tts.defaultEngine === 'pocket-tts' && (
+          <div className="field mt-4">
+            <Label>PocketTTS voice</Label>
+            {available['pocket-tts'] === false ? (
+              <div className="field-hint text-[var(--danger)]">
+                PocketTTS isn’t bundled in this controller image. Rebuild it with{' '}
+                <code>--build-arg WITH_POCKETTTS=1</code> to include the runtime and
+                model, then recreate the controller. Until then this engine falls back to Piper.
+              </div>
+            ) : (data.tts?.pocketTtsVoices?.length || 0) > 0 ? (
+              <>
+                <Select
+                  value={form.tts.pocketTts?.voice ?? 'alba'}
+                  onValueChange={val => setForm(f => ({
+                    ...f, tts: { ...f.tts, pocketTts: { ...f.tts.pocketTts, voice: val } },
+                  }))}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {data.tts?.pocketTtsVoices?.map(v => (
+                        <SelectItem key={v.id} value={v.id}>{v.label} — {v.id}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <div className="field-hint">
+                  100M-param CPU-only model from kyutai-labs. Voices speak English, French,
+                  German, Italian, Spanish and Portuguese. Personas can override this on
+                  the Personas page.
+                </div>
+              </>
+            ) : (
+              <div className="field-hint">This build reports no PocketTTS voices.</div>
             )}
           </div>
         )}
