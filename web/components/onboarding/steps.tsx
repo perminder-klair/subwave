@@ -301,7 +301,7 @@ export function DjStep({ w }: { w: WizardController }) {
     <div>
       <StepHeader
         title="DJ persona"
-        blurb="The DJ's voice on air. Name your station, set your location for weather, and optionally override the personality."
+        blurb="The DJ's voice on air. Name your station and set your location for weather. Personality tuning lives in /admin/settings — keep this step short."
       />
       <div className="grid gap-3">
         <Field label="Station name">
@@ -314,15 +314,6 @@ export function DjStep({ w }: { w: WizardController }) {
           <TextInput
             value={w.data.dj.locationName}
             onChange={e => w.patch(d => ({ dj: { ...d.dj, locationName: e.target.value } }))}
-          />
-        </Field>
-        <Field label="DJ system prompt (optional)" hint="Leave blank for the default. Must contain {name}.">
-          <textarea
-            value={w.data.dj.djPrompt}
-            placeholder="(default — leave blank unless you want to override)"
-            rows={5}
-            onChange={e => w.patch(d => ({ dj: { ...d.dj, djPrompt: e.target.value } }))}
-            className="rounded border border-ink/30 bg-bg px-2 py-1.5 font-mono text-xs focus:border-ink focus:outline-none"
           />
         </Field>
       </div>

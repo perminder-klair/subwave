@@ -29,7 +29,6 @@ export interface WizardData {
   dj: {
     stationName: string;
     locationName: string;
-    djPrompt: string;
     frequency: 'quiet' | 'moderate' | 'aggressive';
   };
 
@@ -43,7 +42,10 @@ export const DEFAULT_DATA: WizardData = {
   navidromeTest: { ok: null },
   llm: {
     provider: 'ollama',
-    model: 'llama3.1:8b',
+    // Default to Ollama's hosted "cloud" model — works out of the box with
+    // a stock Ollama install (no local pull needed) and matches the model
+    // shipped in the terminal wizard's defaults.
+    model: 'glm-5.1:cloud',
     apiKey: '',
     baseUrl: '',
     ollamaUrl: 'http://host.docker.internal:11434',
@@ -56,7 +58,6 @@ export const DEFAULT_DATA: WizardData = {
   dj: {
     stationName: 'SUB/WAVE',
     locationName: 'Wolverhampton',
-    djPrompt: '',
     frequency: 'moderate',
   },
   apiKeys: {},
@@ -158,7 +159,6 @@ export function useWizard() {
           ? { enabled: true, provider: data.tts.cloud.provider }
           : { enabled: false },
       },
-      djPrompt: data.dj.djPrompt,
       weather: { locationName: data.dj.locationName },
       apiKeys,
     };
