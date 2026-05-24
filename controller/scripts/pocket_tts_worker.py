@@ -97,12 +97,27 @@ def main():
                 state = voice_state(voice)
 
             audio = model.generate_audio(state, text)
-            # generate_audio returns a torch tensor; scipy.io.wavfile.write
-            # wants a numpy array of int16 or float32.
+            # generate_audio returns a torch tensor; coerce to a numpy float32
+            # array in roughly [-1, 1].
             if hasattr(audio, "numpy"):
                 audio = audio.numpy()
+            import numpy as np
+            audio = np.asarray(audio, dtype=np.float32)
+            # PocketTTS' raw output has wider dynamic range than Piper / Kokoro
+            # for the same line — peak sits ~-2 dBFS and mean RMS ~-19 dB,
+            # versus Piper at 0 / -14 — so it feels muffled against the
+            # (ducked) music bed. RMS-normalize to ~-14 dB so spoken loudness
+            # matches the other local engines, then hard-clip at -0.5 dBFS as
+            # a safety net (occasional peaks above target).
+            rms = float(np.sqrt(np.mean(audio * audio))) if audio.size else 0.0
+            if rms > 0:
+                gain = 0.193 / rms       # 0.193 linear ≈ -14.3 dBFS RMS
+                audio = audio * gain
+            audio = np.clip(audio, -0.944, 0.944)   # -0.5 dBFS ceiling
+            # Save as 16-bit PCM (matches the other engines' output format).
+            audio_i16 = (audio * 32767.0).astype(np.int16)
             sample_rate = int(getattr(model, "sample_rate", 24000))
-            wavfile.write(out, sample_rate, audio)
+            wavfile.write(out, sample_rate, audio_i16)
 
             duration = float(len(audio)) / float(sample_rate)
             emit({"id": req_id, "ok": True, "path": out, "duration_s": round(duration, 3)})
