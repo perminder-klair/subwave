@@ -27,6 +27,7 @@ import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as jingles from '../broadcast/jingles.js';
 import { queue } from '../broadcast/queue.js';
+import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { saveSetupConfig, clearSetupConfigCache } from '../setup/config.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../setup/secrets.js';
 import { getSetupStatus } from '../setup/firstRun.js';
@@ -220,6 +221,17 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
     // Mark setup complete so the wizard exits even if Navidrome was skipped.
     await saveSetupConfig({ setupCompletedAt: new Date().toISOString() });
     clearSetupConfigCache();
+
+    // Kick the auto-playlist refresher. The boot-time call from
+    // scheduler.start() runs before onboarding completes, so on a fresh
+    // install it fails (no Navidrome creds) and gives up — the next retry
+    // would otherwise be the 60-minute cron tick, leaving /stream.mp3 dark
+    // in the interim. Fire-and-forget so the wizard's response isn't held
+    // up by Navidrome + LLM round-trips; errors land in the controller log
+    // where the operator (or `subwave doctor`) can see them.
+    refreshAutoPlaylist().catch(err =>
+      queue.log('error', `Post-onboarding playlist refresh failed: ${err.message}`),
+    );
 
     res.json({ ok: true, status: await getSetupStatus() });
   } catch (err: any) {
