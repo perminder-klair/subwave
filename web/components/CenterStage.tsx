@@ -33,7 +33,10 @@ export default function CenterStage({ nowPlaying, elapsed, feed, djLineOn, onOpe
   // flip), and every new DJ turn (voice/dj) landing in the feed.
   // djLineOn is a listener preference for the ticker, not a "talking now"
   // flag, so it can't gate the ripple.
-  const latestDjTurnT = useMemo<number | null>(() => {
+  // SessionTurn.t is `string | number | undefined` — ISO timestamps from one
+  // path, unix-ms from another. The value is only ever used as a useEffect
+  // dep (Object.is change detection), so any stable identifier works.
+  const latestDjTurnT = useMemo<string | number | null>(() => {
     if (!feed?.length) return null;
     for (let i = feed.length - 1; i >= 0; i--) {
       const turn = feed[i];
