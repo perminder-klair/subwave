@@ -16,10 +16,12 @@ export default function Prerequisites() {
           <li>
             <strong>Docker on the host.</strong>
             <p>
-              Docker Compose runs the stack (three containers in dev, five in
-              production). The standalone <code className="bs-code-inline">subwave</code>{' '}
-              CLI is a single Bun-compiled binary with no runtime dependency — no
-              Node needed unless you&apos;re hacking on the source (
+              Docker Compose runs the stack (two containers in dev, four in
+              production — icecast and liquidsoap live together in a single{' '}
+              <code className="bs-code-inline">broadcast</code> container). The
+              standalone <code className="bs-code-inline">subwave</code> CLI is a
+              single Bun-compiled binary with no runtime dependency — no Node
+              needed unless you&apos;re hacking on the source (
               <Link href="/setup/development" className="bs-link">Development</Link>).
             </p>
           </li>

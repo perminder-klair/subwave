@@ -22,7 +22,7 @@ export default function Updates() {
           </thead>
           <tbody>
             <tr><td><code className="bs-code-inline">controller/src/**</code></td><td>controller</td></tr>
-            <tr><td><code className="bs-code-inline">liquidsoap/radio.liq</code></td><td>liquidsoap</td></tr>
+            <tr><td><code className="bs-code-inline">liquidsoap/radio.liq</code></td><td>broadcast</td></tr>
             <tr><td><code className="bs-code-inline">web/**</code></td><td>web (prod) · hot-reload (dev)</td></tr>
             <tr><td><code className="bs-code-inline">docker/Caddyfile</code></td><td>just <code className="bs-code-inline">restart caddy</code> (mounted)</td></tr>
             <tr><td><code className="bs-code-inline">docker-compose*.yml</code></td><td><code className="bs-code-inline">up -d</code> (compose decides)</td></tr>
@@ -92,8 +92,8 @@ docker compose up -d`}</CodeBlock>
             <code className="bs-code-inline">docker compose logs -f controller</code>
           </li>
           <li>
-            <strong>Liquidsoap logs</strong> —{' '}
-            <code className="bs-code-inline">docker compose logs -f liquidsoap</code>
+            <strong>Broadcast logs</strong> (icecast + liquidsoap) —{' '}
+            <code className="bs-code-inline">docker compose logs -f broadcast</code>
           </li>
           <li>
             <strong>Operator console</strong> —{' '}

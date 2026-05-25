@@ -78,14 +78,14 @@ $EDITOR .env`}</CodeBlock>
             <p>What just started:</p>
             <ul className="bs-list">
               <li>
-                <strong>icecast</strong> — broadcast endpoint, internal-only. Generates
-                three random passwords on first boot, persisted to{' '}
+                <strong>broadcast</strong> — icecast2 and liquidsoap together in one
+                container. Generates three random Icecast passwords on first boot,
+                persisted to{' '}
                 <code className="bs-code-inline">state/icecast-secrets.env</code>{' '}
                 (no <code className="bs-code-inline">scripts/setup.sh</code> step
-                needed for this).
+                needed for this); the entrypoint sources them before exec-ing
+                liquidsoap. Internal-only.
               </li>
-              <li><strong>liquidsoap</strong> — mixer feeding Icecast; sources the
-              secrets file via its entrypoint before exec-ing.</li>
               <li><strong>controller</strong> — the DJ brain; the one talking to
               Navidrome and your LLM.</li>
               <li><strong>web</strong> — Next.js UI, internal-only</li>
@@ -111,7 +111,7 @@ $EDITOR .env`}</CodeBlock>
               <p>
                 Swap the compose file for{' '}
                 <code className="bs-code-inline">docker-compose.byo.yml</code> —
-                same stack minus the bundled Caddy, with web / controller / icecast bound to{' '}
+                same stack minus the bundled Caddy, with web / controller / broadcast bound to{' '}
                 <code className="bs-code-inline">:7700</code> /{' '}
                 <code className="bs-code-inline">:7701</code> /{' '}
                 <code className="bs-code-inline">:7702</code>.

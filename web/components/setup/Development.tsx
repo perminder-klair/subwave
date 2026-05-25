@@ -6,7 +6,7 @@ export default function Development() {
     <SetupPage
       eyebrow="SETUP · 04"
       title="Hacking on SUB/WAVE."
-      intro="Three compose files, three deployment shapes. Dev mode runs the radio backend in Docker and the Next.js UI on the host with hot reload, so you can iterate on the web without a rebuild. The two prod variants differ only at the edge — one bundles Caddy, the other binds host ports for your own reverse proxy."
+      intro="Three compose files, three deployment shapes. Icecast and Liquidsoap live together in a single broadcast container in every shape. Dev mode runs the radio backend in Docker and the Next.js UI on the host with hot reload, so you can iterate on the web without a rebuild. The two prod variants differ only at the edge — one bundles Caddy, the other binds host ports for your own reverse proxy."
       current="/setup/development"
     >
       <section className="bs-section">
@@ -23,12 +23,12 @@ export default function Development() {
           <tbody>
             <tr>
               <td><code className="bs-code-inline">docker-compose.yml</code></td>
-              <td>prod — icecast · liquidsoap · controller · web · caddy edge on <code className="bs-code-inline">:7700</code></td>
+              <td>prod — broadcast · controller · web · caddy edge on <code className="bs-code-inline">:7700</code></td>
               <td><code className="bs-code-inline">${'{STATE_DIR:-<repo>/state}'}</code></td>
             </tr>
             <tr>
               <td><code className="bs-code-inline">docker-compose.byo.yml</code></td>
-              <td>same as prod minus caddy — web, controller, icecast on host ports{' '}
+              <td>same as prod minus caddy — web, controller, broadcast on host ports{' '}
                 <code className="bs-code-inline">:7700</code> /{' '}
                 <code className="bs-code-inline">:7701</code> /{' '}
                 <code className="bs-code-inline">:7702</code> for your own reverse proxy
@@ -37,7 +37,7 @@ export default function Development() {
             </tr>
             <tr>
               <td><code className="bs-code-inline">docker-compose.dev.yml</code></td>
-              <td>dev — icecast · liquidsoap · controller with <code className="bs-code-inline">tsx watch</code> hot-reload (web runs separately on host)</td>
+              <td>dev — broadcast · controller with <code className="bs-code-inline">tsx watch</code> hot-reload (web runs separately on host)</td>
               <td><code className="bs-code-inline">./state</code></td>
             </tr>
           </tbody>
@@ -56,7 +56,7 @@ export default function Development() {
 npm run dev          # alias for setup — same wizard
 npm run dev:docker   # docker compose up -d        (radio backend only)
 npm run dev:web      # next dev on :7700           (hot-reloaded UI)
-npm run rebuild      # docker compose up -d --build  (after controller/liquidsoap src changes)
+npm run rebuild      # docker compose up -d --build  (rarely needed in dev — controller/src and radio.liq are bind-mounted)
 npm run logs         # tail docker logs
 npm run jingles      # render station idents via Piper
 npm run down         # stop the stack`}</CodeBlock>
@@ -66,12 +66,15 @@ npm run down         # stop the stack`}</CodeBlock>
         <p className="bs-eyebrow">A TYPICAL SESSION</p>
         <h2>Backend in Docker, UI on the host.</h2>
         <CodeBlock>{`# one-time, in two terminals:
-npm run dev:docker   # terminal 1: backend (Icecast, Liquidsoap, Controller)
+npm run dev:docker   # terminal 1: radio backend (broadcast + controller)
 npm run dev:web      # terminal 2: Next.js on http://localhost:7700
 
 # editing web/** — saves are hot-reloaded, no docker action needed.
-# editing controller/src/** or liquidsoap/radio.liq:
-npm run rebuild      # rebuilds + recreates the affected containers`}</CodeBlock>
+# editing controller/src/** — tsx watch restarts the process in-place.
+# editing liquidsoap/radio.liq:
+docker compose -f docker-compose.dev.yml restart broadcast   # bind-mounted in dev, no rebuild needed
+# editing controller/src/** in prod, or any radio.liq change in prod:
+docker compose up -d --build controller   # or 'broadcast' for radio.liq changes`}</CodeBlock>
 
         <div className="bs-callout">
           <div className="bs-eyebrow">DEV HOT-RELOADS · PROD NEEDS A REBUILD</div>
@@ -83,7 +86,7 @@ npm run rebuild      # rebuilds + recreates the affected containers`}</CodeBlock
             process inside the container automatically.{' '}
             <code className="bs-code-inline">liquidsoap/radio.liq</code> is bind-mounted
             too — edits there need{' '}
-            <code className="bs-code-inline">docker compose -f docker-compose.dev.yml restart liquidsoap</code>{' '}
+            <code className="bs-code-inline">docker compose -f docker-compose.dev.yml restart broadcast</code>{' '}
             but no rebuild.
           </p>
           <p className="mt-2">
@@ -91,9 +94,9 @@ npm run rebuild      # rebuilds + recreates the affected containers`}</CodeBlock
             <code className="bs-code-inline">COPY</code> source at build time, so{' '}
             <code className="bs-code-inline">docker compose restart controller</code>{' '}
             would rerun the same baked-in code.{' '}
-            <code className="bs-code-inline">npm run rebuild</code> (or{' '}
-            <code className="bs-code-inline">docker compose up -d --build &lt;service&gt;</code>)
-            is what you want when deploying a change.
+            <code className="bs-code-inline">docker compose up -d --build &lt;service&gt;</code>{' '}
+            (against <code className="bs-code-inline">docker-compose.yml</code>) is what
+            you want when deploying a change.
           </p>
           <p className="mt-2 text-muted">
             The web dev server (<code className="bs-code-inline">npm run dev:web</code>) is

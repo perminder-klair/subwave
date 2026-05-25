@@ -253,7 +253,7 @@ Run through the diff and bucket files into actions. Mapping table (paths are rel
 | `web/**` (prod stack)                     | rebuild + recreate `web`                  |
 | `web/**` (dev stack, separate `npm run dev`) | no docker action — hot-reloads in user's terminal |
 | `docker/Caddyfile`                        | rebuild + recreate `caddy` (Caddyfile is baked into the image — no host bind mount in prod) |
-| `docker/docker-compose*.yml`              | `docker compose ... up -d` (compose re-applies; will only recreate what diff-affected services) |
+| `docker-compose*.yml`                     | `docker compose ... up -d` (compose re-applies; will only recreate what diff-affected services) |
 | `docker/icecast.xml.template`             | rebuild + recreate `broadcast` (template is baked into the image; the supervisor re-renders it at every container start) |
 | `scripts/setup.sh`                        | safe to re-run (idempotent) — useful when state-dir layout changes |
 | `scripts/**` (other), `state/**` (excluding code), `*.md`, `README.md`, `CLAUDE.md`, `.env.example`, `TODO.md` | no action needed |
