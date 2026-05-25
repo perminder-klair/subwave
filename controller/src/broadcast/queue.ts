@@ -4,6 +4,7 @@
 
 import { writeFile, readFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
 import { speak } from '../audio/tts.js';
@@ -296,7 +297,7 @@ class Queue {
         if (item.introScript) {
           try {
             const wavPath = await speak(item.introScript, { kind: 'dj-speak' });
-            await writeFile(config.liquidsoap.sayFile, wavPath);
+            await writeHandoff(config.liquidsoap.sayFile, wavPath);
             this.log('dj-speak', item.introScript);
             await sleep(250);
           } catch (err: any) {
@@ -305,13 +306,12 @@ class Queue {
         }
 
         const uri = subsonic.getAnnotatedUri(item.track);
-        await writeFile(config.liquidsoap.queueFile, uri);
+        await writeHandoff(config.liquidsoap.queueFile, uri);
         item.sent = true;
         this.persist();  // record the sent flag — these are now live in dj_queue
 
-        // Give Liquidsoap's 1s poll a chance to read + delete the file
-        // before we overwrite it with the next item.
-        await sleep(1500);
+        // writeHandoff already waited for Liquidsoap's poll to consume the
+        // file before returning, so no extra sleep needed here.
       }
     } finally {
       this.senderBusy = false;
@@ -333,7 +333,7 @@ class Queue {
       const targetFile = kind === 'link'
         ? config.liquidsoap.introFile
         : config.liquidsoap.sayFile;
-      await writeFile(targetFile, wavPath);
+      await writeHandoff(targetFile, wavPath);
       this.log(kind, text);
       session.appendTurn({ role: 'segment', kind, text });
       // The auto-DJ link channel is its own event; everything else (station
@@ -359,7 +359,7 @@ class Queue {
         this.log('error', `Unknown sound effect: ${name}`);
         return;
       }
-      await writeFile(config.liquidsoap.sfxFile, path);
+      await writeHandoff(config.liquidsoap.sfxFile, path);
       this.log('sfx', name);
       session.appendTurn({ role: 'segment', kind: 'sfx', text: name });
     } catch (err: any) {
@@ -630,6 +630,54 @@ class Queue {
 
 function sleep(ms: number) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+// Per-target-file write chain. Liquidsoap polls each handoff file (say.txt,
+// intro.txt, sfx.txt, next.txt) on a 0.5-1.0s interval and DELETES the file
+// after reading it (see liquidsoap/radio.liq poll_voice/poll_intro/poll_sfx/
+// poll_queue). Without serialisation, two writes inside one poll window
+// silently lose the first one — exactly the failure in issue #140 where a
+// station ID rendered + logged but never aired.
+//
+// writeHandoff() serialises writes per file and waits for the previous WAV/URI
+// to be consumed (file deleted by liquidsoap) before releasing the lock. If
+// liquidsoap is dead/stuck and never deletes, we time out after maxWaitMs and
+// release anyway — better to overwrite a stuck file than block all future
+// announces forever.
+const _handoffChains: Map<string, Promise<void>> = new Map();
+
+async function waitForConsumed(path: string, maxWaitMs: number) {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      await stat(path);
+    } catch {
+      return; // liquidsoap deleted it — file gone, safe to write next
+    }
+    await sleep(100);
+  }
+  // Timed out — file still on disk. Caller proceeds anyway.
+}
+
+async function writeHandoff(path: string, contents: string, { maxWaitMs = 1500 } = {}) {
+  const prev = _handoffChains.get(path) || Promise.resolve();
+  const next = prev
+    .catch(() => undefined)
+    .then(async () => {
+      // Make sure liquidsoap has already consumed whatever was there. If the
+      // file doesn't exist (the common case — liquidsoap polled in the
+      // meantime, or this is the first write of the session), this returns
+      // immediately.
+      if (existsSync(path)) await waitForConsumed(path, maxWaitMs);
+      await writeFile(path, contents);
+    });
+  // Hold the slot until liquidsoap consumes THIS write too, so the next
+  // queued writer waits for the audio to land, not just for the write call to
+  // return. Errors don't break the chain — the .catch above ensures the next
+  // writer still gets its turn.
+  const release = next.then(() => waitForConsumed(path, maxWaitMs).catch(() => undefined));
+  _handoffChains.set(path, release);
+  return next;
 }
 
 const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check', 'weather', 'news', 'traffic', 'curiosity', 'album-anniversary', 'library-deep-cut', 'web-search']);

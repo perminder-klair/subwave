@@ -236,6 +236,54 @@ function logFailurePreview(kind: string, err: any) {
   console.log(`[${kind}] raw model output (truncated): ${preview}`);
 }
 
+// Retry transient upstream failures (gateway timeouts, dropped sockets). Local
+// Ollama — and anything proxying it — produces occasional 502/503/504 and TCP
+// resets, especially on slow models with fat prompts. Without retry, one blip
+// kills a station ID or hourly check (see issue #140). Two retries with
+// jittered backoff is enough — beyond that the upstream is genuinely down and
+// the failure should surface.
+//
+// Schema/parse failures and the agent's "did not call done" condition are NOT
+// transient and bubble straight out — they need different recovery paths.
+const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const TRANSIENT_CODE = new Set([
+  'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN',
+  'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT',
+]);
+
+function isTransient(err: any): boolean {
+  if (!err) return false;
+  const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
+  if (typeof status === 'number' && TRANSIENT_STATUS.has(status)) return true;
+  const code = err.code ?? err.cause?.code;
+  if (typeof code === 'string' && TRANSIENT_CODE.has(code)) return true;
+  const name = err.name ?? err.cause?.name;
+  if (name === 'AbortError' || name === 'TimeoutError') return true;
+  const msg = String(err.message || err.cause?.message || '');
+  if (/\b(408|425|429|500|502|503|504)\b/.test(msg)) return true;
+  if (/socket hang up|fetch failed|network.*(error|timeout)/i.test(msg)) return true;
+  return false;
+}
+
+async function withTransientRetry<T>(kind: string, fn: () => Promise<T>): Promise<T> {
+  const delays = [500, 1500]; // ms — two retries, ~2s total budget
+  let lastErr: any;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isTransient(err) || attempt === delays.length) throw err;
+      const jitter = Math.floor(Math.random() * 200);
+      const wait = delays[attempt] + jitter;
+      const status = (err as any).statusCode ?? (err as any).status ?? (err as any).cause?.statusCode;
+      console.log(`[${kind}] transient upstream error (${status || (err as any).code || 'unknown'}) — retrying in ${wait}ms (attempt ${attempt + 1}/${delays.length})`);
+      await new Promise(r => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
+}
+
 // Structured output via a forced tool call. The result schema is presented as
 // an `emit` tool the model MUST call (toolChoice:'required'); we capture and
 // Zod-validate its input. This is the reliable structured-output path for
@@ -277,7 +325,7 @@ export async function djText({
 }: any) {
   const started = Date.now();
   try {
-    const result = await generateText({
+    const result = await withTransientRetry(kind, () => generateText({
       model: languageModel(),
       system,
       prompt,
@@ -286,7 +334,7 @@ export async function djText({
       ...(seed != null ? { seed } : {}),
       maxOutputTokens,
       providerOptions: providerOpts({ repeatPenalty }),
-    });
+    }));
     const out = stripThinking(result.text);
     // Only record sampling knobs that actually reached the model — see
     // repeatPenaltyApplies() and providerOptions handling above.
@@ -344,10 +392,11 @@ export async function djObject({
       let usage;
       if (attempt === 1 && needsToolCallObject()) {
         lastVia = 'ai-sdk:tool';
-        ({ object, usage } = await objectViaToolCall({ system, prompt, schema, temperature, maxOutputTokens }));
+        ({ object, usage } = await withTransientRetry(kind,
+          () => objectViaToolCall({ system, prompt, schema, temperature, maxOutputTokens })));
       } else if (attempt === 1) {
         lastVia = 'ai-sdk';
-        const result = await generateText({
+        const result = await withTransientRetry(kind, () => generateText({
           model: languageModel(),
           system,
           prompt,
@@ -355,19 +404,19 @@ export async function djObject({
           maxOutputTokens,
           output: Output.object({ schema }),
           providerOptions: providerOpts(),
-        });
+        }));
         object = result.output;
         usage = usageOf(result);
       } else {
         lastVia = 'ai-sdk:recovery';
-        const result = await generateText({
+        const result = await withTransientRetry(kind, () => generateText({
           model: languageModel(),
           system,
           prompt: `${prompt}\n\nRespond with a single JSON object only — no prose, no markdown fences.`,
           temperature,
           maxOutputTokens,
           providerOptions: providerOpts(),
-        });
+        }));
         object = schema.parse(JSON.parse(extractJson(stripThinking(result.text))));
         usage = usageOf(result);
       }
@@ -456,7 +505,8 @@ export async function djAgent({
     const toolCount = tools ? Object.keys(tools).length : 0;
     if (schema && toolCount === 0 && needsToolCallObject()) {
       lastVia = 'ai-sdk:tool';
-      const { object, usage } = await objectViaToolCall({ system, prompt: undefined, messages, schema, temperature, maxOutputTokens });
+      const { object, usage } = await withTransientRetry(kind,
+        () => objectViaToolCall({ system, prompt: undefined, messages, schema, temperature, maxOutputTokens }));
       recordSuccess({
         kind, started, via: lastVia,
         sampling: { temperature },
@@ -525,11 +575,41 @@ export async function djAgent({
     // timeoutMs (when set by a caller) is a hard ceiling — a slow/looping run
     // throws, flows through the catch below, and the caller falls back to its
     // stateless path rather than blocking on a pathological model call.
-    const result = await agent.generate({
+    let result = await withTransientRetry(kind, () => agent.generate({
       messages,
       ...(timeoutMs ? { timeout: timeoutMs } : {}),
-    });
-    const steps = result.steps?.length ?? 0;
+    }));
+    let steps = result.steps?.length ?? 0;
+
+    // Recovery for the "agent did not call the done tool" failure mode (issue
+    // #140). Local/cloud Ollama models occasionally ignore toolChoice:'required'
+    // at step 0 — they emit prose instead of any tool call, the loop ends with
+    // zero tool calls, and we'd otherwise throw. Re-run once with prepareStep
+    // pinned to `done`-only at step 0 so `done` is the model's only legal move.
+    // The recovery agent has no discovery tools active, so the answer comes
+    // from prior knowledge / the message history — a worse pick than a
+    // discovery-then-done run, but better than throwing and silencing the
+    // station ID / hourly check / segment entirely.
+    if (useDoneTool && !(result.staticToolCalls || []).some((c: any) => c.toolName === 'done')) {
+      console.log(`[${kind}] agent stopped without calling done — retrying with done-only`);
+      lastVia = 'ai-sdk:agent:recovery';
+      const recoveryAgent = new ToolLoopAgent({
+        model: languageModel(),
+        instructions: system,
+        tools: allTools,
+        stopWhen: [stepCountIs(2), hasToolCall('done')],
+        temperature,
+        maxOutputTokens,
+        providerOptions: providerOpts(),
+        toolChoice: 'required',
+        prepareStep: async () => ({ activeTools: ['done'], toolChoice: 'required' }),
+      } as any);
+      result = await withTransientRetry(kind, () => recoveryAgent.generate({
+        messages,
+        ...(timeoutMs ? { timeout: timeoutMs } : {}),
+      }));
+      steps = result.steps?.length ?? 0;
+    }
 
     let object;
     if (useDoneTool) {
