@@ -15,6 +15,7 @@ import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
 import { djCallsAllowed } from './listeners.js';
 import * as webhooks from './webhooks.js';
+import * as scrobble from './scrobble.js';
 
 // Random gap between DJ links on auto-played tracks. The frequency setting
 // scales how chatty the DJ is:
@@ -373,6 +374,13 @@ class Queue {
     if (key === this.lastSeenKey) return;
     this.lastSeenKey = key;
 
+    // Snapshot the outgoing track BEFORE the history roll mutates `this.current`
+    // — scrobble.onTrackEvent below needs the previous play + its start time
+    // to compute eligibility against Last.fm's >50% / >4min rule.
+    const outgoingPrev = this.current
+      ? { track: this.current.track, startedAt: this.current.startedAt }
+      : null;
+
     // Roll previous current into history
     if (this.current) {
       const endedAt = new Date().toISOString();
@@ -471,6 +479,28 @@ class Queue {
       album: this.current.track.album || null,
       source: this.current.source,
       requestedBy: this.current.requestedBy || null,
+    });
+
+    // Last.fm / ListenBrainz — also fire-and-forget. Internally gated on
+    // listener count > 0 (fail-closed) and per-backend enable flags.
+    scrobble.onTrackEvent({
+      outgoing: outgoingPrev?.track
+        ? {
+            id: outgoingPrev.track.id || null,
+            title: outgoingPrev.track.title || null,
+            artist: outgoingPrev.track.artist || null,
+            album: outgoingPrev.track.album || null,
+            duration: outgoingPrev.track.duration ?? null,
+          }
+        : null,
+      outgoingStartedAt: outgoingPrev?.startedAt || null,
+      incoming: {
+        id: this.current.track.id || null,
+        title: this.current.track.title || null,
+        artist: this.current.track.artist || null,
+        album: this.current.track.album || null,
+        duration: this.current.track.duration ?? null,
+      },
     });
 
     this.persist();  // upcoming/current/history all just changed

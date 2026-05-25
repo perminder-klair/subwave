@@ -27,6 +27,7 @@ import { router as onboardingRoutes } from './routes/onboarding.js';
 import { router as archivesRoutes } from './routes/archives.js';
 import { router as listenersRoutes } from './routes/listeners.js';
 import { router as webhooksRoutes } from './routes/webhooks.js';
+import { router as scrobbleRoutes } from './routes/scrobble.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
 import { loadSetupConfig } from './setup/config.js';
 import { getSetupStatus } from './setup/firstRun.js';
@@ -52,6 +53,7 @@ app.use(onboardingRoutes);
 app.use(archivesRoutes);
 app.use(listenersRoutes);
 app.use(webhooksRoutes);
+app.use(scrobbleRoutes);
 
 // (manual skip is not implemented in this build — Liquidsoap controls pacing)
 

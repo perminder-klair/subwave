@@ -24,6 +24,12 @@ export const SECRET_ENV_KEYS = [
   'AI_GATEWAY_API_KEY',
   'ELEVENLABS_API_KEY',
   'SEARCH_API_KEY',
+  // Scrobbling. See broadcast/scrobble.ts. Env always wins over settings.json,
+  // so a host with these in compose env_file works without ever touching the UI.
+  'LASTFM_API_KEY',
+  'LASTFM_API_SECRET',
+  'LASTFM_SESSION_KEY',
+  'LISTENBRAINZ_USER_TOKEN',
 ];
 
 // Read state/secrets.env and merge into process.env for keys that aren't

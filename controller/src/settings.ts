@@ -289,6 +289,25 @@ const DEFAULTS = {
   // webhooks.ts for the event list) to `url` with a fire-and-forget HTTP
   // call. Empty by default — operators add hooks via the admin UI.
   webhooks: [] as any[],
+  // Station-wide scrobbling. Each backend is independent; both are paste-only
+  // (no OAuth) and both are gated on listener count > 0 at scrobble time (a
+  // null/unknown count is treated as zero — fail closed, see broadcast/
+  // scrobble.ts). API keys/secrets/tokens live here OR in state/secrets.env
+  // (env wins). `username` is display-only.
+  scrobble: {
+    lastfm: {
+      enabled: false,
+      apiKey: '',
+      apiSecret: '',
+      sessionKey: '',
+      username: '',
+    },
+    listenbrainz: {
+      enabled: false,
+      userToken: '',
+      username: '',
+    },
+  },
 };
 
 const BOUNDS = {
@@ -545,6 +564,44 @@ export async function load() {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
     },
     webhooks: normalizeWebhooks(stored.webhooks),
+    scrobble: {
+      lastfm: {
+        enabled:
+          typeof stored.scrobble?.lastfm?.enabled === 'boolean'
+            ? stored.scrobble.lastfm.enabled
+            : DEFAULTS.scrobble.lastfm.enabled,
+        apiKey:
+          typeof stored.scrobble?.lastfm?.apiKey === 'string'
+            ? stored.scrobble.lastfm.apiKey
+            : '',
+        apiSecret:
+          typeof stored.scrobble?.lastfm?.apiSecret === 'string'
+            ? stored.scrobble.lastfm.apiSecret
+            : '',
+        sessionKey:
+          typeof stored.scrobble?.lastfm?.sessionKey === 'string'
+            ? stored.scrobble.lastfm.sessionKey
+            : '',
+        username:
+          typeof stored.scrobble?.lastfm?.username === 'string'
+            ? stored.scrobble.lastfm.username.trim().slice(0, 40)
+            : '',
+      },
+      listenbrainz: {
+        enabled:
+          typeof stored.scrobble?.listenbrainz?.enabled === 'boolean'
+            ? stored.scrobble.listenbrainz.enabled
+            : DEFAULTS.scrobble.listenbrainz.enabled,
+        userToken:
+          typeof stored.scrobble?.listenbrainz?.userToken === 'string'
+            ? stored.scrobble.listenbrainz.userToken
+            : '',
+        username:
+          typeof stored.scrobble?.listenbrainz?.username === 'string'
+            ? stored.scrobble.listenbrainz.username.trim().slice(0, 40)
+            : '',
+      },
+    },
   };
   return cache;
 }
@@ -598,6 +655,14 @@ export function getRedacted() {
     for (let i = 0; i < clone.webhooks.length; i++) {
       clone.webhooks[i].authHeader = s.webhooks?.[i]?.authHeader ? 'set' : '';
     }
+  }
+  if (clone.scrobble?.lastfm) {
+    clone.scrobble.lastfm.apiKey = s.scrobble?.lastfm?.apiKey ? 'set' : '';
+    clone.scrobble.lastfm.apiSecret = s.scrobble?.lastfm?.apiSecret ? 'set' : '';
+    clone.scrobble.lastfm.sessionKey = s.scrobble?.lastfm?.sessionKey ? 'set' : '';
+  }
+  if (clone.scrobble?.listenbrainz) {
+    clone.scrobble.listenbrainz.userToken = s.scrobble?.listenbrainz?.userToken ? 'set' : '';
   }
   return clone;
 }
@@ -1067,6 +1132,41 @@ export async function update(patch) {
   }
   if ('webhooks' in patch) {
     next.webhooks = validateWebhooksStrict(patch.webhooks, next.webhooks || []);
+  }
+  if ('scrobble' in patch) {
+    const sb = patch.scrobble || {};
+    if (sb.lastfm !== undefined) {
+      const lf = sb.lastfm || {};
+      if (lf.enabled !== undefined) next.scrobble.lastfm.enabled = !!lf.enabled;
+      if (lf.username !== undefined) {
+        const v = String(lf.username ?? '').trim();
+        if (v.length > 40) throw new Error('scrobble.lastfm.username must be 0-40 chars');
+        next.scrobble.lastfm.username = v;
+      }
+      // 'set' is the redaction sentinel from getRedacted() — ignore it so a
+      // round-tripped form doesn't overwrite the stored secret.
+      for (const k of ['apiKey', 'apiSecret', 'sessionKey'] as const) {
+        if (lf[k] !== undefined && lf[k] !== 'set') {
+          const v = String(lf[k] ?? '').trim();
+          if (v.length > 200) throw new Error(`scrobble.lastfm.${k} must be 0-200 chars`);
+          next.scrobble.lastfm[k] = v;
+        }
+      }
+    }
+    if (sb.listenbrainz !== undefined) {
+      const lb = sb.listenbrainz || {};
+      if (lb.enabled !== undefined) next.scrobble.listenbrainz.enabled = !!lb.enabled;
+      if (lb.username !== undefined) {
+        const v = String(lb.username ?? '').trim();
+        if (v.length > 40) throw new Error('scrobble.listenbrainz.username must be 0-40 chars');
+        next.scrobble.listenbrainz.username = v;
+      }
+      if (lb.userToken !== undefined && lb.userToken !== 'set') {
+        const v = String(lb.userToken ?? '').trim();
+        if (v.length > 200) throw new Error('scrobble.listenbrainz.userToken must be 0-200 chars');
+        next.scrobble.listenbrainz.userToken = v;
+      }
+    }
   }
 
   // Post-patch integrity sweep — a personas/shows change in this patch may
