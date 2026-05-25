@@ -12,14 +12,41 @@
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as settings from '../settings.js';
+import { config } from '../config.js';
+import { loadSecretsIntoEnv } from '../setup/secrets.js';
+import { loadSetupConfig } from '../setup/config.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { tagOne } from './tagger-core.js';
+
+// Mirrors server.ts boot: cloud API keys from secrets.env, Navidrome creds
+// from setup-config.json. Standalone CLIs skip server.ts, so without this
+// they fall back to the hardcoded `http://navidrome:4533` and ENOTFOUND on
+// any install with a custom Navidrome host (issue #122).
+async function applyWizardOverlay() {
+  try {
+    await loadSecretsIntoEnv();
+  } catch (err: any) {
+    console.error('[secrets] load failed:', err.message);
+  }
+  try {
+    const sc = await loadSetupConfig();
+    if (sc.navidrome) {
+      if (!process.env.NAVIDROME_URL && sc.navidrome.url) config.navidrome.url = sc.navidrome.url;
+      if (!process.env.NAVIDROME_USER && sc.navidrome.user) config.navidrome.user = sc.navidrome.user;
+      if (!process.env.NAVIDROME_PASS && sc.navidrome.pass)
+        config.navidrome.password = sc.navidrome.pass;
+    }
+  } catch (err: any) {
+    console.error('[setup-config] load failed:', err.message);
+  }
+}
 
 async function main() {
   const args = process.argv.slice(2);
   const limitIdx = args.indexOf('--limit');
   const limit = limitIdx >= 0 ? parseInt(args[limitIdx + 1], 10) : Infinity;
 
+  await applyWizardOverlay();
   await library.load();
   await settings.load();
   console.log(`[tag] starting. ${library.allTaggedIds().length} tracks already tagged.`);
