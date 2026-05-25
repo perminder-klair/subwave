@@ -146,11 +146,91 @@ music = fallback(
 # chain does (see comment above mic_chain). The fix would be to put a
 # getter-controlled filter on the music source BEFORE `cross` and modulate
 # its cutoff from a transition trigger. Parked until needed.
-def dj_transition(a, b) =
+
+# ---------------------------------------------------------------------------
+# TRANSITION LIBRARY — small set of named transition shapes
+# ---------------------------------------------------------------------------
+# Each `tx_*` is a (a, b) -> source variant of dj_transition. The dispatcher
+# below picks one per transition. Phase 1: random weighted choice; Phase 2:
+# the controller writes `transition="…"` into the annotate URI and we read
+# `b.metadata["transition"]` instead of rolling.
+#
+# Constraint: the cross BUFFER width is set when `cross(...)` is constructed
+# below (= crossfade_duration()). It can only be varied per-track by writing
+# `liq_cross_duration` metadata on the INCOMING track — which the controller
+# doesn't do yet. So the variants here all vary the fade SHAPE within the
+# existing buffer; `long_blend` (wants 12-16s) and `filter_sweep` (needs the
+# pre-cross IIR mitigation) are deferred to Phase 2.
+
+# Symmetric equal-amplitude fade across the full cross window — the floor.
+# Same shape as the historic single dj_transition; sums to ~unity at midpoint.
+def tx_fade(a, b) =
   d = crossfade_duration()
-  a_source = fade.out(duration=d, initial_metadata=a.metadata, a.source)
-  b_source = fade.in(duration=d, initial_metadata=b.metadata, b.source)
-  add(normalize=false, [a_source, b_source])
+  add(normalize=false, [
+    fade.out(duration=d, initial_metadata=a.metadata, a.source),
+    fade.in(duration=d, initial_metadata=b.metadata, b.source)
+  ])
+end
+
+# Narrower fade in the middle of the buffer. Outgoing dips to 0 in `short` s,
+# incoming reaches full in `short` s; the rest of the buffer is silence from
+# outgoing under full-volume incoming. Sharper handoff for talky / high-energy.
+def tx_quick_fade(a, b) =
+  d = crossfade_duration()
+  short = if d < 4.0 then d else 4.0 end
+  add(normalize=false, [
+    fade.out(duration=short, initial_metadata=a.metadata, a.source),
+    fade.in(duration=short, initial_metadata=b.metadata, b.source)
+  ])
+end
+
+# Outgoing fades out THROUGH a slap-back echo (tap delay with feedback);
+# incoming fades in clean over the full window. `echo` is a delay line, not
+# an `iir_filter` — the request.queue content-type breakage that hit the
+# old low-pass attempt doesn't apply here. If this style ever does trip
+# "Early computation", drop the weight to 0 in the dispatcher.
+def tx_echo_tail(a, b) =
+  d = crossfade_duration()
+  a_echoed = echo(delay=0.25, feedback=0.4, ping_pong=false, a.source)
+  add(normalize=false, [
+    fade.out(duration=d, initial_metadata=a.metadata, a_echoed),
+    fade.in(duration=d, initial_metadata=b.metadata, b.source)
+  ])
+end
+
+# Punchy switch — outgoing fades out in 0.3s, incoming hits full in 0.1s.
+# Not a true 0s cut (cross still buffers `d` seconds), but the audible
+# handover lands in the first ~0.3s of the buffer. Genre-shift smash-cut.
+def tx_hard_cut(a, b) =
+  add(normalize=false, [
+    fade.out(duration=0.3, initial_metadata=a.metadata, a.source),
+    fade.in(duration=0.1, initial_metadata=b.metadata, b.source)
+  ])
+end
+
+# Dispatcher. Reads b.metadata["transition"] first (Phase 2 will write it);
+# otherwise rolls weighted random. Unknown / missing → tx_fade, so the
+# station can never break because the picker emitted an unknown enum value.
+#
+# Weights: fade-family is the floor (75% combined); characterful moves at
+# 15% / 10%. Phase 2 lets the picker bias these per-track.
+def dj_transition(a, b) =
+  chosen = b.metadata["transition"]
+  style =
+    if chosen != "" then chosen
+    else
+      r = random.float(min=0.0, max=1.0)
+      if r < 0.50 then "fade"
+      elsif r < 0.75 then "quick_fade"
+      elsif r < 0.90 then "echo_tail"
+      else "hard_cut" end
+    end
+  source = if chosen != "" then "picker" else "random" end
+  log("dj_transition: style=#{style} source=#{source}")
+  if style == "quick_fade" then tx_quick_fade(a, b)
+  elsif style == "echo_tail" then tx_echo_tail(a, b)
+  elsif style == "hard_cut"  then tx_hard_cut(a, b)
+  else tx_fade(a, b) end
 end
 
 # Keep a handle on the PRE-cross music source so the on_metadata hook
