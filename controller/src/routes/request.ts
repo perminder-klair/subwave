@@ -154,7 +154,9 @@ async function resolveRequest(entry) {
     if (!refArtist) {
       return failed(`Nothing's playing yet — tell me what you're after instead.`);
     }
-    const recentIds = queue.recentlyPlayedIds(25);
+    // Requests stay near-unfiltered — 2h is enough to skip the song still
+    // ringing in their ears without blocking a re-request from earlier today.
+    const recentIds = queue.recentlyPlayedIds(2);
     const pick = await pickByArtistAndSort({
       artistName: refArtist, sort: null, scope: 'song', recentIds,
     });
@@ -219,7 +221,8 @@ async function resolveRequest(entry) {
     searchTerms: matched.search_terms,
   });
 
-  const recentIds = queue.recentlyPlayedIds(25);
+  // Requests stay near-unfiltered — see /more-like-this comment above.
+  const recentIds = queue.recentlyPlayedIds(2);
   await library.load();
 
   // Helper: pick a fresh random item from a pool, preferring non-recents.

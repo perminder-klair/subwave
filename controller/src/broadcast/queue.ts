@@ -40,6 +40,8 @@ class Queue {
   autoLink = true;             // toggle: random DJ links between auto tracks
   tracksUntilLink = pickLinkInterval();
   _persistTimer: NodeJS.Timeout | null = null; // debounce for the queue.json snapshot
+  _recentPlaysTimer: NodeJS.Timeout | null = null; // debounce for the recent-plays.json sidecar
+  _recentPlays: { id: string | null; title: string | null; artist: string | null; endedAt: string }[] = [];
   _autoMisses = 0;             // consecutive untracked plays — see onTrackStarted
 
   // Snapshot upcoming/current/history to disk. The queue is otherwise purely
@@ -60,6 +62,22 @@ class Queue {
         }, null, 2));
       } catch (err: any) {
         console.error('[queue] persist failed:', err.message);
+      }
+    }, 500);
+  }
+
+  // Write the rolling recent-plays sidecar. Separate from `persist()` because
+  // it has different shape and a different cap, and we want the heavy-traffic
+  // queue.json writes not to block on this one (and vice versa).
+  persistRecentPlays() {
+    if (this._recentPlaysTimer) return;
+    this._recentPlaysTimer = setTimeout(async () => {
+      this._recentPlaysTimer = null;
+      try {
+        await writeFile(config.queue.recentPlaysFile,
+          JSON.stringify(this._recentPlays, null, 2));
+      } catch (err: any) {
+        console.error('[queue] recent-plays persist failed:', err.message);
       }
     }, 500);
   }
@@ -90,6 +108,77 @@ class Queue {
         `Queue recovered: ${this.upcoming.length} upcoming, ${this.history.length} played`);
     } catch (err: any) {
       console.error('[queue] recover failed:', err.message);
+    }
+    if (existsSync(config.queue.recentPlaysFile)) {
+      try {
+        const arr = JSON.parse(readFileSync(config.queue.recentPlaysFile, 'utf8'));
+        if (Array.isArray(arr)) {
+          // Drop anything older than 48h on boot — keeps the file from
+          // ballooning if the cap was raised between restarts.
+          const cutoff = Date.now() - 48 * 3_600_000;
+          this._recentPlays = arr
+            .filter((p: any) => p && p.endedAt && new Date(p.endedAt).getTime() > cutoff)
+            .slice(0, config.queue.recentPlaysMax);
+        }
+      } catch (err: any) {
+        console.error('[queue] recent-plays recover failed:', err.message);
+      }
+    }
+    // Backfill from the events JSONL log — without this, a controller restart
+    // resets the 12h block window to whatever's in the sidecar file (often
+    // empty or only minutes deep), leaving heavy-rotation tracks free to
+    // repeat right after boot. Observed: "2 AM" by Karan Aujla picked at
+    // 00:19 UTC because its actual last play (23:11 UTC) was outside the
+    // sidecar's reach. The events log has every track.play and is durable.
+    this.backfillRecentPlaysFromEvents();
+    this.log('scheduler',
+      `Recent-plays loaded: ${this._recentPlays.length} entries (last 24h)`);
+  }
+
+  // Read the last 24h of track.play events from state/logs/events-*.jsonl
+  // and merge any missing entries into _recentPlays. Events lack a track id
+  // (only title + artist + t), so backfilled entries rely on the title|artist
+  // key path in tools.ts collect() to block repeats. Cheap: ~24h of plays =
+  // ~500 events, two file reads max.
+  backfillRecentPlaysFromEvents() {
+    try {
+      const cutoff = Date.now() - 24 * 3_600_000;
+      // Dedup by `t|title` against existing sidecar (which records endedAt
+      // close to the play.start time; near-enough that exact equality works).
+      const have = new Set(
+        this._recentPlays.map(p => `${p.endedAt}|${p.title || ''}`),
+      );
+      const filled: typeof this._recentPlays = [];
+      const today = new Date().toISOString().slice(0, 10);
+      const yest = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+      const stateDir = config.queue.file.replace(/\/queue\.json$/, '');
+      for (const day of [today, yest]) {
+        const path = `${stateDir}/logs/events-${day}.jsonl`;
+        if (!existsSync(path)) continue;
+        const text = readFileSync(path, 'utf8');
+        for (const line of text.split('\n')) {
+          if (!line) continue;
+          try {
+            const e = JSON.parse(line);
+            if (e.type !== 'track.play' || !e.t || !e.title) continue;
+            if (new Date(e.t).getTime() < cutoff) continue;
+            if (have.has(`${e.t}|${e.title}`)) continue;
+            filled.push({
+              id: null,
+              title: e.title || null,
+              artist: e.artist || null,
+              endedAt: e.t,
+            });
+          } catch {}
+        }
+      }
+      if (filled.length === 0) return;
+      this._recentPlays = [...this._recentPlays, ...filled]
+        .sort((a, b) => b.endedAt.localeCompare(a.endedAt))
+        .slice(0, config.queue.recentPlaysMax);
+      this.persistRecentPlays();
+    } catch (err: any) {
+      console.error('[queue] backfill from events failed:', err.message);
     }
   }
 
@@ -280,8 +369,23 @@ class Queue {
 
     // Roll previous current into history
     if (this.current) {
-      this.history.unshift({ ...this.current, endedAt: new Date().toISOString() });
+      const endedAt = new Date().toISOString();
+      this.history.unshift({ ...this.current, endedAt });
       this.history = this.history.slice(0, 50);
+      // Append to the rolling 24h sidecar used by the picker's recents window.
+      // history is in-memory only and capped at 50 (~3h of plays) — too short
+      // to catch the 2-3h repeat interval we've seen on the live station.
+      const t = this.current.track;
+      if (t) {
+        this._recentPlays.unshift({
+          id: t.id || null,
+          title: t.title || null,
+          artist: t.artist || null,
+          endedAt,
+        });
+        this._recentPlays = this._recentPlays.slice(0, config.queue.recentPlaysMax);
+        this.persistRecentPlays();
+      }
     }
 
     // Match upcoming by subsonic_id first (reliable), fall back to title+artist
@@ -390,14 +494,50 @@ class Queue {
     }
   }
 
-  // IDs of tracks played in the last N entries — used by scheduler to avoid repeats
-  recentlyPlayedIds(n = 25) {
-    const ids: string[] = [];
-    if (this.current?.track?.id) ids.push(this.current.track.id);
-    for (const h of this.history.slice(0, n)) {
-      if (h.track?.id) ids.push(h.track.id);
+  // Tracks played in the last `hours` hours — used by the picker to block
+  // repeats. Returns BOTH ids and `title|artist` keys, because the boot
+  // backfill (in recover()) reads from events-*.jsonl which lacks track ids;
+  // a key-based fallback lets backfilled entries still block repeats. Walks
+  // the rolling 24h sidecar (`_recentPlays`) newest-first to the cutoff and
+  // also includes the current track so a mid-song pick can't re-pick it.
+  recentlyPlayed(hours = 12) {
+    const cutoff = Date.now() - hours * 3_600_000;
+    const ids = new Set<string>();
+    const keys = new Set<string>();
+    const keyOf = (title: string | null | undefined, artist: string | null | undefined) =>
+      `${(title || '').toLowerCase().trim()}|${(artist || '').toLowerCase().trim()}`;
+    const cur = this.current?.track;
+    if (cur?.id) ids.add(cur.id);
+    if (cur?.title) keys.add(keyOf(cur.title, cur.artist));
+    for (const p of this._recentPlays) {
+      if (new Date(p.endedAt).getTime() < cutoff) break;
+      if (p.id) ids.add(p.id);
+      if (p.title) keys.add(keyOf(p.title, p.artist));
     }
-    return new Set(ids);
+    return { ids, keys };
+  }
+
+  // Backwards-compat shim — callsites that only need ids (e.g. legacy fallback
+  // picker pool path that filters its own results) can keep calling this.
+  recentlyPlayedIds(hours = 12): Set<string> {
+    return this.recentlyPlayed(hours).ids;
+  }
+
+  // Lowercased artist names heard in the last `hours` hours — used by the
+  // picker to block recently-heard artists. 2h is a sane default; raising it
+  // narrows the pool fast on a small library.
+  recentArtistsSince(hours = 2) {
+    const cutoff = Date.now() - hours * 3_600_000;
+    const out = new Set<string>();
+    if (this.current?.track?.artist) {
+      out.add(this.current.track.artist.toLowerCase().trim());
+    }
+    for (const p of this._recentPlays) {
+      if (new Date(p.endedAt).getTime() < cutoff) break;
+      const k = (p.artist || '').toLowerCase().trim();
+      if (k) out.add(k);
+    }
+    return out;
   }
 
   // Poll now-playing.json every 1.5s and dispatch track changes

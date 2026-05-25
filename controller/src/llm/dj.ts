@@ -352,7 +352,7 @@ export async function generateHourlyTime(time: any, weather: any, { recap = null
 export const PICKER_CRITERIA = `Selection criteria, in order:
 1. FLOW — does it transition naturally from what just played (energy, mood, tempo)?
 2. CONTEXT — does it fit the time of day, weather, and dominant mood?
-3. VARIETY — avoid the same artist back-to-back; rotate energy levels; don't be predictable.
+3. VARIETY — avoid the same artist back-to-back; don't repeat tracks you've already played today; rotate energy. Variety over cleverness — never pick a track because its title literally matches the time of day, the weather, or anything else literal.
 4. INTEREST — prefer something that creates a moment, not the most generic option.`;
 
 const PICKER_SYSTEM = `You are the DJ for SUB/WAVE, a personal internet radio station.

@@ -54,7 +54,8 @@ export async function refreshAutoPlaylist() {
 async function refreshAutoPlaylistInner() {
   const ctx = await getFullContext();
   const mood = ctx.dominantMood;
-  const recent = queue.recentlyPlayedIds(25);
+  // Match the auto-DJ picker's window (dj-agent.pickViaAgent) — 12h.
+  const recent = queue.recentlyPlayedIds(12);
 
   const pool: any[] = [];
   const fromSource: Record<string, number> = { mood: 0, playlist: 0, recent: 0, frequent: 0, starred: 0, random: 0 };

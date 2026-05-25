@@ -72,8 +72,8 @@ export const pickerAgent = defineAgent({
   maxSteps: 4,
   timeoutMs: 22000,
   buildSystem: () => pickSystem(),
-  buildTools: ({ recentIds, recentArtists }) => {
-    const { tools, seen } = buildPickerTools({ recentIds, recentArtists });
+  buildTools: ({ recentIds, recentKeys, recentArtists }) => {
+    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, recentArtists });
     return { tools, extras: { seen } };
   },
 });
@@ -120,17 +120,19 @@ async function enqueuePick(queue, song, reason, source) {
 // ---------------------------------------------------------------------------
 
 async function pickViaAgent(queue, { wantLink }) {
-  const recentIds = queue.recentlyPlayedIds(25);
-  // Block the last ~10 distinct artists outright — recentIds alone can't stop a
-  // deep-catalogue artist (e.g. a full discography) reappearing every few
-  // tracks, since each fresh track has an id the agent hasn't seen.
-  const recentArtists = new Set<string>(
-    queue.getRecentArtists(10).map((a: string) => a.toLowerCase().trim()).filter(Boolean),
-  );
+  // 12h catches heavy-rotation tracks that repeat every 5-11h on this library
+  // (the 8h window missed Welcome To Heartbreak at gap 10h 54min). Includes a
+  // title|artist key set so backfilled entries (which lack track ids) still
+  // block repeats after a controller restart.
+  const { ids: recentIds, keys: recentKeys } = queue.recentlyPlayed(12);
+  // Block every artist heard in the last 2h. The old "last 10 distinct" window
+  // was ~30-40 min of airtime — far too short on a library this dense.
+  const recentArtists = queue.recentArtistsSince(2);
 
   const { object, steps, toolCalls, extras } = await pickerAgent.run({
     messages: session.windowMessages(),
     recentIds,
+    recentKeys,
     recentArtists,
   });
 
@@ -226,7 +228,10 @@ export async function runRequest(queue: any, ctx: any, { requester, text: _text 
   if (!settings.get().llm?.pickerAgent) return null;
 
   return withTrace({ kind: 'request', requester }, async () => {
-    const recentIds = queue.recentlyPlayedIds(25);
+    // Requests stay near-unfiltered — listeners must be able to re-request a
+    // song from earlier in the day. 2h covers the "don't repeat the song still
+    // ringing in their ears" case and nothing more.
+    const recentIds = queue.recentlyPlayedIds(2);
 
     const { object, toolCalls, extras } = await requestAgent.run({
       messages: session.windowMessages(),
