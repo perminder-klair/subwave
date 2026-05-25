@@ -3,18 +3,23 @@
 #
 # A git worktree checks out every TRACKED file, but the dev stack also needs
 # a handful of gitignored files that do NOT travel with the checkout:
-#   - controller/.env   (Navidrome + Ollama config; dev compose env_file)
-#   - web/.env.local    (dev API/stream URL overrides for the web UI)
-#   - docker/.env       (compose variable substitution)
-#   - web/node_modules  (needed by `npm run dev`)
-#   - state/            (bind-mounted into the containers)
+#   - .env                       (root .env — ADMIN_USER/PASS/SITE_URL; dev compose references it as ./.env)
+#   - controller/.env            (Navidrome + Ollama config; dev compose env_file)
+#   - web/.env.local             (dev API/stream URL overrides for the web UI)
+#   - docker/.env                (compose variable substitution — legacy; harmless to copy if present)
+#   - state/setup-config.json    (Navidrome creds the wizard saved; copying skips /onboarding)
+#   - state/secrets.env          (cloud LLM/TTS API keys, if the main checkout has any)
+#   - web/node_modules           (needed by `npm run dev`)
+#   - state/                     (bind-mounted into the containers)
 #
 # This copies the env files from the main working tree, runs npm install, and
-# scaffolds a FRESH state/ directory — structure only. It deliberately does NOT
+# scaffolds a FRESH state/ directory — structure plus the two onboarding-skip
+# files (setup-config.json + secrets.env, if they exist on main). It does NOT
 # copy settings.json, session.json, queue.json, moods.json, or any archived
 # sessions/jingles/voice files, so the worktree station boots clean and the
-# controller writes its own defaults. The broadcast container generates its
-# own state/icecast-secrets.env on first boot, so there's nothing to copy.
+# controller writes its own defaults — but the operator lands directly on the
+# player instead of /onboarding. The broadcast container generates its own
+# state/icecast-secrets.env on first boot, so there's nothing to copy.
 #
 # Usage:
 #   prep-worktree.sh [worktree-path]   # worktree-path defaults to $PWD
@@ -73,6 +78,7 @@ copy_env() {
   echo "[prep] copied $rel"
 }
 
+copy_env .env
 copy_env controller/.env
 copy_env web/.env.local
 copy_env docker/.env
@@ -91,7 +97,12 @@ mkdir -p "$STATE"/logs "$STATE"/voice "$STATE"/jingles "$STATE"/sessions "$STATE
 # fail with EACCES and crash-loops the container. Widen the tree so every
 # container uid can read+write. (The main checkout ends up 777 the same way
 # after its first container run; this just front-loads it.)
-chmod -R a+rwX "$STATE"
+#
+# `|| true` because re-running prep against an established worktree hits files
+# the container created as root — those are already 0666/0777 from the container's
+# umask, so the chmod is a no-op but bash still errors on the EPERM. Don't bail
+# the whole prep over cosmetic permission warnings on a re-run.
+chmod -R a+rwX "$STATE" 2>/dev/null || true
 
 # icecast-secrets.env — the broadcast container generates this on first boot
 # if it doesn't exist (mode 0644 so liquidsoap inside the same container can
@@ -110,7 +121,35 @@ chmod -R a+rwX "$STATE"
 [ -f "$STATE/auto.m3u" ]    || { : > "$STATE/auto.m3u";    echo "[prep] touched state/auto.m3u (empty — controller refills it)"; }
 [ -f "$STATE/jingles.m3u" ] || { : > "$STATE/jingles.m3u"; echo "[prep] touched state/jingles.m3u (empty — run generate-jingles.sh later if wanted)"; }
 
-echo "[prep] state/ scaffolded fresh — no settings/sessions/queue/moods copied; the controller writes defaults on first boot."
+# setup-config.json carries the Navidrome creds the first-run wizard saved.
+# Without it, controller/src/setup/firstRun.ts reports needsSetup=true and the
+# player redirects to /onboarding on every page load. Copy it from main so the
+# worktree boots straight into the player — the operator already onboarded
+# once in the main checkout, no need to do it again per branch. secrets.env
+# is the matching file for cloud LLM/TTS API keys; copy it too if present.
+copy_state_file() {
+  local rel="$1"
+  local src="$MAIN/state/$rel"
+  local dst="$STATE/$rel"
+  if [ ! -e "$src" ]; then
+    echo "[prep] skip   state/$rel — not present in main"
+    return
+  fi
+  if [ -e "$dst" ]; then
+    echo "[prep] keep   state/$rel — already in worktree (left untouched)"
+    return
+  fi
+  cp "$src" "$dst"
+  # secrets.env is mode 0600 — preserve that. The Navidrome pass in
+  # setup-config.json is plaintext but the file is normal 0644.
+  if [ "$rel" = "secrets.env" ]; then chmod 0600 "$dst"; fi
+  echo "[prep] copied state/$rel"
+}
+
+copy_state_file setup-config.json
+copy_state_file secrets.env
+
+echo "[prep] state/ scaffolded — no settings/sessions/queue/moods copied; the controller writes defaults on first boot."
 
 # ── web dependencies ────────────────────────────────────────────────────────
 if [ "$SKIP_NPM" = 1 ]; then
@@ -126,8 +165,8 @@ fi
 cat <<EOM
 
 [prep] done. Start the dev stack from the worktree:
-  cd "$WORKTREE/docker" && docker compose up -d --build   # --build bakes worktree controller changes into the image
-  cd "$WORKTREE/web"    && npm run dev                     # web hot-reloads — run this in the background
+  cd "$WORKTREE" && docker compose -f docker-compose.dev.yml up -d --build   # --build bakes worktree controller changes into the image
+  cd "$WORKTREE/web" && npm run dev                                           # web hot-reloads — run this in the background
 
 Verify on-air (give Liquidsoap ~5s to connect):
   curl -sf http://localhost:7701/health    # expect {"status":"on-air"}

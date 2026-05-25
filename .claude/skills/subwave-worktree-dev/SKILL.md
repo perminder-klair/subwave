@@ -27,17 +27,21 @@ a worktree checkout:
 
 | File | Why the stack needs it |
 |---|---|
-| `controller/.env` | Dev compose declares `env_file: ../controller/.env` — the controller container will not start without it. Holds Navidrome + Ollama config. |
+| `.env` | Root `.env` — `ADMIN_USER` / `ADMIN_PASS` / `SITE_URL`. Dev compose references it as `./.env`; compose refuses to start without it. |
+| `controller/.env` | Dev compose declares `env_file: ./controller/.env` — controller container won't start without it. Navidrome + Ollama config. |
 | `web/.env.local` | Dev API/stream URL overrides (`NEXT_PUBLIC_API_URL` etc.). Without it the web UI defaults to same-origin `/api` and cannot reach the controller. |
-| `docker/.env` | Compose variable substitution. |
+| `docker/.env` | Compose variable substitution (legacy — harmless to copy). |
+| `state/setup-config.json` | Navidrome creds the wizard saved on main. Without this the controller reports `needsSetup: true` and the player redirects to `/onboarding` on every load. |
+| `state/secrets.env` | Cloud LLM / TTS API keys (if main has any). Sourced into the controller's `process.env` on boot. |
 | `web/node_modules` | Needed by `npm run dev`. |
 | `state/` | Bind-mounted into the containers. A worktree's `state/` is empty. |
 
-`state/` is scaffolded **fresh** — directory structure only. Settings, sessions,
-queue, and library mood data are *not* copied, so the worktree station boots
-clean and the controller writes its own defaults. The broadcast container
-generates its own `state/icecast-secrets.env` on first boot, so worktrees no
-longer need to copy any rendered icecast config — there isn't one.
+`state/` is scaffolded **fresh** — directory structure plus the two onboarding-skip
+files (`setup-config.json`, `secrets.env`) so the operator lands directly on the
+player. Settings, sessions, queue, library mood data, and rendered jingles are
+*not* copied — the worktree station boots clean and the controller writes its
+own defaults. The broadcast container generates its own `state/icecast-secrets.env`
+on first boot, so worktrees no longer need to copy any rendered icecast config.
 
 ## Two load-bearing facts
 
@@ -74,8 +78,9 @@ Only one stack can run. Stop whatever is up (it may be the main checkout's):
 WEB_PID=$(lsof -nP -iTCP:7700 -sTCP:LISTEN -t 2>/dev/null | head -1)
 [ -n "$WEB_PID" ] && ps -p "$WEB_PID" -o comm= | grep -qi node && kill "$WEB_PID"
 
-# Bring down whichever dev stack is up (run from any checkout's docker/ dir —
-# same compose project name, so this targets the running containers).
+# Bring down whichever dev stack is up. The compose file lives at the
+# checkout root (not under docker/); container names are global, so any
+# checkout's docker-compose.dev.yml targets the running containers.
 docker compose -f <some-checkout>/docker-compose.dev.yml down
 ```
 
@@ -96,8 +101,10 @@ fills in what is missing.
 
 ### Step 3 — Start the stack from the worktree
 
+Compose files now live at the worktree **root** (not under `docker/`):
+
 ```bash
-cd <worktree-path>/docker && docker compose up -d --build
+cd <worktree-path> && docker compose -f docker-compose.dev.yml up -d --build
 ```
 
 `--build` is required so the worktree's controller source is baked into the
@@ -127,7 +134,7 @@ settings on first boot are expected, not faults.
 
 - **Web/UI change** — nothing to do; `npm run dev` hot-reloads it.
 - **Controller source change** — rebuild just that service:
-  `cd <worktree-path>/docker && docker compose up -d --build controller`.
+  `cd <worktree-path> && docker compose -f docker-compose.dev.yml up -d --build controller`.
 - **`liquidsoap/radio.liq` change** — it is bind-mounted in dev; just
   `docker compose restart broadcast`.
 
