@@ -1,10 +1,12 @@
 'use client';
 
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import { useClock } from '../../lib/hooks';
 import ThemeToggle from './ThemeToggle';
 
 const LAUNCH_DATE = new Date('2026-01-01T00:00:00Z');
+const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 function issueNo(d: Date): number {
   return Math.max(1, Math.floor((d.getTime() - LAUNCH_DATE.getTime()) / 86400000));
@@ -18,6 +20,14 @@ function issueNo(d: Date): number {
 // reference frame should feel like print, not a performance.
 export default function Masthead() {
   const now = useClock();
+  const [stationName, setStationName] = useState<string>('SUB/WAVE');
+
+  useEffect(() => {
+    fetch(`${API_URL}/dj`)
+      .then(r => r.json())
+      .then(d => { if (typeof d?.station === 'string' && d.station.trim()) setStationName(d.station.trim()); })
+      .catch(() => {});
+  }, []);
 
   return (
     <header className="bs-paper pt-7 pb-0">
@@ -33,10 +43,10 @@ export default function Masthead() {
 
         <Link
           href="/"
-          aria-label="SUB/WAVE home"
+          aria-label={`${stationName} home`}
           className="bs-wordmark bs-masthead-mark text-ink no-underline"
         >
-          SUB/WAVE
+          {stationName}
         </Link>
 
         <div className="bs-masthead-status flex items-center gap-2 text-[11px] font-bold tracking-[0.3em] uppercase">

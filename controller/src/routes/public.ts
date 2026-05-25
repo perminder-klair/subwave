@@ -74,6 +74,7 @@ router.get('/now-playing', async (req, res) => {
       getStreamStatus(),
     ]);
     const persona = settings.getEffectivePersona();
+    const sett = settings.get();
     // activeShow is { name, persona:{ name } } | null — surfaced to listeners.
     const activeShow = ctx.activeShow
       ? { name: ctx.activeShow.name, persona: ctx.activeShow.persona }
@@ -82,7 +83,7 @@ router.get('/now-playing', async (req, res) => {
     res.json({
       nowPlaying,
       context: ctx,
-      dj: { name: persona?.name || 'Frequency', tagline: persona?.tagline || '' },
+      dj: { name: persona?.name || 'Frequency', tagline: persona?.tagline || '', station: sett.station },
       activeShow,
       session: s ? { id: s.id, kind: s.kind, startedAt: s.startedAt, show: s.show?.name || null } : null,
       listeners: stream.listeners,
