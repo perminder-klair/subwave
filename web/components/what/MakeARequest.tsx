@@ -6,7 +6,7 @@ const STEPS = [
     n: '01',
     title: 'Ask in plain language.',
     body:
-      'Open the request drawer and type what you want — a song title, an artist, a vibe. No exact spelling, no library browsing. Add your name if you want the DJ to use it on air.',
+      'Open the request drawer and type what you want: a song title, an artist, a vibe. No exact spelling, no library browsing. Add your name if you want the DJ to use it on air.',
   },
   {
     n: '02',
@@ -18,13 +18,13 @@ const STEPS = [
     n: '03',
     title: 'The DJ finds the match.',
     body:
-      'An LLM reads your request, searches the library, and picks the closest real track. Suggestion chips — built from the current artist, the time of day, the weather — give you a head start if you are undecided.',
+      'An LLM reads your request, searches the library, and picks the closest real track. Suggestion chips (built from the current artist, the time of day, the weather) give you a head start if you are undecided.',
   },
   {
     n: '04',
     title: 'It airs, with an intro.',
     body:
-      'When the match lands, the drawer shows the track and the DJ’s spoken intro. Your request joins the one queue everyone is hearing — and the DJ may say your name as it goes out.',
+      'When the match lands, the drawer shows the track and the DJ’s spoken intro. Your request joins the one queue everyone is hearing, and the DJ may say your name as it goes out.',
   },
 ];
 
@@ -34,7 +34,7 @@ export default function MakeARequest() {
       <p className="bs-eyebrow">PART THREE · REQUESTS</p>
       <h2>Phone the station, like you used to.</h2>
       <p className="text-muted">
-        Requests are the one place a listener steers the broadcast — and it
+        Requests are the one place a listener steers the broadcast. And it
         works the way calling a radio station always should have.
       </p>
 

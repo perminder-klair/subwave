@@ -15,14 +15,14 @@ export default function UnderTheHood() {
       <h2>Four processes, one box, one stream out.</h2>
 
       <div className="bs-drop-cap max-w-[64ch] text-[15px] leading-[1.6]">
-        SUB/WAVE is not a cloud service. The whole stack — Icecast, Liquidsoap,
-        the Controller, the LLM, the voice engines, and a Caddy edge — runs on a
+        SUB/WAVE is not a cloud service. The whole stack (Icecast, Liquidsoap,
+        the Controller, the LLM, the voice engines, and a Caddy edge) runs on a
         single machine in someone’s home, behind Cloudflare. The Controller is a
         small Node.js process that decides what plays and what gets said.
         Liquidsoap mixes the music, crossfades the tracks, ducks the DJ’s voice
         over the bed, and rotates the jingles. Icecast pushes the one stream out
-        to every browser. The pieces talk through plain files in a shared folder
-        — no socket, no message queue, the Unix way.
+        to every browser. The pieces talk through plain files in a shared folder.
+        No socket, no message queue, the Unix way.
       </div>
 
       <div className="bs-flow">
@@ -44,7 +44,7 @@ export default function UnderTheHood() {
 
       <p className="mt-6 max-w-[64ch] text-[14px] leading-[1.6] text-muted">
         No subscriptions, no round-trip to a data center, no algorithm tuned to
-        keep you scrolling. The whole source is open — so you can run your own
+        keep you scrolling. The whole source is open, so you can run your own
         with a different DJ persona, a different library, and a different city
         on the dateline.
       </p>
@@ -60,11 +60,11 @@ export default function UnderTheHood() {
         <p className="m-0 text-[16px] leading-[1.6]">
           Streaming apps gave everyone their own private channel. A playlist tuned
           to you, shuffled for you, paused the second you look away. SUB/WAVE goes
-          the other direction entirely. It is one Icecast stream — a single
-          broadcast every listener hears at the same moment — picked, announced,
+          the other direction entirely. It is one Icecast stream, a single
+          broadcast every listener hears at the same moment, picked, announced,
           and mixed by software running on a single box in someone&apos;s home.
-          There is no skip button. There is no &ldquo;for you.&rdquo; You tune in,
-          and you hear whatever is on the air right now, the same as everyone else.
+          No skip button. No &ldquo;for you.&rdquo; You tune in, and you hear
+          whatever is on the air right now, the same as everyone else.
         </p>
       </div>
     </EditorialReveal>

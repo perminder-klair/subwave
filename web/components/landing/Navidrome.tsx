@@ -23,16 +23,16 @@ export default function Navidrome() {
           <p className="text-muted">
             SUB/WAVE is the DJ, the mixer, and the broadcast layer. The music
             comes from <strong className="text-ink">your</strong>{' '}
-            Navidrome — the self-hosted music server with a Subsonic API. Run
+            Navidrome, the self-hosted music server with a Subsonic API. Run
             Navidrome on your homelab, point SUB/WAVE at it, and the DJ
             picks from your collection. Nobody else's algorithm. Nobody else's catalogue.
           </p>
 
           <ul className="bs-navidrome-bullets">
-            <li><strong>Your taste, not a recommendation engine.</strong> The picker reads the metadata you tagged — genres, moods, your own folders — and chooses from there.</li>
+            <li><strong>Your taste, not a recommendation engine.</strong> The picker reads the metadata you tagged (genres, moods, your own folders) and chooses from there.</li>
             <li><strong>No licensing fees.</strong> You already own (or, you know, have on disk) the music. SUB/WAVE doesn't add a streaming bill on top.</li>
             <li><strong>Private by default.</strong> Listeners hit one MP3 stream. Nobody outside your stack ever sees your library, your tags, or who requested what.</li>
-            <li><strong>BYO Subsonic-compatible server.</strong> Subsonic, Airsonic, Gonic, Funkwhale — if it speaks the Subsonic API, it works.</li>
+            <li><strong>BYO Subsonic-compatible server.</strong> Subsonic, Airsonic, Gonic, Funkwhale. If it speaks the Subsonic API, it works.</li>
           </ul>
 
           <div className="bs-navidrome-cta">

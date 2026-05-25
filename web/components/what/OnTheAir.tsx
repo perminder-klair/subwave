@@ -6,25 +6,25 @@ const POINTS = [
     eyebrow: 'NOW PLAYING',
     title: 'The track, the artist, the booth.',
     body:
-      'The player opens on whatever is on air — cover art pulled straight from your library, title, artist, album, and elapsed time. A waveform tracks the audio underneath. It is not your queue. It is the station’s.',
+      'The player opens on whatever is on air: cover art pulled straight from your library, title, artist, album, and elapsed time. A waveform tracks the audio underneath. It is not your queue. It is the station’s.',
   },
   {
     eyebrow: 'TIMELINE & BOOTH',
     title: 'See what is coming, hear what was said.',
     body:
-      'Two drawers slide out from the side. The Timeline shows tracks queued and recently played; the Booth is a live log of every word the DJ has spoken — station IDs, time checks, weather, the links between songs.',
+      'Two drawers slide out from the side. The Timeline shows tracks queued and recently played; the Booth is a live log of every word the DJ has spoken: station IDs, time checks, weather, the links between songs.',
   },
   {
     eyebrow: 'NO SKIP, ON PURPOSE',
     title: 'A shared broadcast, not a remote control.',
     body:
-      'There is no skip control for listeners — a stray double-tap on someone’s headphones should not change the song for everyone else. Track-end is the only natural transition. It is radio, so it behaves like radio.',
+      'There is no skip control for listeners. A stray double-tap on someone’s headphones should not change the song for everyone else. Track-end is the only natural transition. Radio behaves like radio.',
   },
   {
     eyebrow: 'INSTALL IT',
     title: 'A real app on the lock screen.',
     body:
-      'SUB/WAVE installs as a PWA — a home-screen icon, full-screen, offline-aware. The OS media controls wire straight through, so the lock screen, your headphones, and the car display all show the station and pause it cleanly.',
+      'SUB/WAVE installs as a PWA: a home-screen icon, full-screen, offline-aware. The OS media controls wire straight through, so the lock screen, your headphones, and the car display all show the station and pause it cleanly.',
   },
 ];
 
