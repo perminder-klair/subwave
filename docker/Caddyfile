@@ -20,11 +20,13 @@
 
 :80 {
 	# -------------------------------------------------------------------------
-	# /stream.mp3 — Icecast broadcast endpoint
+	# /stream.mp3 + /stream.opus — Icecast broadcast endpoints
 	# -------------------------------------------------------------------------
-	# flush_interval -1 disables buffering so the audio stream stays live.
+	# Both mounts are served by the same Icecast on broadcast:7702 (Liquidsoap
+	# encodes the same source bus into MP3 192 kbps and Ogg-Opus 96 kbps in
+	# parallel). flush_interval -1 disables buffering so the audio stays live.
 	# Query strings (e.g. ?t=12345 cache-busters) pass through automatically.
-	handle /stream.mp3 {
+	handle /stream.mp3 /stream.opus {
 		reverse_proxy broadcast:7702 {
 			flush_interval -1
 			transport http {

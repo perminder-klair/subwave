@@ -1,8 +1,8 @@
 // Icecast listener-count monitor.
 //
 // Polls Icecast's status-json.xsl on an interval and caches the live listener
-// count for the /stream.mp3 mount, so the DJ gates can ask "is anyone
-// listening?" without each one hitting Icecast.
+// count across both broadcast mounts (/stream.mp3 + /stream.opus), so the DJ
+// gates can ask "is anyone listening?" without each one hitting Icecast.
 //
 // Fail-open: if Icecast is unreachable the count is null and djCallsAllowed()
 // treats the station as occupied — a stats outage must never silence the DJ.
@@ -30,8 +30,15 @@ async function fetchCount() {
     clearTimeout(timer);
     const ic = ((await r.json()) as any)?.icestats;
     const sources = Array.isArray(ic?.source) ? ic.source : ic?.source ? [ic.source] : [];
-    const src = sources.find((s: any) => String(s?.listenurl || '').includes('/stream.mp3')) || null;
-    lastCount = src ? Number(src.listeners || 0) : 0;
+    // Sum listeners across our two broadcast mounts. Anything else (e.g. an
+    // /admin source) is ignored so stray test mounts don't inflate the count.
+    const broadcastMounts = ['/stream.mp3', '/stream.opus'];
+    lastCount = sources.reduce((sum: number, s: any) => {
+      const url = String(s?.listenurl || '');
+      return broadcastMounts.some(m => url.includes(m))
+        ? sum + Number(s.listeners || 0)
+        : sum;
+    }, 0);
   } catch {
     lastCount = null;
   }

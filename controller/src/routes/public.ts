@@ -13,9 +13,12 @@ export const router = express.Router();
 
 // Icecast stream status + listener count — used by /now-playing. Cheap local
 // fetch with a hard 1.5s timeout so a slow Icecast can never wedge the
-// every-5s poll the UI does. `online` is false when the /stream.mp3 mount has
-// no source attached (admin took the station off air, or Liquidsoap is down)
-// or when Icecast itself is unreachable. Returns offline + 0/0 on any failure.
+// every-5s poll the UI does. `online` is false when neither broadcast mount
+// (/stream.mp3, /stream.opus) has a source attached (admin took the station
+// off air, or Liquidsoap is down) or when Icecast itself is unreachable.
+// Listener count and peak sum both mounts so the UI shows total reach
+// regardless of which codec each listener picked. Returns offline + 0/0 on
+// any failure.
 async function getStreamStatus() {
   try {
     const ctrl = new AbortController();
@@ -24,13 +27,15 @@ async function getStreamStatus() {
     clearTimeout(timer);
     const ic = ((await r.json()) as any)?.icestats;
     const sources = Array.isArray(ic?.source) ? ic.source : ic?.source ? [ic.source] : [];
-    const src = sources.find((s: any) => String(s?.listenurl || '').includes('/stream.mp3')) || null;
+    const broadcastMounts = ['/stream.mp3', '/stream.opus'];
+    const broadcastSources = sources.filter((s: any) =>
+      broadcastMounts.some(m => String(s?.listenurl || '').includes(m))
+    );
+    const current = broadcastSources.reduce((sum: number, s: any) => sum + Number(s.listeners || 0), 0);
+    const peak    = broadcastSources.reduce((sum: number, s: any) => sum + Number(s.listener_peak || 0), 0);
     return {
-      online: !!src,
-      listeners: {
-        current: Number(src?.listeners || 0),
-        peak:    Number(src?.listener_peak || 0),
-      },
+      online: broadcastSources.length > 0,
+      listeners: { current, peak },
     };
   } catch {
     return { online: false, listeners: { current: 0, peak: 0 } };

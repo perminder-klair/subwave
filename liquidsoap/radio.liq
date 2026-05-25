@@ -498,17 +498,26 @@ music_meta.on_metadata(on_meta)
 
 # Stream on/off control. An Icecast output can't be paused, but it can be
 # shut down and recreated on demand (Liquidsoap's dynamic-sources pattern).
-# `stream_off` shuts the output down — the /stream.mp3 mount disconnects and
-# the station goes genuinely off air; `stream_on` recreates it. force_start
-# lets the recreated output start after init. The on/off state lives in refs
-# and is read back over telnet by the controller. It is NOT persisted: a
-# mixer restart always comes back on air.
+# `stream_off` shuts both mounts down — the /stream.mp3 and /stream.opus
+# mounts disconnect and the station goes genuinely off air; `stream_on`
+# recreates them. force_start lets the recreated outputs start after init.
+# The on/off state lives in refs and is read back over telnet by the
+# controller. It is NOT persisted: a mixer restart always comes back on air.
+#
+# Two mounts in parallel:
+#   /stream.mp3  — MP3 192 kbps, the universal compatibility floor
+#                  (Sonos, hardware radios, car receivers, pre-iOS-17 Safari).
+#   /stream.opus — Ogg-Opus 96 kbps, ~equal-or-better quality at half the
+#                  bandwidth for modern browsers (the web player auto-prefers
+#                  it via canPlayType). Browsers / VLC / cliamp on a recent
+#                  build all decode it; older clients keep using MP3.
+# Per-listener bandwidth is per-mount, so the unused side costs nothing.
 settings.init.force_start := true
 
-def make_stream_output() =
-  output.icecast(
+def make_stream_outputs() =
+  mp3_out = output.icecast(
     %mp3(bitrate=192, samplerate=44100, stereo=true),
-    id="stream",
+    id="stream_mp3",
     fallible=true,
     host=environment.get(default="icecast", "ICECAST_HOST"),
     port=7702,
@@ -520,6 +529,33 @@ def make_stream_output() =
     url="http://localhost:7700",
     radio
   )
+  # Opus mandates 48 kHz internally — Liquidsoap resamples from the 44.1 kHz
+  # source bus. application="audio" is the right tuning for music (vs "voip"
+  # or "lowdelay"). 96 kbps is the music-transparent sweet spot.
+  opus_out = output.icecast(
+    %opus(
+      bitrate=96,
+      samplerate=48000,
+      channels=2,
+      application="audio",
+      vbr="constrained"
+    ),
+    id="stream_opus",
+    fallible=true,
+    host=environment.get(default="icecast", "ICECAST_HOST"),
+    port=7702,
+    password=environment.get("ICECAST_SOURCE_PASSWORD"),
+    mount="/stream.opus",
+    name="SUB/WAVE",
+    description="Personal frequency from the homelab",
+    genre="Various",
+    url="http://localhost:7700",
+    radio
+  )
+  fun () -> begin
+    mp3_out.shutdown()
+    opus_out.shutdown()
+  end
 end
 
 stream_shutdown = ref(fun () -> ())
@@ -527,8 +563,7 @@ stream_on = ref(false)
 
 def stream_up() =
   if not stream_on() then
-    o = make_stream_output()
-    stream_shutdown := o.shutdown
+    stream_shutdown := make_stream_outputs()
     stream_on := true
   end
 end
@@ -569,10 +604,11 @@ server.register(
   end
 )
 
-# Take the station off air / back on air on demand. stream_off shuts the
-# Icecast output down so the /stream.mp3 mount disconnects; stream_on
-# recreates it. stream_status reports the current state for the admin UI
-# and the listener-facing player. Operator-only — listeners can't reach this.
+# Take the station off air / back on air on demand. stream_off shuts both
+# Icecast outputs down so /stream.mp3 and /stream.opus disconnect together;
+# stream_on recreates them. stream_status reports the current state for the
+# admin UI and the listener-facing player. Operator-only — listeners can't
+# reach this.
 server.register(
   "stream_off",
   description="Take the station off air (disconnect the Icecast mount)",

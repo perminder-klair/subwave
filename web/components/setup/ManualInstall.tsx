@@ -118,14 +118,16 @@ $EDITOR .env`}</CodeBlock>
               </p>
               <p>
                 <strong>You must front this with a reverse proxy.</strong> The web
-                UI calls <code className="bs-code-inline">/api/*</code> and{' '}
-                <code className="bs-code-inline">/stream.mp3</code> same-origin
+                UI calls <code className="bs-code-inline">/api/*</code>,{' '}
+                <code className="bs-code-inline">/stream.mp3</code>, and{' '}
+                <code className="bs-code-inline">/stream.opus</code> same-origin
                 (those paths are baked into the image at build time). Without a
                 proxy routing them to the controller and Icecast, the page loads
                 but the player is dead — no metadata, no audio. Route table to
                 replicate (mirrors <code className="bs-code-inline">docker/Caddyfile</code>):
               </p>
               <CodeBlock>{`/stream.mp3   →  host:7702           # disable proxy buffering for live audio
+/stream.opus  →  host:7702           # ditto — Ogg-Opus mount served from same Icecast
 /api/*        →  host:7701/*         # strip the /api prefix
 /*            →  host:7700           # everything else → web`}</CodeBlock>
               <p>

@@ -72,6 +72,17 @@ export default function Clients() {
           pause and no seek &mdash; closing the app and reopening it drops you back
           wherever the station is <em>now</em>, not where you left off.
         </p>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">OPUS, IF YOUR PLAYER SUPPORTS IT</div>
+          <p>
+            The station also serves <code className="bs-code-inline">/stream.opus</code>{' '}
+            (Ogg-Opus, 96&nbsp;kbps) on the same domain. It sounds equal-or-better and uses
+            roughly half the bandwidth of the MP3 mount. The in-browser player picks it
+            automatically when supported; for external apps try Opus first and fall back
+            to MP3 if the player refuses it. MP3 stays the universal recommendation for
+            Sonos, hardware internet radios, car receivers, and older mobile devices.
+          </p>
+        </div>
       </section>
 
       <section className="bs-section">
@@ -156,9 +167,10 @@ go install github.com/bjarneo/cliamp@latest`}</CodeBlock>
         <p className="text-muted">
           On Linux you also want the ALSA bridge for your audio server &mdash;{' '}
           <code className="bs-code-inline">pipewire-alsa</code> or{' '}
-          <code className="bs-code-inline">pulseaudio-alsa</code>. SUB/WAVE broadcasts
-          plain MP3, so cliamp plays it natively &mdash; no{' '}
-          <code className="bs-code-inline">ffmpeg</code> needed.
+          <code className="bs-code-inline">pulseaudio-alsa</code>. The MP3 mount plays
+          natively in cliamp with no <code className="bs-code-inline">ffmpeg</code>{' '}
+          needed; for the Opus mount cliamp will need an ffmpeg build that includes
+          libopus (most distro packages do).
         </p>
         <p>Pass the station&rsquo;s stream URL straight to cliamp:</p>
         <StreamUrl prefix="cliamp " />
@@ -190,7 +202,7 @@ cliamp http://100.x.x.x:7700/stream.mp3   # over Tailscale`}</CodeBlock>
 
       <section className="bs-section">
         <p className="bs-eyebrow">MORE TO COME</p>
-        <h2>Any MP3 stream player works.</h2>
+        <h2>Any internet-radio player works.</h2>
         <p>
           The SUB/WAVE TUI is the full-featured way in; VLC and cliamp are the walked-through
           audio-only examples &mdash; but none of them are special. Anything that can open an

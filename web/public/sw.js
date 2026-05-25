@@ -8,7 +8,7 @@
 //     audio chunks or stale "now playing" state — both worse than failing.
 //
 // Cache strategy:
-//   • /stream.mp3, /api/*  → bypass entirely (do not even respondWith).
+//   • /stream.mp3, /stream.opus, /api/*  → bypass entirely (do not even respondWith).
 //   • POST / non-GET       → bypass.
 //   • Cross-origin         → bypass (Next image/font CDNs can self-cache).
 //   • /_next/static/*      → cache-first. These URLs are content-hashed and
@@ -54,7 +54,7 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  if (url.pathname === '/stream.mp3') return;
+  if (url.pathname === '/stream.mp3' || url.pathname === '/stream.opus') return;
   if (url.pathname.startsWith('/api/')) return;
 
   // Content-hashed, immutable build assets — a cache hit is always correct.
