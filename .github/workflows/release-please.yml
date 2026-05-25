@@ -18,6 +18,11 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v4
         with:
+          # Explicit target-branch: the action defaults to the repo's default
+          # branch when unset, and our default is `develop` (not `main`). Without
+          # this, the release PR is opened against `develop` and the version tag
+          # never lands on the release branch.
+          target-branch: main
           # PAT (not GITHUB_TOKEN) so the tag push triggers publish-images.yml.
           # GitHub suppresses downstream workflow runs for events triggered by
           # GITHUB_TOKEN to prevent loops; a PAT-pushed tag doesn't have that
