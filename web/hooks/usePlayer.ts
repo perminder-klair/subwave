@@ -2,14 +2,29 @@
 
 import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 
-// If the operator pinned a stream URL at build time, honour it verbatim —
-// they may be routing through a split hostname or a non-default codec. Without
-// that override we default to same-origin MP3 (the universal compatibility
-// floor) and upgrade to Opus once the browser confirms it can decode Ogg-Opus,
-// which is roughly equal-or-better quality at half the bandwidth.
+// We pick MP3 vs Ogg-Opus on the client via canPlayType — Opus is roughly
+// equal-or-better quality at half the bandwidth on browsers that decode it.
+//
+// `NEXT_PUBLIC_STREAM_URL` is the build-time host override (dev points the
+// player at `http://localhost:7702/stream.mp3` because Icecast isn't on the
+// web origin there). It used to pin a single URL; now it pins the *host* and
+// we swap the path between `/stream.mp3` and `/stream.opus` on the same host.
+// Operators who pointed it at a non-standard URL that doesn't end in
+// `/stream.mp3` still get it verbatim (opus is null → codec detection off).
 const STREAM_URL_OVERRIDE = process.env.NEXT_PUBLIC_STREAM_URL || '';
-const DEFAULT_STREAM_URL = '/stream.mp3';
-const OPUS_STREAM_URL = '/stream.opus';
+const MP3_PATH = '/stream.mp3';
+const OPUS_PATH = '/stream.opus';
+
+function resolveStreamUrls(): { mp3: string; opus: string | null } {
+  if (!STREAM_URL_OVERRIDE) return { mp3: MP3_PATH, opus: OPUS_PATH };
+  const idx = STREAM_URL_OVERRIDE.lastIndexOf(MP3_PATH);
+  if (idx === -1) return { mp3: STREAM_URL_OVERRIDE, opus: null };
+  const before = STREAM_URL_OVERRIDE.slice(0, idx);
+  const after = STREAM_URL_OVERRIDE.slice(idx + MP3_PATH.length);
+  return { mp3: STREAM_URL_OVERRIDE, opus: `${before}${OPUS_PATH}${after}` };
+}
+
+const { mp3: MP3_STREAM_URL, opus: OPUS_STREAM_URL } = resolveStreamUrls();
 
 export type PlayerStatus = 'idle' | 'connecting' | 'playing';
 
@@ -34,9 +49,10 @@ export interface UsePlayerOptions {
 // can also reach it).
 export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player {
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  // Resolved at mount via canPlayType. SSR + first render use the MP3 default
-  // (or the build-time override) so server and client markup agree.
-  const [streamUrl, setStreamUrl] = useState<string>(STREAM_URL_OVERRIDE || DEFAULT_STREAM_URL);
+  // Resolved at mount via canPlayType. SSR + first render use the MP3 URL so
+  // server and client markup agree; the useEffect below upgrades to Opus when
+  // the browser confirms it can decode it.
+  const [streamUrl, setStreamUrl] = useState<string>(MP3_STREAM_URL);
   const [tunedIn, setTunedIn] = useState(false);
   // 'idle' | 'connecting' | 'playing'. 'connecting' covers the unavoidable
   // gap between the tune-in gesture and the first audible audio frames —
@@ -60,8 +76,11 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
   // Pick Opus on capable browsers (Chrome, Firefox, Edge, Safari 17+) so the
   // listener gets ~half the bandwidth at equal-or-better quality; everyone
   // else stays on MP3. A throwaway <audio> avoids racing the consumer's ref.
+  // Skipped when the host override didn't fit the /stream.mp3 pattern — in
+  // that case we have no opus URL to offer and the override is treated as a
+  // pinned URL.
   useEffect(() => {
-    if (STREAM_URL_OVERRIDE) return;
+    if (!OPUS_STREAM_URL) return;
     const tester = document.createElement('audio');
     const opusOk = tester.canPlayType('audio/ogg; codecs=opus');
     if (opusOk === 'probably' || opusOk === 'maybe') {
