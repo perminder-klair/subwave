@@ -67,12 +67,12 @@ function scenarioText(s: any) {
 }
 
 // One-line summary of a finished session, carried into the next as continuity.
+// Intentionally omits the "recently aired" track list — leaking the previous
+// session's titles into the new picker's prompt window biases it toward
+// re-picking those same tracks (observed cause of 6-8× daily repeats).
+// The picker has its own recents window for blocking repeats.
 function buildHandoff(prev: any) {
   if (!prev) return null;
-  const plays = prev.messages
-    .filter((m: any) => m.kind === 'play')
-    .slice(-3)
-    .map((m: any) => m.text);
   const lastSpoken = [...prev.messages].reverse()
     .find((m: any) => m.role === 'dj' || m.role === 'segment');
   const parts = [
@@ -80,7 +80,6 @@ function buildHandoff(prev: any) {
       ? `the show "${prev.show?.name}"`
       : `a ${prev.scenario.period || ''} block`,
   ];
-  if (plays.length) parts.push(`recently aired ${plays.join('; ')}`);
   if (lastSpoken?.text) parts.push(`you last said: "${lastSpoken.text.slice(0, 120)}"`);
   return parts.join(' — ');
 }

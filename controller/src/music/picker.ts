@@ -55,7 +55,7 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, currentTrack: any) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any) {
   await library.load();
   const pool: any[] = [];
   const sources: Record<string, number> = {};
@@ -174,6 +174,11 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     .filter((t: any) => {
       if (!t.id || seen.has(t.id)) return false;
       const artistKey = (t.artist || '').toLowerCase().trim();
+      // Drop tracks by an artist heard in the last 2h, mirroring the agent
+      // picker's recentArtistsSince(2) filter. Without this, the fallback
+      // path (~1 in 4-5 picks on the current model) could cluster the same
+      // artist 4× in 90 min, as observed with Prabh Deep on 2026-05-25.
+      if (artistKey && recentArtists.has(artistKey)) return false;
       if (artistKey) {
         const n = perArtist.get(artistKey) || 0;
         if (n >= MAX_PER_ARTIST) return false;
@@ -210,9 +215,12 @@ function summariseRecent(queue: any) {
 // ---------------------------------------------------------------------------
 
 export async function pickViaPool(queue, ctx) {
-  const recentIds = queue.recentlyPlayedIds(25);
+  // Match the agent picker's window (dj-agent.pickViaAgent) — 12h. Anything
+  // shorter and the fallback could pick a track the agent would have rejected.
+  const recentIds = queue.recentlyPlayedIds(12);
+  const recentArtists = queue.recentArtistsSince(2);
   const currentTrack = queue.current?.track || null;
-  const { candidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, currentTrack);
+  const { candidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack);
 
   if (candidates.length === 0) {
     queue.log('picker', 'no candidates available, skipping LLM pick');

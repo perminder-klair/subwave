@@ -26,10 +26,23 @@ function artistKey(s: any) {
   return (s.artist || '').toLowerCase().trim();
 }
 
-// Most songs by any one artist allowed across a whole pick, mirroring
-// music/picker.js's MAX_PER_ARTIST — keeps a deep catalogue artist from
-// flooding the candidate pool just because random/search keeps surfacing them.
-const MAX_PER_ARTIST = 3;
+// Navidrome (and library.songsByMood) return results in deterministic order:
+// `tracksByMood("night")` always returns the same first N of 89 night-tagged
+// songs; `topSongsByArtist("Karan Aujla")` always returns the same top-N by
+// play count. With `cap=8` the agent sees the same handful no matter how many
+// times it asks. Shuffling here turns each call into a fresh sample — the same
+// fix `music/picker.js` already applies at pool-build time.
+function shuffle<T>(arr: T[]): T[] {
+  return [...arr].sort(() => Math.random() - 0.5);
+}
+
+// Most songs by any one artist allowed across a whole pick. The recent-artists
+// window (passed by dj-agent.pickViaAgent) already blocks any artist heard in
+// the last 2h, so this cap only matters when multiple tools (searchLibrary +
+// topSongsByArtist + similarSongs) surface the same artist within one pick.
+// 2 is tighter than the previous 3 to reduce in-pool fixation on deep
+// catalogues — per-tool cap=8 still leaves plenty of candidates overall.
+const MAX_PER_ARTIST = 2;
 
 // Builds a fresh tool set scoped to one pick. `recentIds` (recently-played
 // song ids) and `recentArtists` (lowercased recently-played artist names) are
@@ -38,8 +51,13 @@ const MAX_PER_ARTIST = 3;
 // listener-request path so a request for a recent artist still resolves.
 export function buildPickerTools({
   recentIds = new Set<string>(),
+  recentKeys = new Set<string>(),
   recentArtists = new Set<string>(),
-}: { recentIds?: Set<string>; recentArtists?: Set<string> } = {}) {
+}: {
+  recentIds?: Set<string>;
+  recentKeys?: Set<string>;        // lowercased "title|artist" — backfilled entries lack ids
+  recentArtists?: Set<string>;
+} = {}) {
   const seen = new Map<string, any>(); // id → slim song, accumulated across all tool calls
   const artistCounts = new Map<string, number>(); // artist key → songs already accepted into `seen`
 
@@ -50,10 +68,13 @@ export function buildPickerTools({
   // agent — see picker-latency notes in dj-agent.js. The seen map still
   // accumulates across the whole loop, so the agent's id space grows with
   // each tool call regardless.
+  const trackKey = (s: any) =>
+    `${(s.title || '').toLowerCase().trim()}|${(s.artist || '').toLowerCase().trim()}`;
   const collect = (list: any, cap = 8) => {
     const out: any[] = [];
-    for (const s of (list || []) as any[]) {
+    for (const s of shuffle((list || []) as any[])) {
       if (!s?.id || recentIds.has(s.id) || seen.has(s.id)) continue;
+      if (recentKeys.has(trackKey(s))) continue;   // catches backfilled entries (no id)
       const key = artistKey(s);
       if (key && recentArtists.has(key)) continue;
       if (key) {
