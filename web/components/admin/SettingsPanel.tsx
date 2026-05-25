@@ -21,7 +21,7 @@ const SECTIONS = [
   { id: 'tts',     label: 'TTS voice', hint: 'default engine' },
   { id: 'llm',     label: 'LLM provider', hint: 'model routing' },
   { id: 'search',  label: 'Web search', hint: 'live-facts backend' },
-  { id: 'mixer',   label: 'Mixer', hint: 'crossfade · weather' },
+  { id: 'station', label: 'Station', hint: 'name · location' },
   { id: 'jingles', label: 'Jingles', hint: 'stingers' },
   { id: 'sfx',     label: 'Sound FX', hint: 'agent stingers' },
   { id: 'danger',  label: 'Danger zone', hint: 'broadcast control' },
@@ -446,8 +446,8 @@ export default function SettingsPanel() {
                 saveSettings={saveSettings}
               />
             )}
-            {activeSection === 'mixer' && (
-              <MixerSection
+            {activeSection === 'station' && (
+              <StationSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings}
               />
@@ -474,14 +474,15 @@ export default function SettingsPanel() {
           <>
             <SectionHeader
               eyebrow="danger zone"
-              title="Stop the stream or restart the mixer."
-              sub="Both actions affect every current listener. Restart the mixer after changing crossfade or jingle frequency; stop the stream to take the station off air entirely."
+              title="Crossfade, stream control, and mixer restart."
+              sub="Crossfade is grouped here because it needs a mixer restart to apply. Stream stop and mixer restart both affect every current listener."
               metrics={[
                 {
                   n: data?.streamOnAir == null ? '—' : data.streamOnAir ? 'on air' : 'off air',
                   l: 'broadcast',
                   accent: data?.streamOnAir === true,
                 },
+                { n: `${data?.values?.crossfadeDuration ?? '—'}s`, l: 'crossfade' },
               ]}
             />
 
@@ -501,6 +502,43 @@ export default function SettingsPanel() {
                 </div>
               </div>
             </Card>
+
+            {form && (
+              <Card title="Crossfade" sub="track transition overlap">
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Crossfade duration</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      className="mono-num w-28"
+                      type="number"
+                      step={0.5}
+                      max={30}
+                      value={form.crossfadeDuration}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f => (f ? { ...f, crossfadeDuration: e.target.value } : f))
+                      }
+                    />
+                    <span className="text-[12px] text-muted">sec</span>
+                    <Btn
+                      sm
+                      onClick={() =>
+                        saveSettings({ crossfadeDuration: parseFloat(form.crossfadeDuration) })
+                      }
+                      disabled={busy}
+                    >
+                      Save crossfade
+                    </Btn>
+                  </div>
+                  <div className="field-hint">
+                    Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
+                    Saving flags a pending restart — apply it with the Mixer card below.
+                  </div>
+                </div>
+              </Card>
+            )}
 
             <Card title="Mixer" sub="apply pending Liquidsoap-level settings">
               <div className="grid gap-2">
@@ -1395,11 +1433,10 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
   );
 }
 
-/* ── Mixer ───────────────────────────────────────────────────────────── */
+/* ── Station ─────────────────────────────────────────────────────────── */
 
-function MixerSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
+function StationSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const save = () => saveSettings({
-    crossfadeDuration: parseFloat(form.crossfadeDuration),
     station: form.station,
     weather: {
       lat: parseFloat(form.weather.lat),
@@ -1411,39 +1448,13 @@ function MixerSection({ data, form, setForm, busy, saveSettings }: SectionProps)
   return (
     <>
       <SectionHeader
-        eyebrow="mixer"
-        title="Crossfade and where the station broadcasts from."
-        sub="Crossfade overlap shapes every track transition. The station location sets where the DJ thinks it broadcasts from and drives the Open-Meteo weather it reads on air."
+        eyebrow="station"
+        title="How the DJ identifies this radio on air."
+        sub="The station name is substituted into the DJ prompt as {station}. The location sets where the DJ thinks it broadcasts from and drives the Open-Meteo weather it reads on air. Both apply live — no mixer restart."
         metrics={[
-          { n: `${data.values?.crossfadeDuration}s`, l: 'crossfade', accent: true },
+          { n: data.values?.station || 'SUB/WAVE', l: 'station', accent: true },
         ]}
       />
-
-      <Card title="Crossfade" sub="track transition overlap">
-        <div className="field">
-          <div className="flex items-center gap-2">
-            <Label>Crossfade duration</Label>
-            <Pill tone="ink">restart required</Pill>
-          </div>
-          <div className="flex items-center gap-2">
-            <Input
-              className="mono-num w-28"
-              type="number"
-              step={0.5}
-              max={30}
-              value={form.crossfadeDuration}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, crossfadeDuration: e.target.value }))
-              }
-            />
-            <span className="text-[12px] text-muted">sec</span>
-          </div>
-          <div className="field-hint">
-            Seconds of overlap between tracks (current: {data.values?.crossfadeDuration}s).
-            Requires a mixer restart to apply.
-          </div>
-        </div>
-      </Card>
 
       <Card title="Station name" sub="What the DJ calls this radio on air">
         <div className="field">
@@ -1504,10 +1515,10 @@ function MixerSection({ data, form, setForm, busy, saveSettings }: SectionProps)
       </Card>
 
       <SaveBar
-        note="Station location applies live · Crossfade requires a mixer restart (danger zone)."
+        note="Station name and location apply live."
         busy={busy}
         onSave={save}
-        saveLabel="Save mixer settings"
+        saveLabel="Save station settings"
       />
     </>
   );
