@@ -2,7 +2,7 @@
 # Reads a JSON queue file written by the Node.js controller,
 # crossfades, ducks DJ voice over song intros, falls back to autonomous playlist.
 
-settings.log.level := 4
+settings.log.level := 3
 settings.log.file := true
 settings.log.file.path := "/var/log/liquidsoap/radio.log"
 
@@ -20,6 +20,8 @@ settings.server.telnet.port := 1234
 
 jingle_ratio = ref(30)
 crossfade_duration = ref(10.0)
+archive_enabled = ref(true)
+archive_bitrate = ref(128)
 
 if file.exists("/var/sub-wave/liquidsoap_jingle_ratio.txt") then
   raw = string.trim(file.contents("/var/sub-wave/liquidsoap_jingle_ratio.txt"))
@@ -33,7 +35,18 @@ if file.exists("/var/sub-wave/liquidsoap_crossfade.txt") then
   if v >= 0.0 then crossfade_duration := v end
 end
 
-log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()}")
+if file.exists("/var/sub-wave/liquidsoap_archive_enabled.txt") then
+  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_archive_enabled.txt"))
+  archive_enabled := (raw == "true")
+end
+
+if file.exists("/var/sub-wave/liquidsoap_archive_bitrate.txt") then
+  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_archive_bitrate.txt"))
+  v = int_of_string(default=128, raw)
+  if v > 0 then archive_bitrate := v end
+end
+
+log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()}")
 
 # ---------------------------------------------------------------------------
 # HTTP(S) FETCH OVERRIDE — Liquidsoap's built-in http.get.stream returns
@@ -544,14 +557,30 @@ end
 # On air at startup.
 stream_up()
 
-# Optional: also output to local file for archiving / podcast generation
-output.file(
-  %mp3(bitrate=128),
-  fallible=true,
-  reopen_when={0m0s},
-  "/var/sub-wave/archive/%Y-%m-%d/%H-00.mp3",
-  radio
-)
+# Optional: hourly archive to /var/sub-wave/archive/. A second MP3 encoder
+# running 24/7 is the single biggest CPU cost in the broadcast container —
+# guard the entire output so operators who don't use the archives don't pay
+# for the encoder. Bitrate is selected from a fixed set because `%mp3(bitrate=…)`
+# requires a literal int at parse time (we can't pass a ref).
+archive_path = "/var/sub-wave/archive/%Y-%m-%d/%H-00.mp3"
+if archive_enabled() then
+  br = archive_bitrate()
+  if br <= 64 then
+    output.file(%mp3(bitrate=64), fallible=true, reopen_when={0m0s}, archive_path, radio)
+  elsif br <= 96 then
+    output.file(%mp3(bitrate=96), fallible=true, reopen_when={0m0s}, archive_path, radio)
+  elsif br <= 128 then
+    output.file(%mp3(bitrate=128), fallible=true, reopen_when={0m0s}, archive_path, radio)
+  elsif br <= 160 then
+    output.file(%mp3(bitrate=160), fallible=true, reopen_when={0m0s}, archive_path, radio)
+  elsif br <= 192 then
+    output.file(%mp3(bitrate=192), fallible=true, reopen_when={0m0s}, archive_path, radio)
+  else
+    output.file(%mp3(bitrate=320), fallible=true, reopen_when={0m0s}, archive_path, radio)
+  end
+else
+  log("Hourly archive disabled — set archive.enabled=true in settings to re-enable")
+end
 
 # ---------------------------------------------------------------------------
 # CONTROL — custom telnet command for the controller to trigger a restart

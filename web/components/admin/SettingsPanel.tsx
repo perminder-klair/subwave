@@ -117,9 +117,19 @@ interface ScrobbleForm {
   listenbrainz: ScrobbleListenbrainzForm;
 }
 
+interface ArchiveForm {
+  enabled: boolean;
+  bitrate: string;
+}
+
+// Keep in sync with ARCHIVE_BITRATES in controller/src/settings.ts — radio.liq
+// has a literal `%mp3(bitrate=…)` branch per value, so this set is fixed.
+const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
+
 interface FormState {
   jingleRatio: string;
   crossfadeDuration: string;
+  archive: ArchiveForm;
   station: string;
   weather: WeatherCfg;
   tts: TtsForm;
@@ -153,6 +163,7 @@ interface SettingsData {
   values?: {
     jingleRatio?: number;
     crossfadeDuration?: number;
+    archive?: { enabled?: boolean; bitrate?: number };
     station?: string;
     weather?: { lat?: number; lng?: number; locationName?: string };
     tts?: {
@@ -241,6 +252,10 @@ export default function SettingsPanel() {
     setForm({
       jingleRatio: String(v.jingleRatio ?? ''),
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
+      archive: {
+        enabled: v.archive?.enabled ?? true,
+        bitrate: String(v.archive?.bitrate ?? 128),
+      },
       station: v.station ?? '',
       weather: {
         lat: String(v.weather?.lat ?? ''),
@@ -581,6 +596,89 @@ export default function SettingsPanel() {
                   <div className="field-hint">
                     Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
                     Saving flags a pending restart — apply it with the Mixer card below.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Hourly archive" sub="state/archive/%Y-%m-%d/%H-00.mp3">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>Record the broadcast to disk</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.archive.enabled ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, archive: { ...f.archive, enabled: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({ archive: { enabled: form.archive.enabled } })
+                        }
+                        disabled={busy}
+                      >
+                        Save
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      The archive runs a second MP3 encoder 24/7 and is the biggest constant
+                      CPU cost in the broadcast container — turn it off if you don't replay
+                      the hourly tapes (issue #137).
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>Archive bitrate</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Select
+                        value={form.archive.bitrate}
+                        onValueChange={v =>
+                          setForm(f => (f ? { ...f, archive: { ...f.archive, bitrate: v } } : f))
+                        }
+                      >
+                        <SelectTrigger className="w-32" disabled={!form.archive.enabled}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ARCHIVE_BITRATES.map(br => (
+                            <SelectItem key={br} value={String(br)}>
+                              {br} kbps
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({
+                            archive: { bitrate: parseInt(form.archive.bitrate, 10) },
+                          })
+                        }
+                        disabled={busy || !form.archive.enabled}
+                      >
+                        Save bitrate
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      Lower bitrate = smaller archives, less encoder CPU
+                      (current: {data?.values?.archive?.bitrate ?? '—'} kbps). 128 kbps is the
+                      original default.
+                    </div>
                   </div>
                 </div>
               </Card>

@@ -197,9 +197,20 @@ export const SEED_PERSONAS = [
   },
 ];
 
+// Allowed archive bitrates. Matches the literal branches in radio.liq —
+// %mp3(bitrate=…) needs a parse-time int, so the encoder is pre-baked for
+// this small set. Add a branch in radio.liq if you add a value here.
+export const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
+
 const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
   crossfadeDuration: 10.0, // seconds
+  // Hourly archive output. Enabled by default to preserve existing behaviour.
+  // The second MP3 encoder is the largest constant CPU cost in the broadcast
+  // container — operators who don't use the archives can switch this off to
+  // reclaim that headroom (issue #137). Dropping the bitrate (e.g. 128 → 64
+  // mono in a future change) also helps for operators who want the tape.
+  archive: { enabled: true, bitrate: 128 },
   weather: { lat: 52.5862, lng: -2.1288, locationName: 'Wolverhampton' },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
   // placeholder and returned by GET /dj for the landing page. The product is
@@ -314,6 +325,8 @@ const BOUNDS = {
   jingleRatio: { min: 1, max: 1000, type: 'int' },
   crossfadeDuration: { min: 0, max: 30, type: 'float' },
 };
+
+const ARCHIVE_BITRATE_SET = new Set<number>(ARCHIVE_BITRATES);
 
 let cache: any = null;
 
@@ -474,9 +487,21 @@ export async function load() {
     shows.map(s => s.id),
   );
 
+  const archiveBitrate =
+    typeof stored.archive?.bitrate === 'number' && ARCHIVE_BITRATE_SET.has(stored.archive.bitrate)
+      ? stored.archive.bitrate
+      : DEFAULTS.archive.bitrate;
+
   cache = {
     jingleRatio: stored.jingleRatio ?? DEFAULTS.jingleRatio,
     crossfadeDuration: stored.crossfadeDuration ?? DEFAULTS.crossfadeDuration,
+    archive: {
+      enabled:
+        typeof stored.archive?.enabled === 'boolean'
+          ? stored.archive.enabled
+          : DEFAULTS.archive.enabled,
+      bitrate: archiveBitrate,
+    },
     weather: {
       lat: stored.weather?.lat ?? DEFAULTS.weather.lat,
       lng: stored.weather?.lng ?? DEFAULTS.weather.lng,
@@ -925,6 +950,28 @@ export async function update(patch) {
       restart = true;
     }
   }
+  if ('archive' in patch) {
+    const a = patch.archive || {};
+    if (a.enabled !== undefined) {
+      const v = !!a.enabled;
+      if (v !== cur.archive.enabled) {
+        next.archive.enabled = v;
+        restart = true;
+      }
+    }
+    if (a.bitrate !== undefined) {
+      const v = parseInt(a.bitrate, 10);
+      if (!Number.isFinite(v) || !ARCHIVE_BITRATE_SET.has(v)) {
+        throw new Error(
+          `archive.bitrate must be one of: ${ARCHIVE_BITRATES.join(', ')}`,
+        );
+      }
+      if (v !== cur.archive.bitrate) {
+        next.archive.bitrate = v;
+        restart = true;
+      }
+    }
+  }
   if ('weather' in patch) {
     const w = patch.weather || {};
     if (w.lat !== undefined) {
@@ -1288,20 +1335,29 @@ export function agentPersonaPreamble(persona, { rules = true } = {}) {
   return rules ? `${opener}` : opener;
 }
 
-// Liquidsoap reads two tiny text files instead of JSON.
+// Liquidsoap reads tiny text files instead of JSON.
 const LIQ_JINGLE_RATIO_PATH = `${STATE_DIR}/liquidsoap_jingle_ratio.txt`;
 const LIQ_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_crossfade.txt`;
+const LIQ_ARCHIVE_ENABLED_PATH = `${STATE_DIR}/liquidsoap_archive_enabled.txt`;
+const LIQ_ARCHIVE_BITRATE_PATH = `${STATE_DIR}/liquidsoap_archive_bitrate.txt`;
 
 export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_JINGLE_RATIO_PATH, String(s.jingleRatio));
   await writeFile(LIQ_CROSSFADE_PATH, String(s.crossfadeDuration));
+  await writeFile(LIQ_ARCHIVE_ENABLED_PATH, s.archive.enabled ? 'true' : 'false');
+  await writeFile(LIQ_ARCHIVE_BITRATE_PATH, String(s.archive.bitrate));
 }
 
 // Called from server.js startup so the files exist before Liquidsoap reads
 // them on its next start. Idempotent.
 export async function ensureLiquidsoapSettingsFile() {
   const s = await load();
-  if (!existsSync(LIQ_JINGLE_RATIO_PATH) || !existsSync(LIQ_CROSSFADE_PATH)) {
+  if (
+    !existsSync(LIQ_JINGLE_RATIO_PATH) ||
+    !existsSync(LIQ_CROSSFADE_PATH) ||
+    !existsSync(LIQ_ARCHIVE_ENABLED_PATH) ||
+    !existsSync(LIQ_ARCHIVE_BITRATE_PATH)
+  ) {
     await writeLiquidsoapSettings(s);
   }
 }
