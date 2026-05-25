@@ -53,6 +53,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         llm: s.llm,
         search: s.search,
         sfx: s.sfx,
+        scrobble: s.scrobble,
       },
       defaults: {
         // The built-in prompt template — the UI shows this when djPrompt is "".
@@ -91,6 +92,10 @@ router.get('/settings', requireAdmin, async (req, res) => {
         OPENROUTER_API_KEY: !!process.env.OPENROUTER_API_KEY,
         AI_GATEWAY_API_KEY: !!process.env.AI_GATEWAY_API_KEY,
         SEARCH_API_KEY: !!process.env.SEARCH_API_KEY,
+        LASTFM_API_KEY: !!process.env.LASTFM_API_KEY,
+        LASTFM_API_SECRET: !!process.env.LASTFM_API_SECRET,
+        LASTFM_SESSION_KEY: !!process.env.LASTFM_SESSION_KEY,
+        LISTENBRAINZ_USER_TOKEN: !!process.env.LISTENBRAINZ_USER_TOKEN,
       },
       // Skill catalogue — consumed by the Skills page and by Personas for the
       // per-persona skill-assignment checklist.
