@@ -40,6 +40,19 @@ router.delete('/jingles/:filename', requireAdmin, async (req, res) => {
   }
 });
 
+// Admin preview — streams the rendered WAV so the operator can audition a
+// jingle before it goes on air. Resolved through jingles.getPath so the
+// filename has to match a sidecar entry (no path traversal).
+router.get('/jingles/:filename/audio', requireAdmin, async (req, res) => {
+  try {
+    const filePath = await jingles.getPath(req.params.filename);
+    if (!filePath) return res.status(404).json({ error: 'unknown jingle' });
+    res.type('audio/wav').sendFile(filePath);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // TAG-LIBRARY — kick off the tagger as a background child process.
 // Polls /settings to see progress (library.total grows; tagger.running flips).

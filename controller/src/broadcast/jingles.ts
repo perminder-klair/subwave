@@ -66,6 +66,17 @@ export async function list() {
   return out;
 }
 
+// Absolute path to a jingle's audio file, or null if the filename isn't in
+// the sidecar or the file is missing on disk. Looking it up via the sidecar
+// (instead of joining DIR + the raw param) is what makes path traversal a
+// non-issue — `..` slugs simply won't match a key.
+export async function getPath(filename: string): Promise<string | null> {
+  const meta = await loadMeta();
+  if (!meta.items[filename]) return null;
+  const filePath = `${DIR}/${filename}`;
+  return (await statOrNull(filePath)) ? filePath : null;
+}
+
 export async function create(text: string, { builtin = false }: { builtin?: boolean } = {}) {
   if (!text || !text.trim()) throw new Error('Empty jingle text');
   await mkdir(DIR, { recursive: true });

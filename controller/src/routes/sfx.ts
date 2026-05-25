@@ -40,3 +40,15 @@ router.delete('/sfx/:name', requireAdmin, async (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+
+// Admin preview — streams the rendered MP3 so the operator can audition an
+// effect before letting the agent reach for it.
+router.get('/sfx/:name/audio', requireAdmin, async (req, res) => {
+  try {
+    const filePath = await sfx.getPath(req.params.name);
+    if (!filePath) return res.status(404).json({ error: 'unknown sound effect' });
+    res.type('audio/mpeg').sendFile(filePath);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
