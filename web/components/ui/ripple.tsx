@@ -20,7 +20,7 @@ export const Ripple = React.memo(function Ripple({
   return (
     <div
       className={cn(
-        'pointer-events-none absolute inset-0 select-none [mask-image:linear-gradient(to_bottom,white,transparent)]',
+        'pointer-events-none absolute inset-0 [mask-image:linear-gradient(to_bottom,white,transparent)] select-none',
         'transition-opacity duration-500',
         active ? 'opacity-100' : 'opacity-0',
         className,
@@ -39,6 +39,7 @@ export const Ripple = React.memo(function Ripple({
               'absolute rounded-full border border-solid shadow-xl',
               active && 'sw-ripple-circle',
             )}
+            // eslint-disable-next-line react/forbid-dom-props -- per-circle size/delay/opacity are loop-index-derived; --i is a CSS custom property
             style={
               {
                 '--i': i,
