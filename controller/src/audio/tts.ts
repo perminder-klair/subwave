@@ -23,7 +23,9 @@ export const VOICE_KINDS = [
   'weather',        // weather change announcements (segment capability)
   'news',           // headline read (segment capability)
   'traffic',        // tongue-in-cheek traffic filler (segment capability)
-  'random-facts',   // "did you know" filler (segment capability)
+  'curiosity',      // on-this-day / oddly-specific factoid (segment capability)
+  'album-anniversary', // round-number anniversary of the on-air album (segment capability)
+  'library-deep-cut',  // tease a forgotten track by the on-air artist (segment capability)
   'jingle',         // pre-rendered station idents (offline path)
   'default',        // fallback when a kind isn't explicitly mapped
 ];

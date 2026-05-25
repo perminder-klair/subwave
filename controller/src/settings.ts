@@ -323,13 +323,22 @@ let cache: any = null;
 // sentinel — used by legacy personas and the code default so behaviour is
 // unchanged until the operator explicitly picks a subset. An empty array
 // means "this persona runs no skills".
+//
+// Legacy migrations: `random-facts` is rewritten to `curiosity` (the merged
+// successor capability that absorbed the old prompt-only "did you know" line
+// plus Wikipedia on-this-day). Persona ownership lists predate this rename,
+// so without rewriting them, every upgraded operator would silently lose the
+// capability the moment they reload settings.
+const SKILL_RENAMES: Record<string, string> = {
+  'random-facts': 'curiosity',
+};
 function normalizeSkills(raw: any) {
   if (!Array.isArray(raw)) return null;
   const seen = new Set<string>();
   const out: string[] = [];
   for (const item of raw) {
     if (typeof item !== 'string') continue;
-    const v = item.trim();
+    const v = SKILL_RENAMES[item.trim()] || item.trim();
     if (!SKILL_SLUG_RE.test(v) || seen.has(v)) continue;
     seen.add(v);
     out.push(v);
@@ -557,7 +566,11 @@ export async function load() {
     },
     skills: {
       enabled: Object.fromEntries(
-        Object.entries(stored.skills?.enabled || {}).filter(([, v]) => typeof v === 'boolean'),
+        Object.entries(stored.skills?.enabled || {})
+          .filter(([, v]) => typeof v === 'boolean')
+          // Same rename applied to the operator's enable toggle map so an
+          // existing `random-facts: false` carries forward as `curiosity: false`.
+          .map(([k, v]) => [SKILL_RENAMES[k] || k, v]),
       ),
     },
     sfx: {

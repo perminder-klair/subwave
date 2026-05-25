@@ -46,8 +46,8 @@ import * as sfx from '../broadcast/sfx.js';
 //   label       — human label for the admin command-center UI
 //   cooldownMs  — hard minimum gap between autonomous firings of this kind
 //   desc        — the one-line briefing shown BOTH to the agent (per-capability
-//                 guidance — for traffic/random-facts, which have no data tool,
-//                 this is the agent's ONLY brief) and to the admin UI
+//                 guidance — for traffic, which has no data tool, this is the
+//                 agent's ONLY brief) and to the admin UI
 //   requiresKey — (optional) env key the capability needs
 //   keyUrl      — (optional) where the operator obtains that key
 //   ready       — (optional) () => boolean; false when the env key is missing
@@ -70,9 +70,19 @@ const CAPABILITIES: any[] = [
     desc: 'A tongue-in-cheek made-up "traffic update for the listening area" — one absurd, small-scale sentence (a cat on the cable, a queue at the kettle, slow buffering on the M6). Never a real road incident.',
   },
   {
-    kind: 'random-facts', skill: 'random-facts', label: 'Random facts',
+    kind: 'curiosity', skill: 'curiosity', label: 'Curiosity',
     cooldownMs: 60 * 60 * 1000,
-    desc: 'One concrete, oddly-specific "did you know" line, lightly themed to the hour or season — not Wikipedia-rote. Never say "fun fact" or "interestingly".',
+    desc: 'One oddly-specific moment of interest — a real "on this day in 19xx" beat from history if the tool surfaces a good one, otherwise a concrete factoid lightly themed to the hour or season. Never say "fun fact", "interestingly", or "did you know".',
+  },
+  {
+    kind: 'album-anniversary', skill: 'album-anniversary', label: 'Album anniversary',
+    cooldownMs: 6 * 60 * 60 * 1000,
+    desc: 'If the album currently on air is hitting a 5/10/20/25-year mark this year, note it like a presenter spotting a date in the prep notes — one short sentence, never gushing, never "classic".',
+  },
+  {
+    kind: 'library-deep-cut', skill: 'library-deep-cut', label: 'Library deep-cut tease',
+    cooldownMs: 90 * 60 * 1000,
+    desc: 'If the on-air artist has a track in the library that has not been played in months, tease that it might come around later — one sentence, like a presenter teasing the rest of the show. Never name the track unless the tool surfaced exactly one.',
   },
   {
     kind: 'web-search', skill: 'web-search', label: 'Web search',
@@ -88,7 +98,7 @@ const CAPABILITIES: any[] = [
 
 const SEGMENT_SCHEMA = z.object({
   segment: z.object({
-    kind: z.enum(['weather', 'news', 'traffic', 'random-facts', 'web-search'])
+    kind: z.enum(['weather', 'news', 'traffic', 'curiosity', 'album-anniversary', 'library-deep-cut', 'web-search'])
       .describe('the segment kind — MUST be one offered in the system prompt for this tick'),
     text: z.string().describe('the spoken line in the DJ voice — typically one short sentence, never more than three'),
     sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect (null is usually right — most segments need none)'),
@@ -121,6 +131,7 @@ const lastFired = new Map<string, number>(); // kind → ms timestamp of last ai
 // Dedup memory carried across ticks — passed straight into the segment tools.
 const segmentState: any = {
   seenHeadlines: new Set<string>(),
+  seenCuriosity: new Set<string>(),
   lastWeatherCondition: null,
   lastSearchedArtist: null,
   lastAnySegment: 0,
