@@ -190,6 +190,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
       <TopBar
         tunedIn={tunedIn}
         context={context}
+        stationName={typeof dj?.station === 'string' ? dj.station : undefined}
         djName={typeof dj?.name === 'string' ? dj.name : undefined}
         activeShow={activeShow}
         listeners={listeners}

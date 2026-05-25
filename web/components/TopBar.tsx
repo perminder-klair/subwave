@@ -9,6 +9,7 @@ import type { ActiveShow, ListenerCount, StationContext, ThemeMode } from '@/lib
 export interface TopBarProps {
   tunedIn: boolean;
   context: StationContext | null;
+  stationName?: string;
   djName?: string;
   activeShow: ActiveShow | null;
   listeners: ListenerCount | number | null;
@@ -23,6 +24,7 @@ function isListenerObject(l: ListenerCount | number | null): l is ListenerCount 
 export default function TopBar({
   tunedIn,
   context,
+  stationName,
   djName,
   activeShow,
   listeners,
@@ -53,7 +55,7 @@ export default function TopBar({
           data-spinning={tunedIn ? 'true' : undefined}
           aria-hidden="true"
         />
-        <span className="v3-eyebrow shrink-0">SUB/WAVE</span>
+        <span className="v3-eyebrow shrink-0">{stationName?.trim() || 'SUB/WAVE'}</span>
         {showName && (
           <span className="v3-caption min-w-0 truncate text-ink" title={showName}>
             ▸ {showName}
