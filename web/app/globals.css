@@ -256,6 +256,21 @@ body::after {
     }
 }
 
+/* Magic UI ripple — concentric ink rings expanding behind the now-playing
+   artwork. Each circle inherits its own --i so the breathing is staggered. */
+@keyframes sw-ripple {
+    0%,
+    100% {
+        transform: translate(-50%, -50%) scale(1);
+    }
+    50% {
+        transform: translate(-50%, -50%) scale(0.9);
+    }
+}
+.sw-ripple-circle {
+    animation: sw-ripple 2s ease calc(var(--i, 0) * 0.2s) infinite;
+}
+
 @keyframes sw-success-in {
     from {
         opacity: 0;
