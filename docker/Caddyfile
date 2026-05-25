@@ -26,7 +26,8 @@
 	# encodes the same source bus into MP3 192 kbps and Ogg-Opus 96 kbps in
 	# parallel). flush_interval -1 disables buffering so the audio stays live.
 	# Query strings (e.g. ?t=12345 cache-busters) pass through automatically.
-	handle /stream.mp3 /stream.opus {
+	@streams path /stream.mp3 /stream.opus
+	handle @streams {
 		reverse_proxy broadcast:7702 {
 			flush_interval -1
 			transport http {
