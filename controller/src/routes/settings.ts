@@ -42,6 +42,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
       values: {
         jingleRatio: s.jingleRatio,
         crossfadeDuration: s.crossfadeDuration,
+        station: s.station,
         weather: s.weather,
         djPrompt: s.djPrompt,
         personas: s.personas,
