@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.1.23](https://github.com/perminder-klair/subwave/compare/v0.1.22...v0.1.23) (2026-05-25)
+
+
+### Features
+
+* **admin:** audio preview for jingles and sound effects ([#141](https://github.com/perminder-klair/subwave/issues/141)) ([005983b](https://github.com/perminder-klair/subwave/commit/005983bbc7e29d5c751a48c9a72b3cc9e6670900))
+* **broadcast:** add Ogg-Opus stream alongside MP3 ([#142](https://github.com/perminder-klair/subwave/issues/142)) ([c542285](https://github.com/perminder-klair/subwave/commit/c542285c6eb619c0e7f563ff03bcdc93c67d764b))
+* **controller:** add curiosity, album-anniversary, library-deep-cut skills ([3999f63](https://github.com/perminder-klair/subwave/commit/3999f636335c1397a59676dbb3bf09bb28118089))
+* **controller:** add curiosity, album-anniversary, library-deep-cut skills ([aa3913e](https://github.com/perminder-klair/subwave/commit/aa3913e19f2ac324d3ea52c03c9f992284aab2c0))
+* **web:** haptic feedback on drawer open/close ([345d6f8](https://github.com/perminder-klair/subwave/commit/345d6f851566c924e4a8a3d28b9b3f89e04e3e2a))
+* **web:** haptic feedback on drawer open/close ([bab87c0](https://github.com/perminder-klair/subwave/commit/bab87c0893fe2fc592b31256d9f5273203f45165))
+
+
+### Bug Fixes
+
+* **controller:** harden DJ segments against transient LLM/IPC failures ([#140](https://github.com/perminder-klair/subwave/issues/140)) ([#145](https://github.com/perminder-klair/subwave/issues/145)) ([6a560c9](https://github.com/perminder-klair/subwave/commit/6a560c962f374b5747954cd3da68540362c03b8e))
+* **skill:** worktree-dev prep mirrors operator's declarative state ([f433bb5](https://github.com/perminder-klair/subwave/commit/f433bb583a99b86584d47ac2a2e9769a54749878))
+
+
+### Performance
+
+* **broadcast:** drop log verbosity and make hourly archive toggleable ([#139](https://github.com/perminder-klair/subwave/issues/139)) ([d642d84](https://github.com/perminder-klair/subwave/commit/d642d84b6cd56e605d6e0d66c37def80e9a3f3e4))
+
 ## [0.1.22](https://github.com/perminder-klair/subwave/compare/v0.1.21...v0.1.22) (2026-05-25)
 
 
