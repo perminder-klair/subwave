@@ -64,8 +64,12 @@ function isEligibleScrobble(track: ScrobbleTrack | null, elapsed: number): boole
     if (d <= MIN_DURATION_SEC) return false;
     return elapsed >= d / 2 || elapsed >= MIN_ELAPSED_FLOOR_SEC;
   }
-  // Duration unknown — fall back to the 4-minute floor only.
-  return elapsed >= MIN_ELAPSED_FLOOR_SEC;
+  // Duration unknown (auto-playlist tracks don't carry it through the annotation
+  // chain). SUB/WAVE has no skip endpoint — Liquidsoap controls pacing and a
+  // new track replacing the old one means the old one played to natural
+  // completion. Treat elapsed as the effective duration and apply only the
+  // >30s floor (Last.fm's "ignore short clips" rule).
+  return elapsed >= MIN_DURATION_SEC;
 }
 
 function listenersPresent(): boolean {
@@ -261,14 +265,24 @@ async function listenbrainzSubmit(track: ScrobbleTrack, startedAt: string, token
 // side-effects — never throws, never blocks the caller. Fires both backends
 // in parallel (fire-and-forget).
 export function onTrackEvent({ outgoing, outgoingStartedAt, incoming }: TrackEventArgs): void {
-  if (!listenersPresent()) return;
+  const listeners = getListenerCount();
+  if (typeof listeners !== 'number' || listeners <= 0) {
+    console.log(`[scrobble] skip: ${listeners ?? 'null'} listener(s)`);
+    return;
+  }
 
   const lf = lastfmCreds();
   const lb = listenbrainzToken();
-  if (!lf && !lb) return;
+  if (!lf && !lb) {
+    console.log('[scrobble] skip: no backend enabled with credentials');
+    return;
+  }
+
+  const backends = [lf && 'last.fm', lb && 'listenbrainz'].filter(Boolean).join('+');
 
   // Incoming → now-playing ping.
   if (incoming?.title && incoming?.artist) {
+    console.log(`[scrobble] now-playing → ${backends}: "${incoming.title}" — ${incoming.artist}`);
     if (lf) lastfmUpdateNowPlaying(incoming, lf).catch(() => {});
     if (lb) listenbrainzPlayingNow(incoming, lb).catch(() => {});
   }
@@ -277,8 +291,13 @@ export function onTrackEvent({ outgoing, outgoingStartedAt, incoming }: TrackEve
   if (outgoing && outgoingStartedAt) {
     const elapsed = elapsedSeconds(outgoingStartedAt);
     if (isEligibleScrobble(outgoing, elapsed)) {
+      console.log(`[scrobble] submit → ${backends}: "${outgoing.title}" — ${outgoing.artist} (elapsed=${elapsed}s)`);
       if (lf) lastfmScrobble(outgoing, outgoingStartedAt, lf).catch(() => {});
       if (lb) listenbrainzSubmit(outgoing, outgoingStartedAt, lb).catch(() => {});
+    } else {
+      const dur = Number(outgoing.duration);
+      const durDisplay = Number.isFinite(dur) && dur > 0 ? `${dur}s` : 'unknown';
+      console.log(`[scrobble] skip submit (ineligible): "${outgoing.title}" elapsed=${elapsed}s duration=${durDisplay}`);
     }
   }
 }
