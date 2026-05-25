@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.20](https://github.com/perminder-klair/subwave/compare/v0.1.19...v0.1.20) (2026-05-25)
+
+
+### Features
+
+* admin archives, listener history, outbound webhooks ([#119](https://github.com/perminder-klair/subwave/issues/119)) ([f0389e5](https://github.com/perminder-klair/subwave/commit/f0389e599c1150af243472af9e16e1301a4a7948))
+
 ## [0.1.19](https://github.com/perminder-klair/subwave/compare/v0.1.18...v0.1.19) (2026-05-24)
 
 
