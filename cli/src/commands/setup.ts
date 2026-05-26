@@ -134,6 +134,14 @@ export async function runSetupCommand(): Promise<void> {
   // --- 4. LLM --------------------------------------------------------------
   const llm = await collectLlm();
 
+  // --- 4b. Heavy TTS sidecar -----------------------------------------------
+  // Opt-in to the tts-heavy compose profile (Chatterbox + PocketTTS). When
+  // selected, we merge `tts-heavy` into COMPOSE_PROFILES in .env so future
+  // `docker compose up -d` invocations pick the sidecar up automatically —
+  // no `--profile` flag at the call site. The choice is also POSTed to
+  // /onboarding/save as tts.heavyEnabled, mirroring the web wizard.
+  const heavyTts = await promptHeavyTts();
+
   // --- 5. Timezone ---------------------------------------------------------
   const tz = await promptTimezone();
 
@@ -141,14 +149,23 @@ export async function runSetupCommand(): Promise<void> {
   const station = await promptStationName();
 
   // --- 6. Write the root .env ---------------------------------------------
-  // Setup only owns TZ and (one-time) SUBWAVE_HOMEPAGE. Admin creds and
+  // Setup only owns TZ and (one-time) SUBWAVE_HOMEPAGE, plus COMPOSE_PROFILES
+  // when the operator opts into the tts-heavy sidecar. Admin creds and
   // SITE_URL come from init and are preserved by writeEnvFile's
   // existing-keys-win behaviour when not in our values map.
   header('Writing .env (repo root)');
   const envValues: Record<string, string> = { TZ: tz };
   if (!existingRoot.SUBWAVE_HOMEPAGE) envValues.SUBWAVE_HOMEPAGE = 'player';
+  if (heavyTts) {
+    const merged = mergeCsv(existingRoot.COMPOSE_PROFILES, 'tts-heavy');
+    envValues.COMPOSE_PROFILES = merged;
+  }
   writeEnvFile(getRootEnv(), envValues, { templateFallback: getRootEnvExample() });
   ok(`wrote ${pc.dim('.env')} (${Object.keys(envValues).length} keys)`);
+  if (heavyTts) {
+    muted('Heavy TTS enabled — next `docker compose up -d` will start the tts-heavy sidecar.');
+    muted('First start pulls ~5–6 GB of PyTorch + model weights from GHCR.');
+  }
 
   // --- 7. Push everything through the controller via /onboarding/save -----
   // Same endpoint the browser wizard hits. Doing it this way (rather than
@@ -158,7 +175,7 @@ export async function runSetupCommand(): Promise<void> {
   // refreshAutoPlaylist() that un-sticks the picker after a fresh install.
   // Bypassing the endpoint (the old "write files from host" flow) left the
   // controller's in-memory state stale until the next restart.
-  await pushOnboardingSave(mode, navidrome, llm, station);
+  await pushOnboardingSave(mode, navidrome, llm, station, heavyTts);
 
   // --- 8. State dir perms (standalone install only) -----------------------
   // Idempotent — safe even when running setup against an already-configured
@@ -464,6 +481,35 @@ async function maybeProbeCloud(provider: CloudProvider, label: string, apiKey: s
   if (provider === 'openrouter') return reportProbe(label, () => probeOpenRouter({ apiKey }));
 }
 
+// Ask whether to enable the optional tts-heavy sidecar (Chatterbox +
+// PocketTTS). The two engines live in their own ghcr.io image and the compose
+// profile keeps them out of the default install — we set COMPOSE_PROFILES in
+// .env so subsequent `docker compose up -d` invocations bring the sidecar up
+// without a `--profile` flag.
+async function promptHeavyTts(): Promise<boolean> {
+  header('Heavy TTS sidecar (optional)');
+  muted('Chatterbox: zero-shot voice cloning. PocketTTS: 6x real-time multilingual.');
+  muted('Adds a separate container; first start pulls ~5–6 GB.');
+  return exitIfCancelled(await p.confirm({
+    message: 'Enable the tts-heavy sidecar?',
+    initialValue: false,
+  }), { backOnCancel: false });
+}
+
+// Merge a value into a comma-separated env var (e.g. COMPOSE_PROFILES). Strips
+// blanks, dedupes, and preserves the order of any pre-existing entries.
+function mergeCsv(prev: string | undefined, add: string): string {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of `${prev ?? ''},${add}`.split(',')) {
+    const trimmed = v.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out.join(',');
+}
+
 async function promptTimezone(): Promise<string> {
   const detected = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   return exitIfCancelled(await p.text({
@@ -570,12 +616,22 @@ async function renderJingles(composeFile: string, env: NodeJS.ProcessEnv): Promi
 // Bypassing this endpoint (the previous "write files from the host" path)
 // left the running controller's in-memory state stale, requiring an explicit
 // `subwave restart controller` for setup to take effect.
-async function pushOnboardingSave(env: ComposeEnv, navidrome: NavidromeCreds, llm: LlmChoice, station: string): Promise<void> {
+async function pushOnboardingSave(
+  env: ComposeEnv,
+  navidrome: NavidromeCreds,
+  llm: LlmChoice,
+  station: string,
+  heavyTts: boolean,
+): Promise<void> {
   header('Saving via /onboarding/save');
 
   const body: Record<string, unknown> = {
     navidrome: { url: navidrome.url, user: navidrome.user, pass: navidrome.pass },
     station,
+    // Mirror the web wizard — persist the operator's heavy-TTS intent on
+    // settings.tts.heavyEnabled. The CLI has already written COMPOSE_PROFILES
+    // into .env if true; this entry just keeps both wizards' views consistent.
+    tts: { heavyEnabled: heavyTts },
   };
 
   if (llm.provider) {

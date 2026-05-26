@@ -229,7 +229,8 @@ export function LlmStep({ w }: { w: WizardController }) {
 // ─── TTS ───────────────────────────────────────────────────────────────────
 export function TtsStep({ w }: { w: WizardController }) {
   const engine = w.data.tts.defaultEngine;
-  const needsSidecar = engine === 'chatterbox' || engine === 'pocket-tts';
+  const heavyPicked = engine === 'chatterbox' || engine === 'pocket-tts';
+  const heavyEnabled = w.data.tts.heavyEnabled;
   return (
     <div>
       <StepHeader
@@ -253,12 +254,36 @@ export function TtsStep({ w }: { w: WizardController }) {
             <option value="pocket-tts">PocketTTS (multilingual, sidecar)</option>
           </Select>
         </Field>
-        {needsSidecar && (
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={heavyEnabled}
+            onChange={e =>
+              w.patch(d => ({ tts: { ...d.tts, heavyEnabled: e.target.checked } }))
+            }
+          />
+          Enable Chatterbox + PocketTTS (tts-heavy sidecar, ~5–6 GB)
+        </label>
+        {heavyEnabled && (
+          <div className="rounded-md border border-sky-400/40 bg-sky-400/10 px-3 py-2 text-sm text-sky-100">
+            <strong>Heavy TTS enabled.</strong> The sidecar isn&apos;t started by default.
+            On the machine running this stack, either:
+            <ul className="mt-2 ml-5 list-disc space-y-1">
+              <li>
+                Add <code>COMPOSE_PROFILES=tts-heavy</code> to your <code>.env</code>, then run{' '}
+                <code>docker compose up -d</code> — this enables it permanently.
+              </li>
+              <li>
+                Or run <code>docker compose --profile tts-heavy up -d</code> for a one-off start.
+              </li>
+            </ul>
+          </div>
+        )}
+        {heavyPicked && !heavyEnabled && (
           <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-200">
-            <strong>Heads up:</strong> {engine === 'chatterbox' ? 'Chatterbox' : 'PocketTTS'} runs in
-            the optional <code>tts-heavy</code> sidecar. Start it with{' '}
-            <code>docker compose --profile tts-heavy up -d</code> — until then this persona will
-            silently fall back to Piper.
+            <strong>Heads up:</strong> {engine === 'chatterbox' ? 'Chatterbox' : 'PocketTTS'} runs
+            in the optional <code>tts-heavy</code> sidecar but you haven&apos;t enabled it above —
+            this persona will silently fall back to Piper until the sidecar is started.
           </div>
         )}
         <label className="flex items-center gap-2 text-sm">

@@ -247,6 +247,14 @@ const DEFAULTS = {
   schedule: emptyWeek(),
   tts: {
     defaultEngine: 'piper',
+    // Advisory flag — does the operator intend to run the optional tts-heavy
+    // sidecar (Chatterbox + PocketTTS)? Both setup wizards (CLI + /onboarding)
+    // write to this so each surface knows the other's choice. Nothing in the
+    // controller branches on it — engine availability is still read from
+    // chatterbox.isAvailable() / pocketTts.isAvailable() at call time, which
+    // is the source of truth. This is purely for the UI to show consistent
+    // state and for the CLI to know whether to write COMPOSE_PROFILES.
+    heavyEnabled: false,
     kokoro: { voice: 'bf_isabella' },
     // Global Chatterbox fallback — used as the reference voice when the
     // engine resolves to chatterbox but no persona-level voice is set.
@@ -545,6 +553,12 @@ export async function load() {
       defaultEngine: TTS_ENGINES.includes(stored.tts?.defaultEngine)
         ? stored.tts.defaultEngine
         : DEFAULTS.tts.defaultEngine,
+      // Stored as a plain boolean; coerce missing/non-boolean (older saves) to
+      // the default. See DEFAULTS.tts.heavyEnabled for the semantics.
+      heavyEnabled:
+        typeof stored.tts?.heavyEnabled === 'boolean'
+          ? stored.tts.heavyEnabled
+          : DEFAULTS.tts.heavyEnabled,
       kokoro: {
         voice:
           typeof stored.tts?.kokoro?.voice === 'string' &&
@@ -1075,6 +1089,12 @@ export async function update(patch) {
         throw new Error(`tts.defaultEngine must be one of: ${TTS_ENGINES.join(', ')}`);
       }
       next.tts.defaultEngine = t.defaultEngine;
+    }
+    if (t.heavyEnabled !== undefined) {
+      if (typeof t.heavyEnabled !== 'boolean') {
+        throw new Error('tts.heavyEnabled must be a boolean');
+      }
+      next.tts.heavyEnabled = t.heavyEnabled;
     }
     if (t.kokoro !== undefined) {
       const k = t.kokoro || {};

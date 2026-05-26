@@ -23,6 +23,13 @@ export interface WizardData {
 
   tts: {
     defaultEngine: 'piper' | 'kokoro' | 'cloud' | 'chatterbox' | 'pocket-tts';
+    // Advisory toggle — does the operator intend to run the optional
+    // tts-heavy sidecar (Chatterbox + PocketTTS)? Persisted via
+    // /onboarding/save into settings.tts.heavyEnabled. The web wizard can't
+    // start the sidecar itself; this just captures the intent and shows the
+    // copy-paste docker commands. The CLI setup writes COMPOSE_PROFILES into
+    // .env when its equivalent prompt is answered yes.
+    heavyEnabled: boolean;
     cloud: { enabled: boolean; provider: string; apiKey: string };
   };
 
@@ -53,6 +60,7 @@ export const DEFAULT_DATA: WizardData = {
   llmTest: { ok: null },
   tts: {
     defaultEngine: 'piper',
+    heavyEnabled: false,
     cloud: { enabled: false, provider: 'openai', apiKey: '' },
   },
   dj: {
@@ -155,6 +163,7 @@ export function useWizard() {
       },
       tts: {
         defaultEngine: data.tts.defaultEngine,
+        heavyEnabled: data.tts.heavyEnabled,
         cloud: data.tts.cloud.enabled
           ? { enabled: true, provider: data.tts.cloud.provider }
           : { enabled: false },
