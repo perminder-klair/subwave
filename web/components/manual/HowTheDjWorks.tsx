@@ -42,8 +42,8 @@ export default function HowTheDjWorks() {
         <h2>Local voices, or the cloud.</h2>
         <p>
           The DJ's words are written by the language model, but turning them into speech
-          is a separate job — handled by one of four text-to-speech engines the operator
-          chooses under <strong>Admin &rarr; TTS voice</strong>. Three run on your own
+          is a separate job — handled by one of five text-to-speech engines the operator
+          chooses under <strong>Admin &rarr; TTS voice</strong>. Four run on your own
           hardware, one is hosted.
         </p>
         <ul className="bs-list">
@@ -65,11 +65,19 @@ export default function HowTheDjWorks() {
             reference clip, so each persona can have its own distinct sound, and voices
             paralinguistic cues like <em>[laugh]</em> and <em>[sigh]</em> as real sounds.
             The most capable local engine and the heaviest — comfortable on a GPU, slow
-            on CPU — and opt-in: the operator bundles it into the controller image.
+            on CPU. Lives in the optional <code className="bs-code-inline">tts-heavy</code>{' '}
+            sidecar.
+          </li>
+          <li>
+            <strong>PocketTTS</strong> — a small, multilingual model from kyutai-labs
+            that runs about six times faster than real time on CPU, with built-in voices
+            in English, French, German, Italian, Spanish and Portuguese. Sits between
+            Piper (fast, robotic) and Chatterbox (heavy, expressive). Lives in the same{' '}
+            <code className="bs-code-inline">tts-heavy</code> sidecar as Chatterbox.
           </li>
           <li>
             <strong>Cloud</strong> — hosted text-to-speech through OpenAI or ElevenLabs,
-            using an API key. The most lifelike and expressive of the four, but it costs
+            using an API key. The most lifelike and expressive of the five, but it costs
             per use and depends on the network being up.
           </li>
         </ul>
@@ -88,25 +96,47 @@ export default function HowTheDjWorks() {
           </p>
         </div>
         <div className="bs-callout">
-          <div className="bs-eyebrow">ENABLING CHATTERBOX</div>
+          <div className="bs-eyebrow">ENABLING THE TTS-HEAVY SIDECAR</div>
           <p>
             Piper and Kokoro ship inside the controller image, and the cloud engine just
-            needs an API key — but Chatterbox is the exception. Its model and PyTorch
-            runtime are large, so it is <em>opt-in at build time</em> rather than bundled
-            by default. Rebuild the controller image with the{' '}
-            <code className="bs-code-inline">WITH_CHATTERBOX</code> build argument, then
-            recreate the container:
+            needs an API key. Chatterbox and PocketTTS are the exceptions: they drag in a
+            few GB of PyTorch and model weights between them, so they live in a separate,
+            opt-in <code className="bs-code-inline">tts-heavy</code> container rather than
+            being bundled into every install.
           </p>
-          <CodeBlock>{`cd docker
-docker compose build --build-arg WITH_CHATTERBOX=1 controller
-docker compose up -d controller`}</CodeBlock>
           <p>
-            Once the image is built, Chatterbox shows up as an available engine under{' '}
-            <strong>Admin &rarr; TTS voice</strong>. To give a persona a cloned voice,
-            drop a short reference WAV into{' '}
+            To enable, set <code className="bs-code-inline">COMPOSE_PROFILES=tts-heavy</code>{' '}
+            in your <code className="bs-code-inline">.env</code> and bring the stack up:
+          </p>
+          <CodeBlock>{`echo COMPOSE_PROFILES=tts-heavy >> .env
+docker compose up -d`}</CodeBlock>
+          <p>
+            For a one-off start without persisting the choice, run{' '}
+            <code className="bs-code-inline">docker compose --profile tts-heavy up -d</code>{' '}
+            instead. The setup wizard at <code className="bs-code-inline">/onboarding</code>{' '}
+            also writes the env var for you if you tick &ldquo;Enable Chatterbox +
+            PocketTTS&rdquo;.
+          </p>
+          <p>
+            Once the sidecar is up, both engines show as available under{' '}
+            <strong>Admin &rarr; TTS voice</strong>. For Chatterbox voice cloning, drop a
+            short reference WAV into{' '}
             <code className="bs-code-inline">state/chatterbox-voices/</code> and pick it
-            on the Personas page — without one, Chatterbox uses its built-in voice. Until
-            the image is rebuilt, selecting Chatterbox simply falls back to Piper.
+            on the Personas page — without one, Chatterbox uses its built-in voice.
+            PocketTTS exposes a curated set of built-in voice ids
+            (<code className="bs-code-inline">alba</code>,{' '}
+            <code className="bs-code-inline">anna</code>,{' '}
+            <code className="bs-code-inline">charles</code>, …); pick one on the same
+            page. Until the sidecar is started, selecting either engine silently falls
+            back to Piper.
+          </p>
+          <p className="text-muted">
+            For backwards compatibility, the older{' '}
+            <code className="bs-code-inline">--build-arg WITH_CHATTERBOX=1</code> /{' '}
+            <code className="bs-code-inline">WITH_POCKETTTS=1</code> paths in{' '}
+            <code className="bs-code-inline">docker/Dockerfile.controller</code> still
+            work — they bundle the engines inside the controller image instead. The
+            sidecar is the recommended path for fresh installs.
           </p>
         </div>
       </section>

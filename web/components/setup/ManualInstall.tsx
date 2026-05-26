@@ -160,9 +160,15 @@ $EDITOR .env`}</CodeBlock>
               or any self-hosted OpenAI-compatible server. Cloud API keys go to{' '}
               <code className="bs-code-inline">state/secrets.env</code> (mode 0600,
               sourced into <code className="bs-code-inline">process.env</code> on boot).</li>
-              <li><strong>TTS engine</strong> — Piper (default), Kokoro, cloud (OpenAI /
-              ElevenLabs), or Chatterbox if you built with{' '}
-              <code className="bs-code-inline">--build-arg WITH_CHATTERBOX=1</code>.</li>
+              <li><strong>TTS engine</strong> — Piper (default) and Kokoro both run inside
+              the controller image. Cloud (OpenAI / ElevenLabs) just needs an API key.
+              Chatterbox (voice cloning) and PocketTTS (multilingual) live in the optional{' '}
+              <code className="bs-code-inline">tts-heavy</code> sidecar — tick the
+              &ldquo;Enable Chatterbox + PocketTTS&rdquo; box in the wizard, then start it
+              with <code className="bs-code-inline">docker compose --profile tts-heavy up -d</code>{' '}
+              (or set <code className="bs-code-inline">COMPOSE_PROFILES=tts-heavy</code> in{' '}
+              <code className="bs-code-inline">.env</code> so future{' '}
+              <code className="bs-code-inline">up -d</code> calls bring it up automatically).</li>
               <li><strong>DJ persona</strong> — station name, location for weather,
               optional system-prompt override.</li>
               <li><strong>Jingles</strong> — one-click button to render 5 default
