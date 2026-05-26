@@ -60,7 +60,21 @@ class TtsWorker:
     The worker scripts speak one JSON object per line over stdin/stdout —
     same protocol used by controller/src/audio/{chatterbox,pocketTts}.ts.
     We don't multiplex: one request in flight per worker, gated by a lock.
+
+    Lifecycle is supervised by run() — a long-running coroutine kicked off
+    from the FastAPI lifespan as a background task. run() loops on
+    start → wait-for-exit → respawn with a short backoff, mirroring the
+    auto-restart behaviour in the controller-side TS workers. This is what
+    lets a worker that crashes mid-session (OOM, fatal model error) come
+    back without anyone bouncing the container.
     """
+
+    # Backoff between restart cycles. Short — we'd rather see the worker try
+    # again quickly than babysit a long retry window. start_backoff applies
+    # when start() itself fails (model load error, missing venv); run_backoff
+    # applies when start() succeeded but the worker exited later.
+    START_BACKOFF_S = 5.0
+    RUN_BACKOFF_S = 2.0
 
     def __init__(self, name: str, python: str, script: str, env_extra: dict[str, str] | None = None):
         self.name = name
@@ -70,6 +84,46 @@ class TtsWorker:
         self.proc: asyncio.subprocess.Process | None = None
         self.lock = asyncio.Lock()
         self.ready = False
+
+    async def run(self) -> None:
+        """Keep the worker alive forever (or until cancelled).
+
+        Cancellation comes from the lifespan teardown. We catch it once to
+        terminate the running subprocess cleanly before bubbling up.
+        """
+        try:
+            while True:
+                try:
+                    await self.start()
+                except Exception as e:
+                    log.error(f"[{self.name}] start failed: {e}")
+                    self._reset()
+                    await asyncio.sleep(self.START_BACKOFF_S)
+                    continue
+                # Worker is ready. Block until it exits, then respawn.
+                assert self.proc is not None
+                code = await self.proc.wait()
+                log.warning(
+                    f"[{self.name}] worker exited with code={code}; restarting in {self.RUN_BACKOFF_S}s",
+                )
+                self._reset()
+                await asyncio.sleep(self.RUN_BACKOFF_S)
+        except asyncio.CancelledError:
+            self._terminate()
+            raise
+
+    def _reset(self) -> None:
+        """Clear ready/proc between restart cycles."""
+        self.ready = False
+        self.proc = None
+
+    def _terminate(self) -> None:
+        """Best-effort kill the current subprocess (used on shutdown)."""
+        if self.proc and self.proc.returncode is None:
+            try:
+                self.proc.terminate()
+            except ProcessLookupError:
+                pass
 
     async def start(self) -> None:
         log.info(f"[{self.name}] starting worker: {self.python} {self.script}")
@@ -84,7 +138,8 @@ class TtsWorker:
         )
         # Pump stderr to our log so the operator sees the worker's startup
         # output (model load progress, fatal errors, etc.) in tts-heavy's
-        # docker logs.
+        # docker logs. The task exits naturally when the worker closes stderr
+        # on death, so there's one pump task per active subprocess.
         asyncio.create_task(self._pump_stderr())
 
         # Read until we see {"ready": true}. Workers emit some non-JSON noise
@@ -94,17 +149,23 @@ class TtsWorker:
         # handleMessage) and silently skip anything that doesn't parse — the
         # workers themselves only emit JSON for protocol messages. Chatterbox
         # can take 30+ seconds to instantiate ChatterboxTurboTTS even from a
-        # warm cache, so no timeout here — uvicorn + the container restart
-        # policy are the upstream safety net.
-        msg = await self._await_message(expect_ready=True)
-        if msg.get("fatal"):
-            raise RuntimeError(f"[{self.name}] fatal: {msg.get('error')}")
-        if not msg.get("ready"):
-            raise RuntimeError(f"[{self.name}] expected ready, got: {msg}")
+        # warm cache, so no timeout here — run()'s restart loop is the
+        # upstream safety net if a load hangs forever.
+        try:
+            msg = await self._await_message()
+            if msg.get("fatal"):
+                raise RuntimeError(f"[{self.name}] fatal: {msg.get('error')}")
+            if not msg.get("ready"):
+                raise RuntimeError(f"[{self.name}] expected ready, got: {msg}")
+        except Exception:
+            # Failed to reach ready — terminate the half-booted process so
+            # run() doesn't pile orphans up across retry cycles.
+            self._terminate()
+            raise
         log.info(f"[{self.name}] ready")
         self.ready = True
 
-    async def _await_message(self, expect_ready: bool = False) -> dict[str, Any]:
+    async def _await_message(self) -> dict[str, Any]:
         """Read worker stdout until a parseable JSON object arrives."""
         assert self.proc and self.proc.stdout
         while True:
@@ -126,16 +187,21 @@ class TtsWorker:
 
     async def _pump_stderr(self) -> None:
         assert self.proc and self.proc.stderr
+        proc = self.proc
         while True:
-            line = await self.proc.stderr.readline()
+            line = await proc.stderr.readline()
             if not line:
                 break
             log.info(f"[{self.name}] {line.decode().rstrip()}")
 
     async def request(self, payload: dict[str, Any]) -> dict[str, Any]:
         async with self.lock:
-            if not self.proc or self.proc.returncode is not None:
-                raise RuntimeError(f"[{self.name}] worker is not running")
+            # Fail fast if the worker isn't currently up. The /speak handler
+            # turns this into an HTTP error and the controller's dispatcher
+            # falls back to Piper — preferable to blocking the HTTP request
+            # while we wait for an unhealthy worker to come back.
+            if not self.ready or not self.proc or self.proc.returncode is not None:
+                raise RuntimeError(f"[{self.name}] worker not ready")
             assert self.proc.stdin
             req = json.dumps(payload, ensure_ascii=False)
             self.proc.stdin.write((req + "\n").encode())
@@ -170,13 +236,24 @@ pocket_worker = TtsWorker(
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Boot both workers in parallel. They independently load models (3-15s
-    # each from a warm cache) and emit {"ready": true} when they're done.
-    # gather() means the slower one gates startup, but both run concurrently.
-    await asyncio.gather(chatterbox_worker.start(), pocket_worker.start())
-    yield
-    # No graceful drain on shutdown — workers get SIGKILL'd by the container
-    # stop and the controller's probe loop will see /health go away.
+    # Kick the worker supervisors as background tasks so uvicorn binds :8080
+    # immediately. Without this, chatterbox's 30-60s cold load would block
+    # the port bind and the controller's probe would see "connection refused"
+    # for the entire boot — leading operators to think the sidecar is broken
+    # when it's just still loading.
+    tasks = [
+        asyncio.create_task(chatterbox_worker.run(), name="chatterbox-run"),
+        asyncio.create_task(pocket_worker.run(), name="pocket-tts-run"),
+    ]
+    try:
+        yield
+    finally:
+        for t in tasks:
+            t.cancel()
+        # Give the supervisors a moment to terminate their subprocesses
+        # cleanly before uvicorn exits. SIGKILL from the container stop is
+        # the upstream fallback if any of this hangs.
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 app = FastAPI(title="subwave-tts-heavy", lifespan=lifespan)
@@ -192,9 +269,21 @@ class SpeakRequest(BaseModel):
 
 @app.get("/health")
 async def health():
+    # `engines` is the list of engines that are *currently ready*, not the
+    # static set this sidecar supports. The controller's probe loop in
+    # controller/src/audio/ttsHeavyClient.ts uses `engines.includes(<name>)`
+    # as its readiness signal, so reporting an engine here while its worker
+    # is still booting (or has crashed mid-session) would cause failed
+    # /speak calls instead of clean fall-throughs to Piper. The boolean
+    # *_loaded fields are kept for operator diagnostics.
+    ready_engines: list[str] = []
+    if chatterbox_worker.ready:
+        ready_engines.append("chatterbox")
+    if pocket_worker.ready:
+        ready_engines.append("pocket-tts")
     return {
         "ok": True,
-        "engines": ["chatterbox", "pocket-tts"],
+        "engines": ready_engines,
         "chatterbox_loaded": chatterbox_worker.ready,
         "pocket_loaded": pocket_worker.ready,
     }
