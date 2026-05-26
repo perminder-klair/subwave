@@ -111,6 +111,11 @@ services:
       - STATE_DIR=/var/sub-wave
       # In-container path of the sounds COPY'd into the image at build time.
       - SOUNDS_DIR=/sounds
+      # Optional sidecar for Chatterbox + PocketTTS. The tts-heavy service
+      # below is gated by \`--profile tts-heavy\`; when off, the URL is
+      # unreachable and audio/chatterbox.ts + audio/pocketTts.ts silently
+      # fall back to Piper (same behaviour as the default image today).
+      - TTS_HEAVY_URL=\${TTS_HEAVY_URL:-http://tts-heavy:8080}
     env_file:
       # All controller config (Navidrome creds, LLM keys, ADMIN_*, etc.) lives
       # in the root .env. Vars not set are simply absent — settings.json takes
@@ -146,6 +151,42 @@ services:
       # share-card tags render per-request. Define SITE_URL once in .env and
       # both build-arg and runtime env pick it up.
       - SITE_URL=\${SITE_URL:-}
+
+  # -------------------------------------------------------------------------
+  # TTS-HEAVY (optional) — sidecar for Chatterbox + PocketTTS
+  # -------------------------------------------------------------------------
+  # Heavy PyTorch engines pulled out of the controller image so operators on
+  # the pre-built ghcr.io images can opt into them without a custom rebuild
+  # (issue #103). NOT started by default. Enable with:
+  #
+  #   docker compose --profile tts-heavy up -d
+  #
+  # The controller is wired with TTS_HEAVY_URL pointing here unconditionally;
+  # when the profile is off the URL is unreachable and chatterbox.ts /
+  # pocketTts.ts report unavailable, so the dispatcher falls back to Piper —
+  # same behaviour as the default image today.
+  #
+  # See docker/Dockerfile.tts-heavy + docker/tts-heavy/server.py.
+  tts-heavy:
+    image: ghcr.io/perminder-klair/subwave-tts-heavy:\${SUBWAVE_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.tts-heavy
+    platform: linux/amd64
+    container_name: sub-wave-tts-heavy
+    restart: unless-stopped
+    profiles: ["tts-heavy"]
+    environment:
+      # 'cpu' or 'cuda'. The default image is CPU-only — cuda needs a GPU
+      # host + nvidia runtime; the server gracefully falls back to cpu when
+      # CUDA isn't actually available.
+      - TTS_HEAVY_DEVICE=\${TTS_HEAVY_DEVICE:-cpu}
+      # Default voice id used by PocketTTS when a persona doesn't override it.
+      - POCKET_TTS_VOICE=\${POCKET_TTS_VOICE:-alba}
+    volumes:
+      # Same shared mount as the controller — the sidecar writes WAVs into
+      # /var/sub-wave/voice/* and the controller hands the path to Liquidsoap.
+      - *state-mount
 
 volumes:
   caddy-data:
@@ -234,6 +275,9 @@ services:
       - TZ=\${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
       - SOUNDS_DIR=/sounds
+      # Optional sidecar for Chatterbox + PocketTTS. Gated by --profile tts-heavy
+      # below; unreachable URL → fall back to Piper (no harm done).
+      - TTS_HEAVY_URL=\${TTS_HEAVY_URL:-http://tts-heavy:8080}
     env_file:
       - ./.env
     extra_hosts:
@@ -267,6 +311,28 @@ services:
     # Same-origin (/api, /stream.mp3) is the default baked into the image.
     # Your external proxy is responsible for routing those paths to controller
     # and broadcast — see the header comment for the route table.
+
+  # -------------------------------------------------------------------------
+  # TTS-HEAVY (optional) — sidecar for Chatterbox + PocketTTS
+  # -------------------------------------------------------------------------
+  # See docker-compose.yml for the full rationale (issue #103). NOT started
+  # by default. Enable with \`docker compose -f docker-compose.byo.yml \\
+  #   --profile tts-heavy up -d\`. The controller falls back to Piper when
+  # the URL is unreachable.
+  tts-heavy:
+    image: ghcr.io/perminder-klair/subwave-tts-heavy:\${SUBWAVE_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.tts-heavy
+    platform: linux/amd64
+    container_name: sub-wave-tts-heavy
+    restart: unless-stopped
+    profiles: ["tts-heavy"]
+    environment:
+      - TTS_HEAVY_DEVICE=\${TTS_HEAVY_DEVICE:-cpu}
+      - POCKET_TTS_VOICE=\${POCKET_TTS_VOICE:-alba}
+    volumes:
+      - *state-mount
 `;
 
 // docker-compose.dev.yml
@@ -339,6 +405,10 @@ services:
       - TZ=\${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
       - SOUNDS_DIR=/sounds
+      # Optional sidecar for Chatterbox + PocketTTS. Gated by --profile tts-heavy
+      # below; unreachable URL → fall back to Piper. Dev usage:
+      #   docker compose -f docker-compose.dev.yml --profile tts-heavy up -d
+      - TTS_HEAVY_URL=\${TTS_HEAVY_URL:-http://tts-heavy:8080}
     ports:
       - "7701:7701"
     env_file:
@@ -363,6 +433,28 @@ services:
       # /app/node_modules with the (possibly empty) host node_modules.
       - ./controller/src:/app/src
       - ./controller/scripts:/app/scripts
+
+  # -------------------------------------------------------------------------
+  # TTS-HEAVY (optional) — sidecar for Chatterbox + PocketTTS
+  # -------------------------------------------------------------------------
+  # NOT started by default. Enable with:
+  #   docker compose -f docker-compose.dev.yml --profile tts-heavy up -d
+  # See docker/Dockerfile.tts-heavy + docker/tts-heavy/server.py. First build
+  # downloads ~3-4GB of model weights from Hugging Face — be patient.
+  tts-heavy:
+    image: ghcr.io/perminder-klair/subwave-tts-heavy:\${SUBWAVE_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.tts-heavy
+    platform: linux/amd64
+    container_name: sub-wave-tts-heavy
+    restart: unless-stopped
+    profiles: ["tts-heavy"]
+    environment:
+      - TTS_HEAVY_DEVICE=\${TTS_HEAVY_DEVICE:-cpu}
+      - POCKET_TTS_VOICE=\${POCKET_TTS_VOICE:-alba}
+    volumes:
+      - *state-mount
 `;
 
 // .env.example
