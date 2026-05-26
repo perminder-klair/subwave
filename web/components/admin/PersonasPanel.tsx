@@ -704,9 +704,12 @@ export default function PersonasPanel() {
                 <div className="field max-w-[360px]">
                   {!cbAvailable && (
                     <div className="mb-2.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
-                      Chatterbox isn’t bundled in this controller image — this persona
-                      will fall back to <strong>{defaultEngine}</strong> until the image
-                      is rebuilt with <code>--build-arg WITH_CHATTERBOX=1</code>.
+                      Chatterbox isn’t currently available — it lives in the optional{' '}
+                      <code>tts-heavy</code> sidecar. Start it with{' '}
+                      <code>docker compose --profile tts-heavy up -d</code> (or set{' '}
+                      <code>COMPOSE_PROFILES=tts-heavy</code> in <code>.env</code>).
+                      This persona falls back to <strong>{defaultEngine}</strong> until
+                      it’s up.
                     </div>
                   )}
                   <Label>Reference voice</Label>
@@ -741,9 +744,12 @@ export default function PersonasPanel() {
                 <div className="field max-w-[360px]">
                   {!ptAvailable && (
                     <div className="mb-2.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
-                      PocketTTS isn’t bundled in this controller image — this persona
-                      will fall back to <strong>{defaultEngine}</strong> until the image
-                      is rebuilt with <code>--build-arg WITH_POCKETTTS=1</code>.
+                      PocketTTS isn’t currently available — it lives in the same optional{' '}
+                      <code>tts-heavy</code> sidecar as Chatterbox. Start it with{' '}
+                      <code>docker compose --profile tts-heavy up -d</code> (or set{' '}
+                      <code>COMPOSE_PROFILES=tts-heavy</code> in <code>.env</code>).
+                      This persona falls back to <strong>{defaultEngine}</strong> until
+                      it’s up.
                     </div>
                   )}
                   <Label>PocketTTS voice</Label>

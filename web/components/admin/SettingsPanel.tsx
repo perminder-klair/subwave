@@ -1050,9 +1050,13 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
             <Label>Chatterbox reference voice</Label>
             {available.chatterbox === false ? (
               <div className="field-hint text-[var(--danger)]">
-                Chatterbox isn’t bundled in this controller image. Rebuild it with{' '}
-                <code>--build-arg WITH_CHATTERBOX=1</code> to include the runtime and
-                model, then recreate the controller. Until then this engine falls back to Piper.
+                Chatterbox isn’t currently available — it lives in the optional{' '}
+                <code>tts-heavy</code> sidecar. Start it with{' '}
+                <code>docker compose --profile tts-heavy up -d</code>, or set{' '}
+                <code>COMPOSE_PROFILES=tts-heavy</code> in your <code>.env</code> so it
+                comes up automatically with the rest of the stack. (Legacy path: rebuild
+                the controller image with <code>--build-arg WITH_CHATTERBOX=1</code>.)
+                Until then this engine falls back to Piper.
               </div>
             ) : (data.tts?.chatterboxVoices?.length || 0) > 0 ? (
               <>
@@ -1096,9 +1100,13 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
             <Label>PocketTTS voice</Label>
             {available['pocket-tts'] === false ? (
               <div className="field-hint text-[var(--danger)]">
-                PocketTTS isn’t bundled in this controller image. Rebuild it with{' '}
-                <code>--build-arg WITH_POCKETTTS=1</code> to include the runtime and
-                model, then recreate the controller. Until then this engine falls back to Piper.
+                PocketTTS isn’t currently available — it lives in the same optional{' '}
+                <code>tts-heavy</code> sidecar as Chatterbox. Start it with{' '}
+                <code>docker compose --profile tts-heavy up -d</code>, or set{' '}
+                <code>COMPOSE_PROFILES=tts-heavy</code> in your <code>.env</code> so it
+                comes up automatically with the rest of the stack. (Legacy path: rebuild
+                the controller image with <code>--build-arg WITH_POCKETTTS=1</code>.)
+                Until then this engine falls back to Piper.
               </div>
             ) : (data.tts?.pocketTtsVoices?.length || 0) > 0 ? (
               <>
