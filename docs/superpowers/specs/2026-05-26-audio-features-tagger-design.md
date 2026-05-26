@@ -1,6 +1,12 @@
 # Audio-features tagger — design spec
 
-**Status:** draft (awaiting operator review)
+> **SUPERSEDED 2026-05-26 by [embedding-propagated tagger](2026-05-26-embedding-propagated-tagger-design.md).**
+>
+> This approach (extract BPM+LUFS per track via ffmpeg/aubio inside the controller image, derive `energy` deterministically, enrich the LLM mood prompt with audio numbers) was implemented and smoke-tested against the live Navidrome on 2026-05-26. It worked but the **per-track network cost** (≥1 ffmpeg-decoded stream fetch from Navidrome per track) doesn't scale to large libraries — for a 50k-track library it implies ~50k×30-60s fetches plus 2,500+ LLM calls, multi-day wall time. The pivot is to attack the *LLM call count*, not the per-call grounding: text-embed every track once, LLM-tag a small seed set, propagate moods to the rest by KNN over the embedding space, and only spend extra LLM calls on uncertain residuals. See the linked successor spec for details.
+>
+> The text below is preserved as historical context for the design exploration. The implementation work was reverted; no code from this approach is on the branch.
+
+**Status:** superseded
 **Date:** 2026-05-26
 **Branch context:** follow-up to PR #157 (`perf(controller): bulk tag library tracks in batches of 20`)
 **Spec author:** Claude (brainstormed with operator)
