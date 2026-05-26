@@ -1,16 +1,17 @@
 name: Publish images
 
-# Builds and pushes the four first-party SUB/WAVE images to GHCR.
+# Builds and pushes the five first-party SUB/WAVE images to GHCR.
 #
 # Triggers:
 #   - push of a tag like v1.2.3 → versioned release (also tagged :latest)
 #   - manual workflow_dispatch    → ad-hoc rebuild from the chosen ref
 #
 # Images:
-#   ghcr.io/<owner>/subwave-caddy      (bakes docker/Caddyfile)
-#   ghcr.io/<owner>/subwave-broadcast  (icecast2 + liquidsoap + radio.liq + sounds/)
+#   ghcr.io/<owner>/subwave-caddy       (bakes docker/Caddyfile)
+#   ghcr.io/<owner>/subwave-broadcast   (icecast2 + liquidsoap + radio.liq + sounds/)
 #   ghcr.io/<owner>/subwave-controller
 #   ghcr.io/<owner>/subwave-web
+#   ghcr.io/<owner>/subwave-tts-heavy   (optional Chatterbox + PocketTTS sidecar, ~3-4GB)
 #
 # Platforms: linux/amd64 only. Dockerfile.controller pins amd64 in compose
 # because Piper, Kokoro, and Chatterbox wheels are amd64-only.
@@ -40,6 +41,8 @@ jobs:
             dockerfile: docker/Dockerfile.controller
           - image: subwave-web
             dockerfile: web/Dockerfile
+          - image: subwave-tts-heavy
+            dockerfile: docker/Dockerfile.tts-heavy
     steps:
       - uses: actions/checkout@v4
 

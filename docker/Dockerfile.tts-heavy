@@ -1,0 +1,129 @@
+# subwave-tts-heavy — optional sidecar for Chatterbox + PocketTTS.
+#
+# Background: the controller's default image is pure Node (Piper + Kokoro
+# in-process). The two heavy PyTorch engines (Chatterbox Turbo, PocketTTS) used
+# to live behind --build-arg WITH_CHATTERBOX=1 / WITH_POCKETTTS=1 inside
+# docker/Dockerfile.controller, which meant operators on the pre-built
+# ghcr.io/perminder-klair/subwave-controller image had no path to them
+# (issue #103 — they'd have to fork, rebuild, and publish their own image).
+#
+# This image is the runtime opt-in. Operators enable it with
+# `docker compose --profile tts-heavy up -d`; the controller picks the
+# sidecar up via TTS_HEAVY_URL (see docker-compose*.yml) and POSTs speech
+# requests to it. The build-arg path in Dockerfile.controller still works
+# for the in-process variant.
+#
+# Architecture: TWO isolated venvs (one per engine), driven by the existing
+# stdio worker scripts (controller/scripts/{chatterbox,pocket_tts}_worker.py)
+# and fronted by a tiny FastAPI server (docker/tts-heavy/server.py) that
+# supervises them as long-lived subprocesses. The two engines need
+# incompatible pip resolutions — chatterbox-tts ≥ 0.1.5 (which has the
+# tts_turbo import we use) pulls a different transformers/torch set than
+# pocket-tts wants, so combining them in one venv forces chatterbox down to
+# 0.1.3 which lacks ChatterboxTurboTTS. Two venvs side-step the resolver.
+# This also mirrors the pattern Dockerfile.controller already uses for the
+# legacy in-process WITH_* build args.
+#
+# Image size: ~5-6GB. CPU-only torch wheels (mirror of the index-url trick in
+# docker/Dockerfile.controller:72-87) to avoid the 3.6GB CUDA build. Models
+# are pre-loaded at build time as a smoke test + HF cache warm so the first
+# /speak after container start isn't waiting on a multi-GB download.
+
+FROM python:3.11-slim-bookworm
+
+# build-essential is needed because chatterbox-tts pulls pkuseg, which has no
+# wheel for Python ≥ 3.9 on Linux and so source-builds a Cython extension that
+# needs g++. We purge it after both venvs are built (see the apt purge step
+# below) to keep the runtime image lean.
+# libsndfile is what soundfile/torchaudio shell out to for WAV write. curl is
+# for the operator's own healthchecks; uvicorn handles its own internally.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates \
+    libsndfile1 \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Chatterbox venv -------------------------------------------------------
+# Mirrors the WITH_CHATTERBOX block in docker/Dockerfile.controller — same
+# CPU-only torch trick, same Hugging Face cache pre-warm. numpy + Cython are
+# pre-installed so pkuseg's source build (no wheel for py3.11) can find
+# them; --no-build-isolation makes them visible to setup.py.
+#
+# onnxruntime is a hidden hard requirement of chatterbox-tts >= 0.1.7 — the
+# perth watermarker uses ONNX models.
+#
+# setuptools is pinned to <81 because v81 removed `pkg_resources`, and
+# perth.perth_net.__init__ still does `from pkg_resources import resource_filename`.
+# Without the pin, ChatterboxTurboTTS.from_pretrained() crashes at __init__
+# time when it instantiates perth.PerthImplicitWatermarker (which perth has
+# silently set to None because its module-level import failed). When pkg_resources
+# is gone, none of that is visible until you actually call the constructor.
+ENV CHATTERBOX_HF_HOME=/opt/chatterbox/hf-cache
+RUN python3 -m venv /opt/chatterbox/venv && \
+    /opt/chatterbox/venv/bin/pip install --no-cache-dir --upgrade pip "setuptools<81" wheel && \
+    /opt/chatterbox/venv/bin/pip install --no-cache-dir numpy Cython && \
+    /opt/chatterbox/venv/bin/pip install --no-cache-dir --no-build-isolation \
+      --index-url https://download.pytorch.org/whl/cpu \
+      --extra-index-url https://pypi.org/simple \
+      torch torchaudio onnxruntime chatterbox-tts && \
+    HF_HOME=$CHATTERBOX_HF_HOME /opt/chatterbox/venv/bin/python -c \
+      "from chatterbox.tts_turbo import ChatterboxTurboTTS; ChatterboxTurboTTS.from_pretrained(device='cpu')" && \
+    find /opt/chatterbox/venv -depth -type d -name __pycache__ -exec rm -rf {} + && \
+    SP=/opt/chatterbox/venv/lib/python3.11/site-packages && \
+    rm -rf "$SP/torch/include" "$SP/torch/test"
+
+# --- PocketTTS venv --------------------------------------------------------
+# Mirrors the WITH_POCKETTTS block. Smaller model (~100M params) but still
+# needs torch — separate venv so its pip resolution doesn't fight with
+# chatterbox-tts above.
+ENV POCKET_HF_HOME=/opt/pocket-tts/hf-cache
+RUN python3 -m venv /opt/pocket-tts/venv && \
+    /opt/pocket-tts/venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /opt/pocket-tts/venv/bin/pip install --no-cache-dir \
+      --index-url https://download.pytorch.org/whl/cpu \
+      --extra-index-url https://pypi.org/simple \
+      torch scipy pocket-tts && \
+    HF_HOME=$POCKET_HF_HOME /opt/pocket-tts/venv/bin/python -c \
+      "from pocket_tts import TTSModel; TTSModel.load_model()" && \
+    find /opt/pocket-tts/venv -depth -type d -name __pycache__ -exec rm -rf {} + && \
+    SP=/opt/pocket-tts/venv/lib/python3.11/site-packages && \
+    rm -rf "$SP/torch/include" "$SP/torch/test"
+
+# --- Server venv (FastAPI only — no PyTorch needed) ------------------------
+# The HTTP front is thin: it spawns one stdio worker per engine and shuttles
+# JSON between them and the HTTP client. No model loading happens here.
+RUN python3 -m venv /opt/server/venv && \
+    /opt/server/venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /opt/server/venv/bin/pip install --no-cache-dir \
+      fastapi "uvicorn[standard]" pydantic
+
+# Strip the build toolchain now that pkuseg + any other source dists have
+# compiled. The runtime never needs g++/make again — torch + torchaudio +
+# pocket-tts all ship as wheels. Saves ~500MB off the final image.
+RUN apt-get update && apt-get purge -y --auto-remove build-essential && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV PATH=/opt/server/venv/bin:$PATH \
+    CHATTERBOX_PYTHON=/opt/chatterbox/venv/bin/python \
+    CHATTERBOX_WORKER=/app/workers/chatterbox_worker.py \
+    POCKET_TTS_PYTHON=/opt/pocket-tts/venv/bin/python \
+    POCKET_TTS_WORKER=/app/workers/pocket_tts_worker.py
+
+WORKDIR /app
+COPY docker/tts-heavy/server.py /app/server.py
+# Reuse the SAME worker scripts the controller uses for its in-process path —
+# single source of truth for inference logic, including the PocketTTS RMS
+# normalisation. The scripts speak JSON over stdio; server.py wraps that with
+# an HTTP surface.
+COPY controller/scripts/chatterbox_worker.py /app/workers/chatterbox_worker.py
+COPY controller/scripts/pocket_tts_worker.py /app/workers/pocket_tts_worker.py
+
+# Shared state mount with the controller — the sidecar writes WAVs into
+# /var/sub-wave/voice/* and the controller hands the same path to Liquidsoap
+# via next.txt / say.txt / intro.txt. The directory is created by the
+# controller image (chmod 777 there); the sidecar just writes into it. We
+# mkdir here too so the image is self-contained when run standalone.
+RUN mkdir -p /var/sub-wave/voice && chmod 777 /var/sub-wave
+
+EXPOSE 8080
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]

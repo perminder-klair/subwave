@@ -228,6 +228,8 @@ export function LlmStep({ w }: { w: WizardController }) {
 
 // ─── TTS ───────────────────────────────────────────────────────────────────
 export function TtsStep({ w }: { w: WizardController }) {
+  const engine = w.data.tts.defaultEngine;
+  const needsSidecar = engine === 'chatterbox' || engine === 'pocket-tts';
   return (
     <div>
       <StepHeader
@@ -247,9 +249,18 @@ export function TtsStep({ w }: { w: WizardController }) {
             <option value="piper">Piper (fast, local)</option>
             <option value="kokoro">Kokoro (natural, local)</option>
             <option value="cloud">Cloud (OpenAI / ElevenLabs)</option>
-            <option value="chatterbox">Chatterbox (voice cloning, opt-in build)</option>
+            <option value="chatterbox">Chatterbox (voice cloning, sidecar)</option>
+            <option value="pocket-tts">PocketTTS (multilingual, sidecar)</option>
           </Select>
         </Field>
+        {needsSidecar && (
+          <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm text-amber-200">
+            <strong>Heads up:</strong> {engine === 'chatterbox' ? 'Chatterbox' : 'PocketTTS'} runs in
+            the optional <code>tts-heavy</code> sidecar. Start it with{' '}
+            <code>docker compose --profile tts-heavy up -d</code> — until then this persona will
+            silently fall back to Piper.
+          </div>
+        )}
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"

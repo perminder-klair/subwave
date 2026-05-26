@@ -1,14 +1,19 @@
-// Chatterbox TTS client — supervises a persistent Python worker over stdio.
+// Chatterbox TTS client — two modes:
 //
-// chatterbox_worker.py loads the Chatterbox Turbo model once (5-15s) and stays
-// resident, reading one JSON request per line and emitting one JSON response
-// per line. We manage the lifecycle here: lazy spawn on first speak(),
-// auto-restart on crash, and a small request map keyed by random id.
+// 1. Sidecar mode (when config.ttsHeavy.url is set). speak() POSTs to the
+//    subwave-tts-heavy container (docker/Dockerfile.tts-heavy +
+//    docker/tts-heavy/server.py). isAvailable() reads the cached result of
+//    a periodic /health probe. This is the default deployment story for
+//    operators on the pre-built ghcr.io images (issue #103).
 //
-// Same shape as kokoro.ts — the dispatcher in tts.ts treats both engines
-// identically. The added wrinkle is per-request `referenceWav`: Chatterbox
-// supports zero-shot voice cloning from a 5-second reference clip, so each
-// call can swap voices without restarting the worker.
+// 2. Local-spawn mode (the original). chatterbox_worker.py loads the
+//    Chatterbox Turbo model once (5-15s) and stays resident, reading one
+//    JSON request per line over stdin and emitting one JSON response per
+//    line on stdout. This is the legacy --build-arg WITH_CHATTERBOX=1 path
+//    in docker/Dockerfile.controller; kept working for backwards compat.
+//
+// The dispatcher in tts.ts treats both modes identically — speak() returns a
+// WAV path, isAvailable() returns a boolean, that's the whole contract.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdir, readdir } from 'node:fs/promises';
@@ -16,6 +21,11 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from '../config.js';
+import {
+  isRemoteEnabled,
+  speakRemote,
+  startProbeLoop,
+} from './ttsHeavyClient.js';
 
 const READY_TIMEOUT_MS = 120_000;        // first call may include model + weights load
 // Chatterbox is heavier than Kokoro — 350M params vs ~80M — and on CPU a single
@@ -174,6 +184,15 @@ export async function speak(
   const outPath = customPath || path.join(config.piper.outDir, `${id}.wav`);
   if (customPath) await mkdir(path.dirname(customPath), { recursive: true });
 
+  if (isRemoteEnabled()) {
+    return speakRemote({
+      engine: 'chatterbox',
+      text: text.trim(),
+      out: outPath,
+      referenceWav: resolveReferenceWav(voice),
+    });
+  }
+
   const w = await ensureWorker();
   const msg = await w.send(id, {
     text: text.trim(),
@@ -183,12 +202,20 @@ export async function speak(
   return msg.path;
 }
 
-// Chatterbox is bundled only when the controller image is built with
-// `--build-arg WITH_CHATTERBOX=1`, so a configured path isn't proof the
-// runtime exists. Check the venv interpreter and worker script are actually
-// on disk — that's true in a Chatterbox-enabled image and false otherwise,
-// which is exactly what lets the dispatcher fall back to Piper.
+// In sidecar mode this is the cached result of the /health probe loop; the
+// dispatcher reads it synchronously so we can't await per-call. In local
+// mode it's existsSync on the venv interpreter and worker script — true in
+// a --build-arg WITH_CHATTERBOX=1 image, false in the default image — which
+// is what lets the dispatcher fall back to Piper.
+let remoteAvailable = false;
+if (isRemoteEnabled()) {
+  startProbeLoop('chatterbox', (avail) => {
+    remoteAvailable = avail;
+  });
+}
+
 export function isAvailable() {
+  if (isRemoteEnabled()) return remoteAvailable;
   return existsSync(config.chatterbox.python) && existsSync(config.chatterbox.workerScript);
 }
 

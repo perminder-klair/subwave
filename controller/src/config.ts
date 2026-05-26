@@ -94,6 +94,24 @@ export const config = {
     // which falls back to the default when an id isn't recognised.
     defaultVoice: process.env.POCKET_TTS_VOICE || 'alba',
   },
+  // Optional sidecar that hosts Chatterbox + PocketTTS over HTTP. Set
+  // TTS_HEAVY_URL in the controller's environment and add the `tts-heavy`
+  // profile to compose to enable it. Both audio/chatterbox.ts and
+  // audio/pocketTts.ts prefer the sidecar when the URL is set, falling back
+  // to the in-process WITH_*=1 build path when it isn't. See
+  // docker/Dockerfile.tts-heavy + docker/tts-heavy/server.py for the service.
+  ttsHeavy: {
+    url: process.env.TTS_HEAVY_URL || '',
+    // isAvailable() in remote mode caches the result of a /health probe and
+    // re-runs it on this interval so a sidecar that comes up after the
+    // controller is reflected without a restart, and one that goes down
+    // flips to unavailable within ~30s (dispatcher then falls back to Piper).
+    probeIntervalMs: parseInt(process.env.TTS_HEAVY_PROBE_MS || '30000', 10),
+    // Per-request HTTP timeout. Inference itself is bounded by the engine
+    // modules' own request timeouts (CHATTERBOX_REQUEST_TIMEOUT_MS,
+    // POCKET_TTS_REQUEST_TIMEOUT_MS); this is the network/connect ceiling.
+    requestTimeoutMs: parseInt(process.env.TTS_HEAVY_TIMEOUT_MS || '180000', 10),
+  },
   icecast: {
     // Public status JSON — listener counts + per-mount metadata. No auth.
     // Icecast lives inside the merged `broadcast` container; its hostname on

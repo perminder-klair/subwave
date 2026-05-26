@@ -1,10 +1,16 @@
-// PocketTTS client — supervises a persistent Python worker over stdio.
+// PocketTTS client — two modes:
 //
-// pocket_tts_worker.py loads the kyutai-labs PocketTTS model once (a few
-// seconds) and stays resident, reading one JSON request per line and emitting
-// one JSON response per line. Lifecycle is identical to kokoro.ts /
-// chatterbox.ts — lazy spawn on first speak(), auto-restart on crash, a small
-// request map keyed by random id.
+// 1. Sidecar mode (when config.ttsHeavy.url is set). speak() POSTs to the
+//    subwave-tts-heavy container (docker/Dockerfile.tts-heavy +
+//    docker/tts-heavy/server.py). isAvailable() reads the cached result of
+//    a periodic /health probe. This is the default deployment story for
+//    operators on the pre-built ghcr.io images (issue #103).
+//
+// 2. Local-spawn mode (the original). pocket_tts_worker.py loads the
+//    kyutai-labs PocketTTS model once and stays resident, reading one JSON
+//    request per line over stdin and emitting one JSON response per line
+//    on stdout. This is the legacy --build-arg WITH_POCKETTTS=1 path in
+//    docker/Dockerfile.controller; kept working for backwards compat.
 //
 // v1 ships built-in voices only (alba, anna, charles, …). PocketTTS supports
 // reference-WAV cloning too, but the wrapper deliberately doesn't expose it
@@ -16,6 +22,11 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from '../config.js';
+import {
+  isRemoteEnabled,
+  speakRemote,
+  startProbeLoop,
+} from './ttsHeavyClient.js';
 
 // PocketTTS' 100M-param model is smaller than Chatterbox Turbo but the first
 // call still needs to import torch and warm the Hugging Face cache.
@@ -181,6 +192,15 @@ export async function speak(
   const outPath = customPath || path.join(config.piper.outDir, `${id}.wav`);
   if (customPath) await mkdir(path.dirname(customPath), { recursive: true });
 
+  if (isRemoteEnabled()) {
+    return speakRemote({
+      engine: 'pocket-tts',
+      text: text.trim(),
+      out: outPath,
+      voice: voice || config.pocketTts.defaultVoice,
+    });
+  }
+
   const w = await ensureWorker();
   const msg = await w.send(id, {
     text: text.trim(),
@@ -190,11 +210,19 @@ export async function speak(
   return msg.path;
 }
 
-// PocketTTS is bundled only when the controller image is built with
-// `--build-arg WITH_POCKETTTS=1`, so a configured path isn't proof the runtime
-// exists. Check the venv interpreter and worker script are actually on disk —
-// true in a PocketTTS-enabled image, false otherwise — which lets the
-// dispatcher fall back to Piper without trying to spawn a missing python.
+// In sidecar mode this is the cached result of the /health probe loop; the
+// dispatcher reads it synchronously so we can't await per-call. In local
+// mode it's existsSync on the venv interpreter and worker script — true in
+// a --build-arg WITH_POCKETTTS=1 image, false in the default image — which
+// is what lets the dispatcher fall back to Piper.
+let remoteAvailable = false;
+if (isRemoteEnabled()) {
+  startProbeLoop('pocket-tts', (avail) => {
+    remoteAvailable = avail;
+  });
+}
+
 export function isAvailable() {
+  if (isRemoteEnabled()) return remoteAvailable;
   return existsSync(config.pocketTts.python) && existsSync(config.pocketTts.workerScript);
 }

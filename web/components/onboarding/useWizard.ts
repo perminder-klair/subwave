@@ -22,7 +22,7 @@ export interface WizardData {
   llmTest: { ok: boolean | null; msg?: string };
 
   tts: {
-    defaultEngine: 'piper' | 'kokoro' | 'cloud' | 'chatterbox';
+    defaultEngine: 'piper' | 'kokoro' | 'cloud' | 'chatterbox' | 'pocket-tts';
     cloud: { enabled: boolean; provider: string; apiKey: string };
   };
 

@@ -79,6 +79,9 @@ services:
       - TZ=${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
       - SOUNDS_DIR=/sounds
+      # Optional sidecar for Chatterbox + PocketTTS. Gated by --profile tts-heavy
+      # below; unreachable URL → fall back to Piper (no harm done).
+      - TTS_HEAVY_URL=${TTS_HEAVY_URL:-http://tts-heavy:8080}
     env_file:
       - ./.env
     extra_hosts:
@@ -112,3 +115,25 @@ services:
     # Same-origin (/api, /stream.mp3) is the default baked into the image.
     # Your external proxy is responsible for routing those paths to controller
     # and broadcast — see the header comment for the route table.
+
+  # -------------------------------------------------------------------------
+  # TTS-HEAVY (optional) — sidecar for Chatterbox + PocketTTS
+  # -------------------------------------------------------------------------
+  # See docker-compose.yml for the full rationale (issue #103). NOT started
+  # by default. Enable with `docker compose -f docker-compose.byo.yml \
+  #   --profile tts-heavy up -d`. The controller falls back to Piper when
+  # the URL is unreachable.
+  tts-heavy:
+    image: ghcr.io/perminder-klair/subwave-tts-heavy:${SUBWAVE_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.tts-heavy
+    platform: linux/amd64
+    container_name: sub-wave-tts-heavy
+    restart: unless-stopped
+    profiles: ["tts-heavy"]
+    environment:
+      - TTS_HEAVY_DEVICE=${TTS_HEAVY_DEVICE:-cpu}
+      - POCKET_TTS_VOICE=${POCKET_TTS_VOICE:-alba}
+    volumes:
+      - *state-mount

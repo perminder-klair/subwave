@@ -42,7 +42,7 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 - **Plain-language requests.** "Play something more upbeat" or "anything by Radiohead" works.
 - **Your own music library.** Pulls from Navidrome over the Subsonic API. No external catalogue.
 - **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy.
-- **Four TTS engines.** Piper, Kokoro, Chatterbox (zero-shot voice cloning), and cloud (OpenAI / ElevenLabs). Pick a different engine per kind of speech.
+- **Five TTS engines.** Piper and Kokoro in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) is also available. Pick a different engine per kind of speech.
 - **Multiple DJ personas.** Up to 10 souls in rotation, each with its own voice and writing style.
 - **Dual-codec broadcast.** MP3 192 kbps for Sonos, hardware radios, and cars; Ogg-Opus 96 kbps for modern browsers. The web player picks automatically.
 - **PWA + terminal player.** Installable on phone and desktop with lock-screen controls, plus a TUI for the command line.
@@ -170,6 +170,23 @@ docker compose up -d
 Functionally identical: same images, same state layout, same persistence.
 The CLI just saves you the curl-and-edit dance and gives you `subwave logs`,
 `subwave doctor`, etc. for the rest of the lifecycle.
+
+### Heavy TTS engines (optional)
+
+Chatterbox (zero-shot voice cloning) and PocketTTS (fast multilingual) live in
+a separate `subwave-tts-heavy` sidecar that adds ~5–6 GB of PyTorch and is
+**not** started by default. To enable:
+
+```bash
+docker compose --profile tts-heavy up -d
+```
+
+The controller is wired up to discover the sidecar automatically. Stop it
+again with `docker compose --profile tts-heavy stop tts-heavy`; the rest of
+the stack keeps running and Chatterbox/PocketTTS personas silently fall back
+to Piper. The old `docker build --build-arg WITH_CHATTERBOX=1` path still
+works if you already have a custom-built controller image — see
+`docker/Dockerfile.controller`.
 
 ### Local dev (contributors)
 
