@@ -7,7 +7,9 @@ import * as library from '../music/library.js';
 import * as coverage from '../music/library-coverage.js';
 import * as subsonic from '../music/subsonic.js';
 import * as settings from '../settings.js';
-import { tagOne } from '../music/tagger-core.js';
+import { tagOne, TAGGER_BATCH_SYSTEM } from '../music/tagger-core.js';
+import { promptVocabHash } from '../music/embeddings.js';
+import { activeModelLabel } from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
 
 export const router = express.Router();
@@ -186,6 +188,9 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       genre: song.genre,
       moods,
       energy,
+      source: 'llm',
+      promptHash: promptVocabHash(TAGGER_BATCH_SYSTEM),
+      model: activeModelLabel(),
     });
     await library.save();
     const tagged = library.get(id);

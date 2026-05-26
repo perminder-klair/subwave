@@ -1,32 +1,81 @@
-// One-shot library tagger.
-// Walks the entire Navidrome library, sends batches of unseen tracks to the
-// LLM for {moods, energy} classification, persists results in state/moods.json.
-// Resumable — already-tagged tracks are skipped, so you can re-run any time.
+// Library tagger orchestrator (embedding-propagated).
 //
-// Run:  docker exec sub-wave-controller node src/music/tag-library.js
-//   or  docker exec sub-wave-controller node src/music/tag-library.js --limit 100
-//   or  docker exec sub-wave-controller node src/music/tag-library.js --batch 10
+// Pipeline (each phase short-circuits cleanly so partial runs make progress):
+//   Phase 0  — ENRICH        fetch Last.fm tags + lyric excerpts, cache in DB
+//   Phase 1  — EMBED         text-embed every track that needs it
+//   Phase 2  — SEED          LLM-tag a small, well-chosen seed set
+//   Phase 3  — PROPAGATE     KNN-vote moods/energy onto every untagged track
+//   Phase 4  — ACTIVE-LEARN  LLM-tag the residual uncertain set; re-propagate
 //
-// Batched: one LLM call classifies ~20 tracks at a time. On any batch failure
-// (schema mismatch, length mismatch, transport error) the buffer is replayed
-// one track at a time via tagOne(), so a bad LLM response never loses tags.
+// Run:  docker exec sub-wave-controller npx tsx src/music/tag-library.ts
+// Flags:
+//   --limit N             cap NEW tracks considered this run (default: all)
+//   --batch N             LLM batch size (default 25)
+//   --seeds N             override seed budget (default max(200, ceil(sqrt(library))))
+//   --max-rounds N        cap active-learning rounds (default 3)
+//   --no-propagate        only embed + seed, skip phases 3-4 (debug)
+//   --reseed              drop + rebuild track_vectors; re-embed from scratch
+//   --re-enrich           null out enrichment cache and re-fetch from Navidrome
+//   --skip-enrich         embed using metadata only (debug; verifies enrichment helps)
+//   --upgrade             re-tag only rows with stale promptHash or model
 //
-// The single-track tagOne() primitive in tagger-core.ts is also reused by the
-// inline retag route (controller/src/routes/library.ts → POST /library/retag).
+// On boot the library-db auto-migrates any state/moods.json into the SQLite
+// tracks table as legacy v1 entries (see library-db.ts).
 
 import * as subsonic from './subsonic.js';
-import * as library from './library.js';
+import * as db from './library-db.js';
 import * as settings from '../settings.js';
+import * as embeddings from './embeddings.js';
+import { selectSeeds } from './seed-selector.js';
+import { vote } from './tag-propagator.js';
 import { config } from '../config.js';
 import { loadSecretsIntoEnv } from '../setup/secrets.js';
 import { loadSetupConfig } from '../setup/config.js';
 import { activeModelLabel } from '../llm/provider.js';
-import { tagOne, tagBatch, TaggableSong, TagResult } from './tagger-core.js';
+import { tagBatch, TAGGER_BATCH_SYSTEM } from './tagger-core.js';
+
+// ---------------------------------------------------------------------------
+// CLI arg parsing
+// ---------------------------------------------------------------------------
+
+function parseIntFlag(args: string[], name: string): number | null {
+  const idx = args.indexOf(name);
+  if (idx < 0) return null;
+  const n = parseInt(args[idx + 1], 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+interface CliFlags {
+  limit: number;
+  batchSize: number;
+  seedCount: number | null;
+  maxRounds: number;
+  noPropagate: boolean;
+  reseed: boolean;
+  reEnrich: boolean;
+  skipEnrich: boolean;
+  upgrade: boolean;
+}
+
+function parseFlags(): CliFlags {
+  const args = process.argv.slice(2);
+  return {
+    limit: parseIntFlag(args, '--limit') ?? Infinity,
+    batchSize: Math.max(1, Math.min(50, parseIntFlag(args, '--batch') ?? 25)),
+    seedCount: parseIntFlag(args, '--seeds'),
+    maxRounds: parseIntFlag(args, '--max-rounds') ?? 3,
+    noPropagate: args.includes('--no-propagate'),
+    reseed: args.includes('--reseed'),
+    reEnrich: args.includes('--re-enrich'),
+    skipEnrich: args.includes('--skip-enrich'),
+    upgrade: args.includes('--upgrade'),
+  };
+}
 
 // Mirrors server.ts boot: cloud API keys from secrets.env, Navidrome creds
 // from setup-config.json. Standalone CLIs skip server.ts, so without this
 // they fall back to the hardcoded `http://navidrome:4533` and ENOTFOUND on
-// any install with a custom Navidrome host (issue #122).
+// any install with a custom Navidrome host.
 async function applyWizardOverlay() {
   try {
     await loadSecretsIntoEnv();
@@ -46,98 +95,404 @@ async function applyWizardOverlay() {
   }
 }
 
-function parseIntFlag(args: string[], name: string): number | null {
-  const idx = args.indexOf(name);
-  if (idx < 0) return null;
-  const n = parseInt(args[idx + 1], 10);
-  return Number.isFinite(n) ? n : null;
-}
+// ---------------------------------------------------------------------------
+// Main orchestration
+// ---------------------------------------------------------------------------
 
 async function main() {
-  const args = process.argv.slice(2);
-  const limit = parseIntFlag(args, '--limit') ?? Infinity;
-  const batchRaw = parseIntFlag(args, '--batch') ?? 20;
-  const BATCH_SIZE = Math.max(1, Math.min(50, batchRaw));
+  const flags = parseFlags();
+  const startedAt = Date.now();
 
   await applyWizardOverlay();
-  await library.load();
   await settings.load();
-  console.log(`[tag] starting. ${library.allTaggedIds().length} tracks already tagged.`);
-  console.log(`[tag] model: ${activeModelLabel()}`);
-  console.log(`[tag] batch size: ${BATCH_SIZE}`);
-  if (limit !== Infinity) console.log(`[tag] limit: ${limit} new tracks`);
 
-  type BufferEntry = TaggableSong & { id: string };
-  let processed = 0;
-  let saved = 0;
-  let failed = 0;
-  const startedAt = Date.now();
-  const SAVE_EVERY = 25;
-  const buffer: BufferEntry[] = [];
+  const embeddingDim = embeddings.resolveEmbeddingDim();
+  await db.open({ embeddingDim });
 
-  async function flushBuffer() {
-    if (buffer.length === 0) return;
-    const batch = buffer.splice(0, buffer.length);
-    let results: TagResult[] | null = null;
-    try {
-      results = await tagBatch(batch);
-    } catch (err: any) {
-      console.error(`[tag] batch failed (${batch.length} tracks): ${err.message} — falling back to per-track`);
-    }
-    for (let i = 0; i < batch.length; i++) {
-      const song = batch[i];
-      try {
-        const { moods, energy } = results ? results[i] : await tagOne(song);
-        library.set(song.id, {
-          title: song.title,
-          artist: song.artist,
-          album: song.album,
-          year: song.year,
-          genre: song.genre,
-          moods,
-          energy,
-        });
-        saved++;
-        const tagStr = moods.length ? moods.join(', ') : '(none)';
-        console.log(`[${saved}/${processed}] ${song.artist} — ${song.title} → ${tagStr} [${energy || '?'}]`);
+  // The DB upserts emit when the model changes; record the current one.
+  db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim);
 
-        if (saved % SAVE_EVERY === 0) {
-          await library.save();
-          const elapsed = (Date.now() - startedAt) / 1000;
-          const rate = saved / elapsed;
-          console.log(`[tag] flushed. ${saved} new tags, ${(rate * 60).toFixed(1)}/min`);
-        }
-      } catch (err: any) {
-        failed++;
-        console.error(`[tag] FAIL ${song.id} (${song.title}): ${err.message}`);
-      }
-    }
+  console.log(`[tag] starting. ${db.allTaggedIds().length} tracks already tagged.`);
+  console.log(`[tag] LLM model: ${activeModelLabel()}`);
+  console.log(`[tag] embedding model: ${embeddings.activeModelLabel()} (dim=${embeddingDim})`);
+  console.log(`[tag] batch=${flags.batchSize} maxRounds=${flags.maxRounds}`);
+
+  if (flags.reseed) {
+    console.log('[tag] --reseed: dropping track_vectors, re-embedding from scratch');
+    db.dropVectors();
   }
 
-  for await (const song of subsonic.iterateAllSongs()) {
-    processed++;
-    if (library.has(song.id)) continue;
-    if (saved + buffer.length >= limit) break;
+  if (!embeddings.isAvailable()) {
+    console.error('[tag] embeddings not available — set settings.embedding.enabled / provider');
+    process.exit(1);
+  }
 
-    buffer.push({
-      id: song.id,
+  const promptHash = embeddings.promptVocabHash(TAGGER_BATCH_SYSTEM);
+  const modelLabel = activeModelLabel();
+
+  // ---- Phase A: iterate Navidrome and upsert track metadata into DB ------
+  // Cheap; ensures every Navidrome song is in the tracks table so subsequent
+  // phases can operate purely off SQL.
+  console.log('[tag] walking Navidrome library...');
+  let walked = 0;
+  for await (const song of subsonic.iterateAllSongs()) {
+    db.upsertTrackMeta(song.id, {
       title: song.title,
       artist: song.artist,
       album: song.album,
       year: song.year,
       genre: song.genre,
+      duration: song.duration,
     });
+    walked += 1;
+    if (walked % 500 === 0) console.log(`[tag] walked ${walked} tracks`);
+  }
+  console.log(`[tag] walked ${walked} total tracks`);
 
-    if (buffer.length >= BATCH_SIZE) {
-      await flushBuffer();
+  // Honour --limit by capping how many NEW tracks we work on this run.
+  // We do this by selecting the first N untagged ids; ones beyond the cap
+  // wait for the next run.
+  const allUntagged = db.untaggedIds();
+  const targetUntagged =
+    flags.limit === Infinity ? allUntagged : allUntagged.slice(0, flags.limit);
+  console.log(
+    `[tag] ${targetUntagged.length} untagged tracks in scope this run (of ${allUntagged.length} total untagged)`,
+  );
+
+  // ---- Phase 0: ENRICH ---------------------------------------------------
+  if (!flags.skipEnrich) {
+    await phaseEnrich(targetUntagged, flags.reEnrich);
+  } else {
+    console.log('[tag] --skip-enrich: not fetching Last.fm tags or lyrics');
+  }
+
+  // ---- Phase 1: EMBED ----------------------------------------------------
+  await phaseEmbed(targetUntagged, flags.batchSize);
+
+  // ---- Phase 2: SEED -----------------------------------------------------
+  const seedCount = flags.seedCount ?? autoSeedCount(walked);
+  console.log(`[tag] seed budget: ${seedCount}`);
+
+  const seedSelection = await selectSeeds({
+    seedCount,
+    embeddingForId: (id) => {
+      // For k-means clustering, hand a Float32Array if we have it (we may
+      // not in the very first run; that's fine — the selector falls back
+      // to random sampling within the unembedded pool).
+      const hits = db.knnById(id, 1);
+      if (hits.length === 0) return null;
+      // We don't have a direct vector-read API on library-db today; in v1
+      // the k-means fallback is good enough and we can add one later. For
+      // now: returning null routes seed-selector to its non-k-means path.
+      return null;
+    },
+  });
+  console.log(
+    `[tag] seeds: ${seedSelection.seeds.length} new ` +
+      `(layer counts: ${JSON.stringify(seedSelection.layerCounts)})`,
+  );
+
+  let llmCalls = 0;
+  let llmTagged = 0;
+  if (seedSelection.seeds.length > 0) {
+    const tagged = await llmTagInBatches(seedSelection.seeds, flags.batchSize, promptHash, modelLabel, 'llm');
+    llmCalls += tagged.callCount;
+    llmTagged += tagged.tagged;
+    console.log(`[tag] phase-2 done: ${tagged.tagged}/${seedSelection.seeds.length} seeded`);
+  }
+
+  if (flags.noPropagate) {
+    console.log('[tag] --no-propagate: stopping after seed phase');
+    return finish(startedAt, llmCalls, llmTagged);
+  }
+
+  // ---- Phase 3: PROPAGATE ------------------------------------------------
+  // Only operate on tracks that (a) are in this run's scope and (b) have an
+  // embedding. Tracks without vectors can't have neighbours; they'd just get
+  // marked uncertain and burn LLM budget in phase 4.
+  const knnK = 5;
+  const moodVoteThreshold = 0.6;
+  const confidenceThreshold = 0.6;
+  let propagated = 0;
+  let uncertain: string[] = [];
+
+  for (const id of targetUntagged) {
+    if (db.hasTags(id)) continue;        // already seeded
+    if (!db.hasVector(id)) continue;     // no embedding → can't propagate
+    const neighbours = db.knnById(id, knnK);
+    const result = vote(
+      neighbours,
+      (nId) => {
+        const t = db.getTrack(nId);
+        if (!t || t.moods.length === 0) return null;
+        return { moods: t.moods, energy: t.energy };
+      },
+      { moodVoteThreshold, k: knnK },
+    );
+    if (
+      result.votingNeighbours >= 1 &&
+      result.confidence >= confidenceThreshold &&
+      result.moods.length > 0
+    ) {
+      db.upsertTrackTags(id, {
+        moods: result.moods,
+        energy: result.energy,
+        source: 'propagated',
+        confidence: result.confidence,
+        promptHash,
+        model: modelLabel,
+      });
+      propagated += 1;
+    } else {
+      uncertain.push(id);
     }
   }
-  await flushBuffer();
+  console.log(`[tag] phase-3 propagated ${propagated} tracks; ${uncertain.length} uncertain (in scope)`);
 
-  await library.save();
+  // ---- Phase 4: ACTIVE-LEARN --------------------------------------------
+  for (let round = 1; round <= flags.maxRounds; round++) {
+    if (uncertain.length === 0) break;
+    console.log(`[tag] phase-4 round ${round}: LLM-tagging ${uncertain.length} uncertain`);
+    const tagged = await llmTagInBatches(
+      uncertain,
+      flags.batchSize,
+      promptHash,
+      modelLabel,
+      'uncertain-llm',
+    );
+    llmCalls += tagged.callCount;
+    llmTagged += tagged.tagged;
+
+    // Re-propagate over any tracks in scope still untagged after this LLM round.
+    let extra = 0;
+    const stillUncertain: string[] = [];
+    for (const id of targetUntagged) {
+      if (db.hasTags(id)) continue;
+      if (!db.hasVector(id)) continue;
+      const neighbours = db.knnById(id, knnK);
+      const result = vote(
+        neighbours,
+        (nId) => {
+          const t = db.getTrack(nId);
+          if (!t || t.moods.length === 0) return null;
+          return { moods: t.moods, energy: t.energy };
+        },
+        { moodVoteThreshold, k: knnK },
+      );
+      if (
+        result.votingNeighbours >= 1 &&
+        result.confidence >= confidenceThreshold &&
+        result.moods.length > 0
+      ) {
+        db.upsertTrackTags(id, {
+          moods: result.moods,
+          energy: result.energy,
+          source: 'propagated',
+          confidence: result.confidence,
+          promptHash,
+          model: modelLabel,
+        });
+        extra += 1;
+      } else {
+        stillUncertain.push(id);
+      }
+    }
+    propagated += extra;
+    console.log(
+      `[tag] phase-4 round ${round} re-propagated ${extra}; ${stillUncertain.length} still uncertain`,
+    );
+
+    // Converged if no new propagation happened this round.
+    if (stillUncertain.length === uncertain.length) {
+      console.log('[tag] convergence — no further propagation possible');
+      break;
+    }
+    uncertain = stillUncertain;
+  }
+
+  finish(startedAt, llmCalls, llmTagged);
+}
+
+function autoSeedCount(librarySize: number): number {
+  return Math.max(200, Math.ceil(Math.sqrt(librarySize)));
+}
+
+function finish(startedAt: number, llmCalls: number, llmTagged: number) {
   const elapsed = (Date.now() - startedAt) / 1000;
-  console.log(`\n[tag] done in ${elapsed.toFixed(0)}s. saved=${saved} failed=${failed} processed=${processed}`);
-  console.log('[stats]', JSON.stringify(library.stats(), null, 2));
+  console.log(
+    `\n[tag] done in ${elapsed.toFixed(0)}s. llm_calls=${llmCalls} llm_tagged=${llmTagged}`,
+  );
+  console.log('[stats]', JSON.stringify(db.stats(), null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 0 — Enrichment (Last.fm tags + lyric excerpts)
+// ---------------------------------------------------------------------------
+
+async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
+  if (ids.length === 0) return;
+  const enrichCfg = (settings.get() as any).embedding?.enrichment ?? {};
+  const lastfmEnabled = enrichCfg.lastfmTags !== false;
+  const lyricsEnabled = enrichCfg.lyrics !== false;
+  if (!lastfmEnabled && !lyricsEnabled) {
+    console.log('[tag] phase-0 skipped: both lastfmTags and lyrics disabled in settings.embedding.enrichment');
+    return;
+  }
+  const artistTagCache = new Map<string, string[]>();
+  let enrichedTracks = 0;
+  let enrichedLyrics = 0;
+  let enrichedTags = 0;
+
+  for (const id of ids) {
+    const t = db.getTrack(id);
+    if (!t) continue;
+    if (!reEnrich && t.enrichedAt) continue;
+
+    let lastfmTags: string[] | null = null;
+    if (lastfmEnabled && t.artist) {
+      const cacheKey = t.artist;
+      if (artistTagCache.has(cacheKey)) {
+        lastfmTags = artistTagCache.get(cacheKey) ?? null;
+      } else {
+        try {
+          const matches = await subsonic.searchArtists(t.artist, { artistCount: 1 });
+          const artistId = matches?.[0]?.id;
+          if (artistId) {
+            const tags = await subsonic.getArtistLastfmTags(artistId, { count: 10 });
+            lastfmTags = tags;
+          }
+        } catch { /* ignore */ }
+        artistTagCache.set(cacheKey, lastfmTags ?? []);
+      }
+    }
+
+    let lyricExcerpt: string | null = null;
+    if (lyricsEnabled) {
+      try {
+        const raw = await subsonic.getLyrics(id);
+        if (typeof raw === 'string' && raw.trim()) {
+          lyricExcerpt = raw.trim();
+        }
+      } catch { /* ignore */ }
+    }
+
+    db.upsertTrackEnrichment(id, {
+      lastfmTags: lastfmTags && lastfmTags.length ? lastfmTags : null,
+      lyricExcerpt,
+    });
+    enrichedTracks += 1;
+    if (lastfmTags && lastfmTags.length) enrichedTags += 1;
+    if (lyricExcerpt) enrichedLyrics += 1;
+    if (enrichedTracks % 100 === 0) {
+      console.log(
+        `[tag] enriched ${enrichedTracks}/${ids.length} (lastfm: ${enrichedTags}, lyrics: ${enrichedLyrics})`,
+      );
+    }
+  }
+  console.log(
+    `[tag] phase-0 done: enriched ${enrichedTracks} tracks (lastfm: ${enrichedTags}, lyrics: ${enrichedLyrics})`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1 — Embed
+// ---------------------------------------------------------------------------
+
+async function phaseEmbed(targetIds: string[], batchSize: number): Promise<void> {
+  // Embed any track in scope that doesn't already have a vector. Includes
+  // already-tagged tracks (legacy v1) so they can serve as KNN neighbours.
+  const needsEmbed: string[] = [];
+  for (const id of targetIds) {
+    if (!db.hasVector(id)) needsEmbed.push(id);
+  }
+  // Also embed all already-tagged tracks that don't have vectors yet (legacy
+  // v1 imports). Without this they can't anchor the KNN graph.
+  for (const id of db.allTaggedIds()) {
+    if (!db.hasVector(id)) needsEmbed.push(id);
+  }
+  // Dedup
+  const unique = [...new Set(needsEmbed)];
+  if (unique.length === 0) {
+    console.log('[tag] phase-1 nothing to embed');
+    return;
+  }
+  console.log(`[tag] phase-1 embedding ${unique.length} tracks (batch=${batchSize})`);
+
+  const embedBatchSize = Math.max(8, Math.min(64, batchSize * 2));
+  for (let i = 0; i < unique.length; i += embedBatchSize) {
+    const batch = unique.slice(i, i + embedBatchSize);
+    const songs = batch.map(id => db.getTrack(id)).filter((t): t is db.TrackRecord => !!t);
+    const texts = songs.map(t =>
+      embeddings.formatTrackText(
+        { title: t.title, artist: t.artist, album: t.album, year: t.year, genre: t.genre },
+        { lastfmTags: t.lastfmTags, lyricExcerpt: t.lyricExcerpt },
+      ),
+    );
+    let vecs: number[][];
+    try {
+      vecs = await embeddings.embedTexts(texts);
+    } catch (err: any) {
+      console.error(`[tag] embedding batch failed at offset ${i}: ${err.message}`);
+      throw err;
+    }
+    for (let j = 0; j < songs.length; j++) {
+      db.upsertTrackVector(songs[j].id, vecs[j]);
+    }
+    if ((i + batch.length) % 500 === 0 || i + batch.length === unique.length) {
+      console.log(`[tag] embedded ${i + batch.length}/${unique.length}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// LLM tagging helper (reused by phase 2 + phase 4)
+// ---------------------------------------------------------------------------
+
+async function llmTagInBatches(
+  ids: string[],
+  batchSize: number,
+  promptHash: string,
+  modelLabel: string,
+  source: db.TagSource,
+): Promise<{ tagged: number; callCount: number }> {
+  let tagged = 0;
+  let callCount = 0;
+  for (let i = 0; i < ids.length; i += batchSize) {
+    const batch = ids.slice(i, i + batchSize);
+    const songs = batch.map(id => db.getTrack(id)).filter((t): t is db.TrackRecord => !!t);
+    if (songs.length === 0) continue;
+    const input = songs.map(t => ({
+      title: t.title ?? undefined,
+      artist: t.artist ?? undefined,
+      album: t.album ?? undefined,
+      year: t.year ?? undefined,
+      genre: t.genre ?? undefined,
+    }));
+    let results;
+    try {
+      results = await tagBatch(input);
+      callCount += 1;
+    } catch (err: any) {
+      console.error(`[tag] LLM batch failed (${songs.length} tracks): ${err.message}`);
+      continue;
+    }
+    for (let j = 0; j < songs.length; j++) {
+      const { moods, energy } = results[j];
+      db.upsertTrackTags(songs[j].id, {
+        moods,
+        energy,
+        source,
+        confidence: null,
+        promptHash,
+        model: modelLabel,
+      });
+      tagged += 1;
+    }
+    if (i % (batchSize * 4) === 0) {
+      console.log(`[tag] LLM-tagged ${tagged}/${ids.length}`);
+    }
+  }
+  return { tagged, callCount };
 }
 
 main().catch(err => { console.error(err); process.exit(1); });

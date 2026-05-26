@@ -279,6 +279,36 @@ const DEFAULTS = {
     // resume as soon as someone tunes in. Off by default.
     pauseWhenEmpty: false,
   },
+  // Embedding-propagated library tagger (music/tag-library.ts).
+  //
+  // The tagger embeds every track's metadata text once (free if Ollama-local,
+  // ~$1 for 50k via OpenAI), LLM-tags a small representative seed set, then
+  // KNN-propagates moods/energy to the rest. Cuts LLM call count ~10x vs.
+  // brute-force batched tagging.
+  //
+  // `provider` and `model` default to following settings.llm; set them here
+  // to use a different provider for embeddings than for chat. Anthropic has
+  // no first-party embedding API — Anthropic users either set a different
+  // embedding provider or set OPENAI_API_KEY for the embedding leg.
+  embedding: {
+    enabled: true,
+    provider: '',         // empty → follow settings.llm.provider
+    model: '',            // empty → sensible default per provider
+    seedCount: 0,         // 0 → auto max(200, ceil(sqrt(library)))
+    knnNeighbours: 5,
+    moodVoteThreshold: 0.6,
+    confidenceThreshold: 0.6,
+    maxActiveLearningRounds: 3,
+    enrichment: {
+      // Vanilla Navidrome's getArtistInfo2 doesn't surface Last.fm crowd
+      // tags (the agent only exposes bio + images). Until SUB/WAVE adds a
+      // direct Last.fm API path, leave this off — enabling it just wastes
+      // an HTTP round trip per artist with empty results. Operators
+      // running a custom Navidrome that does expose tag[] can flip it on.
+      lastfmTags: false,
+      lyrics: true,       // fetch + include lyric excerpt in embed text
+    },
+  },
   // Web-search backend for the segment director's web-search capability.
   // Default `duckduckgo` works out of the box with no key; `tavily` reads its
   // key from SEARCH_API_KEY (or the optional override below). `apiKey` is

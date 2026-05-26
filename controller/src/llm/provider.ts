@@ -168,3 +168,125 @@ export function providerName() {
 export function activeOllamaUrl() {
   return ollamaBaseUrl(llmCfg());
 }
+
+// ---------------------------------------------------------------------------
+// Embedding models
+// ---------------------------------------------------------------------------
+//
+// The library tagger uses text embeddings for KNN-propagating moods (see
+// music/embeddings.ts + music/tag-library.ts). Provider follows `settings.llm`
+// by default — same auth, same dependency surface. Operator can override
+// either provider or model via `settings.embedding.{provider,model}`.
+//
+// Default model per provider (all chosen for the homelab/single-host use case):
+//   ollama / unknown    → nomic-embed-text                (768d, free, local)
+//   openai / compat     → text-embedding-3-small          (1536d, ~$0.02/1M)
+//   google              → text-embedding-004              (768d)
+//   anthropic           → falls back to openai embeddings (Anthropic has no
+//                                                          first-party API as
+//                                                          of 2026-05)
+
+function embeddingCfg() {
+  const s: any = settings.get().embedding || {};
+  const llm = llmCfg();
+  return {
+    enabled: s.enabled !== false,
+    provider: s.provider || llm.provider || 'ollama',
+    model: s.model || '',
+    apiKey: s.apiKey || llm.apiKey || '',
+    ollamaUrl: s.ollamaUrl || llm.ollamaUrl || '',
+    baseUrl: s.baseUrl || llm.baseUrl || '',
+  };
+}
+
+function defaultEmbeddingModelFor(provider: string): string {
+  switch (provider) {
+    case 'openai':
+    case 'openai-compatible':
+      return 'text-embedding-3-small';
+    case 'google':
+      return 'text-embedding-004';
+    case 'anthropic':
+      // No first-party Anthropic embedding API. We resolve via openai.
+      return 'text-embedding-3-small';
+    case 'ollama':
+    default:
+      return 'nomic-embed-text';
+  }
+}
+
+function defaultEmbeddingDimFor(model: string): number {
+  // Authoritative dim lookup for the default models. If the operator picks a
+  // model not in this table, library-db will reject the dim mismatch at
+  // upsert time with a friendly --reseed message.
+  if (model === 'nomic-embed-text') return 768;
+  if (model === 'mxbai-embed-large') return 1024;
+  if (model === 'text-embedding-3-small') return 1536;
+  if (model === 'text-embedding-3-large') return 3072;
+  if (model === 'text-embedding-004') return 768;
+  // Unknown model — assume the homelab default until the operator says
+  // otherwise via settings.embedding.dim.
+  return 768;
+}
+
+export function embeddingModel() {
+  const cfg = embeddingCfg();
+  const id = cfg.model || defaultEmbeddingModelFor(cfg.provider);
+  const sig = `embed|${cfg.provider}|${id}|${cfg.apiKey || ''}|${cfg.ollamaUrl}|${cfg.baseUrl}`;
+
+  const cached = clientCache.get(sig);
+  if (cached) return cached;
+
+  let model;
+  switch (cfg.provider) {
+    case 'openai': {
+      const provider = createOpenAI(cfg.apiKey ? { apiKey: cfg.apiKey } : {});
+      model = provider.textEmbeddingModel(id);
+      break;
+    }
+    case 'openai-compatible': {
+      const provider = createOpenAI({
+        baseURL: cfg.baseUrl,
+        apiKey: cfg.apiKey || 'unused',
+        name: 'openai-compatible',
+      });
+      model = provider.textEmbeddingModel(id);
+      break;
+    }
+    case 'google': {
+      const provider = createGoogleGenerativeAI(cfg.apiKey ? { apiKey: cfg.apiKey } : {});
+      model = provider.textEmbeddingModel(id);
+      break;
+    }
+    case 'anthropic': {
+      // Anthropic has no first-party embedding model; punt to OpenAI.
+      const provider = createOpenAI(cfg.apiKey ? { apiKey: cfg.apiKey } : {});
+      model = provider.textEmbeddingModel(id);
+      break;
+    }
+    case 'ollama':
+    default: {
+      const provider = createOllama({ baseURL: ollamaBaseUrl(cfg as any) });
+      model = provider.textEmbeddingModel(id);
+      break;
+    }
+  }
+
+  clientCache.set(sig, model);
+  return model;
+}
+
+export function activeEmbeddingModelLabel(): string {
+  const cfg = embeddingCfg();
+  return `${cfg.provider}:${cfg.model || defaultEmbeddingModelFor(cfg.provider)}`;
+}
+
+export function activeEmbeddingDim(): number {
+  const cfg = embeddingCfg();
+  const id = cfg.model || defaultEmbeddingModelFor(cfg.provider);
+  return defaultEmbeddingDimFor(id);
+}
+
+export function embeddingEnabled(): boolean {
+  return embeddingCfg().enabled;
+}

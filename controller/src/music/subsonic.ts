@@ -190,6 +190,52 @@ export async function searchArtists(query, { artistCount = 5 } = {}) {
   return r.searchResult3?.artist || [];
 }
 
+// Last.fm-backed crowd tags for an artist, normalised to lowercase trimmed
+// strings. Used by the embedding-propagated tagger to enrich the embedding
+// text — see music/embeddings.ts formatTrackText. Returns [] if the artist
+// has no Last.fm coverage (common for very obscure releases).
+export async function getArtistLastfmTags(id, { count = 20 } = {}) {
+  try {
+    const info = await getArtistInfo(id, { count: 0 });
+    const tags = info?.tag || info?.tags?.tag || [];
+    const arr = Array.isArray(tags) ? tags : [tags];
+    return arr
+      .map((t) => (typeof t === 'string' ? t : t?.name))
+      .filter((s) => typeof s === 'string' && s.trim().length > 0)
+      .map((s) => s.toLowerCase().trim())
+      .slice(0, count);
+  } catch {
+    return [];
+  }
+}
+
+// Track lyrics via Subsonic's getLyricsBySongId. Returns the plain-text
+// lyrics, or '' if no lyrics are indexed for this track. Navidrome v0.49+
+// supports this; older Navidromes return a `lyricsList` shape without a
+// match — both paths normalise to a string.
+export async function getLyrics(songId) {
+  try {
+    const r = await call('getLyricsBySongId', { id: songId });
+    // Modern Navidrome: { lyricsList: { structuredLyrics: [{ line: [{ value: '...' }] }] } }
+    const structured = r.lyricsList?.structuredLyrics;
+    if (Array.isArray(structured) && structured.length) {
+      const lines: string[] = [];
+      for (const sl of structured) {
+        const lineArr = Array.isArray(sl.line) ? sl.line : [];
+        for (const l of lineArr) {
+          if (typeof l?.value === 'string' && l.value.trim()) lines.push(l.value.trim());
+        }
+      }
+      return lines.join(' ');
+    }
+    // Legacy getLyrics shape: { lyrics: { value: '...' } }
+    if (typeof r.lyrics?.value === 'string') return r.lyrics.value;
+    return '';
+  } catch {
+    return '';
+  }
+}
+
 // Async iterator over every song in the library. Walks albums in batches.
 export async function* iterateAllSongs() {
   let offset = 0;
