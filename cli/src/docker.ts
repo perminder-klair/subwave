@@ -82,6 +82,20 @@ export function dockerDaemonOk(): boolean {
   return r.status === 0;
 }
 
+// Post-mortem probe: did the previous compose call fail because the operator's
+// user can't talk to the docker daemon socket? Distinguishes "user not in the
+// docker group" (which has a one-liner fix) from "daemon not running" /
+// "docker not installed" so we can tailor the hint we surface (see #156).
+export function dockerSocketPermissionDenied(): boolean {
+  const r = spawnSync('docker', ['info'], { encoding: 'utf8' });
+  if (r.status === 0) return false;
+  const blob = `${r.stdout ?? ''}\n${r.stderr ?? ''}`.toLowerCase();
+  // Match the common kernel/daemon messages. Don't rely on a single phrase —
+  // dockerd, podman-emulating-docker, and rootless setups all word it slightly
+  // differently, but they all mention "permission denied" alongside the socket.
+  return blob.includes('permission denied') && blob.includes('docker.sock');
+}
+
 // `docker compose exec -T <svc> <cmd...>`. Used for in-container probes
 // (e.g. telnet to liquidsoap inside the broadcast container). Not used in
 // the v1 doctor but kept here so we don't have to retrofit the abstraction.
