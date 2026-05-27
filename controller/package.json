@@ -21,10 +21,12 @@
     "@openrouter/ai-sdk-provider": "^2.9.0",
     "ai": "^6.0.182",
     "ai-sdk-ollama": "^3.8.4",
+    "better-sqlite3": "^11.10.0",
     "express": "^4.21.0",
     "node-cron": "^3.0.3",
     "pino": "^9.5.0",
     "pino-pretty": "^11.3.0",
+    "sqlite-vec": "^0.1.9",
     "tsx": "^4.19.2",
     "zod": "^4.4.3"
   },

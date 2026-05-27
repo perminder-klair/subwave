@@ -20,6 +20,7 @@ const CAP_PLAYLIST = 6;
 const CAP_RECENT = 4;
 const CAP_FREQUENT = 4;
 const CAP_SIMILAR_ARTIST = 4;
+const CAP_EMBEDDING_SIMILAR = 4;
 
 // TTL cache for sources that don't change between picks. Without this, every
 // pick would re-fetch playlists, recent/frequent album lists and re-walk their
@@ -72,6 +73,19 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
         count: 20,
       });
       add('similar', similar.filter(notRecent(recentIds)).slice(0, CAP_SIMILAR));
+    } catch {}
+  }
+
+  // 1b. Embedding-KNN from current track — the controller's own semantic
+  // similarity over the actual library. Catches sonic neighbours the LastFM-
+  // backed `getSimilarSongs` doesn't know about — especially valuable for
+  // regional / non-Western catalogues where LastFM coverage is thin. Returns
+  // [] when the seed has no vector yet (fresh imports before the next tagger
+  // run), so the picker silently falls through to the other sources.
+  if (currentTrack?.id) {
+    try {
+      const knn = library.tracksLikeThis(currentTrack.id, 15);
+      add('embedding-similar', knn.filter(notRecent(recentIds)).slice(0, CAP_EMBEDDING_SIMILAR));
     } catch {}
   }
 
