@@ -157,11 +157,18 @@ fi
 # Offer to chain straight into `subwave init` when running interactively.
 # Piping `curl | sh` leaves stdin attached to the curl pipe (not a TTY), so
 # Clack would crash on first prompt. The fix is the rustup-style </dev/tty
-# re-exec: we run the binary as a TTY-attached process so init's prompts
-# work. exec replaces this shell so Ctrl-C in init exits cleanly without
-# falling back through the installer. Non-interactive callers (CI, Docker
-# builds, anything without /dev/tty) skip the prompt and see the original
-# Next: hint below.
+# re-exec: we reattach this shell to the TTY first, then exec the binary —
+# doing the redirect at the shell level (rather than as a one-line redirect
+# on the exec itself) propagates the TTY status more reliably across
+# Bun-compiled binaries, where `exec subwave init </dev/tty` sometimes
+# leaves `process.stdin.isTTY` false and freezes the first prompt. The
+# binary also re-attaches /dev/tty defensively (see cli/src/tty.ts), so
+# operators on older shells / unusual layouts still recover.
+#
+# exec replaces this shell so Ctrl-C in init exits cleanly without falling
+# back through the installer. Non-interactive callers (CI, Docker builds,
+# anything without /dev/tty) skip the prompt and see the original Next:
+# hint below.
 if [ -t 1 ] && [ -r /dev/tty ]; then
   printf '\nRun `%s init` now to scaffold the install? [Y/n] ' "$BIN_NAME"
   reply=""
@@ -169,7 +176,8 @@ if [ -t 1 ] && [ -r /dev/tty ]; then
   case "${reply:-y}" in
     y|Y|yes|YES)
       echo
-      exec "$INSTALL_DIR/$BIN_NAME" init </dev/tty
+      exec </dev/tty
+      exec "$INSTALL_DIR/$BIN_NAME" init
       ;;
   esac
   echo

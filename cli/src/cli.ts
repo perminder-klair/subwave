@@ -3,6 +3,11 @@
 // given.
 //
 // Boot order matters:
+//   0. Re-attach stdin to /dev/tty if it isn't already a TTY. The
+//      `curl … | sh` installer chains into `subwave init` via
+//      `exec ... </dev/tty`, but on Bun-compiled binaries that redirect
+//      doesn't always propagate isTTY through — Clack then can't enter
+//      raw mode and the first prompt looks frozen. See cli/src/tty.ts.
 //   1. Strip `--home <path>` from argv and stash it on SUBWAVE_HOME so the
 //      lazy resolver in util.ts picks it up.
 //   2. Handle commands that DON'T need a resolved home (--version, help,
@@ -14,6 +19,7 @@ import { existsSync } from 'node:fs';
 import { consumeHomeFlag, resolveSubwaveHome } from './home.ts';
 import { getRootEnv, getLegacyControllerEnv } from './util.ts';
 import { runSetupCommand } from './commands/setup.ts';
+import { ensureTTYStdin } from './tty.ts';
 
 const HELP = `
 SUB/WAVE — operator CLI
@@ -44,6 +50,10 @@ Esc inside the menu navigates back. Ctrl-C exits.
 `.trimStart();
 
 async function main(): Promise<void> {
+  // Recover an interactive stdin before any prompt runs. No-op when stdin
+  // is already a TTY (the common case — direct `subwave …` from a shell).
+  ensureTTYStdin();
+
   // Mutates process.argv in place, removing --home/--home=<path>.
   const homeFlag = consumeHomeFlag(process.argv);
   if (homeFlag) process.env.SUBWAVE_HOME = homeFlag;
