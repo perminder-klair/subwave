@@ -20,7 +20,7 @@ import {
   type ComposeEnv,
   type ComposeFile,
 } from '../compose.ts';
-import { composeUp } from '../docker.ts';
+import { composeUp, dockerSocketPermissionDenied } from '../docker.ts';
 import { waitForHealth, checkNeedsSetup } from '../api.ts';
 import { loadConfig, saveConfig } from '../config.ts';
 import { ok, warn, err, info, muted, p, pc, pauseForEnter, header } from '../ui.ts';
@@ -71,7 +71,19 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
   console.log();
   if (code !== 0) {
     err(`docker compose exited ${code}`);
-    muted('→ `subwave logs <service>` to inspect.');
+    // Most common cause we can detect cheaply: the operator's user isn't in
+    // the `docker` group, so docker.sock returns EACCES. Without this hint
+    // they have to find it themselves (see #156, where the operator ended up
+    // `sudo su`-ing as a workaround).
+    if (dockerSocketPermissionDenied()) {
+      console.log();
+      warn(`can't talk to /var/run/docker.sock — your user isn't in the docker group`);
+      muted('  fix it once with:');
+      muted(`    ${pc.bold('sudo usermod -aG docker $USER')}`);
+      muted('  then either log out + back in, or run `newgrp docker` in this shell, then re-run `subwave start`.');
+    } else {
+      muted('→ `subwave logs <service>` to inspect.');
+    }
     await pauseForEnter();
     return;
   }
