@@ -1,57 +1,40 @@
-// Re-attach stdin to /dev/tty when it isn't already a TTY.
+// Workaround for Bun's macOS stdin bug (oven-sh/bun#13374).
 //
-// Background — the `curl … | sh` install path leaves the installer's stdin
-// attached to the curl pipe (not the operator's terminal). install.sh works
-// around that by `exec subwave init </dev/tty`, which redirects fd 0 to the
-// controlling terminal. For Node-built CLIs that's enough — the binary sees
-// `process.stdin.isTTY === true` and Clack's `setRawMode()` enables keypress
-// handling.
+// When the standalone binary is launched from a parent process whose stdin
+// is piped (rather than a TTY) — `curl … | sh → exec subwave init </dev/tty`
+// hits this exactly — Bun's `process.stdin` doesn't deliver bytes on macOS.
+// The TTY ReadStream is created correctly (isTTY=true, setRawMode is a real
+// function, ctor=ReadStream — confirmed via SUBWAVE_TTY_DEBUG=1 diagnostic),
+// `setRawMode` succeeds, but reads never produce data. Result: Clack's
+// prompt renders and then hangs forever — no typing, no Ctrl-C, no kill.
 //
-// For the **Bun-compiled standalone binary** the redirect doesn't always
-// propagate `isTTY=true` on macOS and inside some sudo/SSH layouts on Linux.
-// Clack gates `setRawMode` on `input.isTTY`, so without it:
+// We can't fix Bun's stdin layer from user code. What we CAN do is sidestep
+// it: open `/dev/tty` ourselves as a fresh `tty.ReadStream` and hand THAT
+// to Clack as the prompt's `input`. @clack/core supports an `input` option
+// on every prompt; @clack/prompts' high-level wrappers don't forward it by
+// default, so cli/scripts/patch-clack.mjs runs at build time to thread it
+// through. Our wrapper in cli/src/ui.ts then injects this stream into every
+// `p.text` / `p.password` / `p.confirm` / `p.select` call.
 //
-//   - keystrokes are line-buffered (the prompt looks frozen)
-//   - Ctrl-C never reaches the keypress handler (the process can't be killed)
-//   - backspace/arrows do nothing visible (no way to go back)
-//
-// All three symptoms hit the first prompt — `subwave init`'s "Install
-// directory" — because that's the first call to `setRawMode`.
-//
-// Fix: open /dev/tty ourselves with `fs.openSync` and wrap it in a
-// `tty.ReadStream`, then replace `process.stdin`. The resulting stream
-// reports `isTTY === true` regardless of how the parent shell handed us
-// fd 0, so Clack's raw-mode path is restored. Safe no-op when stdin is
-// already a TTY; fails closed (skips replacement, no crash) when /dev/tty
-// isn't available (CI, headless containers).
+// Safe no-op when /dev/tty isn't available (CI, headless containers): we
+// return undefined and the wrapper passes through to Clack's normal
+// `process.stdin` default. Commands that don't prompt (--version, help,
+// status) work unchanged regardless.
 
-import { openSync, closeSync } from 'node:fs';
+import { openSync } from 'node:fs';
 import { ReadStream } from 'node:tty';
 
-export function ensureTTYStdin(): void {
-  if (process.stdin.isTTY) return;
+let cached: NodeJS.ReadStream | null | undefined;
 
-  let fd: number;
-  try {
-    fd = openSync('/dev/tty', 'r');
-  } catch {
-    // No controlling terminal — likely CI or a piped non-interactive call.
-    // Commands that don't need prompts (--version, --help, status, etc.)
-    // still work; interactive prompts will fail with Clack's own error
-    // rather than appearing to hang.
-    return;
-  }
+export function getInteractiveInput(): NodeJS.ReadStream | undefined {
+  if (cached !== undefined) return cached ?? undefined;
 
   try {
-    const tty = new ReadStream(fd);
-    Object.defineProperty(process, 'stdin', {
-      value: tty,
-      configurable: true,
-      writable: false,
-    });
+    const fd = openSync('/dev/tty', 'r');
+    cached = new ReadStream(fd);
+    return cached;
   } catch {
-    // ReadStream construction failed — let prompts fail naturally on the
-    // original stdin instead of crashing here.
-    try { closeSync(fd); } catch { /* ignore */ }
+    cached = null;
+    return undefined;
   }
 }

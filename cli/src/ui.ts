@@ -5,10 +5,37 @@
 // instead of cancelling the whole process. The main menu loop catches
 // MENU_BACK and re-renders, giving the operator a snappy back-out feel.
 // Pattern lifted from locca's src/ui.ts.
+//
+// Also injects an explicit `input` stream into every interactive prompt
+// (text / password / confirm / select). On macOS, Bun's `process.stdin`
+// doesn't deliver bytes when the binary was launched from a piped parent
+// (oven-sh/bun#13374) — which is exactly the `curl|sh → exec subwave init
+// </dev/tty` path. Opening /dev/tty ourselves as a fresh ReadStream and
+// passing it as `input` sidesteps the broken pipeline. See cli/src/tty.ts
+// and cli/scripts/patch-clack.mjs.
 
-import * as p from '@clack/prompts';
+import * as clack from '@clack/prompts';
 import pc from 'picocolors';
 import readline from 'node:readline';
+import { getInteractiveInput } from './tty.ts';
+
+// Inject an explicit input stream into the four interactive prompts.
+// When no /dev/tty is available (CI, headless), `input` is undefined and
+// @clack/core falls back to its default (process.stdin). spinner/cancel/
+// isCancel and any other passthrough exports stay as-is.
+const interactiveInput = getInteractiveInput();
+function withInput<T>(opts: T): T {
+  if (!interactiveInput) return opts;
+  return { ...opts, input: interactiveInput };
+}
+
+const p: typeof clack = {
+  ...clack,
+  text: (opts) => clack.text(withInput(opts)),
+  password: (opts) => clack.password(withInput(opts)),
+  confirm: (opts) => clack.confirm(withInput(opts)),
+  select: (opts) => clack.select(withInput(opts)),
+};
 
 export { p, pc };
 
