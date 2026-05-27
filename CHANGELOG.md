@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.25](https://github.com/perminder-klair/subwave/compare/v0.1.24...v0.1.25) (2026-05-26)
+
+
+### Documentation
+
+* **readme:** humanize prose, add Features section, fix stale facts ([0b4256a](https://github.com/perminder-klair/subwave/commit/0b4256a4b27b88a98932d6c491ec8335741aa6ca))
+* **readme:** humanize prose, add Features section, fix stale facts ([afda8ff](https://github.com/perminder-klair/subwave/commit/afda8ffa816fd53a07b69f46000184bc188196c3))
+
 ## [0.1.24](https://github.com/perminder-klair/subwave/compare/v0.1.23...v0.1.24) (2026-05-25)
 
 

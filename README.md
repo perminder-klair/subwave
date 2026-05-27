@@ -1,13 +1,13 @@
 # SUB/WAVE
 
-**A personal internet radio station.** One Icecast stream, one broadcast —
-every listener hears the same thing at the same time. An AI DJ picks the
-tracks, writes the links, and reads station idents, the time, and the weather
-between songs. Listeners can request music in plain language; the DJ matches
-it, intros it, and queues it.
+**A personal internet radio station.** One Icecast stream, one broadcast.
+Every listener hears the same thing at the same time. An AI DJ picks the
+tracks and talks between them: station idents, time checks, the weather,
+a quick intro for whatever's going out next. You can ask for music in plain
+language; the DJ works out what you meant and slots it in.
 
-It is *radio*, not a playlist. There is no per-listener shuffle, no skip
-button, no "up next for you." You tune in and hear whatever is on.
+It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
+"up next for you." You tune in and hear whatever is on.
 
 ## Live demo
 
@@ -18,13 +18,13 @@ button, no "up next for you." You tune in and hear whatever is on.
 
 ## Screenshots
 
-**The listener player** — one shared broadcast, with in-app song requests.
+**The listener player.** One shared broadcast, with in-app song requests.
 
 <img src="web/public/screenshots/listen.webp" alt="Player — the listener player on /listen" width="640">
 
 <img src="web/public/screenshots/player-request-song.webp" alt="Player — request a song" width="260">
 
-**The admin console** — where the operator runs the station.
+**The admin console.** Where the operator runs the station.
 
 | | |
 |---|---|
@@ -35,20 +35,39 @@ button, no "up next for you." You tune in and hear whatever is on.
 | <img src="web/public/screenshots/admin-stats.webp" alt="Admin — Stats: LLM and TTS usage" width="100%"> | <img src="web/public/screenshots/admin-debug.webp" alt="Admin — Debug: health, logs, LLM calls" width="100%"> |
 | **Stats** — LLM and TTS usage at a glance | **Debug** — health, logs, recent LLM calls |
 
+## Features
+
+- **One shared Icecast stream.** Every listener hears the same broadcast at the same time.
+- **AI DJ that picks and talks.** Curates tracks, writes intros, and reads station idents, the time, and the weather.
+- **Plain-language requests.** "Play something more upbeat" or "anything by Radiohead" works.
+- **Your own music library.** Pulls from Navidrome over the Subsonic API. No external catalogue.
+- **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy.
+- **Four TTS engines.** Piper, Kokoro, Chatterbox (zero-shot voice cloning), and cloud (OpenAI / ElevenLabs). Pick a different engine per kind of speech.
+- **Multiple DJ personas.** Up to 10 souls in rotation, each with its own voice and writing style.
+- **Dual-codec broadcast.** MP3 192 kbps for Sonos, hardware radios, and cars; Ogg-Opus 96 kbps for modern browsers. The web player picks automatically.
+- **PWA + terminal player.** Installable on phone and desktop with lock-screen controls, plus a TUI for the command line.
+- **Scheduled shows.** A 24×7 grid; each slot has its own persona, mood, and skills.
+- **Mood-aware rotation.** Time of day, weather, and festival days bias what gets played and how the DJ talks.
+- **Hourly archives.** Every hour saved as MP3 for later replay.
+- **Crossfade + voice ducking.** Tracks blend smoothly; the music ducks under DJ speech and lifts back up.
+- **Admin console.** Live status, queue, booth log, personas, shows, skills, stats, and a debug view of recent LLM calls.
+- **MCP server.** External agents (Claude Desktop, Cursor, etc.) can request songs and drive the DJ.
+- **Self-hosted.** One `docker compose up -d` on a single Linux host. Optional Cloudflare in front for TLS.
+
 ## Why it's built this way
 
 A playlist is a list you control. Radio is a broadcast you join. SUB/WAVE
-deliberately chooses the second model:
+is the second kind:
 
-- **One shared stream.** A single Icecast mount everyone connects to. The
-  shared-moment quality is the point — it's the difference between a jukebox
-  and a station.
+- **One shared stream.** A single Icecast mount everyone connects to.
+  Everyone hears the same audio at the same instant. That's what makes it
+  a station instead of a jukebox.
 - **No skip.** Track-end is the only natural transition. The DJ — human-curated
-  personas plus an LLM — owns pacing, not the listener. (Operators *can* skip
-  via the admin API; listeners cannot.)
-- **AI as the DJ, not the catalogue.** The music is your own library (served by
-  Navidrome over the Subsonic API). The LLM curates, sequences, and talks — it
-  doesn't generate the music or replace your taste.
+  personas plus an LLM — owns the pacing, not the listener. (Operators *can*
+  skip via the admin API; listeners cannot.)
+- **AI as the DJ, not the catalogue.** The music is your own library, served
+  by Navidrome over the Subsonic API. The LLM picks what's next and talks
+  between tracks. It doesn't generate music and it doesn't replace your taste.
 - **Self-hosted and swappable.** Runs on one Linux box behind Cloudflare. The
   LLM provider is swappable at runtime (Ollama, Anthropic, OpenAI, Google,
   OpenRouter, Vercel AI Gateway) with no redeploy.
@@ -56,8 +75,8 @@ deliberately chooses the second model:
 ## Architecture
 
 Four cooperating processes. The load-bearing design fact: the **controller**
-and **Liquidsoap** talk only through files in a shared `state/` directory —
-there is no socket or RPC channel between them.
+and **Liquidsoap** talk only through files in a shared `state/` directory.
+There is no socket or RPC channel between them.
 
 ```
                                   ┌───────────────────────────┐
@@ -79,12 +98,13 @@ there is no socket or RPC channel between them.
                                   │  • queue → auto-playlist  │
                                   │  • crossfade + voice duck │
                                   │  • jingles, limiter       │
-                                  │  • encodes MP3            │
+                                  │  • encodes MP3 + Opus     │
                                   └─────────────┬─────────────┘
                                                 │ source connect
                                                 ▼
                                   ┌───────────────────────────┐
                                   │   Icecast  (:7702)        │──▶ /stream.mp3
+                                  │                           │──▶ /stream.opus
                                   └───────────────────────────┘
                                                 ▲
    Browser / PWA ◀── audio ───────────────────┘
@@ -97,8 +117,8 @@ there is no socket or RPC channel between them.
 
 | Process | What it does |
 |---|---|
-| **Controller** (`controller/`, Node/Express) | The brain. Runs the AI DJ — picks tracks, writes links/idents, matches listener requests, runs the cron scheduler, renders TTS. Exposes the HTTP API. |
-| **Broadcast** (`docker/Dockerfile.broadcast`) | One container, two processes. **Liquidsoap** (`liquidsoap/radio.liq`) is the mixing desk: request queue → auto-playlist, crossfades, ducks voice over music, mixes jingles, brick-wall limiter, encodes to MP3. **Icecast2** is the transmitter that serves the single `/stream.mp3` mount to every listener. A tiny supervisor entrypoint launches both and exits if either dies. |
+| **Controller** (`controller/`, Node/Express) | The brain. Runs the AI DJ: picks tracks, writes links/idents, matches listener requests, runs the cron scheduler, renders TTS. Exposes the HTTP API. |
+| **Broadcast** (`docker/Dockerfile.broadcast`) | One container, two processes. **Liquidsoap** (`liquidsoap/radio.liq`) is the mixing desk: request queue → auto-playlist, crossfades, ducks voice over music, mixes jingles, brick-wall limiter, encodes to MP3 (192 kbps) and Ogg-Opus (96 kbps) in parallel. **Icecast2** is the transmitter that serves both `/stream.mp3` and `/stream.opus` mounts to every listener; the web player picks Opus on browsers that support it and falls back to MP3 for Sonos, hardware radios, and older clients. A tiny supervisor entrypoint launches both and exits if either dies. |
 | **Web UI** (`web/`, Next.js 15) | The receiver. Player, marketing landing page, setup walkthrough, and an admin shell for settings/debug. PWA-installable with OS lock-screen controls. |
 
 ### File-based IPC
@@ -126,7 +146,7 @@ subwave setup                              # connect Navidrome + LLM
 
 Two Enter prompts during the installer (`Run subwave init now?`, then
 `Bring the stack up now?`) and the stack is on-air. `subwave setup`
-connects Navidrome and your LLM — or do the same in the browser at
+connects Navidrome and your LLM, or do the same in the browser at
 `http://localhost:7700/onboarding`.
 
 No clone, no Node on the host. `subwave status / logs / doctor / update`
@@ -141,13 +161,13 @@ mkdir subwave && cd subwave
 curl -O https://raw.githubusercontent.com/perminder-klair/subwave/main/docker-compose.yml
 curl -O https://raw.githubusercontent.com/perminder-klair/subwave/main/.env.example
 mv .env.example .env
-# Edit .env — set ADMIN_USER, ADMIN_PASS, SITE_URL (three vars, that's it).
+# Edit .env: set ADMIN_USER, ADMIN_PASS, SITE_URL (three vars, that's it).
 docker compose up -d
-# Then open https://your-host/onboarding — the web wizard collects Navidrome,
+# Then open https://your-host/onboarding. The web wizard collects Navidrome,
 # LLM, TTS, DJ persona, and offers to render jingles.
 ```
 
-Functionally identical — same images, same state layout, same persistence.
+Functionally identical: same images, same state layout, same persistence.
 The CLI just saves you the curl-and-edit dance and gives you `subwave logs`,
 `subwave doctor`, etc. for the rest of the lifecycle.
 
@@ -157,7 +177,7 @@ The CLI just saves you the curl-and-edit dance and gives you `subwave logs`,
 git clone https://github.com/perminder-klair/subwave.git && cd subwave
 ./scripts/setup.sh                                  # scaffolds a 3-var root .env + state/
 docker compose -f docker-compose.dev.yml up -d      # Broadcast (icecast2 + liquidsoap) + Controller
-cd web && npm install && npm run dev                # web UI on :7700 — separate, hot-reloading
+cd web && npm install && npm run dev                # web UI on :7700, separate and hot-reloading
 # Then http://localhost:7700/onboarding to finish configuration.
 ```
 
@@ -165,18 +185,18 @@ Dev compose bind-mounts `controller/src/`, `radio.liq`, and `sounds/` from the
 repo. Controller runs under `tsx watch` so `src/**` edits hot-reload inside
 the container; `radio.liq` edits just need a `docker compose -f docker-compose.dev.yml restart broadcast`.
 
-The standalone `subwave` CLI works inside the cloned repo too — `cd subwave &&
+The standalone `subwave` CLI works inside the cloned repo too. `cd subwave &&
 subwave start dev` does the right thing. The contributor convenience is `npm
 start`, which `tsx`-runs the CLI source directly so unreleased changes are
-exercised — same commands, same flags, no `npm install -g` needed.
+exercised. Same commands, same flags, no `npm install -g` needed.
 
 The same CLI doubles as the console for running the station. Run `npm start`
-for a status-aware menu; every menu action is also a one-shot subcommand —
-append it after `npm start --`:
+for a status-aware menu; every menu action is also a one-shot subcommand,
+appended after `npm start --`:
 
 ```bash
 npm start                       # interactive operator console (status-aware menu)
-npm start -- setup              # first-boot wizard — Navidrome, LLM, admin, env files
+npm start -- setup              # first-boot wizard: Navidrome, LLM, admin, env files
 npm start -- status             # compose env, services, now-playing, recent events
 npm start -- doctor             # full diagnostic sweep
 npm start -- start dev          # docker compose up -d (dev or prod)
@@ -192,8 +212,8 @@ npm start -- stop               # docker compose down (confirms first)
 ## Production deploy
 
 Single Linux host, Cloudflare terminating TLS, Caddy routing to four internal
-services. The [no-clone quickstart above](#quick-start-no-clone-required) is
-the canonical path — `curl` two files, fill in three vars, `docker compose
+services. The [no-CLI quickstart above](#quick-start-no-cli-raw-docker) is
+the canonical path: `curl` two files, fill in three vars, `docker compose
 up -d`, finish setup in the browser. See **[`DEPLOY.md`](DEPLOY.md)** for host
 prerequisites, Cloudflare setup, updates, and backup.
 
@@ -205,7 +225,7 @@ docker compose -f docker-compose.byo.yml up -d
 ```
 
 That exposes the web UI on `:7700`, the controller API on `:7701`, and the
-Icecast stream on `:7702` (all configurable). Point your proxy at those three —
+Icecast stream on `:7702` (all configurable). Point your proxy at those three.
 `docker/Caddyfile` is a working reference for the route table you need to
 replicate. Details in [`DEPLOY.md`](DEPLOY.md#bring-your-own-reverse-proxy).
 
@@ -216,28 +236,31 @@ All compose files pull `:latest` by default; pin a version with
 ## Repository layout
 
 ```
-controller/        Node.js controller — the AI DJ brain
+docker-compose.yml      Production deploy with bundled Caddy (default)
+docker-compose.byo.yml  Production deploy for hosts with their own reverse proxy
+docker-compose.dev.yml  Local dev (broadcast + controller only; web runs separately)
+controller/        Node.js controller, the AI DJ brain
   src/llm/         LLM layer (AI SDK): provider registry, prompts, tools
   src/broadcast/   queue, session, DJ agent, scheduler, jingles
   src/music/       Subsonic client, pool picker, library tagging
   src/audio/       TTS engines: Piper, Kokoro, Chatterbox, cloud
-  src/routes/      HTTP API split by surface (public, request, settings, …)
-liquidsoap/        radio.liq — the Liquidsoap mixing pipeline
+  src/routes/      HTTP API split by surface (public, request, onboarding, settings, …)
+liquidsoap/        radio.liq, the Liquidsoap mixing pipeline
 web/               Next.js 15 web UI (player, landing, admin, setup)
-tui/               Terminal player — the listener UI, in your terminal
-docker/            Two compose files (dev + prod), Caddyfile, Dockerfiles
+tui/               Terminal player, the listener UI in your terminal
+docker/            Caddyfile, Dockerfiles, icecast.xml.template, supervisor entrypoint
 scripts/           setup, jingle generation, update, health check
-mcp-subwave/       MCP server — lets an agent request songs / drive the DJ
-cli/               Operator CLI (TS, run via tsx loader — no build step)
-bin/subwave        Operator CLI entry — setup, status, doctor, lifecycle, play
+mcp-subwave/       MCP server that lets an agent request songs / drive the DJ
+cli/               Operator CLI (TS, run via tsx loader, no build step)
+bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle, play
 ```
 
 ## Notable details
 
-- **Controller code needs a rebuild, not a restart** — its source is `COPY`d at
-  image build time. `radio.liq` is bind-mounted, so a Liquidsoap restart is
-  enough after editing it.
-- **The LLM provider is swappable at runtime** from the admin UI — every model
+- **Controller code needs a rebuild, not a restart**, because its source is
+  `COPY`d at image build time. `radio.liq` is bind-mounted, so a Liquidsoap
+  restart is enough after editing it.
+- **The LLM provider is swappable at runtime** from the admin UI. Every model
   call goes through the Vercel AI SDK.
 - **There is no `/skip` for listeners.** Track-end is the only natural
   transition; operators have an admin-only skip endpoint.
@@ -248,12 +271,12 @@ bin/subwave        Operator CLI entry — setup, status, doctor, lifecycle, play
 
 ## Documentation
 
-- **[`DEPLOY.md`](DEPLOY.md)** — production deployment, updates, backup.
-- **[`CLAUDE.md`](CLAUDE.md)** — deep architecture reference and the
+- **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
+- **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
   non-obvious constraints behind each subsystem.
-- **[`CONTRIBUTING.md`](CONTRIBUTING.md)** — how to contribute.
-- **[`SECURITY.md`](SECURITY.md)** — reporting security issues.
-- **[`mcp-subwave/README.md`](mcp-subwave/README.md)** — the MCP server.
+- **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.
+- **[`SECURITY.md`](SECURITY.md):** reporting security issues.
+- **[`mcp-subwave/README.md`](mcp-subwave/README.md):** the MCP server.
 
 ## License
 

@@ -95,9 +95,25 @@ export async function saveSecrets(patch: Record<string, string>): Promise<void> 
     '# SUB/WAVE secrets — written by the first-run wizard.',
     '# Sourced by the controller on boot. Mode 0600 enforced below.',
     '',
-    ...Object.entries(current).map(([k, v]) => `${k}=${v}`),
+    ...Object.entries(current).map(([k, v]) => `${k}=${envEscape(v)}`),
     '',
   ].join('\n');
   await writeFile(PATH, body);
   await chmod(PATH, 0o600);
+}
+
+// Same shape as cli/src/util.ts:envEscape — keep them in sync. We single-quote
+// any value that isn't ASCII-alphanumeric-plus-a-few-punct so the reader's
+// "strip one pair of surrounding quotes" path takes effect. Strictly speaking
+// the controller's loader doesn't interpolate, so this is mostly cosmetic /
+// defence-in-depth here; it matters more when the same file ever gets read by
+// something that does interpolate.
+function envEscape(value: string): string {
+  if (/^[A-Za-z0-9_./:@,+\-]*$/.test(value)) return value;
+  if (value.includes("'")) {
+    throw new Error(
+      "Secret value contains a single quote; refuse to persist (no safe quoting in single-quoted .env).",
+    );
+  }
+  return `'${value}'`;
 }

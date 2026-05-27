@@ -9,6 +9,12 @@ import { randomBytes } from 'node:crypto';
 import { STATE_DIR } from './config.js';
 
 const SETTINGS_PATH = `${STATE_DIR}/settings.json`;
+// `shows` (reusable show definitions) and `schedule` (the 7×24 grid) live in
+// their own file so settings.json stays readable — a fresh schedule is 168
+// null cells. They're conceptually one feature (the show planner) and are
+// always loaded/saved together, so they share one file. On first load after
+// upgrade, load() migrates them out of settings.json into here.
+const SCHEDULE_PATH = `${STATE_DIR}/schedule.json`;
 
 // Default DJ system-prompt template. Placeholders are substituted at LLM
 // call time via renderDjPrompt(). Keep {name} mandatory — update() refuses
@@ -494,6 +500,23 @@ export async function load() {
   if (existsSync(SETTINGS_PATH)) {
     try {
       stored = JSON.parse(await readFile(SETTINGS_PATH, 'utf8'));
+    } catch {}
+  }
+
+  // shows + schedule live in schedule.json. Migration: if schedule.json
+  // exists, its contents win (and any leftover keys on settings.json are
+  // ignored, to be stripped on the next write). If it doesn't exist, fall
+  // back to whatever's on `stored` (legacy in-line copy from a pre-split
+  // install) so normalizers below can promote it forward. update() always
+  // writes settings.json without these keys, so the next save completes the
+  // migration on disk.
+  if (existsSync(SCHEDULE_PATH)) {
+    try {
+      const sched = JSON.parse(await readFile(SCHEDULE_PATH, 'utf8'));
+      if (sched && typeof sched === 'object') {
+        stored.shows = sched.shows;
+        stored.schedule = sched.schedule;
+      }
     } catch {}
   }
 
@@ -1391,7 +1414,17 @@ export async function update(patch) {
   }
 
   cache = next;
-  await writeFile(SETTINGS_PATH, JSON.stringify(next, null, 2));
+  // shows + schedule are persisted to their own file (schedule.json); strip
+  // them from the settings.json payload so legacy installs migrate forward
+  // on the first write. The in-memory `cache` keeps the full shape so
+  // resolveActiveShow / getEffectivePersona / the integrity sweep all
+  // continue to work against one merged view.
+  const { shows: _shows, schedule: _schedule, ...settingsPersist } = next;
+  await writeFile(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2));
+  await writeFile(
+    SCHEDULE_PATH,
+    JSON.stringify({ shows: next.shows, schedule: next.schedule }, null, 2),
+  );
   await writeLiquidsoapSettings(next);
   return { saved: next, requiresRestart: restart };
 }

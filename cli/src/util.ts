@@ -80,6 +80,33 @@ export function parseEnvFile(path: string): Record<string, string> {
   return out;
 }
 
+// Quote a .env value so docker compose reads it literally.
+//
+// Docker Compose's `.env` parser does variable interpolation on **both**
+// unquoted and double-quoted values — `$VAR` / `${VAR}` get expanded. Only
+// single-quoted values are taken as-is. A password like `pre$word` written
+// raw becomes a reference to a non-existent variable `$word`, mangling the
+// value silently (see #156).
+//
+// Single quotes can't themselves contain a literal single quote (the
+// compose-spec parser has no escape inside `'...'`). Rather than try to
+// double-quote-with-escapes (which can't escape `$` either), we throw on
+// embedded `'` so the caller can surface a clear validation error up-front.
+function envEscape(value: string): string {
+  // Conservative "looks safe" set — alphanumerics plus a handful of
+  // punctuation characters that have no special meaning in a .env value
+  // and don't trigger interpolation. Everything else gets quoted.
+  if (/^[A-Za-z0-9_./:@,+\-]*$/.test(value)) return value;
+  if (value.includes("'")) {
+    throw new Error(
+      "Value contains a single quote, which can't be safely written to a Docker " +
+      "Compose .env file (the parser has no escape for ' inside single quotes). " +
+      'Use a different character.',
+    );
+  }
+  return `'${value}'`;
+}
+
 // Template-aware .env writer. Preserves comments and key order from the
 // existing file (or the .env.example template, if the file doesn't exist
 // yet). Keys present in `values` but absent from the template are appended
@@ -105,11 +132,11 @@ export function writeEnvFile(
     const key = m[1] as string;
     if (!(key in values)) return line;
     seen.add(key);
-    return `${key}=${values[key]}`;
+    return `${key}=${envEscape(values[key] as string)}`;
   });
 
   for (const [k, v] of Object.entries(values)) {
-    if (!seen.has(k)) out.push(`${k}=${v}`);
+    if (!seen.has(k)) out.push(`${k}=${envEscape(v)}`);
   }
 
   // Always end with exactly one trailing newline.
@@ -232,7 +259,7 @@ export function writeSecretsEnv(patch: Record<string, string>): void {
     '# SUB/WAVE secrets — written by the install wizard.',
     '# Sourced by the controller on boot. Mode 0600 enforced below.',
     '',
-    ...Object.entries(current).map(([k, v]) => `${k}=${v}`),
+    ...Object.entries(current).map(([k, v]) => `${k}=${envEscape(v)}`),
     '',
   ].join('\n');
   mkdirSync(dirname(p), { recursive: true });
