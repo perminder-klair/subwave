@@ -134,6 +134,58 @@ export function songsByMood(mood: string | null | undefined): any[] {
   return widened;
 }
 
+// Slim shape the picker + LLM tools expect — title/artist/album/year/genre
+// plus the two tagger axes. Matches what songsByMood returns above; pulled
+// out so the new embedding-similar helpers can share the same projection.
+function slimTrack(r: db.TrackRecord) {
+  return {
+    id: r.id,
+    title: r.title,
+    artist: r.artist,
+    album: r.album,
+    year: r.year,
+    genre: r.genre,
+    moods: r.moods,
+    energy: r.energy,
+  };
+}
+
+export function songsByEnergy(energy: string | null | undefined): any[] {
+  if (!energy || !loaded) return [];
+  if (energy !== 'low' && energy !== 'medium' && energy !== 'high') return [];
+  return db.songsByEnergy(energy).map(slimTrack);
+}
+
+// KNN over the embedding space — finds tracks whose metadata + lyrics +
+// (optional) Last.fm tags embed close to the seed track's. Used by the picker's
+// embedding-similar pool source and the agent's tracksLikeThis tool.
+// Tracks without an embedding return []; callers fall back to other sources.
+export function tracksLikeThis(songId: string, k: number): any[] {
+  if (!loaded || !songId) return [];
+  const hits = db.knnById(songId, k);
+  const out: any[] = [];
+  for (const hit of hits) {
+    const t = db.getTrack(hit.id);
+    if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
+  }
+  return out;
+}
+
+// KNN against an externally-computed query vector. The lyric-search tool
+// embeds a free-text query and calls this to find tracks semantically close
+// to the query — including ones whose lyrics don't literally contain those
+// words.
+export function tracksByVector(vec: number[] | Float32Array, k: number): any[] {
+  if (!loaded) return [];
+  const hits = db.knnByVector(vec, k);
+  const out: any[] = [];
+  for (const hit of hits) {
+    const t = db.getTrack(hit.id);
+    if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
+  }
+  return out;
+}
+
 export function stats() {
   if (!loaded) {
     return { total: 0, byMood: {}, byEnergy: {}, byGenre: {}, updatedAt: null };

@@ -10,6 +10,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import * as subsonic from '../music/subsonic.js';
 import * as library from '../music/library.js';
+import * as embeddings from '../music/embeddings.js';
 
 function slim(s: any) {
   return {
@@ -121,10 +122,58 @@ export function buildPickerTools({
     }),
 
     tracksByMood: tool({
-      description: 'Songs tagged with a mood: energetic, calm, reflective, celebratory, romantic, spiritual, focus, workout, driving, cooking, rainy, sunny, night, morning, evening, festival, cultural.',
-      inputSchema: z.object({ mood: z.string() }),
-      execute: async ({ mood }) => {
-        try { await library.load(); return collect(library.songsByMood(mood)); }
+      description: 'Songs tagged with a mood: energetic, calm, reflective, celebratory, romantic, spiritual, focus, workout, driving, cooking, rainy, sunny, night, morning, evening, festival, cultural. Optionally constrain by energy level (low|medium|high).',
+      inputSchema: z.object({
+        mood: z.string(),
+        energy: z.enum(['low', 'medium', 'high']).optional()
+          .describe('Optional energy filter — narrows the result to that tempo/intensity band.'),
+      }),
+      execute: async ({ mood, energy }) => {
+        try {
+          await library.load();
+          let rows = library.songsByMood(mood);
+          if (energy) rows = rows.filter((r: any) => r.energy === energy);
+          return collect(rows);
+        }
+        catch (err) { return { error: err.message }; }
+      },
+    }),
+
+    tracksByEnergy: tool({
+      description: 'Songs tagged with a specific energy level: low (slow / mellow / ambient), medium (mid-tempo / steady), or high (uptempo / driving). Use for time-of-day or activity-based picks the mood vocab alone can\'t express — e.g. high for a workout, low for a wind-down, medium for a commute.',
+      inputSchema: z.object({ energy: z.enum(['low', 'medium', 'high']) }),
+      execute: async ({ energy }) => {
+        try { await library.load(); return collect(library.songsByEnergy(energy)); }
+        catch (err) { return { error: err.message }; }
+      },
+    }),
+
+    tracksLikeThis: tool({
+      description: 'Tracks whose mood + lyrics + metadata embed closest to a given song id — the controller\'s own semantic similarity over the actual library. Prefer this to similarSongs when "more of this vibe" matters more than "more by this artist". Pass the currently-playing song id to keep the flow going. Returns [] if the seed track has no embedding (rare — only fresh imports before the next tagger run).',
+      inputSchema: z.object({
+        songId: z.string(),
+        k: z.number().int().min(1).max(50).default(20),
+      }),
+      execute: async ({ songId, k }) => {
+        try { await library.load(); return collect(library.tracksLikeThis(songId, k)); }
+        catch (err) { return { error: err.message }; }
+      },
+    }),
+
+    searchByLyrics: tool({
+      description: 'Semantic lyric / theme search over the library. Embed the query and return tracks whose lyrics + metadata are closest to it. Use for thematic picks the mood vocab can\'t express — e.g. "songs about hometown", "tracks with hopeful lyrics", "feeling stuck". Tracks without lyrics or without embeddings simply rank low; the search still returns the best of what it has.',
+      inputSchema: z.object({
+        query: z.string().min(3),
+        k: z.number().int().min(1).max(50).default(20),
+      }),
+      execute: async ({ query, k }) => {
+        try {
+          if (!embeddings.isAvailable()) return { error: 'embeddings not configured — set settings.embedding.enabled / provider' };
+          await library.load();
+          const [vec] = await embeddings.embedTexts([query.trim()]);
+          if (!vec) return { error: 'embedding query failed' };
+          return collect(library.tracksByVector(vec, k));
+        }
         catch (err) { return { error: err.message }; }
       },
     }),

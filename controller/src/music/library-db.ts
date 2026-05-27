@@ -492,6 +492,14 @@ export function songsByMood(mood: string): TrackRecord[] {
   return rows.map(rowToTrack);
 }
 
+export function songsByEnergy(energy: EnergyValue): TrackRecord[] {
+  if (!energy) return [];
+  const rows = requireDb()
+    .prepare(`SELECT * FROM tracks WHERE energy = ?`)
+    .all(energy) as any[];
+  return rows.map(rowToTrack);
+}
+
 export function allTaggedIds(): string[] {
   return (
     requireDb()
