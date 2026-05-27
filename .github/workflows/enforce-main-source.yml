@@ -1,0 +1,27 @@
+name: Enforce main PR source
+
+# main is the release branch. The only PRs allowed into it are:
+#   - develop → main (release cuts)
+#   - release-please's automated release PR
+# Anything else is a contributor who picked the wrong base branch.
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-source-branch:
+    name: PR must come from develop
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check head branch
+        env:
+          HEAD: ${{ github.head_ref }}
+        run: |
+          if [[ "$HEAD" == "develop" ]] || [[ "$HEAD" == release-please--* ]]; then
+            echo "Source branch '$HEAD' is allowed."
+            exit 0
+          fi
+          echo "::error::PRs to main must come from 'develop' (or release-please). This PR's head is '$HEAD'."
+          echo "Open this PR against 'develop' instead — use the base-branch dropdown at the top of the PR page."
+          exit 1

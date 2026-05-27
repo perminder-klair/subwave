@@ -1,4 +1,10 @@
 <!--
+Target branch: please open this PR against `develop`, not `main`.
+
+`main` is the release branch — only `develop` (and the automated release-please
+PR) can merge into it. PRs targeting `main` from any other branch will be
+blocked by CI. Use the "base" dropdown above to switch to `develop`.
+
 Thanks for the PR! Keep this short — the description is for reviewers, not
 for the changelog (release-please builds that from your Conventional Commit
 messages, e.g. `feat: …`, `fix(ui): …`).
