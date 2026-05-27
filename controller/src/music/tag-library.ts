@@ -45,11 +45,18 @@ function parseIntFlag(args: string[], name: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function clamp01(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+}
+
 interface CliFlags {
   limit: number;
   batchSize: number;
   seedCount: number | null;
-  maxRounds: number;
+  maxRounds: number | null;
   noPropagate: boolean;
   reseed: boolean;
   reEnrich: boolean;
@@ -63,7 +70,8 @@ function parseFlags(): CliFlags {
     limit: parseIntFlag(args, '--limit') ?? Infinity,
     batchSize: Math.max(1, Math.min(50, parseIntFlag(args, '--batch') ?? 25)),
     seedCount: parseIntFlag(args, '--seeds'),
-    maxRounds: parseIntFlag(args, '--max-rounds') ?? 3,
+    // null = fall back to settings.embedding.maxActiveLearningRounds
+    maxRounds: parseIntFlag(args, '--max-rounds'),
     noPropagate: args.includes('--no-propagate'),
     reseed: args.includes('--reseed'),
     reEnrich: args.includes('--re-enrich'),
@@ -112,10 +120,24 @@ async function main() {
   // The DB upserts emit when the model changes; record the current one.
   db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim);
 
+  // Tunables from settings.embedding, CLI flags override where present.
+  const embedCfg: any = (settings.get() as any).embedding ?? {};
+  const maxRounds = flags.maxRounds ?? Math.max(0, embedCfg.maxActiveLearningRounds ?? 3);
+  const knnK = Math.max(1, embedCfg.knnNeighbours ?? 5);
+  const moodVoteThreshold = clamp01(embedCfg.moodVoteThreshold ?? 0.6);
+  const confidenceThreshold = clamp01(embedCfg.confidenceThreshold ?? 0.6);
+  const seedCountCfg =
+    typeof embedCfg.seedCount === 'number' && embedCfg.seedCount > 0
+      ? embedCfg.seedCount
+      : null;
+
   console.log(`[tag] starting. ${db.allTaggedIds().length} tracks already tagged.`);
   console.log(`[tag] LLM model: ${activeModelLabel()}`);
   console.log(`[tag] embedding model: ${embeddings.activeModelLabel()} (dim=${embeddingDim})`);
-  console.log(`[tag] batch=${flags.batchSize} maxRounds=${flags.maxRounds}`);
+  console.log(
+    `[tag] batch=${flags.batchSize} maxRounds=${maxRounds} knnK=${knnK} ` +
+      `moodVote=${moodVoteThreshold} confidence=${confidenceThreshold}`,
+  );
 
   if (flags.reseed) {
     console.log('[tag] --reseed: dropping track_vectors, re-embedding from scratch');
@@ -170,7 +192,8 @@ async function main() {
   await phaseEmbed(targetUntagged, flags.batchSize);
 
   // ---- Phase 2: SEED -----------------------------------------------------
-  const seedCount = flags.seedCount ?? autoSeedCount(walked);
+  // CLI --seeds wins, then settings.embedding.seedCount, then sqrt(N) auto.
+  const seedCount = flags.seedCount ?? seedCountCfg ?? autoSeedCount(walked);
   console.log(`[tag] seed budget: ${seedCount}`);
 
   const seedSelection = await selectSeeds({
@@ -210,9 +233,8 @@ async function main() {
   // Only operate on tracks that (a) are in this run's scope and (b) have an
   // embedding. Tracks without vectors can't have neighbours; they'd just get
   // marked uncertain and burn LLM budget in phase 4.
-  const knnK = 5;
-  const moodVoteThreshold = 0.6;
-  const confidenceThreshold = 0.6;
+  // knnK, moodVoteThreshold, confidenceThreshold all sourced from
+  // settings.embedding above.
   let propagated = 0;
   let uncertain: string[] = [];
 
@@ -250,7 +272,7 @@ async function main() {
   console.log(`[tag] phase-3 propagated ${propagated} tracks; ${uncertain.length} uncertain (in scope)`);
 
   // ---- Phase 4: ACTIVE-LEARN --------------------------------------------
-  for (let round = 1; round <= flags.maxRounds; round++) {
+  for (let round = 1; round <= maxRounds; round++) {
     if (uncertain.length === 0) break;
     console.log(`[tag] phase-4 round ${round}: LLM-tagging ${uncertain.length} uncertain`);
     const tagged = await llmTagInBatches(

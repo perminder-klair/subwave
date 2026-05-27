@@ -1,13 +1,16 @@
 // Admin-gated music-library management surface — backs /admin/library.
-// Browse + filter the tagged index (moods.json), page through untagged
-// tracks, retag a single track inline, and report coverage stats.
+// Browse + filter the tagged index (SQLite library-db), page through
+// untagged tracks, retag a single track inline (through the same bulk
+// pipeline — enrich + embed + LLM tag), and report coverage stats.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import * as library from '../music/library.js';
+import * as db from '../music/library-db.js';
 import * as coverage from '../music/library-coverage.js';
 import * as subsonic from '../music/subsonic.js';
 import * as settings from '../settings.js';
-import { tagOne, TAGGER_BATCH_SYSTEM } from '../music/tagger-core.js';
+import * as embeddings from '../music/embeddings.js';
+import { tagBatch, TAGGER_BATCH_SYSTEM } from '../music/tagger-core.js';
 import { promptVocabHash } from '../music/embeddings.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
@@ -160,10 +163,20 @@ router.get('/library/coverage', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /library/retag — inline single-track tag refresh.
+// POST /library/retag — single-track refresh through the bulk pipeline.
 // Body: { id, title?, artist?, album?, year?, genre? }
-// Metadata is taken from the body if present, otherwise we re-fetch via
-// Subsonic search. Writes the new tags into the in-memory store + moods.json.
+//
+// Goes through the same machinery as `npm run tag`:
+//   1. Resolve metadata (body wins; falls back to Subsonic search).
+//   2. Refresh enrichment (Last.fm tags + lyrics excerpt) per settings.
+//   3. Re-embed with the current model so future propagation runs use a
+//      fresh vector grounded in current metadata.
+//   4. LLM-tag via tagBatch([song]) using the same batch prompt as bulk.
+//
+// We always go to the LLM here (not propagation) — "retag" semantically
+// means "override what's there", and the operator is sitting in front of
+// the UI waiting for a fresh decision. Embedding/enrichment updates are
+// best-effort: a failure there logs and continues to the LLM step.
 // ---------------------------------------------------------------------------
 router.post('/library/retag', requireAdmin, async (req, res) => {
   const id = req.body?.id;
@@ -179,7 +192,72 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     }
     if (!song.title) return res.status(404).json({ error: 'track metadata not found' });
 
-    const { moods, energy } = await tagOne(song);
+    const embedCfg: any = (settings.get() as any).embedding ?? {};
+    const enrichCfg = embedCfg.enrichment ?? {};
+    const lastfmEnabled = enrichCfg.lastfmTags === true;
+    const lyricsEnabled = enrichCfg.lyrics !== false;
+
+    // 1. Make sure the track row exists in library-db with current metadata so
+    //    upsertTrackEnrichment / upsertTrackVector below have a row to attach to.
+    db.upsertTrackMeta(id, {
+      title: song.title,
+      artist: song.artist,
+      album: song.album,
+      year: song.year ?? null,
+      genre: song.genre ?? null,
+    });
+
+    // 2. Refresh enrichment (best-effort).
+    let lastfmTags: string[] | null = null;
+    let lyricExcerpt: string | null = null;
+    if (lastfmEnabled && song.artist) {
+      try {
+        const matches = await subsonic.searchArtists(song.artist, { artistCount: 1 });
+        const artistId = matches?.[0]?.id;
+        if (artistId) {
+          lastfmTags = await subsonic.getArtistLastfmTags(artistId, { count: 10 });
+        }
+      } catch (err: any) {
+        queue.log('warn', `/library/retag enrich(lastfm) ${id}: ${err.message}`);
+      }
+    }
+    if (lyricsEnabled) {
+      try {
+        const raw = await subsonic.getLyrics(id);
+        if (typeof raw === 'string' && raw.trim()) lyricExcerpt = raw.trim();
+      } catch (err: any) {
+        queue.log('warn', `/library/retag enrich(lyrics) ${id}: ${err.message}`);
+      }
+    }
+    if (lastfmEnabled || lyricsEnabled) {
+      db.upsertTrackEnrichment(id, {
+        lastfmTags: lastfmTags && lastfmTags.length ? lastfmTags : null,
+        lyricExcerpt,
+      });
+    }
+
+    // 3. Re-embed (best-effort — if embeddings are off or fail, fall through).
+    if (embedCfg.enabled !== false && embeddings.isAvailable()) {
+      try {
+        const text = embeddings.formatTrackText(
+          {
+            title: song.title,
+            artist: song.artist,
+            album: song.album,
+            year: song.year ?? null,
+            genre: song.genre ?? null,
+          },
+          { lastfmTags, lyricExcerpt },
+        );
+        const [vec] = await embeddings.embedTexts([text]);
+        if (vec) db.upsertTrackVector(id, vec);
+      } catch (err: any) {
+        queue.log('warn', `/library/retag embed ${id}: ${err.message}`);
+      }
+    }
+
+    // 4. LLM tag through the same batch path the bulk pipeline uses.
+    const [{ moods, energy }] = await tagBatch([song]);
     library.set(id, {
       title: song.title,
       artist: song.artist,

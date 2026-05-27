@@ -149,6 +149,13 @@ const WEBHOOK_EVENTS = [
 ];
 
 // Server-minted opaque id, e.g. mintId('p_') -> 'p_a1b2c3'.
+function clamp01(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+}
+
 function mintId(prefix) {
   return prefix + randomBytes(3).toString('hex');
 }
@@ -618,6 +625,51 @@ export async function load() {
         ? stored.search.provider
         : DEFAULTS.search.provider,
       apiKey: typeof stored.search?.apiKey === 'string' ? stored.search.apiKey : '',
+    },
+    embedding: {
+      enabled:
+        typeof stored.embedding?.enabled === 'boolean'
+          ? stored.embedding.enabled
+          : DEFAULTS.embedding.enabled,
+      provider:
+        typeof stored.embedding?.provider === 'string'
+          ? stored.embedding.provider.trim()
+          : DEFAULTS.embedding.provider,
+      model:
+        typeof stored.embedding?.model === 'string'
+          ? stored.embedding.model.trim()
+          : DEFAULTS.embedding.model,
+      seedCount:
+        Number.isFinite(stored.embedding?.seedCount) && stored.embedding.seedCount >= 0
+          ? Math.floor(stored.embedding.seedCount)
+          : DEFAULTS.embedding.seedCount,
+      knnNeighbours:
+        Number.isFinite(stored.embedding?.knnNeighbours) && stored.embedding.knnNeighbours >= 1
+          ? Math.floor(stored.embedding.knnNeighbours)
+          : DEFAULTS.embedding.knnNeighbours,
+      moodVoteThreshold:
+        Number.isFinite(stored.embedding?.moodVoteThreshold)
+          ? clamp01(stored.embedding.moodVoteThreshold)
+          : DEFAULTS.embedding.moodVoteThreshold,
+      confidenceThreshold:
+        Number.isFinite(stored.embedding?.confidenceThreshold)
+          ? clamp01(stored.embedding.confidenceThreshold)
+          : DEFAULTS.embedding.confidenceThreshold,
+      maxActiveLearningRounds:
+        Number.isFinite(stored.embedding?.maxActiveLearningRounds)
+        && stored.embedding.maxActiveLearningRounds >= 0
+          ? Math.floor(stored.embedding.maxActiveLearningRounds)
+          : DEFAULTS.embedding.maxActiveLearningRounds,
+      enrichment: {
+        lastfmTags:
+          typeof stored.embedding?.enrichment?.lastfmTags === 'boolean'
+            ? stored.embedding.enrichment.lastfmTags
+            : DEFAULTS.embedding.enrichment.lastfmTags,
+        lyrics:
+          typeof stored.embedding?.enrichment?.lyrics === 'boolean'
+            ? stored.embedding.enrichment.lyrics
+            : DEFAULTS.embedding.enrichment.lyrics,
+      },
     },
     skills: {
       enabled: Object.fromEntries(
@@ -1198,6 +1250,69 @@ export async function update(patch) {
       const v = String(sr.apiKey);
       if (v.length > 200) throw new Error('search.apiKey must be 0-200 chars');
       next.search.apiKey = v;
+    }
+  }
+  if ('embedding' in patch) {
+    const e = patch.embedding || {};
+    if (e.enabled !== undefined) next.embedding.enabled = !!e.enabled;
+    if (e.provider !== undefined) {
+      const v = String(e.provider).trim();
+      // Empty string is meaningful — it means "follow settings.llm.provider".
+      if (v && !LLM_PROVIDERS.includes(v)) {
+        throw new Error(
+          `embedding.provider must be empty or one of: ${LLM_PROVIDERS.join(', ')}`,
+        );
+      }
+      next.embedding.provider = v;
+    }
+    if (e.model !== undefined) {
+      const v = String(e.model).trim();
+      if (v.length > 100) throw new Error('embedding.model must be 0-100 chars');
+      next.embedding.model = v;
+    }
+    if (e.seedCount !== undefined) {
+      const v = parseInt(e.seedCount, 10);
+      if (!Number.isFinite(v) || v < 0 || v > 50_000) {
+        throw new Error('embedding.seedCount must be an integer 0-50000 (0 = auto)');
+      }
+      next.embedding.seedCount = v;
+    }
+    if (e.knnNeighbours !== undefined) {
+      const v = parseInt(e.knnNeighbours, 10);
+      if (!Number.isFinite(v) || v < 1 || v > 50) {
+        throw new Error('embedding.knnNeighbours must be an integer 1-50');
+      }
+      next.embedding.knnNeighbours = v;
+    }
+    if (e.moodVoteThreshold !== undefined) {
+      const v = parseFloat(e.moodVoteThreshold);
+      if (!Number.isFinite(v) || v < 0 || v > 1) {
+        throw new Error('embedding.moodVoteThreshold must be between 0 and 1');
+      }
+      next.embedding.moodVoteThreshold = v;
+    }
+    if (e.confidenceThreshold !== undefined) {
+      const v = parseFloat(e.confidenceThreshold);
+      if (!Number.isFinite(v) || v < 0 || v > 1) {
+        throw new Error('embedding.confidenceThreshold must be between 0 and 1');
+      }
+      next.embedding.confidenceThreshold = v;
+    }
+    if (e.maxActiveLearningRounds !== undefined) {
+      const v = parseInt(e.maxActiveLearningRounds, 10);
+      if (!Number.isFinite(v) || v < 0 || v > 10) {
+        throw new Error('embedding.maxActiveLearningRounds must be an integer 0-10');
+      }
+      next.embedding.maxActiveLearningRounds = v;
+    }
+    if (e.enrichment !== undefined) {
+      const en = e.enrichment || {};
+      if (en.lastfmTags !== undefined) {
+        next.embedding.enrichment.lastfmTags = !!en.lastfmTags;
+      }
+      if (en.lyrics !== undefined) {
+        next.embedding.enrichment.lyrics = !!en.lyrics;
+      }
     }
   }
   if ('skills' in patch) {
