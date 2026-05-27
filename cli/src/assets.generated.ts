@@ -356,7 +356,14 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.broadcast
-    platform: linux/amd64
+    # No \`platform:\` pin in dev. On Apple Silicon, forcing linux/amd64 routes
+    # liquidsoap through Rosetta/QEMU emulation where its clock_nanosleep
+    # syscall fails with \`Unix.Unix_error(EUNKNOWNERR 0, "", "")\` — the
+    # clock loop dies on every boot and Icecast ends up with no source.
+    # The savonet/liquidsoap:v2.2.5 base is multi-arch, so building natively
+    # (arm64 on M-series Macs, amd64 on Linux dev hosts) just works. Prod
+    # composes still pin amd64 because the GHCR-published images are amd64
+    # only for now.
     container_name: sub-wave-broadcast
     restart: unless-stopped
     ports:
