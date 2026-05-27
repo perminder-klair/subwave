@@ -26,6 +26,13 @@ export interface SelectorOpts {
   seedCount: number;
   embeddingForId?: (id: string) => Float32Array | number[] | null;
   // When omitted we skip the k-means layer (useful in tests with no embeddings).
+  // When set, every candidate id any layer surfaces is rejected if it's not in
+  // this set. Callers pass this to honour `--limit`: layers 2 (operator
+  // signals — starred/playlists/frequent) and 3 (stratified buckets) and 4
+  // (k-means residual) all pull from the full library by default, so without
+  // this gate a `--limit 10` run would still tag up to seedCount (default
+  // 200) tracks from outside the in-scope window.
+  untaggedPool?: Set<string>;
 }
 
 const MOOD_WORDS = new Set(SHOW_MOODS.map(s => s.toLowerCase()));
@@ -51,6 +58,7 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
     if (chosen.size >= budget) return false;
     if (alreadyTagged.has(id)) return false;
     if (chosen.has(id)) return false;
+    if (opts.untaggedPool && !opts.untaggedPool.has(id)) return false;
     chosen.add(id);
     layerCounts[label] = (layerCounts[label] ?? 0) + 1;
     return true;
@@ -139,8 +147,12 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
   // when phase 1 hasn't run yet, AND keeps tests not-needing-real-embeddings.
   if (chosen.size < budget) {
     const remaining = budget - chosen.size;
-    const candidatePool = db
-      .untaggedIds()
+    // When untaggedPool is set (i.e. honouring --limit), only iterate that
+    // smaller window — saves building a 6k-id array just to filter it down.
+    const basePool = opts.untaggedPool
+      ? [...opts.untaggedPool]
+      : db.untaggedIds();
+    const candidatePool = basePool
       .filter(id => !chosen.has(id) && !alreadyTagged.has(id));
     if (opts.embeddingForId) {
       const picks = kmeansSeedPicks(candidatePool, opts.embeddingForId, remaining);

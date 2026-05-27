@@ -193,11 +193,29 @@ async function main() {
 
   // ---- Phase 2: SEED -----------------------------------------------------
   // CLI --seeds wins, then settings.embedding.seedCount, then sqrt(N) auto.
-  const seedCount = flags.seedCount ?? seedCountCfg ?? autoSeedCount(walked);
-  console.log(`[tag] seed budget: ${seedCount}`);
+  // When --limit is set, also clamp to the in-scope size — a `--limit 10`
+  // run can never tag more than 10 untagged tracks even if seedCount=200.
+  const rawSeedCount = flags.seedCount ?? seedCountCfg ?? autoSeedCount(walked);
+  const limited = flags.limit !== Infinity;
+  const seedCount = limited
+    ? Math.min(rawSeedCount, targetUntagged.length)
+    : rawSeedCount;
+  if (limited && seedCount < rawSeedCount) {
+    console.log(
+      `[tag] seed budget clamped from ${rawSeedCount} to ${seedCount} by --limit`,
+    );
+  } else {
+    console.log(`[tag] seed budget: ${seedCount}`);
+  }
 
   const seedSelection = await selectSeeds({
     seedCount,
+    // Honour --limit at the seed layer too: without this, layers 2-4 of the
+    // seed selector pull starred/playlist/frequent/stratified/k-means picks
+    // from the full untagged pool, so a `--limit 10` run would still tag up
+    // to seedCount tracks from outside the window. Bulk runs (no --limit)
+    // pass undefined to keep the full library in play.
+    untaggedPool: limited ? new Set(targetUntagged) : undefined,
     embeddingForId: (id) => {
       // For k-means clustering, hand a Float32Array if we have it (we may
       // not in the very first run; that's fine — the selector falls back
