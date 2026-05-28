@@ -90,7 +90,7 @@ export default function LibraryPanel() {
   const ready = hydrated && !needsAuth;
 
   // shared state
-  const [tab, setTab] = useState<Tab>('browse');
+  const [tab, setTab] = useState<Tab>('recent');
   const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [tagger, setTagger] = useState<TaggerState | null>(null);
   const [taggerLimit, setTaggerLimit] = useState('500');
@@ -590,10 +590,10 @@ function KpiStrip({ coverage, stats }: {
 // ---------------------------------------------------------------------------
 function TabRail({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
   const items: { id: Tab; label: string; hint: string }[] = [
+    { id: 'recent', label: 'Recently added', hint: '' },
     { id: 'browse', label: 'Browse', hint: 'tagged' },
     { id: 'search', label: 'Search', hint: 'navidrome' },
     { id: 'untagged', label: 'Untagged', hint: 'needs tags' },
-    { id: 'recent', label: 'Recently added', hint: '' },
   ];
   return (
     <Card bodyClass="!p-0">
