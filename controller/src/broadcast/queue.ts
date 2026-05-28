@@ -265,15 +265,25 @@ class Queue {
   }
 
   // Push a listener request. Adds to upcoming and kicks off the Liquidsoap sender.
-  async push({ track, requestedBy = null, intent = null, introScript = null, aiPicked = false }: {
+  // `introScript` is the spoken intro/link tied to THIS track — it is NOT aired
+  // at queue time. drainToLiquidsoap renders it to a WAV ahead of time and
+  // airIntro() writes that WAV to Liquidsoap only when the track actually starts
+  // playing (see onTrackStarted), so the voice always lands over the right song.
+  // `introKind` picks both the TTS engine routing and the duck channel:
+  //   'dj-speak' → say.txt   (HEAVY duck — request intros)
+  //   'link'     → intro.txt (LIGHT duck — between-track auto-DJ links)
+  async push({ track, requestedBy = null, intent = null, introScript = null, introKind = 'dj-speak', aiPicked = false }: {
     track: any;
     requestedBy?: string | null;
     intent?: string | null;
     introScript?: string | null;
+    introKind?: string;
     aiPicked?: boolean;
   }) {
     const item = {
-      track, requestedBy, intent, introScript, aiPicked,
+      track, requestedBy, intent, introScript, introKind, aiPicked,
+      introWav: null as string | null,
+      introAired: false,
       queuedAt: new Date().toISOString(),
       sent: false,
     };
@@ -294,12 +304,13 @@ class Queue {
         const item = this.upcoming.find(i => !i.sent);
         if (!item) break;
 
-        if (item.introScript) {
+        // Render the track's intro/link WAV ahead of time but DON'T air it here
+        // — airing now would play it over whatever's currently on-air, one (or
+        // more) tracks before this one reaches the front of dj_queue (issue
+        // #189). airIntro() writes it to the voice file when the track starts.
+        if (item.introScript && !item.introWav) {
           try {
-            const wavPath = await speak(item.introScript, { kind: 'dj-speak' });
-            await writeHandoff(config.liquidsoap.sayFile, wavPath);
-            this.log('dj-speak', item.introScript);
-            await sleep(250);
+            item.introWav = await speak(item.introScript, { kind: item.introKind || 'dj-speak' });
           } catch (err: any) {
             this.log('error', `TTS failed: ${err.message}`);
           }
@@ -343,6 +354,31 @@ class Queue {
         kind === 'link' ? { text } : { text, kind });
     } catch (err: any) {
       this.log('error', `Announce failed: ${err.message}`);
+    }
+  }
+
+  // Air a queued item's track-tied intro/link. Called from onTrackStarted the
+  // moment the item's track actually starts playing, so the voice lands over
+  // the RIGHT song rather than over whatever was on-air when it was queued
+  // (issue #189). The WAV was rendered ahead of time in drainToLiquidsoap, so
+  // this just writes the path to the duck channel and mirrors the bookkeeping
+  // announce() does (djLog feeds the opener anti-repeat; session + webhook).
+  async airIntro(item: any) {
+    if (!item?.introWav || item.introAired || !existsSync(item.introWav)) return;
+    item.introAired = true;
+    const kind = item.introKind || 'dj-speak';
+    const targetFile = kind === 'link'
+      ? config.liquidsoap.introFile
+      : config.liquidsoap.sayFile;
+    try {
+      await writeHandoff(targetFile, item.introWav);
+      this.persist();
+      this.log(kind, item.introScript);
+      session.appendTurn({ role: 'segment', kind, text: item.introScript });
+      webhooks.notify(kind === 'link' ? 'dj.link' : 'dj.say',
+        kind === 'link' ? { text: item.introScript } : { text: item.introScript, kind });
+    } catch (err: any) {
+      this.log('error', `Air intro failed: ${err.message}`);
     }
   }
 
@@ -429,6 +465,12 @@ class Queue {
       this.current = { ...item, startedAt: new Date().toISOString(), source };
       this.log('playing', `${np.title} — ${np.artist}`, { requestedBy: item.requestedBy, source });
       this._autoMisses = 0;
+      // Air this track's intro/link now that it's actually on-air — deferred
+      // from queue time so the voice lands over the right song (#189). Fire-
+      // and-forget: airIntro's writeHandoff can block up to maxWaitMs and must
+      // not stall the 1.5s watcher tick. Use the live `this.current` so the
+      // introAired flag is set on the tracked object.
+      void this.airIntro(this.current);
     } else {
       // Not a tracked request → auto-playlist or jingle.
       // If we keep seeing untracked plays while `upcoming` is non-empty, those

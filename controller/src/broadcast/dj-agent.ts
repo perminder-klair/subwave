@@ -103,14 +103,19 @@ function trackFields(song) {
   };
 }
 
-async function enqueuePick(queue, song, reason, source) {
+// `link`, when present, is the between-track line to speak as this pick starts
+// playing. It's attached to the queued item so the queue airs it at the
+// transition INTO this track (queue.airIntro), not over whatever is currently
+// on-air when the pick is made — which is one track earlier (issue #189).
+async function enqueuePick(queue, song, reason, source, link: string | null = null) {
   queue.log('ai-pick', `${song.title} — ${song.artist}`, { reason, source });
   recordPick({ song, reason, source });
   await queue.push({
     track: trackFields(song),
     requestedBy: null,
     intent: reason || 'ai pick',
-    introScript: null,
+    introScript: link,
+    introKind: 'link',
     aiPicked: true,
   });
 }
@@ -139,8 +144,10 @@ async function pickViaAgent(queue, { wantLink }) {
   const song = object?.id ? extras.seen.get(object.id) : null;
   if (!song) throw new Error(`agent returned unknown id ${object?.id}`);
 
-  await enqueuePick(queue, song, object.reason, 'agent');
   const say = typeof object.say === 'string' ? object.say.trim() : '';
+  // Attach the link to the pick so it airs as the pick starts (back-announcing
+  // the track on-air now), instead of immediately over that on-air track (#189).
+  await enqueuePick(queue, song, object.reason, 'agent', (wantLink && say) ? say : null);
   session.appendTurn({
     role: 'dj', kind: 'pick',
     text: object.reason || `Selected "${song.title}".`,
@@ -149,16 +156,32 @@ async function pickViaAgent(queue, { wantLink }) {
       steps, toolCalls, say: say || null,
     },
   });
-  if (wantLink && say) await queue.announce(say, 'link');
 }
 
-async function pickViaPool(queue, ctx, { wantLink, previous, current }) {
+async function pickViaPool(queue, ctx, { wantLink, current }) {
   const result = await picker.pickViaPool(queue, ctx);
   if (!result) {
     queue.log('picker', 'pool produced no pick');
     return;
   }
-  await enqueuePick(queue, result.song, result.reason, result.source || 'pool');
+  // Build the between-track link BEFORE enqueueing so it can ride on the queued
+  // item and air when the pick starts. It back-announces the track on-air right
+  // now (`current`) and leads into the pick — because by the time it airs,
+  // `current` will have just ended and the pick will be starting (#189).
+  let link: string | null = null;
+  if (wantLink && current) {
+    try {
+      link = await dj.generateLink({
+        previous: current, current: result.song, context: ctx,
+        recap: queue.getDjRecap(),
+        recentTracks: queue.getRecentTracks(),
+        recentOpeners: queue.getRecentOpeners(),
+      });
+    } catch (err) {
+      queue.log('error', `DJ link failed: ${err.message}`);
+    }
+  }
+  await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link);
   // The reason text is concise on a successful pool pick and useful context for
   // the next turn — but on a failed pool LLM (picker.js returns the sentinel
   // 'fallback (LLM pick failed)'), recording it as the DJ's session turn primes
@@ -174,19 +197,6 @@ async function pickViaPool(queue, ctx, { wantLink, previous, current }) {
     text: sessionText,
     meta: { trackId: result.song.id, title: result.song.title, artist: result.song.artist },
   });
-  if (wantLink && previous) {
-    try {
-      const link = await dj.generateLink({
-        previous, current, context: ctx,
-        recap: queue.getDjRecap(),
-        recentTracks: queue.getRecentTracks(),
-        recentOpeners: queue.getRecentOpeners(),
-      });
-      await queue.announce(link, 'link');
-    } catch (err) {
-      queue.log('error', `DJ link failed: ${err.message}`);
-    }
-  }
 }
 
 // Called by the queue watcher when an autonomous track starts and the queue is
@@ -200,7 +210,9 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     const eventText = `Now playing "${current?.title}" by ${current?.artist}`
       + (previous ? ` (after "${previous.title}" by ${previous.artist})` : '')
       + '. Pick the track to play next.'
-      + (wantLink ? ' Also write a short link to speak over this track now.' : ' Stay silent — no link this time.');
+      + (wantLink
+          ? ` Also write a short link that airs as your pick starts: back-announce "${current?.title}" and lead into the track you pick.`
+          : ' Stay silent — no link this time.');
     session.appendTurn({ role: 'event', kind: 'pick', text: eventText });
 
     if (settings.get().llm?.pickerAgent) {
@@ -211,7 +223,7 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
         queue.log('error', `DJ agent pick failed: ${err.message} — falling back to pool`);
       }
     }
-    await pickViaPool(queue, ctx, { wantLink, previous, current });
+    await pickViaPool(queue, ctx, { wantLink, current });
   });
 }
 
@@ -247,6 +259,7 @@ export async function runRequest(queue: any, ctx: any, { requester, text: _text 
       requestedBy: requester,
       intent: 'listener request',
       introScript: intro || null,
+      introKind: 'dj-speak',
     });
     session.appendTurn({
       role: 'dj', kind: 'request',

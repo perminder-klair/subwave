@@ -175,6 +175,7 @@ async function resolveRequest(entry) {
     });
     await queue.push({
       track: pick, requestedBy: requester, intent: 'more_like_this', introScript,
+      introKind: 'dj-speak',
     });
     session.appendTurn({
       role: 'dj', kind: 'request',
@@ -368,6 +369,7 @@ async function resolveRequest(entry) {
     requestedBy: requester,
     intent: matched.intent,
     introScript,
+    introKind: 'dj-speak',
   });
   session.appendTurn({
     role: 'dj', kind: 'request',
