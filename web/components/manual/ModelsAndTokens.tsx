@@ -32,7 +32,7 @@ export default function ModelsAndTokens() {
         <h2>For small models &amp; saving tokens.</h2>
         <p>
           If you're on a modest local model, or paying per token and want the bill low,
-          these are the dials to turn down. None of them take the DJ off the air — they
+          these are the dials to turn down. None of them take the DJ off the air. They
           just make it do less work per moment.
         </p>
         <p>
@@ -61,7 +61,7 @@ export default function ModelsAndTokens() {
             <strong>Pause when empty on</strong> (Admin &rarr; LLM) — when nobody is
             listening, the DJ stops picking, talking and writing IDs entirely; the stream
             coasts on the fallback playlist and the DJ wakes up the moment someone tunes
-            in. This one is a pure saving — there's no quality cost, since there's no one
+            in. This one is a pure saving: there's no quality cost, since there's no one
             there to hear it.
           </li>
           <li>

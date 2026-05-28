@@ -18,8 +18,8 @@ export default function QuickStart() {
           <code className="bs-code-inline">init</code> and{' '}
           <code className="bs-code-inline">start</code>. By the time the
           installer finishes, Docker is up and the controller is reporting
-          on-air — <code className="bs-code-inline">setup</code> is the only
-          step left and it covers configuration, not lifecycle.
+          on-air; <code className="bs-code-inline">setup</code> is the only
+          step left, and it covers configuration, not lifecycle.
         </p>
         <div className="bs-faststart">
           <p className="bs-eyebrow">TWO COMMANDS</p>

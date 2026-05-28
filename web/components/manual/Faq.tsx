@@ -19,7 +19,7 @@ export default function Faq() {
           listener count hits zero the DJ stops doing AI work: no track-picking, no spoken
           links, no station IDs. The music keeps flowing from a fallback playlist so the
           stream never goes silent, and the DJ wakes straight back up the instant someone
-          tunes in. It exists to save tokens — and money, on a paid model — when there is
+          tunes in. It exists to save tokens, and money on a paid model, when there is
           no one there to hear the DJ anyway. See{' '}
           <Link href="/manual/llm" className="bs-link">Models &amp; Tokens</Link>.
         </p>

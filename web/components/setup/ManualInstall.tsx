@@ -123,7 +123,7 @@ $EDITOR .env`}</CodeBlock>
                 <code className="bs-code-inline">/stream.opus</code> same-origin
                 (those paths are baked into the image at build time). Without a
                 proxy routing them to the controller and Icecast, the page loads
-                but the player is dead — no metadata, no audio. Route table to
+                but the player is dead: no metadata, no audio. Route table to
                 replicate (mirrors <code className="bs-code-inline">docker/Caddyfile</code>):
               </p>
               <CodeBlock>{`/stream.mp3   →  host:7702           # disable proxy buffering for live audio

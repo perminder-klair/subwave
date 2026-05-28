@@ -15,7 +15,7 @@ export default function OperatorCli() {
         <h2>One command opens the console.</h2>
         <p>
           From a SUB/WAVE checkout, run <code className="bs-code-inline">npm start</code>. The
-          console is a menu — arrow keys to move, Enter to choose, Esc to step back, Ctrl-C to
+          console is a menu: arrow keys to move, Enter to choose, Esc to step back, Ctrl-C to
           quit.
         </p>
         <CodeBlock>{`npm start`}</CodeBlock>
@@ -31,7 +31,7 @@ export default function OperatorCli() {
         <p className="bs-eyebrow">WHAT THE MENU OFFERS</p>
         <h2>Everything you need to run the station.</h2>
         <p>
-          The menu adapts to what&rsquo;s running — when the stack is down you only see{' '}
+          The menu adapts to what&rsquo;s running. When the stack is down you only see{' '}
           <strong>start</strong>; when it&rsquo;s up, the running-stack actions take its
           place.
         </p>
@@ -78,7 +78,7 @@ export default function OperatorCli() {
         <h2>Status for a glance, doctor for a deploy.</h2>
         <p>
           <strong>status</strong> is the two-second &ldquo;is it on the air?&rdquo; check.{' '}
-          <strong>doctor</strong> is the deeper sweep — run it after a deploy, or when
+          <strong>doctor</strong> is the deeper sweep. Run it after a deploy, or when
           something looks off. It&rsquo;s the console&rsquo;s equivalent of{' '}
           <code className="bs-code-inline">scripts/health-check.sh</code>, and it ends with an
           ok / warn / fail tally plus a hint at the first thing that&rsquo;s unhappy.

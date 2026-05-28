@@ -34,7 +34,7 @@ export default function Themes() {
           <strong>Theme</strong>. Each entry is a card with a four-swatch row (paper, ink,
           accent, overlay) so you can read the palette without leaving Settings. Click a
           card and the change applies immediately for you, then propagates to every open
-          player within about thirty seconds — no controller restart, no listener reload.
+          player within about thirty seconds: no controller restart, no listener reload.
         </p>
         <p>
           Five palettes ship with the box:
@@ -95,8 +95,8 @@ export default function Themes() {
         <p className="bs-eyebrow">THE TOKEN MAP</p>
         <h2>Seven knobs, no surprises.</h2>
         <p>
-          A theme writes a fixed set of CSS variables onto <code className="bs-code-inline">&lt;html&gt;</code>{' '}
-          — any other key in your JSON is silently dropped, so a malformed theme can't
+          A theme writes a fixed set of CSS variables onto <code className="bs-code-inline">&lt;html&gt;</code>.
+          Any other key in your JSON is silently dropped, so a malformed theme can't
           inject styles or break out into other parts of the page.
         </p>
         <ul className="bs-list">
@@ -132,7 +132,7 @@ export default function Themes() {
         </p>
         <p>
           The "active id" is the per-show override if one is set and resolves, otherwise
-          the station default. Built-in ids are reserved — a user JSON that claims{' '}
+          the station default. Built-in ids are reserved. A user JSON that claims{' '}
           <code className="bs-code-inline">classic-light</code> is logged and skipped.
         </p>
       </section>

@@ -14,13 +14,13 @@ export default function GettingStarted() {
         <h2>Open the player and you're on the air.</h2>
         <p>
           The station lives at the home page, and always at{' '}
-          <Link href="/listen" className="bs-link">/listen</Link>. Open it and press play —
-          the stream connects and you hear the broadcast already in progress. There's
+          <Link href="/listen" className="bs-link">/listen</Link>. Open it and press play.
+          The stream connects and you hear the broadcast already in progress. There's
           nothing to pick first; the DJ is already mid-show.
         </p>
         <p>
           Because it's a live stream, pressing pause and playing again doesn't resume
-          where you left off — it drops you back into the broadcast as it is now, the same
+          where you left off. It drops you back into the broadcast as it is now, the same
           as everyone else listening.
         </p>
       </section>

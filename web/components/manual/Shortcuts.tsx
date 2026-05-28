@@ -93,7 +93,7 @@ export default function Shortcuts() {
           <div className="bs-eyebrow">REMEMBER</div>
           <p>
             There is no skip. <kbd className="bs-kbd">Space</kbd> tunes you in and out of
-            the broadcast — it doesn't jump the track. See{' '}
+            the broadcast. It doesn't jump the track. See{' '}
             <Link href="/manual/getting-started" className="bs-link">Getting Started</Link>{' '}
             for why the station works that way.
           </p>

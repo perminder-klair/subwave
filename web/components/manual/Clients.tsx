@@ -105,8 +105,8 @@ export default function Clients() {
           and <strong>VLC</strong> on Google Play.
         </p>
         <p>
-          Whichever device you are on, point VLC at its <em>network stream</em> option
-          &mdash; not <em>open file</em> &mdash; and give it the URL above:
+          Whichever device you are on, point VLC at its <em>network stream</em> option,
+          not <em>open file</em>, and give it the URL above:
         </p>
         <table className="bs-doc-table">
           <thead>

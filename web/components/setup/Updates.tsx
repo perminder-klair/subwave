@@ -7,7 +7,7 @@ export default function Updates() {
     <SetupPage
       eyebrow="SETUP · 05"
       title="Updates & help."
-      intro="Pulling a new version, rebuilding only what changed, and what to check when the stream goes quiet. Liquidsoap and the Controller COPY source at build time, so docker compose restart does not pick up code changes — you need up -d --build."
+      intro="Pulling a new version, rebuilding only what changed, and what to check when the stream goes quiet. Liquidsoap and the Controller COPY source at build time, so docker compose restart does not pick up code changes. You need up -d --build."
       current="/setup/updates"
     >
       <section className="bs-section">

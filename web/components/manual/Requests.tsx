@@ -30,7 +30,7 @@ export default function Requests() {
           Your request is accepted instantly, and the panel then waits for the outcome.
           Behind the desk, the AI DJ interprets what you asked for and searches the
           station's music library for the best match. If it finds one, it usually records
-          a short spoken intro — acknowledging your request by name — and queues the track
+          a short spoken intro, acknowledging your request by name, and queues the track
           to play when the current song finishes.
         </p>
         <p>
@@ -44,7 +44,7 @@ export default function Requests() {
         <p className="bs-eyebrow">IT'S STILL A BROADCAST</p>
         <h2>Your request plays for everyone.</h2>
         <p>
-          A request doesn't cut in front of the song that's already playing — there's no
+          A request doesn't cut in front of the song that's already playing. There's no
           skip. It joins the broadcast as the next natural transition, and when it airs,
           <em> every</em> listener hears it, not just you. That's the point: it's one
           shared station, and you just put something on it.

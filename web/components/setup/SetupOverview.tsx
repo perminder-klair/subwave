@@ -39,7 +39,7 @@ export default function SetupOverview() {
           <p className="bs-eyebrow">THE FAST PATH</p>
           <p>
             Already have Docker, Navidrome, and an LLM reachable? One curl, two
-            Enters, and the station is on the air — the installer chains
+            Enters, and the station is on the air. The installer chains
             straight into <code className="bs-code-inline">init</code> and{' '}
             <code className="bs-code-inline">start</code>, then{' '}
             <code className="bs-code-inline">setup</code> finishes the configuration.

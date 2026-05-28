@@ -90,7 +90,7 @@ export default function Overview() {
           second you look away. SUB/WAVE goes the other way. There is one Icecast stream,
           and everyone hears whatever is on the air <em>right now</em>. There is no
           &ldquo;for you,&rdquo; and there is no skip button. You can ask for a song, but
-          it joins the broadcast for every listener — it doesn't jump the current track.
+          it joins the broadcast for every listener. It doesn't jump the current track.
         </p>
         <p>
           Want to run your own station instead of just listening?{' '}

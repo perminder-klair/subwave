@@ -14,7 +14,7 @@ export default function AdminSettings() {
         <h2>The admin console.</h2>
         <p>
           The console lives at <code className="bs-code-inline">/admin</code>. It's gated
-          by a single sign-in — the <code className="bs-code-inline">ADMIN_USER</code> and{' '}
+          by a single sign-in: the <code className="bs-code-inline">ADMIN_USER</code> and{' '}
           <code className="bs-code-inline">ADMIN_PASS</code> set when the station was
           installed. In production those credentials are mandatory: the station won't
           start without them, because the admin surface reveals too much to leave open.

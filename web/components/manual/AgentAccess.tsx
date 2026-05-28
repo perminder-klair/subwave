@@ -31,8 +31,8 @@ export default function AgentAccess() {
             rel="noreferrer"
           >
             Model Context Protocol
-          </a>{' '}
-          — the standard way an AI agent like Claude reaches an external tool. It is the
+          </a>,{' '}
+          the standard way an AI agent like Claude reaches an external tool. It is the
           agent-facing twin of the listener request panel: where a human types into the
           browser, an agent calls a tool, and the same controller does the work.
         </p>

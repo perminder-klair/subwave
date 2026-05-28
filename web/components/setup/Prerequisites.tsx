@@ -29,7 +29,7 @@ export default function Prerequisites() {
             <strong>Navidrome — or any Subsonic-API server.</strong>
             <p>
               SUB/WAVE plays from your library, reachable from wherever the stack
-              runs. Note the URL, username, and password — the wizard asks for all
+              runs. Note the URL, username, and password. The wizard asks for all
               three.{' '}
               <a
                 href="https://www.navidrome.org/"
@@ -46,7 +46,7 @@ export default function Prerequisites() {
             <p>
               The DJ's words and track picks come from a language model. The
               homelab default is <strong>Ollama</strong> with a tool-capable model
-              (qwen3.5, qwen3.6, or gemma4 all work) — note the URL and model name.
+              (qwen3.5, qwen3.6, or gemma4 all work). Note the URL and model name.
               Prefer a hosted model? Anthropic, OpenAI, Google, OpenRouter, and
               DeepSeek are all supported; you pick the provider and supply its key
               in the admin Settings UI after install, not during setup.{' '}

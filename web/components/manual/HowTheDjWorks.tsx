@@ -51,7 +51,7 @@ export default function HowTheDjWorks() {
             <strong>Piper</strong> — a local engine, and the default. It's compact, runs
             on practically any hardware, and renders speech faster than real time. The
             voice is clear but a little synthetic. Piper is also the station's safety
-            net — see below.
+            net; see below.
           </li>
           <li>
             <strong>Kokoro</strong> — a local neural model that sounds markedly more
@@ -64,7 +64,7 @@ export default function HowTheDjWorks() {
             <strong>Chatterbox</strong> — a local model that clones a voice from a short
             reference clip, so each persona can have its own distinct sound, and voices
             paralinguistic cues like <em>[laugh]</em> and <em>[sigh]</em> as real sounds.
-            The most capable local engine and the heaviest — comfortable on a GPU, slow
+            The most capable local engine, and the heaviest: comfortable on a GPU, slow
             on CPU. Lives in the optional <code className="bs-code-inline">tts-heavy</code>{' '}
             sidecar.
           </li>
