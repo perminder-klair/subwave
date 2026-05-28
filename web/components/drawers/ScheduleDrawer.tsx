@@ -159,11 +159,21 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
 
   const hasAnyShow = data.shows.length > 0;
   if (!hasAnyShow) {
+    // Autonomous mode (no scheduled shows) is the common state for a personal
+    // station, so still surface the station time + location here — that's
+    // exactly the context an always-on autonomous station benefits from.
     return (
-      <div className="text-[13px] leading-relaxed text-muted">
-        No shows scheduled — the station is running autonomously. The DJ picks
-        tracks by the time of day, the weather, and any festival on the
-        calendar.
+      <div className="grid gap-6">
+        <StationHeader
+          now={now}
+          timezone={data.timezone ?? null}
+          location={context?.weather?.location ?? null}
+        />
+        <div className="text-[13px] leading-relaxed text-muted">
+          No shows scheduled — the station is running autonomously. The DJ picks
+          tracks by the time of day, the weather, and any festival on the
+          calendar.
+        </div>
       </div>
     );
   }

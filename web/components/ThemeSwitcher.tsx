@@ -112,7 +112,13 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
           role="menu"
           aria-label="Themes"
           className={cn(
-            'absolute z-30 mt-1 grid w-[min(280px,calc(100vw-2rem))] gap-1 border border-ink bg-bg p-2 shadow-drawer',
+            // bg-[var(--field)] (not bg-bg) lifts the panel off the page: the
+            // page background is exactly --bg, so a bg-bg panel reads as
+            // transparent — content and chrome show across it. --field is the
+            // per-theme "raised surface" nudge, so the menu stays opaque and
+            // distinct in every theme. A real drop shadow + ring seal the edge.
+            'absolute z-50 mt-1 grid w-[min(280px,calc(100vw-2rem))] gap-1 border border-ink bg-[var(--field)] p-2',
+            'shadow-[0_16px_44px_-12px_rgba(0,0,0,0.7)] ring-1 ring-black/10',
             // Anchor the popover to the trigger; pull it left so the right
             // edge lines up with the icon — keeps the panel inside the
             // viewport when the trigger sits flush with the right gutter.
