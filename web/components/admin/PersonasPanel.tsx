@@ -118,8 +118,9 @@ function clientMintId() {
   return 'p_' + [...b].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 
-// 512×512 PNG output target. The controller hard-caps at 300 KB; a center-
-// cropped 512×512 PNG from a typical phone photo lands well under that.
+// 512×512 output target. The controller hard-caps the decoded image at 300 KB
+// and the JSON body at 600 KB; a center-cropped 512×512 WebP from a typical
+// phone photo lands in the tens of KB, well under both.
 const AVATAR_TARGET_PX = 512;
 
 // DiceBear styles to roll through when the operator clicks Generate. Each
@@ -150,9 +151,9 @@ async function fetchDicebearAvatar(): Promise<string> {
   });
 }
 
-// Resize + center-crop the operator-picked image to a square PNG, returned as
-// a data URL ready for POSTing. Done entirely client-side so we never need a
-// server-side image library.
+// Resize + center-crop the operator-picked image to a square, returned as a
+// compressed (WebP, JPEG fallback) data URL ready for POSTing. Done entirely
+// client-side so we never need a server-side image library.
 async function fileToAvatarDataUrl(file: File): Promise<string> {
   if (!/^image\/(png|jpe?g|webp)$/.test(file.type)) {
     throw new Error('please pick a PNG, JPEG, or WebP image');
@@ -173,7 +174,16 @@ async function fileToAvatarDataUrl(file: File): Promise<string> {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(bitmap, sx, sy, side, side, 0, 0, AVATAR_TARGET_PX, AVATAR_TARGET_PX);
-    return canvas.toDataURL('image/png');
+    // Compressed export — an uncompressed 512×512 PNG is ~1 MB raw / ~1.33 MB
+    // base64, which blows past the controller's 600 KB JSON cap, so only tiny
+    // source images used to get through. WebP keeps a typical avatar in the
+    // tens-of-KB range and preserves transparency; JPEG is the universal
+    // fallback for the rare browser whose canvas can't emit WebP (it silently
+    // returns a data:image/png URL in that case).
+    const webp = canvas.toDataURL('image/webp', 0.85);
+    return webp.startsWith('data:image/webp')
+      ? webp
+      : canvas.toDataURL('image/jpeg', 0.85);
   } finally {
     bitmap.close?.();
   }
