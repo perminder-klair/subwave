@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.1.28](https://github.com/perminder-klair/subwave/compare/v0.1.27...v0.1.28) (2026-05-28)
+
+
+### Features
+
+* **personas:** Generate button — random DiceBear avatar in admin ([#186](https://github.com/perminder-klair/subwave/issues/186)) ([53373ca](https://github.com/perminder-klair/subwave/commit/53373ca66e1090d2aed16910cc4a1888e16bf910))
+* **web:** per-listener theme switcher in player + admin headers ([#188](https://github.com/perminder-klair/subwave/issues/188)) ([22cc7d9](https://github.com/perminder-klair/subwave/commit/22cc7d9b436a6c1f9ecc55afc8721b836b6e2098))
+* **web:** show station time and location on Schedule tab ([#187](https://github.com/perminder-klair/subwave/issues/187)) ([5a4ca33](https://github.com/perminder-klair/subwave/commit/5a4ca330e69a6f7f680a91b61221cf02b949165b))
+
+
+### Bug Fixes
+
+* **controller:** air DJ intros/links when their track starts, not one early ([#189](https://github.com/perminder-klair/subwave/issues/189)) ([#191](https://github.com/perminder-klair/subwave/issues/191)) ([63055f2](https://github.com/perminder-klair/subwave/commit/63055f200794c1deb3feadbfc0c40ee25d41001e))
+* **web:** admin UI polish — Library default tab + tagger strip, Dash & Personas layout ([#195](https://github.com/perminder-klair/subwave/issues/195)) ([bbe69c8](https://github.com/perminder-klair/subwave/commit/bbe69c8efa011548b0dc8cd2663442c27f479b7b))
+* **web:** compress persona avatar to WebP so normal images upload ([#190](https://github.com/perminder-klair/subwave/issues/190)) ([b433a1a](https://github.com/perminder-klair/subwave/commit/b433a1a94f25a5ea747bd6fc9f8e3f3f2ce84d68))
+* **web:** drop 'newsprint v3' line from admin console footer ([#196](https://github.com/perminder-klair/subwave/issues/196)) ([41159ae](https://github.com/perminder-klair/subwave/commit/41159aee2f1ec860f74173c9246e7ed44ab8ab32))
+* **web:** theme picker opacity + schedule time/location in autonomous mode ([#194](https://github.com/perminder-klair/subwave/issues/194)) ([e7fce92](https://github.com/perminder-klair/subwave/commit/e7fce9244ffa476c2879b9567dcdcff1c454bbc7))
+
 ## [0.1.27](https://github.com/perminder-klair/subwave/compare/v0.1.26...v0.1.27) (2026-05-28)
 
 
