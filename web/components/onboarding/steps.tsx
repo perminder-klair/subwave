@@ -243,7 +243,7 @@ export function TtsStep({ w }: { w: WizardController }) {
             value={w.data.tts.defaultEngine}
             onChange={e =>
               w.patch(d => ({
-                tts: { ...d.tts, defaultEngine: e.target.value as any },
+                tts: { ...d.tts, defaultEngine: e.target.value as typeof d.tts.defaultEngine },
               }))
             }
           >

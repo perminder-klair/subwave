@@ -112,7 +112,7 @@ export function useWizard() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(data.navidrome),
     });
-    const j: any = await r.json().catch(() => ({}));
+    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; serverType?: string; serverVersion?: string; error?: string };
     const result = { ok: !!j.ok, msg: j.ok ? `${j.serverType || 'Subsonic'} v${j.serverVersion || ''}` : j.error };
     patch({ navidromeTest: result });
     return result;
@@ -124,7 +124,7 @@ export function useWizard() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(data.llm),
     });
-    const j: any = await r.json().catch(() => ({}));
+    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; sample?: string; error?: string };
     const result = { ok: !!j.ok, msg: j.ok ? `responded: "${j.sample}"` : j.error };
     patch({ llmTest: result });
     return result;
@@ -177,13 +177,13 @@ export function useWizard() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const j: any = await r.json().catch(() => ({}));
+    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
     return { ok: !!j.ok, error: j.error };
   }, [auth, data]);
 
   const generateJingles = useCallback(async () => {
     const r = await auth.adminFetch('/onboarding/generate-jingles', { method: 'POST' });
-    const j: any = await r.json().catch(() => ({}));
+    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; created?: number; total?: number; error?: string };
     return { ok: !!j.ok, created: j.created, total: j.total, error: j.error };
   }, [auth]);
 

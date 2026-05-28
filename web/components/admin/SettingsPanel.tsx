@@ -972,12 +972,19 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
     return { ...base, tts: { ...base.tts, defaultEngine: engine } };
   });
 
-  const savedTts: any = data.values?.tts || {};
+  type SavedCloud = { provider?: string; voice?: string; model?: string; baseUrl?: string };
+  const savedTts: {
+    defaultEngine?: string;
+    kokoro?: { voice?: string };
+    chatterbox?: { referenceVoice?: string };
+    pocketTts?: { voice?: string };
+    cloud?: SavedCloud;
+  } = data.values?.tts || {};
   const savedEngine: string = savedTts.defaultEngine || 'piper';
   const savedKokoroVoice: string = savedTts.kokoro?.voice || '';
   const savedChatterboxVoice: string = savedTts.chatterbox?.referenceVoice || '';
   const savedPocketTtsVoice: string = savedTts.pocketTts?.voice || '';
-  const savedCloud: any = savedTts.cloud || {};
+  const savedCloud: SavedCloud = savedTts.cloud || {};
   const savedEngineLabel = ENGINE_LABELS[savedEngine] || savedEngine;
   const formEngineLabel = ENGINE_LABELS[form.tts.defaultEngine] || form.tts.defaultEngine;
 
