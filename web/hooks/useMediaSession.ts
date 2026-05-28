@@ -1,9 +1,15 @@
 'use client';
 
-import { useEffect, type RefObject } from 'react';
-import type { NowPlayingTrack } from '@/lib/types';
+import { useEffect, useMemo, useState, type RefObject } from 'react';
+import type { NowPlayingTrack, SessionTurn } from '@/lib/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+
+// How long after the last spoken turn we keep showing the DJ avatar on the
+// lock screen. Match this to typical voice-segment length plus a small tail —
+// 15 s feels right for a station ID, a link, or a weather update; longer
+// segments naturally extend it because each new turn resets the timer.
+const TALKING_LINGER_MS = 15_000;
 
 export interface UseMediaSessionParams {
   tunedIn: boolean;
@@ -11,6 +17,57 @@ export interface UseMediaSessionParams {
   audioRef: RefObject<HTMLAudioElement | null>;
   onTune?: () => void;
   onSkip?: () => void;
+  /** Booth-feed messages, most recent last. We look at the tail to decide
+   *  whether the DJ is talking right now. Optional — when omitted, the
+   *  hook never swaps in the persona avatar. */
+  boothFeed?: SessionTurn[];
+  /** Public avatar URL for the on-air persona (the `/api/persona-avatar/:id`
+   *  endpoint). When the DJ is talking and this is set, we swap it into the
+   *  MediaSession artwork; otherwise the track cover wins. */
+  personaAvatarUrl?: string | null;
+  /** Display name for the on-air host — shown as the metadata "artist" while
+   *  the DJ is talking, so the lock screen reads "Late-night ramble · Marlowe"
+   *  instead of pretending Track Artist is speaking. */
+  personaName?: string | null;
+}
+
+// Turn kinds that map to "the DJ is on the mic". Tracks and request acks fire
+// the same booth-feed channel but aren't actually voiced over the music bus,
+// so they shouldn't trigger the avatar swap.
+const VOICE_TURN_KINDS = new Set([
+  'voice',
+  'segment',
+  'link',
+  'intro',
+  'station-id',
+  'weather',
+  'hourly',
+  'say',
+]);
+
+function isVoiceTurn(turn: SessionTurn | undefined): boolean {
+  if (!turn) return false;
+  const kind = (turn.kind || '').toLowerCase();
+  if (VOICE_TURN_KINDS.has(kind)) return true;
+  const role = (turn.role || '').toLowerCase();
+  return role === 'voice' || role === 'segment';
+}
+
+function lastVoiceTurnTime(feed: SessionTurn[] | undefined): number | null {
+  if (!feed?.length) return null;
+  // Walk from the tail back — voice turns near the end are the only ones that
+  // matter for "is the DJ talking *now*".
+  for (let i = feed.length - 1; i >= 0; i--) {
+    const turn = feed[i];
+    if (!isVoiceTurn(turn)) continue;
+    const t = typeof turn?.t === 'number'
+      ? turn.t
+      : typeof turn?.t === 'string'
+        ? Date.parse(turn.t)
+        : NaN;
+    return Number.isFinite(t) ? t : null;
+  }
+  return null;
 }
 
 // Wires the browser's Media Session API to the controller's now-playing feed.
@@ -39,7 +96,31 @@ export function useMediaSession({
   audioRef,
   onTune,
   onSkip,
+  boothFeed,
+  personaAvatarUrl,
+  personaName,
 }: UseMediaSessionParams): void {
+  // `talking` is a derived bit — true for TALKING_LINGER_MS after the most
+  // recent voice turn lands in the booth feed. We hold it in state (rather
+  // than recomputing on every render) so a setTimeout can flip it back off
+  // without a feed update.
+  const [talking, setTalking] = useState(false);
+  const lastVoiceTs = useMemo(() => lastVoiceTurnTime(boothFeed), [boothFeed]);
+
+  useEffect(() => {
+    if (lastVoiceTs == null) {
+      setTalking(false);
+      return;
+    }
+    const remaining = TALKING_LINGER_MS - (Date.now() - lastVoiceTs);
+    if (remaining <= 0) {
+      setTalking(false);
+      return;
+    }
+    setTalking(true);
+    const id = window.setTimeout(() => setTalking(false), remaining);
+    return () => window.clearTimeout(id);
+  }, [lastVoiceTs]);
   // Reflect tune-in / out into the system playback state. The browser uses
   // this to render the play/pause glyph on the lock screen correctly even
   // if the <audio> readyState is still loading.
@@ -58,27 +139,46 @@ export function useMediaSession({
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
     if (!('MediaMetadata' in window)) return;
 
-    const title = nowPlaying?.title || 'SUB/WAVE';
-    const artist = nowPlaying?.artist || 'Live broadcast';
-    const album = nowPlaying?.album || 'SUB/WAVE';
     const subsonicId = nowPlaying?.subsonic_id;
+    const coverArt: MediaImage | null = subsonicId
+      ? {
+          src: `${API_URL}/cover/${encodeURIComponent(subsonicId)}`,
+          sizes: '512x512',
+          type: 'image/jpeg',
+        }
+      : null;
+    const personaArt: MediaImage | null = personaAvatarUrl
+      ? {
+          src: personaAvatarUrl,
+          sizes: '512x512',
+          type: 'image/png',
+        }
+      : null;
+    const appIcon: MediaImage = { src: '/icons/192', sizes: '192x192', type: 'image/png' };
+    const appIconLg: MediaImage = { src: '/icons/512', sizes: '512x512', type: 'image/png' };
 
-    const artwork: MediaImage[] = subsonicId
-      ? [
-          // Real cover first; the app icon trails as a fallback in case the
-          // Subsonic fetch errors or the track has no embedded art (some
-          // browsers will try the next artwork entry when one fails).
-          {
-            src: `${API_URL}/cover/${encodeURIComponent(subsonicId)}`,
-            sizes: '512x512',
-            type: 'image/jpeg',
-          },
-          { src: '/icons/192', sizes: '192x192', type: 'image/png' },
-        ]
-      : [
-          { src: '/icons/192', sizes: '192x192', type: 'image/png' },
-          { src: '/icons/512', sizes: '512x512', type: 'image/png' },
-        ];
+    // While the DJ is talking and we have an avatar, lead with the persona —
+    // the lock screen, CarPlay etc. picks the first usable entry, so the
+    // avatar wins. The cover stays in the fallback chain so the moment the
+    // DJ stops talking and the linger expires, the next metadata push reverts
+    // cleanly. Title/artist also retarget so the lock-screen text matches.
+    const useAvatar = talking && !!personaArt;
+    const title = useAvatar
+      ? (nowPlaying?.title || 'SUB/WAVE')
+      : (nowPlaying?.title || 'SUB/WAVE');
+    const artist = useAvatar
+      ? (personaName || nowPlaying?.artist || 'Live broadcast')
+      : (nowPlaying?.artist || 'Live broadcast');
+    const album = nowPlaying?.album || 'SUB/WAVE';
+
+    let artwork: MediaImage[];
+    if (useAvatar && personaArt) {
+      artwork = [personaArt, ...(coverArt ? [coverArt] : []), appIcon];
+    } else if (coverArt) {
+      artwork = [coverArt, appIcon];
+    } else {
+      artwork = [appIcon, appIconLg];
+    }
 
     navigator.mediaSession.metadata = new window.MediaMetadata({
       title,
@@ -86,7 +186,15 @@ export function useMediaSession({
       album,
       artwork,
     });
-  }, [nowPlaying?.title, nowPlaying?.artist, nowPlaying?.album, nowPlaying?.subsonic_id]);
+  }, [
+    nowPlaying?.title,
+    nowPlaying?.artist,
+    nowPlaying?.album,
+    nowPlaying?.subsonic_id,
+    talking,
+    personaAvatarUrl,
+    personaName,
+  ]);
 
   // Action handlers. These are bound once per change to the dependencies so
   // they always close over the latest tune / skip callbacks.

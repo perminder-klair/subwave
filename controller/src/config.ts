@@ -154,6 +154,9 @@ export const config = {
     lat: 52.5862,
     lng: -2.1288,
     locationName: 'Wolverhampton',
+    // 'metric' → Celsius, 'imperial' → Fahrenheit. Drives Open-Meteo's
+    // temperature_unit query param and what unit the DJ announces on air.
+    units: 'metric' as 'metric' | 'imperial',
   },
   news: {
     feedUrl: process.env.NEWS_FEED_URL || 'http://feeds.bbci.co.uk/news/rss.xml',

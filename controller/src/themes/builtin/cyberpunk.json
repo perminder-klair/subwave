@@ -1,0 +1,15 @@
+{
+  "id": "cyberpunk",
+  "name": "Cyberpunk",
+  "description": "Near-black neon — graphite base, cyan ink, hot pink accent.",
+  "mode": "dark",
+  "tokens": {
+    "--bg": "#08080d",
+    "--ink": "#a8f0ff",
+    "--muted": "#5b6a8a",
+    "--accent": "oklch(0.72 0.28 340)",
+    "--overlay": "rgba(0, 0, 0, 0.65)",
+    "--soft-border": "rgba(168, 240, 255, 0.14)",
+    "--field": "color-mix(in oklab, #08080d 86%, #a8f0ff)"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "id": "vinyl",
+  "name": "Vinyl",
+  "description": "Warm record sleeve — sepia paper, deep brown ink, mustard accent.",
+  "mode": "light",
+  "tokens": {
+    "--bg": "#efe4cf",
+    "--ink": "#2a1a10",
+    "--muted": "#8a6f55",
+    "--accent": "oklch(0.62 0.16 70)",
+    "--overlay": "rgba(42, 26, 16, 0.06)",
+    "--soft-border": "rgba(42, 26, 16, 0.12)",
+    "--field": "color-mix(in oklab, #efe4cf 90%, #2a1a10)"
+  }
+}

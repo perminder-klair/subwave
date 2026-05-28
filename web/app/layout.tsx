@@ -7,6 +7,7 @@ import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { SITE_URL } from '@/lib/site';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import MotionProvider from '@/components/MotionProvider';
+import ThemeBootstrap from '@/components/ThemeBootstrap';
 
 // Visitor tracking. The gtag.js script only loads when a Measurement ID is
 // configured, so dev and un-instrumented deploys stay analytics-free.
@@ -92,6 +93,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       </head>
       <body suppressHydrationWarning>
         <MotionProvider>
+          <ThemeBootstrap />
           <ServiceWorkerRegister />
           {children}
         </MotionProvider>

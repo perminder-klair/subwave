@@ -290,3 +290,19 @@ export function activeEmbeddingDim(): number {
 export function embeddingEnabled(): boolean {
   return embeddingCfg().enabled;
 }
+
+// Surface enough config for the tagger to (a) write a useful error message
+// and (b) auto-pull a missing model on the Ollama provider. Intentionally
+// just the fields callers need — no secrets, no live SDK clients.
+export function embeddingProviderInfo(): {
+  provider: string;
+  model: string;
+  ollamaUrl: string;
+} {
+  const cfg = embeddingCfg();
+  return {
+    provider: cfg.provider,
+    model: cfg.model || defaultEmbeddingModelFor(cfg.provider),
+    ollamaUrl: cfg.provider === 'ollama' ? ollamaBaseUrl(cfg as any) : '',
+  };
+}

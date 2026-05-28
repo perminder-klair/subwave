@@ -22,7 +22,6 @@ import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
-import ThemeToggle from './ThemeToggle';
 import OdometerNumber from '../OdometerNumber';
 import { Toaster } from '../ui/toaster';
 import { animate as motionAnimate } from 'motion/react';
@@ -254,7 +253,6 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
           <Link href="/" className="caption text-muted no-underline">
             ← player
           </Link>
-          <ThemeToggle />
           {onSignOut && (
             <button className="sign-out" onClick={onSignOut}>
               sign out
@@ -267,7 +265,6 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
           <Link href="/" className="caption text-muted no-underline">
             ← player
           </Link>
-          <ThemeToggle />
         </span>
       )}
     </header>

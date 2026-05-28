@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import { useClock } from '../../lib/hooks';
-import ThemeToggle from './ThemeToggle';
 
 const LAUNCH_DATE = new Date('2026-01-01T00:00:00Z');
 
@@ -28,7 +27,6 @@ export default function Masthead() {
           <span className="bs-masthead-issue text-[10px] tracking-[0.3em] uppercase">
             VOL. I &nbsp;·&nbsp; NO.&nbsp;{now ? issueNo(now) : '—'}
           </span>
-          <ThemeToggle />
         </div>
 
         <Link

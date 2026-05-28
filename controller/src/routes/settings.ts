@@ -15,6 +15,7 @@ import { invalidateWeatherCache } from '../context.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { tagger } from '../broadcast/tagger.js';
 import { skillCatalog } from '../skills/_agent.js';
+import { clearUserThemeCache, loadUserThemes, listThemes } from '../themes.js';
 
 export const router = express.Router();
 
@@ -43,6 +44,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         jingleRatio: s.jingleRatio,
         crossfadeDuration: s.crossfadeDuration,
         station: s.station,
+        theme: s.theme,
         weather: s.weather,
         djPrompt: s.djPrompt,
         personas: s.personas,
@@ -120,8 +122,12 @@ router.post('/settings', requireAdmin, async (req, res) => {
       config.weather.lat = result.saved.weather.lat;
       config.weather.lng = result.saved.weather.lng;
       config.weather.locationName = result.saved.weather.locationName;
+      config.weather.units = result.saved.weather.units;
       invalidateWeatherCache();
-      queue.log('scheduler', `weather location → ${result.saved.weather.locationName}`);
+      queue.log(
+        'scheduler',
+        `weather location → ${result.saved.weather.locationName} (${result.saved.weather.units})`,
+      );
     }
     if (result.requiresRestart) {
       queue.log('scheduler', `mixer settings changed — Liquidsoap restart required`);
@@ -181,4 +187,20 @@ router.post('/auto-pick', requireAdmin, express.json(), (req, res) => {
   if (typeof req.body?.on === 'boolean') queue.autoPick = req.body.on;
   queue.log('scheduler', `auto-pick ${queue.autoPick ? 'enabled' : 'disabled'}`);
   res.json({ autoPick: queue.autoPick });
+});
+
+// ---------------------------------------------------------------------------
+// POST /themes/refresh — re-scan ${STATE_DIR}/themes/. Use after dropping a
+// new JSON in there to pick it up without bouncing the controller. Returns
+// the freshly-listed registry so the admin UI can render it immediately.
+// ---------------------------------------------------------------------------
+router.post('/themes/refresh', requireAdmin, async (req, res) => {
+  try {
+    clearUserThemeCache();
+    await loadUserThemes(true);
+    const themes = await listThemes();
+    res.json({ ok: true, themes });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });

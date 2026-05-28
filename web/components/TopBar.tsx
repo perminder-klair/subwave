@@ -1,10 +1,10 @@
 'use client';
 
-import { Sun, Moon, Headphones } from 'lucide-react';
+import { Headphones } from 'lucide-react';
 import { buildTagline } from '@/lib/tagline';
 import { cn } from '@/lib/cn';
 import OdometerNumber from './OdometerNumber';
-import type { ActiveShow, ListenerCount, StationContext, ThemeMode } from '@/lib/types';
+import type { ActiveShow, ListenerCount, StationContext } from '@/lib/types';
 
 export interface TopBarProps {
   tunedIn: boolean;
@@ -13,8 +13,9 @@ export interface TopBarProps {
   djName?: string;
   activeShow: ActiveShow | null;
   listeners: ListenerCount | number | null;
-  theme: ThemeMode | 'light' | 'dark';
-  onToggleTheme?: () => void;
+  /** Optional — when provided, the show + host line becomes a button that
+   *  opens the Schedule drawer. Omitted on Landing where there's no player. */
+  onOpenSchedule?: () => void;
 }
 
 function isListenerObject(l: ListenerCount | number | null): l is ListenerCount {
@@ -28,8 +29,7 @@ export default function TopBar({
   djName,
   activeShow,
   listeners,
-  theme,
-  onToggleTheme,
+  onOpenSchedule,
 }: TopBarProps) {
   const tagline = buildTagline(context);
   // When a programmed show is on air, name it and prefer its host.
@@ -57,14 +57,36 @@ export default function TopBar({
         />
         <span className="v3-eyebrow shrink-0">{stationName?.trim() || 'SUB/WAVE'}</span>
         {showName && (
-          <span className="v3-caption min-w-0 truncate text-ink" title={showName}>
-            ▸ {showName}
-          </span>
+          onOpenSchedule ? (
+            <button
+              type="button"
+              onClick={onOpenSchedule}
+              className="v3-caption v3-focus min-w-0 cursor-pointer truncate border-0 bg-transparent p-0 text-left text-ink hover:underline"
+              title={`${showName} — open schedule`}
+            >
+              ▸ {showName}
+            </button>
+          ) : (
+            <span className="v3-caption min-w-0 truncate text-ink" title={showName}>
+              ▸ {showName}
+            </span>
+          )
         )}
         {onAirName && (
-          <span className="v3-caption truncate text-vermilion">
-            with {onAirName}
-          </span>
+          onOpenSchedule ? (
+            <button
+              type="button"
+              onClick={onOpenSchedule}
+              className="v3-caption v3-focus cursor-pointer truncate border-0 bg-transparent p-0 text-left text-vermilion hover:underline"
+              title="Open schedule"
+            >
+              with {onAirName}
+            </button>
+          ) : (
+            <span className="v3-caption truncate text-vermilion">
+              with {onAirName}
+            </span>
+          )
         )}
         {tagline && (
           <span
@@ -88,18 +110,6 @@ export default function TopBar({
             <Headphones className="h-3.5 w-3.5" aria-hidden="true" />
             <OdometerNumber value={listenerObj.current} />
           </span>
-        )}
-        {onToggleTheme && (
-          <button
-            onClick={onToggleTheme}
-            className="v3-focus inline-flex cursor-pointer items-center text-ink"
-            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
-          >
-            {theme === 'dark'
-              ? <Sun className="h-3.5 w-3.5" aria-hidden="true" />
-              : <Moon className="h-3.5 w-3.5" aria-hidden="true" />}
-          </button>
         )}
       </div>
     </div>

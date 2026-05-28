@@ -149,6 +149,15 @@ async function main() {
     process.exit(1);
   }
 
+  // Preflight — catch the common misconfigurations (model not pulled, cloud
+  // Ollama 401, server unreachable) BEFORE we walk Navidrome and burn through
+  // a 28k-track embed loop only to die on the first batch. Issue #174.
+  const probe = await embeddings.ensureReady();
+  if (probe.code !== 'ok') {
+    console.error(`[tag] embedding preflight failed (${probe.code}):\n${probe.message}`);
+    process.exit(1);
+  }
+
   const promptHash = embeddings.promptVocabHash(TAGGER_BATCH_SYSTEM);
   const modelLabel = activeModelLabel();
 

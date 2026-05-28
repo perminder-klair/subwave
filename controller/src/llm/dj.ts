@@ -139,7 +139,7 @@ export function buildContextLines(context: any, { recentTracks }: { recentTracks
   }
   if (context?.time) lines.push(`Period: ${context.time.period} (${context.time.vibe})`);
   if (context?.weather && context.weather.condition && context.weather.condition !== 'unknown') {
-    lines.push(`Weather in ${context.weather.location}: ${context.weather.condition}${context.weather.temp != null ? `, ${context.weather.temp}°C` : ''}`);
+    lines.push(`Weather in ${context.weather.location}: ${context.weather.condition}${context.weather.temp != null ? `, ${context.weather.temp}°${context.weather.tempUnit || 'C'}` : ''}`);
   }
   if (context?.festival) lines.push(`Festival: ${context.festival.name}`);
   if (context?.activeShow) {
@@ -290,8 +290,9 @@ export async function generateIntro({ track, context, requestedBy = null, reques
 
 export async function generateStationId({ recap = null, context = null, recentOpeners = null }: any = {}) {
   const djName = settings.getEffectivePersona()?.name || 'your host';
+  const stationName = settings.get().station;
   const ctxLines = buildContextLines(context);
-  ctxLines.push(`Task: ${lengthPhrase('stationId')} for SUB/WAVE with ${djName}. A little understated.`);
+  ctxLines.push(`Task: ${lengthPhrase('stationId')} for ${stationName} with ${djName}. A little understated.`);
   return djText({
     system: djSystem(),
     prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'station_id', recap, recentOpeners }),
@@ -346,7 +347,7 @@ export async function generateHourlyTime(time: any, weather: any, { recap = null
 // LLM PICKER — choose the next track from a candidate pool
 // ---------------------------------------------------------------------------
 
-// Shared selection criteria — used by both the pool picker (PICKER_SYSTEM
+// Shared selection criteria — used by both the pool picker (pickerSystem
 // below) and the conversational agent picker (pickSystem in broadcast/
 // dj-agent.js) so the two strategies can't drift apart on selection rules.
 export const PICKER_CRITERIA = `Selection criteria, in order:
@@ -355,7 +356,9 @@ export const PICKER_CRITERIA = `Selection criteria, in order:
 3. VARIETY — avoid the same artist back-to-back; don't repeat tracks you've already played today; rotate energy. Variety over cleverness — never pick a track because its title literally matches the time of day, the weather, or anything else literal.
 4. INTEREST — prefer something that creates a moment, not the most generic option.`;
 
-const PICKER_SYSTEM = `You are the DJ for SUB/WAVE, a personal internet radio station.
+function pickerSystem() {
+  const stationName = settings.get().station;
+  return `You are the DJ for ${stationName}, a personal internet radio station.
 Pick the single best NEXT track from the candidate pool, given recent plays and the current context.
 
 ${PICKER_CRITERIA}
@@ -372,6 +375,7 @@ recentPlays is context for judging flow — every candidate is already guarantee
 unplayed, so you never need to reject one for being recent.
 
 Pick exactly one candidate.`;
+}
 
 export async function pickNextTrack({ candidates, recentPlays, context }) {
   const user = JSON.stringify({
@@ -387,7 +391,7 @@ export async function pickNextTrack({ candidates, recentPlays, context }) {
   }, null, 2);
 
   return djObject({
-    system: PICKER_SYSTEM,
+    system: pickerSystem(),
     prompt: user,
     schema: z.object({
       id: z.string().describe('the exact id of one candidate'),

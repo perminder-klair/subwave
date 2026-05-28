@@ -1,0 +1,15 @@
+{
+  "id": "classic-light",
+  "name": "Classic Light",
+  "description": "Newsprint cream with hot vermilion ink — the default SUB/WAVE look.",
+  "mode": "light",
+  "tokens": {
+    "--bg": "#f3efe6",
+    "--ink": "#161412",
+    "--muted": "#7a736a",
+    "--accent": "oklch(0.62 0.22 25)",
+    "--overlay": "rgba(0, 0, 0, 0.05)",
+    "--soft-border": "rgba(0, 0, 0, 0.08)",
+    "--field": "color-mix(in oklab, #f3efe6 92%, #161412)"
+  }
+}

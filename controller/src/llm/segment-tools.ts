@@ -27,7 +27,7 @@ export function buildSegmentTools(ctx: any, state: any, caps: any[]) {
 
   if (kinds.has('weather')) {
     tools.checkWeather = tool({
-      description: 'Get the current weather and whether it has changed since the DJ last spoke about weather on air. Dull or unchanged weather is usually not worth airing.',
+      description: 'Get the current weather and whether it has changed since the DJ last spoke about weather on air. Dull or unchanged weather is usually not worth airing. The temperature is returned in the unit indicated by `tempUnit` ("C" or "F") — read it on air in that unit, do not convert.',
       inputSchema: z.object({}),
       execute: async () => {
         const w = ctx.weather;
@@ -37,6 +37,7 @@ export function buildSegmentTools(ctx: any, state: any, caps: any[]) {
           location: w.location,
           condition: w.condition,
           temp: w.temp ?? null,
+          tempUnit: w.tempUnit || 'C',
           changedSinceLastMention: w.condition !== state.lastWeatherCondition,
         };
       },

@@ -30,6 +30,11 @@ const NAME_MAX = 60;
 const TOPIC_MAX = 1000;
 const SHOWS_MAX = 64;
 
+// Radix Select rejects an empty-string item value, so the "no override"
+// choice round-trips through this sentinel. Form state still stores the
+// real empty string ('' = use station default).
+const THEME_DEFAULT_SENTINEL = '__station_default__';
+
 // Storage keys are 0=Sun..6=Sat (JS getDay); display Mon-first.
 const DAYS = [
   { key: 1, label: 'Mon' }, { key: 2, label: 'Tue' }, { key: 3, label: 'Wed' },
@@ -49,6 +54,19 @@ interface Show {
   topic: string;
   personaId: string;
   mood: string;
+  /** Optional theme override — empty string means "fall back to the station
+   *  default while this show is on air". Validated against the live theme
+   *  registry by the controller; a stale id silently falls back too. */
+  themeId: string;
+}
+
+// Slim view of a theme returned by GET /themes — only the bits the picker
+// needs. Token maps are dropped here; we don't render swatches in the
+// shows panel (the admin Settings → Theme page is the gallery).
+interface ThemeOption {
+  id: string;
+  name: string;
+  mode?: string;
 }
 
 interface Persona {
@@ -149,6 +167,9 @@ export default function ShowsPanel() {
   // Modal state: `editIndex` is null (closed), -1 (new show), or a show index.
   const [editIndex, setEditIndex] = useState<number | null>(null);
   const [draft, setDraft] = useState<Show | null>(null);
+  // Theme list for the per-show override dropdown. Public endpoint, no auth
+  // needed — same source the player ThemeBootstrap reads.
+  const [themes, setThemes] = useState<ThemeOption[]>([]);
 
   // Drag-paint stroke: { active, value } — value is the showId/null painted
   // for the whole stroke, decided on mousedown so a drag doesn't flicker.
@@ -203,6 +224,7 @@ export default function ShowsPanel() {
           topic: s.topic ?? '',
           personaId: s.personaId ?? '',
           mood: s.mood ?? '',
+          themeId: s.themeId ?? '',
         }));
         setForm({ shows, schedule: week });
         // Arm the first valid show as the brush so the grid is paintable at once.
@@ -211,6 +233,24 @@ export default function ShowsPanel() {
       }
     })();
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch the theme list once for the per-show override dropdown. Public
+  // endpoint — runs even before sign-in. Failures are silent: the picker
+  // just shows "Station default" with no override choices.
+  useEffect(() => {
+    if (!hydrated) return;
+    const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${API}/themes`);
+        if (!r.ok || cancelled) return;
+        const j = (await r.json()) as { themes?: ThemeOption[] };
+        if (Array.isArray(j.themes)) setThemes(j.themes);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [hydrated]);
 
   const personas: Persona[] = data?.values?.personas || [];
   const moods: string[] = data?.tts?.moods || [];
@@ -229,6 +269,7 @@ export default function ShowsPanel() {
     setDraft({
       id: '', name: '', topic: '',
       personaId: personas[0]?.id || '', mood: moods[0] || '',
+      themeId: '',
     });
   };
   const openEdit = (i: number) => {
@@ -236,7 +277,11 @@ export default function ShowsPanel() {
     const s = form.shows[i];
     if (!s) return;
     setEditIndex(i);
-    setDraft({ id: s.id, name: s.name, topic: s.topic, personaId: s.personaId, mood: s.mood });
+    setDraft({
+      id: s.id, name: s.name, topic: s.topic,
+      personaId: s.personaId, mood: s.mood,
+      themeId: s.themeId || '',
+    });
   };
   const closeModal = () => { setEditIndex(null); setDraft(null); };
   const setDraftField = (patch: Partial<Show>) => setDraft(d => d ? ({ ...d, ...patch }) : d);
@@ -245,6 +290,7 @@ export default function ShowsPanel() {
     const clean = {
       name: draft.name.trim(), topic: draft.topic.trim(),
       personaId: draft.personaId, mood: draft.mood,
+      themeId: draft.themeId || '',
     };
     if (editIndex === -1) {
       const id = clientMintId();
@@ -379,6 +425,7 @@ export default function ShowsPanel() {
           shows: form.shows.map(s => ({
             id: s.id, name: s.name.trim(), topic: s.topic.trim(),
             personaId: s.personaId, mood: s.mood,
+            themeId: s.themeId || '',
           })),
           schedule: form.schedule,
         }),
@@ -679,6 +726,35 @@ export default function ShowsPanel() {
                 </Select>
               </Field>
             </div>
+
+            <Field>
+              <Label>theme override — applied while this show is on air</Label>
+              <Select
+                value={draft.themeId || THEME_DEFAULT_SENTINEL}
+                onValueChange={val =>
+                  setDraftField({ themeId: val === THEME_DEFAULT_SENTINEL ? '' : val })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value={THEME_DEFAULT_SENTINEL}>Station default</SelectItem>
+                    {themes.map(t => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name}{t.mode ? ` — ${t.mode}` : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <span className="field-hint">
+                Optional. When this show goes on air the player switches to
+                this palette; back to the station default when the hour ends.
+                Manage themes in admin → Settings → Theme.
+              </span>
+            </Field>
 
             <Field>
               <Label htmlFor="show-topic">topic — fed to the DJ as the show theme</Label>

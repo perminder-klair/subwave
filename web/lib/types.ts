@@ -32,7 +32,44 @@ export interface TimeContext {
 
 export interface ActiveShow {
   name?: string;
-  persona?: { name?: string };
+  /** `id` and `avatar` are surfaced so the player can paint the on-air host
+   *  next to the now-playing card and on the lock screen. `avatar` is the
+   *  full public URL (e.g. `/api/persona-avatar/p_default0`) — the controller
+   *  serves a transparent 1×1 placeholder when no avatar is set. */
+  persona?: { id?: string; name?: string; avatar?: string };
+}
+
+/** `/dj` response used by Landing + lock-screen artwork. */
+export interface DjPublic {
+  name?: string;
+  tagline?: string;
+  soul?: string;
+  frequency?: string;
+  avatar?: string;
+  station?: string;
+  location?: string;
+}
+
+/** `/schedule` response — listener-safe view of the week. */
+export interface SchedulePersona {
+  id: string;
+  name: string;
+  avatar: string;
+}
+export interface ScheduleShow {
+  id: string;
+  name: string;
+  topic: string;
+  mood: string;
+  personaId: string;
+}
+/** 7 entries (Sun=0..Sat=6), each a 24-slot array of showId|null. */
+export type ScheduleGrid = Record<number, Array<string | null>>;
+export interface SchedulePayload {
+  personas: SchedulePersona[];
+  shows: ScheduleShow[];
+  schedule: ScheduleGrid;
+  timezone?: string | null;
 }
 
 /** Context envelope returned by `/now-playing` — driven by controller's
@@ -140,9 +177,6 @@ export interface SessionPayload {
   session: SessionInfo | null;
   messages: SessionTurn[];
 }
-
-/** Theme mode persisted in localStorage (or absent for `system`). */
-export type ThemeMode = 'system' | 'light' | 'dark';
 
 /** Cloud TTS provider option. */
 export interface CloudVoice {

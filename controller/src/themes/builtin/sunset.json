@@ -1,0 +1,15 @@
+{
+  "id": "sunset",
+  "name": "Sunset",
+  "description": "Warm dusk — plum base, peach ink, vermilion-magenta accent.",
+  "mode": "dark",
+  "tokens": {
+    "--bg": "#1a0e1f",
+    "--ink": "#fce8d4",
+    "--muted": "#a07e8a",
+    "--accent": "oklch(0.68 0.22 18)",
+    "--overlay": "rgba(40, 12, 32, 0.55)",
+    "--soft-border": "rgba(252, 232, 212, 0.12)",
+    "--field": "color-mix(in oklab, #1a0e1f 88%, #fce8d4)"
+  }
+}

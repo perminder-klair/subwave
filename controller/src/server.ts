@@ -28,6 +28,7 @@ import { router as archivesRoutes } from './routes/archives.js';
 import { router as listenersRoutes } from './routes/listeners.js';
 import { router as webhooksRoutes } from './routes/webhooks.js';
 import { router as scrobbleRoutes } from './routes/scrobble.js';
+import { router as personasRoutes } from './routes/personas.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
 import { loadSetupConfig } from './setup/config.js';
 import { getSetupStatus } from './setup/firstRun.js';
@@ -36,7 +37,10 @@ import { getSetupStatus } from './setup/firstRun.js';
 assertAdminConfigured();
 
 const app = express();
-app.use(express.json());
+// Global cap covers small JSON payloads everywhere; the persona-avatar route
+// re-applies its own (slightly larger) cap on top via per-route json middleware.
+// The default 100 KB was below the 50–300 KB data URLs the avatar picker posts.
+app.use(express.json({ limit: '600kb' }));
 app.use(cors);
 
 // Routes. `requireAdmin` is applied per-route inside the admin modules.
@@ -54,6 +58,7 @@ app.use(archivesRoutes);
 app.use(listenersRoutes);
 app.use(webhooksRoutes);
 app.use(scrobbleRoutes);
+app.use(personasRoutes);
 
 // (manual skip is not implemented in this build — Liquidsoap controls pacing)
 
@@ -99,6 +104,7 @@ app.listen(config.server.port, async () => {
     config.weather.lat = s.weather.lat;
     config.weather.lng = s.weather.lng;
     config.weather.locationName = s.weather.locationName;
+    config.weather.units = s.weather.units;
     await settings.ensureLiquidsoapSettingsFile();
     console.log(
       `[settings] loaded. jingleRatio=${s.jingleRatio} crossfadeDuration=${s.crossfadeDuration} location=${s.weather.locationName}`,

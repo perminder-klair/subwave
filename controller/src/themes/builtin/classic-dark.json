@@ -1,0 +1,15 @@
+{
+  "id": "classic-dark",
+  "name": "Classic Dark",
+  "description": "Deep charcoal newsprint with warm off-white ink and the same vermilion accent.",
+  "mode": "dark",
+  "tokens": {
+    "--bg": "#100e0c",
+    "--ink": "#ece6dc",
+    "--muted": "#c1c0bd",
+    "--accent": "oklch(0.62 0.22 25)",
+    "--overlay": "rgba(0, 0, 0, 0.55)",
+    "--soft-border": "rgba(255, 255, 255, 0.1)",
+    "--field": "color-mix(in oklab, #100e0c 92%, #ece6dc)"
+  }
+}

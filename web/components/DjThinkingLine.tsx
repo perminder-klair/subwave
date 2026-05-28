@@ -98,8 +98,9 @@ export default function DjThinkingLine({ feed, enabled, onOpenBooth }: DjThinkin
                   visible: { opacity: 1, filter: 'blur(0px)', transition: { duration: 0.12 } },
                 }}
                 aria-hidden="true"
-                // Preserve whitespace — collapsed spaces would crowd the type.
-                style={{ whiteSpace: 'pre' }}
+                // Preserve whitespace but allow soft wrapping at spaces — `pre`
+                // would suppress every wrap opportunity and overflow the column.
+                style={{ whiteSpace: 'pre-wrap' }}
               >
                 {char}
               </m.span>

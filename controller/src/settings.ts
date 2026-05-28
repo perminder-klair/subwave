@@ -3,10 +3,16 @@
 // DJ personas, shows); others require a Liquidsoap restart (jingle frequency,
 // crossfade duration).
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, unlink, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { STATE_DIR } from './config.js';
+import { DEFAULT_THEME_ID, isValidThemeId, listThemes } from './themes.js';
+
+// Where uploaded persona avatars live. One file per persona, basename =
+// `<personaId>.<ext>`. The dedicated upload route is the only writer; the
+// post-update orphan sweep below is the only place that deletes by id.
+export const PERSONA_AVATAR_DIR = `${STATE_DIR}/persona-avatars`;
 
 const SETTINGS_PATH = `${STATE_DIR}/settings.json`;
 // `shows` (reusable show definitions) and `schedule` (the 7×24 grid) live in
@@ -153,6 +159,11 @@ const POCKET_TTS_VOICE_RE = /^[a-z][a-z0-9_-]{0,39}$/;
 // valid (means "use the built-in default voice").
 const CHATTERBOX_VOICE_RE = /^[A-Za-z0-9_.-]{1,80}\.wav$/;
 const ID_RE = /^[a-z0-9_]{3,32}$/;
+// Persona avatar filename — `<personaId>.(png|jpg|jpeg|webp)`. The id segment
+// reuses ID_RE's shape so an avatar field can never reference a basename
+// outside the persona-avatars directory. Empty is also valid (no avatar set).
+export const AVATAR_FILENAME_RE = /^[a-z0-9_]{3,32}\.(png|jpe?g|webp)$/;
+export const AVATAR_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'] as const;
 // Skill slugs (e.g. 'weather', 'random-facts'). The skills registry is the
 // source of truth for which slugs exist; settings only checks the shape.
 const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
@@ -206,6 +217,7 @@ export const SEED_PERSONAS = [
     frequency: 'moderate',
     scriptLength: 'concise',
     soul: DJ_SOULS[0],
+    avatar: '',
     tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_george' },
   },
   {
@@ -215,6 +227,7 @@ export const SEED_PERSONAS = [
     frequency: 'quiet',
     scriptLength: 'concise',
     soul: DJ_SOULS[1],
+    avatar: '',
     tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_alice' },
   },
   {
@@ -224,6 +237,7 @@ export const SEED_PERSONAS = [
     frequency: 'moderate',
     scriptLength: 'concise',
     soul: DJ_SOULS[3],
+    avatar: '',
     tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_daniel' },
   },
 ];
@@ -242,12 +256,18 @@ const DEFAULTS = {
   // reclaim that headroom (issue #137). Dropping the bitrate (e.g. 128 → 64
   // mono in a future change) also helps for operators who want the tape.
   archive: { enabled: true, bitrate: 128 },
-  weather: { lat: 52.5862, lng: -2.1288, locationName: 'Wolverhampton' },
+  weather: { lat: 52.5862, lng: -2.1288, locationName: 'Wolverhampton', units: 'metric' as 'metric' | 'imperial' },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
   // placeholder and returned by GET /dj for the landing page. The product is
   // still called SUB/WAVE — this is what the operator's station running on it
   // is called (e.g. "Frequency 88", "Late Shift Radio").
   station: 'SUB/WAVE',
+  // Station-wide visual theme — every listener and the admin UI render with
+  // this palette. The id resolves through controller/src/themes.ts, which
+  // ships the built-ins and reads optional user JSONs from
+  // ${STATE_DIR}/themes/. Stored as id only; the actual token map lives with
+  // the theme registry so it stays in sync with the file on disk.
+  theme: { active: DEFAULT_THEME_ID },
   // Global DJ prompt template. '' means "use DEFAULT_DJ_PROMPT_TEMPLATE".
   djPrompt: '',
   // The persona roster. One persona is "active" at a time (activePersonaId);
@@ -461,6 +481,11 @@ function normalizePersona(raw: any) {
   const name = typeof raw.name === 'string' ? raw.name.trim().slice(0, 40) : '';
   const soul = typeof raw.soul === 'string' ? raw.soul.trim().slice(0, 400) : '';
   if (!name || !soul) return null;
+  // Avatar — stored as a bare basename. Reset to '' if the persisted value
+  // doesn't match the strict basename shape, so a hand-edited settings.json
+  // can never point /persona-avatar/:id at an arbitrary path.
+  const rawAvatar = typeof raw.avatar === 'string' ? raw.avatar.trim() : '';
+  const avatar = rawAvatar && AVATAR_FILENAME_RE.test(rawAvatar) ? rawAvatar : '';
   return {
     id: typeof raw.id === 'string' && ID_RE.test(raw.id) ? raw.id : mintId('p_'),
     name,
@@ -468,6 +493,7 @@ function normalizePersona(raw: any) {
     frequency: FREQUENCIES.includes(raw.frequency) ? raw.frequency : 'moderate',
     scriptLength: SCRIPT_LENGTHS.includes(raw.scriptLength) ? raw.scriptLength : 'concise',
     soul,
+    avatar,
     tts: normalizeTts(raw.tts),
     skills: normalizeSkills(raw.skills),
   };
@@ -501,12 +527,22 @@ function normalizeShows(raw: any, personaIds: string[]) {
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
+    // themeId is the optional per-show theme override. Lenient path: we only
+    // sanity-check the shape. A stale id (theme file deleted under our feet)
+    // is harmless — routes/public.ts falls back to the station default at
+    // serve time via getTheme()'s own fallback. Empty/missing means "no
+    // override" and is stored as an empty string for round-trip cleanliness.
+    const themeId =
+      typeof item.themeId === 'string' && item.themeId.trim()
+        ? item.themeId.trim().slice(0, 64)
+        : '';
     out.push({
       id,
       name,
       topic: typeof item.topic === 'string' ? item.topic.trim().slice(0, 1000) : '',
       personaId: item.personaId,
       mood: item.mood,
+      themeId,
     });
     if (out.length >= SHOWS_LIMIT) break;
   }
@@ -599,12 +635,26 @@ export async function load() {
       lat: stored.weather?.lat ?? DEFAULTS.weather.lat,
       lng: stored.weather?.lng ?? DEFAULTS.weather.lng,
       locationName: stored.weather?.locationName ?? DEFAULTS.weather.locationName,
+      units:
+        stored.weather?.units === 'imperial' || stored.weather?.units === 'metric'
+          ? stored.weather.units
+          : DEFAULTS.weather.units,
     },
     djPrompt,
     station:
       typeof stored.station === 'string' && stored.station.trim()
         ? stored.station.trim().slice(0, 80)
         : DEFAULTS.station,
+    theme: {
+      // We only validate the *shape* here. The active id might reference a
+      // theme file that's since been removed; the public /themes endpoint
+      // and getTheme() both fall back to the default id when that happens, so
+      // a stale id doesn't break the UI.
+      active:
+        typeof stored.theme?.active === 'string' && stored.theme.active.trim()
+          ? stored.theme.active.trim()
+          : DEFAULTS.theme.active,
+    },
     personas,
     activePersonaId,
     shows,
@@ -964,6 +1014,21 @@ function validatePersonasStrict(raw) {
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('p_');
     if (seen.has(id)) id = mintId('p_');
     seen.add(id);
+    // Avatar — optional. Absent/empty → '' (no avatar). Present must be a
+    // bare basename matching AVATAR_FILENAME_RE. The dedicated upload route
+    // is the only writer that creates the file on disk; this validator just
+    // checks the persisted string. The post-patch sweep below garbage-
+    // collects orphaned files when the persona itself is removed.
+    let avatar = '';
+    if (item.avatar !== undefined && item.avatar !== null && item.avatar !== '') {
+      const a = String(item.avatar).trim();
+      if (!AVATAR_FILENAME_RE.test(a)) {
+        throw new Error(
+          `personas[${i}].avatar must be a basename like <id>.png|jpg|jpeg|webp`,
+        );
+      }
+      avatar = a;
+    }
     return {
       id,
       name,
@@ -971,13 +1036,14 @@ function validatePersonasStrict(raw) {
       frequency: item.frequency,
       scriptLength,
       soul,
+      avatar,
       tts,
       skills,
     };
   });
 }
 
-function validateShowsStrict(raw, personas) {
+function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
   if (!Array.isArray(raw)) throw new Error('shows must be an array');
   if (raw.length > SHOWS_LIMIT) throw new Error(`shows must be at most ${SHOWS_LIMIT} entries`);
   const personaIds = personas.map(p => p.id);
@@ -994,10 +1060,21 @@ function validateShowsStrict(raw, personas) {
     if (!SHOW_MOODS.includes(item.mood)) {
       throw new Error(`shows[${i}].mood must be one of: ${SHOW_MOODS.join(', ')}`);
     }
+    // Optional per-show theme override. Empty/missing means "fall back to the
+    // station default while this show is on air". The allow-set is built once
+    // by update() so we stay sync here.
+    let themeId = '';
+    if (item.themeId !== undefined && item.themeId !== null && item.themeId !== '') {
+      const v = String(item.themeId).trim();
+      if (!allowedThemeIds.has(v)) {
+        throw new Error(`shows[${i}].themeId "${v}" is not a known theme id`);
+      }
+      themeId = v;
+    }
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood: item.mood };
+    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId };
   });
 }
 
@@ -1148,14 +1225,31 @@ export async function update(patch) {
     if (typeof w.locationName === 'string' && w.locationName.trim()) {
       next.weather.locationName = w.locationName.trim().slice(0, 80);
     }
+    if (w.units !== undefined) {
+      if (w.units !== 'metric' && w.units !== 'imperial') {
+        throw new Error("weather.units must be 'metric' or 'imperial'");
+      }
+      next.weather.units = w.units;
+    }
   }
   if ('station' in patch) {
     const v = String(patch.station ?? '').trim();
-    if (v === '') {
-      next.station = DEFAULTS.station;
-    } else {
-      if (v.length > 80) throw new Error('station name must be 80 chars or fewer');
-      next.station = v;
+    if (v.length > 80) throw new Error('station name must be 80 chars or fewer');
+    const resolved = v === '' ? DEFAULTS.station : v;
+    if (resolved !== cur.station) {
+      restart = true;
+    }
+    next.station = resolved;
+  }
+  if ('theme' in patch) {
+    const t = patch.theme || {};
+    if (t.active !== undefined) {
+      const v = String(t.active ?? '').trim();
+      if (!v) throw new Error('theme.active must be a theme id');
+      if (!(await isValidThemeId(v))) {
+        throw new Error(`theme.active "${v}" is not a known theme id`);
+      }
+      next.theme.active = v;
     }
   }
   if ('djPrompt' in patch) {
@@ -1176,7 +1270,11 @@ export async function update(patch) {
     next.personas = validatePersonasStrict(patch.personas);
   }
   if ('shows' in patch) {
-    next.shows = validateShowsStrict(patch.shows, next.personas);
+    // Snapshot the theme registry once so the validator can stay sync.
+    // listThemes() returns built-ins + cached user themes (30 s TTL) — same
+    // source the picker reads.
+    const allowedThemeIds = new Set((await listThemes()).map(t => t.id));
+    next.shows = validateShowsStrict(patch.shows, next.personas, allowedThemeIds);
   }
   if ('schedule' in patch) {
     next.schedule = validateScheduleStrict(patch.schedule, next.shows);
@@ -1485,6 +1583,25 @@ export async function update(patch) {
       }
     }
     if (!personaIds.includes(next.activePersonaId)) next.activePersonaId = personaIds[0];
+
+    // Garbage-collect avatar files for personas that no longer exist. Best
+    // effort — a missing directory or a vanished file is fine, this just
+    // keeps the on-disk state from accumulating dead images.
+    const removedIds = (cur.personas || [])
+      .map((p: any) => p.id)
+      .filter((id: string) => !personaIds.includes(id));
+    if (removedIds.length) {
+      try {
+        const entries = await readdir(PERSONA_AVATAR_DIR);
+        await Promise.all(
+          entries
+            .filter(e => removedIds.some(id => e.startsWith(`${id}.`)))
+            .map(e => unlink(`${PERSONA_AVATAR_DIR}/${e}`).catch(() => {})),
+        );
+      } catch {
+        // Directory doesn't exist yet — nothing to clean.
+      }
+    }
   }
 
   cache = next;
@@ -1530,7 +1647,13 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     name: show.name,
     topic: show.topic,
     mood: show.mood,
-    persona: persona ? { id: persona.id, name: persona.name } : null,
+    // Empty string means "fall back to the station-wide default". The route
+    // layer is responsible for resolving an empty/stale id against the live
+    // theme registry; we just surface what the show declares.
+    themeId: typeof show.themeId === 'string' ? show.themeId : '',
+    persona: persona
+      ? { id: persona.id, name: persona.name, avatar: persona.avatar || '' }
+      : null,
   };
 }
 
@@ -1592,12 +1715,14 @@ const LIQ_JINGLE_RATIO_PATH = `${STATE_DIR}/liquidsoap_jingle_ratio.txt`;
 const LIQ_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_crossfade.txt`;
 const LIQ_ARCHIVE_ENABLED_PATH = `${STATE_DIR}/liquidsoap_archive_enabled.txt`;
 const LIQ_ARCHIVE_BITRATE_PATH = `${STATE_DIR}/liquidsoap_archive_bitrate.txt`;
+const LIQ_STATION_NAME_PATH = `${STATE_DIR}/liquidsoap_station_name.txt`;
 
 export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_JINGLE_RATIO_PATH, String(s.jingleRatio));
   await writeFile(LIQ_CROSSFADE_PATH, String(s.crossfadeDuration));
   await writeFile(LIQ_ARCHIVE_ENABLED_PATH, s.archive.enabled ? 'true' : 'false');
   await writeFile(LIQ_ARCHIVE_BITRATE_PATH, String(s.archive.bitrate));
+  await writeFile(LIQ_STATION_NAME_PATH, s.station || DEFAULTS.station);
 }
 
 // Called from server.js startup so the files exist before Liquidsoap reads

@@ -14,6 +14,7 @@ export const MANUAL_PAGES: ManualPageEntry[] = [
   { href: '/manual/shortcuts', label: 'Keyboard Shortcuts' },
   { href: '/manual/dj', label: 'How the DJ Works' },
   { href: '/manual/admin', label: 'Admin & Settings' },
+  { href: '/manual/themes', label: 'Themes' },
   { href: '/manual/cli', label: 'The Operator CLI' },
   { href: '/manual/llm', label: 'Models & Tokens' },
   { href: '/manual/mcp', label: 'Agent Access' },

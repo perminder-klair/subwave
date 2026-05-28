@@ -16,6 +16,7 @@ import {
   activeEmbeddingModelLabel,
   activeEmbeddingDim,
   embeddingEnabled,
+  embeddingProviderInfo,
 } from '../llm/provider.js';
 import { SHOW_MOODS as MOOD_VOCAB } from '../settings.js';
 import crypto from 'node:crypto';
@@ -90,6 +91,172 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
     );
   }
   return embeddings as number[][];
+}
+
+// ---------------------------------------------------------------------------
+// Preflight — classify the common configuration failures BEFORE running a
+// 28,000-track embedding job so the operator gets an actionable message
+// instead of a Node stack trace. Issue #174.
+// ---------------------------------------------------------------------------
+
+export type ProbeCode =
+  | 'ok'
+  | 'disabled'
+  | 'not_found'      // Ollama 404 — model isn't pulled
+  | 'unauthorized'   // 401 — typically cloud-routed Ollama or wrong API key
+  | 'unreachable'    // connection refused / DNS / timeout
+  | 'unknown';       // anything else — message has the raw error
+
+export interface ProbeResult {
+  code: ProbeCode;
+  message: string;
+}
+
+function classifyEmbeddingError(err: any): { code: ProbeCode; raw: string } {
+  const raw = err?.message || String(err);
+  const status = err?.cause?.status_code ?? err?.statusCode ?? err?.status;
+  const txt = raw.toLowerCase();
+  if (status === 404 || txt.includes('not found') || txt.includes('try pulling')) {
+    return { code: 'not_found', raw };
+  }
+  if (status === 401 || status === 403 || txt.includes('unauthorized') || txt.includes('forbidden')) {
+    return { code: 'unauthorized', raw };
+  }
+  if (
+    err?.code === 'ECONNREFUSED' ||
+    err?.cause?.code === 'ECONNREFUSED' ||
+    err?.code === 'ENOTFOUND' ||
+    err?.cause?.code === 'ENOTFOUND' ||
+    txt.includes('fetch failed')
+  ) {
+    return { code: 'unreachable', raw };
+  }
+  return { code: 'unknown', raw };
+}
+
+function actionableMessage(code: ProbeCode, raw: string): string {
+  const { provider, model, ollamaUrl } = embeddingProviderInfo();
+  switch (code) {
+    case 'not_found':
+      if (provider === 'ollama') {
+        return (
+          `Embedding model "${model}" isn't installed in your Ollama at ${ollamaUrl}.\n` +
+          `  Fix:  ollama pull ${model}\n` +
+          `  Or pick another model in /admin/settings → Embedding (e.g. mxbai-embed-large).`
+        );
+      }
+      return (
+        `Embedding model "${model}" was not found on provider "${provider}".\n` +
+        `  Pick a different model in /admin/settings → Embedding.`
+      );
+    case 'unauthorized':
+      if (provider === 'ollama') {
+        return (
+          `Ollama at ${ollamaUrl} returned "unauthorized" for embedding model "${model}".\n` +
+          `  This usually means your Ollama is routing the request to ollama.com\n` +
+          `  (cloud), which doesn't expose embeddings the same way as chat.\n` +
+          `  Fix:  pull a LOCAL embedding model and point settings.embedding at it:\n` +
+          `        ollama pull nomic-embed-text\n` +
+          `        # then in /admin/settings → Embedding set model = nomic-embed-text`
+        );
+      }
+      return (
+        `Provider "${provider}" rejected the embedding request as unauthorized.\n` +
+        `  Check settings.embedding.apiKey (or the inherited llm.apiKey).`
+      );
+    case 'unreachable':
+      if (provider === 'ollama') {
+        return (
+          `Can't reach Ollama at ${ollamaUrl}.\n` +
+          `  Is the server running? In Docker, the controller reaches the host via\n` +
+          `  http://host.docker.internal:11434 — set settings.embedding.ollamaUrl\n` +
+          `  (or settings.llm.ollamaUrl, which embeddings inherit from) accordingly.`
+        );
+      }
+      return `Can't reach provider "${provider}" — check network / baseUrl. (${raw})`;
+    case 'unknown':
+    default:
+      return `Embedding probe failed: ${raw}`;
+  }
+}
+
+// Attempt to pull a missing Ollama model. Returns true on success. Best-effort:
+// any error from the pull is swallowed and reported via the next probe.
+async function tryOllamaPull(model: string, ollamaUrl: string): Promise<boolean> {
+  if (!model || !ollamaUrl) return false;
+  console.log(`[tag] auto-pulling Ollama embedding model "${model}" from ${ollamaUrl}...`);
+  try {
+    const res = await fetch(`${ollamaUrl.replace(/\/+$/, '')}/api/pull`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: model, stream: true }),
+    });
+    if (!res.ok || !res.body) {
+      console.error(`[tag] pull failed: HTTP ${res.status}`);
+      return false;
+    }
+    // Drain the NDJSON progress stream so the pull actually completes; only
+    // print milestone status lines to keep the log readable.
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let lastStatus = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) !== -1) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        try {
+          const evt = JSON.parse(line);
+          if (evt.error) {
+            console.error(`[tag] pull error: ${evt.error}`);
+            return false;
+          }
+          if (evt.status && evt.status !== lastStatus && !evt.status.startsWith('pulling ')) {
+            console.log(`[tag] pull: ${evt.status}`);
+            lastStatus = evt.status;
+          }
+        } catch { /* tolerate partial lines / non-JSON */ }
+      }
+    }
+    console.log(`[tag] pull complete: ${model}`);
+    return true;
+  } catch (err: any) {
+    console.error(`[tag] pull failed: ${err?.message || err}`);
+    return false;
+  }
+}
+
+async function probeOnce(): Promise<ProbeResult> {
+  try {
+    await embedTexts(['subwave embedding probe']);
+    return { code: 'ok', message: 'ok' };
+  } catch (err: any) {
+    const { code, raw } = classifyEmbeddingError(err);
+    return { code, message: actionableMessage(code, raw) };
+  }
+}
+
+// One-shot readiness check used by the tagger before phase-1. Auto-pulls a
+// missing Ollama model once and re-probes; on any other failure code, returns
+// the friendly message so the caller can print + exit.
+export async function ensureReady(): Promise<ProbeResult> {
+  if (!embeddingEnabled()) {
+    return { code: 'disabled', message: 'embeddings are disabled (settings.embedding.enabled=false)' };
+  }
+  const first = await probeOnce();
+  if (first.code === 'ok') return first;
+  if (first.code === 'not_found') {
+    const { provider, model, ollamaUrl } = embeddingProviderInfo();
+    if (provider === 'ollama' && (await tryOllamaPull(model, ollamaUrl))) {
+      return probeOnce();
+    }
+  }
+  return first;
 }
 
 // The mood vocabulary is part of the LLM tagger's prompt; including its hash

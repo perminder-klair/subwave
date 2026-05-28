@@ -851,9 +851,9 @@ function TaggerStrip(p: TaggerStripProps) {
   return (
     <div className="sticky bottom-3 z-30">
       <section className="card border-ink shadow-[0_4px_24px_rgba(0,0,0,0.18)]">
-        <div className="grid grid-cols-[1fr_auto] items-center gap-3 p-3">
+        <div className="stack-mobile grid grid-cols-[1fr_auto] items-center gap-3 p-3">
           <div className="grid gap-1.5">
-            <div className="flex items-center gap-3 text-[12px]">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
               <span className={cn('h-2 w-2 rounded-full', running ? 'animate-pulse bg-vermilion' : 'bg-muted')} />
               <span className="font-bold">
                 {p.coverage?.tagged?.toLocaleString('en-GB') || '—'}
@@ -874,7 +874,7 @@ function TaggerStrip(p: TaggerStripProps) {
               </div>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Input
               type="number"
               inputMode="numeric"

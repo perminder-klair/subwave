@@ -69,41 +69,104 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
   const playPromise = useRef<Promise<void> | null>(null);
   const gen = useRef(0);
 
+  // Refs mirror the latest values of state the stall watchdog needs to read,
+  // so its event listeners can stay registered once and still see fresh data.
+  const tunedInRef = useRef(tunedIn);
+  const streamUrlRef = useRef(streamUrl);
+  const volumeRef = useRef(volume);
+  const watchdogTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => { tunedInRef.current = tunedIn; }, [tunedIn]);
+  useEffect(() => { streamUrlRef.current = streamUrl; }, [streamUrl]);
+  useEffect(() => { volumeRef.current = volume; }, [volume]);
+
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume;
   }, [volume]);
 
-  // Pick Opus on capable browsers (Chrome, Firefox, Edge, Safari 17+) so the
-  // listener gets ~half the bandwidth at equal-or-better quality; everyone
-  // else stays on MP3. A throwaway <audio> avoids racing the consumer's ref.
-  // Skipped when the host override didn't fit the /stream.mp3 pattern — in
-  // that case we have no opus URL to offer and the override is treated as a
-  // pinned URL.
+  // Pick Opus on browsers that *definitively* decode it (Chrome, Firefox,
+  // Edge — they return 'probably' for Ogg-Opus). Safari iOS/iPadOS returns
+  // 'maybe' but its AVFoundation Opus decoder doesn't handle live Ogg over
+  // Icecast — the first crossfade hits an Ogg page-chain boundary it can't
+  // tolerate and decoding silently stops with no error event for the
+  // watchdog to catch. Two layers of defence: require 'probably' (drops
+  // Safari's optimistic 'maybe' answer), and skip the upgrade entirely on
+  // iOS-family devices (iPad on iPadOS 13+ reports the desktop Macintosh UA
+  // so we also check maxTouchPoints to identify it). Everyone falling
+  // through stays on the universal MP3 192 kbps mount.
   useEffect(() => {
     if (!OPUS_STREAM_URL) return;
+    const ua = navigator.userAgent;
+    const isIOS =
+      /iPad|iPhone|iPod/.test(ua) ||
+      (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+    if (isIOS) return;
     const tester = document.createElement('audio');
     const opusOk = tester.canPlayType('audio/ogg; codecs=opus');
-    if (opusOk === 'probably' || opusOk === 'maybe') {
+    if (opusOk === 'probably') {
       setStreamUrl(OPUS_STREAM_URL);
     }
   }, []);
 
-  // Drive `status` from the <audio> element's own events: 'playing' fires when
-  // audio is actually audible; 'waiting'/'stalled' mean a rebuffer; 'error'
-  // means the connection failed. tune()/stop() set 'connecting'/'idle' eagerly;
-  // these listeners settle it to the truth.
+  // Drive `status` from the <audio> element's own events, and reconnect the
+  // stream when the element gets stuck mid-broadcast (the symptom: a few
+  // seconds of silence around a track transition that only a page refresh
+  // recovers from, because nothing in here was forcing the dead element back
+  // onto the live mount). 'playing' clears the watchdog; 'waiting'/'stalled'
+  // arm a 5s timer that re-sets src if 'playing' hasn't fired by then;
+  // 'error' bypasses the timer and reconnects after 500 ms.
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
-    const onPlaying = () => setStatus('playing');
-    const onWaiting = () =>
+
+    const clearWatchdog = () => {
+      if (watchdogTimer.current !== null) {
+        clearTimeout(watchdogTimer.current);
+        watchdogTimer.current = null;
+      }
+    };
+
+    const reconnect = () => {
+      clearWatchdog();
+      if (!tunedInRef.current || !audioRef.current) return;
+      const audio = audioRef.current;
+      const myGen = ++gen.current;
+      audio.src = `${streamUrlRef.current}?t=${Date.now()}`;
+      audio.volume = volumeRef.current;
+      setStatus('connecting');
+      const p = audio.play();
+      playPromise.current = p;
+      Promise.resolve(p).catch((err: unknown) => {
+        const name = err && typeof err === 'object' && 'name' in err ? (err as { name?: string }).name : undefined;
+        if (gen.current === myGen && name !== 'AbortError') {
+          console.error('Reconnect failed:', err);
+        }
+      });
+    };
+
+    const armWatchdog = (delay: number) => {
+      if (!tunedInRef.current) return;
+      clearWatchdog();
+      watchdogTimer.current = setTimeout(reconnect, delay);
+    };
+
+    const onPlaying = () => {
+      clearWatchdog();
+      setStatus('playing');
+    };
+    const onWaiting = () => {
       setStatus(s => (s === 'playing' ? 'connecting' : s));
-    const onError = () => setStatus('idle');
+      armWatchdog(5000);
+    };
+    const onError = () => {
+      setStatus('idle');
+      armWatchdog(500);
+    };
     el.addEventListener('playing', onPlaying);
     el.addEventListener('waiting', onWaiting);
     el.addEventListener('stalled', onWaiting);
     el.addEventListener('error', onError);
     return () => {
+      clearWatchdog();
       el.removeEventListener('playing', onPlaying);
       el.removeEventListener('waiting', onWaiting);
       el.removeEventListener('stalled', onWaiting);
@@ -118,6 +181,10 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
     if (!audioRef.current) return;
     const el = audioRef.current;
     const myGen = ++gen.current;
+    if (watchdogTimer.current !== null) {
+      clearTimeout(watchdogTimer.current);
+      watchdogTimer.current = null;
+    }
     setTunedIn(false);
     setStatus('idle');
     // Let any in-flight play() settle before pausing, then bail if a later

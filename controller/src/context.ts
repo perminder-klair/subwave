@@ -63,8 +63,11 @@ export async function getWeather() {
   if (weatherCache.data && Date.now() - weatherCache.fetchedAt < WEATHER_TTL_MS) {
     return weatherCache.data;
   }
+  const imperial = config.weather.units === 'imperial';
+  const tempUnit = imperial ? 'F' : 'C';
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${config.weather.lat}&longitude=${config.weather.lng}&current=temperature_2m,weather_code,is_day`;
+    const unitParam = imperial ? '&temperature_unit=fahrenheit' : '';
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${config.weather.lat}&longitude=${config.weather.lng}&current=temperature_2m,weather_code,is_day${unitParam}`;
     const res = await fetch(url);
     const data = await res.json() as any;
     const code = data.current.weather_code;
@@ -73,13 +76,14 @@ export async function getWeather() {
       condition,
       mood: weatherToMood(condition),
       temp: Math.round(data.current.temperature_2m),
+      tempUnit,
       isDay: data.current.is_day === 1,
       location: config.weather.locationName,
     };
     weatherCache = { data: result, fetchedAt: Date.now() };
     return result;
   } catch {
-    return { condition: 'unknown', mood: null, temp: null, location: config.weather.locationName };
+    return { condition: 'unknown', mood: null, temp: null, tempUnit, location: config.weather.locationName };
   }
 }
 

@@ -1,11 +1,13 @@
 'use client';
 
 import type { ChangeEvent, ReactNode } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { m } from 'motion/react';
 import { notify, errorMessage } from '../../lib/notify';
 import { fmtSize } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { applyTheme, cacheTheme } from '../../lib/theme';
 import { CLOUD_VOICES, CLOUD_MODELS } from '../../lib/cloudVoices';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { Input } from '../ui/input';
@@ -23,6 +25,7 @@ const SECTIONS = [
   { id: 'search',   label: 'Web search', hint: 'live-facts backend' },
   { id: 'library',  label: 'Library tagger', hint: 'embedding · propagation' },
   { id: 'station',  label: 'Station', hint: 'name · location' },
+  { id: 'theme',    label: 'Theme', hint: 'station-wide palette' },
   { id: 'jingles',  label: 'Jingles', hint: 'stingers' },
   { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers' },
   { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz' },
@@ -67,6 +70,7 @@ interface WeatherCfg {
   lat: string;
   lng: string;
   locationName: string;
+  units: 'metric' | 'imperial';
 }
 
 interface CloudTtsCfg {
@@ -185,7 +189,8 @@ interface SettingsData {
     crossfadeDuration?: number;
     archive?: { enabled?: boolean; bitrate?: number };
     station?: string;
-    weather?: { lat?: number; lng?: number; locationName?: string };
+    theme?: { active?: string };
+    weather?: { lat?: number; lng?: number; locationName?: string; units?: 'metric' | 'imperial' };
     tts?: {
       defaultEngine?: string;
       kokoro?: { voice?: string };
@@ -295,6 +300,7 @@ export default function SettingsPanel() {
         lat: String(v.weather?.lat ?? ''),
         lng: String(v.weather?.lng ?? ''),
         locationName: v.weather?.locationName ?? '',
+        units: v.weather?.units === 'imperial' ? 'imperial' : 'metric',
       },
       tts: {
         defaultEngine: v.tts?.defaultEngine ?? 'piper',
@@ -485,7 +491,7 @@ export default function SettingsPanel() {
   return (
     <div className="stack-mobile grid grid-cols-[240px_1fr] items-start gap-6">
       {/* Section rail */}
-      <aside className="sticky top-6 grid gap-1">
+      <aside className="grid gap-1 sm:sticky sm:top-6">
         <span className="caption pb-2">settings</span>
         {SECTIONS.map(s => {
           const isActive = activeSection === s.id;
@@ -560,6 +566,12 @@ export default function SettingsPanel() {
               <StationSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings}
+              />
+            )}
+            {activeSection === 'theme' && (
+              <ThemeSection
+                data={data} busy={busy} saveSettings={saveSettings}
+                adminFetch={adminFetch}
               />
             )}
             {activeSection === 'jingles' && (
@@ -2026,6 +2038,7 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
       lat: parseFloat(form.weather.lat),
       lng: parseFloat(form.weather.lng),
       locationName: form.weather.locationName,
+      units: form.weather.units,
     },
   });
 
@@ -2096,6 +2109,30 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
             weather it reads on air (current: {data.values?.weather?.locationName} @ {data.values?.weather?.lat}, {data.values?.weather?.lng}). Applies live.
           </div>
         </div>
+
+        <div className="field">
+          <Label>Weather units</Label>
+          <Select
+            value={form.weather.units}
+            onValueChange={val =>
+              setForm(f => ({
+                ...f,
+                weather: { ...f.weather, units: val === 'imperial' ? 'imperial' : 'metric' },
+              }))
+            }
+          >
+            <SelectTrigger className="w-[240px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="metric">Metric — °C</SelectItem>
+                <SelectItem value="imperial">Imperial — °F</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <div className="field-hint">
+            What the DJ announces on air (current: {data.values?.weather?.units === 'imperial' ? 'Imperial / °F' : 'Metric / °C'}). Applies live.
+          </div>
+        </div>
       </Card>
 
       <SaveBar
@@ -2104,6 +2141,171 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
         onSave={save}
         saveLabel="Save station settings"
       />
+    </>
+  );
+}
+
+/* ── Theme ───────────────────────────────────────────────────────────── */
+
+interface ThemeSectionProps {
+  data: SettingsData;
+  busy: boolean;
+  saveSettings: SaveSettings;
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+}
+
+interface ThemeDef {
+  id: string;
+  name: string;
+  description?: string;
+  mode: 'light' | 'dark';
+  tokens: Record<string, string>;
+}
+
+// Swatch columns shown per theme card — chosen to read the palette at a
+// glance: paper, ink, accent, and the muted overlay (which doubles as the
+// hover wash, so it telegraphs interactive state).
+const SWATCH_KEYS = ['--bg', '--ink', '--accent', '--overlay'] as const;
+
+// Each swatch is its own ref because useDynamicStyle wants a single element
+// per call. The arbitrary token values can't go through Tailwind utilities
+// (issue #50 bans the inline `style` prop), so we route them through the
+// DOM-API hook instead.
+function Swatch({ color }: { color?: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useDynamicStyle(ref, { background: color || 'transparent' });
+  return <span ref={ref} className="h-7 w-7" aria-hidden="true" />;
+}
+
+function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProps) {
+  const [themes, setThemes] = useState<ThemeDef[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const activeId = data.values?.theme?.active;
+  const PUBLIC_API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
+
+  // Theme list is public — fetch through the unauthenticated /themes endpoint
+  // so a signed-out admin still sees swatches while signing in.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${PUBLIC_API}/themes`);
+        if (!r.ok || cancelled) return;
+        const j = (await r.json()) as { themes: ThemeDef[] };
+        setThemes(j.themes);
+        setError(null);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [PUBLIC_API]);
+
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      const r = await adminFetch('/themes/refresh', { method: 'POST' });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; themes?: ThemeDef[] };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const next = j.themes ?? [];
+      setThemes(next);
+      notify.ok(`reloaded — ${next.length} theme${next.length === 1 ? '' : 's'}`);
+    } catch (e) {
+      notify.err(`Refresh failed: ${errorMessage(e)}`);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const choose = async (theme: ThemeDef) => {
+    if (theme.id === activeId || busy) return;
+    // Save through the existing settings flow. ThemeBootstrap's 30 s poll
+    // would pick this up eventually, but the admin viewing this page wants
+    // the swatch swap to feel instant — apply locally on click.
+    applyTheme(theme);
+    cacheTheme(theme);
+    await saveSettings({ theme: { active: theme.id } });
+  };
+
+  return (
+    <>
+      <SectionHeader
+        eyebrow="theme"
+        title="Station-wide visual theme."
+        sub={<>Every listener and the admin UI render with this palette. Built-ins ship with the controller; drop custom JSONs in <code>state/themes/</code> and hit <em>Refresh</em>.</>}
+        metrics={[
+          {
+            n: themes ? String(themes.length) : '—',
+            l: 'themes',
+            accent: true,
+          },
+        ]}
+      />
+
+      <Card title="Picker" sub="active station theme">
+        {error && (
+          <div className="field-hint text-[var(--danger)]">
+            Couldn’t load themes: {error}
+          </div>
+        )}
+        {!themes && !error && (
+          <div className="text-[13px] text-muted italic">loading…</div>
+        )}
+        {themes && (
+          <div className="grid gap-2">
+            {themes.map(t => {
+              const isActive = t.id === activeId;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => choose(t)}
+                  disabled={busy}
+                  className={cn(
+                    'flex w-full items-center gap-3 border p-3 text-left disabled:cursor-not-allowed disabled:opacity-60',
+                    isActive
+                      ? 'border-vermilion bg-[var(--ink-softer)]'
+                      : 'border-ink bg-bg hover:bg-[var(--overlay)]',
+                  )}
+                >
+                  <span className="inline-flex shrink-0 border border-ink" aria-hidden="true">
+                    {SWATCH_KEYS.map(k => (
+                      <Swatch key={k} color={t.tokens[k]} />
+                    ))}
+                  </span>
+                  <div className="grid min-w-0 flex-1 gap-0.5">
+                    <span className="text-[12px] font-bold tracking-[0.12em] uppercase">
+                      {t.name}
+                    </span>
+                    <span className="text-[11px] leading-[1.4] text-muted">
+                      {t.description || (t.mode === 'dark' ? 'Dark palette' : 'Light palette')}
+                    </span>
+                  </div>
+                  {isActive && <Pill tone="accent" dot>active</Pill>}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      <Card title="Custom themes" sub="state/themes/*.json">
+        <div className="grid gap-3">
+          <div>
+            <Btn sm onClick={refresh} disabled={refreshing || busy}>
+              {refreshing ? 'Refreshing…' : 'Refresh themes'}
+            </Btn>
+          </div>
+          <div className="field-hint">
+            Drop a JSON theme file in <code>state/themes/</code> and click <em>Refresh</em> to
+            add it to the picker — no controller restart needed. The folder
+            includes a <code>README.md</code> with the format and the allowed
+            token keys.
+          </div>
+        </div>
+      </Card>
     </>
   );
 }
