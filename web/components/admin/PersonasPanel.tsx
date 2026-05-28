@@ -250,21 +250,18 @@ function PersonaAvatarPicker(props: {
           e.target.value = '';
         }}
       />
-      <div className="flex flex-wrap gap-1.5">
-        <Btn sm onClick={() => inputRef.current?.click()} disabled={uploading}>
+      <div className="grid w-[96px] gap-1.5">
+        <Btn sm className="w-full justify-center" onClick={() => inputRef.current?.click()} disabled={uploading}>
           {uploading ? '…' : hasAvatar ? 'Replace' : 'Upload'}
         </Btn>
-        <Btn sm onClick={onGenerate} disabled={uploading} title="Random DiceBear avatar — click again for a different one">
+        <Btn sm className="w-full justify-center" onClick={onGenerate} disabled={uploading} title="Random DiceBear avatar — click again for a different one">
           Generate
         </Btn>
         {hasAvatar && (
-          <Btn sm tone="danger" onClick={onClear} disabled={uploading}>
+          <Btn sm tone="danger" className="w-full justify-center" onClick={onClear} disabled={uploading}>
             Remove
           </Btn>
         )}
-      </div>
-      <div className="text-[10px] leading-[1.4] text-muted">
-        Upload a square 512px PNG/JPEG/WebP, or click Generate for a random DiceBear avatar.
       </div>
     </div>
   );
@@ -814,7 +811,7 @@ export default function PersonasPanel() {
               </>
             }
           >
-            <div className="stack-mobile grid grid-cols-[96px_1fr_1fr] items-start gap-4">
+            <div className="stack-mobile grid grid-cols-[96px_1fr] items-start gap-4">
               <PersonaAvatarPicker
                 persona={focused}
                 tick={avatarTick}
@@ -823,30 +820,32 @@ export default function PersonasPanel() {
                 onGenerate={() => generateAvatar(focused.id)}
                 onClear={() => clearAvatar(focused.id)}
               />
-              <div className="field">
-                <Label>On-air name</Label>
-                <Input
-                  value={focused.name}
-                  maxLength={NAME_MAX}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => setPersona(safeIdx, { name: e.target.value })}
-                  className={focused.name.trim() ? 'border-ink' : 'border-[var(--danger)]'}
-                />
-                <div className="field-hint">
-                  Shown in the player and injected into every prompt as <code>{'{name}'}</code>.
-                  <span className="ml-2 text-muted">{focused.name.trim().length} / {NAME_MAX}</span>
+              <div className="grid gap-4">
+                <div className="field">
+                  <Label>On-air name</Label>
+                  <Input
+                    value={focused.name}
+                    maxLength={NAME_MAX}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setPersona(safeIdx, { name: e.target.value })}
+                    className={focused.name.trim() ? 'border-ink' : 'border-[var(--danger)]'}
+                  />
+                  <div className="field-hint">
+                    Shown in the player and injected into every prompt as <code>{'{name}'}</code>.
+                    <span className="ml-2 text-muted">{focused.name.trim().length} / {NAME_MAX}</span>
+                  </div>
                 </div>
-              </div>
-              <div className="field">
-                <Label>Tagline</Label>
-                <Input
-                  value={focused.tagline}
-                  maxLength={TAGLINE_MAX}
-                  placeholder="e.g. late-night drift"
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => setPersona(safeIdx, { tagline: e.target.value })}
-                />
-                <div className="field-hint">
-                  A short line shown alongside the persona. Optional.
-                  <span className="ml-2 text-muted">{focused.tagline.trim().length} / {TAGLINE_MAX}</span>
+                <div className="field">
+                  <Label>Tagline</Label>
+                  <Input
+                    value={focused.tagline}
+                    maxLength={TAGLINE_MAX}
+                    placeholder="e.g. late-night drift"
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setPersona(safeIdx, { tagline: e.target.value })}
+                  />
+                  <div className="field-hint">
+                    A short line shown alongside the persona. Optional.
+                    <span className="ml-2 text-muted">{focused.tagline.trim().length} / {TAGLINE_MAX}</span>
+                  </div>
                 </div>
               </div>
             </div>
