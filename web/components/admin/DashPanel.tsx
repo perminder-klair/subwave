@@ -9,7 +9,14 @@ import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
 import { turnClass, turnKey, turnText } from '../../lib/sessionFeed';
 import type { SessionTurn } from '../../lib/types';
-import type { NowPlayingTrack, StationContext, ActiveShow, DjState, ListenerCount, QueueEntry } from '../../lib/types';
+import type {
+  NowPlayingTrack,
+  StationContext,
+  ActiveShow,
+  DjState,
+  ListenerCount,
+  QueueEntry,
+} from '../../lib/types';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { V3Alert } from '../ui/alert';
 import { Textarea } from '../ui/textarea';
@@ -106,7 +113,12 @@ export default function DashPanel() {
   }, [status?.sessionMessages?.length]);
 
   // Generic POST helper — drives the busy state; result goes to the toast.
-  const act = async (key: string, path: string, body: Record<string, unknown> | null, label: string): Promise<ActResponse | null> => {
+  const act = async (
+    key: string,
+    path: string,
+    body: Record<string, unknown> | null,
+    label: string,
+  ): Promise<ActResponse | null> => {
     setBusy(key);
     try {
       const r = await adminFetch(path, {
@@ -159,9 +171,10 @@ export default function DashPanel() {
     sub?: ReactNode;
     accent?: boolean;
   }
-  const djName = status?.dj && typeof status.dj === 'object' && 'name' in status.dj
-    ? String((status.dj as { name?: unknown }).name ?? '—')
-    : '—';
+  const djName =
+    status?.dj && typeof status.dj === 'object' && 'name' in status.dj
+      ? String((status.dj as { name?: unknown }).name ?? '—')
+      : '—';
   const strip: StripCell[] = [
     { l: 'dj on air', v: djName, accent: true },
     { l: 'show', v: showName },
@@ -200,25 +213,9 @@ export default function DashPanel() {
       <div className="stack-mobile grid grid-cols-[1.4fr_1fr] gap-4">
         {/* LEFT */}
         <div className="grid grid-rows-[auto_1fr] gap-4">
-          <Card
-            title="Queue"
-            sub={`${upcoming.length} upcoming`}
-            right={
-              <>
-                <Pill tone="accent" dot={!!q.autoPick}>
-                  auto-pick {q.autoPick ? 'on' : 'off'}
-                </Pill>
-                <Pill tone="accent" dot={!!q.autoLink}>
-                  auto-link {q.autoLink ? 'on' : 'off'}
-                </Pill>
-              </>
-            }
-            bodyClass="px-3.5 py-1"
-          >
+          <Card title="Queue" sub={`${upcoming.length} upcoming`} bodyClass="px-3.5 py-1">
             {upcoming.length === 0 ? (
-              <div className="py-2.5 text-muted italic">
-                queue empty — auto-playlist fallback
-              </div>
+              <div className="py-2.5 text-muted italic">queue empty — auto-playlist fallback</div>
             ) : (
               upcoming.slice(0, 8).map((t, i) => (
                 <div className="track-row" key={i}>
@@ -254,10 +251,7 @@ export default function DashPanel() {
             {booth.length === 0 ? (
               <div className="text-muted italic">no session turns yet</div>
             ) : (
-              <div
-                ref={logRef}
-                className="max-h-[360px] min-h-[220px] flex-1 overflow-y-auto"
-              >
+              <div ref={logRef} className="max-h-[420px] min-h-[220px] flex-1 overflow-y-auto">
                 {booth.map((turn, i) => (
                   <div key={turnKey(turn, i)} className={`log ${classTone(turnClass(turn))}`}>
                     <span className="t">
@@ -344,9 +338,7 @@ export default function DashPanel() {
               <div className="flex items-center justify-between border-t border-dashed border-separator-strong pt-2">
                 <div>
                   <div className="text-[12px] font-bold">Auto-playlist</div>
-                  <div className="text-[10px] text-muted">
-                    rebuild liquidsoap fallback
-                  </div>
+                  <div className="text-[10px] text-muted">rebuild liquidsoap fallback</div>
                 </div>
                 <Btn
                   sm
@@ -363,9 +355,7 @@ export default function DashPanel() {
         </div>
       </div>
 
-      {!status && !err && (
-        <div className="text-muted italic">connecting…</div>
-      )}
+      {!status && !err && <div className="text-muted italic">connecting…</div>}
 
       <V3AlertDialog
         open={confirmSkip}
@@ -407,35 +397,23 @@ function HeroSection({ err, np, q, busy, onSkip, strip }: HeroSectionProps) {
           {np?.title ? (
             <>
               <div className="text-[18px] leading-[1.2] font-bold tracking-[-0.01em]">
-                {np.title}{' '}
-                <span className="font-semibold text-muted">— {np.artist}</span>
+                {np.title} <span className="font-semibold text-muted">— {np.artist}</span>
               </div>
-              {np.album && (
-                <div className="caption mt-1.5">
-                  album · {np.album}
-                </div>
-              )}
+              {np.album && <div className="caption mt-1.5">album · {np.album}</div>}
             </>
           ) : (
-            <div className="text-[22px] font-bold text-muted">
-              nothing reported playing
-            </div>
+            <div className="text-[22px] font-bold text-muted">nothing reported playing</div>
           )}
         </div>
         <div className="flex gap-2">
-          <Btn
-            lg
-            tone="danger"
-            disabled={!!busy || !np?.title}
-            onClick={onSkip}
-          >
+          <Btn lg tone="danger" disabled={!!busy || !np?.title} onClick={onSkip}>
             {busy === 'skip' ? 'skipping…' : 'Skip track'}
           </Btn>
         </div>
       </div>
 
       {/* status strip */}
-      <div className="strip-mobile grid grid-cols-6">
+      <div className="strip-mobile grid grid-cols-5">
         {strip.map((c, i) => (
           <div
             key={i}
@@ -446,18 +424,11 @@ function HeroSection({ err, np, q, busy, onSkip, strip }: HeroSectionProps) {
           >
             <span className="caption">{c.l}</span>
             <span
-              className={cn(
-                'text-[14px] font-semibold',
-                c.accent ? 'text-vermilion' : 'text-ink',
-              )}
+              className={cn('text-[14px] font-semibold', c.accent ? 'text-vermilion' : 'text-ink')}
             >
               {c.v}
             </span>
-            {c.sub && (
-              <span className="caption text-[9px]">
-                {c.sub}
-              </span>
-            )}
+            {c.sub && <span className="caption text-[9px]">{c.sub}</span>}
           </div>
         ))}
       </div>
@@ -486,7 +457,8 @@ interface SegmentButtonProps {
 
 function SegmentButton({ label, busyHere, anyBusy, onFire }: SegmentButtonProps) {
   const onEnter = (e: MouseEvent<HTMLButtonElement>) => {
-    if (!anyBusy) e.currentTarget.style.background = 'color-mix(in oklab, var(--accent) 18%, transparent)';
+    if (!anyBusy)
+      e.currentTarget.style.background = 'color-mix(in oklab, var(--accent) 18%, transparent)';
   };
   const onLeave = (e: MouseEvent<HTMLButtonElement>) => {
     e.currentTarget.style.background = 'color-mix(in oklab, var(--accent) 8%, transparent)';
