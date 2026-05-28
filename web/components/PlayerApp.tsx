@@ -270,7 +270,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
             context={context}
           />
         )}
-        {drawer === 'schedule' && <ScheduleDrawer activeShow={activeShow} />}
+        {drawer === 'schedule' && <ScheduleDrawer activeShow={activeShow} context={context} />}
       </Sheet>
 
       <AnimatePresence>

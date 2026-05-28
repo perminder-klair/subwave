@@ -18,6 +18,7 @@ export interface NowPlayingTrack {
 export interface WeatherContext {
   condition?: string;
   temp?: number;
+  location?: string;
 }
 
 export interface FestivalContext {

@@ -8,6 +8,7 @@ import type {
   SchedulePayload,
   SchedulePersona,
   ScheduleShow,
+  StationContext,
 } from '@/lib/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -28,6 +29,9 @@ export interface ScheduleDrawerProps {
   /** What's on right now, fed from `useStationFeed` so the on-now card stays
    *  fresh without re-fetching `/schedule`. */
   activeShow: ActiveShow | null;
+  /** Station context from `/now-playing` — used for the operator-configured
+   *  location label shown above the schedule. */
+  context: StationContext | null;
 }
 
 interface Slot {
@@ -79,7 +83,7 @@ function endHourForCurrentBlock(grid: ScheduleGrid, day: number, hour: number): 
   return h;
 }
 
-export default function ScheduleDrawer({ activeShow }: ScheduleDrawerProps) {
+export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerProps) {
   const [data, setData] = useState<SchedulePayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
@@ -103,10 +107,12 @@ export default function ScheduleDrawer({ activeShow }: ScheduleDrawerProps) {
     };
   }, []);
 
-  // Keep the on-now indicator honest as time passes — bumps every 60s, which is
-  // fine since the grid resolution is 1 h. No setState churn during transitions.
+  // Drives both the on-now indicator (grid resolution is 1 h, so 60 s would
+  // be enough on its own) and the station-time clock at the top of the drawer
+  // (HH:MM, needs sub-minute ticks to feel live). 1 s is cheap and only runs
+  // while the drawer is open.
   useEffect(() => {
-    const id = window.setInterval(() => setNow(new Date()), 60_000);
+    const id = window.setInterval(() => setNow(new Date()), 1_000);
     return () => window.clearInterval(id);
   }, []);
 
@@ -164,6 +170,11 @@ export default function ScheduleDrawer({ activeShow }: ScheduleDrawerProps) {
 
   return (
     <div className="grid gap-6">
+      <StationHeader
+        now={now}
+        timezone={data.timezone ?? null}
+        location={context?.weather?.location ?? null}
+      />
       <OnNowCard onNow={onNow} activeShow={activeShow} />
 
       <section>
@@ -189,6 +200,42 @@ export default function ScheduleDrawer({ activeShow }: ScheduleDrawerProps) {
 
       <DayTabs value={viewDay} today={today} onChange={setViewDay} />
     </div>
+  );
+}
+
+function StationHeader({
+  now,
+  timezone,
+  location,
+}: {
+  now: Date;
+  timezone: string | null;
+  location: string | null;
+}) {
+  // If the operator's TZ isn't on the schedule payload we fall back to the
+  // viewer's local TZ — close enough for a personal station where operator
+  // and listener usually overlap.
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    ...(timezone ? { timeZone: timezone } : {}),
+  }).format(now);
+  return (
+    <section className="flex items-end justify-between gap-4 border-b border-separator-soft pb-3">
+      <div>
+        <div className="text-[9px] tracking-[0.3em] text-muted uppercase">Station time</div>
+        <div className="v3-tab-num mt-1 text-2xl leading-none font-semibold text-ink">
+          {time}
+        </div>
+      </div>
+      {location && (
+        <div className="text-right">
+          <div className="text-[9px] tracking-[0.3em] text-muted uppercase">Location</div>
+          <div className="mt-1 text-sm text-ink">{location}</div>
+        </div>
+      )}
+    </section>
   );
 }
 
