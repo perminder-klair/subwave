@@ -17,6 +17,7 @@ const SHORTCUTS: readonly Shortcut[] = [
   { keys: ['1'], label: 'Open Timeline' },
   { keys: ['2'], label: 'Open Booth feed' },
   { keys: ['3', 'R'], label: 'Make a request' },
+  { keys: ['4'], label: 'Open Schedule' },
   { keys: ['?'], label: 'This shortcuts list' },
   { keys: ['⌘K'], label: 'Command palette' },
   { keys: ['Esc'], label: 'Close drawer / dialog' },
