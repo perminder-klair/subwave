@@ -15,7 +15,7 @@ export default function ArticleHead() {
         </p>
       </div>
 
-      <div className="mb-0 flex flex-wrap items-baseline justify-center gap-4 border-y border-separator-strong py-3 text-[10px] font-bold tracking-[0.24em] text-muted uppercase">
+      <div className="mb-0 flex flex-wrap items-baseline justify-center gap-4 border-t border-separator-strong pt-3 text-[10px] font-bold tracking-[0.24em] text-muted uppercase">
         <span className="text-ink">A personal radio station</span>
         <span aria-hidden="true">·</span>
         <span>Broadcasting from a homelab</span>

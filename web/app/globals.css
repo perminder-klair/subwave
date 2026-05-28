@@ -829,7 +829,7 @@ body::after {
     display: flex;
     flex-direction: column;
     gap: clamp(24px, 4vw, 48px);
-    padding: clamp(12px, 2.5vw, 28px) 0 clamp(8px, 1.5vw, 16px);
+    padding: clamp(6px, 1.2vw, 14px) 0 clamp(8px, 1.5vw, 16px);
 }
 .bs-hero-head {
     display: flex;

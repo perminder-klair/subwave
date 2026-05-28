@@ -18,7 +18,7 @@ export default function Landing() {
     <div className="min-h-screen bg-bg text-ink">
       <Masthead />
 
-      <main className="bs-paper">
+      <main className="bs-paper pt-0">
         <ArticleHead />
         <OnTheAir />
         <MeetTheVoices />
