@@ -11,6 +11,7 @@ import { z } from 'zod';
 import * as subsonic from '../music/subsonic.js';
 import * as library from '../music/library.js';
 import * as embeddings from '../music/embeddings.js';
+import * as excludeFilter from '../music/exclude-filter.js';
 
 function slim(s: any) {
   return {
@@ -62,6 +63,12 @@ export function buildPickerTools({
   const seen = new Map<string, any>(); // id → slim song, accumulated across all tool calls
   const artistCounts = new Map<string, number>(); // artist key → songs already accepted into `seen`
 
+  // Exclude filter — resolved once per tool-set lifetime. The filter object
+  // is captured here so every tool invocation re-uses the same expansion of
+  // playlist/album exclusions (cached internally for 30 min anyway).
+  let excludeP: Promise<excludeFilter.ExcludeFilter> | null = null;
+  const getExclude = () => (excludeP ??= excludeFilter.build());
+
   // Filter recents, slim, and record into `seen` so the picker can resolve
   // the agent's final id choice to a full track. Drops songs by an artist that
   // played in the recent window, and caps any one artist's share of the pool.
@@ -71,11 +78,13 @@ export function buildPickerTools({
   // each tool call regardless.
   const trackKey = (s: any) =>
     `${(s.title || '').toLowerCase().trim()}|${(s.artist || '').toLowerCase().trim()}`;
-  const collect = (list: any, cap = 8) => {
+  const collect = async (list: any, cap = 8) => {
     const out: any[] = [];
+    const exclude = await getExclude();
     for (const s of shuffle((list || []) as any[])) {
       if (!s?.id || recentIds.has(s.id) || seen.has(s.id)) continue;
       if (recentKeys.has(trackKey(s))) continue;   // catches backfilled entries (no id)
+      if (excludeFilter.matches(exclude, s)) continue;
       const key = artistKey(s);
       if (key && recentArtists.has(key)) continue;
       if (key) {

@@ -190,6 +190,13 @@ export async function searchArtists(query, { artistCount = 5 } = {}) {
   return r.searchResult3?.artist || [];
 }
 
+// Search just the album index and return matching album objects. Used by the
+// admin selection-rules source picker.
+export async function searchAlbums(query, { albumCount = 20 } = {}) {
+  const r = await call('search3', { query, albumCount, artistCount: 0, songCount: 0 });
+  return r.searchResult3?.album || [];
+}
+
 // Last.fm-backed crowd tags for an artist, normalised to lowercase trimmed
 // strings. Used by the embedding-propagated tagger to enrich the embedding
 // text — see music/embeddings.ts formatTrackText. Returns [] if the artist

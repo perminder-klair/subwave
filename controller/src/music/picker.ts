@@ -9,6 +9,7 @@
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as dj from '../llm/dj.js';
+import * as excludeFilter from './exclude-filter.js';
 
 const CANDIDATE_CAP = 18;
 const HISTORY_DEPTH = 4;
@@ -58,12 +59,17 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
 
 async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any) {
   await library.load();
+  const exclude = await excludeFilter.build();
   const pool: any[] = [];
   const sources: Record<string, number> = {};
   const add = (label: string, items: any[]) => {
     if (!items?.length) return;
-    pool.push(...items.map((t: any) => ({ ...t, _source: label })));
-    sources[label] = (sources[label] || 0) + items.length;
+    const allowed = exclude.active
+      ? items.filter((t: any) => !excludeFilter.matches(exclude, t))
+      : items;
+    if (!allowed.length) return;
+    pool.push(...allowed.map((t: any) => ({ ...t, _source: label })));
+    sources[label] = (sources[label] || 0) + allowed.length;
   };
 
   // 1. Similar-songs from current track — strongest contextual signal.

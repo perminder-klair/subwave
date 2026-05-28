@@ -346,6 +346,35 @@ class Queue {
     }
   }
 
+  // Rule-engine entry point. Injects a track picked by a minute-counted
+  // force-insert rule into the queue, optionally with a TTS preface written
+  // by the operator. The track is marked `ruleId` so the now-playing watcher
+  // and the session DJ can recognise it (e.g. don't back-announce a sponsor
+  // read like a regular pick).
+  async injectRule(rule: any, track: any) {
+    const introScript =
+      rule?.djBehavior === 'announce' && rule.announceText ? rule.announceText : null;
+    const item: any = {
+      track,
+      requestedBy: null,
+      intent: null,
+      introScript,
+      aiPicked: false,
+      ruleId: rule.id,
+      ruleName: rule.name,
+      queuedAt: new Date().toISOString(),
+      sent: false,
+    };
+    this.upcoming.push(item);
+    this.log('rule-inject', `${track.title} — ${track.artist}`, {
+      rule: rule.name,
+      cadence: rule.cadence,
+    });
+    this.persist();
+    this.drainToLiquidsoap();
+    return this.upcoming.length;
+  }
+
   // Play a pre-rendered sound effect from the library UNDER the DJ voice.
   // Writes the effect's file path straight to sfx.txt — no TTS, the audio is
   // already rendered. Liquidsoap's sfx_queue mixes it beneath the voice

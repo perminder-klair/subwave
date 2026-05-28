@@ -88,6 +88,67 @@ router.get('/library/genres', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /library/playlists — Navidrome playlists, used by the rules form's
+// source picker. Returns { id, name, songCount }.
+// ---------------------------------------------------------------------------
+router.get('/library/playlists', requireAdmin, async (_req, res) => {
+  try {
+    const playlists = await subsonic.getPlaylists();
+    res.json({
+      playlists: (playlists || []).map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        songCount: p.songCount ?? null,
+      })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /library/artists?q=foo — artist autocomplete for the rules form. Empty
+// query returns nothing (the dropdown only loads on type).
+// ---------------------------------------------------------------------------
+router.get('/library/artists', requireAdmin, async (req, res) => {
+  const q = typeof req.query?.q === 'string' ? req.query.q.trim() : '';
+  if (q.length < 2) return res.json({ artists: [] });
+  try {
+    const matches = await subsonic.searchArtists(q, { artistCount: 20 });
+    res.json({
+      artists: (matches || []).map((a: any) => ({
+        id: a.id,
+        name: a.name,
+        albumCount: a.albumCount ?? null,
+      })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /library/albums?q=foo — album autocomplete via Subsonic search3.
+// ---------------------------------------------------------------------------
+router.get('/library/albums', requireAdmin, async (req, res) => {
+  const q = typeof req.query?.q === 'string' ? req.query.q.trim() : '';
+  if (q.length < 2) return res.json({ albums: [] });
+  try {
+    const albums = await subsonic.searchAlbums(q, { albumCount: 20 });
+    res.json({
+      albums: (albums || []).map((a: any) => ({
+        id: a.id,
+        name: a.name || a.title,
+        artist: a.artist || null,
+        songCount: a.songCount ?? null,
+      })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /library/untagged?limit=&cursor=
 // Cursor is an opaque base64 of `albumOffset:songIndexInAlbum` so the next
 // request resumes where the last one stopped. Returns up to `limit` untagged

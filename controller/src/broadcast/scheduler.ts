@@ -17,6 +17,7 @@ import { cleanupOldVoices } from '../audio/tts.js';
 import { shouldFire } from './dj-gate.js';
 import { djCallsAllowed } from './listeners.js';
 import { agenticTick, skillCatalog } from '../skills/_agent.js';
+import * as ruleEngine from './rule-engine.js';
 import { withTrace } from '../observability/events.js';
 
 const TARGET_POOL = 30;
@@ -266,9 +267,22 @@ async function cleanup() {
 export function startScheduler() {
   // Initial run
   refreshAutoPlaylist().catch(err => queue.log('error', `Initial playlist failed: ${err.message}`));
+  // Materialise rule slot playlists once on boot so liquidsoap has fresh m3us
+  // even if settings haven't been touched recently.
+  ruleEngine.refresh().catch(err => queue.log('error', `Initial rule refresh failed: ${err.message}`));
 
   // Auto-playlist refresh every 10 minutes
   cron.schedule(`*/${config.show.autoQueueRefreshMinutes} * * * *`, refreshAutoPlaylist);
+
+  // Selection rules — minute-counted force-inserts and periodic m3u refresh.
+  // The tick is cheap when no minute rules exist; the refresh re-resolves
+  // Subsonic-side playlists so operator edits flow into the broadcast.
+  cron.schedule('* * * * *', () => {
+    ruleEngine.tick().catch(err => queue.log('error', `rule-engine tick: ${err.message}`));
+  });
+  cron.schedule('*/10 * * * *', () => {
+    ruleEngine.refresh().catch(err => queue.log('error', `rule-engine refresh: ${err.message}`));
+  });
 
   // Top of every hour
   cron.schedule('0 * * * *', hourlyCheck);

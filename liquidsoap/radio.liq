@@ -407,6 +407,71 @@ radio = rotate(
 )
 
 # ---------------------------------------------------------------------------
+# SELECTION RULES — force-insert slots
+# ---------------------------------------------------------------------------
+# Track-counted force-insert rules occupy fixed slots wrapped around the
+# (jingles + music) source. Each slot reads two state files written by the
+# controller: a playlist m3u and a cadence integer (the operator's "every N
+# tracks" value). When the cadence is 0 the slot is inert. We layer with
+# `random(...)` rather than nesting rotates so each rule's probability is
+# independent — adding a rule with cadence 7 doesn't drift the jingles math.
+#
+# WEIGHT_SCALE must match controller/src/broadcast/rule-weights.ts so the
+# admin UI preview ("actual ≈ every X tracks") matches reality.
+rule_weight_scale = 1000
+
+def read_rule_cadence(slot) =
+  path = "/var/sub-wave/liquidsoap_rule_#{slot}_ratio.txt"
+  if file.exists(path) then
+    raw = string.trim(file.contents(path))
+    int_of_string(default=0, raw)
+  else
+    0
+  end
+end
+
+def make_rule_source(slot) =
+  playlist(
+    id="rule_#{slot}",
+    mode="randomize",
+    reload_mode="watch",
+    "/var/sub-wave/liquidsoap_rule_#{slot}.m3u"
+  )
+end
+
+rule_slot_indices = [1, 2, 3, 4, 5, 6]
+rule_pairs =
+  list.map(
+    fun (slot) ->
+      begin
+        n = read_rule_cadence(slot)
+        w = if n > 0 then int_of_float(float_of_int(rule_weight_scale) / float_of_int(n)) else 0 end
+        (w, make_rule_source(slot))
+      end,
+    rule_slot_indices
+  )
+rule_active = list.filter(fun (p) -> fst(p) > 0, rule_pairs)
+rule_weights = list.map(fst, rule_active)
+rule_sources = list.map(snd, rule_active)
+rule_sum = list.fold(fun (acc, w) -> acc + w, 0, rule_weights)
+base_weight = max(1, rule_weight_scale - rule_sum)
+
+# Only wrap the radio in `random(...)` if at least one slot is active; the
+# unwrapped fast path avoids the random-selector overhead in the common case
+# of no force-insert rules configured.
+radio =
+  if list.length(rule_active) > 0 then
+    log("rules: #{list.length(rule_active)} active slot(s), weights=#{rule_weights} base=#{base_weight}")
+    random(
+      weights=list.append([base_weight], rule_weights),
+      list.append([radio], rule_sources)
+    )
+  else
+    log("rules: no active force-insert slots")
+    radio
+  end
+
+# ---------------------------------------------------------------------------
 # SAFETY — blank detection, fallback to silence-killer playlist
 # ---------------------------------------------------------------------------
 

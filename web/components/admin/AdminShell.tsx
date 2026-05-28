@@ -17,6 +17,7 @@ import {
   Terminal,
   Archive,
   Webhook,
+  Filter,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -53,6 +54,7 @@ const NAV_SECTIONS: NavSection[] = [
       { href: '/admin/shows', id: 'shows', label: 'Shows', icon: CalendarClock },
       { href: '/admin/personas', id: 'personas', label: 'Personas', icon: Drama },
       { href: '/admin/skills', id: 'skills', label: 'Skills', icon: Sparkles },
+      { href: '/admin/rules', id: 'rules', label: 'Rules', icon: Filter },
     ],
   },
   {

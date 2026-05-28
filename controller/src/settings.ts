@@ -233,6 +233,27 @@ export const SEED_PERSONAS = [
 // this small set. Add a branch in radio.liq if you add a value here.
 export const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
 
+// Selection rules — programmable filters over the picker's output. Two modes:
+// `exclude` rules filter `buildCandidates()` in music/picker.ts; `force-insert`
+// rules periodically jam a track from a source into the broadcast. Track-
+// counted cadences run in Liquidsoap (radio.liq fixed rule slots);
+// minute-counted cadences run in the controller scheduler (broadcast/
+// rule-engine.ts). See docs/selection-rules-plan.md for design rationale.
+export const RULE_MODES = ['exclude', 'force-insert'] as const;
+export const RULE_SOURCE_KINDS = ['playlist', 'genre', 'artist', 'album'] as const;
+export const RULE_CADENCE_KINDS = ['every-n-tracks', 'every-n-minutes'] as const;
+export const RULE_PICK_STRATEGIES = ['random', 'least-recently-played'] as const;
+export const RULE_DJ_BEHAVIORS = ['silent', 'announce'] as const;
+// Force-insert sources restricted to scopes that resolve to a concrete track
+// list. Genre/artist are valid exclude scopes but as inserts they're really
+// just biasing the picker pool, not periodic-injection material.
+export const RULE_FORCE_INSERT_SOURCE_KINDS = ['playlist', 'album'] as const;
+export const RULES_LIMIT = 32;
+// Maximum number of track-counted force-insert rules. Hard cap because each
+// occupies a fixed slot in radio.liq's rotate chain — widening this requires
+// extending the rule_slots list in liquidsoap/radio.liq.
+export const RULES_TRACK_SLOT_CAP = 6;
+
 const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
   crossfadeDuration: 10.0, // seconds
@@ -372,6 +393,11 @@ const DEFAULTS = {
   // webhooks.ts for the event list) to `url` with a fire-and-forget HTTP
   // call. Empty by default — operators add hooks via the admin UI.
   webhooks: [] as any[],
+  // Selection rules — see RULE_MODES / RULE_SOURCE_KINDS above. Each entry
+  // is either an exclude filter on the picker pool or a periodic force-
+  // insert into the broadcast. Empty by default — operators add them via
+  // /admin/rules.
+  rules: [] as any[],
   // Station-wide scrobbling. Each backend is independent; both are paste-only
   // (no OAuth) and both are gated on listener count > 0 at scrobble time (a
   // null/unknown count is treated as zero — fail closed, see broadcast/
@@ -753,6 +779,7 @@ export async function load() {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
     },
     webhooks: normalizeWebhooks(stored.webhooks),
+    rules: normalizeRules(stored.rules),
     scrobble: {
       lastfm: {
         enabled:
@@ -821,6 +848,62 @@ function normalizeWebhooks(raw: any) {
         typeof item.authHeader === 'string' ? item.authHeader.slice(0, 500) : '',
     });
     if (out.length >= WEBHOOKS_LIMIT) break;
+  }
+  return out;
+}
+
+// Lenient normalizer — used by load(). Drops invalid entries silently rather
+// than failing the whole boot. The strict validator (validateRulesStrict)
+// throws; this one only filters.
+function normalizeRules(raw: any) {
+  if (!Array.isArray(raw)) return [];
+  const out: any[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    if (!RULE_MODES.includes(item.mode)) continue;
+    const src = item.source || {};
+    if (!RULE_SOURCE_KINDS.includes(src.kind)) continue;
+    const ref = typeof src.ref === 'string' ? src.ref.trim() : '';
+    if (!ref || ref.length > 200) continue;
+    const name =
+      typeof item.name === 'string' && item.name.trim()
+        ? item.name.trim().slice(0, 80)
+        : `${item.mode} ${src.kind}`;
+    let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('r_');
+    if (seen.has(id)) id = mintId('r_');
+    seen.add(id);
+    const rule: any = {
+      id,
+      name,
+      enabled: typeof item.enabled === 'boolean' ? item.enabled : true,
+      mode: item.mode,
+      source: { kind: src.kind, ref },
+    };
+    if (item.mode === 'force-insert') {
+      if (!RULE_FORCE_INSERT_SOURCE_KINDS.includes(src.kind)) continue;
+      const cad = item.cadence || {};
+      if (!RULE_CADENCE_KINDS.includes(cad.kind)) continue;
+      const value = parseInt(cad.value, 10);
+      if (!Number.isFinite(value) || value < 1) continue;
+      const ceiling = cad.kind === 'every-n-tracks' ? 1000 : 720;
+      if (value > ceiling) continue;
+      rule.cadence = { kind: cad.kind, value };
+      if (cad.kind === 'every-n-minutes' && Number.isFinite(cad.jitter)) {
+        rule.cadence.jitter = Math.max(0, Math.min(100, Math.floor(cad.jitter)));
+      }
+      rule.pickStrategy = RULE_PICK_STRATEGIES.includes(item.pickStrategy)
+        ? item.pickStrategy
+        : 'random';
+      rule.djBehavior = RULE_DJ_BEHAVIORS.includes(item.djBehavior)
+        ? item.djBehavior
+        : 'silent';
+      if (rule.djBehavior === 'announce' && typeof item.announceText === 'string') {
+        rule.announceText = item.announceText.trim().slice(0, 400);
+      }
+    }
+    out.push(rule);
+    if (out.length >= RULES_LIMIT) break;
   }
   return out;
 }
@@ -1074,6 +1157,115 @@ function validateWebhooksStrict(raw: any, existing: any[] = []) {
       enabled: item.enabled !== false,
       authHeader,
     };
+  });
+}
+
+// Strict validator — used by update(). `existing` is the current list, so a
+// caller can omit the id on edits and we'll mint a fresh one. Throws on the
+// first invalid entry.
+function validateRulesStrict(raw: any) {
+  if (!Array.isArray(raw)) throw new Error('rules must be an array');
+  if (raw.length > RULES_LIMIT) {
+    throw new Error(`rules must be at most ${RULES_LIMIT} entries`);
+  }
+  const seen = new Set<string>();
+  let trackSlotCount = 0;
+  return raw.map((item: any, i: number) => {
+    if (!item || typeof item !== 'object') throw new Error(`rules[${i}] must be an object`);
+    if (!RULE_MODES.includes(item.mode)) {
+      throw new Error(`rules[${i}].mode must be one of: ${RULE_MODES.join(', ')}`);
+    }
+    const src = item.source || {};
+    if (!RULE_SOURCE_KINDS.includes(src.kind)) {
+      throw new Error(
+        `rules[${i}].source.kind must be one of: ${RULE_SOURCE_KINDS.join(', ')}`,
+      );
+    }
+    const ref = String(src.ref ?? '').trim();
+    if (ref.length < 1 || ref.length > 200) {
+      throw new Error(`rules[${i}].source.ref must be 1-200 chars`);
+    }
+    const name = String(item.name ?? '').trim() || `${item.mode} ${src.kind}`;
+    if (name.length > 80) throw new Error(`rules[${i}].name must be 0-80 chars`);
+
+    let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('r_');
+    if (seen.has(id)) id = mintId('r_');
+    seen.add(id);
+
+    const rule: any = {
+      id,
+      name,
+      enabled: item.enabled !== false,
+      mode: item.mode,
+      source: { kind: src.kind, ref },
+    };
+
+    if (item.mode === 'force-insert') {
+      if (!RULE_FORCE_INSERT_SOURCE_KINDS.includes(src.kind)) {
+        throw new Error(
+          `rules[${i}]: force-insert sources must be one of: ${RULE_FORCE_INSERT_SOURCE_KINDS.join(', ')} (genre/artist are exclude-only)`,
+        );
+      }
+      const cad = item.cadence || {};
+      if (!RULE_CADENCE_KINDS.includes(cad.kind)) {
+        throw new Error(
+          `rules[${i}].cadence.kind must be one of: ${RULE_CADENCE_KINDS.join(', ')}`,
+        );
+      }
+      const value = parseInt(cad.value, 10);
+      const ceiling = cad.kind === 'every-n-tracks' ? 1000 : 720;
+      if (!Number.isFinite(value) || value < 1 || value > ceiling) {
+        throw new Error(
+          `rules[${i}].cadence.value must be an integer in [1, ${ceiling}]`,
+        );
+      }
+      rule.cadence = { kind: cad.kind, value };
+      if (cad.kind === 'every-n-minutes') {
+        // Default ±10% jitter so periodic inserts don't feel like a bus timetable.
+        // 0 = exact; explicit number overrides.
+        const j =
+          cad.jitter === undefined ? 10 : parseInt(cad.jitter, 10);
+        if (!Number.isFinite(j) || j < 0 || j > 100) {
+          throw new Error(`rules[${i}].cadence.jitter must be 0-100`);
+        }
+        rule.cadence.jitter = j;
+      } else {
+        if (rule.enabled) {
+          trackSlotCount += 1;
+          if (trackSlotCount > RULES_TRACK_SLOT_CAP) {
+            throw new Error(
+              `at most ${RULES_TRACK_SLOT_CAP} enabled track-counted force-insert rules — convert the rest to minute-counted`,
+            );
+          }
+        }
+      }
+      rule.pickStrategy = item.pickStrategy ?? 'random';
+      if (!RULE_PICK_STRATEGIES.includes(rule.pickStrategy)) {
+        throw new Error(
+          `rules[${i}].pickStrategy must be one of: ${RULE_PICK_STRATEGIES.join(', ')}`,
+        );
+      }
+      rule.djBehavior = item.djBehavior ?? 'silent';
+      if (!RULE_DJ_BEHAVIORS.includes(rule.djBehavior)) {
+        throw new Error(
+          `rules[${i}].djBehavior must be one of: ${RULE_DJ_BEHAVIORS.join(', ')}`,
+        );
+      }
+      if (rule.djBehavior === 'announce') {
+        const text = String(item.announceText ?? '').trim();
+        if (text.length < 1 || text.length > 400) {
+          throw new Error(
+            `rules[${i}].announceText must be 1-400 chars when djBehavior is "announce"`,
+          );
+        }
+        rule.announceText = text;
+      }
+    } else {
+      if (item.cadence !== undefined && item.cadence !== null) {
+        throw new Error(`rules[${i}]: exclude rules must not have a cadence`);
+      }
+    }
+    return rule;
   });
 }
 
@@ -1471,6 +1663,18 @@ export async function update(patch) {
     }
   }
 
+  if ('rules' in patch) {
+    const validated = validateRulesStrict(patch.rules);
+    // Any change that touches the track-counted slot population (count,
+    // ratios, slot indices, sources) needs a Liquidsoap restart so the new
+    // rotate weights take effect. Easiest correct heuristic: compare a
+    // canonical signature of the track-counted subset.
+    const prevSig = trackSlotSignature(cur.rules || []);
+    const nextSig = trackSlotSignature(validated);
+    next.rules = validated;
+    if (prevSig !== nextSig) restart = true;
+  }
+
   // Post-patch integrity sweep — a personas/shows change in this patch may
   // have orphaned a show owner, a schedule slot, or the active persona.
   {
@@ -1592,12 +1796,59 @@ const LIQ_JINGLE_RATIO_PATH = `${STATE_DIR}/liquidsoap_jingle_ratio.txt`;
 const LIQ_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_crossfade.txt`;
 const LIQ_ARCHIVE_ENABLED_PATH = `${STATE_DIR}/liquidsoap_archive_enabled.txt`;
 const LIQ_ARCHIVE_BITRATE_PATH = `${STATE_DIR}/liquidsoap_archive_bitrate.txt`;
+const LIQ_RULE_RATIO_PATH = (slot: number) =>
+  `${STATE_DIR}/liquidsoap_rule_${slot}_ratio.txt`;
+const LIQ_RULE_M3U_PATH = (slot: number) =>
+  `${STATE_DIR}/liquidsoap_rule_${slot}.m3u`;
+// Stable canonical fingerprint of the enabled track-counted rules. Used to
+// decide whether a settings save needs a Liquidsoap restart (the rotate
+// weights are baked in at parse time, so any change to slot occupancy or
+// ratios needs a restart to take effect).
+function trackSlotSignature(rules: any[]) {
+  const trackRules = (rules || [])
+    .filter(
+      (r: any) =>
+        r &&
+        r.enabled &&
+        r.mode === 'force-insert' &&
+        r.cadence?.kind === 'every-n-tracks',
+    )
+    .map((r: any) => `${r.id}:${r.cadence.value}:${r.source.kind}:${r.source.ref}`)
+    .sort();
+  return trackRules.join('|');
+}
+// Per-slot ratio writer for radio.liq's rule_1..rule_N rotate sources. Slot
+// assignment is by stable order of enabled track-counted rules in settings.
+// Ratio "0" or empty m3u = inert slot. Slots beyond the active rule count get
+// "0" written so the file always exists (radio.liq tolerates missing files,
+// but writing "0" keeps things explicit).
+async function writeLiquidsoapRuleSlots(rules: any[]) {
+  const trackRules = (rules || [])
+    .filter(
+      (r: any) =>
+        r &&
+        r.enabled &&
+        r.mode === 'force-insert' &&
+        r.cadence?.kind === 'every-n-tracks',
+    )
+    .slice(0, RULES_TRACK_SLOT_CAP);
+  for (let slot = 1; slot <= RULES_TRACK_SLOT_CAP; slot++) {
+    const rule = trackRules[slot - 1];
+    await writeFile(LIQ_RULE_RATIO_PATH(slot), rule ? String(rule.cadence.value) : '0');
+    // Create empty m3u if missing so radio.liq's `playlist(...)` always finds
+    // a file. The actual contents are written by rule-engine.materialise.
+    if (!existsSync(LIQ_RULE_M3U_PATH(slot))) {
+      await writeFile(LIQ_RULE_M3U_PATH(slot), '');
+    }
+  }
+}
 
 export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_JINGLE_RATIO_PATH, String(s.jingleRatio));
   await writeFile(LIQ_CROSSFADE_PATH, String(s.crossfadeDuration));
   await writeFile(LIQ_ARCHIVE_ENABLED_PATH, s.archive.enabled ? 'true' : 'false');
   await writeFile(LIQ_ARCHIVE_BITRATE_PATH, String(s.archive.bitrate));
+  await writeLiquidsoapRuleSlots(s.rules || []);
 }
 
 // Called from server.js startup so the files exist before Liquidsoap reads
@@ -1608,7 +1859,8 @@ export async function ensureLiquidsoapSettingsFile() {
     !existsSync(LIQ_JINGLE_RATIO_PATH) ||
     !existsSync(LIQ_CROSSFADE_PATH) ||
     !existsSync(LIQ_ARCHIVE_ENABLED_PATH) ||
-    !existsSync(LIQ_ARCHIVE_BITRATE_PATH)
+    !existsSync(LIQ_ARCHIVE_BITRATE_PATH) ||
+    !existsSync(LIQ_RULE_RATIO_PATH(1))
   ) {
     await writeLiquidsoapSettings(s);
   }
