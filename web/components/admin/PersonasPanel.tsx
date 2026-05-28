@@ -374,7 +374,7 @@ export default function PersonasPanel() {
     <div className="grid gap-4">
       {/* ── HERO ─────────────────────────────────────────────────────────── */}
       <section className="card">
-        <div className="grid grid-cols-[1fr_auto] items-center gap-4 border-b border-ink p-4">
+        <div className="stack-mobile grid grid-cols-[1fr_auto] items-center gap-4 border-b border-ink p-4">
           <div>
             <Eyebrow className="text-vermilion">personas</Eyebrow>
             <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
@@ -385,7 +385,7 @@ export default function PersonasPanel() {
               Every change applies live; no mixer restart.
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Btn onClick={() => setShowPrompt(s => !s)}>
               {showPrompt ? 'Hide system prompt' : 'System prompt'}
             </Btn>

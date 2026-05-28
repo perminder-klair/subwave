@@ -485,7 +485,7 @@ export default function SettingsPanel() {
   return (
     <div className="stack-mobile grid grid-cols-[240px_1fr] items-start gap-6">
       {/* Section rail */}
-      <aside className="sticky top-6 grid gap-1">
+      <aside className="grid gap-1 sm:sticky sm:top-6">
         <span className="caption pb-2">settings</span>
         {SECTIONS.map(s => {
           const isActive = activeSection === s.id;
