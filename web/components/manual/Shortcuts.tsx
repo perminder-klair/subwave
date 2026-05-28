@@ -8,10 +8,10 @@ const SHORTCUTS = [
   { keys: ['↑'], action: 'Volume up', note: 'Raises the volume in 5% steps.' },
   { keys: ['↓'], action: 'Volume down', note: 'Lowers the volume in 5% steps.' },
   { keys: ['M'], action: 'Mute / unmute', note: 'Drops to silence, then back to your last level.' },
-  { keys: ['T'], action: 'Toggle theme', note: 'Switches between the light and dark broadsheet.' },
   { keys: ['1'], action: 'Open Timeline', note: 'The upcoming queue and recent history.' },
   { keys: ['2'], action: 'Open Booth feed', note: 'What the DJ has been saying on air.' },
   { keys: ['3', 'R'], action: 'Make a request', note: 'Opens the request panel.' },
+  { keys: ['4'], action: 'Open Schedule', note: 'The lineup of upcoming and recent shows.' },
   { keys: ['?'], action: 'Shortcuts help', note: 'The in-player list of every shortcut.' },
   { keys: ['⌘K', 'Ctrl K'], action: 'Command palette', note: 'A searchable menu of every player action.' },
   { keys: ['Esc'], action: 'Close', note: 'Dismisses the open drawer or dialog.' },
@@ -35,7 +35,7 @@ export default function Shortcuts() {
     <ManualPage
       eyebrow="MANUAL · 04"
       title="Keyboard shortcuts."
-      intro="The player can be driven entirely from the keyboard — tune in, change the volume, open the panels, and switch themes without reaching for the mouse."
+      intro="The player can be driven entirely from the keyboard — tune in, change the volume, and open the panels without reaching for the mouse."
       current="/manual/shortcuts"
     >
       <section className="bs-section">

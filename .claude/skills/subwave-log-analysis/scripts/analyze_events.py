@@ -3,7 +3,7 @@
 
 The controller writes one JSON object per line to state/logs/events-YYYY-MM-DD.jsonl.
 Event types: trace.start, trace.end, llm, tool, navidrome, track.play,
-session.start, session.end. Events made inside a withTrace() scope carry a
+pick.rejected, session.start, session.end. Events made inside a withTrace() scope carry a
 shared traceId, so a DJ decision and the Navidrome/tool calls it triggered can
 be read back as one trace.
 
@@ -163,7 +163,7 @@ def report_overview(events, files_read, skipped):
         print(f"Time span      : {times[0]}  ->  {times[-1]}")
     print(f"Total events   : {len(events)}")
     for t in ("track.play", "trace.start", "llm", "tool", "navidrome",
-              "session.start"):
+              "pick.rejected", "session.start"):
         if by_type.get(t):
             print(f"  {t:<14}: {by_type[t]}")
     sessions = [ev for ev in events if ev.get("type") == "session.start"]
@@ -243,21 +243,29 @@ def report_picker(events, traces):
 
     if pick_traces:
         nav_counts, tool_counts, durations = [], [], []
-        agent_ok = agent_fallback = agent_off = 0
+        agent_ok = agent_fallback = agent_off = agent_rejected = 0
         for tr in pick_traces.values():
             evs = tr["events"]
             nav_counts.append(sum(1 for e in evs if e.get("type") == "navidrome"))
             tool_counts.append(sum(1 for e in evs if e.get("type") == "tool"))
             if tr["ms"] is not None:
                 durations.append(tr["ms"])
+            # The agent's LLM call can succeed (ok:true) yet return a track id
+            # that wasn't in the candidate set — dj-agent then rejects it and
+            # falls back to the pool. That rejection is logged as a distinct
+            # `pick.rejected` event; without checking for it, an invalid-id pick
+            # counts as "agent succeeded" and the success rate is overstated.
+            rejected = any(e.get("type") == "pick.rejected" for e in evs)
             llm_picks = [e for e in evs if e.get("type") == "llm"
                          and e.get("kind") == "djAgentPick"]
             if not llm_picks:
                 agent_off += 1            # pickerAgent disabled — pool picker only
+            elif rejected:
+                agent_rejected += 1       # LLM ok, but returned an unknown id → pool
             elif all(p.get("ok") for p in llm_picks):
                 agent_ok += 1
             else:
-                agent_fallback += 1       # agent ran, failed, fell back to pool
+                agent_fallback += 1       # the LLM call itself errored → pool
         n = len(pick_traces)
         print(f"Track-pick decisions : {n}")
         print(f"  avg Navidrome calls / decision : {avg(nav_counts):.1f}  "
@@ -268,7 +276,9 @@ def report_picker(events, traces):
             print(f"  decision latency               : avg {avg(durations):.0f} ms, "
                   f"p95 {pctl(durations,95):.0f} ms, max {max(durations):.0f} ms")
         print(f"  agent succeeded   : {agent_ok}/{n}   {bar(agent_ok, n)}")
-        print(f"  agent -> fallback : {agent_fallback}/{n}   {bar(agent_fallback, n)}")
+        if agent_rejected:
+            print(f"  agent invalid id  : {agent_rejected}/{n}   {bar(agent_rejected, n)}  (returned an id not in its candidates → pool fallback)")
+        print(f"  agent -> fallback : {agent_fallback}/{n}   {bar(agent_fallback, n)}  (LLM call errored)")
         if agent_off:
             print(f"  pool picker only  : {agent_off}/{n}  (pickerAgent disabled)")
     else:

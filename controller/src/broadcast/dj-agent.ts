@@ -19,7 +19,7 @@ import * as dj from '../llm/dj.js';
 import { defineAgent } from '../llm/agent.js';
 import { buildPickerTools } from '../llm/tools.js';
 import { recordPick } from '../llm/log.js';
-import { withTrace } from '../observability/events.js';
+import { withTrace, logEvent } from '../observability/events.js';
 
 export const PICK_SCHEMA = z.object({
   id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
@@ -142,7 +142,15 @@ async function pickViaAgent(queue, { wantLink }) {
   });
 
   const song = object?.id ? extras.seen.get(object.id) : null;
-  if (!song) throw new Error(`agent returned unknown id ${object?.id}`);
+  if (!song) {
+    // The agent returned an id that isn't in the candidate set it was shown —
+    // it fabricated one. The trace still ends ok:true (we fall back to the pool
+    // and air a track), so without this explicit event the rejection is
+    // invisible to /debug and the log analyzer, which then over-report agent
+    // health. Emit it inside the live trace so agent-pick reliability is real.
+    logEvent('pick.rejected', { agent: 'pick', id: object?.id ?? null, candidates: extras.seen.size, steps, toolCalls });
+    throw new Error(`agent returned unknown id ${object?.id}`);
+  }
 
   const say = typeof object.say === 'string' ? object.say.trim() : '';
   // Attach the link to the pick so it airs as the pick starts (back-announcing
@@ -251,7 +259,10 @@ export async function runRequest(queue: any, ctx: any, { requester, text: _text 
     });
 
     const song = object?.id ? extras.seen.get(object.id) : null;
-    if (!song) throw new Error(`request agent returned unknown id ${object?.id}`);
+    if (!song) {
+      logEvent('pick.rejected', { agent: 'request', id: object?.id ?? null, candidates: extras.seen.size, toolCalls });
+      throw new Error(`request agent returned unknown id ${object?.id}`);
+    }
 
     const intro = typeof object.intro === 'string' ? object.intro.trim() : '';
     await queue.push({

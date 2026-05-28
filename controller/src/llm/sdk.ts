@@ -593,6 +593,17 @@ export async function djAgent({
     if (useDoneTool && !(result.staticToolCalls || []).some((c: any) => c.toolName === 'done')) {
       console.log(`[${kind}] agent stopped without calling done — retrying with done-only`);
       lastVia = 'ai-sdk:agent:recovery';
+      // Carry the first run's conversation forward — crucially its tool-call +
+      // tool-result messages (the discovery trail). The first run DID surface
+      // candidates into the caller's `seen` map (gated discovery forces a tool
+      // call at step 0); it just never emitted `done`. Replaying only the bare
+      // `messages` here strips those candidates, so a picker/request agent
+      // cornered into done-only has no ids in context and can only fabricate
+      // one — which is why 100% of recovery picks returned an "unknown id".
+      // Feeding the discovery trail back lets the model commit to a REAL
+      // surfaced id. Harmless for free-text recovery (no tool messages to add).
+      const priorMessages = (result as any).response?.messages || [];
+      const recoveryMessages = priorMessages.length ? [...messages, ...priorMessages] : messages;
       const recoveryAgent = new ToolLoopAgent({
         model: languageModel(),
         instructions: system,
@@ -605,7 +616,7 @@ export async function djAgent({
         prepareStep: async () => ({ activeTools: ['done'], toolChoice: 'required' }),
       } as any);
       result = await withTransientRetry(kind, () => recoveryAgent.generate({
-        messages,
+        messages: recoveryMessages,
         ...(timeoutMs ? { timeout: timeoutMs } : {}),
       }));
       steps = result.steps?.length ?? 0;
