@@ -3,10 +3,15 @@
 // DJ personas, shows); others require a Liquidsoap restart (jingle frequency,
 // crossfade duration).
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, unlink, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { STATE_DIR } from './config.js';
+
+// Where uploaded persona avatars live. One file per persona, basename =
+// `<personaId>.<ext>`. The dedicated upload route is the only writer; the
+// post-update orphan sweep below is the only place that deletes by id.
+export const PERSONA_AVATAR_DIR = `${STATE_DIR}/persona-avatars`;
 
 const SETTINGS_PATH = `${STATE_DIR}/settings.json`;
 // `shows` (reusable show definitions) and `schedule` (the 7×24 grid) live in
@@ -153,6 +158,11 @@ const POCKET_TTS_VOICE_RE = /^[a-z][a-z0-9_-]{0,39}$/;
 // valid (means "use the built-in default voice").
 const CHATTERBOX_VOICE_RE = /^[A-Za-z0-9_.-]{1,80}\.wav$/;
 const ID_RE = /^[a-z0-9_]{3,32}$/;
+// Persona avatar filename — `<personaId>.(png|jpg|jpeg|webp)`. The id segment
+// reuses ID_RE's shape so an avatar field can never reference a basename
+// outside the persona-avatars directory. Empty is also valid (no avatar set).
+export const AVATAR_FILENAME_RE = /^[a-z0-9_]{3,32}\.(png|jpe?g|webp)$/;
+export const AVATAR_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'] as const;
 // Skill slugs (e.g. 'weather', 'random-facts'). The skills registry is the
 // source of truth for which slugs exist; settings only checks the shape.
 const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
@@ -206,6 +216,7 @@ export const SEED_PERSONAS = [
     frequency: 'moderate',
     scriptLength: 'concise',
     soul: DJ_SOULS[0],
+    avatar: '',
     tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_george' },
   },
   {
@@ -215,6 +226,7 @@ export const SEED_PERSONAS = [
     frequency: 'quiet',
     scriptLength: 'concise',
     soul: DJ_SOULS[1],
+    avatar: '',
     tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_alice' },
   },
   {
@@ -224,6 +236,7 @@ export const SEED_PERSONAS = [
     frequency: 'moderate',
     scriptLength: 'concise',
     soul: DJ_SOULS[3],
+    avatar: '',
     tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_daniel' },
   },
 ];
@@ -461,6 +474,11 @@ function normalizePersona(raw: any) {
   const name = typeof raw.name === 'string' ? raw.name.trim().slice(0, 40) : '';
   const soul = typeof raw.soul === 'string' ? raw.soul.trim().slice(0, 400) : '';
   if (!name || !soul) return null;
+  // Avatar — stored as a bare basename. Reset to '' if the persisted value
+  // doesn't match the strict basename shape, so a hand-edited settings.json
+  // can never point /persona-avatar/:id at an arbitrary path.
+  const rawAvatar = typeof raw.avatar === 'string' ? raw.avatar.trim() : '';
+  const avatar = rawAvatar && AVATAR_FILENAME_RE.test(rawAvatar) ? rawAvatar : '';
   return {
     id: typeof raw.id === 'string' && ID_RE.test(raw.id) ? raw.id : mintId('p_'),
     name,
@@ -468,6 +486,7 @@ function normalizePersona(raw: any) {
     frequency: FREQUENCIES.includes(raw.frequency) ? raw.frequency : 'moderate',
     scriptLength: SCRIPT_LENGTHS.includes(raw.scriptLength) ? raw.scriptLength : 'concise',
     soul,
+    avatar,
     tts: normalizeTts(raw.tts),
     skills: normalizeSkills(raw.skills),
   };
@@ -968,6 +987,21 @@ function validatePersonasStrict(raw) {
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('p_');
     if (seen.has(id)) id = mintId('p_');
     seen.add(id);
+    // Avatar — optional. Absent/empty → '' (no avatar). Present must be a
+    // bare basename matching AVATAR_FILENAME_RE. The dedicated upload route
+    // is the only writer that creates the file on disk; this validator just
+    // checks the persisted string. The post-patch sweep below garbage-
+    // collects orphaned files when the persona itself is removed.
+    let avatar = '';
+    if (item.avatar !== undefined && item.avatar !== null && item.avatar !== '') {
+      const a = String(item.avatar).trim();
+      if (!AVATAR_FILENAME_RE.test(a)) {
+        throw new Error(
+          `personas[${i}].avatar must be a basename like <id>.png|jpg|jpeg|webp`,
+        );
+      }
+      avatar = a;
+    }
     return {
       id,
       name,
@@ -975,6 +1009,7 @@ function validatePersonasStrict(raw) {
       frequency: item.frequency,
       scriptLength,
       soul,
+      avatar,
       tts,
       skills,
     };
@@ -1495,6 +1530,25 @@ export async function update(patch) {
       }
     }
     if (!personaIds.includes(next.activePersonaId)) next.activePersonaId = personaIds[0];
+
+    // Garbage-collect avatar files for personas that no longer exist. Best
+    // effort — a missing directory or a vanished file is fine, this just
+    // keeps the on-disk state from accumulating dead images.
+    const removedIds = (cur.personas || [])
+      .map((p: any) => p.id)
+      .filter((id: string) => !personaIds.includes(id));
+    if (removedIds.length) {
+      try {
+        const entries = await readdir(PERSONA_AVATAR_DIR);
+        await Promise.all(
+          entries
+            .filter(e => removedIds.some(id => e.startsWith(`${id}.`)))
+            .map(e => unlink(`${PERSONA_AVATAR_DIR}/${e}`).catch(() => {})),
+        );
+      } catch {
+        // Directory doesn't exist yet — nothing to clean.
+      }
+    }
   }
 
   cache = next;
@@ -1540,7 +1594,9 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     name: show.name,
     topic: show.topic,
     mood: show.mood,
-    persona: persona ? { id: persona.id, name: persona.name } : null,
+    persona: persona
+      ? { id: persona.id, name: persona.name, avatar: persona.avatar || '' }
+      : null,
   };
 }
 

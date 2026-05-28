@@ -11,7 +11,7 @@ import {
 import { Kbd } from './ui/kbd';
 import type { ThemeMode } from '@/lib/types';
 
-export type PlayerDrawer = 'timeline' | 'booth' | 'request';
+export type PlayerDrawer = 'timeline' | 'booth' | 'request' | 'schedule';
 
 export interface CommandPaletteProps {
   open: boolean;
@@ -59,6 +59,7 @@ export default function CommandPalette({
     { label: 'Open Timeline', hint: '1', onSelect: run(() => onOpenDrawer('timeline')) },
     { label: 'Open Booth feed', hint: '2', onSelect: run(() => onOpenDrawer('booth')) },
     { label: 'Make a request', hint: '3', onSelect: run(() => onOpenDrawer('request')) },
+    { label: 'Open Schedule', hint: '4', onSelect: run(() => onOpenDrawer('schedule')) },
     {
       label: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
       hint: 'T',

@@ -7,7 +7,7 @@
 // The system prompt is one global template shared by every persona.
 // Everything POSTs to /settings and applies live — no mixer restart.
 import type { ChangeEvent, ReactNode } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { CLOUD_VOICES } from '../../lib/cloudVoices';
 import { notify, errorMessage } from '../../lib/notify';
@@ -66,6 +66,10 @@ interface Persona {
   frequency: string;
   scriptLength: string;
   soul: string;
+  // Stored basename like `p_abc123.png` — empty when no avatar is uploaded.
+  // The actual image is served via /api/persona-avatar/<id>; we keep the
+  // basename in state only so the form round-trips it on save.
+  avatar: string;
   tts: PersonaTts;
   skills: string[];
 }
@@ -90,7 +94,7 @@ interface VoiceOption {
 
 interface SettingsResponse {
   values?: {
-    personas?: Array<Partial<Persona>>;
+    personas?: Array<Partial<Persona> & { avatar?: string }>;
     activePersonaId?: string;
     djPrompt?: string;
     tts?: { defaultEngine?: string };
@@ -112,6 +116,116 @@ interface SettingsResponse {
 function clientMintId() {
   const b = crypto.getRandomValues(new Uint8Array(3));
   return 'p_' + [...b].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+
+// 512×512 PNG output target. The controller hard-caps at 300 KB; a center-
+// cropped 512×512 PNG from a typical phone photo lands well under that.
+const AVATAR_TARGET_PX = 512;
+
+// Resize + center-crop the operator-picked image to a square PNG, returned as
+// a data URL ready for POSTing. Done entirely client-side so we never need a
+// server-side image library.
+async function fileToAvatarDataUrl(file: File): Promise<string> {
+  if (!/^image\/(png|jpe?g|webp)$/.test(file.type)) {
+    throw new Error('please pick a PNG, JPEG, or WebP image');
+  }
+  if (file.size > 12 * 1024 * 1024) {
+    throw new Error('image is over 12 MB — pick something smaller');
+  }
+  const bitmap = await createImageBitmap(file);
+  try {
+    const side = Math.min(bitmap.width, bitmap.height);
+    const sx = (bitmap.width - side) / 2;
+    const sy = (bitmap.height - side) / 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = AVATAR_TARGET_PX;
+    canvas.height = AVATAR_TARGET_PX;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('canvas 2d context unavailable');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(bitmap, sx, sy, side, side, 0, 0, AVATAR_TARGET_PX, AVATAR_TARGET_PX);
+    return canvas.toDataURL('image/png');
+  } finally {
+    bitmap.close?.();
+  }
+}
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
+
+function initialsFor(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  const first = parts[0] ?? '';
+  if (parts.length === 1) return first.slice(0, 2).toUpperCase();
+  const last = parts[parts.length - 1] ?? '';
+  return ((first[0] ?? '') + (last[0] ?? '')).toUpperCase() || '?';
+}
+
+function PersonaAvatarPicker(props: {
+  persona: Persona;
+  tick: number;
+  uploading: boolean;
+  onPick: (file: File) => void;
+  onClear: () => void;
+}) {
+  const { persona, tick, uploading, onPick, onClear } = props;
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  // The public endpoint serves a 1×1 transparent placeholder when no avatar
+  // is set; rather than render that as a tiny grey square, fall back to
+  // initials in the admin UI. The ?v=… buster forces a refetch after upload.
+  const hasAvatar = !!persona.avatar;
+  const src = hasAvatar
+    ? `${API_BASE}/persona-avatar/${encodeURIComponent(persona.id)}?v=${tick}`
+    : null;
+  return (
+    <div className="grid gap-2">
+      <Label>Avatar</Label>
+      <div
+        className="grid h-[96px] w-[96px] place-items-center overflow-hidden border border-ink bg-[var(--ink-softer)]"
+        aria-label={hasAvatar ? `${persona.name} avatar` : 'No avatar set'}
+      >
+        {src ? (
+          <img
+            src={src}
+            alt=""
+            width={96}
+            height={96}
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <span className="text-[22px] font-extrabold tracking-[-0.02em] text-muted">
+            {initialsFor(persona.name)}
+          </span>
+        )}
+      </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        className="hidden"
+        onChange={e => {
+          const file = e.target.files?.[0];
+          if (file) onPick(file);
+          // Reset so picking the same file twice still fires onChange.
+          e.target.value = '';
+        }}
+      />
+      <div className="flex flex-wrap gap-1.5">
+        <Btn sm onClick={() => inputRef.current?.click()} disabled={uploading}>
+          {uploading ? '…' : hasAvatar ? 'Replace' : 'Upload'}
+        </Btn>
+        {hasAvatar && (
+          <Btn sm tone="danger" onClick={onClear} disabled={uploading}>
+            Remove
+          </Btn>
+        )}
+      </div>
+      <div className="text-[10px] leading-[1.4] text-muted">
+        Square crop, 512px. PNG/JPEG/WebP.
+      </div>
+    </div>
+  );
 }
 
 function personaValid(p: Persona): boolean {
@@ -176,6 +290,13 @@ export default function PersonasPanel() {
   const [focusIdx, setFocusIdx] = useState(0);
   // toggles the system-prompt editor card
   const [showPrompt, setShowPrompt] = useState(false);
+  // Bumped on every avatar mutation. Appended as ?v=… so the admin <img>
+  // refetches even though the public endpoint caches for an hour — the cache
+  // is right for listeners, wrong for the operator who just uploaded.
+  const [avatarTick, setAvatarTick] = useState(0);
+  // Per-persona "uploading" flag — drives the spinner / disables the buttons
+  // while the request is in flight.
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
 
   const load = async () => {
     try {
@@ -219,6 +340,7 @@ export default function PersonasPanel() {
             frequency: p.frequency ?? 'moderate',
             scriptLength: p.scriptLength ?? 'concise',
             soul: p.soul ?? '',
+            avatar: typeof p.avatar === 'string' ? p.avatar : '',
             tts: {
               engine: p.tts?.engine ?? 'piper',
               cloudProvider: p.tts?.cloudProvider ?? 'openai',
@@ -250,6 +372,7 @@ export default function PersonasPanel() {
         personas: [...f.personas, {
           id: clientMintId(), name: 'New persona', tagline: '',
           frequency: 'moderate', scriptLength: 'concise', soul: '',
+          avatar: '',
           tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella' },
           skills: (data?.skills?.catalog || []).map(s => s.name),
         }],
@@ -266,6 +389,67 @@ export default function PersonasPanel() {
       const activePersonaId = target.id === f.activePersonaId ? fallback : f.activePersonaId;
       return { ...f, personas, activePersonaId };
     });
+
+  // Avatar mutations talk to the dedicated upload endpoints, then update the
+  // local form so the basename round-trips through any subsequent save. Each
+  // mutation bumps avatarTick so the <img> cache-buster query string flips.
+  const uploadAvatar = async (personaId: string, file: File) => {
+    setUploadingId(personaId);
+    try {
+      const dataUrl = await fileToAvatarDataUrl(file);
+      const r = await adminFetch(`/personas/${encodeURIComponent(personaId)}/avatar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataUrl }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; avatar?: string };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const filename = j.avatar || '';
+      setForm(f =>
+        f
+          ? {
+              ...f,
+              personas: f.personas.map(p =>
+                p.id === personaId ? { ...p, avatar: filename } : p,
+              ),
+            }
+          : f,
+      );
+      setAvatarTick(t => t + 1);
+      notify.ok('avatar uploaded');
+    } catch (e) {
+      notify.err(errorMessage(e));
+    } finally {
+      setUploadingId(null);
+    }
+  };
+
+  const clearAvatar = async (personaId: string) => {
+    setUploadingId(personaId);
+    try {
+      const r = await adminFetch(`/personas/${encodeURIComponent(personaId)}/avatar`, {
+        method: 'DELETE',
+      });
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      setForm(f =>
+        f
+          ? {
+              ...f,
+              personas: f.personas.map(p =>
+                p.id === personaId ? { ...p, avatar: '' } : p,
+              ),
+            }
+          : f,
+      );
+      setAvatarTick(t => t + 1);
+      notify.ok('avatar removed');
+    } catch (e) {
+      notify.err(errorMessage(e));
+    } finally {
+      setUploadingId(null);
+    }
+  };
 
   // ── validation ───────────────────────────────────────────────────────────
   const promptText = form ? form.systemPrompt.trim() : '';
@@ -290,6 +474,7 @@ export default function PersonasPanel() {
             frequency: p.frequency,
             scriptLength: p.scriptLength,
             soul: p.soul.trim(),
+            avatar: p.avatar || '',
             tts: {
               engine: p.tts.engine,
               cloudProvider: p.tts.cloudProvider,
@@ -556,7 +741,14 @@ export default function PersonasPanel() {
               </>
             }
           >
-            <div className="stack-mobile grid grid-cols-[1fr_1fr] gap-4">
+            <div className="stack-mobile grid grid-cols-[96px_1fr_1fr] items-start gap-4">
+              <PersonaAvatarPicker
+                persona={focused}
+                tick={avatarTick}
+                uploading={uploadingId === focused.id}
+                onPick={file => uploadAvatar(focused.id, file)}
+                onClear={() => clearAvatar(focused.id)}
+              />
               <div className="field">
                 <Label>On-air name</Label>
                 <Input
