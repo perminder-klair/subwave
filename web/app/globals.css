@@ -1253,6 +1253,26 @@ body::after {
     color: var(--muted);
 }
 
+/* Command reference — each command gets its own copy box, with a one-line
+   description grouped tighter than the surrounding section rhythm. */
+.bs-cmd-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.bs-cmd {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.bs-cmd p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--muted);
+    max-width: 64ch;
+}
+
 /* Prerequisites checklist — three scannable items with a hollow accent
    square marker, replacing three stacked sections. */
 .bs-checklist {

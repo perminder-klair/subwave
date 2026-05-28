@@ -30,11 +30,12 @@ export default function Updates() {
           </tbody>
         </table>
 
-        <p className="mt-4">Typical manual deploy:</p>
+        <p className="mt-4">
+          Typical manual deploy — pull, rebuild only what changed (here, controller
+          + web), then verify:
+        </p>
         <CodeBlock>{`git pull --ff-only
-# rebuild only what changed (example: controller + web)
 docker compose up -d --build controller web
-# then verify
 ./scripts/health-check.sh`}</CodeBlock>
 
         <div className="bs-callout">
@@ -44,8 +45,8 @@ docker compose up -d --build controller web
             <code className="bs-code-inline">curl cli.getsubwave.com | sh</code>, two
             commands cover both update axes:
           </p>
-          <CodeBlock>{`subwave update         # pull new images, recreate changed services
-subwave self-update    # replace the CLI binary itself with the latest release`}</CodeBlock>
+          <CodeBlock>{`subwave update`}</CodeBlock>
+          <CodeBlock>{`subwave self-update`}</CodeBlock>
           <p className="text-muted">
             <code className="bs-code-inline">subwave update</code> is a docker
             pull + up -d wrapper that knows which compose file is live;{' '}
@@ -59,10 +60,11 @@ subwave self-update    # replace the CLI binary itself with the latest release`}
           <p>
             If you&apos;re pulling prebuilt images from{' '}
             <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-*</code>{' '}
-            without the CLI, the rebuild step becomes a pull:
+            without the CLI, the rebuild step becomes a pull (pin{' '}
+            <code className="bs-code-inline">SUBWAVE_VERSION</code> in{' '}
+            <code className="bs-code-inline">.env</code> first):
           </p>
-          <CodeBlock>{`# pin SUBWAVE_VERSION in .env, then:
-docker compose pull
+          <CodeBlock>{`docker compose pull
 docker compose up -d`}</CodeBlock>
           <p className="text-muted">
             Same flow if you&apos;re on{' '}

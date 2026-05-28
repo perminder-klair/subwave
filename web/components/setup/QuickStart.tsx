@@ -23,8 +23,8 @@ export default function QuickStart() {
         </p>
         <div className="bs-faststart">
           <p className="bs-eyebrow">TWO COMMANDS</p>
-          <CodeBlock>{`curl -fsSL https://cli.getsubwave.com | sh
-subwave setup`}</CodeBlock>
+          <CodeBlock>{`curl -fsSL https://cli.getsubwave.com | sh`}</CodeBlock>
+          <CodeBlock>{`subwave setup`}</CodeBlock>
           <p className="text-muted">
             The installer prompts <em>Run subwave init now?</em> — say yes and{' '}
             <code className="bs-code-inline">init</code> asks where to install
@@ -93,13 +93,14 @@ subwave setup`}</CodeBlock>
           <strong>Cursor</strong>, or anything else that reads{' '}
           <code className="bs-code-inline">AGENTS.md</code>.
         </p>
-        <p>Clone the repo, open your agent in it, and say one of:</p>
+        <p>Clone the repo and open your agent in it:</p>
         <CodeBlock>{`git clone https://github.com/perminder-klair/subwave.git
-cd subwave
-# then in your agent of choice, ask:
-# "set up subwave"
-# "deploy subwave"
-# "pull and restart"`}</CodeBlock>
+cd subwave`}</CodeBlock>
+        <p>
+          Then ask your agent one of: <em>&ldquo;set up subwave&rdquo;</em>,{' '}
+          <em>&ldquo;deploy subwave&rdquo;</em>, or{' '}
+          <em>&ldquo;pull and restart&rdquo;</em>.
+        </p>
         <div className="bs-callout">
           <div className="bs-eyebrow">WHY USE THE SKILL</div>
           <p>

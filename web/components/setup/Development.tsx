@@ -52,29 +52,81 @@ export default function Development() {
           <code className="bs-code-inline">package.json</code> so you don't have to remember
           them:
         </p>
-        <CodeBlock>{`npm run setup        # interactive wizard (writes envs, brings the stack up)
-npm run dev          # alias for setup — same wizard
-npm run dev:docker   # docker compose up -d        (radio backend only)
-npm run dev:web      # next dev on :7700           (hot-reloaded UI)
-npm run rebuild      # docker compose up -d --build  (rarely needed in dev — controller/src and radio.liq are bind-mounted)
-npm run logs         # tail docker logs
-npm run jingles      # render station idents via Piper
-npm run down         # stop the stack`}</CodeBlock>
+        <div className="bs-cmd-list">
+          <div className="bs-cmd">
+            <CodeBlock>{`npm run setup`}</CodeBlock>
+            <p>Interactive wizard — writes envs, brings the stack up.</p>
+          </div>
+          <div className="bs-cmd">
+            <CodeBlock>{`npm run dev`}</CodeBlock>
+            <p>Alias for setup — same wizard.</p>
+          </div>
+          <div className="bs-cmd">
+            <CodeBlock>{`npm run dev:docker`}</CodeBlock>
+            <p>
+              <code className="bs-code-inline">docker compose up -d</code> — radio
+              backend only.
+            </p>
+          </div>
+          <div className="bs-cmd">
+            <CodeBlock>{`npm run dev:web`}</CodeBlock>
+            <p>
+              <code className="bs-code-inline">next dev</code> on{' '}
+              <code className="bs-code-inline">:7700</code> — hot-reloaded UI.
+            </p>
+          </div>
+          <div className="bs-cmd">
+            <CodeBlock>{`npm run rebuild`}</CodeBlock>
+            <p>
+              <code className="bs-code-inline">docker compose up -d --build</code> —
+              rarely needed in dev, since <code className="bs-code-inline">controller/src</code>{' '}
+              and <code className="bs-code-inline">radio.liq</code> are bind-mounted.
+            </p>
+          </div>
+          <div className="bs-cmd">
+            <CodeBlock>{`npm run logs`}</CodeBlock>
+            <p>Tail docker logs.</p>
+          </div>
+          <div className="bs-cmd">
+            <CodeBlock>{`npm run jingles`}</CodeBlock>
+            <p>Render station idents via Piper.</p>
+          </div>
+          <div className="bs-cmd">
+            <CodeBlock>{`npm run down`}</CodeBlock>
+            <p>Stop the stack.</p>
+          </div>
+        </div>
       </section>
 
       <section className="bs-section">
         <p className="bs-eyebrow">A TYPICAL SESSION</p>
         <h2>Backend in Docker, UI on the host.</h2>
-        <CodeBlock>{`# one-time, in two terminals:
-npm run dev:docker   # terminal 1: radio backend (broadcast + controller)
-npm run dev:web      # terminal 2: Next.js on http://localhost:7700
-
-# editing web/** — saves are hot-reloaded, no docker action needed.
-# editing controller/src/** — tsx watch restarts the process in-place.
-# editing liquidsoap/radio.liq:
-docker compose -f docker-compose.dev.yml restart broadcast   # bind-mounted in dev, no rebuild needed
-# editing controller/src/** in prod, or any radio.liq change in prod:
-docker compose up -d --build controller   # or 'broadcast' for radio.liq changes`}</CodeBlock>
+        <p>One-time, in two terminals:</p>
+        <div className="bs-cmd-list">
+          <div className="bs-cmd">
+            <CodeBlock>{`npm run dev:docker`}</CodeBlock>
+            <p>Terminal 1 — radio backend (broadcast + controller).</p>
+          </div>
+          <div className="bs-cmd">
+            <CodeBlock>{`npm run dev:web`}</CodeBlock>
+            <p>Terminal 2 — Next.js on http://localhost:7700.</p>
+          </div>
+        </div>
+        <p>
+          From there, edits to <code className="bs-code-inline">web/**</code> hot-reload with
+          no Docker action, and <code className="bs-code-inline">controller/src/**</code>{' '}
+          restarts in place under <code className="bs-code-inline">tsx watch</code>. A{' '}
+          <code className="bs-code-inline">liquidsoap/radio.liq</code> change in dev needs a
+          broadcast restart:
+        </p>
+        <CodeBlock>{`docker compose -f docker-compose.dev.yml restart broadcast`}</CodeBlock>
+        <p>
+          In prod, a <code className="bs-code-inline">controller/src/**</code> or{' '}
+          <code className="bs-code-inline">radio.liq</code> change needs a rebuild and
+          recreate (swap <code className="bs-code-inline">controller</code> for{' '}
+          <code className="bs-code-inline">broadcast</code> for radio.liq changes):
+        </p>
+        <CodeBlock>{`docker compose up -d --build controller`}</CodeBlock>
 
         <div className="bs-callout">
           <div className="bs-eyebrow">DEV HOT-RELOADS · PROD NEEDS A REBUILD</div>

@@ -110,8 +110,8 @@ export default function OperatorCli() {
           just speed — append the action after <code className="bs-code-inline">npm start
           --</code>:
         </p>
-        <CodeBlock>{`npm start -- status        # print a snapshot, then exit
-npm start -- doctor        # run the full sweep, then exit
+        <CodeBlock>{`npm start -- status
+npm start -- doctor
 npm start -- logs controller
 npm start -- restart controller`}</CodeBlock>
         <p className="text-muted">

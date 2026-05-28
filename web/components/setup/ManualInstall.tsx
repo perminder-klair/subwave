@@ -144,7 +144,11 @@ $EDITOR .env`}</CodeBlock>
           <div className="bs-step-num">03</div>
           <div className="bs-step-body">
             <h3>Finish setup in the browser</h3>
-            <CodeBlock>{`open http://localhost:7700/onboarding   # or https://your-host/onboarding`}</CodeBlock>
+            <CodeBlock>{`open http://localhost:7700/onboarding`}</CodeBlock>
+            <p className="text-muted">
+              Or <code className="bs-code-inline">https://your-host/onboarding</code>{' '}
+              if you&apos;re not on localhost.
+            </p>
             <p>
               Sign in with the{' '}
               <code className="bs-code-inline">ADMIN_USER</code> /{' '}

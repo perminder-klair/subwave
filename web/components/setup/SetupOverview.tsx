@@ -44,8 +44,8 @@ export default function SetupOverview() {
             <code className="bs-code-inline">start</code>, then{' '}
             <code className="bs-code-inline">setup</code> finishes the configuration.
           </p>
-          <CodeBlock>{`curl -fsSL https://cli.getsubwave.com | sh
-subwave setup`}</CodeBlock>
+          <CodeBlock>{`curl -fsSL https://cli.getsubwave.com | sh`}</CodeBlock>
+          <CodeBlock>{`subwave setup`}</CodeBlock>
           <p className="text-muted">
             The installer drops the <code className="bs-code-inline">subwave</code>{' '}
             binary, then prompts <em>Run subwave init now?</em> — say yes and it
