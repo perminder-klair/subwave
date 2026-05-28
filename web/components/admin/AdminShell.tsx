@@ -23,6 +23,7 @@ import type { SignInResult } from '../../lib/adminAuth';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
 import OdometerNumber from '../OdometerNumber';
+import ThemeSwitcher from '../ThemeSwitcher';
 import { Toaster } from '../ui/toaster';
 import { animate as motionAnimate } from 'motion/react';
 
@@ -250,6 +251,7 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
               </span>
             </>
           )}
+          <ThemeSwitcher variant="admin" />
           <Link href="/" className="caption text-muted no-underline">
             ← player
           </Link>
@@ -262,6 +264,7 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
       )}
       {!signedIn && (
         <span className="right">
+          <ThemeSwitcher variant="admin" />
           <Link href="/" className="caption text-muted no-underline">
             ← player
           </Link>

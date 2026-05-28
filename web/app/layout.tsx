@@ -93,9 +93,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       </head>
       <body suppressHydrationWarning>
         <MotionProvider>
-          <ThemeBootstrap />
-          <ServiceWorkerRegister />
-          {children}
+          <ThemeBootstrap>
+            <ServiceWorkerRegister />
+            {children}
+          </ThemeBootstrap>
         </MotionProvider>
       </body>
       {GA_ID ? <GoogleAnalytics gaId={GA_ID} /> : null}

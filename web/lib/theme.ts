@@ -21,6 +21,7 @@ export type ThemeTokenKey = (typeof THEME_TOKEN_KEYS)[number];
 
 const TOKEN_KEY_SET = new Set<string>(THEME_TOKEN_KEYS);
 const TOKEN_CACHE_KEY = 'subwave-theme-tokens';
+const OVERRIDE_KEY = 'subwave-theme-override';
 
 export type ThemeMode = 'light' | 'dark';
 
@@ -76,6 +77,32 @@ export function loadCachedTheme(): Theme | null {
   } catch {
     return null;
   }
+}
+
+/** Read the listener's per-browser theme override id. When set, the
+ *  ThemeProvider applies this theme instead of the station's active one — so
+ *  a listener can pick a palette they prefer without affecting anyone else.
+ *  Returns null when no override is stored or storage is unreadable. */
+export function loadThemeOverride(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(OVERRIDE_KEY);
+    return raw && raw.length > 0 ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Save or clear the listener's per-browser theme override. Pass null to
+ *  drop the override and re-follow the station default. Failures (private
+ *  mode, quota) are swallowed — the override is a nice-to-have, not load-
+ *  bearing. */
+export function saveThemeOverride(id: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (id) window.localStorage.setItem(OVERRIDE_KEY, id);
+    else window.localStorage.removeItem(OVERRIDE_KEY);
+  } catch { /* private mode / quota — non-fatal */ }
 }
 
 // Pre-hydration <script> body — applies the cached theme's tokens onto <html>

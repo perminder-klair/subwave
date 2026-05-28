@@ -4,6 +4,7 @@ import { Headphones } from 'lucide-react';
 import { buildTagline } from '@/lib/tagline';
 import { cn } from '@/lib/cn';
 import OdometerNumber from './OdometerNumber';
+import ThemeSwitcher from './ThemeSwitcher';
 import type { ActiveShow, ListenerCount, StationContext } from '@/lib/types';
 
 export interface TopBarProps {
@@ -111,6 +112,7 @@ export default function TopBar({
             <OdometerNumber value={listenerObj.current} />
           </span>
         )}
+        <ThemeSwitcher variant="player" />
       </div>
     </div>
   );
