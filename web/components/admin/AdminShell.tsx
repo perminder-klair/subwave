@@ -31,7 +31,12 @@ interface NavItem {
   href: string;
   id: string;
   label: string;
-  icon: ComponentType<{ className?: string; size?: number; strokeWidth?: number; 'aria-hidden'?: boolean | 'true' | 'false' }>;
+  icon: ComponentType<{
+    className?: string;
+    size?: number;
+    strokeWidth?: number;
+    'aria-hidden'?: boolean | 'true' | 'false';
+  }>;
   pill?: string;
 }
 
@@ -178,8 +183,6 @@ export default function AdminShell({ children }: AdminShellProps) {
             sub / wave
             <br />
             admin console
-            <br />
-            newsprint v3
           </div>
         </nav>
         <main className="min-w-0">
@@ -215,9 +218,14 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
   const current = NAV.find(n => pathname?.startsWith(n.href))?.label || 'Admin';
   const { nowPlaying, listeners } = useStationFeed();
   const onAir = !!nowPlaying?.title;
-  const listenersObj = (listeners && typeof listeners === 'object') ? listeners as { current?: number; count?: number } : null;
+  const listenersObj =
+    listeners && typeof listeners === 'object'
+      ? (listeners as { current?: number; count?: number })
+      : null;
   const count =
-    listenersObj?.current ?? listenersObj?.count ?? (typeof listeners === 'number' ? listeners : null);
+    listenersObj?.current ??
+    listenersObj?.count ??
+    (typeof listeners === 'number' ? listeners : null);
 
   const dotRef = useRef<HTMLSpanElement>(null);
   useDynamicStyle(dotRef, { background: onAir ? 'var(--accent)' : 'var(--muted)' });
@@ -227,7 +235,11 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
   const wasOnAirRef = useRef(onAir);
   useEffect(() => {
     if (onAir && !wasOnAirRef.current && dotRef.current) {
-      motionAnimate(dotRef.current, { scale: [1.4, 1] }, { duration: 0.18, ease: [0.2, 0.7, 0.2, 1] });
+      motionAnimate(
+        dotRef.current,
+        { scale: [1.4, 1] },
+        { duration: 0.18, ease: [0.2, 0.7, 0.2, 1] },
+      );
     }
     wasOnAirRef.current = onAir;
   }, [onAir]);
