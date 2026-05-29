@@ -38,6 +38,20 @@ export function composeDown(file: ComposeFile): Promise<number> {
   return run(file, ['down']);
 }
 
+// `docker compose down` with optional `-v` (remove named volumes) and
+// `--rmi all` (remove the service images). Only `subwave uninstall` reaches
+// for these — the command layer gates them behind explicit flags + a confirm,
+// because `-v` is destructive and `--rmi all` forces a re-pull next install.
+export function composeDownFull(
+  file: ComposeFile,
+  opts: { volumes?: boolean; rmi?: boolean } = {},
+): Promise<number> {
+  const a = ['down', '--remove-orphans'];
+  if (opts.volumes) a.push('-v');
+  if (opts.rmi) a.push('--rmi', 'all');
+  return run(file, a);
+}
+
 export function composeRestart(file: ComposeFile, service: string): Promise<number> {
   return run(file, ['restart', service]);
 }

@@ -34,6 +34,7 @@ Usage:
   subwave listen [dev|prod] open the web player in a browser
   subwave admin [dev|prod] open the admin console in a browser
   subwave self-update      replace the installed binary with the latest release
+  subwave uninstall        tear down the stack + remove the install (keeps state/)
 
 Flags:
   --home <path>            override SUBWAVE_HOME for this invocation
@@ -46,6 +47,12 @@ init flags:
   --admin-user <user>      admin username (default: admin)
   --admin-pass <pass>      admin password (default: randomly generated)
   --site-url <url>         public site URL (default: none)
+
+uninstall flags:
+  --purge                  also remove the whole install dir (incl. state/) + volumes
+  --images                 also remove the pulled ghcr images
+  --binary                 also remove the subwave binary
+  --yes, -y                skip the confirmation prompt
 
   subwave help             show this message
   subwave --version        print version
@@ -105,6 +112,19 @@ async function main(): Promise<void> {
       version = a.startsWith('--version=') ? a.slice('--version='.length) : rest[versionFlagIdx + 1];
     }
     await runSelfUpdateCommand({ version });
+    return;
+  }
+  if (cmd === 'uninstall') {
+    // Handled before the resolved-home gate: uninstall must work even when the
+    // install is half-broken (no .env, stale stack), and can still clean up
+    // CLI config + binary when there's no home at all.
+    const { runUninstallCommand } = await import('./commands/uninstall.ts');
+    await runUninstallCommand({
+      yes: rest.includes('--yes') || rest.includes('-y'),
+      purge: rest.includes('--purge'),
+      images: rest.includes('--images'),
+      binary: rest.includes('--binary'),
+    });
     return;
   }
 
