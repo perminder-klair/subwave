@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.29](https://github.com/perminder-klair/subwave/compare/v0.1.28...v0.1.29) (2026-05-28)
+
+
+### Bug Fixes
+
+* **controller:** dj-agent recovery returns valid ids + pick.rejected observability ([#199](https://github.com/perminder-klair/subwave/issues/199)) ([ff4c22e](https://github.com/perminder-klair/subwave/commit/ff4c22e152088e380914bdabb311c93ab578bafb))
+* **web:** drop dead T theme shortcut, document 4 → Schedule in player help ([#198](https://github.com/perminder-klair/subwave/issues/198)) ([c7df977](https://github.com/perminder-klair/subwave/commit/c7df9776b665d3e36d221921aea51d3f3675f121))
+
+
+### Documentation
+
+* **web:** thin em-dash density in manual and setup pages ([#200](https://github.com/perminder-klair/subwave/issues/200)) ([34b3b78](https://github.com/perminder-klair/subwave/commit/34b3b782a5789c7f0c3a8ce98a1ad1c1c0701419))
+
 ## [0.1.28](https://github.com/perminder-klair/subwave/compare/v0.1.27...v0.1.28) (2026-05-28)
 
 
