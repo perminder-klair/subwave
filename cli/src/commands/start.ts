@@ -16,6 +16,7 @@ import {
   getComposeFiles,
   detectCompose,
   inferEnvFromFilesystem,
+  runningImageRefs,
   webBaseFor,
   type ComposeEnv,
   type ComposeFile,
@@ -23,6 +24,7 @@ import {
 import { composeUp, dockerSocketPermissionDenied } from '../docker.ts';
 import { waitForHealth, checkNeedsSetup } from '../api.ts';
 import { loadConfig, saveConfig } from '../config.ts';
+import { parseEnvFile, getRootEnv } from '../util.ts';
 import { ok, warn, err, info, muted, p, pc, pauseForEnter, header } from '../ui.ts';
 import { maybeStartWebDev } from '../web-dev.ts';
 
@@ -39,6 +41,7 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
   if (current.env !== 'down') {
     header('Already running');
     info(`stack is already up — env=${current.env}`);
+    warnIfVersionMismatch(current.file);
     muted('→ use `subwave restart` to bounce a service, or `subwave stop` first.');
     await pauseForEnter();
     return;
@@ -179,4 +182,32 @@ function resolveEnv(arg?: StartableEnv): ComposeFile | null {
   err('could not resolve env from install state');
   muted('→ pass `subwave start dev|prod|prod-byo` explicitly, or run `subwave init` to scaffold a fresh install.');
   return null;
+}
+
+// When a stack is already up, flag if its image tags don't match the version
+// this install expects (process.env.SUBWAVE_VERSION → root .env → 'latest').
+// Catches a stale or different-version stack — e.g. a leftover `:pocket`
+// build — silently occupying the container names a fresh install reuses, so
+// the operator doesn't mistake it for their new install (see the v0.1.30
+// install where a 44-min-old `:pocket` stack masked a fresh scaffold).
+function warnIfVersionMismatch(file: ComposeFile | null): void {
+  if (!file) return;
+  let expected = process.env.SUBWAVE_VERSION?.trim();
+  if (!expected) {
+    try { expected = parseEnvFile(getRootEnv()).SUBWAVE_VERSION?.trim(); } catch { /* no .env yet */ }
+  }
+  expected = expected || 'latest';
+
+  const tags = new Set(
+    runningImageRefs(file)
+      .filter((r) => r.includes('subwave-'))
+      .map((r) => r.slice(r.lastIndexOf(':') + 1))
+      .filter(Boolean),
+  );
+  const mismatched = [...tags].filter((t) => t !== expected);
+  if (mismatched.length === 0) return;
+
+  warn(`running images are tagged ${[...tags].map((t) => `:${t}`).join(', ')}, but this install expects :${expected}.`);
+  muted('  Looks like a stale or different-version stack. To replace it:');
+  muted('    subwave stop   (then)   subwave start');
 }

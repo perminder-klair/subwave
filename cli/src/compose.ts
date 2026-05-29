@@ -146,6 +146,28 @@ function listServices(f: ComposeFile): Record<string, string> {
   return out;
 }
 
+// Image refs (repo:tag) of the project's containers — running or stopped.
+// `start` uses this to warn when an already-up stack is a different version
+// than the install expects (e.g. a stale locally-tagged build, or a
+// :pocket/dev image, masking the release the .env pins).
+export function runningImageRefs(file: ComposeFile): string[] {
+  const r = spawnSync(
+    'docker',
+    ['compose', '-f', file.file, 'ps', '--format', 'json', '--all'],
+    { cwd: getSubwaveHome(), encoding: 'utf8' },
+  );
+  if (r.status !== 0) return [];
+  const refs = new Set<string>();
+  for (const line of r.stdout.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const row = JSON.parse(line) as { Image?: string };
+      if (row.Image) refs.add(row.Image);
+    } catch { /* skip bad lines */ }
+  }
+  return [...refs];
+}
+
 // BYO mode honours the same WEB_PORT / CONTROLLER_PORT / ICECAST_PORT env
 // vars the byo-proxy compose file uses, so the operator can override host
 // bindings without the CLI losing track of where the services actually live.
