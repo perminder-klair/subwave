@@ -5,7 +5,7 @@ import CodeBlock from "@/components/CodeBlock";
 export default function OperatorCli() {
   return (
     <ManualPage
-      eyebrow="MANUAL · 08"
+      eyebrow="MANUAL · 09"
       title="The operator console."
       intro="SUB/WAVE ships a command-line console for running the station. One command opens a menu that boots the stack, checks its health, tails logs, and opens a terminal player — no Docker flags to remember."
       current="/manual/cli"

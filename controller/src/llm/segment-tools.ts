@@ -184,5 +184,33 @@ export function buildSegmentTools(ctx: any, state: any, caps: any[]) {
     });
   }
 
+  // Operator-dropped custom skills (state/skills) that ship a tool.mjs get
+  // their data fetcher wrapped as a tool here. The fetcher runs operator-
+  // supplied code, so it is fenced behind a hard timeout + try/catch — a slow
+  // or throwing skill degrades to "no data" rather than hanging the tick.
+  for (const cap of caps as any[]) {
+    if (!cap.custom || typeof cap.toolFn !== 'function') continue;
+    tools[cap.toolName] = tool({
+      description: cap.toolDesc,
+      inputSchema: z.object({}),
+      execute: async () => {
+        try {
+          return await withTimeout(Promise.resolve(cap.toolFn(ctx, state)), 8000);
+        } catch (err: any) {
+          return { error: err?.message || String(err) };
+        }
+      },
+    });
+  }
+
   return tools;
+}
+
+// Resolve `p`, or reject after `ms` — keeps an operator skill's tool.mjs from
+// stalling the segment tick indefinitely.
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((res, rej) => {
+    const t = setTimeout(() => rej(new Error(`tool timed out after ${ms}ms`)), ms);
+    p.then(v => { clearTimeout(t); res(v); }, e => { clearTimeout(t); rej(e); });
+  });
 }

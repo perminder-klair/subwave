@@ -28,6 +28,11 @@ const GUIDE = [
     blurb: 'The AI behind the desk: how it picks songs, when it talks, and who it sounds like.',
   },
   {
+    href: '/manual/skills',
+    label: 'Custom Skills',
+    blurb: 'Add your own between-track segments — drop a SKILL.md into state/skills and the DJ can run it.',
+  },
+  {
     href: '/manual/admin',
     label: 'Admin & Settings',
     blurb: 'For the operator — signing in, tuning the DJ, scheduling shows, and managing jingles.',
@@ -64,7 +69,7 @@ export default function Overview() {
     >
       <section className="bs-section">
         <p className="bs-eyebrow">WHAT'S INSIDE</p>
-        <h2>Ten short guides.</h2>
+        <h2>Eleven short guides.</h2>
         <p>
           Start at the top if you're new. Each page links to the next, so you can read
           straight through, or jump to whatever you need from the contents on the left.

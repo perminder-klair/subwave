@@ -1,0 +1,130 @@
+import ManualPage from './ManualPage';
+import CodeBlock from "@/components/CodeBlock";
+
+export default function CustomSkills() {
+  return (
+    <ManualPage
+      eyebrow="MANUAL · 06"
+      title="Custom skills."
+      intro="The things the DJ does between tracks — a weather check, a headline, a traffic gag — are skills. A handful ship built in. You can add your own by dropping a folder into state/skills, no code changes to the station."
+      current="/manual/skills"
+    >
+      <section className="bs-section">
+        <p className="bs-eyebrow">WHAT A SKILL IS</p>
+        <h2>One thing: a between-track line.</h2>
+        <p>
+          A SUB/WAVE skill is a single between-track <em>spoken segment</em> — the DJ
+          glances at something, then either says one short line over the music or stays
+          quiet. The format borrows from{' '}
+          <a href="https://github.com/anthropics/skills" target="_blank" rel="noreferrer">
+            Anthropic&rsquo;s skills
+          </a>{' '}
+          — a <code className="bs-code-inline">SKILL.md</code> with YAML frontmatter and a
+          markdown body, plus optional code — but the meaning is narrower. These don&rsquo;t
+          process documents or run tasks; they decide what the DJ says next.
+        </p>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">THE LAYOUT</p>
+        <h2>A folder under state/skills.</h2>
+        <p>
+          Drop a folder into <code className="bs-code-inline">state/skills/</code>. It needs a{' '}
+          <code className="bs-code-inline">SKILL.md</code>; an optional{' '}
+          <code className="bs-code-inline">tool.mjs</code> lets the segment look at live data
+          before the DJ speaks.
+        </p>
+        <CodeBlock>{`state/skills/
+  moon-phase/
+    SKILL.md      # frontmatter (→ settings) + body (→ the DJ's brief)
+    tool.mjs      # OPTIONAL: a data fetcher the DJ can call`}</CodeBlock>
+        <p>
+          A ready-to-copy example ships in the repo at{' '}
+          <code className="bs-code-inline">docs/examples/skills/moon-phase</code>. Copy it
+          into <code className="bs-code-inline">state/skills/</code> and hit{' '}
+          <strong>Rescan</strong> on the admin Skills page.
+        </p>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">SKILL.md</p>
+        <h2>Frontmatter, then the brief.</h2>
+        <p>
+          The frontmatter sets the skill&rsquo;s metadata; the markdown body <em>is</em> the
+          brief the DJ follows — what to say, in what tone, and when to stay silent. Only a
+          non-empty body is required; every key has a sensible default.
+        </p>
+        <CodeBlock>{`---
+name: moon-phase          # the slug (defaults to the folder name)
+label: Moon phase         # label shown in admin (defaults to a title-cased name)
+cooldown: 6h              # min gap between auto firings — "90m" | "6h" | "2d" | "45" (minutes)
+window: any               # "any" (default) | "commute" — commute hours only
+requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; unset → stays inert
+---
+If tonight's moon is at a notable phase, work it into one short, in-character
+line, the way a late-night presenter might glance out the window. Skip it when
+the phase is unremarkable.`}</CodeBlock>
+        <p className="text-muted">
+          The <code className="bs-code-inline">name</code> must be a lowercase slug and
+          can&rsquo;t shadow a built-in skill. Bad frontmatter is logged and skipped — it
+          never crashes the station.
+        </p>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">tool.mjs — OPTIONAL</p>
+        <h2>Let the DJ look before it speaks.</h2>
+        <p>
+          With a <code className="bs-code-inline">tool.mjs</code>, the DJ can fetch live data
+          before deciding whether to air the line — the same mechanism the built-in weather
+          and news skills use. Export a default function; return any JSON, and use{' '}
+          <code className="bs-code-inline">{`{ available: false }`}</code> to tell the DJ
+          there&rsquo;s nothing worth airing.
+        </p>
+        <CodeBlock>{`export default async function (ctx, state) {
+  // ctx   — the moment: { time, weather, festival, dominantMood, clock }
+  // state — cross-tick memory (persists between firings)
+  return { available: true, phase: 'full moon', illumination: 100 };
+}`}</CodeBlock>
+        <p>
+          The call is timeout-guarded and any error degrades cleanly to &ldquo;no
+          data&rdquo; — a slow or broken skill can never hang the station. With no{' '}
+          <code className="bs-code-inline">tool.mjs</code>, the skill writes from its brief
+          alone (like the built-in traffic gag).
+        </p>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">IT RUNS YOUR CODE</div>
+          <p>
+            <code className="bs-code-inline">tool.mjs</code> executes inside the controller —
+            the same trust model as installing a local tool. Only drop in code you&rsquo;ve
+            read and trust.
+          </p>
+        </div>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">GOING LIVE</p>
+        <h2>Discovered, then enabled by you.</h2>
+        <p>
+          A freshly dropped skill appears on the admin <strong>Skills</strong> page toggled{' '}
+          <strong>off</strong>. It can&rsquo;t air — by itself or via the DJ — until you
+          enable it there. Dropping a folder never puts unreviewed content (or code) on air.
+        </p>
+        <p>
+          Skills load at boot, and on demand via the <strong>Rescan state/skills</strong>{' '}
+          button on that page — which picks up new folders and edits to{' '}
+          <code className="bs-code-inline">SKILL.md</code> /{' '}
+          <code className="bs-code-inline">tool.mjs</code> without a restart. Like the
+          built-ins, a custom skill only fires autonomously when it&rsquo;s enabled{' '}
+          <em>and</em> assigned to the persona on air (Personas page). <strong>Run now</strong>{' '}
+          is an operator override that ignores the toggle, the persona, the frequency gate,
+          and the cooldown.
+        </p>
+        <p className="text-muted">
+          Full reference, including the example skill, lives in{' '}
+          <code className="bs-code-inline">docs/custom-skills.md</code>.
+        </p>
+      </section>
+    </ManualPage>
+  );
+}

@@ -25,6 +25,7 @@ interface Skill {
   requiresKey?: string;
   keyUrl?: string;
   cooldownMs?: number;
+  custom?: boolean;
 }
 
 interface SkillsResponse {
@@ -81,6 +82,7 @@ export default function SkillsPanel() {
   const [skills, setSkills] = useState<Skill[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);   // skill name currently mutating, or null
+  const [rescanning, setRescanning] = useState(false);
 
   useEffect(() => {
     if (!hydrated || needsAuth) return;
@@ -115,6 +117,19 @@ export default function SkillsPanel() {
     } catch (e) {
       notify.err(`Toggle failed: ${errorMessage(e)}`);
     } finally { setBusy(null); }
+  };
+
+  const rescan = async () => {
+    setRescanning(true);
+    try {
+      const r = await adminFetch('/dj/skills/rescan', { method: 'POST' });
+      const j = (await r.json().catch(() => ({}))) as SkillToggleResponse & { custom?: number };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      if (Array.isArray(j.skills)) setSkills(j.skills);
+      notify.ok(`Rescanned — ${j.custom ?? 0} custom skill${j.custom === 1 ? '' : 's'} loaded`);
+    } catch (e) {
+      notify.err(`Rescan failed: ${errorMessage(e)}`);
+    } finally { setRescanning(false); }
   };
 
   const runNow = async (name: string) => {
@@ -168,10 +183,20 @@ export default function SkillsPanel() {
             <strong> and</strong> assigned to the persona on air — set per-persona assignments
             on the Personas page. “Run now” is an operator override and ignores both.
           </div>
+          <div className="mt-1 text-[11px] leading-[1.6] text-muted">
+            Drop your own skills into <code>state/skills/&lt;name&gt;/SKILL.md</code> and hit
+            <strong> Rescan</strong>. Custom skills arrive <strong>disabled</strong> — review,
+            then enable them before they can air.
+          </div>
         </div>
         <div className="flex items-center gap-4 bg-[var(--ink-softer)] p-3.5">
           <span className="caption">{skills.length} skill{skills.length === 1 ? '' : 's'}</span>
           <span className="caption text-vermilion">{enabledCount} enabled</span>
+          <div className="ml-auto">
+            <Btn onClick={rescan} disabled={rescanning}>
+              {rescanning ? 'Rescanning…' : 'Rescan state/skills'}
+            </Btn>
+          </div>
         </div>
       </section>
 
@@ -183,6 +208,7 @@ export default function SkillsPanel() {
           sub={s.kind}
           right={
             <>
+              {s.custom && <Pill>custom</Pill>}
               <Pill tone={s.enabled ? 'accent' : 'default'} dot={s.enabled}>
                 {s.enabled ? 'enabled' : 'disabled'}
               </Pill>

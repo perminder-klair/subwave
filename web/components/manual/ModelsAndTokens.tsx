@@ -4,7 +4,7 @@ import ManualPage from './ManualPage';
 export default function ModelsAndTokens() {
   return (
     <ManualPage
-      eyebrow="MANUAL · 09"
+      eyebrow="MANUAL · 10"
       title="Models & tokens."
       intro="The AI DJ can run on a small model on your own hardware or a large hosted one — and a handful of settings let you tune the station for whichever you've picked, trading richness against cost."
       current="/manual/llm"

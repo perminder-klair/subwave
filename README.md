@@ -47,6 +47,7 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 - **Dual-codec broadcast.** MP3 192 kbps for Sonos, hardware radios, and cars; Ogg-Opus 96 kbps for modern browsers. The web player picks automatically.
 - **PWA + terminal player.** Installable on phone and desktop with lock-screen controls, plus a TUI for the command line.
 - **Scheduled shows.** A 24×7 grid; each slot has its own persona, mood, and skills.
+- **Pluggable skills.** The DJ's between-track segments — weather, news, traffic, and your own — are skills. Drop a `SKILL.md` (plus optional data-fetching code) into `state/skills/`, hit Rescan in the admin console, and enable it. See [`docs/custom-skills.md`](docs/custom-skills.md).
 - **Mood-aware rotation.** Time of day, weather, and festival days bias what gets played and how the DJ talks.
 - **Hourly archives.** Every hour saved as MP3 for later replay.
 - **Crossfade + voice ducking.** Tracks blend smoothly; the music ducks under DJ speech and lifts back up.

@@ -11,6 +11,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { skillCatalog, runCapability } from '../skills/_agent.js';
+import { loadCustomSkills } from '../skills/loader.js';
 import { skipTrack } from '../broadcast/liquidsoap-control.js';
 import { getFullContext } from '../context.js';
 
@@ -26,6 +27,22 @@ const SAY_KINDS = ['dj-speak', 'link'];
 // ---------------------------------------------------------------------------
 router.get('/dj/skills', requireAdmin, (req, res) => {
   res.json({ skills: skillCatalog() });
+});
+
+// ---------------------------------------------------------------------------
+// POST /dj/skills/rescan — reload operator-dropped custom skills from
+// state/skills (picks up new folders and edited SKILL.md / tool.mjs files
+// without a controller restart). Returns the refreshed catalogue.
+// ---------------------------------------------------------------------------
+router.post('/dj/skills/rescan', requireAdmin, async (req, res) => {
+  try {
+    const caps = await loadCustomSkills();
+    queue.log('scheduler', `[skills] rescanned — ${caps.length} custom skill(s) loaded`);
+    res.json({ skills: skillCatalog(), custom: caps.length });
+  } catch (err) {
+    queue.log('error', `/dj/skills/rescan failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------

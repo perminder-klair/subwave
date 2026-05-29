@@ -37,6 +37,7 @@ import { defineAgent } from '../llm/agent.js';
 import { buildContextLines } from '../llm/dj.js';
 import { buildSegmentTools } from '../llm/segment-tools.js';
 import { searchReady } from './web-search.js';
+import { customCapabilities } from './loader.js';
 import * as sfx from '../broadcast/sfx.js';
 
 // Capability table — the single source of truth for the DJ's between-track
@@ -96,10 +97,23 @@ const CAPABILITIES: any[] = [
   },
 ];
 
+// The full capability set the segment director operates over: the built-in
+// CAPABILITIES above plus operator-dropped custom skills loaded from
+// state/skills (see skills/loader.js). Everything downstream — the autonomous
+// tick, runCapability, skillCatalog, the admin toggles — iterates THIS, so a
+// dropped skill lights up the whole chain. Custom caps carry { custom: true }
+// and are gated more conservatively (disabled until the operator enables them).
+function allCapabilities(): any[] {
+  return [...CAPABILITIES, ...customCapabilities()];
+}
+
 const SEGMENT_SCHEMA = z.object({
   segment: z.object({
-    kind: z.enum(['weather', 'news', 'traffic', 'curiosity', 'album-anniversary', 'library-deep-cut', 'web-search'])
-      .describe('the segment kind — MUST be one offered in the system prompt for this tick'),
+    // Kept as a free string (not a fixed enum) so operator-dropped custom
+    // skills get valid kinds too. The agent is told which kinds are on offer in
+    // the system prompt, and agenticTick drops any kind it wasn't offered.
+    kind: z.string()
+      .describe('the segment kind — MUST be one of the kinds offered in the system prompt for this tick'),
     text: z.string().describe('the spoken line in the DJ voice — typically one short sentence, never more than three'),
     sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect (null is usually right — most segments need none)'),
   }).nullable().describe('the segment to air, or null to stay silent — silence is a perfectly good answer, often the best one, when the data is dull, stale, unchanged, or there is nothing fresh worth a listener\'s attention'),
@@ -152,11 +166,17 @@ function availableCapabilities(ctx: any, now: Date) {
   const enabled = s.skills?.enabled || {};
   const persona = settings.getEffectivePersona(now);
   const out: any[] = [];
-  for (const cap of CAPABILITIES) {
-    if (enabled[cap.skill] === false) continue;
+  for (const cap of allCapabilities()) {
+    // Built-ins are enabled unless explicitly turned off; custom skills are
+    // DISCOVERED-BUT-DISABLED — they must be explicitly enabled before they
+    // can air, so dropping a folder never auto-airs unreviewed content/code.
+    const isEnabled = cap.custom ? enabled[cap.skill] === true : enabled[cap.skill] !== false;
+    if (!isEnabled) continue;
     if (persona?.skills && !persona.skills.includes(cap.skill)) continue;
     if (now.getTime() - (lastFired.get(cap.kind) || 0) < cap.cooldownMs) continue;
-    if (cap.kind === 'traffic' && !ctx.clock?.isCommute) continue;
+    // Window gating: built-in traffic is commute-only; custom skills opt in via
+    // `window: commute` in their SKILL.md frontmatter.
+    if ((cap.kind === 'traffic' || cap.window === 'commute') && !ctx.clock?.isCommute) continue;
     if (cap.ready && !cap.ready()) continue;
     out.push(cap);
   }
@@ -355,7 +375,7 @@ export const forcedDirectorAgent = defineAgent({
 // /dj/skill. `which` is a kind or skill slug (kept identical). Returns the
 // spoken text; throws on an unknown/unready capability or empty output.
 export async function runCapability(which, ctx) {
-  const cap = CAPABILITIES.find(c => c.kind === which || c.skill === which);
+  const cap = allCapabilities().find(c => c.kind === which || c.skill === which);
   if (!cap) throw new Error(`unknown skill: ${which}`);
   if (cap.ready && !cap.ready()) {
     // Hint at the missing key when the capability is keyed. web-search is the
@@ -409,7 +429,7 @@ export function skillCatalog() {
   const s = settings.get();
   const enabledMap = s.skills?.enabled || {};
   const searchProvider = s.search?.provider || 'duckduckgo';
-  return CAPABILITIES.map(c => {
+  return allCapabilities().map(c => {
     // web-search's key requirement depends on the active search provider:
     // Tavily needs SEARCH_API_KEY, DuckDuckGo needs nothing. Other capabilities
     // carry their requiresKey/keyUrl statically in CAPABILITIES (none today).
@@ -430,7 +450,12 @@ export function skillCatalog() {
       description: c.desc || '',
       kind: c.kind,
       cooldownMs: c.cooldownMs || 0,
-      enabled: enabledMap[c.skill] !== false,
+      // Built-ins default on; custom skills are discovered-but-disabled and
+      // only count as enabled once the operator explicitly flips them on.
+      enabled: c.custom ? enabledMap[c.skill] === true : enabledMap[c.skill] !== false,
+      // Marks an operator-dropped skill (state/skills) vs a built-in, so the
+      // admin UI can badge it and explain the off-by-default behaviour.
+      custom: !!c.custom,
       // `ready` is false when the capability needs an env key that isn't set;
       // `requiresKey` names it and `keyUrl` links the operator to its source.
       ready: typeof c.ready === 'function' ? !!c.ready() : true,

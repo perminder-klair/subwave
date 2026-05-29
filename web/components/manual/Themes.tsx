@@ -21,7 +21,7 @@ const EXAMPLE_THEME = `{
 export default function Themes() {
   return (
     <ManualPage
-      eyebrow="MANUAL · 07"
+      eyebrow="MANUAL · 08"
       title="Themes."
       intro="SUB/WAVE renders the player and the admin console through one shared palette. You pick the station's theme; everyone listening sees the same look. Built-ins ship with the controller, and you can drop your own JSONs in to extend the menu."
       current="/manual/themes"

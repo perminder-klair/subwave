@@ -113,6 +113,16 @@ app.listen(config.server.port, async () => {
     console.error('[settings] load failed:', err.message);
   }
 
+  // Load operator-dropped custom skills from state/skills — merged into the
+  // segment director's capability set (see skills/loader.js). Never fatal.
+  try {
+    const { loadCustomSkills } = await import('./skills/loader.js');
+    const caps = await loadCustomSkills();
+    if (caps.length) console.log(`[skills] ${caps.length} custom skill(s): ${caps.map((c: any) => c.kind).join(', ')}`);
+  } catch (err: any) {
+    console.error('[skills] custom load failed:', err.message);
+  }
+
   // First-run banner — operators glancing at `docker compose logs` should
   // immediately see where to finish setup.
   try {
