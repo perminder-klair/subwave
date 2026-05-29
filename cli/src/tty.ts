@@ -38,3 +38,13 @@ export function getInteractiveInput(): NodeJS.ReadStream | undefined {
     return undefined;
   }
 }
+
+// True when we're in the configuration that triggers oven-sh/bun#13374: the
+// process was launched from a piped parent (process.stdin isn't a TTY), so even
+// the freshly-opened /dev/tty stream may never deliver bytes and an interactive
+// prompt would hang un-killably. Direct interactive runs have isTTY === true and
+// are never in danger. ui.ts uses this to arm a watchdog (it's a no-op signal on
+// its own — see armHangWatchdog there).
+export function inPipedStdinDangerZone(): boolean {
+  return !process.stdin.isTTY;
+}

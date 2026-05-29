@@ -21,6 +21,7 @@ SUB/WAVE — operator CLI
 Usage:
   subwave                  open the interactive menu (default)
   subwave init             scaffold a fresh install at ~/subwave (no-clone path)
+  subwave init --yes       non-interactive scaffold + start with defaults
   subwave setup            (re-)run the install wizard
   subwave status           quick stack + now-playing snapshot
   subwave doctor           full diagnostic sweep
@@ -36,6 +37,15 @@ Usage:
 
 Flags:
   --home <path>            override SUBWAVE_HOME for this invocation
+
+init flags:
+  --yes, -y                skip all prompts; use defaults (immune to the macOS
+                           piped-stdin hang — used by the curl|sh installer)
+  --no-start               scaffold only; don't bring the stack up
+  --mode <prod|prod-byo>   deployment shape (default: prod)
+  --admin-user <user>      admin username (default: admin)
+  --admin-pass <pass>      admin password (default: randomly generated)
+  --site-url <url>         public site URL (default: none)
 
   subwave help             show this message
   subwave --version        print version
@@ -64,7 +74,25 @@ async function main(): Promise<void> {
   }
   if (cmd === 'init') {
     const { runInitCommand } = await import('./commands/init.ts');
-    await runInitCommand();
+    const flag = (name: string): string | undefined => {
+      const i = rest.findIndex((a) => a === `--${name}` || a.startsWith(`--${name}=`));
+      if (i < 0) return undefined;
+      const a = rest[i] as string;
+      return a.includes('=') ? a.slice(a.indexOf('=') + 1) : rest[i + 1];
+    };
+    const mode = flag('mode');
+    if (mode && mode !== 'prod' && mode !== 'prod-byo') {
+      process.stderr.write(`Unknown --mode: ${mode}. Expected 'prod' or 'prod-byo'.\n`);
+      process.exit(2);
+    }
+    await runInitCommand({
+      yes: rest.includes('--yes') || rest.includes('-y'),
+      start: rest.includes('--no-start') ? false : undefined,
+      mode: mode as 'prod' | 'prod-byo' | undefined,
+      adminUser: flag('admin-user'),
+      adminPass: flag('admin-pass'),
+      siteUrl: flag('site-url'),
+    });
     return;
   }
   if (cmd === 'self-update') {

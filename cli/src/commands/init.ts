@@ -34,14 +34,44 @@ interface InitAnswers {
   siteUrl: string;
 }
 
-export async function runInitCommand(): Promise<void> {
+// Options for non-interactive init (`subwave init --yes`). Used by the curl|sh
+// installer, which must NOT drive an interactive Clack prompt through the pipe:
+// on macOS Bun doesn't deliver stdin bytes when launched from a piped parent
+// (oven-sh/bun#13374), so the first prompt would hang un-killably. `--yes`
+// skips every prompt, applies sane defaults (overridable via the flags below),
+// and is therefore immune to that bug.
+export interface InitOptions {
+  yes?: boolean;
+  mode?: Mode;
+  adminUser?: string;
+  adminPass?: string;
+  siteUrl?: string;
+  // Whether to bring the stack up after scaffolding. Defaults to true; the
+  // installer's `--no-start` maps to false.
+  start?: boolean;
+}
+
+export async function runInitCommand(opts: InitOptions = {}): Promise<void> {
   banner('install');
   info('Scaffolds a fresh install directory, writes the compose file + .env, and records the home so future commands know where to look.');
   muted('After this, run `subwave start` then `subwave setup` to finish configuration.');
   console.log();
 
-  const answers = await collectAnswers();
+  const answers = opts.yes ? defaultAnswers(opts) : await collectAnswers();
   await scaffold(answers);
+
+  // Non-interactive (`--yes`): no "start now?" prompt — `opts.start` decides.
+  if (opts.yes) {
+    if (opts.start !== false) {
+      await runStartCommand();
+    } else {
+      console.log();
+      muted('Next:');
+      muted('  subwave start          # docker compose up -d');
+      muted('  subwave setup          # configure Navidrome / LLM / TTS / DJ (and change install dir / mode)');
+    }
+    return;
+  }
 
   // Offer to chain straight into `start` so the curl|sh → init → on-air flow
   // is one decision long. preferredEnv was just persisted by scaffold(), so
@@ -59,6 +89,31 @@ export async function runInitCommand(): Promise<void> {
     return;
   }
   await pauseForEnter();
+}
+
+// Build InitAnswers from defaults + flag overrides, no prompts. Mirrors the
+// defaults baked into collectAnswers() (home = SUBWAVE_HOME or ~/subwave, prod
+// mode, admin user "admin", generated password, blank site URL). Refuses to
+// clobber an existing install — destroying compose files non-interactively is
+// never the right default.
+function defaultAnswers(opts: InitOptions): InitAnswers {
+  const envHome = process.env.SUBWAVE_HOME?.trim();
+  const homeRaw = envHome || DEFAULT_SUBWAVE_HOME;
+  const homeAbs = homeRaw.startsWith('~/') ? resolve(homedir(), homeRaw.slice(2)) : resolve(homeRaw);
+
+  if (existsSync(resolve(homeAbs, 'docker-compose.yml'))) {
+    warn(`${homeAbs} already contains a docker-compose.yml — leaving it untouched.`);
+    muted(`(Run \`subwave start\` to boot it, or \`subwave init\` interactively to scaffold elsewhere.)`);
+    process.exit(0);
+  }
+
+  return {
+    home: homeAbs,
+    mode: opts.mode ?? 'prod',
+    adminUser: opts.adminUser ?? 'admin',
+    adminPass: opts.adminPass ?? crypto.randomBytes(16).toString('hex'),
+    siteUrl: opts.siteUrl ?? '',
+  };
 }
 
 async function collectAnswers(): Promise<InitAnswers> {

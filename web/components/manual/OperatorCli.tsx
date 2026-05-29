@@ -14,16 +14,19 @@ export default function OperatorCli() {
         <p className="bs-eyebrow">PRESS START</p>
         <h2>One command opens the console.</h2>
         <p>
-          From a SUB/WAVE checkout, run <code className="bs-code-inline">npm start</code>. The
-          console is a menu: arrow keys to move, Enter to choose, Esc to step back, Ctrl-C to
-          quit.
+          Run <code className="bs-code-inline">subwave</code> with no arguments. The console is
+          a menu: arrow keys to move, Enter to choose, Esc to step back, Ctrl-C to quit.
         </p>
-        <CodeBlock>{`npm start`}</CodeBlock>
+        <CodeBlock>{`subwave`}</CodeBlock>
         <p className="text-muted">
           First time through? If there&rsquo;s no{' '}
           <code className="bs-code-inline">.env</code> yet, the console drops you
           straight into the install wizard — the same one the{' '}
           <Link href="/setup" className="bs-link">setup guide</Link> walks through.
+        </p>
+        <p className="text-muted">
+          Working from a cloned repo instead of the standalone CLI? Run{' '}
+          <code className="bs-code-inline">npm start</code> — it opens the same console.
         </p>
       </section>
 
@@ -107,15 +110,18 @@ export default function OperatorCli() {
         <h2>Every action runs without the menu too.</h2>
         <p>
           The menu is for hands-on operating. To skip it — for a deploy script, a cron job, or
-          just speed — append the action after <code className="bs-code-inline">npm start
-          --</code>:
+          just speed — name the action straight after{' '}
+          <code className="bs-code-inline">subwave</code>:
         </p>
-        <CodeBlock>{`npm start -- status
-npm start -- doctor
-npm start -- logs controller
-npm start -- restart controller`}</CodeBlock>
+        <CodeBlock>{`subwave status
+subwave doctor
+subwave logs controller
+subwave restart controller`}</CodeBlock>
         <p className="text-muted">
           Same actions, same output — just without the interactive menu wrapped around them.
+          From a cloned repo, the same actions run after{' '}
+          <code className="bs-code-inline">npm start --</code> (e.g.{' '}
+          <code className="bs-code-inline">npm start -- status</code>).
         </p>
       </section>
     </ManualPage>

@@ -13,8 +13,12 @@ name: Publish images
 #   ghcr.io/<owner>/subwave-web
 #   ghcr.io/<owner>/subwave-tts-heavy   (optional Chatterbox + PocketTTS sidecar, ~3-4GB)
 #
-# Platforms: linux/amd64 only. Dockerfile.controller pins amd64 in compose
-# because Piper, Kokoro, and Chatterbox wheels are amd64-only.
+# Platforms: the core four images (caddy, broadcast, controller, web) are
+# multi-arch (linux/amd64 + linux/arm64) so Apple Silicon and ARM servers run
+# natively instead of under emulation. Dockerfile.controller selects the
+# matching Piper build via $TARGETARCH; Kokoro/onnx have arm64 wheels. The
+# optional tts-heavy sidecar stays amd64-only — its heavy PyTorch stack makes
+# an arm64 cross-build slow/large, and it's opt-in (runs fine under emulation).
 
 on:
   push:
@@ -35,16 +39,25 @@ jobs:
         include:
           - image: subwave-caddy
             dockerfile: docker/Dockerfile.caddy
+            platforms: linux/amd64,linux/arm64
           - image: subwave-broadcast
             dockerfile: docker/Dockerfile.broadcast
+            platforms: linux/amd64,linux/arm64
           - image: subwave-controller
             dockerfile: docker/Dockerfile.controller
+            platforms: linux/amd64,linux/arm64
           - image: subwave-web
             dockerfile: web/Dockerfile
+            platforms: linux/amd64,linux/arm64
           - image: subwave-tts-heavy
             dockerfile: docker/Dockerfile.tts-heavy
+            platforms: linux/amd64
     steps:
       - uses: actions/checkout@v4
+
+      # QEMU provides the cross-arch emulation buildx needs to build the
+      # linux/arm64 variant on the amd64 GitHub runner.
+      - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
 
@@ -68,7 +81,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64
+          platforms: ${{ matrix.platforms }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

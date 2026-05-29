@@ -9,12 +9,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # --- Piper -----------------------------------------------------------------
 # CPU-only, ~30ms/word. Default engine; remains the fast path even after Kokoro.
+# TARGETARCH is provided automatically by buildx (amd64 / arm64); map it to the
+# Piper release's asset naming so the multi-arch build pulls the right binary.
 ARG PIPER_VERSION=2023.11.14-2
+ARG TARGETARCH
 RUN cd /tmp && \
-    wget -q https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/piper_linux_x86_64.tar.gz && \
-    tar -xzf piper_linux_x86_64.tar.gz -C /opt && \
+    case "${TARGETARCH}" in \
+      amd64|"") piper_arch=x86_64 ;; \
+      arm64)    piper_arch=aarch64 ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH} for Piper" >&2; exit 1 ;; \
+    esac && \
+    wget -q https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/piper_linux_${piper_arch}.tar.gz && \
+    tar -xzf piper_linux_${piper_arch}.tar.gz -C /opt && \
     ln -s /opt/piper/piper /usr/local/bin/piper && \
-    rm piper_linux_x86_64.tar.gz
+    rm piper_linux_${piper_arch}.tar.gz
 
 # British English voice — lift the same one you use in Kaze
 RUN mkdir -p /opt/piper/voices && \

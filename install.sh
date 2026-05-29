@@ -154,36 +154,44 @@ if ! command -v "$BIN_NAME" >/dev/null 2>&1; then
   echo
 fi
 
-# Offer to chain straight into `subwave init` when running interactively.
-# Piping `curl | sh` leaves stdin attached to the curl pipe (not a TTY), so
-# Clack would crash on first prompt. The fix is the rustup-style </dev/tty
-# re-exec: we reattach this shell to the TTY first, then exec the binary —
-# doing the redirect at the shell level (rather than as a one-line redirect
-# on the exec itself) propagates the TTY status more reliably across
-# Bun-compiled binaries, where `exec subwave init </dev/tty` sometimes
-# leaves `process.stdin.isTTY` false and freezes the first prompt. The
-# binary also re-attaches /dev/tty defensively (see cli/src/tty.ts), so
-# operators on older shells / unusual layouts still recover.
+# Offer to chain straight into a scaffold + start when running interactively.
 #
-# exec replaces this shell so Ctrl-C in init exits cleanly without falling
-# back through the installer. Non-interactive callers (CI, Docker builds,
-# anything without /dev/tty) skip the prompt and see the original Next:
-# hint below.
+# We must NOT drive the *interactive* `subwave init` through the curl pipe.
+# On macOS, Bun doesn't deliver stdin bytes when the binary is launched from a
+# parent whose own stdin is piped (oven-sh/bun#13374) — even after an
+# `exec </dev/tty` re-attach. The first Clack prompt then renders and hangs
+# forever in raw mode, swallowing Ctrl-C. (Running `subwave init` directly from
+# the operator's own shell is fine — stdin is a real controlling TTY there.)
+#
+# So instead we confirm at the SHELL level (POSIX `read </dev/tty`, which is
+# unaffected by the Bun bug) and run the NON-interactive `subwave init --yes`.
+# `--yes` has no prompts, so stdin is irrelevant and nothing can hang. It
+# scaffolds with sane defaults (home ~/subwave, prod, admin user "admin",
+# generated password printed below) and brings the stack up. Operators who
+# want the interactive wizard answer "n" and run `subwave init` themselves.
+#
+# Non-interactive callers (CI, Docker builds, anything without /dev/tty) skip
+# the prompt and see the Next: hint below.
 if [ -t 1 ] && [ -r /dev/tty ]; then
-  printf '\nRun `%s init` now to scaffold the install? [Y/n] ' "$BIN_NAME"
+  printf '\nScaffold + start SUB/WAVE now with defaults? [Y/n] '
   reply=""
   read -r reply </dev/tty || reply=""
   case "${reply:-y}" in
     y|Y|yes|YES)
       echo
-      exec </dev/tty
-      exec "$INSTALL_DIR/$BIN_NAME" init
+      "$INSTALL_DIR/$BIN_NAME" init --yes
+      status=$?
+      if [ "$status" -eq 0 ]; then
+        echo
+        echo "Customize anytime with \`$BIN_NAME setup\` (Navidrome, LLM, TTS, DJ)."
+      fi
+      exit "$status"
       ;;
   esac
   echo
 fi
 
 echo "Next:"
-echo "  $BIN_NAME init           # scaffold a fresh install at ~/subwave"
+echo "  $BIN_NAME init           # scaffold a fresh install at ~/subwave (interactive wizard)"
 echo "  $BIN_NAME setup          # configure Navidrome, LLM, TTS, DJ"
 echo "  $BIN_NAME start          # docker compose up -d"

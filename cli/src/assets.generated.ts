@@ -56,7 +56,6 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.broadcast
-    platform: linux/amd64
     container_name: sub-wave-broadcast
     restart: unless-stopped
     environment:
@@ -93,7 +92,6 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
-    platform: linux/amd64
     container_name: sub-wave-controller
     restart: unless-stopped
     depends_on:
@@ -172,6 +170,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.tts-heavy
+    # amd64-only image (heavy PyTorch stack); pinned so it runs under emulation
+    # on arm64 hosts. The other services are multi-arch and auto-select.
     platform: linux/amd64
     container_name: sub-wave-tts-heavy
     restart: unless-stopped
@@ -234,7 +234,6 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.broadcast
-    platform: linux/amd64
     container_name: sub-wave-broadcast
     restart: unless-stopped
     environment:
@@ -264,7 +263,6 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
-    platform: linux/amd64
     container_name: sub-wave-controller
     restart: unless-stopped
     depends_on:
@@ -324,6 +322,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.tts-heavy
+    # amd64-only image (heavy PyTorch stack); pinned so it runs under emulation
+    # on arm64 hosts. The other services are multi-arch and auto-select.
     platform: linux/amd64
     container_name: sub-wave-tts-heavy
     restart: unless-stopped

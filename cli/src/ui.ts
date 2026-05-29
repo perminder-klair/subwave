@@ -17,7 +17,7 @@
 import * as clack from '@clack/prompts';
 import pc from 'picocolors';
 import readline from 'node:readline';
-import { getInteractiveInput } from './tty.ts';
+import { getInteractiveInput, inPipedStdinDangerZone } from './tty.ts';
 
 // Inject an explicit input stream into the four interactive prompts.
 // When no /dev/tty is available (CI, headless), `input` is undefined and
@@ -29,12 +29,50 @@ function withInput<T>(opts: T): T {
   return { ...opts, input: interactiveInput };
 }
 
+// Defense-in-depth against oven-sh/bun#13374: when the process was launched
+// from a piped parent (process.stdin isn't a TTY), an interactive prompt can
+// hang un-killably because Bun never delivers stdin bytes — not even on the
+// freshly-opened /dev/tty stream. The installer no longer drives interactive
+// prompts through the pipe (it uses `subwave init --yes`), but if anything ever
+// does again, this watchdog turns the silent hang into a fast, actionable exit.
+//
+// Armed lazily on the FIRST interactive prompt, and only in the danger zone, so
+// normal direct-terminal users (isTTY === true) never see it and can pause at a
+// prompt indefinitely. process.exit works even with a dead stdin, so this
+// guarantees the prompt is escapable.
+const HANG_WATCHDOG_MS = Number(process.env.SUBWAVE_PROMPT_WATCHDOG_MS) || 60_000;
+let watchdogArmed = false;
+function armHangWatchdog(): void {
+  if (watchdogArmed) return;
+  watchdogArmed = true;
+  if (!inPipedStdinDangerZone()) return;
+
+  const timer = setTimeout(() => {
+    process.stderr.write(
+      '\n⚠ Input isn\'t reaching the prompt — known Bun/macOS issue (oven-sh/bun#13374)\n' +
+      '  when launched through a pipe. Run `subwave init` directly in a terminal,\n' +
+      '  or `subwave init --yes` for defaults.\n',
+    );
+    process.exit(1);
+  }, HANG_WATCHDOG_MS);
+  // Don't let the watchdog itself hold the event loop open.
+  timer.unref?.();
+
+  const clear = (): void => clearTimeout(timer);
+  // Any byte on either the /dev/tty stream or process.stdin means input is
+  // flowing — stand down.
+  interactiveInput?.once('data', clear);
+  interactiveInput?.once('keypress', clear);
+  process.stdin.once('data', clear);
+  process.stdin.once('keypress', clear);
+}
+
 const p: typeof clack = {
   ...clack,
-  text: (opts) => clack.text(withInput(opts)),
-  password: (opts) => clack.password(withInput(opts)),
-  confirm: (opts) => clack.confirm(withInput(opts)),
-  select: (opts) => clack.select(withInput(opts)),
+  text: (opts) => { armHangWatchdog(); return clack.text(withInput(opts)); },
+  password: (opts) => { armHangWatchdog(); return clack.password(withInput(opts)); },
+  confirm: (opts) => { armHangWatchdog(); return clack.confirm(withInput(opts)); },
+  select: (opts) => { armHangWatchdog(); return clack.select(withInput(opts)); },
 };
 
 export { p, pc };
