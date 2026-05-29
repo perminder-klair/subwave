@@ -33,6 +33,11 @@ const GUIDE = [
     blurb: 'For the operator — signing in, tuning the DJ, scheduling shows, and managing jingles.',
   },
   {
+    href: '/manual/themes',
+    label: 'Themes',
+    blurb: 'Pick the station-wide palette every listener sees, override it per show, or drop in your own.',
+  },
+  {
     href: '/manual/cli',
     label: 'The Operator CLI',
     blurb: 'Run the station from the terminal — a status-aware console for health, logs, restarts, and the players.',
@@ -64,7 +69,7 @@ export default function Overview() {
     >
       <section className="bs-section">
         <p className="bs-eyebrow">WHAT'S INSIDE</p>
-        <h2>Ten short guides.</h2>
+        <h2>Eleven short guides.</h2>
         <p>
           Start at the top if you're new. Each page links to the next, so you can read
           straight through, or jump to whatever you need from the contents on the left.
