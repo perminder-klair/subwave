@@ -1,6 +1,6 @@
 ---
 name: subwave-release-pr
-description: Open a release pull request from develop to main for SUB/WAVE. Summarises the commits queued on develop, groups them by conventional-commit type, and opens the PR via gh. Trigger this skill whenever the user says "create a release PR", "open a release PR to main", "release to main", "cut a release", "ship to main from develop", "open a develop→main PR", or any equivalent phrasing where the goal is to open the develop→main merge that release-please will then promote. The skill does NOT touch versions, changelogs, or tags — release-please workflows on main own all of that downstream.
+description: Open a release pull request from develop to main for SUB/WAVE, and keep develop from drifting behind main. Summarises the commits queued on develop, groups them by conventional-commit type, opens the PR via gh, and — once the release lands — back-merges main → develop so the release-please version bump and CHANGELOG come across. Trigger this skill whenever the user says "create a release PR", "open a release PR to main", "release to main", "cut a release", "ship to main from develop", "open a develop→main PR", "sync develop with main", "develop is behind main", "back-merge main into develop", or any equivalent phrasing where the goal is to open the develop→main merge that release-please will promote, or to reconcile develop with main afterward. The skill does NOT touch versions, changelogs, or tags directly — release-please workflows on main own all of that downstream.
 ---
 
 # SUB/WAVE release PR
@@ -10,6 +10,8 @@ Open a pull request from `develop` → `main`. Everything after that — version
 ## Why this skill exists
 
 A release PR for SUB/WAVE is mechanical but easy to get wrong by hand: forgetting to fetch first, listing merge commits in the body, picking up commits that are actually already on main via a back-merge. The skill encodes the right git plumbing and the body format that matches the project's recent PR history.
+
+It also keeps `develop` from drifting behind `main`. After every release, release-please pushes a `chore(main): release X.Y.Z` version bump (and CHANGELOG entry) **directly to main**, and that commit — plus the merge-commit bubble from the release PR — never flows back to develop on its own. Left alone, develop steadily falls "N commits behind main" even though it carries every line of real source. This skill detects that gap up front and closes it with a back-merge after the release lands (Step 8).
 
 ## Workflow
 
@@ -22,11 +24,13 @@ git rev-parse --show-toplevel              # confirm we're in subwave (or any gi
 git status --short                         # any uncommitted work?
 git rev-parse --abbrev-ref HEAD            # current branch (informational — we work via remote refs)
 git fetch origin main develop              # MUST run before computing the diff, otherwise stale
+git rev-list --left-right --count origin/develop...origin/main   # "<ahead>	<behind>" — develop relative to main
 ```
 
 What to do with the output:
 - If `git status --short` shows uncommitted changes, surface them to the user and ask whether to proceed (the PR is built from `origin/develop`, so local edits won't be in it — but the user might want to commit them first).
 - If `git fetch` fails (no network, no remote), stop and tell the user. Don't fall back to local refs — the PR base is `origin/main` and the head is `origin/develop`, so the comparison must be against fresh remotes.
+- **If the second number ("behind") is > 0, develop is behind main.** Inspect those commits with `git log --oneline origin/develop..origin/main` before reacting. Almost always they're pure release bookkeeping — `chore(main): release …` version bumps + merge-commit bubbles from prior release PRs — in which case develop is *not* missing any real source and the release PR is unaffected (a merge commit does a 3-way merge, so main's version bump and CHANGELOG survive). Note the gap to the user, proceed with the PR, and plan to close it with the Step 8 back-merge once this release lands. **Only stop and flag it as a real problem** if those "behind" commits include `feat:` / `fix:` / `refactor:` work that *isn't* already on develop — that means a hotfix landed straight on main and should be back-merged into develop *before* you cut the release, so the release PR doesn't reintroduce or conflict with it.
 
 ### Step 1 — Check for an existing release PR
 
@@ -154,24 +158,69 @@ git push origin main
 
 Then re-run the release-please workflow (Actions tab → release-please → Run workflow on main).
 
+### Step 8 — Back-merge main → develop (keep develop from falling behind)
+
+This is the step that keeps develop in sync. It runs **after** the release fully lands, not when the release PR is opened.
+
+**Timing — wait for the version bump.** Two things must be on main before you back-merge:
+1. The release PR (#207-style develop→main) has been merged.
+2. release-please's follow-up `chore(main): release X.Y.Z` PR has *also* merged — that's the commit carrying the new version + CHANGELOG.
+
+Back-merging before (2) lands just copies develop's own commits back onto develop and leaves it behind again the moment the bump merges. Confirm both are in with `git fetch origin main && git log --oneline -3 origin/main` — you want to see the `chore(main): release …` commit at or near the tip.
+
+**Check whether a back-merge is even needed:**
+
+```bash
+git fetch origin main develop
+git rev-list --count origin/develop..origin/main   # commits on main not on develop
+```
+
+If that count is `0`, develop is already up to date — skip the rest of this step. If it's > 0, those are the release-bookkeeping commits; sync them across.
+
+**Preferred path — sync PR (no local working tree, mirrors the project's PR-driven flow):**
+
+```bash
+gh pr create --base develop --head main \
+  --title "chore: back-merge main → develop (vX.Y.Z release bookkeeping)" \
+  --body "Sync develop with the release-please version bump + CHANGELOG that landed on main after vX.Y.Z. No source changes — keeps develop from drifting behind main."
+```
+
+Merge that PR with **"Create a merge commit"** (same reasoning as Step 7 — preserve the `chore(main): release …` commit verbatim; never squash). Report the URL to the user. There is normally no conflict — develop never touched the version line or the CHANGELOG entries main added.
+
+**Local path (only if the user explicitly wants it done from the working tree — needs confirmation, touches the checkout):**
+
+```bash
+git checkout develop
+git pull origin develop
+git merge --no-ff origin/main -m "chore: back-merge main → develop (vX.Y.Z release bookkeeping)"
+git push origin develop
+```
+
+If the merge reports a conflict, stop and surface it — do not resolve release bookkeeping conflicts blind. A conflict here usually means real work landed on main directly (a hotfix), which is exactly the case Step 0 told you to flag.
+
+**Offer, don't force.** When you open the release PR in Step 6, tell the user the back-merge is the natural follow-up once the release lands, and that they can re-invoke this skill (or just ask) to run Step 8 then. If the user invokes the skill specifically to "sync develop with main" or "develop is behind main," jump straight to this step.
+
 ## Edge cases
 
 - **Not on develop**: doesn't matter — this skill works against `origin/develop`, not the local checkout. The local branch could be anywhere. Don't switch branches.
 - **Local develop is behind origin/develop**: also doesn't matter for the PR (we use origin/develop). Mention it to the user as an FYI in case they're surprised by what's in the PR.
 - **Local develop is *ahead* of origin/develop**: the unpushed commits will NOT be in the PR. Ask whether to push first; if yes, push then re-run from Step 2 (the commit list will change).
 - **gh not authenticated**: `gh pr create` will fail with a clear error. Surface it and tell the user to run `gh auth login` — don't try workarounds.
-- **A draft release-please PR exists on main** (the version-bump PR release-please opens after a release lands): unrelated, ignore. That PR's base is main and its head is `release-please--branches--main`, not develop.
+- **A draft release-please PR exists on main** (the version-bump PR release-please opens after a release lands): unrelated to opening the release PR, ignore it for Steps 1–6. But it *is* the gate for Step 8 — the back-merge should wait until that version-bump PR has merged, so the new version/CHANGELOG come across with it.
 - **Previous release PR was squash-merged and release-please skipped the version bump**: follow the recovery block in Step 7 (push an empty `feat:` commit to main, re-run the release-please workflow).
+- **develop is behind main by release bookkeeping only** (`chore(main): release …` + merge bubbles, no unmerged `feat:`/`fix:`): expected and harmless for the release PR — a merge commit 3-way-merges, so main's version bump survives. Close the gap with the Step 8 back-merge after the release lands; it's hygiene, not a blocker.
+- **develop is behind main by real work** (a `feat:`/`fix:` hotfix committed straight onto main, not present on develop): stop before opening the release PR. Back-merge main → develop first (Step 8's procedure, run *now* rather than after), then re-run from Step 2 — otherwise the release PR's diff fights the hotfix.
 
 ## Allowed without confirmation
 
 - `git fetch origin main develop`
-- `git log` / `git diff` / `git status` reads
+- `git log` / `git diff` / `git status` / `git rev-list` reads
 - `gh pr list`, `gh pr view`
-- `gh pr create` — the user invoked the skill specifically to open a PR
+- `gh pr create` — the user invoked the skill specifically to open a PR. This covers both the release PR (Step 6) and the Step 8 back-merge sync PR (`--base develop --head main`); both are PR-open operations, not working-tree changes.
 
 ## Confirm before running
 
 - `gh pr close` (only if the user explicitly chose to replace an existing PR)
 - `git push` of the local develop branch (only if the user opted into Step 6's edge case)
-- Anything touching the local working tree (commits, stashes, branch switches) — this skill doesn't need any of that
+- The **local** back-merge path in Step 8 (`git checkout` / `git merge` / `git push origin develop`) — it mutates the working tree. Prefer the sync-PR path, which needs no confirmation. Only run the local path if the user explicitly asks for it.
+- Anything else touching the local working tree (commits, stashes, branch switches) — the PR-driven paths in this skill don't need any of that
