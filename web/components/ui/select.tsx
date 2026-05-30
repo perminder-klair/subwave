@@ -72,9 +72,19 @@ const SelectContent = React.forwardRef<
       position={position}
       {...props}>
       <SelectScrollUpButton />
+      {/*
+        Viewport intentionally has no fixed height — the upstream shadcn
+        template set `h-[var(--radix-select-trigger-height)]` here, which
+        pinned the scrollable region to the trigger button's row height and
+        made long lists impossible to scroll without zooming the browser
+        out (issue #213). The Content's `max-h-[--radix-select-content-
+        available-height]` + `overflow-y-auto` plus the scroll-up/down
+        chevrons handle long lists correctly when the viewport is free to
+        grow.
+      */}
       <SelectPrimitive.Viewport
         className={cn("p-1", position === "popper" &&
-          "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]")}>
+          "w-full min-w-[var(--radix-select-trigger-width)]")}>
         {children}
       </SelectPrimitive.Viewport>
       <SelectScrollDownButton />

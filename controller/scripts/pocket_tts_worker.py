@@ -8,14 +8,18 @@ caching it across requests turns ~6x real-time inference into the actual cost
 per line. Protocol mirrors kokoro_worker.py and chatterbox_worker.py — one
 JSON object per line over stdin/stdout.
 
-Request:  {"id": "...", "text": "...", "voice": "alba", "out": "/path/to.wav"}
+Request:  {"id": "...", "text": "...", "voice": "alba",
+           "reference_wav": "/path/to/ref.wav",  # optional, empty = built-in
+           "out": "/path/to.wav"}
 Response: {"id": "...", "ok": true,  "path": "/path/to.wav", "duration_s": 3.4}
        |  {"id": "...", "ok": false, "error": "..."}
 
-Built-in voices only in v1 (alba, anna, charles, estelle, giovanni, juergen,
-lola, rafael). PocketTTS also supports zero-shot cloning from a reference WAV,
-but the engine wrapper deliberately doesn't expose it yet — settings ship the
-curated voice list, no reference-dir scan, no per-persona WAV upload UI.
+Voice selection (issue #213):
+  - "voice" only (built-in id like alba, anna, charles, estelle, giovanni,
+    juergen, lola, rafael) → curated voice plays directly.
+  - "reference_wav" set     → zero-shot cloning from the WAV. The base voice
+    is still passed so the model has a speaker prior if the reference load
+    fails — the worker logs the failure and falls back instead of erroring.
 
 The model is bundled into the controller image only when it is built with
 `--build-arg WITH_POCKETTTS=1` (see docker/Dockerfile.controller). Weights live
@@ -58,13 +62,15 @@ def main():
 
     # get_state_for_audio_prompt() does meaningful work (loads the speaker
     # embedding) — cache per voice id so repeat lines don't pay it again.
+    # Reference-WAV clones cache under their absolute path; built-in ids
+    # cache under their id, so the two namespaces never collide.
     voice_states = {}
 
-    def voice_state(name):
-        st = voice_states.get(name)
+    def voice_state(key):
+        st = voice_states.get(key)
         if st is None:
-            st = model.get_state_for_audio_prompt(name)
-            voice_states[name] = st
+            st = model.get_state_for_audio_prompt(key)
+            voice_states[key] = st
         return st
 
     log("ready")
@@ -82,19 +88,34 @@ def main():
             if not text:
                 raise ValueError("empty text")
             voice = req.get("voice") or DEFAULT_VOICE
+            ref = (req.get("reference_wav") or "").strip()
             out = req.get("out")
             if not out:
                 raise ValueError("missing 'out' path")
 
-            try:
-                state = voice_state(voice)
-            except Exception as e:
-                # Unknown voice id — fall back to the default rather than 500
-                # the request, mirroring how chatterbox falls back to its
-                # built-in voice when a reference clip is missing.
-                log(f"voice {voice!r} failed ({e}); using default {DEFAULT_VOICE!r}")
-                voice = DEFAULT_VOICE
-                state = voice_state(voice)
+            # Prefer a reference WAV when one is supplied — same API call as
+            # built-in voices, just with an absolute path instead of an id.
+            # On failure, log and fall back to the built-in default so a stale
+            # / missing clone never silences a segment.
+            state = None
+            if ref:
+                if not os.path.exists(ref):
+                    log(f"reference_wav {ref!r} not found; falling back to {DEFAULT_VOICE!r}")
+                else:
+                    try:
+                        state = voice_state(ref)
+                    except Exception as e:
+                        log(f"reference_wav {ref!r} failed ({e}); falling back to {DEFAULT_VOICE!r}")
+            if state is None:
+                try:
+                    state = voice_state(voice)
+                except Exception as e:
+                    # Unknown voice id — fall back to the default rather than
+                    # 500 the request, mirroring how chatterbox falls back to
+                    # its built-in voice when a reference clip is missing.
+                    log(f"voice {voice!r} failed ({e}); using default {DEFAULT_VOICE!r}")
+                    voice = DEFAULT_VOICE
+                    state = voice_state(voice)
 
             audio = model.generate_audio(state, text)
             # generate_audio returns a torch tensor; coerce to a numpy float32

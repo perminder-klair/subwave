@@ -12,9 +12,11 @@
 //    on stdout. This is the legacy --build-arg WITH_POCKETTTS=1 path in
 //    docker/Dockerfile.controller; kept working for backwards compat.
 //
-// v1 ships built-in voices only (alba, anna, charles, …). PocketTTS supports
-// reference-WAV cloning too, but the wrapper deliberately doesn't expose it
-// yet — the settings surface lists a curated voice id set instead.
+// Voice selection: a built-in voice id (alba, anna, charles, …) plays the
+// curated voice; a `.wav` filename triggers zero-shot cloning against the
+// shared voice folder (config.voices.dir, with a fallback read of legacy
+// chatterbox-voices/). Issue #213 wired up cloning — earlier versions exposed
+// the built-in ids only.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
@@ -165,11 +167,10 @@ async function ensureWorker(): Promise<PocketTtsWorker> {
   }
 }
 
-// PocketTTS built-in voices. The model also accepts reference-WAV paths for
-// zero-shot cloning, but the v1 wrapper sticks to the curated list — the
-// settings layer (POCKET_TTS_VOICES) is the source of truth for what the UI
-// offers. Anything not on this list falls back to the default voice in the
-// worker itself, so an unknown value never breaks a spoken segment.
+// PocketTTS built-in voices. A persona's `tts.voice` is either one of these
+// ids OR a `.wav` filename in the shared voice folder (zero-shot cloning).
+// The worker also guards against unknown ids by falling back to the default,
+// so a stale value never breaks a spoken segment.
 export const BUILTIN_VOICES = [
   'alba',
   'anna',
@@ -180,6 +181,35 @@ export const BUILTIN_VOICES = [
   'lola',
   'rafael',
 ] as const;
+
+const WAV_RE = /^[A-Za-z0-9_.-]{1,80}\.wav$/i;
+
+// Split a persona's `tts.voice` into the two fields the worker needs.
+// - `.wav` filename or absolute path → reference cloning. The base voice falls
+//   back to the configured default so the model still has a speaker prior to
+//   anchor against if the reference load fails.
+// - Anything else → built-in voice id, no reference path.
+function resolveVoice(value?: string): { voice: string; referenceWav: string } {
+  const v = (value || '').trim();
+  if (!v) return { voice: config.pocketTts.defaultVoice, referenceWav: '' };
+  if (path.isAbsolute(v)) return { voice: config.pocketTts.defaultVoice, referenceWav: v };
+  if (WAV_RE.test(v)) {
+    const primary = path.join(config.voices.dir, v);
+    if (existsSync(primary)) {
+      return { voice: config.pocketTts.defaultVoice, referenceWav: primary };
+    }
+    const legacy = path.join(config.voices.legacyDir, v);
+    if (existsSync(legacy)) {
+      return { voice: config.pocketTts.defaultVoice, referenceWav: legacy };
+    }
+    // File missing — let the worker surface the failure and fall back to the
+    // default voice, mirroring chatterbox's behaviour when a reference is
+    // unreadable. The canonical path goes on the wire so the error message
+    // points at the right place.
+    return { voice: config.pocketTts.defaultVoice, referenceWav: primary };
+  }
+  return { voice: v, referenceWav: '' };
+}
 
 export async function speak(
   text: string,
@@ -192,19 +222,23 @@ export async function speak(
   const outPath = customPath || path.join(config.piper.outDir, `${id}.wav`);
   if (customPath) await mkdir(path.dirname(customPath), { recursive: true });
 
+  const { voice: resolvedVoice, referenceWav } = resolveVoice(voice);
+
   if (isRemoteEnabled()) {
     return speakRemote({
       engine: 'pocket-tts',
       text: text.trim(),
       out: outPath,
-      voice: voice || config.pocketTts.defaultVoice,
+      voice: resolvedVoice,
+      referenceWav,
     });
   }
 
   const w = await ensureWorker();
   const msg = await w.send(id, {
     text: text.trim(),
-    voice: voice || config.pocketTts.defaultVoice,
+    voice: resolvedVoice,
+    reference_wav: referenceWav,
     out: outPath,
   });
   return msg.path;

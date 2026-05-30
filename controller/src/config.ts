@@ -25,6 +25,17 @@ export const SOUNDS_DIR = process.env.SOUNDS_DIR
 // internally because Piper expresses rate as length_scale (higher = slower).
 const TTS_SPEED = process.env.TTS_SPEED || '1.0';
 
+// Shared directory for operator-uploaded reference WAVs. Both Chatterbox and
+// PocketTTS read from here for zero-shot voice cloning. `TTS_VOICE_DIR` is the
+// canonical override; `CHATTERBOX_VOICE_DIR` is honoured for back-compat with
+// operators who pinned the old chatterbox-only path. The legacy folder
+// (state/chatterbox-voices/) is still read at list/resolve time so pre-existing
+// installs keep working without a manual file move.
+const VOICES_DIR = process.env.TTS_VOICE_DIR
+  || process.env.CHATTERBOX_VOICE_DIR
+  || `${STATE_DIR}/voices`;
+const LEGACY_VOICES_DIR = `${STATE_DIR}/chatterbox-voices`;
+
 export const config = {
   // Absolute path to the shared state dir — modules build their own file
   // paths from this rather than hardcoding /var/sub-wave.
@@ -74,7 +85,8 @@ export const config = {
     device: process.env.CHATTERBOX_DEVICE || 'cpu',
     // Directory where the operator drops per-persona reference WAVs. Each
     // persona stores a filename (relative to here) in its `tts.voice` field.
-    voiceDir: process.env.CHATTERBOX_VOICE_DIR || `${STATE_DIR}/chatterbox-voices`,
+    // Shared with PocketTTS — see `voices` below.
+    voiceDir: VOICES_DIR,
     // Global fallback reference WAV used when a persona has no voice set.
     // Empty → use Chatterbox's built-in default voice.
     referenceWav: process.env.CHATTERBOX_REFERENCE_WAV || '',
@@ -93,6 +105,19 @@ export const config = {
     // (POCKET_TTS_VOICES); anything else still passes through to the worker,
     // which falls back to the default when an id isn't recognised.
     defaultVoice: process.env.POCKET_TTS_VOICE || 'alba',
+    // Shared with Chatterbox — see `voices` below. When a persona's voice
+    // value matches a .wav filename in here, the worker switches to
+    // reference-WAV cloning mode; built-in voice ids stay as-is.
+    voiceDir: VOICES_DIR,
+  },
+  // Shared reference-WAV folder for Chatterbox + PocketTTS zero-shot cloning.
+  // Operators drop .wav files into `dir`; both engines read it via
+  // listReferenceVoices(). `legacyDir` is the pre-#213 chatterbox-only path
+  // and is still scanned (with `dir` winning on filename clash) so existing
+  // installs don't need a manual move.
+  voices: {
+    dir: VOICES_DIR,
+    legacyDir: LEGACY_VOICES_DIR,
   },
   // Optional sidecar that hosts Chatterbox + PocketTTS over HTTP. Set
   // TTS_HEAVY_URL in the controller's environment and add the `tts-heavy`

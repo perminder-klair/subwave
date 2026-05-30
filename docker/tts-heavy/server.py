@@ -310,6 +310,10 @@ async def speak(req: SpeakRequest):
             "id": "1",
             "text": text,
             "voice": req.voice or POCKET_TTS_DEFAULT_VOICE,
+            # Issue #213 — forward the reference WAV path for zero-shot
+            # cloning. Mirrors the chatterbox branch above; the worker treats
+            # an empty value as "use the built-in voice".
+            "reference_wav": req.reference_wav or "",
             "out": req.out,
         })
     else:

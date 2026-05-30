@@ -136,12 +136,11 @@ export const KOKORO_VOICES_BRITISH = [
 ];
 
 const KOKORO_VOICE_RE = /^[a-z]{2}_[a-z0-9]+$/;
-// PocketTTS built-in voices — the curated set the admin UI offers. The
-// underlying model also accepts a reference-WAV path for zero-shot cloning,
-// but the v1 wrapper sticks to built-ins (see controller/src/audio/pocketTts.ts).
-// Any voice matching POCKET_TTS_VOICE_RE still passes validation, so an
-// operator can override via POST with an unlisted id and the worker will
-// fall back to the default if the voice isn't recognised.
+// PocketTTS built-in voices — the curated set the admin UI offers. Issue #213
+// also surfaced zero-shot cloning, so `tts.voice` for pocket-tts may now be
+// either an entry from this list (or another id passing POCKET_TTS_VOICE_RE)
+// OR a `.wav` filename in the shared voice folder (CHATTERBOX_VOICE_RE shape,
+// see controller/src/audio/pocketTts.ts).
 export const POCKET_TTS_VOICES = [
   { id: 'alba', label: 'Alba (EN, F)' },
   { id: 'anna', label: 'Anna (EN, F)' },
@@ -153,10 +152,11 @@ export const POCKET_TTS_VOICES = [
   { id: 'rafael', label: 'Rafael (PT, M)' },
 ];
 const POCKET_TTS_VOICE_RE = /^[a-z][a-z0-9_-]{0,39}$/;
-// Chatterbox voices are reference-WAV filenames living in
-// config.chatterbox.voiceDir. Loose check — basename only, no path
-// separators, conservative character set, ends in .wav. Empty is also
-// valid (means "use the built-in default voice").
+// Reference-WAV filenames live in the shared voice folder (config.voices.dir,
+// formerly config.chatterbox.voiceDir). Loose check — basename only, no path
+// separators, conservative character set, ends in .wav. Empty is also valid
+// (means "use the built-in default voice"). Used by both chatterbox and
+// pocket-tts since issue #213.
 const CHATTERBOX_VOICE_RE = /^[A-Za-z0-9_.-]{1,80}\.wav$/;
 const ID_RE = /^[a-z0-9_]{3,32}$/;
 // Persona avatar filename — `<personaId>.(png|jpg|jpeg|webp)`. The id segment
@@ -464,10 +464,17 @@ function normalizeTts(raw: any) {
   // Empty is legitimate ("use built-in default"), invalid filenames get reset
   // to empty rather than rewritten to a Kokoro id.
   if (engine === 'chatterbox' && voice && !CHATTERBOX_VOICE_RE.test(voice)) voice = '';
-  // PocketTTS uses plain built-in voice ids (alba, anna, …). Invalid or
-  // missing values reset to the default — the worker also guards against
-  // unknown ids, but normalising here keeps the persisted form clean.
-  if (engine === 'pocket-tts' && (!voice || !POCKET_TTS_VOICE_RE.test(voice))) voice = 'alba';
+  // PocketTTS accepts a built-in voice id (alba, anna, …) OR a .wav filename
+  // in the shared voice folder for zero-shot cloning (issue #213). Anything
+  // that matches neither shape resets to the default; the worker also guards
+  // against unknown ids, but normalising here keeps the persisted form clean.
+  if (
+    engine === 'pocket-tts'
+    && (!voice
+      || (!POCKET_TTS_VOICE_RE.test(voice) && !CHATTERBOX_VOICE_RE.test(voice)))
+  ) {
+    voice = 'alba';
+  }
   // openai-compatible voices are server-specific (often arbitrary cloning ref
   // names) — no canonical default; leave empty so generateSpeech omits the
   // field and the server picks its own.
@@ -686,8 +693,9 @@ export async function load() {
       },
       pocketTts: {
         voice:
-          typeof stored.tts?.pocketTts?.voice === 'string' &&
-          POCKET_TTS_VOICE_RE.test(stored.tts.pocketTts.voice)
+          typeof stored.tts?.pocketTts?.voice === 'string'
+          && (POCKET_TTS_VOICE_RE.test(stored.tts.pocketTts.voice)
+            || CHATTERBOX_VOICE_RE.test(stored.tts.pocketTts.voice))
             ? stored.tts.pocketTts.voice
             : DEFAULTS.tts.pocketTts.voice,
       },
@@ -933,13 +941,16 @@ function validateTtsBlock(raw, where) {
       );
     }
   } else if (t.engine === 'pocket-tts') {
-    // Built-in voice id — alba, anna, charles, … Curated set lives in
-    // POCKET_TTS_VOICES; anything else passing the regex is also accepted
-    // (the worker falls back to the default for unknown ids).
+    // Two accepted forms (issue #213):
+    //   - A built-in voice id (alba, anna, charles, …). Curated set lives in
+    //     POCKET_TTS_VOICES; anything passing POCKET_TTS_VOICE_RE is also
+    //     accepted (the worker falls back to the default for unknown ids).
+    //   - A `.wav` filename in the shared voice folder → zero-shot cloning.
+    //     Same shape as the chatterbox value.
     if (!voice) voice = 'alba';
-    if (!POCKET_TTS_VOICE_RE.test(voice)) {
+    if (!POCKET_TTS_VOICE_RE.test(voice) && !CHATTERBOX_VOICE_RE.test(voice)) {
       throw new Error(
-        `${where}.tts.voice for pocket-tts must be a built-in voice id (lowercase, e.g. alba)`,
+        `${where}.tts.voice for pocket-tts must be a built-in voice id (e.g. alba) or a .wav filename`,
       );
     }
   } else if (t.engine === 'cloud') {
@@ -1325,9 +1336,10 @@ export async function update(patch) {
       const pt = t.pocketTts || {};
       if (pt.voice !== undefined) {
         const v = String(pt.voice).trim();
-        if (!POCKET_TTS_VOICE_RE.test(v)) {
+        // Built-in id OR shared-folder .wav filename (issue #213).
+        if (!POCKET_TTS_VOICE_RE.test(v) && !CHATTERBOX_VOICE_RE.test(v)) {
           throw new Error(
-            'tts.pocketTts.voice must be a built-in voice id (lowercase, e.g. alba)',
+            'tts.pocketTts.voice must be a built-in voice id (e.g. alba) or a .wav filename',
           );
         }
         next.tts.pocketTts.voice = v;

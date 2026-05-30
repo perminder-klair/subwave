@@ -119,15 +119,16 @@ docker compose up -d`}</CodeBlock>
           </p>
           <p>
             Once the sidecar is up, both engines show as available under{' '}
-            <strong>Admin &rarr; TTS voice</strong>. For Chatterbox voice cloning, drop a
-            short reference WAV into{' '}
-            <code className="bs-code-inline">state/chatterbox-voices/</code> and pick it
-            on the Personas page — without one, Chatterbox uses its built-in voice.
-            PocketTTS exposes a curated set of built-in voice ids
-            (<code className="bs-code-inline">alba</code>,{' '}
+            <strong>Admin &rarr; TTS voice</strong>. For voice cloning (Chatterbox or
+            PocketTTS), drop a short reference WAV into{' '}
+            <code className="bs-code-inline">state/voices/</code>{' '}
+            (legacy <code className="bs-code-inline">state/chatterbox-voices/</code> is
+            still read) and pick it on the Personas page — without one, both engines
+            use their built-in default voice. PocketTTS also exposes a curated set of
+            built-in voice ids (<code className="bs-code-inline">alba</code>,{' '}
             <code className="bs-code-inline">anna</code>,{' '}
-            <code className="bs-code-inline">charles</code>, …); pick one on the same
-            page. Until the sidecar is started, selecting either engine silently falls
+            <code className="bs-code-inline">charles</code>, …) alongside any cloned
+            voices. Until the sidecar is started, selecting either engine silently falls
             back to Piper.
           </p>
           <p className="text-muted">

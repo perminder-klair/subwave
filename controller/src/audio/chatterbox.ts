@@ -167,10 +167,21 @@ async function ensureWorker(): Promise<ChatterboxWorker> {
 // `bf_isabella`). The dispatcher passes the persona's `voice` field directly;
 // resolve it against the configured voice directory so the worker gets an
 // absolute path (or empty string → built-in voice).
-function resolveReferenceWav(voice?: string): string {
+//
+// Shared with PocketTTS via `config.voices` (issue #213). The new canonical
+// path is `state/voices/`; the legacy `state/chatterbox-voices/` is still
+// probed so pre-existing installs don't break — `voices/` wins on filename
+// clash.
+export function resolveReferenceWav(voice?: string): string {
   if (!voice) return '';
   if (path.isAbsolute(voice)) return voice;
-  return path.join(config.chatterbox.voiceDir, voice);
+  const primary = path.join(config.voices.dir, voice);
+  if (existsSync(primary)) return primary;
+  const legacy = path.join(config.voices.legacyDir, voice);
+  if (existsSync(legacy)) return legacy;
+  // Neither exists yet — return the canonical path; the worker will surface a
+  // clear error rather than silently use a stale legacy file.
+  return primary;
 }
 
 export async function speak(
@@ -219,19 +230,47 @@ export function isAvailable() {
   return existsSync(config.chatterbox.python) && existsSync(config.chatterbox.workerScript);
 }
 
-// List the reference-WAV filenames the operator has uploaded into the voice
-// directory. The admin UI uses these to populate the per-persona voice dropdown.
-// Returns [] (not an error) if the directory doesn't exist yet — that's the
-// pre-install state and the UI handles it gracefully.
-export async function listReferenceVoices(): Promise<string[]> {
+// List the reference-WAV filenames the operator has uploaded into the shared
+// voice directory. The admin UI uses these to populate the per-persona voice
+// dropdown for BOTH Chatterbox and PocketTTS (issue #213). Returns [] (not an
+// error) if the directories don't exist yet — that's the pre-install state and
+// the UI handles it gracefully.
+//
+// The legacy `state/chatterbox-voices/` folder is still scanned so operators
+// who set up before #213 don't have to move files. Filenames present in both
+// dirs are deduped (the canonical `state/voices/` copy wins on resolution —
+// see resolveReferenceWav).
+let legacyWarned = false;
+async function readVoiceWavs(dir: string): Promise<string[]> {
   try {
-    const entries = await readdir(config.chatterbox.voiceDir);
-    return entries.filter((f) => f.toLowerCase().endsWith('.wav')).sort();
+    const entries = await readdir(dir);
+    return entries.filter((f) => f.toLowerCase().endsWith('.wav'));
   } catch {
     return [];
   }
 }
+export async function listReferenceVoices(): Promise<string[]> {
+  const [primary, legacy] = await Promise.all([
+    readVoiceWavs(config.voices.dir),
+    readVoiceWavs(config.voices.legacyDir),
+  ]);
+  if (legacy.length > 0 && !legacyWarned) {
+    legacyWarned = true;
+    console.log(
+      `[voices] reading ${legacy.length} legacy voice(s) from ${config.voices.legacyDir}`
+      + ` — move them to ${config.voices.dir} when convenient`,
+    );
+  }
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const f of [...primary, ...legacy]) {
+    if (seen.has(f)) continue;
+    seen.add(f);
+    merged.push(f);
+  }
+  return merged.sort();
+}
 
 export function voiceDir(): string {
-  return config.chatterbox.voiceDir;
+  return config.voices.dir;
 }

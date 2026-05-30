@@ -32,6 +32,10 @@ router.get('/settings', requireAdmin, async (req, res) => {
     // On-air status — a telnet failure must not 500 the whole settings load.
     let streamOnAir: boolean | null = null;
     try { streamOnAir = await streamStatus(); } catch {}
+    // Reference-WAV voices are shared by chatterbox + pocket-tts (issue #213);
+    // read once and reuse for both dropdowns.
+    const customVoices = await chatterbox.listReferenceVoices();
+    const voiceDir = chatterbox.voiceDir();
     res.json({
       autoPick: queue.autoPick,
       pickerBusy: queue.pickerBusy,
@@ -70,9 +74,13 @@ router.get('/settings', requireAdmin, async (req, res) => {
         engines: tts.ENGINES,
         available: tts.availableEngines(),
         kokoroVoices: settings.KOKORO_VOICES_BRITISH,
-        chatterboxVoices: await chatterbox.listReferenceVoices(),
-        chatterboxVoiceDir: chatterbox.voiceDir(),
+        voiceDir,
+        chatterboxVoices: customVoices,
+        // `chatterboxVoiceDir` kept as an alias of `voiceDir` so older UI
+        // builds that haven't picked up the new field don't break.
+        chatterboxVoiceDir: voiceDir,
         pocketTtsVoices: settings.POCKET_TTS_VOICES,
+        pocketTtsCustomVoices: customVoices,
         cloudProviders: settings.TTS_CLOUD_PROVIDERS,
         frequencies: settings.FREQUENCIES,
         moods: settings.SHOW_MOODS,

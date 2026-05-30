@@ -41,6 +41,7 @@ RENDERED=/etc/icecast2/icecast.xml
 
 mkdir -p /var/sub-wave \
          /var/sub-wave/voice \
+         /var/sub-wave/voices \
          /var/sub-wave/archive \
          /var/sub-wave/jingles \
          /var/sub-wave/logs \
@@ -48,6 +49,7 @@ mkdir -p /var/sub-wave \
          /var/sub-wave/sfx
 chmod 777 /var/sub-wave \
           /var/sub-wave/voice \
+          /var/sub-wave/voices \
           /var/sub-wave/archive \
           /var/sub-wave/jingles \
           /var/sub-wave/logs \

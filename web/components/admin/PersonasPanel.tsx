@@ -15,7 +15,7 @@ import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { Label } from '../ui/label';
 import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Seg, Toggle } from './ui';
 import { cn } from '../../lib/cn';
@@ -104,8 +104,12 @@ interface SettingsResponse {
   tts?: {
     kokoroVoices?: VoiceOption[];
     chatterboxVoices?: string[];
+    // `voiceDir` is the new shared name (issue #213). `chatterboxVoiceDir` is
+    // kept as an alias so the UI keeps working against older controllers.
+    voiceDir?: string;
     chatterboxVoiceDir?: string;
     pocketTtsVoices?: VoiceOption[];
+    pocketTtsCustomVoices?: string[];
     available?: Record<string, boolean>;
     cloudProviders?: string[];
   };
@@ -963,7 +967,9 @@ export default function PersonasPanel() {
 
             {focused.tts.engine === 'chatterbox' && (() => {
               const cbVoices: string[] = data?.tts?.chatterboxVoices || [];
-              const cbDir = 'state/chatterbox-voices/';
+              // Shared voice folder (issue #213). Default to state/voices/ when
+              // the controller advertises the new field.
+              const cbDir = 'state/voices/';
               const cbAvailable = data?.tts?.available?.chatterbox !== false;
               return (
                 <div className="field max-w-[360px]">
@@ -1018,25 +1024,50 @@ export default function PersonasPanel() {
                     </div>
                   )}
                   <Label>PocketTTS voice</Label>
-                  <Select
-                    value={focused.tts.voice || 'alba'}
-                    onValueChange={val => setPersonaTts(safeIdx, { voice: val })}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {pocketTtsVoices.map(v => (
-                          <SelectItem key={v.id} value={v.id}>{v.label}</SelectItem>
-                        ))}
-                        {focused.tts.voice && !pocketTtsVoices.some(v => v.id === focused.tts.voice) && (
-                          <SelectItem value={focused.tts.voice}>{focused.tts.voice}</SelectItem>
-                        )}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
+                  {(() => {
+                    const customVoices: string[] = data?.tts?.pocketTtsCustomVoices || [];
+                    const value = focused.tts.voice || 'alba';
+                    const isBuiltin = pocketTtsVoices.some(v => v.id === value);
+                    const isCustom = customVoices.includes(value);
+                    return (
+                      <Select
+                        value={value}
+                        onValueChange={val => setPersonaTts(safeIdx, { voice: val })}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            <SelectLabel>Built-in</SelectLabel>
+                            {pocketTtsVoices.map(v => (
+                              <SelectItem key={v.id} value={v.id}>{v.label}</SelectItem>
+                            ))}
+                          </SelectGroup>
+                          {customVoices.length > 0 && (
+                            <SelectGroup>
+                              <SelectLabel>Custom (cloned)</SelectLabel>
+                              {customVoices.map(v => (
+                                <SelectItem key={v} value={v}>{v}</SelectItem>
+                              ))}
+                            </SelectGroup>
+                          )}
+                          {!isBuiltin && !isCustom && focused.tts.voice && (
+                            // Persona references a voice that isn't currently
+                            // present — keep the value visible so a save round-trips
+                            // without rewriting, but flag it so the operator notices.
+                            <SelectGroup>
+                              <SelectLabel>Unknown</SelectLabel>
+                              <SelectItem value={focused.tts.voice}>{focused.tts.voice} (missing)</SelectItem>
+                            </SelectGroup>
+                          )}
+                        </SelectContent>
+                      </Select>
+                    );
+                  })()}
                   <div className="field-hint">
                     CPU-only, ~6× real-time. Built-in voices cover English, French, German,
-                    Italian, Spanish and Portuguese.
+                    Italian, Spanish and Portuguese. Drop a ~5s WAV into{' '}
+                    <code>state/voices/</code> to clone a voice — it’ll appear under
+                    <em> Custom</em> on next reload.
                   </div>
                 </div>
               );

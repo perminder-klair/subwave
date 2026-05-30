@@ -14,7 +14,7 @@ import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { Label } from '../ui/label';
 import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
 import { cn } from '../../lib/cn';
@@ -222,8 +222,12 @@ interface SettingsData {
     available?: Record<string, boolean>;
     kokoroVoices?: Array<{ id: string; label: string }>;
     chatterboxVoices?: string[];
+    // `voiceDir` is the new shared name (issue #213). `chatterboxVoiceDir` is
+    // kept as an alias so the UI keeps working against older controllers.
+    voiceDir?: string;
     chatterboxVoiceDir?: string;
     pocketTtsVoices?: Array<{ id: string; label: string }>;
+    pocketTtsCustomVoices?: string[];
     cloudProviders?: string[];
   };
   llm?: {
@@ -1149,17 +1153,19 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                 </Select>
                 <div className="field-hint">
                   ~5 seconds of clean speech is enough to clone a voice. Drop WAVs into{' '}
-                  <code>state/chatterbox-voices/</code>
-                  {' '}on the host and they’ll appear here on next reload. Personas can
+                  <code>state/voices/</code>
+                  {' '}on the host (the legacy <code>state/chatterbox-voices/</code> is
+                  still read) and they’ll appear here on next reload. Personas can
                   override this on the Personas page.
                 </div>
               </>
             ) : (
               <div className="field-hint">
                 No reference voices found in{' '}
-                <code>state/chatterbox-voices/</code>.
-                The engine will use its built-in default voice. Drop a 5-second WAV into
-                that directory to enable cloning.
+                <code>state/voices/</code>{' '}
+                (legacy <code>state/chatterbox-voices/</code> also empty). The engine will
+                use its built-in default voice — drop a 5-second WAV into that directory
+                to enable cloning.
               </div>
             )}
           </div>
@@ -1189,16 +1195,27 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
+                      <SelectLabel>Built-in</SelectLabel>
                       {data.tts?.pocketTtsVoices?.map(v => (
                         <SelectItem key={v.id} value={v.id}>{v.label} — {v.id}</SelectItem>
                       ))}
                     </SelectGroup>
+                    {(data.tts?.pocketTtsCustomVoices?.length || 0) > 0 && (
+                      <SelectGroup>
+                        <SelectLabel>Custom (cloned)</SelectLabel>
+                        {data.tts?.pocketTtsCustomVoices?.map(v => (
+                          <SelectItem key={v} value={v}>{v}</SelectItem>
+                        ))}
+                      </SelectGroup>
+                    )}
                   </SelectContent>
                 </Select>
                 <div className="field-hint">
-                  100M-param CPU-only model from kyutai-labs. Voices speak English, French,
-                  German, Italian, Spanish and Portuguese. Personas can override this on
-                  the Personas page.
+                  100M-param CPU-only model from kyutai-labs. Built-in voices speak
+                  English, French, German, Italian, Spanish and Portuguese. Drop a
+                  ~5-second WAV into <code>state/voices/</code> to clone a voice and it
+                  will appear under <em>Custom</em> on next reload. Personas can override
+                  this on the Personas page.
                 </div>
               </>
             ) : (
