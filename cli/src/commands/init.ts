@@ -32,6 +32,17 @@ interface InitAnswers {
   adminUser: string;
   adminPass: string;
   siteUrl: string;
+  tz: string;
+}
+
+// Auto-detect the host's IANA timezone so the DJ announces local time out of
+// the box. The controller reads the clock via date.getHours(), which keys off
+// the container's TZ env var; without it the container runs in UTC and time
+// announcements drift by the host's offset (see issue #205). Bun/Node expose
+// the host zone through Intl; we fall back to the compose default so a host
+// with no resolvable zone keeps the historical behaviour rather than UTC.
+function detectTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/London';
 }
 
 // Options for non-interactive init (`subwave init --yes`). Used by the curl|sh
@@ -46,6 +57,9 @@ export interface InitOptions {
   adminUser?: string;
   adminPass?: string;
   siteUrl?: string;
+  // IANA timezone for the DJ clock. Defaults to the auto-detected host zone;
+  // the installer / `--yes` callers can override it explicitly.
+  tz?: string;
   // Whether to bring the stack up after scaffolding. Defaults to true; the
   // installer's `--no-start` maps to false.
   start?: boolean;
@@ -113,6 +127,7 @@ function defaultAnswers(opts: InitOptions): InitAnswers {
     adminUser: opts.adminUser ?? 'admin',
     adminPass: opts.adminPass ?? crypto.randomBytes(16).toString('hex'),
     siteUrl: opts.siteUrl ?? '',
+    tz: opts.tz?.trim() || detectTimezone(),
   };
 }
 
@@ -187,7 +202,10 @@ async function collectAnswers(): Promise<InitAnswers> {
     placeholder: 'https://radio.example.com',
   }), { backOnCancel: false });
 
-  return { home: homeAbs, mode, adminUser, adminPass, siteUrl };
+  // TZ is auto-detected, not prompted: init stays lean (the editable timezone
+  // prompt lives in `subwave setup`), and skipping a prompt keeps init safe to
+  // drive over a pipe on macOS, where Bun's stdin hangs (oven-sh/bun#13374).
+  return { home: homeAbs, mode, adminUser, adminPass, siteUrl, tz: detectTimezone() };
 }
 
 async function scaffold(a: InitAnswers): Promise<void> {
@@ -225,10 +243,11 @@ async function scaffold(a: InitAnswers): Promise<void> {
   const envValues: Record<string, string> = {
     ADMIN_USER: a.adminUser,
     ADMIN_PASS: a.adminPass,
+    TZ: a.tz,
   };
   if (a.siteUrl) envValues.SITE_URL = a.siteUrl;
   writeEnvFileAt(resolve(a.home, '.env'), envValues, envExamplePath);
-  ok(`wrote .env (ADMIN_USER, ADMIN_PASS${a.siteUrl ? ', SITE_URL' : ''})`);
+  ok(`wrote .env (ADMIN_USER, ADMIN_PASS, TZ=${a.tz}${a.siteUrl ? ', SITE_URL' : ''})`);
 
   // 4. Persist the home in ~/.config/subwave/config.json so subsequent
   // `subwave …` commands resolve to this directory without --home or
