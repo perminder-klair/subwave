@@ -83,23 +83,30 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
     if (audioRef.current) audioRef.current.volume = volume;
   }, [volume]);
 
-  // Pick Opus on browsers that *definitively* decode it (Chrome, Firefox,
-  // Edge — they return 'probably' for Ogg-Opus). Safari iOS/iPadOS returns
-  // 'maybe' but its AVFoundation Opus decoder doesn't handle live Ogg over
-  // Icecast — the first crossfade hits an Ogg page-chain boundary it can't
-  // tolerate and decoding silently stops with no error event for the
-  // watchdog to catch. Two layers of defence: require 'probably' (drops
-  // Safari's optimistic 'maybe' answer), and skip the upgrade entirely on
-  // iOS-family devices (iPad on iPadOS 13+ reports the desktop Macintosh UA
-  // so we also check maxTouchPoints to identify it). Everyone falling
-  // through stays on the universal MP3 192 kbps mount.
+  // Pick Opus on browsers that *definitively* decode it (Chrome, Edge — they
+  // return 'probably' for Ogg-Opus). Two browser families say they can decode
+  // Opus but choke on the live chained Ogg stream Icecast emits at a crossfade
+  // boundary, going silent at the first track change with no error/stalled
+  // event for the watchdog to catch — so we keep both on the universal MP3
+  // 192 kbps mount instead:
+  //   • Safari iOS/iPadOS — returns the optimistic 'maybe', and its
+  //     AVFoundation Opus decoder can't tolerate the Ogg page-chain boundary.
+  //   • Firefox/Gecko — returns 'probably', decodes Opus fine in general, but
+  //     its media stack can't follow the chained Ogg stream either (issue #212).
+  // Three layers of defence: require 'probably' (drops Safari's 'maybe'), skip
+  // iOS-family devices (iPad on iPadOS 13+ reports the desktop Macintosh UA so
+  // we also check maxTouchPoints), and skip Firefox by UA.
   useEffect(() => {
     if (!OPUS_STREAM_URL) return;
     const ua = navigator.userAgent;
     const isIOS =
       /iPad|iPhone|iPod/.test(ua) ||
       (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
-    if (isIOS) return;
+    // Desktop/Android Firefox + Gecko forks (LibreWolf, Waterfox) carry
+    // "Firefox" in the UA; Firefox-for-iOS reports "FxiOS" and is already
+    // caught by isIOS above, so /firefox/i doesn't double-handle it.
+    const isFirefox = /firefox/i.test(ua);
+    if (isIOS || isFirefox) return;
     const tester = document.createElement('audio');
     const opusOk = tester.canPlayType('audio/ogg; codecs=opus');
     if (opusOk === 'probably') {
