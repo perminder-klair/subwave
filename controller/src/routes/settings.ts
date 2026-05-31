@@ -8,6 +8,7 @@ import * as jingles from '../broadcast/jingles.js';
 import * as settings from '../settings.js';
 import * as tts from '../audio/tts.js';
 import * as chatterbox from '../audio/chatterbox.js';
+import * as piper from '../audio/piper.js';
 import * as llmProvider from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
 import { restartLiquidsoap, startStream, stopStream, streamStatus } from '../broadcast/liquidsoap-control.js';
@@ -35,6 +36,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
     // Reference-WAV voices are shared by chatterbox + pocket-tts (issue #213);
     // read once and reuse for both dropdowns.
     const customVoices = await chatterbox.listReferenceVoices();
+    // Custom Piper .onnx voices the operator dropped into the same shared folder
+    // (issue #230) — only those with a matching .onnx.json manifest are listed.
+    const piperVoices = await piper.listPiperVoices();
     const voiceDir = chatterbox.voiceDir();
     res.json({
       autoPick: queue.autoPick,
@@ -75,6 +79,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         available: tts.availableEngines(),
         kokoroVoices: settings.KOKORO_VOICES_BRITISH,
         voiceDir,
+        piperVoices,
         chatterboxVoices: customVoices,
         // `chatterboxVoiceDir` kept as an alias of `voiceDir` so older UI
         // builds that haven't picked up the new field don't break.
