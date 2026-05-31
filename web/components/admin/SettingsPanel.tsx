@@ -20,12 +20,12 @@ import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
 import { cn } from '../../lib/cn';
 
 const SECTIONS = [
+  { id: 'station',  label: 'Station', hint: 'name · location' },
+  { id: 'theme',    label: 'Theme', hint: 'station-wide palette' },
   { id: 'tts',      label: 'TTS voice', hint: 'default engine' },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing' },
   { id: 'search',   label: 'Web search', hint: 'live-facts backend' },
   { id: 'library',  label: 'Library tagger', hint: 'embedding · propagation' },
-  { id: 'station',  label: 'Station', hint: 'name · location' },
-  { id: 'theme',    label: 'Theme', hint: 'station-wide palette' },
   { id: 'jingles',  label: 'Jingles', hint: 'stingers' },
   { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers' },
   { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz' },
@@ -267,7 +267,7 @@ export default function SettingsPanel() {
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<SectionId>('tts');
+  const [activeSection, setActiveSection] = useState<SectionId>('station');
   const [sfxData, setSfxData] = useState<SfxData | null>(null);
   const [sfxForm, setSfxForm] = useState<SfxForm>({ name: '', description: '', prompt: '', durationSec: '' });
   const [confirmDeleteSfx, setConfirmDeleteSfx] = useState<string | null>(null);
