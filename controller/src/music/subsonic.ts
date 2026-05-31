@@ -287,6 +287,13 @@ export function getStreamUrl(songId) {
   return `subhttp:${buildUrl('stream', { id: songId, format: 'raw' })}`;
 }
 
+// Plain HTTP stream URL (no `subhttp:` prefix) with auth baked into the query
+// string — for the analysis worker, which fetches the original bytes with
+// urllib and decodes the first chunk. `format=raw` avoids a transcode hop.
+export function getRawStreamUrl(songId: string): string {
+  return buildUrl('stream', { id: songId, format: 'raw' });
+}
+
 // Returns the local file path if Navidrome and the controller share the music
 // volume — much more efficient than streaming over HTTP for the radio.
 // Set MUSIC_LIBRARY_PATH to mount your library inside the controller container.

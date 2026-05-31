@@ -44,6 +44,9 @@ export function get(songId: string): any {
     promptHash: t.promptHash,
     model: t.model,
     taggedAt: t.taggedAt,
+    bpm: t.bpm,
+    musicalKey: t.musicalKey,
+    introMs: t.introMs,
   };
 }
 
@@ -147,6 +150,11 @@ function slimTrack(r: db.TrackRecord) {
     genre: r.genre,
     moods: r.moods,
     energy: r.energy,
+    // Acoustic analysis — null on un-analysed tracks. Consumers (picker
+    // re-rank, LLM candidate surface) treat null as "no signal".
+    bpm: r.bpm,
+    musicalKey: r.musicalKey,
+    introMs: r.introMs,
   };
 }
 

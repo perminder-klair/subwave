@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""
+Acoustic-analysis worker — line-protocol child process.
+
+The Node side (controller/src/music/analyzer.ts) spawns this once and keeps it
+alive, because importing librosa takes a couple of seconds and we don't want to
+eat that per track in a bulk pass. Protocol is one JSON object per line over
+stdin/stdout, same shape as the Kokoro/PocketTTS workers.
+
+Request:  {"id": "<song id>", "url": "<http stream url>"}
+Response: {"id": "<echoed>", "ok": true, "bpm": 122.0, "key": "8A",
+           "intro_ms": 8200, "confidence": 0.71}
+       |  {"id": "<echoed>", "ok": false, "error": "..."}
+
+This deliberately lives OUTSIDE the controller image — librosa pulls in
+numba/scipy/soundfile, which the controller must stay lean of. It runs in the
+tts-heavy sidecar's analyzer venv, or in a standalone offline venv on the
+operator's machine. Audio is fetched from the Subsonic stream URL (auth baked
+into the query string) to a temp file, then only the first ANALYZE_SECONDS are
+decoded — enough for tempo/key and the intro estimate, a fraction of the bytes.
+"""
+
+import json
+import os
+import sys
+import tempfile
+import urllib.request
+
+ANALYZE_SECONDS = float(os.environ.get("ANALYZE_SECONDS", "120"))
+ANALYZE_SR = int(os.environ.get("ANALYZE_SR", "22050"))
+FETCH_TIMEOUT_S = float(os.environ.get("ANALYZE_FETCH_TIMEOUT_S", "60"))
+
+# Krumhansl-Kessler key profiles (major/minor), indexed from the tonic.
+MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+
+# Camelot code per pitch class (C=0 … B=11), one table per mode.
+MAJOR_CAMELOT = ["8B", "3B", "10B", "5B", "12B", "7B", "2B", "9B", "4B", "11B", "6B", "1B"]
+MINOR_CAMELOT = ["5A", "12A", "7A", "2A", "9A", "4A", "11A", "6A", "1A", "8A", "3A", "10A"]
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def log(msg):
+    sys.stderr.write(f"[analyze-worker] {msg}\n")
+    sys.stderr.flush()
+
+
+def _pearson(a, b):
+    n = len(a)
+    ma = sum(a) / n
+    mb = sum(b) / n
+    num = sum((a[i] - ma) * (b[i] - mb) for i in range(n))
+    da = sum((a[i] - ma) ** 2 for i in range(n)) ** 0.5
+    db = sum((b[i] - mb) ** 2 for i in range(n)) ** 0.5
+    if da == 0 or db == 0:
+        return 0.0
+    return num / (da * db)
+
+
+def estimate_key(chroma_mean):
+    """Krumhansl-Schmuckler: correlate the mean chroma against all 24 keys.
+    Returns (camelot_code, separation) where separation (best - 2nd best
+    correlation, 0..1-ish) is a rough confidence in the key call."""
+    scores = []  # (corr, camelot)
+    for tonic in range(12):
+        rotated = [chroma_mean[(tonic + i) % 12] for i in range(12)]
+        scores.append((_pearson(MAJOR_PROFILE, rotated), MAJOR_CAMELOT[tonic]))
+        scores.append((_pearson(MINOR_PROFILE, rotated), MINOR_CAMELOT[tonic]))
+    scores.sort(reverse=True, key=lambda s: s[0])
+    best_corr, best_code = scores[0]
+    separation = max(0.0, min(1.0, best_corr - scores[1][0]))
+    return best_code, separation
+
+
+def estimate_intro_ms(y, sr, librosa):
+    """Rough intro length: the first time the short-term energy rises and stays
+    above a fraction of the track's typical loud level — i.e. where the track
+    'comes in' after any quiet count-in. This is an energy heuristic, NOT true
+    vocal-onset detection, so callers treat it as a soft budget, never a gate."""
+    import numpy as np
+
+    rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=512)[0]
+    if rms.size == 0:
+        return None
+    loud = float(np.percentile(rms, 80))
+    if loud <= 0:
+        return None
+    threshold = 0.30 * loud
+    times = librosa.frames_to_time(np.arange(rms.size), sr=sr, hop_length=512)
+    # First frame that crosses the threshold and stays above it for ~0.5s.
+    sustain_frames = max(1, int(0.5 * sr / 512))
+    for i in range(rms.size):
+        if rms[i] >= threshold:
+            window = rms[i : i + sustain_frames]
+            if window.size and float(np.mean(window)) >= threshold:
+                return max(0.0, float(times[i]) * 1000.0)
+    return 0.0
+
+
+def fetch_audio(url):
+    suffix = ".audio"
+    fd, path = tempfile.mkstemp(suffix=suffix, prefix="swanalyze_")
+    os.close(fd)
+    req = urllib.request.Request(url, headers={"User-Agent": "subwave-analyzer/1"})
+    with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp, open(path, "wb") as out:
+        # Cap the download so we don't pull whole albums of bytes for a
+        # 120-second analysis window — ~3 MB covers 2 min of most codecs.
+        max_bytes = int(os.environ.get("ANALYZE_MAX_BYTES", str(12 * 1024 * 1024)))
+        read = 0
+        while True:
+            chunk = resp.read(65536)
+            if not chunk:
+                break
+            out.write(chunk)
+            read += len(chunk)
+            if read >= max_bytes:
+                break
+    return path
+
+
+def analyze(url, librosa):
+    import numpy as np
+
+    path = fetch_audio(url)
+    try:
+        y, sr = librosa.load(path, sr=ANALYZE_SR, mono=True, duration=ANALYZE_SECONDS)
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    if y is None or len(y) == 0:
+        raise RuntimeError("decoded empty audio")
+
+    tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+    bpm = float(np.atleast_1d(tempo)[0])
+
+    chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
+    chroma_mean = [float(x) for x in np.mean(chroma, axis=1)]
+    key, key_sep = estimate_key(chroma_mean)
+
+    intro_ms = estimate_intro_ms(y, sr, librosa)
+
+    # Overall confidence: dominated by how cleanly the key resolved, nudged by
+    # whether we got a plausible tempo. Kept conservative on purpose.
+    confidence = round(0.5 * key_sep + (0.5 if 40 <= bpm <= 220 else 0.0), 3)
+
+    return {
+        "bpm": round(bpm, 1),
+        "key": key,
+        "intro_ms": int(intro_ms) if intro_ms is not None else None,
+        "confidence": confidence,
+    }
+
+
+def main():
+    try:
+        import librosa  # noqa: F401
+        import numpy  # noqa: F401
+    except Exception as e:  # pragma: no cover
+        emit({"id": None, "ok": False, "fatal": True, "error": f"import failed: {e}"})
+        sys.exit(1)
+
+    log("ready")
+    emit({"id": None, "ready": True})
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except Exception as e:
+            emit({"id": None, "ok": False, "error": f"bad json: {e}"})
+            continue
+        rid = req.get("id")
+        url = req.get("url")
+        if not url:
+            emit({"id": rid, "ok": False, "error": "missing url"})
+            continue
+        try:
+            import librosa
+
+            result = analyze(url, librosa)
+            emit({"id": rid, "ok": True, **result})
+        except Exception as e:
+            emit({"id": rid, "ok": False, "error": str(e)})
+
+
+if __name__ == "__main__":
+    main()

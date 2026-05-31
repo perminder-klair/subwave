@@ -7,6 +7,7 @@
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
     "tag": "tsx src/music/tag-library.ts",
+    "analyze": "tsx src/music/analyze-library.ts",
     "lastfm-session": "tsx scripts/lastfm-session.ts",
     "lint": "eslint . && tsc --noEmit",
     "lint:fix": "eslint . --fix",

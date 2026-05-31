@@ -27,6 +27,12 @@ const LEGACY_MOODS_JSON = `${STATE_DIR}/moods.json`;
 // with WHERE tagger_version < N for upgrade scripts.
 export const TAGGER_VERSION = 3;
 
+// Acoustic-analysis schema version, stored on every row the analyze pass
+// writes (music/analyze-library.ts). Independent of TAGGER_VERSION — mood
+// tagging and acoustic analysis run separately. Bump when the analysis shape
+// or method changes so `--re-analyze` / staleness checks can target old rows.
+export const ANALYSIS_VERSION = 1;
+
 let db: Database.Database | null = null;
 let currentEmbeddingDim: number | null = null;
 
@@ -56,6 +62,14 @@ export interface TrackRecord {
   promptHash: string | null;
   model: string | null;
   taggedAt: string | null;
+  // Acoustic analysis (music/analyze-library.ts). All nullable — a track that
+  // hasn't been analysed reads null and every consumer treats that as "no
+  // signal, behave as today".
+  bpm: number | null;
+  musicalKey: string | null;   // Camelot code, e.g. '8A'
+  introMs: number | null;
+  analysisConfidence: number | null;
+  analysisVersion: number | null;
 }
 
 export interface TrackMeta {
@@ -186,6 +200,21 @@ async function migrate(embeddingDim: number): Promise<void> {
       );
     `);
     d.pragma('user_version = 1');
+  }
+
+  if (userVersion < 2) {
+    // Acoustic analysis columns — all nullable, back-filled offline by
+    // music/analyze-library.ts. Idempotent: only runs once per DB (guarded by
+    // user_version), and ALTER ... ADD COLUMN is the safe additive migration.
+    runDdl(d, `
+      ALTER TABLE tracks ADD COLUMN bpm                 REAL;
+      ALTER TABLE tracks ADD COLUMN musical_key         TEXT;
+      ALTER TABLE tracks ADD COLUMN intro_ms            INTEGER;
+      ALTER TABLE tracks ADD COLUMN analysis_confidence REAL;
+      ALTER TABLE tracks ADD COLUMN analysis_version    INTEGER;
+      CREATE INDEX IF NOT EXISTS idx_tracks_analysis ON tracks(analysis_version);
+    `);
+    d.pragma('user_version = 2');
   }
 
   // The vec0 virtual table carries the embedding dim in its schema. If the
@@ -399,6 +428,57 @@ export function upsertTrackTags(id: string, tags: TagWrite): void {
       new Date().toISOString(),
       id,
     );
+}
+
+export interface TrackAnalysisWrite {
+  bpm?: number | null;
+  musicalKey?: string | null;
+  introMs?: number | null;
+  confidence?: number | null;
+}
+
+// Write acoustic-analysis results for a track. Stamps ANALYSIS_VERSION so
+// resumable runs can skip already-analysed rows and a bump re-targets stale
+// ones. Mirrors upsertTrackTags (UPDATE on an existing meta row).
+export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
+  requireDb()
+    .prepare(
+      `UPDATE tracks SET
+        bpm                 = ?,
+        musical_key         = ?,
+        intro_ms            = ?,
+        analysis_confidence = ?,
+        analysis_version    = ?
+      WHERE id = ?`,
+    )
+    .run(
+      Number.isFinite(a.bpm as number) ? (a.bpm as number) : null,
+      a.musicalKey ?? null,
+      Number.isFinite(a.introMs as number) ? Math.round(a.introMs as number) : null,
+      Number.isFinite(a.confidence as number) ? (a.confidence as number) : null,
+      ANALYSIS_VERSION,
+      id,
+    );
+}
+
+// Ids that still need acoustic analysis: never analysed, or analysed by an
+// older ANALYSIS_VERSION. Ordered for stable resumption. `limit` caps a run.
+export function needsAnalysisIds(limit?: number): string[] {
+  const sql =
+    `SELECT id FROM tracks
+       WHERE analysis_version IS NULL OR analysis_version < ?
+       ORDER BY id` + (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
+  const rows = requireDb().prepare(sql).all(ANALYSIS_VERSION) as Array<{ id: string }>;
+  return rows.map(r => r.id);
+}
+
+export function clearAnalysis(): void {
+  requireDb()
+    .prepare(
+      `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
+        analysis_confidence = NULL, analysis_version = NULL`,
+    )
+    .run();
 }
 
 export function upsertTrackVector(id: string, vector: number[] | Float32Array): void {
@@ -675,6 +755,11 @@ function rowToTrack(row: any): TrackRecord {
     promptHash: row.prompt_hash,
     model: row.model,
     taggedAt: row.tagged_at,
+    bpm: row.bpm ?? null,
+    musicalKey: row.musical_key ?? null,
+    introMs: row.intro_ms ?? null,
+    analysisConfidence: row.analysis_confidence ?? null,
+    analysisVersion: row.analysis_version ?? null,
   };
 }
 

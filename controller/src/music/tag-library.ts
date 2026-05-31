@@ -33,6 +33,7 @@ import { loadSecretsIntoEnv } from '../setup/secrets.js';
 import { loadSetupConfig } from '../setup/config.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { tagBatch, TAGGER_BATCH_SYSTEM } from './tagger-core.js';
+import { runAnalysisPass } from './analyze.js';
 
 // ---------------------------------------------------------------------------
 // CLI arg parsing
@@ -62,6 +63,8 @@ interface CliFlags {
   reEnrich: boolean;
   skipEnrich: boolean;
   upgrade: boolean;
+  skipAnalyze: boolean;
+  reAnalyze: boolean;
 }
 
 function parseFlags(): CliFlags {
@@ -77,6 +80,8 @@ function parseFlags(): CliFlags {
     reEnrich: args.includes('--re-enrich'),
     skipEnrich: args.includes('--skip-enrich'),
     upgrade: args.includes('--upgrade'),
+    skipAnalyze: args.includes('--skip-analyze'),
+    reAnalyze: args.includes('--re-analyze'),
   };
 }
 
@@ -357,6 +362,21 @@ async function main() {
       break;
     }
     uncertain = stillUncertain;
+  }
+
+  // ---- Phase 5: ANALYZE (acoustic bpm/key/intro) -------------------------
+  // Independent of mood tagging — runs the same pass as `npm run analyze`.
+  // No-ops cleanly when no analysis backend (tts-heavy sidecar / local
+  // librosa venv) is reachable, so it never blocks a tag run.
+  if (!flags.skipAnalyze) {
+    try {
+      await runAnalysisPass({
+        limit: flags.limit === Infinity ? undefined : flags.limit,
+        reAnalyze: flags.reAnalyze,
+      });
+    } catch (err: any) {
+      console.error(`[tag] analysis phase failed (non-fatal): ${err?.message || err}`);
+    }
   }
 
   finish(startedAt, llmCalls, llmTagged);
