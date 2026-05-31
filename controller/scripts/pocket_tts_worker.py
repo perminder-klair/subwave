@@ -124,17 +124,25 @@ def main():
                 audio = audio.numpy()
             import numpy as np
             audio = np.asarray(audio, dtype=np.float32)
-            # PocketTTS' raw output has wider dynamic range than Piper / Kokoro
-            # for the same line — peak sits ~-2 dBFS and mean RMS ~-19 dB,
-            # versus Piper at 0 / -14 — so it feels muffled against the
-            # (ducked) music bed. RMS-normalize to ~-14 dB so spoken loudness
-            # matches the other local engines, then hard-clip at -0.5 dBFS as
-            # a safety net (occasional peaks above target).
+            # Loudness. PocketTTS is the operator's chosen on-air voice and was
+            # perceived quiet on the (ducked) music bed, so we drive it
+            # deliberately hot: RMS-normalize to a high target, then soft-limit
+            # peaks instead of hard-clipping — so the louder level never chops
+            # into harsh clipping. POCKET_TTS_TARGET_RMS tunes it without a code
+            # change (0.245 linear ≈ -12.2 dBFS RMS, ~+2 dB over the old -14.3).
+            target_rms = float(os.environ.get("POCKET_TTS_TARGET_RMS", "0.245"))
             rms = float(np.sqrt(np.mean(audio * audio))) if audio.size else 0.0
             if rms > 0:
-                gain = 0.193 / rms       # 0.193 linear ≈ -14.3 dBFS RMS
-                audio = audio * gain
-            audio = np.clip(audio, -0.944, 0.944)   # -0.5 dBFS ceiling
+                audio = audio * (target_rms / rms)
+            # Soft-knee limiter: transparent below `knee`, then tanh-shaped up to
+            # `ceiling` (~-0.26 dBFS). Tames the hotter signal's peaks smoothly
+            # and adds a touch of presence, where a hard clip would distort.
+            knee, ceiling = 0.70, 0.97
+            mag = np.abs(audio)
+            over = mag > knee
+            audio[over] = np.sign(audio[over]) * (
+                knee + (ceiling - knee) * np.tanh((mag[over] - knee) / (ceiling - knee))
+            )
             # Save as 16-bit PCM (matches the other engines' output format).
             audio_i16 = (audio * 32767.0).astype(np.int16)
             sample_rate = int(getattr(model, "sample_rate", 24000))
