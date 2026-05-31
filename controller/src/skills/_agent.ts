@@ -244,7 +244,9 @@ export async function agenticTick(ctx) {
 
   const now = new Date();
   const persona = settings.getEffectivePersona(now);
-  const freq = persona?.frequency || 'moderate';
+  // DJ-mode personas read one rung chattier, lowering the floor so more
+  // between-track segments (weather, curiosity, deep cuts) get through.
+  const freq = settings.effectiveFrequency(persona);
 
   // Floor on the gap between any two segments.
   if (now.getTime() - segmentState.lastAnySegment < frequencyFloorMs(freq)) return;

@@ -197,6 +197,7 @@ router.get('/dj', async (req, res) => {
       tagline: persona?.tagline || '',
       soul: persona?.soul || '',
       frequency: persona?.frequency || 'moderate',
+      djMode: persona?.djMode === true,
       avatar: avatarUrlFor(persona?.id),
       station: s.station,
       location: s.weather?.locationName || '',

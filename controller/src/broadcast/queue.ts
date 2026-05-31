@@ -23,8 +23,10 @@ import * as scrobble from './scrobble.js';
 //   quiet      → uniform 8-20 tracks between links
 //   moderate   → current behaviour (1-9 85% of the time, 10-15 the other 15%)
 //   aggressive → uniform 1-3 tracks
+// A DJ-mode persona reads one rung chattier (effectiveFrequency), so it links
+// transitions far more often — a working DJ talks across most of them.
 function pickLinkInterval() {
-  const f = settings.getEffectivePersona()?.frequency || 'moderate';
+  const f = settings.effectiveFrequency();
   if (f === 'quiet')      return 8 + Math.floor(Math.random() * 13);
   if (f === 'aggressive') return 1 + Math.floor(Math.random() * 3);
   if (Math.random() < 0.15) return 10 + Math.floor(Math.random() * 6);

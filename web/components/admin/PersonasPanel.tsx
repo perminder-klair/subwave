@@ -65,6 +65,10 @@ interface Persona {
   tagline: string;
   frequency: string;
   scriptLength: string;
+  // When true the persona behaves like a working DJ — back-announces AND teases
+  // what's next, runs callbacks across the session, and is more present. Off =
+  // the historical tasteful-narrator behaviour.
+  djMode: boolean;
   soul: string;
   // Stored basename like `p_abc123.png` — empty when no avatar is uploaded.
   // The actual image is served via /api/persona-avatar/<id>; we keep the
@@ -382,6 +386,7 @@ export default function PersonasPanel() {
             tagline: p.tagline ?? '',
             frequency: p.frequency ?? 'moderate',
             scriptLength: p.scriptLength ?? 'concise',
+            djMode: p.djMode === true,
             soul: p.soul ?? '',
             avatar: typeof p.avatar === 'string' ? p.avatar : '',
             tts: {
@@ -414,7 +419,7 @@ export default function PersonasPanel() {
         ...f,
         personas: [...f.personas, {
           id: clientMintId(), name: 'New persona', tagline: '',
-          frequency: 'moderate', scriptLength: 'concise', soul: '',
+          frequency: 'moderate', scriptLength: 'concise', djMode: false, soul: '',
           avatar: '',
           tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella' },
           skills: (data?.skills?.catalog || []).map(s => s.name),
@@ -547,6 +552,7 @@ export default function PersonasPanel() {
             tagline: p.tagline.trim(),
             frequency: p.frequency,
             scriptLength: p.scriptLength,
+            djMode: p.djMode,
             soul: p.soul.trim(),
             avatar: p.avatar || '',
             tts: {
@@ -898,6 +904,23 @@ export default function PersonasPanel() {
                   onSelect={() => setPersona(safeIdx, { scriptLength: s.id })}
                 />
               ))}
+            </div>
+
+            <div className="rule-label">DJ mode</div>
+
+            <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+              <div>
+                <div className="text-[13px] font-bold">Work the desk like a real DJ</div>
+                <div className="mt-0.5 text-[11px] text-muted">
+                  Back-announces and teases what&apos;s coming next, runs callbacks across the
+                  hour, and talks more often. Off keeps this persona a tasteful between-track
+                  narrator.
+                </div>
+              </div>
+              <Toggle
+                on={focused.djMode}
+                onClick={() => setPersona(safeIdx, { djMode: !focused.djMode })}
+              />
             </div>
           </Card>
 

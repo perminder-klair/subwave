@@ -47,12 +47,29 @@ export const DJ_SOULS = [
   'quietly enthusiastic; treats every track like a small recommendation to a friend; specific over poetic',
 ];
 
+// Ordered ascending in chattiness — effectiveFrequency() steps up this ladder.
 export const FREQUENCIES = ['quiet', 'moderate', 'aggressive'];
 
 // Per-persona verbosity. 'concise' is the historical one-liner behaviour;
 // 'extended' roughly doubles every spoken segment for a storytelling DJ.
 // See llm/dj.js LENGTH_PHRASES for the actual length directives.
 export const SCRIPT_LENGTHS = ['concise', 'extended'];
+
+// DJ mode makes a persona behave like a working radio DJ rather than a
+// between-track narrator: it back-announces AND teases what's next, runs
+// threads/callbacks across the session (paired with the cross-hour memory in
+// broadcast/session.ts), and is generally more present. The "more present"
+// part is expressed here as a one-rung bump up the FREQUENCIES ladder, reused
+// by ident cadence (broadcast/dj-gate.ts), between-track segment floors
+// (skills/_agent.ts), and auto-link spacing (broadcast/queue.ts). A persona
+// with djMode off returns its base frequency unchanged, so a default station
+// behaves exactly as before.
+export function effectiveFrequency(persona: any = getEffectivePersona()) {
+  const base = FREQUENCIES.includes(persona?.frequency) ? persona.frequency : 'moderate';
+  if (!persona?.djMode) return base;
+  const i = FREQUENCIES.indexOf(base);
+  return FREQUENCIES[Math.min(i + 1, FREQUENCIES.length - 1)];
+}
 
 // TTS engines. Every spoken segment is voiced by the on-air persona's own
 // `tts` config (see audio/tts.js); only jingle rendering falls back to the
@@ -499,6 +516,7 @@ function normalizePersona(raw: any) {
     tagline: typeof raw.tagline === 'string' ? raw.tagline.trim().slice(0, 80) : '',
     frequency: FREQUENCIES.includes(raw.frequency) ? raw.frequency : 'moderate',
     scriptLength: SCRIPT_LENGTHS.includes(raw.scriptLength) ? raw.scriptLength : 'concise',
+    djMode: raw.djMode === true,
     soul,
     avatar,
     tts: normalizeTts(raw.tts),
@@ -996,6 +1014,16 @@ function validatePersonasStrict(raw) {
       }
       scriptLength = item.scriptLength;
     }
+    // djMode — optional boolean. Absent → false (a plain narrator persona, the
+    // historical behaviour). When true the persona behaves like a working DJ
+    // (forward-tease, callbacks, more presence) — see effectiveFrequency above.
+    let djMode = false;
+    if (item.djMode !== undefined && item.djMode !== null) {
+      if (typeof item.djMode !== 'boolean') {
+        throw new Error(`personas[${i}].djMode must be a boolean`);
+      }
+      djMode = item.djMode;
+    }
     const tts = validateTtsBlock(item.tts, `personas[${i}]`);
     // skills — optional. Absent → null ("all skills", legacy/default). Present
     // → an explicit slug array (the UI always sends one once edited).
@@ -1046,6 +1074,7 @@ function validatePersonasStrict(raw) {
       tagline,
       frequency: item.frequency,
       scriptLength,
+      djMode,
       soul,
       avatar,
       tts,

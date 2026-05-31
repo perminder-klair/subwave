@@ -13,7 +13,9 @@
 import * as settings from '../settings.js';
 
 export function shouldFire(kind, now = new Date()) {
-  const f = settings.getEffectivePersona(now)?.frequency || 'moderate';
+  // effectiveFrequency bumps a DJ-mode persona one rung up the ladder, so it
+  // drops more idents / time checks — a working DJ marks the clock more often.
+  const f = settings.effectiveFrequency(settings.getEffectivePersona(now));
   const m = now.getMinutes();
 
   if (kind === 'stationId') {

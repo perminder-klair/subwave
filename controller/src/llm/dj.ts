@@ -321,7 +321,12 @@ export async function generateLink({ previous, current, context, recap = null, r
   if (previous?.title) ctxLines.push(`Just played: "${previous.title}" by ${previous.artist || 'unknown'}`);
   if (current?.title) ctxLines.push(`Now playing: "${current.title}" by ${current.artist || 'unknown'}`);
 
-  const prompt = `Write a DJ link between tracks. Back-announce what just played and ease into what's playing now. ${lengthPhrase('link')}, conversational, don't list both titles like a robot — pick one to mention specifically and treat the other lightly.\n\n${ctxLines.join('\n')}`;
+  // DJ-mode personas tease what's coming, not just back-announce — mirrors the
+  // agent path in broadcast/dj-agent.ts so both pickers feel like the same DJ.
+  const teaseClause = settings.getEffectivePersona()?.djMode
+    ? ` Tease what's coming — name the artist or capture the feel so listeners know what's next.`
+    : '';
+  const prompt = `Write a DJ link between tracks. Back-announce what just played and ease into what's playing now.${teaseClause} ${lengthPhrase('link')}, conversational, don't list both titles like a robot — pick one to mention specifically and treat the other lightly.\n\n${ctxLines.join('\n')}`;
 
   return djText({
     system: djSystem(),

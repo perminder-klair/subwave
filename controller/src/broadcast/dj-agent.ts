@@ -43,9 +43,17 @@ const REQUEST_SCHEMA = z.object({
 // models. PICKER_CRITERIA stays because it's editorial preference (flow,
 // context, variety, interest) — that's not in any tool or schema.
 export function pickSystem() {
-  return `${settings.agentPersonaPreamble(settings.getEffectivePersona(), { rules: false })}
+  const persona = settings.getEffectivePersona();
+  // In DJ mode, lean on the live session history: a working DJ runs threads
+  // and calls back to a track or a remark from earlier in the shift. This pairs
+  // with the cross-hour memory in broadcast/session.ts, which now keeps that
+  // history alive across daypart turnovers.
+  const djModeLine = persona?.djMode
+    ? `\n\nYou're in full DJ mode — keep the thread alive across tracks: call back to something you played or said earlier in this session when it fits, and build a little momentum rather than treating each pick as isolated.`
+    : '';
+  return `${settings.agentPersonaPreamble(persona, { rules: false })}
 
-You run the station as one continuous shift. The messages above are the live session.
+You run the station as one continuous shift. The messages above are the live session.${djModeLine}
 
 ${dj.PICKER_CRITERIA}`;
 }
@@ -214,13 +222,21 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
   return withTrace({ kind: 'track-event', wantLink }, async () => {
     const current = queue.current?.track || null;
     const previous = queue.history[0]?.track || null;
+    const djMode = !!settings.getEffectivePersona()?.djMode;
 
+    // The link clause differs in DJ mode: a working DJ doesn't just ease into
+    // the next track, they TEASE it — name the artist or capture its feel so
+    // listeners know what's coming. The agent already knows its own pick when
+    // it writes `say`, so this costs nothing extra.
+    const linkClause = wantLink
+      ? (djMode
+          ? ` Also write a short link that airs as your pick starts: back-announce "${current?.title}", then tease what's next — name the artist or capture the feel of the track you pick so listeners know what's coming.`
+          : ` Also write a short link that airs as your pick starts: back-announce "${current?.title}" and lead into the track you pick.`)
+      : ' Stay silent — no link this time.';
     const eventText = `Now playing "${current?.title}" by ${current?.artist}`
       + (previous ? ` (after "${previous.title}" by ${previous.artist})` : '')
       + '. Pick the track to play next.'
-      + (wantLink
-          ? ` Also write a short link that airs as your pick starts: back-announce "${current?.title}" and lead into the track you pick.`
-          : ' Stay silent — no link this time.');
+      + linkClause;
     session.appendTurn({ role: 'event', kind: 'pick', text: eventText });
 
     if (settings.get().llm?.pickerAgent) {
