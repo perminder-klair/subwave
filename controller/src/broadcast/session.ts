@@ -66,11 +66,16 @@ function scenarioText(s: any) {
   return `Autonomous block begins — ${bits.join(', ')}.`;
 }
 
-// One-line summary of a finished session, carried into the next as continuity.
-// Intentionally omits the "recently aired" track list — leaking the previous
-// session's titles into the new picker's prompt window biases it toward
-// re-picking those same tracks (observed cause of 6-8× daily repeats).
-// The picker has its own recents window for blocking repeats.
+// Compact continuity summary of a finished session, carried into the next one
+// (only on a HARD roll now — a show boundary or the 4h cap; daypart turnovers
+// keep the live session instead, see maybeRoll). Enriched with the prior
+// persona + mood so a new program still opens with a sense of where the station
+// just was.
+//
+// STILL intentionally omits the "recently aired" track list — leaking the
+// previous session's titles into the new picker's prompt window biases it
+// toward re-picking those same tracks (observed cause of 6-8× daily repeats).
+// The picker has its own recents window for blocking repeats. Do not add titles.
 function buildHandoff(prev: any) {
   if (!prev) return null;
   const lastSpoken = [...prev.messages].reverse()
@@ -78,8 +83,10 @@ function buildHandoff(prev: any) {
   const parts = [
     prev.kind === 'show'
       ? `the show "${prev.show?.name}"`
-      : `a ${prev.scenario.period || ''} block`,
+      : `a ${prev.scenario?.period || ''} block`,
   ];
+  if (prev.persona?.name) parts.push(`hosted as ${prev.persona.name}`);
+  if (prev.scenario?.mood) parts.push(`mood ${prev.scenario.mood}`);
   if (lastSpoken?.text) parts.push(`you last said: "${lastSpoken.text.slice(0, 120)}"`);
   return parts.join(' — ');
 }
@@ -154,14 +161,47 @@ async function end() {
   logEvent('session.end', { sessionId: _session.id, key: _session.key });
 }
 
-// End + restart if the context no longer matches the live session.
+// Decide whether to keep the live session or roll to a fresh one.
+//
+// A daypart/mood turnover *within* an autonomous run is NOT a program change —
+// it's the same DJ on the same shift, so the session (and its chat history)
+// continues across it via a soft shift. That's what lets the DJ run a thread or
+// call back to a track from earlier in the hour. Only two things hard-roll to a
+// clean slate (with a handoff line): a genuine show boundary (a scheduled
+// program begins, ends, or changes — `show:<id>` in the old or new key) and the
+// 4h MAX_SESSION_MS safety cap.
 export async function maybeRoll(ctx: any): Promise<any> {
   if (!_session) return start(ctx);
+  const nextKey = sessionKeyFor(ctx);
   const aged = Date.now() - new Date(_session.startedAt).getTime() > MAX_SESSION_MS;
-  if (_session.key === sessionKeyFor(ctx) && !aged) return _session;
+  if (_session.key === nextKey && !aged) return _session;
+
+  const bothAuto = _session.key.startsWith('auto:') && nextKey.startsWith('auto:');
+  if (bothAuto && !aged) return softShift(ctx, nextKey);
+
   const prev = _session;
   await end();
   return start(ctx, buildHandoff(prev));
+}
+
+// Soft continuation across an autonomous daypart/mood turnover: same session id,
+// same messages, refreshed identity + scenario. The shift is marked on the
+// timeline as a `scenario` turn (filtered out of the agent window like other
+// scenario turns, so it adds no prompt noise). No archive, no handoff — the
+// running history simply carries forward and the existing WINDOW_TURNS window
+// now spans the boundary.
+function softShift(ctx: any, nextKey: string): any {
+  _session.key = nextKey;
+  _session.scenario = scenarioOf(ctx);
+  const sc = _session.scenario;
+  const label = [
+    sc.period,
+    sc.mood ? `mood ${sc.mood}` : null,
+    sc.weather ? `weather ${sc.weather}` : null,
+  ].filter(Boolean).join(', ');
+  appendTurn({ role: 'event', kind: 'scenario', text: `Shift continues — now ${label}.` });
+  logEvent('session.shift', { sessionId: _session.id, key: _session.key });
+  return _session;
 }
 
 // The bounded chat window fed to the DJ agent — handoff + the last N turns,
