@@ -9,7 +9,10 @@ import { config } from '../config.js';
 
 await mkdir(config.piper.outDir, { recursive: true });
 
-export async function speak(text: string, { outPath: customPath }: { outPath?: string } = {}): Promise<string> {
+export async function speak(
+  text: string,
+  { outPath: customPath, speedScale }: { outPath?: string; speedScale?: number } = {},
+): Promise<string> {
   if (!text || !text.trim()) throw new Error('Empty TTS text');
 
   const id = crypto.randomBytes(6).toString('hex');
@@ -27,9 +30,11 @@ export async function speak(text: string, { outPath: customPath }: { outPath?: s
   ];
   // Piper expresses speech rate as length_scale — the per-phoneme duration
   // multiplier, where HIGHER is slower. We carry a "speed" multiplier
-  // everywhere (lower = slower), so invert it here. Only passed when it
-  // actually differs from default so unchanged stations behave identically.
-  const speed = config.piper.speed;
+  // everywhere (lower = slower), so invert it here. The per-call speedScale
+  // (daypart energy) composes on top of the configured speed; only passed to
+  // Piper when the result differs from 1.0 so unchanged stations behave
+  // identically.
+  const speed = config.piper.speed * (speedScale != null ? speedScale : 1);
   if (speed && speed > 0 && speed !== 1.0) {
     args.push('--length_scale', String(1 / speed));
   }

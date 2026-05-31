@@ -107,7 +107,7 @@ export function isConfigured(providerOverride: string | null = null) {
 // provider + voice while still sharing the global model + apiKey from Settings.
 export async function speak(
   text: string,
-  { outPath, cloudOverride = null }: { outPath?: string; cloudOverride?: any } = {},
+  { outPath, cloudOverride = null, speedScale }: { outPath?: string; cloudOverride?: any; speedScale?: number } = {},
 ) {
   if (!text || !text.trim()) throw new Error('Empty TTS text');
   const base = cloudCfg();
@@ -127,12 +127,15 @@ export async function speak(
     c.apiKey = base.apiKey;
   }
 
-  // Speech rate (CLOUD_TTS_SPEED / TTS_SPEED), clamped to the provider's
-  // range. Only sent when it differs from default so default stations are
-  // unaffected and providers that ignore the field never see it. Skipped for
-  // openai-compatible — local engines vary on whether they accept `speed`.
+  // Speech rate — the per-call speedScale (daypart energy) composes on top of
+  // CLOUD_TTS_SPEED / TTS_SPEED, then clamped to the provider's range. Only
+  // sent when it differs from default so default stations are unaffected and
+  // providers that ignore the field never see it. Skipped for openai-compatible
+  // — local engines vary on whether they accept `speed`.
   const isCompat = c.provider === 'openai-compatible';
-  const speed = isCompat ? 1.0 : clampSpeed(config.tts.cloudSpeed, c.provider);
+  const speed = isCompat
+    ? 1.0
+    : clampSpeed(config.tts.cloudSpeed * (speedScale != null ? speedScale : 1), c.provider);
 
   const result = await generateSpeech({
     model: speechModel(c),

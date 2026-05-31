@@ -152,6 +152,39 @@ export function getClockContext(date = new Date()) {
   };
 }
 
+// Vocal energy for the moment — how the DJ should *sound*, not what it says.
+// `speed` is a multiplier on the engine's default speech rate (>1 brisker,
+// <1 slower); higher is faster on every engine that supports it (piper,
+// kokoro, cloud). `register` is a coarse delivery label carried forward for
+// future style/emotion hints (cloud/chatterbox) — Stage 1 only acts on speed.
+//
+// Pure function of the existing daypart + clock so there's a single source of
+// truth and it's trivially testable. A daypart that maps to speed 1.0
+// (afternoon) yields no change at all, so a station with the default
+// afternoon profile behaves exactly as before.
+const DAYPART_ENERGY: Record<string, { speed: number; register: string }> = {
+  'early-morning': { speed: 0.98, register: 'warm' },      // gentle waking
+  morning:         { speed: 1.02, register: 'even' },      // productive
+  midday:          { speed: 1.06, register: 'up' },        // lunch-hour lift
+  afternoon:       { speed: 1.0,  register: 'even' },       // neutral baseline
+  'drive-time':    { speed: 1.06, register: 'up' },        // drive-home energy
+  evening:         { speed: 0.97, register: 'warm' },      // wind down
+  'late-evening':  { speed: 0.94, register: 'intimate' },  // late hours
+  'after-hours':   { speed: 0.92, register: 'intimate' },  // graveyard
+};
+
+export function energyForDaypart(date = new Date()) {
+  const { period } = getTimeContext(date);
+  const { isLateNight, isCommute } = getClockContext(date);
+  const base = DAYPART_ENERGY[period] || { speed: 1.0, register: 'even' };
+  // The small hours pull the pace down regardless of which daypart label the
+  // hour technically falls under (e.g. the 00:00–01:00 tail of 'late-evening').
+  if (isLateNight) return { speed: Math.min(base.speed, 0.92), register: 'intimate' };
+  // Commute windows get a touch more push than their daypart baseline.
+  if (isCommute) return { speed: Math.max(base.speed, 1.05), register: 'up' };
+  return base;
+}
+
 // Combined snapshot — what's the vibe right now?
 export async function getFullContext() {
   const now = new Date();

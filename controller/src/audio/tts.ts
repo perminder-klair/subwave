@@ -11,6 +11,7 @@ import * as pocketTts from './pocketTts.js';
 import * as cloud from '../llm/speech.js';
 import * as settings from '../settings.js';
 import { recordTts } from '../stats.js';
+import { energyForDaypart } from '../context.js';
 
 export const ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud'];
 
@@ -128,14 +129,29 @@ function normalizeForSpeech(text: string) {
 //
 // Every call is timed and recorded into the TTS ring buffer (stats.js) so the
 // admin Stats page can show per-engine usage, latency, and the fallback rate.
-export async function speak(text: string, { kind = 'default', outPath }: { kind?: string; outPath?: string } = {}) {
+export async function speak(
+  text: string,
+  { kind = 'default', outPath, speedScale }: { kind?: string; outPath?: string; speedScale?: number } = {},
+) {
   const speakText = normalizeForSpeech(text);
   const personaTts = djPersonaTts(kind);
   const primary = resolveEngine(kind, personaTts);
+  // Delivery pace tracks the daypart for live, persona-voiced segments.
+  // `speedScale` is a MULTIPLIER on the engine's configured speech rate (1.0 =
+  // unchanged), so it composes with — rather than overrides — an operator's
+  // global PIPER_SPEED/KOKORO_SPEED/CLOUD_TTS_SPEED. An explicit scale (e.g. a
+  // future talk-up-to-post line budget) always wins; otherwise persona-voiced
+  // kinds inherit the daypart energy. Persona-agnostic kinds (jingle/default)
+  // are skipped — jingles are pre-rendered offline, so a jingle cut at 2am must
+  // not carry 2am pacing into a noon playout. A daypart scale of 1.0
+  // (afternoon) composes to the config default, so the station is unchanged.
+  const scale = speedScale != null
+    ? speedScale
+    : (GLOBAL_VOICE_KINDS.has(kind) ? undefined : energyForDaypart().speed);
   const started = Date.now();
   const chars = (speakText || '').length;
   try {
-    const result = await speakWith(primary, speakText, { outPath }, personaTts);
+    const result = await speakWith(primary, speakText, { outPath, speedScale: scale }, personaTts);
     recordTts({
       kind, engine: primary, requested: primary, fellBack: false,
       ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
@@ -156,7 +172,7 @@ export async function speak(text: string, { kind = 'default', outPath }: { kind?
     }
     console.error(`[tts] ${primary} failed for kind=${kind}: ${err.message} — falling back to ${fallback}`);
     try {
-      const result = await speakWith(fallback, speakText, { outPath }, personaTts);
+      const result = await speakWith(fallback, speakText, { outPath, speedScale: scale }, personaTts);
       recordTts({
         kind, engine: fallback, requested: primary, fellBack: true,
         ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
