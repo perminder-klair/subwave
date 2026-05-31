@@ -98,7 +98,7 @@ export function introBudgetPhrase(introMs: number | null | undefined): string {
   if (introMs < 6000) {
     return `The track's vocals come in around ${sec}s — keep this to a single short phrase that finishes before then; never run past it.`;
   }
-  return `The track's vocals come in around ${sec}s — keep this short enough to land before then, and don't talk over them.`;
+  return `The track's vocals come in around ${sec}s — you have room for a sentence or two; use it, but land your last word before then rather than talking over the vocals.`;
 }
 
 // Narrative angles per call type. One is picked at random and injected into
