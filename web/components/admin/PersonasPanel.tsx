@@ -283,8 +283,10 @@ function personaValid(p: Persona): boolean {
     return v === '' || CHATTERBOX_VOICE_RE.test(v);
   }
   if (e === 'pocket-tts') {
+    // Built-in voice id, OR a .wav filename for zero-shot cloning (issue #213),
+    // OR empty for the default — matches the server-side validator in settings.ts.
     const v = p.tts.voice.trim();
-    return v === '' || POCKET_TTS_VOICE_RE.test(v);
+    return v === '' || POCKET_TTS_VOICE_RE.test(v) || CHATTERBOX_VOICE_RE.test(v);
   }
   if (e === 'cloud') {
     const v = p.tts.voice.trim();
@@ -301,7 +303,8 @@ function personaValid(p: Persona): boolean {
 function voiceForSave(engine: string, voice: string): string {
   if (engine === 'kokoro') return voice || 'bf_isabella';
   if (engine === 'chatterbox') return CHATTERBOX_VOICE_RE.test(voice) ? voice : '';
-  if (engine === 'pocket-tts') return POCKET_TTS_VOICE_RE.test(voice) ? voice : 'alba';
+  // Built-in id or a .wav clone filename both pass through; anything else → default.
+  if (engine === 'pocket-tts') return (POCKET_TTS_VOICE_RE.test(voice) || CHATTERBOX_VOICE_RE.test(voice)) ? voice : 'alba';
   return voice; // piper ignores voice; cloud carries its own
 }
 
