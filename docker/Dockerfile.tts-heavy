@@ -97,6 +97,19 @@ RUN python3 -m venv /opt/server/venv && \
     /opt/server/venv/bin/pip install --no-cache-dir \
       fastapi "uvicorn[standard]" pydantic
 
+# --- Analyzer venv (librosa — bpm/key/intro; no torch) ---------------------
+# Acoustic analysis for the controller's analyze pass. librosa/numba ship as
+# wheels (no g++ needed); ffmpeg + libsndfile1 give it broad codec coverage for
+# the Navidrome stream formats (opus/m4a/mp3). These two are runtime deps and
+# survive the build-essential purge below.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg libsndfile1 && \
+    rm -rf /var/lib/apt/lists/* && \
+    python3 -m venv /opt/analyzer/venv && \
+    /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /opt/analyzer/venv/bin/pip install --no-cache-dir librosa soundfile && \
+    find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
+
 # Strip the build toolchain now that pkuseg + any other source dists have
 # compiled. The runtime never needs g++/make again — torch + torchaudio +
 # pocket-tts all ship as wheels. Saves ~500MB off the final image.
@@ -107,7 +120,9 @@ ENV PATH=/opt/server/venv/bin:$PATH \
     CHATTERBOX_PYTHON=/opt/chatterbox/venv/bin/python \
     CHATTERBOX_WORKER=/app/workers/chatterbox_worker.py \
     POCKET_TTS_PYTHON=/opt/pocket-tts/venv/bin/python \
-    POCKET_TTS_WORKER=/app/workers/pocket_tts_worker.py
+    POCKET_TTS_WORKER=/app/workers/pocket_tts_worker.py \
+    ANALYZE_PYTHON=/opt/analyzer/venv/bin/python \
+    ANALYZE_WORKER=/app/workers/analyze_worker.py
 
 WORKDIR /app
 COPY docker/tts-heavy/server.py /app/server.py
@@ -117,6 +132,7 @@ COPY docker/tts-heavy/server.py /app/server.py
 # an HTTP surface.
 COPY controller/scripts/chatterbox_worker.py /app/workers/chatterbox_worker.py
 COPY controller/scripts/pocket_tts_worker.py /app/workers/pocket_tts_worker.py
+COPY controller/scripts/analyze_worker.py /app/workers/analyze_worker.py
 
 # Shared state mount with the controller — the sidecar writes WAVs into
 # /var/sub-wave/voice/* and the controller hands the same path to Liquidsoap
