@@ -27,7 +27,7 @@ export default function StationFooter({ djName }: { djName?: string }) {
         </span>
       </div>
       <div className="pb-[6px] text-center text-[10px] tracking-[0.3em] text-muted uppercase">
-        — End of broadcast page · <Link href="/listen" className="bs-link tracking-[inherit]">open the player</Link> —
+        — End of broadcast page · <Link href="/news" className="bs-link tracking-[inherit]">read the dispatches</Link> · <Link href="/listen" className="bs-link tracking-[inherit]">open the player</Link> —
       </div>
       <div className="pb-[6px] text-center text-[10px] tracking-[0.3em] text-balance text-muted uppercase">
         Set in type &amp; sent to press by{' '}
