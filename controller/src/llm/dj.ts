@@ -101,6 +101,32 @@ export function introBudgetPhrase(introMs: number | null | undefined): string {
   return `The track's vocals come in around ${sec}s — you have room for a sentence or two; use it, but land your last word before then rather than talking over the vocals.`;
 }
 
+// Hard backstop for talk-within-the-intro (Stage A.3 phase 2): the budget
+// PHRASE above is advisory — a small model will still occasionally overrun the
+// runway. This enforces it deterministically. Speaking pace is ~2.5 words/sec,
+// so a known intro runway maps to a word ceiling; over-long lines are trimmed
+// to the last sentence that fits, and only hard-cut mid-sentence if even one
+// sentence won't fit. Returns the text unchanged when there's no usable runway
+// (null, very short, or a long ≥18s intro), so un-analysed tracks are never
+// touched — symmetric with introBudgetPhrase's guards.
+export function enforceIntroBudget(text: string, introMs: number | null | undefined): string {
+  const t = (text || '').trim();
+  if (!t || !introMs || introMs < 2500 || introMs >= 18000) return t;
+  const WORDS_PER_SEC = 2.5;
+  const maxWords = Math.max(3, Math.floor((introMs / 1000) * WORDS_PER_SEC));
+  const words = t.split(/\s+/);
+  if (words.length <= maxWords) return t;
+
+  // Trim to the last sentence boundary that fits the budget.
+  const capped = words.slice(0, maxWords).join(' ');
+  const lastStop = Math.max(capped.lastIndexOf('.'), capped.lastIndexOf('!'), capped.lastIndexOf('?'));
+  if (lastStop >= Math.floor(capped.length * 0.4)) {
+    return capped.slice(0, lastStop + 1).trim();
+  }
+  // No sentence boundary worth keeping — hard cut and punctuate cleanly.
+  return capped.replace(/[,;:\-—\s]+$/, '') + '…';
+}
+
 // Narrative angles per call type. One is picked at random and injected into
 // the user prompt as "Tone for this segment:" so consecutive generations
 // don't fall back to the same shape. Only the generate* callers in this file

@@ -322,5 +322,12 @@ export function getAnnotatedUri(song) {
   ];
   if (song.year) fields.push(`year="${escAnnotate(song.year)}"`);
   if (song.genre) fields.push(`genre="${escAnnotate(song.genre)}"`);
+  // DJ-mode adaptive blend: the queue stashes a per-transition crossfade length
+  // (seconds) on the track when the persona is in DJ mode and both tracks are
+  // analysed. Liquidsoap's `cross` honours `liq_cross_duration` to size the
+  // blend for this transition (radio.liq dj_transition reads the same key for
+  // its fades, keeping fade == buffer). Absent → Liquidsoap uses its startup
+  // crossfade_duration(), i.e. today's behaviour.
+  if (song.crossSec != null) fields.push(`liq_cross_duration="${escAnnotate(song.crossSec)}"`);
   return `annotate:${fields.join(',')}:${getPlayableUri(song)}`;
 }

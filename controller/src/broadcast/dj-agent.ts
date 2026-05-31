@@ -15,11 +15,73 @@ import { z } from 'zod';
 import * as settings from '../settings.js';
 import * as session from './session.js';
 import * as picker from '../music/picker.js';
+import * as library from '../music/library.js';
+import * as mix from '../music/mix.js';
 import * as dj from '../llm/dj.js';
+import { energyForDaypart } from '../context.js';
 import { defineAgent } from '../llm/agent.js';
 import { buildPickerTools } from '../llm/tools.js';
 import { recordPick } from '../llm/log.js';
 import { withTrace, logEvent } from '../observability/events.js';
+
+// --- Feature 4: DJ-mode mini-runs ------------------------------------------
+// A short, deliberate tempo/key journey across 2-3 consecutive picks. While a
+// run is active the pool re-rank is anchored to the run target (not just the
+// current track), and the link patter acknowledges the run. State is module-
+// level — one station, one run at a time. Cleared when it runs out or when the
+// active persona isn't in DJ mode.
+let runState: { bpm: number | null; key: string | null; remaining: number } | null = null;
+
+// Resolve {bpm, key} for a track via the library DB (queued/agent picks carry
+// only id/title/artist).
+function analysisOf(track: any): { bpm: number | null; key: string | null } {
+  if (!track) return { bpm: null, key: null };
+  if (track.bpm != null || track.musicalKey != null) {
+    return { bpm: track.bpm ?? null, key: track.musicalKey ?? null };
+  }
+  const rec = track.id ? library.get(track.id) : null;
+  return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
+}
+
+// Resolve a track's measured intro runway (ms), for the talk-within-the-intro
+// budget enforcement.
+function introMsOf(track: any): number | null {
+  if (track?.introMs != null) return track.introMs;
+  const rec = track?.id ? library.get(track.id) : null;
+  return rec?.introMs ?? null;
+}
+
+// Probability of STARTING a run on a given pick, by chattiness. Quiet personas
+// never start one; a run is a presence behaviour like the rest of DJ mode.
+function runStartProbability(): number {
+  const f = settings.effectiveFrequency();
+  if (f === 'aggressive') return 0.5;
+  if (f === 'moderate') return 0.3;
+  return 0;
+}
+
+// Advance the mini-run state for this pick and return the re-rank target to use
+// (or null for "anchor to the current track as usual"). Only does anything in
+// DJ mode with an analysed current track.
+function advanceRun(djMode: boolean, current: any): { bpm: number | null; key: string | null } | null {
+  if (!djMode) { runState = null; return null; }
+  if (runState && runState.remaining > 0) {
+    runState.remaining--;
+    if (runState.remaining <= 0) { const t = { bpm: runState.bpm, key: runState.key }; runState = null; return t; }
+    return { bpm: runState.bpm, key: runState.key };
+  }
+  // No active run — maybe start one off the current track.
+  const cur = analysisOf(current);
+  if ((cur.bpm == null && cur.key == null) || Math.random() >= runStartProbability()) return null;
+  const target = mix.pickRunTarget(cur, energyForDaypart());
+  if (!target) return null;
+  runState = { bpm: target.bpm, key: target.key, remaining: 1 + Math.floor(Math.random() * 2) }; // 1-2 more after this
+  return target;
+}
+
+export function runActive(): boolean {
+  return !!(runState && runState.remaining > 0);
+}
 
 export const PICK_SCHEMA = z.object({
   id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
@@ -160,7 +222,12 @@ async function pickViaAgent(queue, { wantLink }) {
     throw new Error(`agent returned unknown id ${object?.id}`);
   }
 
-  const say = typeof object.say === 'string' ? object.say.trim() : '';
+  const rawSay = typeof object.say === 'string' ? object.say.trim() : '';
+  // Talk-within-the-intro (feature 3a): in DJ mode, hard-trim the link to the
+  // pick's measured intro runway so the DJ lands before the vocals instead of
+  // talking over them. No-op when the pick is un-analysed or not in DJ mode.
+  const djMode = !!settings.getEffectivePersona()?.djMode;
+  const say = (djMode && rawSay) ? dj.enforceIntroBudget(rawSay, introMsOf(song)) : rawSay;
   // Attach the link to the pick so it airs as the pick starts (back-announcing
   // the track on-air now), instead of immediately over that on-air track (#189).
   await enqueuePick(queue, song, object.reason, 'agent', (wantLink && say) ? say : null);
@@ -174,8 +241,10 @@ async function pickViaAgent(queue, { wantLink }) {
   });
 }
 
-async function pickViaPool(queue, ctx, { wantLink, current }) {
-  const result = await picker.pickViaPool(queue, ctx);
+async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm: number | null; key: string | null } | null = null) {
+  // A DJ-mode mini-run (feature 4) anchors the pool re-rank to the run's
+  // tempo/key target instead of the current track. null → today's behaviour.
+  const result = await picker.pickViaPool(queue, ctx, rankTarget);
   if (!result) {
     queue.log('picker', 'pool produced no pick');
     return;
@@ -224,10 +293,17 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     const previous = queue.history[0]?.track || null;
     const djMode = !!settings.getEffectivePersona()?.djMode;
 
+    // Feature 4 — advance/maybe-start a mini-run and get the re-rank target.
+    const rankTarget = advanceRun(djMode, current);
+    const inRun = runActive();
+
     // The link clause differs in DJ mode: a working DJ doesn't just ease into
     // the next track, they TEASE it — name the artist or capture its feel so
     // listeners know what's coming. The agent already knows its own pick when
     // it writes `say`, so this costs nothing extra.
+    const runClause = inRun
+      ? ` You're mid-run — keep the energy moving in the same direction (a touch ${energyForDaypart().speed >= 1 ? 'brisker' : 'mellower'}) and you may nod to it in the link, but never say tempo numbers.`
+      : '';
     const linkClause = wantLink
       ? (djMode
           ? ` Also write a short link that airs as your pick starts: back-announce "${current?.title}", then tease what's next — name the artist or capture the feel of the track you pick so listeners know what's coming. If the track you pick shows an intro_ms, keep the link short enough to finish before then, so you land just as the vocals come in.`
@@ -236,7 +312,8 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     const eventText = `Now playing "${current?.title}" by ${current?.artist}`
       + (previous ? ` (after "${previous.title}" by ${previous.artist})` : '')
       + '. Pick the track to play next.'
-      + linkClause;
+      + linkClause
+      + runClause;
     session.appendTurn({ role: 'event', kind: 'pick', text: eventText });
 
     if (settings.get().llm?.pickerAgent) {
@@ -247,7 +324,7 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
         queue.log('error', `DJ agent pick failed: ${err.message} — falling back to pool`);
       }
     }
-    await pickViaPool(queue, ctx, { wantLink, current });
+    await pickViaPool(queue, ctx, { wantLink, current }, rankTarget);
   });
 }
 

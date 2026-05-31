@@ -9,6 +9,7 @@
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as dj from '../llm/dj.js';
+import { bpmCompat, keyCompat } from './mix.js';
 
 const CANDIDATE_CAP = 18;
 const HISTORY_DEPTH = 4;
@@ -55,43 +56,8 @@ function analysisFor(t: any): { bpm: number | null; key: string | null } {
   return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
 }
 
-// 0..1 — how close two tempos are, folding half/double time (70 ≈ 140).
-function bpmCompat(a: number | null, b: number | null): number {
-  if (!a || !b || a <= 0 || b <= 0) return 0;
-  const candidates = [b, b * 2, b / 2];
-  let best = 1;
-  for (const c of candidates) best = Math.min(best, Math.abs(a - c) / a);
-  if (best < 0.03) return 1;
-  if (best < 0.06) return 0.6;
-  if (best < 0.12) return 0.3;
-  return 0;
-}
-
-// Parse a Camelot code like '8A' → { n: 8, letter: 'A' }.
-function parseCamelot(code: string | null): { n: number; letter: string } | null {
-  if (!code) return null;
-  const m = /^(\d{1,2})([AB])$/.exec(code.trim().toUpperCase());
-  if (!m) return null;
-  const n = parseInt(m[1], 10);
-  if (n < 1 || n > 12) return null;
-  return { n, letter: m[2] };
-}
-
-// 0..1 — harmonic compatibility on the Camelot wheel: same key, ±1 around the
-// wheel, or relative major/minor (same number, other letter).
-function keyCompat(a: string | null, b: string | null): number {
-  const ka = parseCamelot(a);
-  const kb = parseCamelot(b);
-  if (!ka || !kb) return 0;
-  if (ka.n === kb.n && ka.letter === kb.letter) return 1;
-  if (ka.n === kb.n) return 0.8; // relative major/minor
-  if (ka.letter === kb.letter) {
-    const d = Math.abs(ka.n - kb.n);
-    const wheel = Math.min(d, 12 - d);
-    if (wheel === 1) return 0.8; // adjacent on the wheel
-  }
-  return 0;
-}
+// bpmCompat / keyCompat now live in ./mix.js (single source of truth, shared
+// with the DJ-mix transition features); imported above.
 
 // Order the pool by a random base nudged up for tempo/harmonic compatibility
 // with the current track. Random stays dominant so the pool keeps its variety
@@ -125,7 +91,7 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any, rankTarget: { bpm: number | null; key: string | null } | null = null) {
   await library.load();
   const pool: any[] = [];
   const sources: Record<string, number> = {};
@@ -258,7 +224,12 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // and a no-op (pure shuffle) when the current track or the pool is
   // un-analysed. The dedup / artist-cap / recent-artist filter below is
   // unchanged; it just walks a differently-ordered list.
-  const curAnalysis = currentTrack?.id ? analysisFor(currentTrack) : { bpm: null, key: null };
+  // A DJ-mode mini-run (broadcast/dj-agent.ts) overrides the re-rank anchor
+  // with a deliberate tempo/key target so the pool drifts toward the run's
+  // journey rather than just hugging the current track. Falls back to the
+  // current track's own analysis when no run is active.
+  const curAnalysis = rankTarget
+    || (currentTrack?.id ? analysisFor(currentTrack) : { bpm: null, key: null });
   const final = softRankByCompat(pool, curAnalysis)
     .filter((t: any) => {
       if (!t.id || seen.has(t.id)) return false;
@@ -303,13 +274,13 @@ function summariseRecent(queue: any) {
 // { song, reason, source } or null. Used by broadcast/dj-agent.js.
 // ---------------------------------------------------------------------------
 
-export async function pickViaPool(queue, ctx) {
+export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null) {
   // Match the agent picker's window (dj-agent.pickViaAgent) — 12h. Anything
   // shorter and the fallback could pick a track the agent would have rejected.
   const recentIds = queue.recentlyPlayedIds(12);
   const recentArtists = queue.recentArtistsSince(2);
   const currentTrack = queue.current?.track || null;
-  const { candidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack);
+  const { candidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget);
 
   if (candidates.length === 0) {
     queue.log('picker', 'no candidates available, skipping LLM pick');

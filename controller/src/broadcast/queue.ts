@@ -7,11 +7,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
+import * as mix from '../music/mix.js';
+import * as library from '../music/library.js';
 import { speak } from '../audio/tts.js';
 import * as djAgent from './dj-agent.js';
 import * as sfx from './sfx.js';
 import * as session from './session.js';
-import { getFullContext } from '../context.js';
+import { getFullContext, energyForDaypart } from '../context.js';
 import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
 import { djCallsAllowed } from './listeners.js';
@@ -44,6 +46,7 @@ class Queue {
   autoPick = true;             // toggle: should we ask Ollama for next track when idle
   autoLink = true;             // toggle: random DJ links between auto tracks
   tracksUntilLink = pickLinkInterval();
+  _transitionsSinceSfx = 999;  // DJ-mode transition-FX spacing counter (see drainToLiquidsoap)
   _persistTimer: NodeJS.Timeout | null = null; // debounce for the queue.json snapshot
   _recentPlaysTimer: NodeJS.Timeout | null = null; // debounce for the recent-plays.json sidecar
   _recentPlays: { id: string | null; title: string | null; artist: string | null; endedAt: string }[] = [];
@@ -296,6 +299,63 @@ class Queue {
     return this.upcoming.length;
   }
 
+  // Resolve {bpm, key} for a queued track: from the track object if it carries
+  // analysis, else a library lookup (queued items hold only id/title/artist).
+  mixAnalysisFor(track: any): { bpm: number | null; key: string | null } {
+    if (!track) return { bpm: null, key: null };
+    if (track.bpm != null || track.musicalKey != null) {
+      return { bpm: track.bpm ?? null, key: track.musicalKey ?? null };
+    }
+    const rec = track.id ? library.get(track.id) : null;
+    return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
+  }
+
+  // How many transitions must pass between DJ-mode transition-FX, keyed off the
+  // chattiness ladder. Infinity for quiet personas → no transition FX at all.
+  sfxTransitionGap(): number {
+    const f = settings.effectiveFrequency();
+    if (f === 'aggressive') return 4;
+    if (f === 'moderate') return 8;
+    return Infinity;
+  }
+
+  // DJ-mode mixing applied to the transition INTO `item`'s track (features 1 &
+  // 2). No-op unless the active persona is in DJ mode. Stashes a per-transition
+  // crossfade length on the track (read by subsonic.getAnnotatedUri →
+  // liq_cross_duration) and, on a notable upward tempo jump, fires a rate-
+  // limited riser across the blend. Both require both tracks to be analysed.
+  applyMixTransition(item: any) {
+    const persona = settings.getEffectivePersona();
+    if (!persona?.djMode || !item?.track) return;
+
+    const idx = this.upcoming.indexOf(item);
+    const prevTrack = (idx > 0 ? this.upcoming[idx - 1]?.track : null) || this.current?.track || null;
+    if (!prevTrack) return;
+
+    const cur = this.mixAnalysisFor(prevTrack);
+    const next = this.mixAnalysisFor(item.track);
+
+    // Feature 1 — adaptive blend length, with a subtle daypart nudge.
+    let energyDelta = 0;
+    try { energyDelta = energyForDaypart().speed - 1; } catch {}
+    const secs = mix.crossSecondsFor(cur, next, { energyDelta });
+    if (secs != null) {
+      item.track.crossSec = secs;
+      this.log('mix', `blend ${secs}s → ${item.track.title}`);
+    }
+
+    // Feature 2 — transition FX, spaced by the chattiness ladder and gated on
+    // settings.sfx.enabled; never two transitions in a row.
+    this._transitionsSinceSfx++;
+    if (settings.get().sfx?.enabled && this._transitionsSinceSfx >= this.sfxTransitionGap()) {
+      const fx = mix.transitionSfxFor(cur, next);
+      if (fx) {
+        this._transitionsSinceSfx = 0;
+        void this.playSfx(fx);
+      }
+    }
+  }
+
   // Walk the upcoming queue and feed unsent items to Liquidsoap one at a time,
   // spaced out so the 1s file-poll doesn't miss any.
   async drainToLiquidsoap() {
@@ -317,6 +377,14 @@ class Queue {
             this.log('error', `TTS failed: ${err.message}`);
           }
         }
+
+        // DJ-mode mixing (features 1 & 2): shape the transition INTO this track
+        // from its tempo/harmonic compatibility with the track it follows. The
+        // predecessor is the item just ahead of it in the queue, else whatever
+        // is on-air now. Both gated on the active persona's djMode and on both
+        // tracks being analysed — a no-op otherwise, so non-DJ stations and
+        // un-analysed libraries behave exactly as before.
+        this.applyMixTransition(item);
 
         const uri = subsonic.getAnnotatedUri(item.track);
         await writeHandoff(config.liquidsoap.queueFile, uri);
