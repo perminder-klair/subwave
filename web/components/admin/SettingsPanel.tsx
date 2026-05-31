@@ -931,6 +931,62 @@ interface SectionProps {
 // rejects an empty-string SelectItem value.
 const CB_DEFAULT_VOICE = '__cb_default__';
 
+// Prominent, self-contained "engine not installed" callout with a step-by-step
+// setup guide. Chatterbox and PocketTTS both live in the optional `tts-heavy`
+// sidecar, so the recommended path is identical; only the engine label and the
+// legacy build-arg differ.
+function HeavyEngineSetupGuide({ engine, buildArg }: { engine: 'Chatterbox' | 'PocketTTS'; buildArg: string }) {
+  return (
+    <div
+      role="alert"
+      className="border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_7%,transparent)] p-3.5"
+    >
+      <div className="flex items-center gap-2">
+        <span className="text-[13px] leading-none text-[var(--danger)]">⚠</span>
+        <span className="text-[11px] font-bold tracking-[0.14em] text-[var(--danger)] uppercase">
+          {engine} isn’t installed in this build
+        </span>
+      </div>
+
+      <p className="mt-2 text-[11px] leading-[1.55] text-muted">
+        {engine} is a heavy PyTorch engine, so the controller image doesn’t carry it.
+        It ships in the optional <code>tts-heavy</code> sidecar. Until that’s running,
+        every segment routed here <strong>falls back to Piper</strong> — the DJ never
+        goes silent, it just won’t use this voice.
+      </p>
+
+      <div className="mt-3 text-[10px] font-bold tracking-[0.16em] text-ink uppercase">
+        Turn it on
+      </div>
+      <ol className="mt-1.5 grid list-decimal gap-2 pl-[18px] text-[11px] leading-[1.55] text-muted marker:font-bold marker:text-[var(--danger)]">
+        <li>
+          Bring the sidecar up alongside the stack:
+          <code className="mt-1 block w-fit max-w-full overflow-x-auto bg-[var(--ink-soft)] px-2 py-1">
+            docker compose --profile tts-heavy up -d
+          </code>
+        </li>
+        <li>
+          To start it automatically every time, add this to your root <code>.env</code>
+          instead:
+          <code className="mt-1 block w-fit max-w-full overflow-x-auto bg-[var(--ink-soft)] px-2 py-1">
+            COMPOSE_PROFILES=tts-heavy
+          </code>
+        </li>
+        <li>
+          Give it ~30 s to pull the model and pass its health check, then reload this
+          page — the warning clears once the controller can reach the sidecar.
+        </li>
+      </ol>
+
+      <p className="mt-2.5 text-[10px] leading-[1.5] text-muted">
+        Legacy single-image path: rebuild the controller with{' '}
+        <code>--build-arg {buildArg}</code> (only if you built a custom image on the
+        pre-sidecar pattern).
+      </p>
+    </div>
+  );
+}
+
 function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const engines = data.tts?.engines || ['piper'];
   const available = data.tts?.available || {};
@@ -1049,7 +1105,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
               <span className="text-[11px] leading-[1.5] text-muted">
                 {activeDetail} — {ttsDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}
                 {savedEngineMissing && (
-                  <span className="text-[var(--danger)]"> This engine isn’t installed in this build — segments fall back to Piper.</span>
+                  <span className="text-[var(--danger)]"> This engine isn’t installed in this build — segments fall back to Piper. See the setup steps below.</span>
                 )}
               </span>
             </div>
@@ -1119,15 +1175,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
           <div className="field mt-4">
             <Label>Chatterbox reference voice</Label>
             {available.chatterbox === false ? (
-              <div className="field-hint text-[var(--danger)]">
-                Chatterbox isn’t currently available — it lives in the optional{' '}
-                <code>tts-heavy</code> sidecar. Start it with{' '}
-                <code>docker compose --profile tts-heavy up -d</code>, or set{' '}
-                <code>COMPOSE_PROFILES=tts-heavy</code> in your <code>.env</code> so it
-                comes up automatically with the rest of the stack. (Legacy path: rebuild
-                the controller image with <code>--build-arg WITH_CHATTERBOX=1</code>.)
-                Until then this engine falls back to Piper.
-              </div>
+              <HeavyEngineSetupGuide engine="Chatterbox" buildArg="WITH_CHATTERBOX=1" />
             ) : (data.tts?.chatterboxVoices?.length || 0) > 0 ? (
               <>
                 <Select
@@ -1169,15 +1217,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
           <div className="field mt-4">
             <Label>PocketTTS voice</Label>
             {available['pocket-tts'] === false ? (
-              <div className="field-hint text-[var(--danger)]">
-                PocketTTS isn’t currently available — it lives in the same optional{' '}
-                <code>tts-heavy</code> sidecar as Chatterbox. Start it with{' '}
-                <code>docker compose --profile tts-heavy up -d</code>, or set{' '}
-                <code>COMPOSE_PROFILES=tts-heavy</code> in your <code>.env</code> so it
-                comes up automatically with the rest of the stack. (Legacy path: rebuild
-                the controller image with <code>--build-arg WITH_POCKETTTS=1</code>.)
-                Until then this engine falls back to Piper.
-              </div>
+              <HeavyEngineSetupGuide engine="PocketTTS" buildArg="WITH_POCKETTTS=1" />
             ) : (data.tts?.pocketTtsVoices?.length || 0) > 0 ? (
               <>
                 <Select
