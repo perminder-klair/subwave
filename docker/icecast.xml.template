@@ -5,12 +5,19 @@
     <limits>
         <clients>100</clients>
         <sources>4</sources>
-        <queue-size>524288</queue-size>
+        <!-- queue-size: per-client backlog before Icecast drops a lagging
+             listener. 1 MB ≈ 43s of MP3 / 85s of Opus — gives jittery mobile
+             and Cloudflare-proxied clients more rope before they're kicked. -->
+        <queue-size>1048576</queue-size>
         <client-timeout>30</client-timeout>
         <header-timeout>15</header-timeout>
         <source-timeout>10</source-timeout>
         <burst-on-connect>1</burst-on-connect>
-        <burst-size>65535</burst-size>
+        <!-- burst-size: audio bursted to a client on connect to prime its
+             buffer. 256 KB ≈ 10s of MP3 / 20s of Opus (was 64 KB ≈ 2.6s/5s),
+             so a brief mobile network blip drains the buffer instead of
+             stalling and forcing the player's watchdog to reconnect. -->
+        <burst-size>262144</burst-size>
     </limits>
 
     <authentication>
