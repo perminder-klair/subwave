@@ -13,13 +13,26 @@ import * as library from '../music/library.js';
 import * as embeddings from '../music/embeddings.js';
 
 function slim(s: any) {
-  return {
+  const base = {
     id: s.id,
     title: s.title,
     artist: s.artist,
     album: s.album || null,
     year: s.year || null,
     genre: s.genre || null,
+  };
+  // Surface measured tempo/key when known — from the song itself (library
+  // sources) or a library lookup (Subsonic sources). Omitted when un-analysed
+  // so the agent only ever sees real values.
+  const src = (s.bpm != null || s.musicalKey != null || s.introMs != null)
+    ? s
+    : (s.id ? library.get(s.id) : null);
+  if (!src) return base;
+  return {
+    ...base,
+    ...(src.bpm != null ? { bpm: src.bpm } : {}),
+    ...(src.musicalKey != null ? { key: src.musicalKey } : {}),
+    ...(src.introMs != null ? { intro_ms: src.introMs } : {}),
   };
 }
 

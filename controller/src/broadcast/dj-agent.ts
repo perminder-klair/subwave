@@ -230,7 +230,7 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     // it writes `say`, so this costs nothing extra.
     const linkClause = wantLink
       ? (djMode
-          ? ` Also write a short link that airs as your pick starts: back-announce "${current?.title}", then tease what's next — name the artist or capture the feel of the track you pick so listeners know what's coming.`
+          ? ` Also write a short link that airs as your pick starts: back-announce "${current?.title}", then tease what's next — name the artist or capture the feel of the track you pick so listeners know what's coming. If the track you pick shows an intro_ms, keep the link short enough to finish before then, so you land just as the vocals come in.`
           : ` Also write a short link that airs as your pick starts: back-announce "${current?.title}" and lead into the track you pick.`)
       : ' Stay silent — no link this time.';
     const eventText = `Now playing "${current?.title}" by ${current?.artist}`

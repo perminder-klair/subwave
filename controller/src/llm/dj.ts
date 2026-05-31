@@ -8,6 +8,7 @@
 
 import { z } from 'zod';
 import * as settings from '../settings.js';
+import * as library from '../music/library.js';
 import { djText, djObject } from './sdk.js';
 import { recentCalls } from './log.js';
 
@@ -68,6 +69,36 @@ export function lengthMode(persona: any = settings.getEffectivePersona()) {
 export function lengthPhrase(kind: string, persona?: any) {
   const m = (LENGTH_PHRASES as any)[lengthMode(persona)];
   return m[kind] || m.link;
+}
+
+// Intro runway (ms to where the track 'comes in') for a track, from the track
+// object or a library lookup. Null when un-analysed.
+function introMsFor(track: any): number | null {
+  if (track?.introMs != null) return track.introMs;
+  const rec = track?.id ? library.get(track.id) : null;
+  return rec?.introMs ?? null;
+}
+
+function bpmKeyFor(track: any): { bpm: number | null; key: string | null } {
+  if (track && (track.bpm != null || track.musicalKey != null)) {
+    return { bpm: track.bpm ?? null, key: track.musicalKey ?? null };
+  }
+  const rec = track?.id ? library.get(track.id) : null;
+  return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
+}
+
+// Turn a known intro runway into an advisory spoken-line budget so the DJ
+// lands before the vocals enter (Stage A.3 phase 1 — "talk within the intro").
+// Returns '' when there's no usable runway, so un-analysed tracks are never
+// constrained: the post is a bonus when the data exists, never a precondition.
+export function introBudgetPhrase(introMs: number | null | undefined): string {
+  if (!introMs || introMs < 2500) return '';
+  if (introMs >= 18000) return '';
+  const sec = Math.floor(introMs / 1000);
+  if (introMs < 6000) {
+    return `The track's vocals come in around ${sec}s — keep this to a single short phrase that finishes before then; never run past it.`;
+  }
+  return `The track's vocals come in around ${sec}s — keep this short enough to land before then, and don't talk over them.`;
 }
 
 // Narrative angles per call type. One is picked at random and injected into
@@ -278,7 +309,11 @@ export async function generateIntro({ track, context, requestedBy = null, reques
   }
   ctxLines.push(`Coming up: "${track.title}" by ${track.artist}${track.album ? ` from ${track.album}` : ''}${track.year ? ` (${track.year})` : ''}`);
 
-  const prompt = `Write an intro for this track. ${lengthPhrase('intro')} If the listener said something specific, acknowledge their words naturally — don't quote them verbatim, but weave the gist in. Never read the request out loud as-is.\n\n${ctxLines.join('\n')}`;
+  // Talk-within-the-intro (A.3 phase 1): when the track's intro runway is
+  // known, budget the line to land before the vocals. Advisory + additive —
+  // empty for un-analysed tracks, so behaviour is unchanged there.
+  const budget = introBudgetPhrase(introMsFor(track));
+  const prompt = `Write an intro for this track. ${lengthPhrase('intro')}${budget ? ' ' + budget : ''} If the listener said something specific, acknowledge their words naturally — don't quote them verbatim, but weave the gist in. Never read the request out loud as-is.\n\n${ctxLines.join('\n')}`;
 
   return djText({
     system: djSystem(),
@@ -323,10 +358,20 @@ export async function generateLink({ previous, current, context, recap = null, r
 
   // DJ-mode personas tease what's coming, not just back-announce — mirrors the
   // agent path in broadcast/dj-agent.ts so both pickers feel like the same DJ.
-  const teaseClause = settings.getEffectivePersona()?.djMode
+  const djMode = !!settings.getEffectivePersona()?.djMode;
+  const teaseClause = djMode
     ? ` Tease what's coming — name the artist or capture the feel so listeners know what's next.`
     : '';
-  const prompt = `Write a DJ link between tracks. Back-announce what just played and ease into what's playing now.${teaseClause} ${lengthPhrase('link')}, conversational, don't list both titles like a robot — pick one to mention specifically and treat the other lightly.\n\n${ctxLines.join('\n')}`;
+  // DJ-mode mix patter: only when BOTH tracks carry measured tempo/key, and
+  // only as a natural option — never forced, never robotic numbers on air.
+  const prevAK = bpmKeyFor(previous);
+  const curAK = bpmKeyFor(current);
+  const patterClause = (djMode && (prevAK.bpm || prevAK.key) && (curAK.bpm || curAK.key))
+    ? ` You may nod to the mix if it feels natural — e.g. easing into something a touch faster or slower, or how it sits in key — but never say raw numbers.`
+    : '';
+  // Talk-within-the-intro budget for the track now starting (current = the pick).
+  const budget = introBudgetPhrase(introMsFor(current));
+  const prompt = `Write a DJ link between tracks. Back-announce what just played and ease into what's playing now.${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhrase('link')}, conversational, don't list both titles like a robot — pick one to mention specifically and treat the other lightly.\n\n${ctxLines.join('\n')}`;
 
   return djText({
     system: djSystem(),
@@ -356,7 +401,7 @@ export async function generateHourlyTime(time: any, weather: any, { recap = null
 // below) and the conversational agent picker (pickSystem in broadcast/
 // dj-agent.js) so the two strategies can't drift apart on selection rules.
 export const PICKER_CRITERIA = `Selection criteria, in order:
-1. FLOW — does it transition naturally from what just played (energy, mood, tempo)?
+1. FLOW — does it transition naturally from what just played (energy, mood, tempo)? When a candidate shows a "bpm" and/or Camelot "key", those are MEASURED — prefer a next track whose tempo sits near the current one (or steps it deliberately for the daypart) and whose key is harmonically close. Treat them as a tie-breaker, never a hard rule; many tracks won't have them.
 2. CONTEXT — does it fit the time of day, weather, and dominant mood?
 3. VARIETY — avoid the same artist back-to-back; don't repeat tracks you've already played today; rotate energy. Variety over cleverness — never pick a track because its title literally matches the time of day, the weather, or anything else literal.
 4. INTEREST — prefer something that creates a moment, not the most generic option.`;
