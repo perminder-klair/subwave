@@ -51,6 +51,8 @@ router.get('/settings', requireAdmin, async (req, res) => {
       values: {
         jingleRatio: s.jingleRatio,
         crossfadeDuration: s.crossfadeDuration,
+        archive: s.archive,
+        stream: s.stream,
         station: s.station,
         theme: s.theme,
         weather: s.weather,
