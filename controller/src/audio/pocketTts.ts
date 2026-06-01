@@ -46,6 +46,11 @@ type PendingRequest = {
 
 let worker: PocketTtsWorker | null = null;
 let bootingPromise: Promise<PocketTtsWorker> | null = null;
+// Whether the local-spawn worker can do voice cloning (gated kyutai/pocket-tts
+// weights present). null until the worker has booted and reported it via its
+// ready message; cloningAvailable() returns it for the local path. The sidecar
+// path uses `remoteCloning` instead (set by the /health probe loop). See #238.
+let localCloning: boolean | null = null;
 
 class PocketTtsWorker {
   proc: ChildProcessWithoutNullStreams | null = null;
@@ -103,6 +108,15 @@ class PocketTtsWorker {
   handleMessage(msg: any) {
     if (msg.ready) {
       this.ready = true;
+      if (typeof msg.voice_cloning === 'boolean') {
+        localCloning = msg.voice_cloning;
+        if (!localCloning) {
+          console.warn(
+            '[pocket-tts] voice cloning UNAVAILABLE — cloned .wav voices will fall '
+              + 'back to a built-in. Set HF_TOKEN to enable cloning.',
+          );
+        }
+      }
       if (this.readyTimer) clearTimeout(this.readyTimer);
       this.readyResolve?.();
       return;
@@ -241,6 +255,14 @@ export async function speak(
     reference_wav: referenceWav,
     out: outPath,
   });
+  // Make a silent voice substitution visible (issue #238) — mirrors the
+  // logging speakRemote() does on the sidecar path.
+  if (msg.fell_back) {
+    console.warn(
+      `[pocket-tts] requested voice "${referenceWav || resolvedVoice}" not honoured`
+        + ` (${msg.fell_back_reason || 'fell back'}); rendered "${msg.voice_used ?? 'default'}"`,
+    );
+  }
   return msg.path;
 }
 
@@ -250,13 +272,26 @@ export async function speak(
 // a --build-arg WITH_POCKETTTS=1 image, false in the default image — which
 // is what lets the dispatcher fall back to Piper.
 let remoteAvailable = false;
+let remoteCloning: boolean | null = null;
 if (isRemoteEnabled()) {
-  startProbeLoop('pocket-tts', (avail) => {
+  startProbeLoop('pocket-tts', (avail, meta) => {
     remoteAvailable = avail;
+    remoteCloning = meta?.voiceCloning ?? null;
   });
 }
 
 export function isAvailable() {
   if (isRemoteEnabled()) return remoteAvailable;
   return existsSync(config.pocketTts.python) && existsSync(config.pocketTts.workerScript);
+}
+
+// Whether PocketTTS can do zero-shot voice cloning (the gated kyutai/pocket-tts
+// weights loaded). Returns null when not yet known — the sidecar is still
+// booting, or (local mode) the worker hasn't been spawned yet, since it only
+// reports the capability in its ready message. Surfaced via tts.availableEngines()
+// / describeRouting() so the admin UI can warn that cloned voices won't take
+// effect (issue #238) rather than letting them silently revert.
+export function cloningAvailable(): boolean | null {
+  if (isRemoteEnabled()) return remoteCloning;
+  return localCloning;
 }

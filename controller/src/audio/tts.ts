@@ -205,6 +205,10 @@ export function availableEngines() {
     kokoro: kokoro.isAvailable(),
     chatterbox: chatterbox.isAvailable(),
     'pocket-tts': pocketTts.isAvailable(),
+    // Whether PocketTTS can clone voices (gated weights present). null = not
+    // yet known. The admin UI uses this to warn that a cloned .wav voice will
+    // silently revert to a built-in when cloning is unavailable (issue #238).
+    pocketTtsCloning: pocketTts.cloningAvailable(),
     cloud: cloud.isConfigured(),
     // Per-provider — a persona's cloud voice is only usable if *its* provider
     // is configured, which can differ from the global Cloud-engine provider.
@@ -213,6 +217,14 @@ export function availableEngines() {
       elevenlabs: cloud.isConfigured('elevenlabs'),
     },
   };
+}
+
+// True when a PocketTTS `voice` value is a cloned reference (a .wav filename)
+// rather than a built-in voice id. Mirrors resolveVoice()'s split in
+// audio/pocketTts.ts — anything ending in .wav (or an absolute path) is a clone.
+function isPocketClone(voice?: string | null): boolean {
+  const v = (voice || '').trim();
+  return !!v && (/\.wav$/i.test(v) || v.startsWith('/'));
 }
 
 // Snapshot of how a spoken segment would currently route: which engine the
@@ -249,6 +261,15 @@ export function describeRouting() {
       ? personaTts.voice
       : null;
   }
+  // If the on-air persona asks PocketTTS for a cloned voice but the engine
+  // can't clone (gated weights absent), the .wav silently reverts to a built-in
+  // — the root cause of issue #238. Surface it so /debug shows *why* the voice
+  // isn't what the operator picked, instead of a healthy-looking no-op.
+  let warning: string | null = null;
+  if (engine === 'pocket-tts' && isPocketClone(voice) && pocketTts.cloningAvailable() === false) {
+    warning = 'PocketTTS voice cloning is unavailable in this build (gated weights '
+      + 'not loaded) — this cloned voice reverts to a built-in. Set HF_TOKEN to enable cloning.';
+  }
   return {
     effectivePersona: persona ? { id: persona.id, name: persona.name } : null,
     available: availableEngines(),
@@ -258,6 +279,7 @@ export function describeRouting() {
       voice: voice || null,
       provider: provider || null,
       fellBack: requested !== engine,
+      warning,
     },
     jingle: { engine: resolveEngine('jingle', null) },
   };

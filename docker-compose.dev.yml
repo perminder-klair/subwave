@@ -115,6 +115,9 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.tts-heavy
+      args:
+        # Optional — bake the gated PocketTTS cloning weights in at build time.
+        HF_TOKEN: ${HF_TOKEN:-}
     platform: linux/amd64
     container_name: sub-wave-tts-heavy
     restart: unless-stopped
@@ -122,5 +125,9 @@ services:
     environment:
       - TTS_HEAVY_DEVICE=${TTS_HEAVY_DEVICE:-cpu}
       - POCKET_TTS_VOICE=${POCKET_TTS_VOICE:-alba}
+      # Optional — enables PocketTTS voice CLONING (issue #238). Cloning weights
+      # are gated; accept terms at huggingface.co/kyutai/pocket-tts and set
+      # HF_TOKEN in your .env. Built-in voices need no token.
+      - HF_TOKEN=${HF_TOKEN:-}
     volumes:
       - *state-mount
