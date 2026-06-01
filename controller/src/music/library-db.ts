@@ -565,6 +565,14 @@ export function trackCount(): number {
   }).n;
 }
 
+// Tracks with acoustic analysis. A track is "analysed" iff bpm IS NOT NULL
+// (bpm/musical_key/intro_ms are written together by upsertTrackAnalysis).
+export function analysedCount(): number {
+  return (requireDb().prepare('SELECT COUNT(*) AS n FROM tracks WHERE bpm IS NOT NULL').get() as {
+    n: number;
+  }).n;
+}
+
 // ---------------------------------------------------------------------------
 // Mood-keyed reads (drop-in replacements for the old library.ts in-memory loops)
 // ---------------------------------------------------------------------------

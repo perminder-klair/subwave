@@ -150,8 +150,10 @@ router.get('/library/untagged', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// GET /library/coverage — { tagged, total, percent, scannedAt, scanning }
-// `total` / `percent` are null until the first background scan completes.
+// GET /library/coverage —
+//   { tagged, analysed, total, percent, analysedPercent, scannedAt, scanning }
+// `total` / `percent` / `analysedPercent` are null until the first background
+// scan completes.
 // ---------------------------------------------------------------------------
 router.get('/library/coverage', requireAdmin, async (req, res) => {
   try {

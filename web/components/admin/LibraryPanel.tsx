@@ -61,8 +61,10 @@ interface UntaggedResponse { rows: Track[]; nextCursor: string | null }
 
 interface Coverage {
   tagged: number;
+  analysed: number;
   total: number | null;
   percent: number | null;
+  analysedPercent: number | null;
   scannedAt: string | null;
   scanning: boolean;
 }
@@ -551,6 +553,10 @@ function KpiStrip({ coverage, stats }: {
     ? coverage.total.toLocaleString('en-GB')
     : (coverage?.scanning ? 'scanning…' : '—');
   const percentLabel = coverage?.percent != null ? `${coverage.percent}%` : '—';
+  // Acoustic-analysis (BPM/key) coverage against the same Subsonic total.
+  const analysedLabel = coverage?.analysedPercent != null
+    ? `${coverage.analysedPercent}%`
+    : (coverage?.scanning ? 'scanning…' : '—');
   const moodCount = stats ? Object.keys(stats.byMood || {}).length : 0;
   const lastTag = stats?.updatedAt ? new Date(stats.updatedAt).toLocaleString('en-GB') : '—';
 
@@ -566,7 +572,7 @@ function KpiStrip({ coverage, stats }: {
           Re-tag tracks the AI got wrong. Queue anything on demand.
         </div>
       </div>
-      <div className="grid grid-cols-2 border-b border-ink sm:grid-cols-4">
+      <div className="grid grid-cols-2 border-b border-ink sm:grid-cols-5">
         <div className="border-r border-separator-strong p-4">
           <Metric n={taggedLabel} l="tagged" />
         </div>
@@ -575,6 +581,9 @@ function KpiStrip({ coverage, stats }: {
         </div>
         <div className="border-t border-r border-separator-strong p-4 sm:border-t-0">
           <Metric n={percentLabel} l="coverage" accent />
+        </div>
+        <div className="border-t border-separator-strong p-4 sm:border-t-0 sm:border-r">
+          <Metric n={analysedLabel} l="analysed · bpm/key" />
         </div>
         <div className="border-t border-separator-strong p-4 sm:border-t-0">
           <Metric n={moodCount} l="moods used" />
