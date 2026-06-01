@@ -33,6 +33,16 @@ export const TAGGER_VERSION = 3;
 // or method changes so `--re-analyze` / staleness checks can target old rows.
 export const ANALYSIS_VERSION = 1;
 
+// A track counts as "tagged" only when it carries at least one mood. An empty
+// array ('[]') is written by the legacy moods.json migration and by the tagger
+// when the LLM returns no moods for a track — and an analysis-only track that
+// went through the bulk pipeline can end up the same way. `moods IS NOT NULL`
+// alone treats those as tagged, so they leak into the browse index and inflate
+// the tagged count even though they have no usable tags. Gate on a non-empty
+// JSON array everywhere instead.
+const SQL_HAS_MOODS = `moods IS NOT NULL AND json_array_length(moods) > 0`;
+const SQL_NO_MOODS = `(moods IS NULL OR json_array_length(moods) = 0)`;
+
 let db: Database.Database | null = null;
 let currentEmbeddingDim: number | null = null;
 
@@ -354,7 +364,7 @@ export function getTrack(id: string): TrackRecord | null {
 
 export function hasTags(id: string): boolean {
   const row = requireDb()
-    .prepare(`SELECT 1 FROM tracks WHERE id = ? AND moods IS NOT NULL`)
+    .prepare(`SELECT 1 FROM tracks WHERE id = ? AND ${SQL_HAS_MOODS}`)
     .get(id);
   return !!row;
 }
@@ -606,8 +616,8 @@ export function allTaggedIds(): string[] {
 
 export function untaggedIds(limit?: number): string[] {
   const q = limit
-    ? `SELECT id FROM tracks WHERE moods IS NULL LIMIT ?`
-    : `SELECT id FROM tracks WHERE moods IS NULL`;
+    ? `SELECT id FROM tracks WHERE ${SQL_NO_MOODS} LIMIT ?`
+    : `SELECT id FROM tracks WHERE ${SQL_NO_MOODS}`;
   const stmt = requireDb().prepare(q);
   const rows = (limit ? stmt.all(limit) : stmt.all()) as Array<{ id: string }>;
   return rows.map(r => r.id);
@@ -656,7 +666,10 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
   const offset = Math.max(0, opts.offset ?? 0);
 
-  const where: string[] = [];
+  // Base: the browseable index is tagged tracks only. Without this, every
+  // row the metadata/analysis walk inserted (moods NULL or '[]') would show
+  // up here as if it were tagged — including analysis-only tracks.
+  const where: string[] = [SQL_HAS_MOODS];
   const params: unknown[] = [];
   if (moods.length) {
     const placeholders = moods.map(() => '?').join(', ');
@@ -702,7 +715,7 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
 export function stats(): LibraryStats {
   const d = requireDb();
   const total =
-    (d.prepare('SELECT COUNT(*) AS n FROM tracks WHERE moods IS NOT NULL').get() as {
+    (d.prepare(`SELECT COUNT(*) AS n FROM tracks WHERE ${SQL_HAS_MOODS}`).get() as {
       n: number;
     }).n;
   const byMood: Record<string, number> = {};
