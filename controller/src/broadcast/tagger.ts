@@ -19,13 +19,27 @@ let activeChild: ChildProcess | null = null;
 
 // Spawn the tagger as a detached-from-our-event-loop child process. Caller is
 // responsible for rejecting the request if `tagger.running` is already true.
-// `reseed` drops + rebuilds track_vectors and re-embeds from scratch (the
-// embedding-model-swap recovery path; see music/tag-library.ts --reseed).
-export function startTagger(opts: { limit?: number; reseed?: boolean } = {}) {
-  const { limit, reseed } = opts;
+// The re-* flags map straight to music/tag-library.ts: `reseed` drops + rebuilds
+// track_vectors and re-embeds from scratch (embedding-model-swap recovery),
+// `reEnrich` re-fetches Last.fm tags + lyrics, `reAnalyze` redoes acoustic
+// bpm/key, `upgrade` re-LLM-tags rows whose prompt/model is stale. A "full
+// re-scan" from the admin UI is reseed + reEnrich + reAnalyze together.
+export function startTagger(
+  opts: {
+    limit?: number;
+    reseed?: boolean;
+    reEnrich?: boolean;
+    reAnalyze?: boolean;
+    upgrade?: boolean;
+  } = {},
+) {
+  const { limit, reseed, reEnrich, reAnalyze, upgrade } = opts;
   const args = ['src/music/tag-library.ts'];
   if (Number.isFinite(limit) && (limit as number) > 0) args.push('--limit', String(limit));
   if (reseed) args.push('--reseed');
+  if (reEnrich) args.push('--re-enrich');
+  if (reAnalyze) args.push('--re-analyze');
+  if (upgrade) args.push('--upgrade');
 
   const child = spawn('npx', ['tsx', ...args], { cwd: '/app', detached: false });
   activeChild = child;
@@ -50,6 +64,9 @@ export function startTagger(opts: { limit?: number; reseed?: boolean } = {}) {
   const detail = [
     Number.isFinite(limit) && (limit as number) > 0 ? `limit=${limit}` : null,
     reseed ? 'reseed' : null,
+    reEnrich ? 're-enrich' : null,
+    reAnalyze ? 're-analyze' : null,
+    upgrade ? 'upgrade' : null,
   ]
     .filter(Boolean)
     .join(', ');

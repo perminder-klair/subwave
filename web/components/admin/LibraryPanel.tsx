@@ -374,22 +374,31 @@ export default function LibraryPanel() {
     }
   };
 
-  // Full re-embed: drops + rebuilds the vector table from scratch. The recovery
-  // path after changing the embedding model (its dim no longer matches the
-  // stored vectors). Sends no limit — a partial reseed leaves the library in a
-  // mixed state KNN propagation can't use. Existing mood/energy tags survive as
-  // seeds, so this only re-spends embedding calls, not the LLM tag budget.
-  const reseedTagger = async () => {
+  // Re-scan with explicit flags. Each maps to a tag-library CLI flag:
+  //   reseed     drop + rebuild every embedding from scratch (model-swap recovery)
+  //   reEnrich   re-fetch Last.fm tags + lyrics that feed the embeddings
+  //   reAnalyze  redo acoustic bpm/key analysis
+  //   upgrade    re-LLM-tag only rows whose prompt/model is stale
+  // The "Full re-scan" button sends reseed + reEnrich + reAnalyze together; the
+  // advanced checkboxes let an operator compose a narrower run. Sends no limit —
+  // a partial reseed leaves the library in a mixed state KNN can't use. Existing
+  // mood tags survive as seeds, so a reseed re-spends embedding calls, not LLM.
+  const rescanTagger = async (opts: {
+    reseed?: boolean;
+    reEnrich?: boolean;
+    reAnalyze?: boolean;
+    upgrade?: boolean;
+  }) => {
     setTaggerBusy(true);
     try {
       const r = await adminFetch('/tag-library', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reseed: true }),
+        body: JSON.stringify(opts),
       });
       const j = await r.json().catch(() => ({})) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `re-seed failed (${r.status})`);
-      notify.ok('re-seeding embeddings…');
+      if (!r.ok) throw new Error(j.error || `re-scan failed (${r.status})`);
+      notify.ok('re-scan started…');
       await loadTagger();
     } catch (err) {
       notify.err(errorMessage(err));
@@ -435,7 +444,7 @@ export default function LibraryPanel() {
         busy={taggerBusy}
         onStart={startTagger}
         onStop={stopTagger}
-        onReseed={reseedTagger}
+        onRescan={rescanTagger}
       />
 
       <div className="stack-mobile grid grid-cols-[260px_1fr] items-start gap-4">
@@ -938,6 +947,13 @@ function TrackTable(p: TrackTableProps) {
 // ---------------------------------------------------------------------------
 // tagger strip (sticky bottom)
 // ---------------------------------------------------------------------------
+type RescanOpts = {
+  reseed?: boolean;
+  reEnrich?: boolean;
+  reAnalyze?: boolean;
+  upgrade?: boolean;
+};
+
 interface TaggerStripProps {
   coverage: Coverage | null;
   tagger: TaggerState | null;
@@ -946,12 +962,22 @@ interface TaggerStripProps {
   busy: boolean;
   onStart: () => void;
   onStop: () => void;
-  onReseed: () => void;
+  onRescan: (opts: RescanOpts) => void;
 }
 
 function TaggerStrip(p: TaggerStripProps) {
   const [expanded, setExpanded] = useState(false);
-  const [confirmReseed, setConfirmReseed] = useState(false);
+  const [confirmFull, setConfirmFull] = useState(false);
+  const [advanced, setAdvanced] = useState(false);
+  const [adv, setAdv] = useState<RescanOpts>({
+    reseed: false,
+    reEnrich: false,
+    reAnalyze: false,
+    upgrade: false,
+  });
+  const toggleAdv = (key: keyof RescanOpts) =>
+    setAdv(prev => ({ ...prev, [key]: !prev[key] }));
+  const advSelected = adv.reseed || adv.reEnrich || adv.reAnalyze || adv.upgrade;
   const logRef = useRef<HTMLPreElement>(null);
   const fillRef = useRef<HTMLSpanElement>(null);
 
@@ -1009,11 +1035,19 @@ function TaggerStrip(p: TaggerStripProps) {
                 <Btn tone="accent" onClick={p.onStart} disabled={p.busy}>Start tagging</Btn>
                 <Btn
                   sm
-                  onClick={() => setConfirmReseed(true)}
+                  onClick={() => setConfirmFull(true)}
                   disabled={p.busy}
-                  title="Drop + rebuild every embedding from scratch — run after changing the embedding model"
+                  title="Rebuild embeddings + enrichment + acoustic analysis for the whole library (keeps existing mood tags)"
                 >
-                  Re-seed
+                  Full re-scan
+                </Btn>
+                <Btn
+                  sm
+                  onClick={() => setAdvanced(a => !a)}
+                  disabled={p.busy}
+                  title="Compose a re-scan from individual passes"
+                >
+                  {advanced ? 'advanced ▴' : 'advanced ▾'}
                 </Btn>
               </>
             )}
@@ -1022,6 +1056,50 @@ function TaggerStrip(p: TaggerStripProps) {
             </Btn>
           </div>
         </div>
+        {advanced && !running && (
+          <div className="grid gap-2 border-t border-separator-strong p-3">
+            <div className="caption text-muted">
+              Pick which passes to re-run. Unticked tracks keep their current data.
+            </div>
+            <div className="flex flex-wrap gap-x-5 gap-y-2">
+              <AdvCheck
+                label="Re-embed"
+                hint="drop + rebuild all vectors — run after changing the embedding model"
+                checked={!!adv.reseed}
+                onToggle={() => toggleAdv('reseed')}
+              />
+              <AdvCheck
+                label="Re-enrich"
+                hint="re-fetch Last.fm tags + lyrics"
+                checked={!!adv.reEnrich}
+                onToggle={() => toggleAdv('reEnrich')}
+              />
+              <AdvCheck
+                label="Re-analyze"
+                hint="redo acoustic bpm / key"
+                checked={!!adv.reAnalyze}
+                onToggle={() => toggleAdv('reAnalyze')}
+              />
+              <AdvCheck
+                label="Upgrade moods"
+                hint="re-tag stale prompt/model rows"
+                checked={!!adv.upgrade}
+                onToggle={() => toggleAdv('upgrade')}
+              />
+            </div>
+            <div>
+              <Btn
+                sm
+                tone="accent"
+                onClick={() => p.onRescan(adv)}
+                disabled={p.busy || !advSelected}
+                title={advSelected ? 'run the selected passes' : 'select at least one pass'}
+              >
+                Run selected
+              </Btn>
+            </div>
+          </div>
+        )}
         {expanded && (
           <pre
             ref={logRef}
@@ -1032,15 +1110,35 @@ function TaggerStrip(p: TaggerStripProps) {
         )}
       </section>
       <V3AlertDialog
-        open={confirmReseed}
-        onOpenChange={setConfirmReseed}
-        title="Re-seed embeddings"
-        description="Drops the vector table and re-embeds every track from scratch. Do this after changing the embedding model — the new model's dimensions no longer match the stored vectors. Existing mood/energy tags are kept and reused as seeds (no LLM re-tagging), but a full re-embed can take several minutes on a large library."
-        confirmLabel="re-seed"
+        open={confirmFull}
+        onOpenChange={setConfirmFull}
+        title="Full library re-scan"
+        description="Rebuilds the whole library from scratch: re-embeds every track, re-fetches Last.fm tags + lyrics, and redoes acoustic (bpm/key) analysis. Existing mood tags are kept and reused as seeds — moods are not re-decided. This can take several minutes on a large library and re-spends embedding calls. To re-decide moods too, use the 'Upgrade moods' option under advanced."
+        confirmLabel="full re-scan"
         danger
-        onConfirm={p.onReseed}
+        onConfirm={() => p.onRescan({ reseed: true, reEnrich: true, reAnalyze: true })}
       />
     </div>
+  );
+}
+
+function AdvCheck({
+  label,
+  hint,
+  checked,
+  onToggle,
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-center gap-2 text-[12px]">
+      <Checkbox checked={checked} onCheckedChange={onToggle} />
+      <span className={cn('font-medium', checked ? 'text-ink' : 'text-muted')}>{label}</span>
+      <span className="caption text-muted">· {hint}</span>
+    </label>
   );
 }
 

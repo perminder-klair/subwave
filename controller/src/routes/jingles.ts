@@ -61,7 +61,16 @@ router.post('/tag-library', requireAdmin, (req, res) => {
   if (tagger.running) return res.status(409).json({ error: 'tagger already running', tagger });
   const limit = parseInt(req.body?.limit, 10);
   const reseed = req.body?.reseed === true;
-  startTagger({ limit: Number.isFinite(limit) ? limit : undefined, reseed });
+  const reEnrich = req.body?.reEnrich === true;
+  const reAnalyze = req.body?.reAnalyze === true;
+  const upgrade = req.body?.upgrade === true;
+  startTagger({
+    limit: Number.isFinite(limit) ? limit : undefined,
+    reseed,
+    reEnrich,
+    reAnalyze,
+    upgrade,
+  });
   res.json({ ok: true, tagger });
 });
 
