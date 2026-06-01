@@ -67,6 +67,9 @@ interface Coverage {
   analysedPercent: number | null;
   scannedAt: string | null;
   scanning: boolean;
+  // null = still probing; false = no analysis backend (sidecar/librosa) running.
+  analysisAvailable?: boolean | null;
+  analysisBackend?: string | null;
 }
 
 interface TaggerState {
@@ -545,16 +548,21 @@ export default function LibraryPanel() {
 // One labelled progress meter: a headline count (done / total), a fill bar,
 // and a trailing percent. The done count comes straight from the library DB
 // so it shows immediately; only the denominator waits on the Subsonic scan.
-function Meter({ label, done, total, percent, scanning, onStart }: {
+function Meter({ label, done, total, percent, scanning, onStart, unavailable, note }: {
   label: string;
   done: number | null;
   total: number | null;
   percent: number | null;
   scanning: boolean;
   onStart?: () => void;
+  // When true, the meter reads "engine off" instead of a misleading 0% — the
+  // pass can't run because no backend is installed.
+  unavailable?: boolean;
+  // Explanatory line shown under the bar (e.g. how to enable the engine).
+  note?: string;
 }) {
   const fillRef = useRef<HTMLSpanElement>(null);
-  useDynamicStyle(fillRef, { width: percent != null ? `${Math.min(100, percent)}%` : '0%' });
+  useDynamicStyle(fillRef, { width: !unavailable && percent != null ? `${Math.min(100, percent)}%` : '0%' });
 
   const doneNum = done != null ? done.toLocaleString('en-GB') : '—';
   const totalNum = total != null
@@ -568,21 +576,29 @@ function Meter({ label, done, total, percent, scanning, onStart }: {
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <span className="text-[10px] font-bold tracking-[0.1em] text-muted uppercase">{label}</span>
         <span className="caption text-muted">
-          {complete
-            ? '✓ complete'
-            : percent != null
-              ? `${percent}%`
-              : (empty && onStart ? '' : '…')}
+          {unavailable
+            ? 'engine off'
+            : complete
+              ? '✓ complete'
+              : percent != null
+                ? `${percent}%`
+                : (empty && onStart ? '' : '…')}
         </span>
       </div>
       <div className="flex items-baseline gap-2">
-        <span className="mono-num text-[22px] leading-none font-extrabold tracking-[-0.02em]">{doneNum}</span>
+        <span className={cn(
+          'mono-num text-[22px] leading-none font-extrabold tracking-[-0.02em]',
+          unavailable && 'text-muted',
+        )}>{doneNum}</span>
         <span className="caption text-muted">/ {totalNum}</span>
       </div>
-      <div className="h-1.5 w-full overflow-hidden bg-[var(--ink-soft)]">
+      <div className={cn('h-1.5 w-full overflow-hidden bg-[var(--ink-soft)]', unavailable && 'opacity-50')}>
         <span ref={fillRef} className="block h-full bg-[var(--accent)]" />
       </div>
-      {empty && onStart && (
+      {note && (
+        <div className="mt-0.5 text-[11px] leading-[1.45] text-muted">{note}</div>
+      )}
+      {empty && onStart && !unavailable && (
         <button
           type="button"
           onClick={onStart}
@@ -639,6 +655,10 @@ function KpiStrip({ coverage, stats, onStartTag }: {
             total={total}
             percent={coverage?.analysedPercent ?? null}
             scanning={scanning}
+            unavailable={coverage?.analysisAvailable === false}
+            note={coverage?.analysisAvailable === false
+              ? 'No analysis engine running. Start the tts-heavy sidecar (docker compose --profile tts-heavy up -d) or configure a local librosa venv to enable BPM/key detection — tagging runs will then fill this in.'
+              : undefined}
           />
         </div>
       </div>

@@ -10,8 +10,13 @@
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as db from './library-db.js';
+import * as analyzer from './analyzer.js';
 
 const STALE_MS = 6 * 60 * 60 * 1000; // 6 h
+// Acoustic-analysis backend availability is probed separately: analyzer
+// .isAvailable() can do a 5 s sidecar HTTP probe and doesn't cache a negative
+// result, so we memoise it on a short TTL rather than re-probe on every poll.
+const ANALYSIS_PROBE_TTL_MS = 60 * 1000; // 1 min
 
 interface CoverageCache {
   total: number;
@@ -21,6 +26,29 @@ interface CoverageCache {
 
 const cache: CoverageCache = { total: 0, scannedAt: null, scanning: false };
 let inflight: Promise<void> | null = null;
+
+// Last known acoustic-analysis backend state. `null` until first probed.
+let analysisAvail: { available: boolean; backend: string; checkedAt: number } | null = null;
+let analysisProbeInflight: Promise<void> | null = null;
+
+function refreshAnalysisAvail() {
+  if (analysisProbeInflight) return analysisProbeInflight;
+  analysisProbeInflight = (async () => {
+    try {
+      const available = await analyzer.isAvailable();
+      analysisAvail = { available, backend: analyzer.backendLabel(), checkedAt: Date.now() };
+    } catch {
+      analysisAvail = { available: false, backend: 'none', checkedAt: Date.now() };
+    } finally {
+      analysisProbeInflight = null;
+    }
+  })();
+  return analysisProbeInflight;
+}
+
+function analysisAvailStale() {
+  return !analysisAvail || Date.now() - analysisAvail.checkedAt > ANALYSIS_PROBE_TTL_MS;
+}
 
 async function doScan() {
   cache.scanning = true;
@@ -55,6 +83,11 @@ function isStale() {
 export async function get() {
   await library.load();
   if (isStale() && !cache.scanning) refresh();
+  // First call: probe definitively (≤5 s) so the UI gets a real answer rather
+  // than "checking…" for a whole poll cycle. Later calls refresh in the
+  // background and serve the last-known value.
+  if (analysisAvail == null) await refreshAnalysisAvail();
+  else if (analysisAvailStale() && !analysisProbeInflight) refreshAnalysisAvail();
   const tagged = library.allTaggedIds().length;
   const analysed = db.analysedCount();
   const total = cache.scannedAt ? cache.total : null;
@@ -70,5 +103,10 @@ export async function get() {
     analysedPercent,
     scannedAt: cache.scannedAt,
     scanning: cache.scanning,
+    // Whether an acoustic-analysis backend (tts-heavy sidecar / local librosa
+    // venv) is reachable. When false, acoustic coverage stays 0 by design —
+    // the UI surfaces this rather than showing a misleading 0%.
+    analysisAvailable: analysisAvail ? analysisAvail.available : null,
+    analysisBackend: analysisAvail ? analysisAvail.backend : null,
   };
 }
