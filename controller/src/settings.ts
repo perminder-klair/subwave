@@ -278,12 +278,12 @@ const DEFAULTS = {
   // reclaim that headroom (issue #137). Dropping the bitrate (e.g. 128 → 64
   // mono in a future change) also helps for operators who want the tape.
   archive: { enabled: true, bitrate: 128 },
-  // Secondary Ogg-Opus broadcast mount (/stream.opus). On by default so
-  // existing installs are unaffected. Only Blink (Chrome/Edge) clients ever
-  // select it — web/hooks/usePlayer.ts keeps Safari/iOS/Firefox on MP3 — so
-  // operators can drop the continuous Opus encoder + its 44.1→48k resample to
-  // reclaim broadcast-container CPU. The mandatory /stream.mp3 mount stays.
-  stream: { opusEnabled: true },
+  // Secondary Ogg-Opus broadcast mount (/stream.opus). Off by default — only
+  // Blink (Chrome/Edge) clients ever select it (web/hooks/usePlayer.ts keeps
+  // Safari/iOS/Firefox on MP3), and it adds a continuous Opus encoder + a
+  // 44.1→48k resample, so operators opt in rather than pay that CPU unasked.
+  // The mandatory /stream.mp3 mount always serves everyone.
+  stream: { opusEnabled: false },
   weather: { lat: 52.5862, lng: -2.1288, locationName: 'Wolverhampton', units: 'metric' as 'metric' | 'imperial' },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
   // placeholder and returned by GET /dj for the landing page. The product is

@@ -795,11 +795,12 @@ export default function SettingsPanel() {
                     </Btn>
                   </div>
                   <div className="field-hint">
-                    Only Chrome/Edge listeners ever pick Opus (Safari, iOS and Firefox stay on
-                    the universal MP3 mount); for them it&apos;s equal-or-better quality at
-                    ~half the bandwidth. It runs a continuous second encoder + a 44.1→48 kHz
-                    resample, so turn it off to reclaim broadcast-container CPU — the mandatory
-                    <code> /stream.mp3</code> mount keeps serving everyone.
+                    Off by default. Only Chrome/Edge listeners ever pick Opus (Safari, iOS and
+                    Firefox stay on the universal MP3 mount); for them it&apos;s equal-or-better
+                    quality at ~half the bandwidth, but it adds a continuous second encoder + a
+                    44.1→48 kHz resample. Turn it on if you have Chrome/Edge listeners and want
+                    the bandwidth saving — the mandatory <code>/stream.mp3</code> mount serves
+                    everyone either way.
                   </div>
                 </div>
               </Card>

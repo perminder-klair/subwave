@@ -22,7 +22,7 @@ jingle_ratio = ref(30)
 crossfade_duration = ref(10.0)
 archive_enabled = ref(true)
 archive_bitrate = ref(128)
-opus_enabled = ref(true)
+opus_enabled = ref(false)
 station_name = ref("SUB/WAVE")
 
 if file.exists("/var/sub-wave/liquidsoap_jingle_ratio.txt") then
@@ -48,13 +48,14 @@ if file.exists("/var/sub-wave/liquidsoap_archive_bitrate.txt") then
   if v > 0 then archive_bitrate := v end
 end
 
-# Opt out of the Ogg-Opus mount to drop a continuous encoder (+ its 44.1->48k
-# resample). Only Blink (Chrome/Edge) clients ever select Opus — see
+# Opt IN to the Ogg-Opus mount, which adds a continuous encoder (+ its
+# 44.1->48k resample). Only Blink (Chrome/Edge) clients ever select Opus — see
 # web/hooks/usePlayer.ts, which keeps Safari/iOS/Firefox on the MP3 mount — so
-# operators who don't want the extra encode can disable it. Default on.
+# it's off by default and operators who want the extra mount turn it on. The
+# mandatory /stream.mp3 mount always serves everyone.
 if file.exists("/var/sub-wave/liquidsoap_opus_enabled.txt") then
   raw = string.trim(file.contents("/var/sub-wave/liquidsoap_opus_enabled.txt"))
-  opus_enabled := (raw != "false")
+  opus_enabled := (raw == "true")
 end
 
 if file.exists("/var/sub-wave/liquidsoap_station_name.txt") then
