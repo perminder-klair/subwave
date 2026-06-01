@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/perminder-klair/subwave/compare/v0.3.0...v0.4.0) (2026-06-01)
+
+
+### Features
+
+* AI DJ capabilities — daypart energy, cross-hour memory, DJ mode + track analysis ([#216](https://github.com/perminder-klair/subwave/issues/216)) ([#228](https://github.com/perminder-klair/subwave/issues/228)) ([ba79a53](https://github.com/perminder-klair/subwave/commit/ba79a5398c890f5e4d10bfdde278347cf9fa62d7))
+* **tts:** per-persona custom Piper voices via drop-in .onnx files ([#232](https://github.com/perminder-klair/subwave/issues/232)) ([865c3e9](https://github.com/perminder-klair/subwave/commit/865c3e9c95ea025ec20a5baabdd293e1e8e9bf77)), closes [#230](https://github.com/perminder-klair/subwave/issues/230)
+
+
+### Bug Fixes
+
+* **web:** allow saving PocketTTS personas with a cloned .wav voice ([#231](https://github.com/perminder-klair/subwave/issues/231)) ([51a2423](https://github.com/perminder-klair/subwave/commit/51a242369b093636a60c4c2e6ec6e422e5c5b969))
+
 ## [0.3.0](https://github.com/perminder-klair/subwave/compare/v0.2.0...v0.3.0) (2026-05-31)
 
 
