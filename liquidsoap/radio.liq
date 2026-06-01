@@ -22,6 +22,7 @@ jingle_ratio = ref(30)
 crossfade_duration = ref(10.0)
 archive_enabled = ref(true)
 archive_bitrate = ref(128)
+opus_enabled = ref(true)
 station_name = ref("SUB/WAVE")
 
 if file.exists("/var/sub-wave/liquidsoap_jingle_ratio.txt") then
@@ -47,12 +48,21 @@ if file.exists("/var/sub-wave/liquidsoap_archive_bitrate.txt") then
   if v > 0 then archive_bitrate := v end
 end
 
+# Opt out of the Ogg-Opus mount to drop a continuous encoder (+ its 44.1->48k
+# resample). Only Blink (Chrome/Edge) clients ever select Opus — see
+# web/hooks/usePlayer.ts, which keeps Safari/iOS/Firefox on the MP3 mount — so
+# operators who don't want the extra encode can disable it. Default on.
+if file.exists("/var/sub-wave/liquidsoap_opus_enabled.txt") then
+  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_opus_enabled.txt"))
+  opus_enabled := (raw != "false")
+end
+
 if file.exists("/var/sub-wave/liquidsoap_station_name.txt") then
   raw = string.trim(file.contents("/var/sub-wave/liquidsoap_station_name.txt"))
   if raw != "" then station_name := raw end
 end
 
-log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} station_name=#{station_name()}")
+log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} opus_enabled=#{opus_enabled()} station_name=#{station_name()}")
 
 # ---------------------------------------------------------------------------
 # HTTP(S) FETCH OVERRIDE — Liquidsoap's built-in http.get.stream returns
@@ -556,30 +566,38 @@ def make_stream_outputs() =
   )
   # Opus mandates 48 kHz internally — Liquidsoap resamples from the 44.1 kHz
   # source bus. application="audio" is the right tuning for music (vs "voip"
-  # or "lowdelay"). 96 kbps is the music-transparent sweet spot.
-  opus_out = output.icecast(
-    %opus(
-      bitrate=96,
-      samplerate=48000,
-      channels=2,
-      application="audio",
-      vbr="constrained"
-    ),
-    id="stream_opus",
-    fallible=true,
-    host=environment.get(default="icecast", "ICECAST_HOST"),
-    port=7702,
-    password=environment.get("ICECAST_SOURCE_PASSWORD"),
-    mount="/stream.opus",
-    name=station_name(),
-    description="Personal frequency from the homelab",
-    genre="Various",
-    url="http://localhost:7700",
-    radio
-  )
+  # or "lowdelay"). 96 kbps is the music-transparent sweet spot. Gated on
+  # opus_enabled so operators can drop the encoder + resample (no-op shutdown
+  # when off).
+  opus_shutdown =
+    if opus_enabled() then
+      opus_out = output.icecast(
+        %opus(
+          bitrate=96,
+          samplerate=48000,
+          channels=2,
+          application="audio",
+          vbr="constrained"
+        ),
+        id="stream_opus",
+        fallible=true,
+        host=environment.get(default="icecast", "ICECAST_HOST"),
+        port=7702,
+        password=environment.get("ICECAST_SOURCE_PASSWORD"),
+        mount="/stream.opus",
+        name=station_name(),
+        description="Personal frequency from the homelab",
+        genre="Various",
+        url="http://localhost:7700",
+        radio
+      )
+      opus_out.shutdown
+    else
+      fun () -> ()
+    end
   fun () -> begin
     mp3_out.shutdown()
-    opus_out.shutdown()
+    opus_shutdown()
   end
 end
 
