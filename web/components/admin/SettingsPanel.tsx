@@ -1888,7 +1888,8 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
             <div className="field-hint">
               Leave blank for the sensible default per provider. If you change
               this on a tagged library, the next run will reject the new dim —
-              re-run with <code>--reseed</code> to drop existing vectors.
+              hit <strong>Re-seed</strong> on the Library tab (or run{' '}
+              <code>--reseed</code>) to drop and rebuild the vectors.
             </div>
           </div>
         </div>

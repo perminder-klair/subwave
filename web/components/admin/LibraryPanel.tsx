@@ -26,6 +26,7 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '../ui/select';
 import { Card, Btn, Eyebrow, Seg } from './ui';
+import { V3AlertDialog } from '../ui/alert-dialog';
 import { cn } from '../../lib/cn';
 
 // ---------------------------------------------------------------------------
@@ -373,6 +374,30 @@ export default function LibraryPanel() {
     }
   };
 
+  // Full re-embed: drops + rebuilds the vector table from scratch. The recovery
+  // path after changing the embedding model (its dim no longer matches the
+  // stored vectors). Sends no limit — a partial reseed leaves the library in a
+  // mixed state KNN propagation can't use. Existing mood/energy tags survive as
+  // seeds, so this only re-spends embedding calls, not the LLM tag budget.
+  const reseedTagger = async () => {
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/tag-library', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reseed: true }),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `re-seed failed (${r.status})`);
+      notify.ok('re-seeding embeddings…');
+      await loadTagger();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
   // -----------------------------------------------------------------------
   // derived
   // -----------------------------------------------------------------------
@@ -410,6 +435,7 @@ export default function LibraryPanel() {
         busy={taggerBusy}
         onStart={startTagger}
         onStop={stopTagger}
+        onReseed={reseedTagger}
       />
 
       <div className="stack-mobile grid grid-cols-[260px_1fr] items-start gap-4">
@@ -920,10 +946,12 @@ interface TaggerStripProps {
   busy: boolean;
   onStart: () => void;
   onStop: () => void;
+  onReseed: () => void;
 }
 
 function TaggerStrip(p: TaggerStripProps) {
   const [expanded, setExpanded] = useState(false);
+  const [confirmReseed, setConfirmReseed] = useState(false);
   const logRef = useRef<HTMLPreElement>(null);
   const fillRef = useRef<HTMLSpanElement>(null);
 
@@ -977,7 +1005,17 @@ function TaggerStrip(p: TaggerStripProps) {
             {running ? (
               <Btn tone="danger" onClick={p.onStop} disabled={p.busy}>Stop</Btn>
             ) : (
-              <Btn tone="accent" onClick={p.onStart} disabled={p.busy}>Start tagging</Btn>
+              <>
+                <Btn tone="accent" onClick={p.onStart} disabled={p.busy}>Start tagging</Btn>
+                <Btn
+                  sm
+                  onClick={() => setConfirmReseed(true)}
+                  disabled={p.busy}
+                  title="Drop + rebuild every embedding from scratch — run after changing the embedding model"
+                >
+                  Re-seed
+                </Btn>
+              </>
             )}
             <Btn sm onClick={() => setExpanded(e => !e)}>
               {expanded ? 'hide log' : 'log'}
@@ -993,6 +1031,15 @@ function TaggerStrip(p: TaggerStripProps) {
           </pre>
         )}
       </section>
+      <V3AlertDialog
+        open={confirmReseed}
+        onOpenChange={setConfirmReseed}
+        title="Re-seed embeddings"
+        description="Drops the vector table and re-embeds every track from scratch. Do this after changing the embedding model — the new model's dimensions no longer match the stored vectors. Existing mood/energy tags are kept and reused as seeds (no LLM re-tagging), but a full re-embed can take several minutes on a large library."
+        confirmLabel="re-seed"
+        danger
+        onConfirm={p.onReseed}
+      />
     </div>
   );
 }

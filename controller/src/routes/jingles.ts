@@ -60,7 +60,8 @@ router.get('/jingles/:filename/audio', requireAdmin, async (req, res) => {
 router.post('/tag-library', requireAdmin, (req, res) => {
   if (tagger.running) return res.status(409).json({ error: 'tagger already running', tagger });
   const limit = parseInt(req.body?.limit, 10);
-  startTagger(limit);
+  const reseed = req.body?.reseed === true;
+  startTagger({ limit: Number.isFinite(limit) ? limit : undefined, reseed });
   res.json({ ok: true, tagger });
 });
 

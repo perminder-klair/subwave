@@ -19,9 +19,13 @@ let activeChild: ChildProcess | null = null;
 
 // Spawn the tagger as a detached-from-our-event-loop child process. Caller is
 // responsible for rejecting the request if `tagger.running` is already true.
-export function startTagger(limit?: number) {
+// `reseed` drops + rebuilds track_vectors and re-embeds from scratch (the
+// embedding-model-swap recovery path; see music/tag-library.ts --reseed).
+export function startTagger(opts: { limit?: number; reseed?: boolean } = {}) {
+  const { limit, reseed } = opts;
   const args = ['src/music/tag-library.ts'];
   if (Number.isFinite(limit) && (limit as number) > 0) args.push('--limit', String(limit));
+  if (reseed) args.push('--reseed');
 
   const child = spawn('npx', ['tsx', ...args], { cwd: '/app', detached: false });
   activeChild = child;
@@ -43,7 +47,13 @@ export function startTagger(limit?: number) {
     tagger.lastLog.push(`[exit ${signal || code}]`);
     queue.log('scheduler', `tagger finished (${signal ? `signal ${signal}` : `exit ${code}`})`);
   });
-  queue.log('scheduler', `tagger started${Number.isFinite(limit) ? ` (limit=${limit})` : ''}`);
+  const detail = [
+    Number.isFinite(limit) && (limit as number) > 0 ? `limit=${limit}` : null,
+    reseed ? 'reseed' : null,
+  ]
+    .filter(Boolean)
+    .join(', ');
+  queue.log('scheduler', `tagger started${detail ? ` (${detail})` : ''}`);
 }
 
 // Stop the running tagger by signalling its child. The exit handler above
