@@ -145,6 +145,10 @@ interface ArchiveForm {
   bitrate: string;
 }
 
+interface StreamForm {
+  opusEnabled: boolean;
+}
+
 // Keep in sync with ARCHIVE_BITRATES in controller/src/settings.ts — radio.liq
 // has a literal `%mp3(bitrate=…)` branch per value, so this set is fixed.
 const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
@@ -153,6 +157,7 @@ interface FormState {
   jingleRatio: string;
   crossfadeDuration: string;
   archive: ArchiveForm;
+  stream: StreamForm;
   station: string;
   weather: WeatherCfg;
   tts: TtsForm;
@@ -188,6 +193,7 @@ interface SettingsData {
     jingleRatio?: number;
     crossfadeDuration?: number;
     archive?: { enabled?: boolean; bitrate?: number };
+    stream?: { opusEnabled?: boolean };
     station?: string;
     theme?: { active?: string };
     weather?: { lat?: number; lng?: number; locationName?: string; units?: 'metric' | 'imperial' };
@@ -298,6 +304,9 @@ export default function SettingsPanel() {
       archive: {
         enabled: v.archive?.enabled ?? true,
         bitrate: String(v.archive?.bitrate ?? 128),
+      },
+      stream: {
+        opusEnabled: v.stream?.opusEnabled ?? true,
       },
       station: v.station ?? '',
       weather: {
@@ -750,6 +759,48 @@ export default function SettingsPanel() {
                       (current: {data?.values?.archive?.bitrate ?? '—'} kbps). 128 kbps is the
                       original default.
                     </div>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Opus stream" sub="/stream.opus — Ogg-Opus 96 kbps">
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Serve the secondary Opus mount</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Seg
+                      options={[
+                        { id: 'on', label: 'On' },
+                        { id: 'off', label: 'Off' },
+                      ]}
+                      value={form.stream.opusEnabled ? 'on' : 'off'}
+                      onChange={id =>
+                        setForm(f =>
+                          f ? { ...f, stream: { ...f.stream, opusEnabled: id === 'on' } } : f,
+                        )
+                      }
+                    />
+                    <Btn
+                      sm
+                      onClick={() =>
+                        saveSettings({ stream: { opusEnabled: form.stream.opusEnabled } })
+                      }
+                      disabled={busy}
+                    >
+                      Save
+                    </Btn>
+                  </div>
+                  <div className="field-hint">
+                    Off by default. Only Chrome/Edge listeners ever pick Opus (Safari, iOS and
+                    Firefox stay on the universal MP3 mount); for them it&apos;s equal-or-better
+                    quality at ~half the bandwidth, but it adds a continuous second encoder + a
+                    44.1→48 kHz resample. Turn it on if you have Chrome/Edge listeners and want
+                    the bandwidth saving — the mandatory <code>/stream.mp3</code> mount serves
+                    everyone either way.
                   </div>
                 </div>
               </Card>

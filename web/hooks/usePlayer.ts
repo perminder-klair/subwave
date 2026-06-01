@@ -75,6 +75,10 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
   const streamUrlRef = useRef(streamUrl);
   const volumeRef = useRef(volume);
   const watchdogTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set once if the optional Opus mount fails to load — pins us to MP3 so the
+  // watchdog stops retrying a dead Opus URL (e.g. an operator who disabled the
+  // server-side Opus encoder, so /stream.opus 404s).
+  const opusFailedRef = useRef(false);
   useEffect(() => { tunedInRef.current = tunedIn; }, [tunedIn]);
   useEffect(() => { streamUrlRef.current = streamUrl; }, [streamUrl]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
@@ -97,7 +101,7 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
   // iOS-family devices (iPad on iPadOS 13+ reports the desktop Macintosh UA so
   // we also check maxTouchPoints), and skip Firefox by UA.
   useEffect(() => {
-    if (!OPUS_STREAM_URL) return;
+    if (!OPUS_STREAM_URL || opusFailedRef.current) return;
     const ua = navigator.userAgent;
     const isIOS =
       /iPad|iPhone|iPod/.test(ua) ||
@@ -166,6 +170,14 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
     };
     const onError = () => {
       setStatus('idle');
+      // If the optional Opus mount errors (commonly a 404 when the operator
+      // has disabled Opus server-side), fall back permanently to the universal
+      // MP3 mount rather than reconnecting to the dead Opus URL on every retry.
+      if (OPUS_STREAM_URL && streamUrlRef.current === OPUS_STREAM_URL) {
+        opusFailedRef.current = true;
+        streamUrlRef.current = MP3_STREAM_URL;
+        setStreamUrl(MP3_STREAM_URL);
+      }
       armWatchdog(500);
     };
     el.addEventListener('playing', onPlaying);
