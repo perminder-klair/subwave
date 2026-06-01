@@ -12,7 +12,9 @@
 // analysis column stays NULL, and consumers behave exactly as today.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, createWriteStream } from 'node:fs';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
 
@@ -22,6 +24,16 @@ export interface AnalysisResult {
   introMs: number | null;
   confidence: number | null;
 }
+
+// Cap the download so we don't pull whole albums of bytes for a short
+// analysis window — mirrors ANALYZE_MAX_BYTES in the Python worker so both
+// fetch paths read the same envelope.
+const ANALYZE_MAX_BYTES = parseInt(process.env.ANALYZE_MAX_BYTES || String(12 * 1024 * 1024), 10);
+// Where the controller stages pre-fetched audio. Lives under the shared
+// state dir (mounted at the same /var/sub-wave path in both the controller and
+// the tts-heavy sidecar), so the path string the controller writes resolves to
+// the same file inside the sidecar — that's what makes the path handoff work.
+const ANALYZE_TMP_DIR = `${config.stateDir}/analyze-tmp`;
 
 // ---------------------------------------------------------------------------
 // Local Python worker (persistent over stdio)
@@ -84,18 +96,38 @@ function startWorker(): Promise<void> {
   return booting;
 }
 
-async function analyzeViaLocal(url: string): Promise<AnalysisResult> {
-  if (!ready) await startWorker();
+// Write a request to the local stdio worker and resolve its response. The
+// request carries either `url` (worker downloads) or `path` (already-local).
+function localRequest(req: { url: string } | { path: string }): Promise<AnalysisResult> {
   const id = `a${++reqSeq}`;
-  const msg = await new Promise<any>((resolve, reject) => {
+  return new Promise<AnalysisResult>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error('analyze request timed out'));
     }, config.analyzer.requestTimeoutMs);
-    pending.set(id, { resolve, reject, timer });
-    proc?.stdin.write(JSON.stringify({ id, url }) + '\n');
+    pending.set(id, {
+      resolve: (msg: any) =>
+        resolve({
+          bpm: msg.bpm ?? null,
+          musicalKey: msg.key ?? null,
+          introMs: msg.intro_ms ?? null,
+          confidence: msg.confidence ?? null,
+        }),
+      reject,
+      timer,
+    });
+    proc?.stdin.write(JSON.stringify({ id, ...req }) + '\n');
   });
-  return { bpm: msg.bpm ?? null, musicalKey: msg.key ?? null, introMs: msg.intro_ms ?? null, confidence: msg.confidence ?? null };
+}
+
+async function analyzeViaLocal(url: string): Promise<AnalysisResult> {
+  if (!ready) await startWorker();
+  return localRequest({ url });
+}
+
+async function analyzeViaLocalPath(path: string): Promise<AnalysisResult> {
+  if (!ready) await startWorker();
+  return localRequest({ path });
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +150,9 @@ async function sidecarReachable(): Promise<boolean> {
   }
 }
 
-async function analyzeViaSidecar(url: string): Promise<AnalysisResult> {
+// POST the sidecar a request body of either {url} (it downloads) or {path}
+// (a file on the shared volume the controller pre-fetched).
+async function sidecarRequest(body: { url: string } | { path: string }): Promise<AnalysisResult> {
   const base = config.ttsHeavy.url;
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), config.analyzer.requestTimeoutMs);
@@ -126,16 +160,24 @@ async function analyzeViaSidecar(url: string): Promise<AnalysisResult> {
     const res = await fetch(`${base}/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify(body),
       signal: ac.signal,
     });
     if (!res.ok) throw new Error(`tts-heavy /analyze ${res.status}: ${await res.text().catch(() => '')}`);
-    const body = (await res.json()) as any;
-    if (!body.ok) throw new Error(body.error || 'analysis failed');
-    return { bpm: body.bpm ?? null, musicalKey: body.key ?? null, introMs: body.intro_ms ?? null, confidence: body.confidence ?? null };
+    const resBody = (await res.json()) as any;
+    if (!resBody.ok) throw new Error(resBody.error || 'analysis failed');
+    return { bpm: resBody.bpm ?? null, musicalKey: resBody.key ?? null, introMs: resBody.intro_ms ?? null, confidence: resBody.confidence ?? null };
   } finally {
     clearTimeout(t);
   }
+}
+
+function analyzeViaSidecar(url: string): Promise<AnalysisResult> {
+  return sidecarRequest({ url });
+}
+
+function analyzeViaSidecarPath(path: string): Promise<AnalysisResult> {
+  return sidecarRequest({ path });
 }
 
 // ---------------------------------------------------------------------------
@@ -162,12 +204,69 @@ export function backendLabel(): string {
 }
 
 // Analyse one track by id. Throws on failure — the caller (analyze pass) logs
-// and moves on, leaving the row NULL so it's retried on the next run.
+// and moves on, leaving the row NULL so it's retried on the next run. This is
+// the URL path: the backend fetches the audio itself. Kept as the fallback
+// for the prefetch pipeline (see analyzePath / downloadCapped below).
 export async function analyze(songId: string): Promise<AnalysisResult> {
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
   const url = subsonic.getRawStreamUrl(songId);
   return backend === 'sidecar' ? analyzeViaSidecar(url) : analyzeViaLocal(url);
+}
+
+// Download a track's audio to a capped temp file on the shared state volume
+// and return the absolute path. The controller does this AHEAD of the
+// backend's compute so network fetch (controller) overlaps DSP (backend) —
+// the path is valid in both containers because the shared dir mounts at the
+// same location. Caps bytes + applies the analyzer request timeout. Throws
+// on any error; the caller falls back to the url path for that one track.
+export async function downloadCapped(songId: string): Promise<string> {
+  mkdirSync(ANALYZE_TMP_DIR, { recursive: true });
+  const dest = `${ANALYZE_TMP_DIR}/${encodeURIComponent(songId)}.audio`;
+  const url = subsonic.getRawStreamUrl(songId);
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), config.analyzer.requestTimeoutMs);
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'subwave-analyzer/1' },
+      signal: ac.signal,
+    });
+    if (!res.ok || !res.body) {
+      throw new Error(`download ${res.status}: ${await res.text().catch(() => '')}`);
+    }
+    // Stream the body to disk, aborting once we've pulled the byte cap — a few
+    // MB covers the analysis window for any common codec.
+    let read = 0;
+    const out = createWriteStream(dest);
+    const src = Readable.fromWeb(res.body as any);
+    src.on('data', (chunk: Buffer) => {
+      read += chunk.length;
+      if (read >= ANALYZE_MAX_BYTES) {
+        src.destroy();
+        ac.abort();
+      }
+    });
+    try {
+      await pipeline(src, out);
+    } catch (err: any) {
+      // A deliberate cap-abort closes the stream mid-flight; that's not a
+      // failure as long as we wrote some bytes.
+      if (read === 0) throw err;
+    }
+    if (read === 0) throw new Error('downloaded empty audio');
+    return dest;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// Analyse a track from an already-local file on the shared volume (produced
+// by downloadCapped). Same backend resolution as analyze(), but hands the
+// path over instead of a url so the backend skips its own fetch.
+export async function analyzePath(localPath: string): Promise<AnalysisResult> {
+  const backend = await resolveBackend();
+  if (!backend) throw new Error('no analysis backend available');
+  return backend === 'sidecar' ? analyzeViaSidecarPath(localPath) : analyzeViaLocalPath(localPath);
 }
 
 export function shutdown(): void {

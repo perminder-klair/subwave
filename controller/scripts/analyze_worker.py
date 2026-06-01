@@ -7,7 +7,8 @@ alive, because importing librosa takes a couple of seconds and we don't want to
 eat that per track in a bulk pass. Protocol is one JSON object per line over
 stdin/stdout, same shape as the Kokoro/PocketTTS workers.
 
-Request:  {"id": "<song id>", "url": "<http stream url>"}
+Request:  {"id": "<song id>", "url": "<http stream url>"}   (worker downloads)
+       |  {"id": "<song id>", "path": "<local file path>"}  (caller owns it)
 Response: {"id": "<echoed>", "ok": true, "bpm": 122.0, "key": "8A",
            "intro_ms": 8200, "confidence": 0.71}
        |  {"id": "<echoed>", "ok": false, "error": "..."}
@@ -26,7 +27,9 @@ import sys
 import tempfile
 import urllib.request
 
-ANALYZE_SECONDS = float(os.environ.get("ANALYZE_SECONDS", "120"))
+# 60s is enough for stable BPM (beat_track) / key (chroma); intro
+# detection only needs the first ~20-30s. Env-overridable.
+ANALYZE_SECONDS = float(os.environ.get("ANALYZE_SECONDS", "60"))
 ANALYZE_SR = int(os.environ.get("ANALYZE_SR", "22050"))
 FETCH_TIMEOUT_S = float(os.environ.get("ANALYZE_FETCH_TIMEOUT_S", "60"))
 
@@ -122,17 +125,23 @@ def fetch_audio(url):
     return path
 
 
-def analyze(url, librosa):
+def analyze(librosa, url=None, path=None):
     import numpy as np
 
-    path = fetch_audio(url)
+    # A controller-provided path is pre-fetched onto the shared volume and
+    # owned by the caller; only files fetch_audio downloads here are ours to
+    # remove. Keeps the url path behaviour identical for back-compat.
+    owned = path is None
+    if owned:
+        path = fetch_audio(url)
     try:
         y, sr = librosa.load(path, sr=ANALYZE_SR, mono=True, duration=ANALYZE_SECONDS)
     finally:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+        if owned:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     if y is None or len(y) == 0:
         raise RuntimeError("decoded empty audio")
@@ -180,13 +189,14 @@ def main():
             continue
         rid = req.get("id")
         url = req.get("url")
-        if not url:
-            emit({"id": rid, "ok": False, "error": "missing url"})
+        path = req.get("path")
+        if not url and not path:
+            emit({"id": rid, "ok": False, "error": "missing url or path"})
             continue
         try:
             import librosa
 
-            result = analyze(url, librosa)
+            result = analyze(librosa, url=url, path=path)
             emit({"id": rid, "ok": True, **result})
         except Exception as e:
             emit({"id": rid, "ok": False, "error": str(e)})

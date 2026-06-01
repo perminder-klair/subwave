@@ -8,7 +8,13 @@
 // Flags:
 //   --limit N      cap tracks analysed this run (default: all that need it)
 //   --re-analyze   drop existing analysis and redo everything
-//   --skip-walk    don't refresh track metadata from Navidrome first
+//   --walk         force a Navidrome metadata refresh before analysing
+//   --skip-walk    never walk Navidrome, even on an empty catalogue
+//
+// Walk policy: by default the metadata walk runs ONLY when the catalogue is
+// empty (first-run bootstrap) — the ~11.5 min walk over a populated DB is the
+// dominant cost and almost always redundant. Pass --walk to force a refresh;
+// --skip-walk hard-disables it (and wins over --walk).
 //
 // The heavy DSP lives in music/analyzer.ts's backend (tts-heavy sidecar or a
 // local librosa venv via ANALYZE_PYTHON). With no backend the pass is a no-op.
@@ -53,6 +59,7 @@ async function main() {
   const args = process.argv.slice(2);
   const limit = parseIntFlag(args, '--limit');
   const reAnalyze = args.includes('--re-analyze');
+  const forceWalk = args.includes('--walk');
   const skipWalk = args.includes('--skip-walk');
 
   await applyWizardOverlay();
@@ -60,8 +67,25 @@ async function main() {
   const embeddingDim = embeddings.resolveEmbeddingDim();
   await db.open({ embeddingDim });
 
-  if (!skipWalk) {
-    console.log('[analyze] walking Navidrome to refresh track metadata...');
+  // Walk only when forced, or when the catalogue is empty (bootstrap).
+  // --skip-walk hard-disables either way.
+  const count = db.trackCount();
+  const shouldWalk = !skipWalk && (forceWalk || count === 0);
+  if (skipWalk) {
+    console.log('[analyze] --skip-walk: not refreshing track metadata');
+  } else if (shouldWalk) {
+    console.log(
+      forceWalk
+        ? '[analyze] --walk: refreshing track metadata...'
+        : '[analyze] empty catalogue — walking Navidrome...',
+    );
+  } else {
+    console.log(
+      `[analyze] catalogue has ${count} tracks — skipping metadata walk (use --walk to refresh)`,
+    );
+  }
+
+  if (shouldWalk) {
     let walked = 0;
     for await (const song of subsonic.iterateAllSongs()) {
       db.upsertTrackMeta(song.id, {

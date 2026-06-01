@@ -70,7 +70,9 @@ export const config = {
   analyzer: {
     python: process.env.ANALYZE_PYTHON || '',   // empty → no local backend
     workerScript: process.env.ANALYZE_WORKER || '/app/scripts/analyze_worker.py',
-    seconds: parseFloat(process.env.ANALYZE_SECONDS || '120'),
+    // 60s is enough for stable BPM (beat_track) / key (chroma); intro
+    // detection only needs the first ~20-30s. Env-overridable.
+    seconds: parseFloat(process.env.ANALYZE_SECONDS || '60'),
     requestTimeoutMs: parseInt(process.env.ANALYZE_REQUEST_TIMEOUT_MS || '120000', 10),
   },
   kokoro: {

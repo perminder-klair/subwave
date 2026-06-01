@@ -41,7 +41,9 @@ POCKET_TTS_WORKER = os.environ.get("POCKET_TTS_WORKER", "/app/workers/pocket_tts
 # stdio worker the offline CLI uses (controller/scripts/analyze_worker.py).
 ANALYZE_PYTHON = os.environ.get("ANALYZE_PYTHON", "/opt/analyzer/venv/bin/python")
 ANALYZE_WORKER = os.environ.get("ANALYZE_WORKER", "/app/workers/analyze_worker.py")
-ANALYZE_SECONDS = os.environ.get("ANALYZE_SECONDS", "120")
+# 60s is enough for stable BPM (beat_track) / key (chroma); intro
+# detection only needs the first ~20-30s. Env-overridable.
+ANALYZE_SECONDS = os.environ.get("ANALYZE_SECONDS", "60")
 
 DEVICE = os.environ.get("TTS_HEAVY_DEVICE", "cpu").lower()
 POCKET_TTS_DEFAULT_VOICE = os.environ.get("POCKET_TTS_VOICE", "alba")
@@ -351,14 +353,23 @@ async def speak(req: SpeakRequest):
 
 
 class AnalyzeRequest(BaseModel):
-    url: str
+    # Either a remote stream url (the worker downloads it) or a local path on
+    # the shared /var/sub-wave volume the controller pre-fetched into. The
+    # controller's prefetch pipeline sends `path` to overlap network I/O with
+    # the sidecar's single-threaded compute; `url` stays as the fallback.
+    url: str | None = None
+    path: str | None = None
 
 
 @app.post("/analyze")
 async def analyze(req: AnalyzeRequest):
-    if not req.url:
-        raise HTTPException(400, "missing 'url'")
-    msg = await analyzer_worker.request({"id": "1", "url": req.url})
+    if req.path:
+        payload = {"id": "1", "path": req.path}
+    elif req.url:
+        payload = {"id": "1", "url": req.url}
+    else:
+        raise HTTPException(400, "missing 'url' or 'path'")
+    msg = await analyzer_worker.request(payload)
     if not msg.get("ok"):
         raise HTTPException(500, msg.get("error") or "analyze failed")
     return {

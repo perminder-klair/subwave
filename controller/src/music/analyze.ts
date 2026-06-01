@@ -9,8 +9,10 @@
 // local librosa venv). When no backend is available this is a clean no-op, so
 // it's always safe to call as a tagger phase.
 
+import { rm } from 'node:fs/promises';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
+import { config } from '../config.js';
 
 export interface AnalyzeOptions {
   limit?: number;        // cap tracks this run (default: all that need it)
@@ -47,10 +49,32 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
 
   let analyzed = 0;
   let failed = 0;
+
+  // One-ahead prefetch pipeline: the controller downloads track i+1's audio
+  // (network) while the backend computes track i (CPU), so the two overlap.
+  // The backend stays single-threaded — we only hide fetch latency. Each
+  // download resolves to a temp path on the shared volume; on download failure
+  // we fall back to the url path for that one id so it still gets analysed.
+  type Prefetch = Promise<string>;
+  let inflight: Prefetch | null = ids.length > 0 ? analyzer.downloadCapped(ids[0]) : null;
+
   for (let i = 0; i < ids.length; i++) {
     const id = ids[i];
+    const downloadPromise = inflight;
+    // Kick off the NEXT download before awaiting this one's analysis so the
+    // fetch overlaps the compute.
+    inflight = i + 1 < ids.length ? analyzer.downloadCapped(ids[i + 1]) : null;
+
+    let localPath: string | null = null;
     try {
-      const a = await analyzer.analyze(id);
+      try {
+        localPath = downloadPromise ? await downloadPromise : null;
+      } catch (err: any) {
+        // Prefetch failed — fall back to the url path for this one track.
+        console.error(`[analyze] ${id} prefetch failed (${err?.message || err}); using url path`);
+        localPath = null;
+      }
+      const a = localPath ? await analyzer.analyzePath(localPath) : await analyzer.analyze(id);
       db.upsertTrackAnalysis(id, {
         bpm: a.bpm,
         musicalKey: a.musicalKey,
@@ -62,11 +86,18 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       failed += 1;
       // Leave the row NULL so the next run retries it; don't stamp a version.
       console.error(`[analyze] ${id} failed: ${err?.message || err}`);
+    } finally {
+      // Drop this track's temp file (best-effort) regardless of outcome.
+      if (localPath) await rm(localPath, { force: true }).catch(() => {});
     }
     if ((i + 1) % 25 === 0 || i + 1 === ids.length) {
       console.log(`[analyze] ${i + 1}/${ids.length} (ok=${analyzed} fail=${failed})`);
     }
   }
+
+  // Best-effort sweep of the staging dir in case a prefetch left an orphan
+  // (e.g. a download that resolved after its analyze slot already errored).
+  await rm(`${config.stateDir}/analyze-tmp`, { recursive: true, force: true }).catch(() => {});
 
   console.log(`[analyze] done — analyzed=${analyzed} failed=${failed}`);
   return { available: true, backend, analyzed, failed, scope: ids.length };

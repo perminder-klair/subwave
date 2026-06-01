@@ -557,6 +557,14 @@ export function vectorCount(): number {
   }).n;
 }
 
+// Total tracks known to the catalogue. Used by the analyze CLI to decide
+// whether to walk Navidrome (only on an empty/bootstrap catalogue).
+export function trackCount(): number {
+  return (requireDb().prepare('SELECT COUNT(*) AS n FROM tracks').get() as {
+    n: number;
+  }).n;
+}
+
 // ---------------------------------------------------------------------------
 // Mood-keyed reads (drop-in replacements for the old library.ts in-memory loops)
 // ---------------------------------------------------------------------------
