@@ -175,6 +175,11 @@ const POCKET_TTS_VOICE_RE = /^[a-z][a-z0-9_-]{0,39}$/;
 // (means "use the built-in default voice"). Used by both chatterbox and
 // pocket-tts since issue #213.
 const CHATTERBOX_VOICE_RE = /^[A-Za-z0-9_.-]{1,80}\.wav$/;
+// Per-persona Piper voice — an `.onnx` model filename in the shared voice folder
+// (config.voices.dir), e.g. `en_US-amy-medium.onnx`, dropped alongside its
+// `.onnx.json` manifest. Basename only, no path separators. Empty is valid and
+// means "use the baked-in default voice" (issue #230).
+const PIPER_VOICE_RE = /^[A-Za-z0-9_.-]{1,100}\.onnx$/;
 const ID_RE = /^[a-z0-9_]{3,32}$/;
 // Persona avatar filename — `<personaId>.(png|jpg|jpeg|webp)`. The id segment
 // reuses ID_RE's shape so an avatar field can never reference a basename
@@ -492,11 +497,15 @@ function normalizeTts(raw: any) {
   ) {
     voice = 'alba';
   }
+  // Piper voices are `.onnx` filenames in the shared voice folder (issue #230).
+  // Empty is legitimate ("use the baked-in default voice"); invalid filenames
+  // reset to empty rather than being rewritten to a Kokoro id.
+  if (engine === 'piper' && voice && !PIPER_VOICE_RE.test(voice)) voice = '';
   // openai-compatible voices are server-specific (often arbitrary cloning ref
   // names) — no canonical default; leave empty so generateSpeech omits the
   // field and the server picks its own.
   if (!voice && engine === 'cloud' && cloudProvider !== 'openai-compatible') voice = 'alloy';
-  if (!voice && engine !== 'cloud' && engine !== 'chatterbox') voice = 'bf_isabella';
+  if (!voice && engine !== 'cloud' && engine !== 'chatterbox' && engine !== 'piper') voice = 'bf_isabella';
   return { engine, cloudProvider, voice };
 }
 
@@ -980,9 +989,14 @@ function validateTtsBlock(raw, where) {
       throw new Error(`${where}.tts.voice must be 1-100 chars`);
     }
   } else {
-    // piper voice is fixed at runtime; tolerate empty.
-    if (!voice) voice = 'bf_isabella';
-    if (voice.length > 100) throw new Error(`${where}.tts.voice must be 0-100 chars`);
+    // piper: empty = use the baked-in default voice. Otherwise the value must
+    // be an .onnx filename (no path separators) referencing a model the operator
+    // dropped into the shared voice folder (issue #230).
+    if (voice && !PIPER_VOICE_RE.test(voice)) {
+      throw new Error(
+        `${where}.tts.voice for piper must be an .onnx filename (no path), or empty for the default voice`,
+      );
+    }
   }
   return { engine: t.engine, cloudProvider: t.cloudProvider, voice };
 }

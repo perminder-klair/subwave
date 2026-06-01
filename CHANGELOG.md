@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.0](https://github.com/perminder-klair/subwave/compare/v0.2.0...v0.3.0) (2026-05-31)
+
+
+### Features
+
+* **web:** add news "Dispatches" page with markdown articles ([#223](https://github.com/perminder-klair/subwave/issues/223)) ([4a221f0](https://github.com/perminder-klair/subwave/commit/4a221f085d40a0de88617116f6898ff79925659b))
+
+
+### Bug Fixes
+
+* **broadcast:** fatten Icecast burst + queue buffers to cut mobile stalls ([#224](https://github.com/perminder-klair/subwave/issues/224)) ([e421fe4](https://github.com/perminder-klair/subwave/commit/e421fe433f761b8725033babee489817abf86144))
+
+## [0.2.0](https://github.com/perminder-klair/subwave/compare/v0.1.30...v0.2.0) (2026-05-31)
+
+
+### Features
+
+* **cli:** subwave uninstall + version-mismatch warning ([#211](https://github.com/perminder-klair/subwave/issues/211)) ([f8dd506](https://github.com/perminder-klair/subwave/commit/f8dd5062952fd8fe000d9ec88684636cb5e85c9b))
+* **skills:** operator-pluggable custom skills via state/skills ([#210](https://github.com/perminder-klair/subwave/issues/210)) ([dc193f3](https://github.com/perminder-klair/subwave/commit/dc193f3171c3676c49974bd30f496db2835fbab8))
+* **tts:** shared voice folder + PocketTTS cloning + scrollable voice select ([#213](https://github.com/perminder-klair/subwave/issues/213)) ([#217](https://github.com/perminder-klair/subwave/issues/217)) ([c4dcac4](https://github.com/perminder-klair/subwave/commit/c4dcac47ecbd22233c77f467604946489c00f0cf))
+* **web:** prominent setup guide for uninstalled heavy TTS engines ([#220](https://github.com/perminder-klair/subwave/issues/220)) ([d8a3b60](https://github.com/perminder-klair/subwave/commit/d8a3b6083623d4b387aa9f5718bc389cee185d9b))
+* **web:** reorder admin settings sidebar with Station first ([#219](https://github.com/perminder-klair/subwave/issues/219)) ([75ae565](https://github.com/perminder-klair/subwave/commit/75ae565c72f986401122f0c814aef38118eecdb3))
+
+
+### Bug Fixes
+
+* **setup:** auto-detect host timezone on fresh installs ([#205](https://github.com/perminder-klair/subwave/issues/205)) ([#214](https://github.com/perminder-klair/subwave/issues/214)) ([96defbd](https://github.com/perminder-klair/subwave/commit/96defbdadf37380244aa2e1f05d0c76906a68095))
+* **web:** keep Firefox on MP3 mount (Opus goes silent on track change) ([#215](https://github.com/perminder-klair/subwave/issues/215)) ([8fdb0c9](https://github.com/perminder-klair/subwave/commit/8fdb0c93b5b9410840730b25846dd389d3d66e3b)), closes [#212](https://github.com/perminder-klair/subwave/issues/212)
+
+
+### Documentation
+
+* **skill:** add back-merge step to subwave-release-pr skill ([#209](https://github.com/perminder-klair/subwave/issues/209)) ([11030ba](https://github.com/perminder-klair/subwave/commit/11030ba043a1c73deca45d06f6fd09858221f2f3))
+
 ## [0.1.30](https://github.com/perminder-klair/subwave/compare/v0.1.29...v0.1.30) (2026-05-29)
 
 

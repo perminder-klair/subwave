@@ -113,7 +113,12 @@ async function speakWith(engine: string, text: string, opts: any, personaTts: an
       : null;
     return cloud.speak(text, { ...opts, cloudOverride });
   }
-  return piper.speak(text, opts);
+  // For piper, persona's `voice` is an .onnx filename (resolved by piper.ts
+  // against config.voices.dir). Empty/missing → the baked-in default voice.
+  const voice = (personaTts && personaTts.engine === 'piper' && personaTts.voice)
+    ? personaTts.voice
+    : undefined;
+  return piper.speak(text, { ...opts, voice });
 }
 
 // TTS engines read "SUB/WAVE" as "sub slash wave". Spell the station name
@@ -238,6 +243,11 @@ export function describeRouting() {
     voice = (personaTts?.engine === 'pocket-tts' && personaTts.voice)
       ? personaTts.voice
       : (tts.pocketTts?.voice || null);
+  } else if (engine === 'piper') {
+    // For piper, `voice` is the .onnx filename; empty → baked-in default.
+    voice = (personaTts?.engine === 'piper' && personaTts.voice)
+      ? personaTts.voice
+      : null;
   }
   return {
     effectivePersona: persona ? { id: persona.id, name: persona.name } : null,
