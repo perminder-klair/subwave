@@ -39,6 +39,21 @@ function fileToSlug(file: string): string {
   return file.replace(/\.md$/, '').replace(/^\d{4}-\d{2}-\d{2}-/, '');
 }
 
+// Normalise a frontmatter date to an ISO yyyy-mm-dd string. Unquoted YAML
+// dates (date: 2026-06-01) are parsed by js-yaml into a JS Date, whose
+// String() form ("Mon Jun 01 2026 …") breaks both the newest-first sort
+// (it ends up comparing day-of-week names) and formatNewsDate (which can't
+// re-parse it and falls back to printing the raw string). Coerce to a clean
+// UTC date string here so everything downstream stays comparable + readable.
+function toIsoDate(value: unknown): string {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime())
+      ? ''
+      : value.toISOString().slice(0, 10);
+  }
+  return String(value ?? '').trim();
+}
+
 function readRaw(): { slug: string; raw: string }[] {
   let files: string[];
   try {
@@ -60,7 +75,7 @@ function parseMeta(slug: string, raw: string): NewsMeta {
   return {
     slug: (data.slug as string) || slug,
     title: String(data.title ?? slug),
-    date: String(data.date ?? ''),
+    date: toIsoDate(data.date),
     category: (data.category as NewsCategory) ?? 'Announcement',
     excerpt: String(data.excerpt ?? ''),
     version: data.version ? String(data.version) : undefined,
