@@ -25,7 +25,7 @@ import { Checkbox } from '../ui/checkbox';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '../ui/select';
-import { Card, Btn, Eyebrow, Seg, Metric } from './ui';
+import { Card, Btn, Eyebrow, Seg } from './ui';
 import { cn } from '../../lib/cn';
 
 // ---------------------------------------------------------------------------
@@ -397,7 +397,7 @@ export default function LibraryPanel() {
 
   return (
     <div className="grid gap-4">
-      <KpiStrip coverage={coverage} stats={stats} />
+      <KpiStrip coverage={coverage} stats={stats} onStartTag={startTagger} />
 
       <TaggerStrip
         coverage={coverage}
@@ -542,21 +542,70 @@ export default function LibraryPanel() {
 // ---------------------------------------------------------------------------
 // KPI strip
 // ---------------------------------------------------------------------------
-function KpiStrip({ coverage, stats }: {
+// One labelled progress meter: a headline count (done / total), a fill bar,
+// and a trailing percent. The done count comes straight from the library DB
+// so it shows immediately; only the denominator waits on the Subsonic scan.
+function Meter({ label, done, total, percent, scanning, onStart }: {
+  label: string;
+  done: number | null;
+  total: number | null;
+  percent: number | null;
+  scanning: boolean;
+  onStart?: () => void;
+}) {
+  const fillRef = useRef<HTMLSpanElement>(null);
+  useDynamicStyle(fillRef, { width: percent != null ? `${Math.min(100, percent)}%` : '0%' });
+
+  const doneNum = done != null ? done.toLocaleString('en-GB') : '—';
+  const totalNum = total != null
+    ? total.toLocaleString('en-GB')
+    : (scanning ? 'scanning…' : '—');
+  const complete = percent != null && percent >= 100;
+  const empty = (done ?? 0) === 0;
+
+  return (
+    <div className="grid gap-1.5 p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <span className="text-[10px] font-bold tracking-[0.1em] text-muted uppercase">{label}</span>
+        <span className="caption text-muted">
+          {complete
+            ? '✓ complete'
+            : percent != null
+              ? `${percent}%`
+              : (empty && onStart ? '' : '…')}
+        </span>
+      </div>
+      <div className="flex items-baseline gap-2">
+        <span className="mono-num text-[22px] leading-none font-extrabold tracking-[-0.02em]">{doneNum}</span>
+        <span className="caption text-muted">/ {totalNum}</span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden bg-[var(--ink-soft)]">
+        <span ref={fillRef} className="block h-full bg-[var(--accent)]" />
+      </div>
+      {empty && onStart && (
+        <button
+          type="button"
+          onClick={onStart}
+          className="mt-0.5 w-fit text-[11px] font-bold text-vermilion underline-offset-2 hover:underline"
+        >
+          Start tagging →
+        </button>
+      )}
+    </div>
+  );
+}
+
+function KpiStrip({ coverage, stats, onStartTag }: {
   coverage: Coverage | null;
   stats: BrowseResponse['stats'] | undefined;
+  onStartTag?: () => void;
 }) {
-  const taggedLabel = coverage?.tagged != null
-    ? coverage.tagged.toLocaleString('en-GB')
-    : (stats?.total != null ? stats.total.toLocaleString('en-GB') : '—');
-  const totalLabel = coverage?.total != null
-    ? coverage.total.toLocaleString('en-GB')
-    : (coverage?.scanning ? 'scanning…' : '—');
-  const percentLabel = coverage?.percent != null ? `${coverage.percent}%` : '—';
-  // Acoustic-analysis (BPM/key) coverage against the same Subsonic total.
-  const analysedLabel = coverage?.analysedPercent != null
-    ? `${coverage.analysedPercent}%`
-    : (coverage?.scanning ? 'scanning…' : '—');
+  // `tagged` / `analysed` are known from the DB without the scan; only the
+  // denominator (`total`) and the derived percents wait on the Subsonic walk.
+  const tagged = coverage?.tagged ?? stats?.total ?? null;
+  const analysed = coverage?.analysed ?? null;
+  const total = coverage?.total ?? null;
+  const scanning = !!coverage?.scanning;
   const moodCount = stats ? Object.keys(stats.byMood || {}).length : 0;
   const lastTag = stats?.updatedAt ? new Date(stats.updatedAt).toLocaleString('en-GB') : '—';
 
@@ -572,24 +621,36 @@ function KpiStrip({ coverage, stats }: {
           Re-tag tracks the AI got wrong. Queue anything on demand.
         </div>
       </div>
-      <div className="grid grid-cols-2 border-b border-ink sm:grid-cols-5">
-        <div className="border-r border-separator-strong p-4">
-          <Metric n={taggedLabel} l="tagged" />
+      <div className="grid grid-cols-1 border-b border-ink sm:grid-cols-2">
+        <div className="border-b border-separator-strong sm:border-r sm:border-b-0">
+          <Meter
+            label="mood tagging"
+            done={tagged}
+            total={total}
+            percent={coverage?.percent ?? null}
+            scanning={scanning}
+            onStart={onStartTag}
+          />
         </div>
-        <div className="border-separator-strong p-4 sm:border-r">
-          <Metric n={totalLabel} l="library" />
-        </div>
-        <div className="border-t border-r border-separator-strong p-4 sm:border-t-0">
-          <Metric n={percentLabel} l="coverage" accent />
-        </div>
-        <div className="border-t border-separator-strong p-4 sm:border-t-0 sm:border-r">
-          <Metric n={analysedLabel} l="analysed · bpm/key" />
-        </div>
-        <div className="border-t border-separator-strong p-4 sm:border-t-0">
-          <Metric n={moodCount} l="moods used" />
+        <div>
+          <Meter
+            label="acoustic analysis · bpm/key"
+            done={analysed}
+            total={total}
+            percent={coverage?.analysedPercent ?? null}
+            scanning={scanning}
+          />
         </div>
       </div>
-      <div className="px-4 py-2 text-[11px] text-muted">last tag {lastTag}</div>
+      <div className="flex flex-wrap gap-x-2 px-4 py-2 text-[11px] text-muted">
+        <span className="mono-num">{total != null ? total.toLocaleString('en-GB') : (scanning ? 'scanning…' : '—')}</span>
+        <span>tracks</span>
+        <span aria-hidden>·</span>
+        <span className="mono-num">{moodCount}</span>
+        <span>moods in use</span>
+        <span aria-hidden>·</span>
+        <span>last tag {lastTag}</span>
+      </div>
     </section>
   );
 }
