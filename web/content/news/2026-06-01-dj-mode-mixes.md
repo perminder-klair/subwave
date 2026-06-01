@@ -22,9 +22,9 @@ cd controller && npm run analyze
 
 Watch the "acoustic analysis · bpm/key" meter on the Library tab in admin fill up. The blends only fire on tracks that have been analysed, so more coverage means more mixing.
 
-Then turn it on. Open admin, go to Personas, pick a persona, and flip the DJ mode toggle. Save.
+Then turn it on. Open admin, go to Personas, and pick a persona. Switch on its DJ mode toggle, the one that reads "Work the desk like a real DJ." It's set per persona, so one host can mix and back-announce while another stays a quiet between-track narrator. Save when you're done.
 
-For the riser flourishes, keep sound effects enabled in settings. They fire sparingly, only on the transitions that earn them.
+For the riser flourishes, open Settings, go to the Sound FX tab, and leave "Enable sound effects" on. They fire sparingly, only on the transitions that earn them.
 
 ## Why it helps
 
