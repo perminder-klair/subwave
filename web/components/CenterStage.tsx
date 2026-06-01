@@ -109,7 +109,7 @@ export default function CenterStage({ nowPlaying, elapsed, feed, djLineOn, onOpe
                   <h1 className="v3-title m-0 text-ink">
                     {nowPlaying?.title}
                   </h1>
-                  <div className="v3-subtitle mt-[12px] text-muted">
+                  <div className="mt-[12px] text-[clamp(13px,1.4vw,18px)] leading-snug font-medium text-muted">
                     <span className="text-ink">{nowPlaying?.artist || 'Unknown artist'}</span>
                     {nowPlaying?.album && <span className="ml-[14px]"> · {nowPlaying.album}</span>}
                     {nowPlaying?.year && <span className="ml-[14px]"> · {nowPlaying.year}</span>}

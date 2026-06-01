@@ -71,7 +71,7 @@ export default function DjThinkingLine({ feed, enabled, onOpenBooth }: DjThinkin
         }
       }}
       title="Open booth feed"
-      className="v3-focus mt-[22px] mb-[10px] flex w-full max-w-[78%] cursor-pointer items-baseline gap-2 font-mono text-[12px] leading-[1.55] text-muted"
+      className="v3-focus mt-[22px] mb-[10px] flex w-full max-w-[82%] cursor-pointer items-baseline gap-2 font-mono text-[14px] leading-[1.6] text-muted sm:text-[15px]"
     >
       <span className="opacity-70" aria-hidden="true">
         {MARKER[cls] || '·'}
