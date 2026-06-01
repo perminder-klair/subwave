@@ -76,6 +76,18 @@ RUN python3 -m venv /opt/chatterbox/venv && \
 # Mirrors the WITH_POCKETTTS block. Smaller model (~100M params) but still
 # needs torch — separate venv so its pip resolution doesn't fight with
 # chatterbox-tts above.
+#
+# HF_TOKEN (optional) unlocks PocketTTS voice cloning (issue #238). The
+# cloning weights (kyutai/pocket-tts) are GATED on Hugging Face; without a
+# token the pre-warm below loads the open "without-voice-cloning" weights and
+# cloned .wav voices silently revert to a built-in. Pass it to BAKE the gated
+# weights into the image: `docker compose build --build-arg HF_TOKEN=hf_...`
+# (you must first accept the model terms on huggingface.co/kyutai/pocket-tts).
+# Setting HF_TOKEN at RUNTIME (compose env) is enough on its own — the worker
+# downloads the gated weights lazily on first load — so baking is only for
+# offline / faster-first-call setups. NOTE: a build-arg token lands in the
+# image's build history; prefer the runtime env unless you control the image.
+ARG HF_TOKEN=""
 ENV POCKET_HF_HOME=/opt/pocket-tts/hf-cache
 RUN python3 -m venv /opt/pocket-tts/venv && \
     /opt/pocket-tts/venv/bin/pip install --no-cache-dir --upgrade pip && \
@@ -83,8 +95,9 @@ RUN python3 -m venv /opt/pocket-tts/venv && \
       --index-url https://download.pytorch.org/whl/cpu \
       --extra-index-url https://pypi.org/simple \
       torch scipy pocket-tts && \
-    HF_HOME=$POCKET_HF_HOME /opt/pocket-tts/venv/bin/python -c \
-      "from pocket_tts import TTSModel; TTSModel.load_model()" && \
+    HF_HOME=$POCKET_HF_HOME HF_TOKEN="$HF_TOKEN" HUGGING_FACE_HUB_TOKEN="$HF_TOKEN" \
+      /opt/pocket-tts/venv/bin/python -c \
+      "from pocket_tts import TTSModel; m = TTSModel.load_model(); print('voice_cloning=' + str(getattr(m, 'has_voice_cloning', None)))" && \
     find /opt/pocket-tts/venv -depth -type d -name __pycache__ -exec rm -rf {} + && \
     SP=/opt/pocket-tts/venv/lib/python3.11/site-packages && \
     rm -rf "$SP/torch/include" "$SP/torch/test"

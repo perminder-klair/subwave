@@ -105,7 +105,14 @@ RUN if [ "$WITH_CHATTERBOX" = "1" ]; then \
 # only, model preload doubling as a build-time smoke test). When the venv is
 # absent, pocketTts.isAvailable() reports false and the dispatcher falls back
 # to Piper, so settings can safely reference the engine regardless.
+# HF_TOKEN (optional) unlocks PocketTTS voice cloning (issue #238): the cloning
+# weights (kyutai/pocket-tts) are GATED on Hugging Face. Without it the pre-warm
+# loads the open "without-voice-cloning" weights and cloned .wav voices revert
+# to a built-in. Setting HF_TOKEN at RUNTIME also works (lazy download on first
+# load); the build-arg only bakes the gated weights in. A build-arg token lands
+# in image history, so prefer the runtime env unless you control the image.
 ARG WITH_POCKETTTS=0
+ARG HF_TOKEN=""
 RUN if [ "$WITH_POCKETTTS" = "1" ]; then \
       echo "Bundling PocketTTS (PyTorch, CPU-only) — adds ~1-2GB to the image" && \
       python3 -m venv /opt/pocket-tts/venv && \
@@ -114,8 +121,9 @@ RUN if [ "$WITH_POCKETTTS" = "1" ]; then \
         --index-url https://download.pytorch.org/whl/cpu \
         --extra-index-url https://pypi.org/simple \
         torch scipy pocket-tts && \
-      /opt/pocket-tts/venv/bin/python -c \
-        "from pocket_tts import TTSModel; TTSModel.load_model()" && \
+      HF_TOKEN="$HF_TOKEN" HUGGING_FACE_HUB_TOKEN="$HF_TOKEN" \
+        /opt/pocket-tts/venv/bin/python -c \
+        "from pocket_tts import TTSModel; m = TTSModel.load_model(); print('voice_cloning=' + str(getattr(m, 'has_voice_cloning', None)))" && \
       find /opt/pocket-tts/venv -depth -type d -name __pycache__ -exec rm -rf {} + && \
       SP=/opt/pocket-tts/venv/lib/python3.11/site-packages && \
       rm -rf "$SP/torch/include" "$SP/torch/test" ; \

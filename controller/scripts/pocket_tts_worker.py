@@ -60,6 +60,26 @@ def main():
         emit({"id": None, "ok": False, "fatal": True, "error": f"model load failed: {e}"})
         sys.exit(1)
 
+    # Voice cloning lives behind the GATED kyutai/pocket-tts weights. Loaded
+    # without an HF token (the default for an image built with no credentials —
+    # issue #238), pocket-tts silently falls back to the open
+    # "without-voice-cloning" weights and sets has_voice_cloning=False. In that
+    # mode get_state_for_audio_prompt(<a .wav path>) raises VOICE_CLONING_
+    # UNSUPPORTED, so a persona's cloned reference can never take effect — it
+    # silently reverts to a built-in voice. Detect the capability once up front
+    # so we can (a) advertise it in the ready message and (b) short-circuit
+    # clone requests with a precise reason instead of a generic stack trace.
+    has_voice_cloning = bool(getattr(model, "has_voice_cloning", True))
+    if has_voice_cloning:
+        log("voice cloning available")
+    else:
+        log(
+            "voice cloning UNAVAILABLE — loaded without the gated kyutai/pocket-tts "
+            "weights. Built-in voices work; cloned .wav references will fall back to "
+            "a built-in voice. Set HF_TOKEN (and accept the model terms on Hugging "
+            "Face) to enable cloning."
+        )
+
     # get_state_for_audio_prompt() does meaningful work (loads the speaker
     # embedding) — cache per voice id so repeat lines don't pay it again.
     # Reference-WAV clones cache under their absolute path; built-in ids
@@ -74,7 +94,7 @@ def main():
         return st
 
     log("ready")
-    emit({"id": None, "ready": True})
+    emit({"id": None, "ready": True, "voice_cloning": has_voice_cloning})
 
     for line in sys.stdin:
         line = line.strip()
@@ -93,29 +113,55 @@ def main():
             if not out:
                 raise ValueError("missing 'out' path")
 
-            # Prefer a reference WAV when one is supplied — same API call as
-            # built-in voices, just with an absolute path instead of an id.
-            # On failure, log and fall back to the built-in default so a stale
-            # / missing clone never silences a segment.
+            # Resolve the speaker state, tracking whether the operator's chosen
+            # voice/clone was actually honoured. fell_back=True means the
+            # rendered audio is NOT the requested voice; the controller logs
+            # that loudly and surfaces it in /debug so a silently-substituted
+            # voice (issue #238) is visible instead of looking like a no-op.
             state = None
+            fell_back = False
+            fell_back_reason = None
+            voice_used = voice
             if ref:
-                if not os.path.exists(ref):
-                    log(f"reference_wav {ref!r} not found; falling back to {DEFAULT_VOICE!r}")
+                # Prefer a reference WAV when one is supplied — but cloning needs
+                # the gated weights (see has_voice_cloning above). Short-circuit
+                # with a precise reason rather than letting get_state_for_audio_
+                # prompt() raise VOICE_CLONING_UNSUPPORTED.
+                if not has_voice_cloning:
+                    fell_back = True
+                    fell_back_reason = (
+                        "voice cloning unavailable (model loaded without cloning "
+                        "weights; set HF_TOKEN to enable)"
+                    )
+                    log(f"reference_wav {ref!r} ignored: {fell_back_reason}; using {voice!r}")
+                elif not os.path.exists(ref):
+                    fell_back = True
+                    fell_back_reason = f"reference_wav not found: {ref}"
+                    log(f"{fell_back_reason}; falling back to {voice!r}")
                 else:
                     try:
                         state = voice_state(ref)
+                        voice_used = ref
                     except Exception as e:
-                        log(f"reference_wav {ref!r} failed ({e}); falling back to {DEFAULT_VOICE!r}")
+                        fell_back = True
+                        fell_back_reason = f"reference_wav failed: {e}"
+                        log(f"reference_wav {ref!r} failed ({e}); falling back to {voice!r}")
             if state is None:
                 try:
                     state = voice_state(voice)
+                    voice_used = voice
                 except Exception as e:
-                    # Unknown voice id — fall back to the default rather than
-                    # 500 the request, mirroring how chatterbox falls back to
-                    # its built-in voice when a reference clip is missing.
+                    # Unknown / unfetchable voice id — fall back to the default
+                    # rather than 500 the request, mirroring how chatterbox
+                    # falls back to its built-in voice when a reference is
+                    # missing. Record it so the substitution stays visible.
+                    if not fell_back:
+                        fell_back = True
+                        fell_back_reason = f"voice {voice!r} failed: {e}"
                     log(f"voice {voice!r} failed ({e}); using default {DEFAULT_VOICE!r}")
                     voice = DEFAULT_VOICE
                     state = voice_state(voice)
+                    voice_used = voice
 
             audio = model.generate_audio(state, text)
             # generate_audio returns a torch tensor; coerce to a numpy float32
@@ -149,7 +195,13 @@ def main():
             wavfile.write(out, sample_rate, audio_i16)
 
             duration = float(len(audio)) / float(sample_rate)
-            emit({"id": req_id, "ok": True, "path": out, "duration_s": round(duration, 3)})
+            emit({
+                "id": req_id, "ok": True, "path": out,
+                "duration_s": round(duration, 3),
+                "voice_used": voice_used,
+                "fell_back": fell_back,
+                "fell_back_reason": fell_back_reason,
+            })
         except Exception as e:
             log(f"request failed: {e}\n{traceback.format_exc()}")
             emit({"id": req_id, "ok": False, "error": str(e)})

@@ -91,6 +91,10 @@ class TtsWorker:
         self.proc: asyncio.subprocess.Process | None = None
         self.lock = asyncio.Lock()
         self.ready = False
+        # The worker's ready message, minus the `ready` flag — carries
+        # per-engine capability metadata (e.g. pocket-tts' voice_cloning,
+        # issue #238). Cleared on every restart cycle.
+        self.ready_meta: dict[str, Any] = {}
 
     async def run(self) -> None:
         """Keep the worker alive forever (or until cancelled).
@@ -123,6 +127,7 @@ class TtsWorker:
         """Clear ready/proc between restart cycles."""
         self.ready = False
         self.proc = None
+        self.ready_meta = {}
 
     def _terminate(self) -> None:
         """Best-effort kill the current subprocess (used on shutdown)."""
@@ -169,7 +174,8 @@ class TtsWorker:
             # run() doesn't pile orphans up across retry cycles.
             self._terminate()
             raise
-        log.info(f"[{self.name}] ready")
+        self.ready_meta = {k: v for k, v in msg.items() if k != "ready"}
+        log.info(f"[{self.name}] ready {self.ready_meta or ''}".rstrip())
         self.ready = True
 
     async def _await_message(self) -> dict[str, Any]:
@@ -309,6 +315,14 @@ async def health():
         "engines": ready_engines,
         "chatterbox_loaded": chatterbox_worker.ready,
         "pocket_loaded": pocket_worker.ready,
+        # Whether PocketTTS can do zero-shot voice cloning. False when the
+        # gated kyutai/pocket-tts weights weren't available at load (no
+        # HF_TOKEN) — the controller surfaces this so cloned .wav voices don't
+        # silently revert to a built-in (issue #238). None until the worker is
+        # ready and has reported its capability.
+        "pocket_voice_cloning": (
+            pocket_worker.ready_meta.get("voice_cloning") if pocket_worker.ready else None
+        ),
         "analyze_loaded": analyzer_worker.ready,
     }
 
@@ -349,6 +363,12 @@ async def speak(req: SpeakRequest):
         "ok": True,
         "path": msg["path"],
         "duration_s": msg.get("duration_s", 0),
+        # Surface PocketTTS' per-call voice substitution (issue #238) so the
+        # controller can log when the requested voice/clone wasn't honoured.
+        # Absent for engines that don't report it (chatterbox).
+        "voice_used": msg.get("voice_used"),
+        "fell_back": msg.get("fell_back", False),
+        "fell_back_reason": msg.get("fell_back_reason"),
     }
 
 

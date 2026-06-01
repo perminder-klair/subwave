@@ -126,6 +126,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.tts-heavy
+      args:
+        # Optional — bake the gated PocketTTS cloning weights in at build time.
+        # Runtime HF_TOKEN (below) enables cloning without it.
+        HF_TOKEN: ${HF_TOKEN:-}
     # amd64-only image (heavy PyTorch stack); pinned so it runs under emulation
     # on arm64 hosts. The other services are multi-arch and auto-select.
     platform: linux/amd64
@@ -135,5 +139,10 @@ services:
     environment:
       - TTS_HEAVY_DEVICE=${TTS_HEAVY_DEVICE:-cpu}
       - POCKET_TTS_VOICE=${POCKET_TTS_VOICE:-alba}
+      # Optional — enables PocketTTS voice CLONING (issue #238). Cloning weights
+      # are gated on Hugging Face; accept the terms at
+      # huggingface.co/kyutai/pocket-tts and set HF_TOKEN in your root .env.
+      # Built-in voices need no token.
+      - HF_TOKEN=${HF_TOKEN:-}
     volumes:
       - *state-mount

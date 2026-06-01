@@ -1063,6 +1063,14 @@ export default function PersonasPanel() {
 
             {focused.tts.engine === 'pocket-tts' && (() => {
               const ptAvailable = data?.tts?.available?.['pocket-tts'] !== false;
+              const customVoices: string[] = data?.tts?.pocketTtsCustomVoices || [];
+              const value = focused.tts.voice || 'alba';
+              const isBuiltin = pocketTtsVoices.some(v => v.id === value);
+              const isCustom = customVoices.includes(value);
+              // null/undefined = not yet known (sidecar still booting). Only
+              // false means the engine confirmed it can't clone (issue #238).
+              const ptCloning = data?.tts?.available?.pocketTtsCloning;
+              const usingClone = isCustom || /\.wav$/i.test(value);
               return (
                 <div className="field max-w-[360px]">
                   {!ptAvailable && (
@@ -1075,12 +1083,17 @@ export default function PersonasPanel() {
                       it’s up.
                     </div>
                   )}
+                  {ptAvailable && ptCloning === false && usingClone && (
+                    <div className="mb-2.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
+                      Voice <strong>cloning is unavailable</strong> in this build, so this
+                      cloned voice won’t play — PocketTTS reverts to a built-in voice. The
+                      cloning model (<code>kyutai/pocket-tts</code>) is gated on Hugging Face:
+                      accept its terms, then set <code>HF_TOKEN</code> in your <code>.env</code>{' '}
+                      and restart <code>tts-heavy</code>. Built-in voices below work without a token.
+                    </div>
+                  )}
                   <Label>PocketTTS voice</Label>
                   {(() => {
-                    const customVoices: string[] = data?.tts?.pocketTtsCustomVoices || [];
-                    const value = focused.tts.voice || 'alba';
-                    const isBuiltin = pocketTtsVoices.some(v => v.id === value);
-                    const isCustom = customVoices.includes(value);
                     return (
                       <Select
                         value={value}
@@ -1096,7 +1109,9 @@ export default function PersonasPanel() {
                           </SelectGroup>
                           {customVoices.length > 0 && (
                             <SelectGroup>
-                              <SelectLabel>Custom (cloned)</SelectLabel>
+                              <SelectLabel>
+                                Custom (cloned){ptCloning === false ? ' — cloning unavailable' : ''}
+                              </SelectLabel>
                               {customVoices.map(v => (
                                 <SelectItem key={v} value={v}>{v}</SelectItem>
                               ))}
@@ -1119,7 +1134,7 @@ export default function PersonasPanel() {
                     CPU-only, ~6× real-time. Built-in voices cover English, French, German,
                     Italian, Spanish and Portuguese. Drop a ~5s WAV into{' '}
                     <code>state/voices/</code> to clone a voice — it’ll appear under
-                    <em> Custom</em> on next reload.
+                    <em> Custom</em> on next reload (cloning needs <code>HF_TOKEN</code>; see above).
                   </div>
                 </div>
               );
