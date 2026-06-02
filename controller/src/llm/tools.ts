@@ -106,12 +106,23 @@ export function buildPickerTools({
 
   const tools = {
     searchLibrary: tool({
-      description: 'Search the music library by artist name, song title, or real genre (e.g. "jazz", "punjabi"). Returns matching songs.',
+      description: 'Search the music library. Matches a literal artist name, song title, or real genre (e.g. "jazz", "punjabi") first; if nothing matches it falls back to semantic / vibe search, so descriptive multi-word queries like "punjabi r&b romantic" also work. Returns matching songs.',
       inputSchema: z.object({
-        query: z.string().describe('an artist name, song title, or genre'),
+        query: z.string().describe('an artist name, song title, genre, or vibe'),
       }),
       execute: async ({ query }) => {
-        try { return collect(await subsonic.search(query, { songCount: 25 })); }
+        try {
+          const out = collect(await subsonic.search(query, { songCount: 25 }));
+          if (out.length > 0) return out;
+          // Lexical search3 found nothing — fall back to semantic embedding
+          // search over the library (same path as searchByLyrics) so vibe
+          // queries still return tracks. No-op when embeddings aren't set up.
+          if (!embeddings.isAvailable()) return out;
+          await library.load();
+          const [vec] = await embeddings.embedTexts([query.trim()]);
+          if (!vec) return out;
+          return collect(library.tracksByVector(vec, 20));
+        }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -162,9 +173,9 @@ export function buildPickerTools({
     }),
 
     tracksLikeThis: tool({
-      description: 'Tracks whose mood + lyrics + metadata embed closest to a given song id — the controller\'s own semantic similarity over the actual library. Prefer this to similarSongs when "more of this vibe" matters more than "more by this artist". Pass the currently-playing song id to keep the flow going. Returns [] if the seed track has no embedding (rare — only fresh imports before the next tagger run).',
+      description: 'Tracks whose mood + lyrics + metadata embed closest to a seed track — the controller\'s own semantic similarity over the actual library. Prefer this to similarSongs when "more of this vibe" matters more than "more by this artist". Pass the currently-playing song id (best) OR a track title — a title is resolved to the matching track. Returns [] only if neither a song id nor a title match anything embedded.',
       inputSchema: z.object({
-        songId: z.string(),
+        songId: z.string().describe('a song id (preferred) or a track title'),
         k: z.number().int().min(1).max(50).default(20),
       }),
       execute: async ({ songId, k }) => {

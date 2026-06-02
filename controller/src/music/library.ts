@@ -167,10 +167,24 @@ export function songsByEnergy(energy: string | null | undefined): any[] {
 // KNN over the embedding space — finds tracks whose metadata + lyrics +
 // (optional) Last.fm tags embed close to the seed track's. Used by the picker's
 // embedding-similar pool source and the agent's tracksLikeThis tool.
-// Tracks without an embedding return []; callers fall back to other sources.
-export function tracksLikeThis(songId: string, k: number): any[] {
-  if (!loaded || !songId) return [];
-  const hits = db.knnById(songId, k);
+//
+// `seed` is normally a real track id, but the picker agent often passes a track
+// *title* instead (e.g. "Be Mine"). When the id lookup finds no embedding, we
+// resolve the string as a title via db.filter (LIKE over title/artist/album,
+// scoped to tagged tracks — the same set that carries embeddings) and KNN from
+// the first candidate that has one. Tracks with no embedding and no title match
+// return []; callers fall back to other sources.
+export function tracksLikeThis(seed: string, k: number): any[] {
+  if (!loaded || !seed) return [];
+  let hits = db.knnById(seed, k);
+  if (hits.length === 0) {
+    // Treat `seed` as a title — find the best embedded match and KNN from it.
+    for (const row of db.filter({ q: seed, limit: 8 }).rows) {
+      if (row.id === seed) continue;            // already tried as an id above
+      hits = db.knnById(row.id, k);
+      if (hits.length) break;
+    }
+  }
   const out: any[] = [];
   for (const hit of hits) {
     const t = db.getTrack(hit.id);
