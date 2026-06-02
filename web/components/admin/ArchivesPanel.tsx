@@ -27,9 +27,11 @@ function hourLabel(h: number): string {
 }
 
 export default function ArchivesPanel() {
-  const { adminFetch, auth, needsAuth, hydrated } = useAdminAuth();
+  const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [entries, setEntries] = useState<ArchiveEntry[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const [dlErr, setDlErr] = useState<string | null>(null);
 
   useEffect(() => {
     if (!hydrated || needsAuth) return;
@@ -86,27 +88,32 @@ export default function ArchivesPanel() {
 
   const totalBytes = entries.reduce((a, b) => a + b.bytes, 0);
 
-  // Download links carry HTTP Basic auth in the URL so the <a> can stream
-  // directly through Caddy without us pulling the whole file into memory.
-  const downloadHref = (path: string) => {
-    const base = process.env.NEXT_PUBLIC_API_URL || '/api';
-    // auth is base64(user:pass); split it back to inject as userinfo for
-    // same-origin URLs the browser will send a normal Authorization header
-    // for via fetch — but for a plain anchor download we need the credentials
-    // pre-baked. Use the credentials via a fetch-then-blob fallback if base
-    // is same-origin; for an external API URL include userinfo.
-    if (!base.startsWith('http')) return `${base}/archives/file/${path}`;
+  // The archive file endpoint is behind requireAdmin, so a plain <a download>
+  // hits it with no Authorization header and the browser saves the 401 JSON
+  // body as the "download". Embedding user:pass@ in the URL doesn't help —
+  // it's a no-op for same-origin and modern Chrome strips credentials from
+  // navigations anyway. Instead fetch through adminFetch (which attaches the
+  // Basic header), then trigger the save from an in-memory blob. Hourly MP3s
+  // are ~tens of MB, fine to hold briefly for a one-off download.
+  const download = async (path: string) => {
+    setDownloading(path);
+    setDlErr(null);
     try {
-      const u = new URL(`${base}/archives/file/${path}`);
-      if (auth) {
-        const dec = typeof window !== 'undefined' ? window.atob(auth) : '';
-        const [user, pass] = dec.split(':');
-        if (user) u.username = encodeURIComponent(user);
-        if (pass) u.password = encodeURIComponent(pass);
-      }
-      return u.toString();
-    } catch {
-      return `${base}/archives/file/${path}`;
+      const r = await adminFetch(`/archives/file/${path}`);
+      if (!r.ok) throw new Error(`download failed (${r.status})`);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = path.replace(/\//g, '_'); // 2025-06-02/02-00.mp3 → 2025-06-02_02-00.mp3
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setDlErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDownloading(null);
     }
   };
 
@@ -129,6 +136,10 @@ export default function ArchivesPanel() {
           <span className="caption text-vermilion">{fmtSize(totalBytes)} total</span>
         </div>
       </section>
+
+      {dlErr && (
+        <div className="text-[12px] text-[var(--danger)]">download error: {dlErr}</div>
+      )}
 
       {byDate.length === 0 && (
         <Card title="No recordings yet">
@@ -153,9 +164,14 @@ export default function ArchivesPanel() {
                   <span className="text-[11px] text-muted">{fmtSize(e.bytes)}</span>
                   <span className="text-[10px] text-muted">{relTime(e.mtime)} ago</span>
                 </div>
-                <a href={downloadHref(e.path)} download>
-                  <Btn sm tone="accent">Download</Btn>
-                </a>
+                <Btn
+                  sm
+                  tone="accent"
+                  onClick={() => download(e.path)}
+                  disabled={downloading === e.path}
+                >
+                  {downloading === e.path ? 'Downloading…' : 'Download'}
+                </Btn>
               </li>
             ))}
           </ul>
