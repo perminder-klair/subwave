@@ -480,8 +480,13 @@ body::after {
 }
 
 /* Player header runs a touch larger than the shared v3 scale — the masthead
-   reads better at arm's length without disturbing the landing broadsheet. */
+   reads better at arm's length without disturbing the landing broadsheet.
+   The wordmark also swaps to Fraunces (the display serif) so the station name
+   carries the same editorial face as the broadsheet masthead, while the other
+   header labels stay in the tracked sans. */
 .player-topbar .v3-eyebrow {
+    font-family: var(--font-display), Georgia, "Times New Roman", serif;
+    font-optical-sizing: auto;
     font-size: 13px;
 }
 .player-topbar .v3-caption {
@@ -496,7 +501,7 @@ body::after {
     align-items: center;
     justify-content: center;
     gap: 14px;
-    padding: 6px 0 0;
+    padding: 4px 0px 4px;
     flex-wrap: wrap;
 }
 .bs-masthead-link {
@@ -690,6 +695,27 @@ body::after {
 .bs-tune[data-tuned="true"] {
     background: var(--bg);
     color: var(--ink);
+}
+
+/* Ghost variant — outlined twin of .bs-tune for a secondary CTA sitting next
+   to the filled primary (e.g. "Source" beside "Setup" in the article hero).
+   Defined after .bs-tune:hover so its hover wins the equal-specificity match. */
+.bs-tune--ghost {
+    background: transparent;
+    color: var(--ink);
+}
+.bs-tune--ghost:hover {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--bg);
+}
+
+/* Hero CTA row — left-aligned button pair under the article deck. */
+.bs-hero-cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 6px;
 }
 
 /* Ghost link — used for "Open full player", footer links. */

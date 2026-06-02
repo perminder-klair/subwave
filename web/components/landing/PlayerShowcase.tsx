@@ -24,7 +24,7 @@ export default function PlayerShowcase() {
         </div>
         <div className="bs-frame-url">
           <span className="text-muted">https://</span>
-          <span>www.getsubwave.com</span>
+          <span>getsubwave.com</span>
           <span className="text-muted">/listen</span>
         </div>
         <m.div

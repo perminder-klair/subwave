@@ -19,7 +19,7 @@ export default function Masthead() {
   const now = useClock();
 
   return (
-    <header className="bs-paper pt-7 pb-0">
+    <header className="bs-paper pt-7 !pb-4">
       <div className="bs-rule-double" />
 
       <div className="bs-masthead-head">
@@ -45,18 +45,31 @@ export default function Masthead() {
 
       <div className="bs-rule" />
 
-      <nav
-        aria-label="Primary"
-        className="bs-masthead-nav"
-      >
-        <Link href="/listen" className="bs-masthead-link">Listen</Link>
-        <span aria-hidden="true" className="bs-masthead-sep">·</span>
-        <Link href="/manual" className="bs-masthead-link">Manual</Link>
-        <span aria-hidden="true" className="bs-masthead-sep">·</span>
-        <Link href="/setup" className="bs-masthead-link">Setup</Link>
-        <span aria-hidden="true" className="bs-masthead-sep">·</span>
-        <Link href="/news" className="bs-masthead-link">News</Link>
-        <span aria-hidden="true" className="bs-masthead-sep">·</span>
+      <nav aria-label="Primary" className="bs-masthead-nav">
+        <Link href="/listen" className="bs-masthead-link">
+          Listen
+        </Link>
+        <span aria-hidden="true" className="bs-masthead-sep">
+          ·
+        </span>
+        <Link href="/manual" className="bs-masthead-link">
+          Manual
+        </Link>
+        <span aria-hidden="true" className="bs-masthead-sep">
+          ·
+        </span>
+        <Link href="/setup" className="bs-masthead-link">
+          Setup
+        </Link>
+        <span aria-hidden="true" className="bs-masthead-sep">
+          ·
+        </span>
+        <Link href="/news" className="bs-masthead-link">
+          News
+        </Link>
+        <span aria-hidden="true" className="bs-masthead-sep">
+          ·
+        </span>
         <a
           href="https://github.com/perminder-klair/subwave"
           target="_blank"
