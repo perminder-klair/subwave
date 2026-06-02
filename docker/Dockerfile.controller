@@ -7,6 +7,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     espeak-ng libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
+# Common wget retry policy for the model/binary pulls below. GitHub releases and
+# HuggingFace's xet bridge intermittently return 429/5xx in CI; without retries
+# a single transient blip fails the whole release build (wget exit code 8).
+# --retry-on-http-error needs GNU wget >= 1.20 (bookworm ships 1.21).
+# ARG (not ENV) so it stays a build-time detail and isn't baked into the image.
+ARG WGET_RETRY="--tries=5 --retry-connrefused --waitretry=10 --timeout=60 --retry-on-http-error=429,500,502,503,504"
+
 # --- Piper -----------------------------------------------------------------
 # CPU-only, ~30ms/word. Default engine; remains the fast path even after Kokoro.
 # TARGETARCH is provided automatically by buildx (amd64 / arm64); map it to the
@@ -19,16 +26,16 @@ RUN cd /tmp && \
       arm64)    piper_arch=aarch64 ;; \
       *) echo "unsupported TARGETARCH=${TARGETARCH} for Piper" >&2; exit 1 ;; \
     esac && \
-    wget -q https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/piper_linux_${piper_arch}.tar.gz && \
+    wget -q ${WGET_RETRY} https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/piper_linux_${piper_arch}.tar.gz && \
     tar -xzf piper_linux_${piper_arch}.tar.gz -C /opt && \
     ln -s /opt/piper/piper /usr/local/bin/piper && \
     rm piper_linux_${piper_arch}.tar.gz
 
 # British English voice — lift the same one you use in Kaze
 RUN mkdir -p /opt/piper/voices && \
-    wget -q -O /opt/piper/voices/en_GB-alan-medium.onnx \
+    wget -q ${WGET_RETRY} -O /opt/piper/voices/en_GB-alan-medium.onnx \
       https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx && \
-    wget -q -O /opt/piper/voices/en_GB-alan-medium.onnx.json \
+    wget -q ${WGET_RETRY} -O /opt/piper/voices/en_GB-alan-medium.onnx.json \
       https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx.json
 
 # --- Kokoro ---------------------------------------------------------------
@@ -42,9 +49,9 @@ RUN python3 -m venv /opt/kokoro/venv && \
       kokoro-onnx==0.4.9 soundfile==0.12.1
 
 RUN mkdir -p /opt/kokoro/models && \
-    wget -q -O /opt/kokoro/models/kokoro-v1.0.onnx \
+    wget -q ${WGET_RETRY} -O /opt/kokoro/models/kokoro-v1.0.onnx \
       https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx && \
-    wget -q -O /opt/kokoro/models/voices-v1.0.bin \
+    wget -q ${WGET_RETRY} -O /opt/kokoro/models/voices-v1.0.bin \
       https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
 
 ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
