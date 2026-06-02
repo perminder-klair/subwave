@@ -1,7 +1,7 @@
 import './globals.css';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
-import { Fraunces, Inter, JetBrains_Mono } from 'next/font/google';
+import { Fraunces, Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google';
 import { GoogleAnalytics } from '@next/third-parties/google';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { SITE_URL } from '@/lib/site';
@@ -16,7 +16,7 @@ const GA_ID = process.env.NEXT_PUBLIC_GA_ID;
 
 // Fraunces — the display serif. Soft, optical-axis editorial face used for
 // every headline + the masthead wordmark; opsz makes it self-tune contrast to
-// the rendered size. Inter carries body/UI; JetBrains Mono stays for data
+// the rendered size. Plus Jakarta Sans carries body/UI; JetBrains Mono is data
 // (timestamps, durations, code, kbd) so numbers read like hi-fi gear.
 const fraunces = Fraunces({
   subsets: ['latin'],
@@ -25,7 +25,7 @@ const fraunces = Fraunces({
   variable: '--font-display',
 });
 
-const inter = Inter({
+const plusJakarta = Plus_Jakarta_Sans({
   subsets: ['latin'],
   display: 'swap',
   variable: '--font-sans',
@@ -113,7 +113,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html
       lang="en"
-      className={`${fraunces.variable} ${inter.variable} ${jetbrainsMono.variable}`}
+      className={`${fraunces.variable} ${plusJakarta.variable} ${jetbrainsMono.variable}`}
       suppressHydrationWarning
     >
       <head>

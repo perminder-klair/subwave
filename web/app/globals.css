@@ -60,8 +60,9 @@
   --tracking-eyebrow: 0.2em;
 
   /* Type families — promoted so `font-sans` / `font-display` / `font-mono`
-     utilities resolve to the next/font variables set on <html>. Inter is the
-     UI/body default, Fraunces the display serif, JetBrains Mono the data face. */
+     utilities resolve to the next/font variables set on <html>. Plus Jakarta
+     Sans is the UI/body default, Fraunces the display serif, JetBrains Mono the
+     data face. */
   --font-sans: var(--font-sans);
   --font-display: var(--font-display);
   --font-mono: var(--font-mono);
@@ -162,9 +163,9 @@ html,
 body {
     background: var(--bg);
     color: var(--ink);
-    /* Inter is the body/UI default now. Fraunces (--font-display) is applied to
-       headings + the masthead, JetBrains Mono (--font-mono) is re-asserted on
-       data (timestamps, code, kbd) in the type-roles block below. */
+    /* Plus Jakarta Sans is the body/UI default now. Fraunces (--font-display) is
+       applied to headings + the masthead, JetBrains Mono (--font-mono) is
+       re-asserted on data (timestamps, code, kbd) in the type-roles block. */
     font-family:
         var(--font-sans), ui-sans-serif, system-ui, -apple-system,
         "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -180,7 +181,7 @@ body {
 
 /* ─────────────────────────────────────────────────────────────────────────
    TYPE ROLES — the premium editorial split layered over the cascade above.
-   Body defaults to Inter (set on <html,body>). Here we promote headlines to
+   Body defaults to Plus Jakarta Sans (set on <html,body>). Here we promote headlines to
    Fraunces (the soft display serif) and pull data — timestamps, durations,
    code, terminal, keycaps — back to JetBrains Mono so numbers stay tabular and
    read like hi-fi gear. Keep these two lists in sync when adding headings or
@@ -457,12 +458,12 @@ body::after {
 }
 .v3-subtitle {
     font-size: clamp(16px, 2vw, 28px);
-    letter-spacing: 0; /* Inter needs no tracking at body/subhead sizes */
+    letter-spacing: 0; /* sans needs no tracking at body/subhead sizes */
     font-weight: 500;
 }
 .v3-eyebrow {
     font-size: 11px;
-    letter-spacing: 0.18em; /* tracked uppercase label (Inter) */
+    letter-spacing: 0.18em; /* tracked uppercase label (sans) */
     text-transform: uppercase;
     font-weight: 700;
 }
