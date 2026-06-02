@@ -1,12 +1,13 @@
-import type { Metadata } from 'next';
 import Link from 'next/link';
 import { getAllNews, formatNewsDate, type NewsMeta } from '@/lib/news';
+import { pageMeta } from '@/lib/seo';
 
-export const metadata: Metadata = {
+export const metadata = pageMeta({
   title: 'SUB/WAVE — Dispatches',
   description:
     'News and updates from the SUB/WAVE desk — new features, fixes, and short how-tos for running your own AI radio station.',
-};
+  path: '/news',
+});
 
 function Dateline({ a }: { a: NewsMeta }) {
   return (

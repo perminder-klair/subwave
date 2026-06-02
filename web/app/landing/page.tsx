@@ -1,6 +1,12 @@
 import Landing from '../../components/Landing';
+import { pageMeta } from '@/lib/seo';
 
-export const metadata = { title: 'SUB/WAVE — A real internet radio station' };
+export const metadata = pageMeta({
+  title: 'SUB/WAVE — A real internet radio station',
+  description:
+    'A real internet radio station. Single Icecast stream — every listener hears the same broadcast at the same time, picked and announced by an LLM-driven DJ.',
+  path: '/landing',
+});
 
 // Fixed app-shell layout — lock out pinch-zoom on mobile. Merges with root.
 export const viewport = {

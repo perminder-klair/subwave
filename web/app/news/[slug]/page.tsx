@@ -7,6 +7,8 @@ import {
   getNewsSlugs,
   formatNewsDate,
 } from '@/lib/news';
+import JsonLd from '@/components/JsonLd';
+import { absoluteUrl } from '@/lib/seo';
 
 export function generateStaticParams() {
   return getNewsSlugs().map((slug) => ({ slug }));
@@ -20,10 +22,21 @@ export async function generateMetadata({
   const { slug } = await params;
   const article = getNewsArticle(slug);
   if (!article) return { title: 'SUB/WAVE — Dispatches' };
+  const url = absoluteUrl(`/news/${article.slug}`);
   return {
     title: `${article.title} — SUB/WAVE`,
     description: article.excerpt,
-    openGraph: { title: article.title, description: article.excerpt, type: 'article' },
+    alternates: { canonical: url },
+    openGraph: {
+      title: article.title,
+      description: article.excerpt,
+      type: 'article',
+      url,
+      siteName: 'SUB/WAVE',
+      publishedTime: article.date || undefined,
+      modifiedTime: article.date || undefined,
+      authors: article.author ? [article.author] : undefined,
+    },
   };
 }
 
@@ -43,8 +56,26 @@ export default async function NewsArticlePage({
   const newer = idx > 0 ? all[idx - 1] : null;
   const older = idx >= 0 && idx < all.length - 1 ? all[idx + 1] : null;
 
+  const articleJsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'NewsArticle',
+    headline: article.title,
+    description: article.excerpt,
+    datePublished: article.date || undefined,
+    dateModified: article.date || undefined,
+    author: { '@type': article.author ? 'Person' : 'Organization', name: article.author || 'SUB/WAVE' },
+    publisher: {
+      '@type': 'Organization',
+      name: 'SUB/WAVE',
+      logo: { '@type': 'ImageObject', url: absoluteUrl('/icons/512') },
+    },
+    image: absoluteUrl('/og'),
+    mainEntityOfPage: absoluteUrl(`/news/${article.slug}`),
+  };
+
   return (
     <article className="bs-article">
+      <JsonLd data={articleJsonLd} />
       <Link href="/news" className="bs-news-back">
         &larr; All dispatches
       </Link>

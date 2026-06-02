@@ -8,6 +8,7 @@ import { SITE_URL } from '@/lib/site';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import MotionProvider from '@/components/MotionProvider';
 import ThemeBootstrap from '@/components/ThemeBootstrap';
+import JsonLd from '@/components/JsonLd';
 
 // Visitor tracking. The gtag.js script only loads when a Measurement ID is
 // configured, so dev and un-instrumented deploys stay analytics-free.
@@ -26,13 +27,34 @@ const DESCRIPTION =
 const SOCIAL_TITLE = 'SUB/WAVE — A real internet radio station';
 const OG_IMAGE_ALT = 'SUB/WAVE — a real internet radio station';
 
-// The image and URL-bearing tags (og:image, twitter:image, og:url, canonical)
-// are emitted manually in <head> below — NOT via the Metadata API. Next routes
-// every URL in the Metadata API through `metadataBase`, and it drops
-// metadataBase on the force-dynamic homepage, pinning those URLs to a
-// localhost origin. Hand-written <meta> tags are emitted verbatim, so the
-// absolute SITE_URL survives. The Metadata API still owns everything that
-// isn't a URL — title, descriptions, icons, PWA metas.
+// Site-wide structured data. WebSite + Organization give search engines the
+// canonical name/logo to attach to rich results across every page.
+const SITE_JSONLD = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    name: 'SUB/WAVE',
+    url: SITE_URL,
+    description: DESCRIPTION,
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'Organization',
+    name: 'SUB/WAVE',
+    url: SITE_URL,
+    logo: `${SITE_URL}/icons/512`,
+  },
+];
+
+// The share-card image tags (og:image, twitter:image) are emitted manually in
+// <head> below — NOT via the Metadata API. Next routes every URL in the
+// Metadata API through `metadataBase`, and it drops metadataBase on the
+// force-dynamic homepage, pinning those URLs to a localhost origin.
+// Hand-written <meta> tags are emitted verbatim, so the absolute SITE_URL
+// survives. Per-page canonical + og:url go through lib/seo's pageMeta(), which
+// passes absolute strings the Metadata API leaves untouched. The Metadata API
+// still owns everything that isn't a fixed URL — titles, descriptions, icons,
+// PWA metas.
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: { default: 'SUB/WAVE', template: '%s · SUB/WAVE' },
@@ -78,11 +100,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             Script body is a static constant from lib/theme — no untrusted input. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
 
-        {/* Absolute share-card + canonical tags — see the metadata comment
-            above for why these bypass the Metadata API. SITE_URL is baked at
-            build time from the Docker build arg. */}
-        <link rel="canonical" href={SITE_URL} />
-        <meta property="og:url" content={SITE_URL} />
+        {/* Site-wide structured data (WebSite + Organization). */}
+        <JsonLd data={SITE_JSONLD} />
+
+        {/* Absolute share-card image tags — see the metadata comment above for
+            why these bypass the Metadata API. Per-page canonical + og:url are
+            set via lib/seo's pageMeta(). SITE_URL is baked at build time from
+            the Docker build arg. */}
         <meta property="og:image" content={`${SITE_URL}/og`} />
         <meta property="og:image:type" content="image/png" />
         <meta property="og:image:width" content="1200" />
