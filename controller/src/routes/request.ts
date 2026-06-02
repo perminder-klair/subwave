@@ -139,7 +139,7 @@ async function resolveRequest(entry) {
     session.appendTurn({
       role: 'event', kind: 'request',
       text: `Listener "${requester}" requests: "${text}"`
-        + (cur ? ` (currently playing "${cur.title}" by ${cur.artist})` : ''),
+        + (cur ? ` (currently playing "${cur.title}" by ${cur.artist}${cur.id ? ` [id: ${cur.id}]` : ''})` : ''),
     });
   } catch (err) {
     queue.log('error', `Session update for request failed: ${err.message}`);

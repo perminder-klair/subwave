@@ -309,7 +309,12 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
           ? ` Also write a short link that airs as your pick starts: back-announce "${current?.title}", then tease what's next — name the artist or capture the feel of the track you pick so listeners know what's coming. If the track you pick shows an intro_ms, keep the link short enough to finish before then, so you land just as the vocals come in.`
           : ` Also write a short link that airs as your pick starts: back-announce "${current?.title}" and lead into the track you pick.`)
       : ' Stay silent — no link this time.';
+    // Surface the current track's real Subsonic id so similarSongs /
+    // tracksLikeThis ("pass the currently-playing song id") actually have one
+    // to pass. Without it the agent fabricates a slug from the title/artist
+    // (e.g. "lost-sultaan-romeo") and Navidrome answers "data not found".
     const eventText = `Now playing "${current?.title}" by ${current?.artist}`
+      + (current?.id ? ` [id: ${current.id}]` : '')
       + (previous ? ` (after "${previous.title}" by ${previous.artist})` : '')
       + '. Pick the track to play next.'
       + linkClause
