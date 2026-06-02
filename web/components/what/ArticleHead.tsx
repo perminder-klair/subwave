@@ -31,9 +31,15 @@ export default function ArticleHead() {
       </div>
 
       <div className="mb-0 flex flex-wrap items-baseline justify-center gap-4 border-t border-separator-strong pt-3 text-[10px] font-bold tracking-[0.24em] text-muted uppercase">
-        <span className="text-ink">A personal radio station</span>
+        <span className="text-ink">An agentic AI DJ</span>
         <span aria-hidden="true">·</span>
-        <span>Broadcasting from a homelab</span>
+        <span>Cloned-voice personas</span>
+        <span aria-hidden="true">·</span>
+        <span>Scheduled shows &amp; skills</span>
+        <span aria-hidden="true">·</span>
+        <span>Bring any LLM</span>
+        <span aria-hidden="true">·</span>
+        <span>Runs in your homelab</span>
         <span aria-hidden="true">·</span>
         <span className="text-vermilion">Open source</span>
       </div>
