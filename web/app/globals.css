@@ -575,6 +575,26 @@ body::after {
     .bs-wordmark {
         font-size: clamp(38px, 13vw, 64px);
     }
+    /* Tighten the nav so all five items stay on one row on narrow phones —
+       the · separators already carry the visual break, so the flex gap and
+       the wide tracking can both relax without the row reading as cramped. */
+    .bs-masthead-nav {
+        gap: 7px;
+    }
+    .bs-masthead-link {
+        letter-spacing: 0.12em;
+    }
+}
+
+/* Smallest phones (iPhone-SE class, ~320px) need a tighter step still or the
+   GitHub link drops to a second row — squeeze the gap and tracking further. */
+@media (max-width: 360px) {
+    .bs-masthead-nav {
+        gap: 5px;
+    }
+    .bs-masthead-link {
+        letter-spacing: 0.06em;
+    }
 }
 
 /* Masthead wordmark — outsized Fraunces nameplate. Black weight for the
