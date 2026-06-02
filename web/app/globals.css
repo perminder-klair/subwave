@@ -670,11 +670,15 @@ body::after {
     align-items: center;
     gap: 8px;
     margin-top: 28px;
+    width: 70%;
+    margin-left: auto;
+    margin-right: auto;
 }
 @media (max-width: 720px) {
     .bs-flow {
         grid-template-columns: 1fr;
         gap: 6px;
+        width: 100%;
     }
     .bs-flow .bs-arrow {
         transform: rotate(90deg);
