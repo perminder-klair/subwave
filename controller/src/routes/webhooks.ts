@@ -5,7 +5,7 @@
 //   track.play       { event, t, title, artist, album?, source, requestedBy? }
 //   dj.say           { event, t, text, kind }      // kind is the original `announce` kind
 //   dj.link          { event, t, text }
-//   request.received { event, t, title?, artist?, requestedBy }
+//   request.received { event, t, requestedBy, text }   // text is the listener's raw ask
 //
 // All payloads carry `event` (one of the above) and `t` (ISO timestamp).
 import express from 'express';

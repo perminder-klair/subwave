@@ -4,6 +4,7 @@
 // endpoints on station events. See controller/src/broadcast/webhooks.ts
 // for the fan-out + the documented payload shapes.
 
+import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
@@ -44,6 +45,169 @@ function valid(h: Webhook): boolean {
   if (h.url.trim().length > 500) return false;
   if (!h.events.length) return false;
   return true;
+}
+
+// ── Reference examples ──────────────────────────────────────────────────────
+// Every payload below mirrors what broadcast/webhooks.ts actually POSTs. All
+// carry `event` + `t` (ISO timestamp); the rest is event-specific. Kept inline
+// so an operator can wire a relay without reading the controller source.
+
+interface PayloadDoc {
+  event: string;
+  blurb: string;
+  json: string;
+}
+
+const PAYLOADS: PayloadDoc[] = [
+  {
+    event: 'track.play',
+    blurb: 'A track started. `source` is "auto" (the playlist), "ai" (picker agent) or "request"; `artist`/`album`/`requestedBy` may be null.',
+    json: `{
+  "event": "track.play",
+  "t": "2026-06-02T19:04:12.880Z",
+  "title": "Teardrop",
+  "artist": "Massive Attack",
+  "album": "Mezzanine",
+  "source": "auto",
+  "requestedBy": null
+}`,
+  },
+  {
+    event: 'dj.link',
+    blurb: 'A between-track auto-DJ link (the light-ducked voice). The chattiest stream — most relays filter this one out.',
+    json: `{
+  "event": "dj.link",
+  "t": "2026-06-02T19:07:55.020Z",
+  "text": "That was Massive Attack — staying in the deep end for this next one."
+}`,
+  },
+  {
+    event: 'dj.say',
+    blurb: 'A scheduled spoken segment (station ID, hourly time, weather). `kind` is the original announce kind.',
+    json: `{
+  "event": "dj.say",
+  "t": "2026-06-02T20:00:01.300Z",
+  "text": "You're locked into SUB/WAVE — eight o'clock.",
+  "kind": "hourly-check"
+}`,
+  },
+  {
+    event: 'request.received',
+    blurb: 'A listener submitted a request. `text` is their raw ask; the picker resolves it to a track separately.',
+    json: `{
+  "event": "request.received",
+  "t": "2026-06-02T19:10:33.412Z",
+  "requestedBy": "ada",
+  "text": "something by Aphex Twin please"
+}`,
+  },
+  {
+    event: 'test',
+    blurb: 'What the "Send test" button fires — ignores the event subscriptions so you can sanity-check a fresh hook.',
+    json: `{
+  "event": "test",
+  "t": "2026-06-02T19:00:00.000Z",
+  "note": "sub-wave webhook test fire"
+}`,
+  },
+];
+
+interface RecipeDoc {
+  title: string;
+  blurb: ReactNode;
+  lang: string;
+  code: string;
+}
+
+const RECIPES: RecipeDoc[] = [
+  {
+    title: 'Discord — “now playing” via a Cloudflare Worker',
+    blurb: <>Discord expects <code>{'{ content }'}</code>, not sub-wave&apos;s shape, so reshape in a tiny relay. Point a <code>track.play</code> hook at the Worker; it forwards a message to your Discord webhook.</>,
+    lang: 'js',
+    code: `export default {
+  async fetch(req, env) {
+    const e = await req.json();
+    if (e.event !== 'track.play') return new Response('ok');
+    await fetch(env.DISCORD_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: \`🎵 **\${e.title}** — \${e.artist ?? 'unknown'}\`,
+      }),
+    });
+    return new Response('ok');
+  },
+};`,
+  },
+  {
+    title: 'Home Assistant — pulse a light on every track',
+    blurb: <>HA webhook triggers accept any JSON. Subscribe <code>track.play</code> and set the hook URL to your HA webhook (<code>…/api/webhook/&lt;id&gt;</code>).</>,
+    lang: 'yaml',
+    code: `# automation
+trigger:
+  - platform: webhook
+    webhook_id: subwave_track
+    local_only: false
+action:
+  - service: light.turn_on
+    target: { entity_id: light.studio }
+    data: { flash: short }`,
+  },
+  {
+    title: 'n8n / Pipedream — durable relay with retries',
+    blurb: <>sub-wave fires once with no retry queue. When delivery matters, put a workflow in front: add a Webhook node, subscribe the events you need, and branch on the event name.</>,
+    lang: 'text',
+    code: `Webhook node  →  Switch on {{ $json.event }}
+  ├─ track.play        → append row in a sheet / log
+  ├─ request.received  → notify you in Slack
+  └─ dj.say            → ignore`,
+  },
+];
+
+function Fold({ summary, children, open }: { summary: ReactNode; children: ReactNode; open?: boolean }) {
+  return (
+    <details open={open} className="border border-separator-strong bg-bg">
+      <summary className="flex cursor-pointer items-center gap-2 px-3 py-2">
+        <span className="caption">{summary}</span>
+      </summary>
+      <div className="px-3 pt-1 pb-3">{children}</div>
+    </details>
+  );
+}
+
+function ExamplesSection() {
+  return (
+    <Card
+      title="Payloads & recipes"
+      sub="reference — what each event sends, and how to wire it"
+    >
+      <div className="text-[12px] leading-[1.6] text-muted">
+        Every payload is JSON, fire-and-forget, with <code>event</code> and an ISO <code>t</code> timestamp.
+        Most targets want a different shape than sub-wave emits, so point hooks at a relay that reshapes
+        the body — these examples do exactly that.
+      </div>
+
+      <div className="caption mt-4 mb-1.5">Event payloads</div>
+      <div className="grid gap-1.5">
+        {PAYLOADS.map((p, i) => (
+          <Fold key={p.event} summary={p.event} open={i === 0}>
+            <div className="mb-2 text-[11px] leading-[1.6] text-muted">{p.blurb}</div>
+            <pre className="term">{p.json}</pre>
+          </Fold>
+        ))}
+      </div>
+
+      <div className="caption mt-4 mb-1.5">Integration recipes</div>
+      <div className="grid gap-1.5">
+        {RECIPES.map(r => (
+          <Fold key={r.title} summary={r.title}>
+            <div className="mb-2 text-[11px] leading-[1.6] text-muted">{r.blurb}</div>
+            <pre className="term">{r.code}</pre>
+          </Fold>
+        ))}
+      </div>
+    </Card>
+  );
 }
 
 export default function WebhooksPanel() {
@@ -237,6 +401,8 @@ export default function WebhooksPanel() {
           </Card>
         );
       })}
+
+      <ExamplesSection />
     </div>
   );
 }
