@@ -48,11 +48,8 @@ export default function MeetTheVoices() {
       </div>
 
       <p className="mt-2 max-w-[64ch] text-[14px] leading-[1.6] text-muted">
-        The model behind it is the operator’s choice: a local Ollama box, or a
-        hosted provider like Anthropic, OpenAI, or Google. The voice is just as
-        swappable: local engines Piper, Kokoro, and Chatterbox run on-device, or
-        a cloud voice from OpenAI or ElevenLabs. Change either one in the console
-        and the next spoken line uses it. No redeploy.
+        And both the model doing the thinking and the voice doing the talking are
+        the operator’s to choose — that is what comes next.
       </p>
     </EditorialReveal>
   );

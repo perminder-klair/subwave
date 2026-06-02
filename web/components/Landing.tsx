@@ -3,6 +3,7 @@ import StationFooter from './landing/StationFooter';
 import ArticleHead from './what/ArticleHead';
 import OnTheAir from './what/OnTheAir';
 import MeetTheVoices from './what/MeetTheVoices';
+import YourStack from './what/YourStack';
 import MakeARequest from './what/MakeARequest';
 import BehindTheDesk from './what/BehindTheDesk';
 import UnderTheHood from './what/UnderTheHood';
@@ -22,6 +23,7 @@ export default function Landing() {
         <ArticleHead />
         <OnTheAir />
         <MeetTheVoices />
+        <YourStack />
         <MakeARequest />
         <BehindTheDesk />
         <UnderTheHood />

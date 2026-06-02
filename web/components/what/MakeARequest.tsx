@@ -31,7 +31,7 @@ const STEPS = [
 export default function MakeARequest() {
   return (
     <EditorialReveal className="bs-section">
-      <p className="bs-eyebrow">PART THREE · REQUESTS</p>
+      <p className="bs-eyebrow">PART FOUR · REQUESTS</p>
       <h2>Phone the station, like you used to.</h2>
       <p className="text-muted">
         Requests are the one place a listener steers the broadcast. And it

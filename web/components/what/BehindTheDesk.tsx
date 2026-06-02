@@ -55,7 +55,7 @@ const PANELS = [
 export default function BehindTheDesk() {
   return (
     <EditorialReveal className="bs-section">
-      <p className="bs-eyebrow">PART FOUR · THE CONSOLE</p>
+      <p className="bs-eyebrow">PART FIVE · THE CONSOLE</p>
       <h2>Behind the desk.</h2>
       <p className="text-muted">
         Everything a listener hears is shaped from one place: a gated admin

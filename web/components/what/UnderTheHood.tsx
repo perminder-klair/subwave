@@ -11,7 +11,7 @@ const BOXES = [
 export default function UnderTheHood() {
   return (
     <EditorialReveal className="bs-section">
-      <p className="bs-eyebrow">PART FIVE · UNDER THE HOOD</p>
+      <p className="bs-eyebrow">PART SIX · UNDER THE HOOD</p>
       <h2>Four processes, one box, one stream out.</h2>
 
       <div className="bs-drop-cap max-w-[64ch] text-[15px] leading-[1.6]">
