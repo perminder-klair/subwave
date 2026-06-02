@@ -264,8 +264,13 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
             </>
           )}
           <ThemeSwitcher variant="admin" />
-          <Link href="/" className="caption text-muted no-underline">
-            ← player
+          <Link
+            href="/listen"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="caption text-muted no-underline"
+          >
+            listen ↗
           </Link>
           {onSignOut && (
             <button className="sign-out" onClick={onSignOut}>
@@ -277,8 +282,13 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
       {!signedIn && (
         <span className="right">
           <ThemeSwitcher variant="admin" />
-          <Link href="/" className="caption text-muted no-underline">
-            ← player
+          <Link
+            href="/listen"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="caption text-muted no-underline"
+          >
+            listen ↗
           </Link>
         </span>
       )}
