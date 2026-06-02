@@ -130,6 +130,34 @@ interface FileEntry {
 
 type FilesValue = FileEntry[] | { error?: string } | undefined;
 
+// Mirrors the controller's getFullContext() snapshot — what the DJ "feels"
+// right now. Rendered human-friendly by <DjContext>, not as raw JSON.
+interface DebugContext {
+  time?: { period?: string; mood?: string; vibe?: string; show?: string };
+  weather?: {
+    condition?: string;
+    mood?: string | null;
+    temp?: number | null;
+    tempUnit?: string;
+    isDay?: boolean;
+    location?: string;
+  };
+  festival?: { name?: string; mood?: string } | null;
+  dominantMood?: string;
+  date?: {
+    iso?: string;
+    dayOfWeek?: number;
+    dayLabel?: string;
+    monthLabel?: string;
+    dayOfMonth?: number;
+    season?: string;
+  };
+  clock?: { hhmm?: string; isWeekend?: boolean; isLateNight?: boolean; isCommute?: boolean };
+  activeShow?: { name?: string; mood?: string; topic?: string; persona?: { name?: string } | null } | null;
+  listeners?: { count?: number | null };
+  error?: string;
+}
+
 interface DebugData {
   icecast?: DebugIcecast;
   liquidsoapLog?: string;
@@ -137,7 +165,7 @@ interface DebugData {
   queue?: DebugQueue;
   library?: DebugLibrary;
   nowPlaying?: Record<string, unknown> | null;
-  context?: Record<string, unknown> | null;
+  context?: DebugContext | null;
   tts?: DebugTts;
   subsonic?: DebugSubsonic;
   session?: DebugSession;
@@ -259,7 +287,7 @@ export default function DebugPanel() {
             </Card>
 
             <Card title="DJ context" bodyClass="max-h-[200px] overflow-y-auto">
-              <KvTable obj={data.context} />
+              <DjContext ctx={data.context} />
             </Card>
           </div>
 
@@ -522,6 +550,120 @@ function KvRow({ k, val }: { k: string; val: unknown }) {
         )}
       </dd>
     </>
+  );
+}
+
+// Slugs like "early-morning" / "drive-time" → "Early morning".
+function titleize(s: unknown): string {
+  const t = String(s ?? '').replace(/[-_]/g, ' ').trim();
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : '';
+}
+
+// The DJ context snapshot, rendered as labelled prose rather than raw JSON.
+function DjContext({ ctx }: { ctx?: DebugContext | null }) {
+  if (!ctx || Object.keys(ctx).length === 0) {
+    return <span className="field-hint italic">—</span>;
+  }
+  if (ctx.error) {
+    return <span className="field-hint italic">{ctx.error}</span>;
+  }
+
+  const { time, weather, festival, dominantMood, date, clock, activeShow, listeners } = ctx;
+
+  const flags = [
+    clock?.isWeekend && 'weekend',
+    clock?.isLateNight && 'late night',
+    clock?.isCommute && 'commute',
+  ].filter(Boolean) as string[];
+
+  const weatherLine = weather
+    ? [
+        titleize(weather.condition),
+        weather.temp != null ? `${weather.temp}°${weather.tempUnit || ''}` : null,
+        weather.location,
+      ].filter(Boolean).join(' · ')
+    : '';
+
+  const dateLine = date
+    ? [
+        date.dayLabel,
+        date.dayOfMonth != null && date.monthLabel ? `${date.dayOfMonth} ${date.monthLabel}` : null,
+      ].filter(Boolean).join(', ')
+    : '';
+
+  const count = listeners?.count;
+
+  return (
+    <dl className="kv">
+      {dominantMood && (
+        <>
+          <dt>Mood</dt>
+          <dd className="font-bold text-vermilion">{titleize(dominantMood)}</dd>
+        </>
+      )}
+      {(dateLine || date?.season) && (
+        <>
+          <dt>Date</dt>
+          <dd>
+            {dateLine}
+            {date?.season ? <span className="text-muted"> · {titleize(date.season)}</span> : null}
+          </dd>
+        </>
+      )}
+      {(clock?.hhmm || flags.length > 0) && (
+        <>
+          <dt>Clock</dt>
+          <dd className="flex flex-wrap items-center gap-1.5">
+            {clock?.hhmm && <span className="mono-num">{clock.hhmm}</span>}
+            {flags.map(f => <Pill key={f}>{f}</Pill>)}
+          </dd>
+        </>
+      )}
+      {time?.period && (
+        <>
+          <dt>Daypart</dt>
+          <dd>
+            {titleize(time.period)}
+            {time.vibe ? <span className="text-muted"> · {time.vibe}</span> : null}
+          </dd>
+        </>
+      )}
+      {weatherLine && (
+        <>
+          <dt>Weather</dt>
+          <dd>
+            {weatherLine}
+            {weather?.isDay != null ? (
+              <span className="text-muted"> · {weather.isDay ? 'daytime' : 'night'}</span>
+            ) : null}
+          </dd>
+        </>
+      )}
+      <dt>Festival</dt>
+      <dd>
+        {festival?.name ? (
+          <>
+            {festival.name}
+            {festival.mood ? <span className="text-muted"> · {festival.mood}</span> : null}
+          </>
+        ) : (
+          <span className="text-muted italic">none today</span>
+        )}
+      </dd>
+      <dt>Show</dt>
+      <dd>
+        {activeShow?.name ? (
+          <>
+            {activeShow.name}
+            {activeShow.persona?.name ? <span className="text-muted"> · {activeShow.persona.name}</span> : null}
+          </>
+        ) : (
+          <span className="text-muted italic">autonomous — no show scheduled</span>
+        )}
+      </dd>
+      <dt>Listeners</dt>
+      <dd>{count == null ? <span className="text-muted italic">unknown</span> : `${count} listening`}</dd>
+    </dl>
   );
 }
 
