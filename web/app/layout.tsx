@@ -1,7 +1,7 @@
 import './globals.css';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
-import { JetBrains_Mono } from 'next/font/google';
+import { Fraunces, Inter, JetBrains_Mono } from 'next/font/google';
 import { GoogleAnalytics } from '@next/third-parties/google';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { SITE_URL } from '@/lib/site';
@@ -13,6 +13,23 @@ import JsonLd from '@/components/JsonLd';
 // Visitor tracking. The gtag.js script only loads when a Measurement ID is
 // configured, so dev and un-instrumented deploys stay analytics-free.
 const GA_ID = process.env.NEXT_PUBLIC_GA_ID;
+
+// Fraunces — the display serif. Soft, optical-axis editorial face used for
+// every headline + the masthead wordmark; opsz makes it self-tune contrast to
+// the rendered size. Inter carries body/UI; JetBrains Mono stays for data
+// (timestamps, durations, code, kbd) so numbers read like hi-fi gear.
+const fraunces = Fraunces({
+  subsets: ['latin'],
+  axes: ['opsz'],
+  display: 'swap',
+  variable: '--font-display',
+});
+
+const inter = Inter({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-sans',
+});
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ['latin', 'latin-ext'],
@@ -94,7 +111,11 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={jetbrainsMono.variable} suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`${fraunces.variable} ${inter.variable} ${jetbrainsMono.variable}`}
+      suppressHydrationWarning
+    >
       <head>
         {/* Apply stored theme before paint to avoid flash of wrong palette.
             Script body is a static constant from lib/theme — no untrusted input. */}

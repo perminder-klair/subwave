@@ -59,7 +59,11 @@
   /* Recurring eyebrow letterspacing — used everywhere caps headers appear. */
   --tracking-eyebrow: 0.2em;
 
-  /* Mono font — set in body inline; promoted so `font-mono` works. */
+  /* Type families — promoted so `font-sans` / `font-display` / `font-mono`
+     utilities resolve to the next/font variables set on <html>. Inter is the
+     UI/body default, Fraunces the display serif, JetBrains Mono the data face. */
+  --font-sans: var(--font-sans);
+  --font-display: var(--font-display);
   --font-mono: var(--font-mono);
 }
 
@@ -158,18 +162,79 @@ html,
 body {
     background: var(--bg);
     color: var(--ink);
+    /* Inter is the body/UI default now. Fraunces (--font-display) is applied to
+       headings + the masthead, JetBrains Mono (--font-mono) is re-asserted on
+       data (timestamps, code, kbd) in the type-roles block below. */
     font-family:
-        var(--font-mono), ui-monospace, "JetBrains Mono", "SF Mono", Menlo,
-        Consolas, monospace;
-    font-feature-settings:
-        "calt" 1,
-        "ss01" 1; /* contextual + slashed zero */
+        var(--font-sans), ui-sans-serif, system-ui, -apple-system,
+        "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-feature-settings: "calt" 1; /* contextual alternates */
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
     /* Catch-all against accidental horizontal overflow on mobile. `clip`
        (not `hidden`) keeps vertical page scroll intact and still lets inner
        scrollable areas (e.g. the weekly-schedule grid) scroll horizontally
        inside their own `overflow-x: auto` wrappers. */
     overflow-x: clip;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   TYPE ROLES — the premium editorial split layered over the cascade above.
+   Body defaults to Inter (set on <html,body>). Here we promote headlines to
+   Fraunces (the soft display serif) and pull data — timestamps, durations,
+   code, terminal, keycaps — back to JetBrains Mono so numbers stay tabular and
+   read like hi-fi gear. Keep these two lists in sync when adding headings or
+   numeric/code surfaces.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Display serif — every headline + the masthead wordmark + the now-playing
+   title. font-optical-sizing:auto lets Fraunces' opsz axis tune contrast to the
+   rendered size (delicate at body, dramatic at the masthead). */
+.bs-wordmark,
+.bs-hero-title,
+.bs-section h2,
+.bs-setup-hero h1,
+.bs-step-body h3,
+.bs-navidrome-copy h2,
+.bs-news-hero h1,
+.bs-news-lead-headline,
+.bs-news-headline,
+.bs-article-head h1,
+.bs-prose h2,
+.bs-prose h3,
+.v3-title {
+    font-family: var(--font-display), Georgia, "Times New Roman", serif;
+    font-optical-sizing: auto;
+}
+
+/* Note: the masthead wordmark + news-hero H1 relax their letter-spacing at
+   their own definitions below (those rules win the cascade), since the tight
+   tracking tuned for mono crowds Fraunces' serifs. */
+
+/* Data face — JetBrains Mono kept for anything that benefits from tabular,
+   fixed-advance glyphs: clocks, durations, indices, version strings, code,
+   terminal output and keycaps. */
+.v3-tab-num,
+.admin-root .mono-num,
+.admin-root .metric .n,
+.admin-root .track-row .idx,
+.admin-root .track-row .dur,
+.admin-root .log .t,
+.admin-root .term,
+.bs-news-ver,
+.bs-frame-url,
+.bs-code,
+.bs-code-inline,
+.bs-code-lang,
+.bs-copy,
+.bs-kbd,
+.bs-prose code,
+.bs-prose pre {
+    font-family: var(--font-mono), ui-monospace, "SF Mono", Menlo, Consolas,
+        monospace;
+    font-feature-settings:
+        "calt" 1,
+        "ss01" 1; /* contextual + slashed zero */
 }
 
 /* Paper grain — fixed full-viewport SVG turbulence at low opacity.
@@ -507,12 +572,14 @@ body::after {
     }
 }
 
-/* Masthead wordmark — outsized mono, extreme weight, tight tracking. */
+/* Masthead wordmark — outsized Fraunces nameplate. Black weight for the
+   broadsheet-masthead punch; tracking relaxed from the old mono -0.04em so the
+   serifs don't collide at display size. */
 .bs-wordmark {
     font-size: clamp(48px, 9vw, 128px);
     line-height: 0.85;
-    letter-spacing: -0.04em;
-    font-weight: 800;
+    letter-spacing: -0.015em;
+    font-weight: 900;
     text-transform: uppercase;
 }
 
@@ -2260,8 +2327,9 @@ body::after {
     margin: 0;
     font-size: clamp(40px, 7vw, 88px);
     line-height: 0.9;
-    letter-spacing: -0.035em;
-    font-weight: 800;
+    /* relaxed from -0.035em (mono) so the uppercase serif doesn't crowd */
+    letter-spacing: -0.01em;
+    font-weight: 900;
     text-transform: uppercase;
 }
 .bs-news-hero p {
