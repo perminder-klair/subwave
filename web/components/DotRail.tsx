@@ -28,9 +28,7 @@ export interface DotRailProps {
 export default function DotRail({ counts, active, onSelect }: DotRailProps) {
   return (
     <div
-      className="absolute top-20 right-0 bottom-20 z-20 flex w-24
-        flex-col items-center justify-center gap-1
-        sm:[border-left:1px_solid_var(--ink)]"
+      className="absolute top-20 right-0 bottom-20 z-20 flex w-24 flex-col items-center justify-center gap-1"
     >
       {ITEMS.map(item => {
         const isActive = active === item.k;

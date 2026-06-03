@@ -73,7 +73,7 @@ export default function CenterStage({ nowPlaying, elapsed, feed, djLineOn, onOpe
   useDynamicStyle(coverRef, { '--cover': coverSrc ? `url("${coverSrc}")` : null });
 
   return (
-    <div className="absolute top-1/2 right-24 left-4 flex -translate-y-[58%] flex-col items-start sm:left-8">
+    <div className="absolute top-1/2 right-24 left-4 flex -translate-y-[64%] flex-col items-start sm:left-8">
       <div className="isolate flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-6">
         {coverSrc && (
           <button

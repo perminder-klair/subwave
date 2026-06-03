@@ -20,6 +20,7 @@ import RequestDrawer from './drawers/RequestDrawer';
 import ScheduleDrawer from './drawers/ScheduleDrawer';
 import { useStationFeed } from '@/hooks/useStationFeed';
 import { usePlayer } from '@/hooks/usePlayer';
+import { useSignal } from '@/hooks/useSignal';
 import { useMediaSession } from '@/hooks/useMediaSession';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useCoverColors } from '@/hooks/useCoverColors';
@@ -48,6 +49,15 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
   // streamOnline is null until the first poll resolves — only treat an
   // explicit false as offline so the player never flashes "offline" on load.
   const offline = streamOnline === false;
+
+  // Connection-health meter for the footer's signal scale — measured latency
+  // to the controller, probed only while tuned in (see useSignal).
+  const signal = useSignal({ tunedIn, status, offline });
+
+  // Listener count now lives in the footer's signal readout (not the header) —
+  // normalise the feed's number | { current } | null shape to a plain count.
+  const listenerCount =
+    listeners == null ? null : typeof listeners === 'number' ? listeners : (listeners.current ?? null);
 
   // If the station goes off air while someone is tuned in, tear playback down
   // so the <audio> element isn't left retrying a dead mount.
@@ -231,7 +241,6 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
         stationName={typeof dj?.station === 'string' ? dj.station : undefined}
         djName={typeof dj?.name === 'string' ? dj.name : undefined}
         activeShow={activeShow}
-        listeners={listeners}
         onOpenSchedule={() => setDrawer('schedule')}
       />
 
@@ -266,9 +275,13 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
         volume={volume}
         setVolume={setVolume}
         volumePulse={volumePulse}
+        muted={muted}
+        onToggleMute={toggleMute}
+        latencyMs={signal.latencyMs}
+        signalQuality={signal.quality}
+        listeners={listenerCount}
         nowPlaying={nowPlaying}
         elapsed={elapsed}
-        context={context}
       />
 
       <Sheet

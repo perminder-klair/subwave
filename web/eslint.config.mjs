@@ -63,6 +63,10 @@ export default defineConfig([
           // outside this allow-list.
           ignore: [
             '^v3-',
+            // .fz-* — the console-deck footer's hardware-part classes
+            // (TransportBar), defined in app/globals.css. Same legacy-CSS deal
+            // as the other prefixes: component CSS not yet promoted to @theme.
+            '^fz-',
             '^bs-',
             '^broadsheet-',
             '^admin-',
