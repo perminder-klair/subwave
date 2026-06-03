@@ -107,22 +107,49 @@ async function call(endpoint, params = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Station-archive guard
+// ---------------------------------------------------------------------------
+// SUB/WAVE's own hourly mixdowns are written by radio.liq to
+// `/var/sub-wave/archive/YYYY-MM-DD/HH-00.mp3`. If the operator's Navidrome music
+// folder overlaps that directory, Navidrome scans those MP3s and indexes them as
+// untagged songs whose filename ("02-00.mp3") becomes the title — they then leak
+// into the picker (DJ reads "02:00" as the time), the tagger, and the library UI
+// (issue #273). Every selection/enumeration path funnels through the song-returning
+// functions below, so filtering here keeps station recordings out of all of them.
+// `call()` logging is untouched, so /debug still shows the raw Subsonic responses.
+export function isStationArchive(song: any): boolean {
+  if (!song) return false;
+  const path = String(song.path ?? '');
+  // Primary, tight signal: the archive path pattern radio.liq writes.
+  if (/(^|\/)archive\/\d{4}-\d{2}-\d{2}\/\d{2}-\d{2}\.mp3$/i.test(path)) return true;
+  // Fallback when Navidrome omits `path`: an HH-00 title with no real artist/album.
+  const title = String(song.title ?? '').trim();
+  const blank = (s: any) => {
+    const v = String(s ?? '').trim().toLowerCase();
+    return v === '' || v.startsWith('[unknown') || v === 'unknown artist' || v === 'unknown album';
+  };
+  return /^\d{2}-00$/.test(title) && blank(song.artist) && blank(song.album);
+}
+
+const rejectArchive = (arr: any[]) => (arr || []).filter((s) => !isStationArchive(s));
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 export async function search(query, { songCount = 20, songOffset = 0 } = {}) {
   const r = await call('search3', { query, songCount, songOffset, artistCount: 5, albumCount: 5 });
-  return r.searchResult3?.song || [];
+  return rejectArchive(r.searchResult3?.song || []);
 }
 
 export async function getRandomSongs({ size = 20, genre, fromYear, toYear }: { size?: number; genre?: string; fromYear?: number; toYear?: number } = {}) {
   const r = await call('getRandomSongs', { size, genre, fromYear, toYear });
-  return r.randomSongs?.song || [];
+  return rejectArchive(r.randomSongs?.song || []);
 }
 
 export async function getSongsByGenre(genre, { count = 20 } = {}) {
   const r = await call('getSongsByGenre', { genre, count });
-  return r.songsByGenre?.song || [];
+  return rejectArchive(r.songsByGenre?.song || []);
 }
 
 // All genre tags present in the library, each with { value, songCount,
@@ -135,12 +162,12 @@ export async function getGenres() {
 
 export async function getSimilarSongs(id, { count = 20 } = {}) {
   const r = await call('getSimilarSongs2', { id, count });
-  return r.similarSongs2?.song || [];
+  return rejectArchive(r.similarSongs2?.song || []);
 }
 
 export async function getStarred() {
   const r = await call('getStarred2');
-  return r.starred2?.song || [];
+  return rejectArchive(r.starred2?.song || []);
 }
 
 export async function getAlbumList(offset = 0, size = 500) {
@@ -170,12 +197,12 @@ export async function getArtistInfo(id, { count = 10 } = {}) {
 // Note: keyed by artist NAME, not id.
 export async function getTopSongs(artistName, { count = 10 } = {}) {
   const r = await call('getTopSongs', { artist: artistName, count });
-  return r.topSongs?.song || [];
+  return rejectArchive(r.topSongs?.song || []);
 }
 
 export async function getAlbum(id) {
   const r = await call('getAlbum', { id });
-  return r.album?.song || [];
+  return rejectArchive(r.album?.song || []);
 }
 
 // Returns { id, name, albumCount, album: [{ id, name, year, ... }] }
@@ -245,6 +272,7 @@ export async function* iterateAllSongs() {
     if (albums.length === 0) break;
     for (const album of albums) {
       try {
+        // getAlbum already drops station-archive recordings (issue #273).
         const songs = await getAlbum(album.id);
         for (const s of songs) yield s;
       } catch (err) {
@@ -263,7 +291,7 @@ export async function getPlaylists() {
 
 export async function getPlaylist(id) {
   const r = await call('getPlaylist', { id });
-  return r.playlist?.entry || [];
+  return rejectArchive(r.playlist?.entry || []);
 }
 
 // Authenticated cover-art URL for a given Subsonic song id. Returns the

@@ -45,6 +45,13 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
       limit,
       offset,
     });
+    // Drop any station-archive rows the tagger may have written into the index
+    // before the subsonic-layer guard existed (issue #273), so the admin library
+    // is clean without requiring a re-tag.
+    const cleanRows = result.rows.filter((row) => !subsonic.isStationArchive(row));
+    const removed = result.rows.length - cleanRows.length;
+    result.rows = cleanRows;
+    result.total = Math.max(0, result.total - removed);
     const stats = library.stats();
     res.json({
       ...result,

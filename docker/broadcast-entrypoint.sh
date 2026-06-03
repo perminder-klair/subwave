@@ -58,6 +58,11 @@ chmod 777 /var/sub-wave \
 # Bootstrap empty m3u files Liquidsoap's reload_mode="watch" needs to see.
 touch /var/sub-wave/auto.m3u /var/sub-wave/jingles.m3u
 chmod 666 /var/sub-wave/auto.m3u /var/sub-wave/jingles.m3u
+# Tell a co-located Navidrome to skip the archive dir — its hourly mixdowns are
+# the station's own recordings, not library tracks, and otherwise get scanned in
+# as junk "HH-00" entries that confuse the DJ (issue #273). Harmless when
+# Navidrome lives elsewhere / doesn't overlap this path.
+touch /var/sub-wave/archive/.ndignore
 
 # Liquidsoap writes radio.log to /var/log/liquidsoap as uid 10000. Compose
 # usually bind-mounts ${STATE_DIR}/logs over this path; that bind mount lands
