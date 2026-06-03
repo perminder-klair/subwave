@@ -149,6 +149,10 @@ services:
       # share-card tags render per-request. Define SITE_URL once in .env and
       # both build-arg and runtime env pick it up.
       - SITE_URL=\${SITE_URL:-}
+      # Server-side base URL for generateMetadata on the force-dynamic homepage
+      # to read the live station name from the controller. Internal compose
+      # network name — not exposed to the browser (which uses /api via Caddy).
+      - CONTROLLER_INTERNAL_URL=http://controller:7701
 
   # -------------------------------------------------------------------------
   # TTS-HEAVY (optional) — sidecar for Chatterbox + PocketTTS
@@ -315,6 +319,10 @@ services:
       - NODE_ENV=production
       - SUBWAVE_HOMEPAGE=\${SUBWAVE_HOMEPAGE:-player}
       - SITE_URL=\${SITE_URL:-}
+      # Server-side base URL for generateMetadata on the force-dynamic homepage
+      # to read the live station name from the controller. Internal compose
+      # network name — not exposed to the browser (which uses /api via Caddy).
+      - CONTROLLER_INTERNAL_URL=http://controller:7701
     ports:
       - "\${WEB_PORT:-7700}:7700"
     # Same-origin (/api, /stream.mp3) is the default baked into the image.
@@ -572,4 +580,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version` and by the TUI release fetch URL).
-export const CLI_VERSION = `0.4.0`;
+export const CLI_VERSION = `0.7.0`;
