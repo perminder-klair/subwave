@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { AnimatedLink } from '@/components/ui/animated-link';
 import EditorialReveal from './EditorialReveal';
 
 const COMPATIBLE = [
@@ -39,14 +40,13 @@ export default function Navidrome() {
             <Link href="/setup" className="bs-tune">
               Connect your library &nbsp;→
             </Link>
-            <a
+            <AnimatedLink
               href="https://www.navidrome.org/"
-              target="_blank"
-              rel="noreferrer"
-              className="bs-link text-[12px] tracking-[0.15em] uppercase"
+              variant="arrow"
+              className="text-[12px] font-semibold tracking-[0.15em] text-ink uppercase hover:text-vermilion"
             >
-              New to Navidrome? &nbsp;↗
-            </a>
+              New to Navidrome?
+            </AnimatedLink>
           </div>
         </div>
 

@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { AnimatedLink } from '@/components/ui/animated-link';
 import { getAllNews, formatNewsDate, type NewsMeta } from '@/lib/news';
 import { pageMeta } from '@/lib/seo';
 
@@ -53,12 +54,12 @@ export default function NewsIndex() {
               <li key={a.slug} className="bs-news-item">
                 <Dateline a={a} />
                 <h3 className="bs-news-headline">
-                  <Link href={`/news/${a.slug}`}>{a.title}</Link>
+                  <AnimatedLink href={`/news/${a.slug}`}>{a.title}</AnimatedLink>
                 </h3>
                 <p className="bs-news-excerpt">{a.excerpt}</p>
-                <Link href={`/news/${a.slug}`} className="bs-news-more">
-                  Read &rarr;
-                </Link>
+                <AnimatedLink href={`/news/${a.slug}`} variant="arrow" className="bs-news-more">
+                  Read
+                </AnimatedLink>
               </li>
             ))}
           </ul>

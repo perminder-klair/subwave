@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { AnimatedLink } from '@/components/ui/animated-link';
 import { useClock } from '../../lib/hooks';
 
 const LAUNCH_DATE = new Date('2026-01-01T00:00:00Z');
@@ -46,38 +47,37 @@ export default function Masthead() {
       <div className="bs-rule" />
 
       <nav aria-label="Primary" className="bs-masthead-nav">
-        <Link href="/listen" className="bs-masthead-link">
+        <AnimatedLink href="/listen" className="bs-masthead-link">
           Listen
-        </Link>
+        </AnimatedLink>
         <span aria-hidden="true" className="bs-masthead-sep">
           ·
         </span>
-        <Link href="/manual" className="bs-masthead-link">
+        <AnimatedLink href="/manual" className="bs-masthead-link">
           Manual
-        </Link>
+        </AnimatedLink>
         <span aria-hidden="true" className="bs-masthead-sep">
           ·
         </span>
-        <Link href="/setup" className="bs-masthead-link">
+        <AnimatedLink href="/setup" className="bs-masthead-link">
           Setup
-        </Link>
+        </AnimatedLink>
         <span aria-hidden="true" className="bs-masthead-sep">
           ·
         </span>
-        <Link href="/news" className="bs-masthead-link">
+        <AnimatedLink href="/news" className="bs-masthead-link">
           News
-        </Link>
+        </AnimatedLink>
         <span aria-hidden="true" className="bs-masthead-sep">
           ·
         </span>
-        <a
+        <AnimatedLink
           href="https://github.com/perminder-klair/subwave"
-          target="_blank"
-          rel="noreferrer"
+          variant="arrow"
           className="bs-masthead-link"
         >
-          GitHub&nbsp;↗
-        </a>
+          GitHub
+        </AnimatedLink>
       </nav>
 
       <div className="bs-rule-double" />

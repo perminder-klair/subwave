@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { AnimatedLink } from '@/components/ui/animated-link';
 import {
   getAllNews,
   getNewsArticle,
@@ -76,9 +77,9 @@ export default async function NewsArticlePage({
   return (
     <article className="bs-article">
       <JsonLd data={articleJsonLd} />
-      <Link href="/news" className="bs-news-back">
+      <AnimatedLink href="/news" className="bs-news-back">
         &larr; All dispatches
-      </Link>
+      </AnimatedLink>
 
       <header className="bs-article-head">
         <p className="bs-eyebrow">{article.category}</p>

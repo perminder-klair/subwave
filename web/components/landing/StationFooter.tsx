@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import { AnimatedLink } from '@/components/ui/animated-link';
 
 export default function StationFooter({ djName }: { djName?: string }) {
   return (
@@ -16,29 +16,35 @@ export default function StationFooter({ djName }: { djName?: string }) {
         </span>
         <span>
           {djName ? `${djName} on the desk · ` : ''}
-          <a
+          <AnimatedLink
             href="https://github.com/perminder-klair/subwave"
-            target="_blank"
-            rel="noreferrer"
-            className="bs-link tracking-[inherit]"
+            variant="arrow"
+            className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
           >
-            GitHub →
-          </a>
+            GitHub
+          </AnimatedLink>
         </span>
       </div>
       <div className="pb-[6px] text-center text-[10px] tracking-[0.3em] text-muted uppercase">
-        — End of broadcast page · <Link href="/news" className="bs-link tracking-[inherit]">read the dispatches</Link> · <Link href="/listen" className="bs-link tracking-[inherit]">open the player</Link> —
+        — End of broadcast page ·{' '}
+        <AnimatedLink href="/news" className="font-semibold tracking-[inherit] text-ink hover:text-vermilion">
+          read the dispatches
+        </AnimatedLink>{' '}
+        ·{' '}
+        <AnimatedLink href="/listen" className="font-semibold tracking-[inherit] text-ink hover:text-vermilion">
+          open the player
+        </AnimatedLink>{' '}
+        —
       </div>
       <div className="pb-[6px] text-center text-[10px] tracking-[0.3em] text-balance text-muted uppercase">
         Set in type &amp; sent to press by{' '}
-        <a
+        <AnimatedLink
           href="https://www.klair.co"
-          target="_blank"
-          rel="noreferrer"
-          className="bs-link tracking-[inherit] whitespace-nowrap"
+          variant="arrow"
+          className="font-semibold tracking-[inherit] whitespace-nowrap text-ink hover:text-vermilion"
         >
           the Klair works ✦ klair.co
-        </a>
+        </AnimatedLink>
       </div>
     </footer>
   );
