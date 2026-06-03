@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/perminder-klair/subwave/compare/v0.8.0...v0.9.0) (2026-06-03)
+
+
+### Features
+
+* **web:** redesign player footer as a console deck with live signal meter ([#281](https://github.com/perminder-klair/subwave/issues/281)) ([2d07fd2](https://github.com/perminder-klair/subwave/commit/2d07fd27c89c5fcff70af7ebcfe28b821c064b35))
+
 ## [0.8.0](https://github.com/perminder-klair/subwave/compare/v0.7.0...v0.8.0) (2026-06-03)
 
 

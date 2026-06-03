@@ -1,6 +1,6 @@
 {
   "name": "subwave-cli",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "description": "SUB/WAVE operator CLI — status, doctor, lifecycle.",
