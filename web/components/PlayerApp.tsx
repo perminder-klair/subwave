@@ -22,6 +22,8 @@ import { useStationFeed } from '@/hooks/useStationFeed';
 import { usePlayer } from '@/hooks/usePlayer';
 import { useMediaSession } from '@/hooks/useMediaSession';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
+import { useCoverColors } from '@/hooks/useCoverColors';
+import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import { cn } from '@/lib/cn';
 import type { RequestResult } from '@/lib/types';
 
@@ -85,6 +87,20 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
   // Drawers/dialogs portal here when contained so they stay inside the frame.
   const [portalNode, setPortalNode] = useState<HTMLElement | null>(null);
   useEffect(() => { if (contained) setPortalNode(rootRef.current); }, [contained]);
+
+  // Art-derived ambient wash — extract a couple of colours from the current
+  // cover and feed them to the gradient layer behind the player. Same coverSrc
+  // shape as CenterStage so the extraction hits the controller's cached proxy.
+  const coverSubsonicId = nowPlaying?.subsonic_id ?? null;
+  const coverSrc = coverSubsonicId
+    ? `${API_URL}/cover/${encodeURIComponent(coverSubsonicId)}`
+    : null;
+  const coverColors = useCoverColors(coverSrc);
+  const ambientRef = useRef<HTMLDivElement | null>(null);
+  useDynamicStyle(ambientRef, {
+    '--cover-tint': coverColors.vibrant,
+    '--cover-tint-2': coverColors.average ?? coverColors.vibrant,
+  });
 
   const [requestText, setRequestText] = useState('');
   const [requesterName, setRequesterName] = useState('');
@@ -201,6 +217,12 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
       ref={rootRef}
       className={cn(contained ? 'absolute' : 'fixed', 'inset-0 overflow-hidden bg-bg text-ink')}
     >
+      <div
+        ref={ambientRef}
+        aria-hidden="true"
+        className={cn('v3-cover-ambient', coverColors.vibrant && 'v3-cover-ambient-on')}
+      />
+
       <audio ref={audioRef} crossOrigin="anonymous" preload="auto" />
 
       <TopBar
@@ -219,6 +241,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
         feed={boothFeed}
         djLineOn={tickerOn}
         onOpenBooth={() => setDrawer('booth')}
+        onOpenTimeline={() => setDrawer('timeline')}
       />
 
       <Waveform audioRef={audioRef} tunedIn={tunedIn} progress={progress} />

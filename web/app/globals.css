@@ -436,6 +436,252 @@ body::after {
     color: #c5302a;
 }
 
+/* Art-derived ambient wash — a soft tint pulled from the current cover art
+   (see hooks/useCoverColors.ts) bled behind the whole player. Two faint radial
+   pools, one per extracted colour, sitting just above --bg and below all
+   content. Registering the tint vars as <color> @properties lets them
+   cross-fade on track change instead of snapping; opacity fades the layer in
+   once a colour is available. Tuned low so it tints the cream/charcoal base
+   without fighting the broadsheet ink. */
+@property --cover-tint {
+    syntax: "<color>";
+    inherits: false;
+    initial-value: transparent;
+}
+@property --cover-tint-2 {
+    syntax: "<color>";
+    inherits: false;
+    initial-value: transparent;
+}
+.v3-cover-ambient {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    background-image:
+        radial-gradient(
+            58% 52% at 20% 36%,
+            color-mix(in oklab, var(--cover-tint) 32%, transparent) 0,
+            transparent 70%
+        ),
+        radial-gradient(
+            68% 58% at 82% 76%,
+            color-mix(in oklab, var(--cover-tint-2) 22%, transparent) 0,
+            transparent 72%
+        );
+    transition:
+        --cover-tint 1.1s ease,
+        --cover-tint-2 1.1s ease,
+        opacity 1.1s ease;
+}
+.v3-cover-ambient.v3-cover-ambient-on {
+    opacity: 1;
+}
+/* Dark theme leans on the tint a touch more — the colour has to lift charcoal
+   rather than settle onto cream, so a soft-light blend keeps it luminous. The
+   explicit [data-theme="dark"] and the prefers-dark-without-explicit-light
+   media query mirror the same dark-mode pattern used by the paper-grain rules. */
+:root[data-theme="dark"] .v3-cover-ambient {
+    mix-blend-mode: soft-light;
+}
+:root[data-theme="dark"] .v3-cover-ambient.v3-cover-ambient-on {
+    opacity: 0.85;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .v3-cover-ambient {
+        mix-blend-mode: soft-light;
+    }
+    :root:not([data-theme="light"]) .v3-cover-ambient.v3-cover-ambient-on {
+        opacity: 0.85;
+    }
+}
+
+/* Now-playing cover — calm at rest, a CRT/broadcast glitch when engaged.
+   The two channel ghosts are background copies of the same art (fed in via the
+   --cover custom property on .v3-cover-frame), tinted vermilion + teal and offset
+   with a screen blend so they read as chromatic-aberration fringes. A faint
+   scanline sweep and four printer's registration ticks finish the broadcast feel.
+   "Engaged" = hover/focus OR .v3-cover-live, the latter toggled by CenterStage while
+   the ripple waves are active (track change / the DJ speaking), so the artwork
+   glitches in sync with the on-air transmission. The hover-only lift is kept off
+   .v3-cover-live so the art doesn't jump every time the DJ talks. */
+.v3-cover-frame {
+    cursor: pointer;
+    transition:
+        transform 0.3s cubic-bezier(0.2, 0.7, 0.2, 1),
+        filter 0.3s ease;
+}
+.v3-cover-frame:hover,
+.v3-cover-frame:focus-visible {
+    transform: translateY(-1px) scale(1.012);
+}
+.v3-cover-frame:focus-visible {
+    outline: none;
+}
+/* Frame wakes from muted to ink on engage. */
+.v3-cover-frame .v3-cover-glitch {
+    transition: border-color 0.25s ease;
+}
+.v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-glitch {
+    border-color: var(--ink);
+}
+
+/* Chromatic channel ghosts — hidden until engaged. */
+.v3-cover-glitch::before,
+.v3-cover-glitch::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+    mix-blend-mode: screen;
+    transition: opacity 0.18s ease;
+    background-size:
+        cover,
+        cover;
+    background-position:
+        center,
+        center;
+}
+.v3-cover-glitch::before {
+    /* vermilion channel */
+    background-image: linear-gradient(var(--accent), var(--accent)), var(--cover);
+    background-blend-mode: multiply;
+}
+.v3-cover-glitch::after {
+    /* teal channel */
+    background-image: linear-gradient(#16d6cf, #16d6cf), var(--cover);
+    background-blend-mode: multiply;
+}
+.v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-glitch::before {
+    opacity: 0.55;
+    animation: cover-glitch-r 0.55s steps(1) infinite;
+}
+.v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-glitch::after {
+    opacity: 0.55;
+    animation: cover-glitch-c 0.55s steps(1) infinite;
+}
+
+/* Scanline sweep — a thin moving band, only while engaged. */
+.v3-cover-scan {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    background-image: repeating-linear-gradient(
+        to bottom,
+        color-mix(in oklab, var(--ink) 22%, transparent) 0,
+        color-mix(in oklab, var(--ink) 22%, transparent) 1px,
+        transparent 1px,
+        transparent 3px
+    );
+    transition: opacity 0.18s ease;
+    mix-blend-mode: overlay;
+}
+.v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-scan {
+    opacity: 0.6;
+    animation: cover-scan-sweep 2.4s linear infinite;
+}
+
+/* Printer's registration ticks — whisper-faint corner marks that fade in. */
+.v3-cover-tick {
+    position: absolute;
+    width: 7px;
+    height: 7px;
+    pointer-events: none;
+    opacity: 0;
+    transform: scale(0.7);
+    transition:
+        opacity 0.2s ease,
+        transform 0.2s ease;
+    border-color: var(--ink);
+    border-style: solid;
+    border-width: 0;
+}
+.v3-cover-tick--tl {
+    top: -4px;
+    left: -4px;
+    border-top-width: 1px;
+    border-left-width: 1px;
+}
+.v3-cover-tick--tr {
+    top: -4px;
+    right: -4px;
+    border-top-width: 1px;
+    border-right-width: 1px;
+}
+.v3-cover-tick--bl {
+    bottom: -4px;
+    left: -4px;
+    border-bottom-width: 1px;
+    border-left-width: 1px;
+}
+.v3-cover-tick--br {
+    bottom: -4px;
+    right: -4px;
+    border-bottom-width: 1px;
+    border-right-width: 1px;
+}
+.v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-tick {
+    opacity: 1;
+    transform: scale(1);
+}
+
+@keyframes cover-glitch-r {
+    0%,
+    100% {
+        transform: translate(0, 0);
+        clip-path: inset(0 0 0 0);
+    }
+    20% {
+        transform: translate(-3px, 1px);
+        clip-path: inset(8% 0 62% 0);
+    }
+    40% {
+        transform: translate(2px, -1px);
+        clip-path: inset(48% 0 22% 0);
+    }
+    60% {
+        transform: translate(-2px, 0);
+        clip-path: inset(70% 0 8% 0);
+    }
+    80% {
+        transform: translate(3px, 1px);
+        clip-path: inset(24% 0 46% 0);
+    }
+}
+@keyframes cover-glitch-c {
+    0%,
+    100% {
+        transform: translate(0, 0);
+        clip-path: inset(0 0 0 0);
+    }
+    20% {
+        transform: translate(3px, -1px);
+        clip-path: inset(58% 0 12% 0);
+    }
+    40% {
+        transform: translate(-2px, 1px);
+        clip-path: inset(18% 0 52% 0);
+    }
+    60% {
+        transform: translate(2px, 0);
+        clip-path: inset(4% 0 72% 0);
+    }
+    80% {
+        transform: translate(-3px, -1px);
+        clip-path: inset(44% 0 26% 0);
+    }
+}
+@keyframes cover-scan-sweep {
+    from {
+        background-position-y: 0;
+    }
+    to {
+        background-position-y: 24px;
+    }
+}
+
 /* Reduced motion — collapse anything that animates. */
 @media (prefers-reduced-motion: reduce) {
     .v3-drawer-content,
@@ -444,6 +690,27 @@ body::after {
     .v3-tunein-pulse,
     .v3-connecting-pulse {
         animation: none !important;
+    }
+    /* Keep the cover calm: no channel ghosts, scanlines, jitter or lift —
+       just the quiet frame-to-ink + registration ticks as a static engaged
+       state, whether that's hover/focus or the .v3-cover-live transmission cue. */
+    .v3-cover-frame:hover,
+    .v3-cover-frame:focus-visible {
+        transform: none;
+    }
+    .v3-cover-glitch::before,
+    .v3-cover-glitch::after,
+    .v3-cover-scan {
+        animation: none !important;
+    }
+    .v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-glitch::before,
+    .v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-glitch::after,
+    .v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-scan {
+        opacity: 0;
+    }
+    /* Ambient wash still tints, but snaps in instead of cross-fading. */
+    .v3-cover-ambient {
+        transition: none;
     }
 }
 

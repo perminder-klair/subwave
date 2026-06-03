@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
+import { cn } from '@/lib/cn';
 import { fmtTime } from '@/lib/format';
+import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import DjThinkingLine from './DjThinkingLine';
 import { Ripple } from './ui/ripple';
 import { isDjTurn } from '@/lib/sessionFeed';
@@ -16,9 +18,10 @@ export interface CenterStageProps {
   feed: SessionTurn[];
   djLineOn: boolean;
   onOpenBooth: () => void;
+  onOpenTimeline: () => void;
 }
 
-export default function CenterStage({ nowPlaying, elapsed, feed, djLineOn, onOpenBooth }: CenterStageProps) {
+export default function CenterStage({ nowPlaying, elapsed, feed, djLineOn, onOpenBooth, onOpenTimeline }: CenterStageProps) {
   const has = !!nowPlaying?.title;
   const duration = nowPlaying?.duration ?? 0;
   const subsonicId = nowPlaying?.subsonic_id ?? null;
@@ -63,11 +66,27 @@ export default function CenterStage({ nowPlaying, elapsed, feed, djLineOn, onOpe
 
   const rippleActive = trackBurst || djBurst;
 
+  // Feed the current cover URL into the CSS `--cover` custom property so the
+  // hover-glitch channel ghosts (globals.css `.v3-cover-*`) can paint copies of
+  // the art. useDynamicStyle keeps this off the lint-forbidden `style` prop.
+  const coverRef = useRef<HTMLButtonElement>(null);
+  useDynamicStyle(coverRef, { '--cover': coverSrc ? `url("${coverSrc}")` : null });
+
   return (
     <div className="absolute top-1/2 right-24 left-4 flex -translate-y-[58%] flex-col items-start sm:left-8">
       <div className="isolate flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-6">
         {coverSrc && (
-          <div className="relative h-[clamp(72px,14vw,160px)] w-[clamp(72px,14vw,160px)] shrink-0">
+          <button
+            ref={coverRef}
+            type="button"
+            onClick={onOpenTimeline}
+            aria-label="Open the timeline"
+            className={cn(
+              'v3-cover-frame v3-focus relative h-[clamp(72px,14vw,160px)] w-[clamp(72px,14vw,160px)] shrink-0 appearance-none border-0 bg-transparent p-0',
+              // Glitch the art in sync with the ripple waves — track change + DJ speaking.
+              rippleActive && 'v3-cover-live',
+            )}
+          >
             <Ripple
               active={rippleActive}
               mainCircleSize={140}
@@ -75,7 +94,7 @@ export default function CenterStage({ nowPlaying, elapsed, feed, djLineOn, onOpe
               numCircles={6}
               className="-inset-[220px] -z-10"
             />
-            <div className="relative h-full w-full overflow-hidden rounded-sm border border-muted">
+            <div className="v3-cover-glitch relative h-full w-full overflow-hidden rounded-sm border border-muted">
               <AnimatePresence mode="popLayout" initial={false}>
                 <m.img
                   key={coverSrc}
@@ -89,8 +108,13 @@ export default function CenterStage({ nowPlaying, elapsed, feed, djLineOn, onOpe
                   onError={(e) => { e.currentTarget.style.display = 'none'; }}
                 />
               </AnimatePresence>
+              <span className="v3-cover-scan" aria-hidden="true" />
             </div>
-          </div>
+            <span className="v3-cover-tick v3-cover-tick--tl" aria-hidden="true" />
+            <span className="v3-cover-tick v3-cover-tick--tr" aria-hidden="true" />
+            <span className="v3-cover-tick v3-cover-tick--bl" aria-hidden="true" />
+            <span className="v3-cover-tick v3-cover-tick--br" aria-hidden="true" />
+          </button>
         )}
         <div className="min-w-0">
           <div className="v3-caption mb-[14px] text-muted">
