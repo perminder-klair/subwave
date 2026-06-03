@@ -3191,3 +3191,187 @@ body::after {
     border-bottom: 1px solid var(--separator-strong);
     vertical-align: top;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   STATIONS — the community directory: a stat strip, an equirectangular world
+   chart (graticule + plotted dots), a submit call-to-action, and a grid of
+   station cards that probe each station's live now-playing API. Reuses the
+   bs- token vocabulary; no new colors.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Stat strip — "12 stations · 7 countries". Display numerals, accent figures. */
+.bs-stat-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 12px;
+    margin: 0 0 clamp(20px, 3vw, 32px);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.bs-stat-strip strong {
+    font-family: var(--font-display);
+    font-size: clamp(28px, 4vw, 44px);
+    font-weight: 900;
+    letter-spacing: -0.01em;
+    color: var(--accent);
+    margin-right: 4px;
+}
+.bs-stat-sep {
+    opacity: 0.5;
+}
+
+/* World chart — equirectangular graticule with plotted station dots. */
+.bs-station-map {
+    margin: 0 0 clamp(28px, 4vw, 44px);
+    padding: clamp(12px, 2vw, 20px);
+    border-top: 1px solid var(--ink);
+    border-bottom: 1px solid var(--ink);
+}
+.bs-station-map-svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+}
+.bs-map-frame {
+    fill: none;
+    stroke: var(--separator-strong);
+    stroke-width: 0.6;
+}
+.bs-map-grid {
+    stroke: var(--separator-soft);
+    stroke-width: 0.4;
+}
+.bs-map-axis {
+    stroke: var(--separator-strong);
+    stroke-width: 0.6;
+}
+.bs-map-halo {
+    fill: color-mix(in oklab, var(--accent) 22%, transparent);
+}
+.bs-map-dot {
+    fill: var(--accent);
+}
+.bs-map-label {
+    font-family: var(--font-mono);
+    font-size: 5.4px;
+    letter-spacing: 0.04em;
+    fill: var(--muted);
+    text-transform: uppercase;
+}
+.bs-map-caption {
+    margin: 10px 0 0;
+    font-size: 12px;
+    color: var(--muted);
+    text-align: center;
+}
+
+/* Submit CTA — sits between the map and the grid. */
+.bs-station-cta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px 18px;
+    padding: 0 0 clamp(24px, 4vw, 40px);
+}
+.bs-station-cta-copy {
+    margin: 0;
+    flex: 1 1 auto;
+    min-width: 220px;
+    font-family: var(--font-display);
+    font-size: clamp(18px, 2vw, 24px);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+}
+.bs-station-cta-link {
+    font-size: 12px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--accent);
+}
+.bs-station-cta-help {
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+/* Station grid — same multi-column newspaper run as the news archive. */
+.bs-stations-grid {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: clamp(24px, 3vw, 44px);
+}
+.bs-station-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 20px;
+    border-top: 1px solid var(--separator-strong);
+    min-width: 0;
+}
+
+/* Live strip — ON AIR + current track, or Offline / Checking. */
+.bs-station-live {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-height: 16px;
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+}
+.bs-station-live-label {
+    font-weight: 700;
+    color: var(--accent);
+}
+.bs-station-off {
+    color: var(--muted);
+    font-weight: 600;
+}
+.bs-station-track {
+    flex-basis: 100%;
+    margin-top: 2px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    color: var(--ink);
+}
+
+.bs-station-name {
+    margin: 0;
+    font-size: clamp(20px, 2.2vw, 26px);
+    line-height: 1.12;
+    letter-spacing: -0.01em;
+    font-weight: 800;
+    text-wrap: balance;
+}
+.bs-station-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    margin: 0;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.bs-station-genre {
+    color: var(--accent);
+}
+.bs-station-desc {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--muted);
+}
