@@ -10,6 +10,7 @@ import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as dj from '../llm/dj.js';
 import { bpmCompat, keyCompat } from './mix.js';
+import { filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
 
 const CANDIDATE_CAP = 18;
 const HISTORY_DEPTH = 4;
@@ -78,6 +79,11 @@ function notRecent(recentIds: Set<string>) {
   return (t: any) => t && t.id && !recentIds.has(t.id);
 }
 
+function sampleWithRecentFallback(items: any[], recentIds: Set<string>, cap: number) {
+  const fresh = items.filter(notRecent(recentIds));
+  return (fresh.length > 0 ? fresh : items).slice(0, cap);
+}
+
 // Walk a list of albums and return up to `perAlbum` tracks from each, capped.
 async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   const out: any[] = [];
@@ -107,7 +113,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       const similar = await subsonic.getSimilarSongs(currentTrack.id, {
         count: 20,
       });
-      add('similar', similar.filter(notRecent(recentIds)).slice(0, CAP_SIMILAR));
+      add('similar', sampleWithRecentFallback(similar, recentIds, CAP_SIMILAR));
     } catch {}
   }
 
@@ -120,14 +126,14 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   if (currentTrack?.id) {
     try {
       const knn = library.tracksLikeThis(currentTrack.id, 15);
-      add('embedding-similar', knn.filter(notRecent(recentIds)).slice(0, CAP_EMBEDDING_SIMILAR));
+      add('embedding-similar', sampleWithRecentFallback(knn, recentIds, CAP_EMBEDDING_SIMILAR));
     } catch {}
   }
 
   // 2. Mood-tagged library (LLM-built tags, may be sparse).
   if (mood) {
-    const moodHits = shuffle(library.songsByMood(mood).filter(notRecent(recentIds)));
-    add('mood-library', moodHits.slice(0, CAP_MOOD_LIBRARY));
+    const moodHits = shuffle(library.songsByMood(mood));
+    add('mood-library', sampleWithRecentFallback(moodHits, recentIds, CAP_MOOD_LIBRARY));
   }
 
   // 3. Mood-matched Navidrome playlists — operator's hand curation.
@@ -144,7 +150,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
           plTracks.push(...songs);
         } catch {}
       }
-      add('playlist', shuffle(plTracks.filter(notRecent(recentIds))).slice(0, CAP_PLAYLIST));
+      add('playlist', sampleWithRecentFallback(shuffle(plTracks), recentIds, CAP_PLAYLIST));
     } catch {}
   }
 
@@ -157,7 +163,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       const albums = await subsonic.getRecentlyAddedAlbums({ size: 12 });
       return tracksFromAlbums(shuffle(albums), 3, 40);
     });
-    add('recent', shuffle(recentPool).filter(notRecent(recentIds)).slice(0, CAP_RECENT));
+    add('recent', sampleWithRecentFallback(shuffle(recentPool), recentIds, CAP_RECENT));
   } catch {}
 
   // 5. Frequent albums — scrobble-backed favourites. Same wide-pool-then-
@@ -167,7 +173,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       const albums = await subsonic.getFrequentAlbums({ size: 12 });
       return tracksFromAlbums(shuffle(albums), 3, 40);
     });
-    add('frequent', shuffle(freqPool).filter(notRecent(recentIds)).slice(0, CAP_FREQUENT));
+    add('frequent', sampleWithRecentFallback(shuffle(freqPool), recentIds, CAP_FREQUENT));
   } catch {}
 
   // 6. Similar-artist top songs — adjacency through Last.fm artist graph.
@@ -197,7 +203,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       );
       add(
         'similar-artist',
-        similarArtistTracks.filter(notRecent(recentIds)).slice(0, CAP_SIMILAR_ARTIST),
+        sampleWithRecentFallback(similarArtistTracks, recentIds, CAP_SIMILAR_ARTIST),
       );
     } catch {}
   }
@@ -205,49 +211,37 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // 7. Fallback if the pool is still thin — starred + random.
   if (pool.length < 8) {
     try {
-      const starred = (await subsonic.getStarred()).filter(notRecent(recentIds));
-      add('starred', shuffle(starred).slice(0, 4));
+      const starred = await subsonic.getStarred();
+      add('starred', sampleWithRecentFallback(shuffle(starred), recentIds, 4));
     } catch {}
     try {
-      const random = (await subsonic.getRandomSongs({ size: 10 })).filter(notRecent(recentIds));
-      add('random', random.slice(0, 4));
+      const random = await subsonic.getRandomSongs({ size: 10 });
+      add('random', sampleWithRecentFallback(random, recentIds, 4));
     } catch {}
   }
 
   // De-dup by id, cap per artist so one name can't dominate the pool (the LLM
   // can only rotate artists across what it's handed), shuffle, cap.
   const MAX_PER_ARTIST = 3;
-  const seen = new Set<string>();
   const perArtist = new Map<string, number>();
   // Soft tempo/harmonic re-rank toward the current track BEFORE the cap, so
   // compatible tracks are likelier to survive the slice — never a hard filter,
   // and a no-op (pure shuffle) when the current track or the pool is
-  // un-analysed. The dedup / artist-cap / recent-artist filter below is
-  // unchanged; it just walks a differently-ordered list.
+  // un-analysed. The dedup / artist-cap / recency filter below is unchanged;
+  // it just walks a differently-ordered list.
   // A DJ-mode mini-run (broadcast/dj-agent.ts) overrides the re-rank anchor
   // with a deliberate tempo/key target so the pool drifts toward the run's
   // journey rather than just hugging the current track. Falls back to the
   // current track's own analysis when no run is active.
   const curAnalysis = rankTarget
     || (currentTrack?.id ? analysisFor(currentTrack) : { bpm: null, key: null });
-  const final = softRankByCompat(pool, curAnalysis)
-    .filter((t: any) => {
-      if (!t.id || seen.has(t.id)) return false;
-      const artistKey = (t.artist || '').toLowerCase().trim();
-      // Drop tracks by an artist heard in the last 2h, mirroring the agent
-      // picker's recentArtistsSince(2) filter. Without this, the fallback
-      // path (~1 in 4-5 picks on the current model) could cluster the same
-      // artist 4× in 90 min, as observed with Prabh Deep on 2026-05-25.
-      if (artistKey && recentArtists.has(artistKey)) return false;
-      if (artistKey) {
-        const n = perArtist.get(artistKey) || 0;
-        if (n >= MAX_PER_ARTIST) return false;
-        perArtist.set(artistKey, n + 1);
-      }
-      seen.add(t.id);
-      return true;
-    })
-    .slice(0, CANDIDATE_CAP);
+  const final = filterPickerCandidates(softRankByCompat(pool, curAnalysis), {
+    recentIds,
+    recentArtists,
+    artistCounts: perArtist,
+    maxPerArtist: MAX_PER_ARTIST,
+    cap: CANDIDATE_CAP,
+  });
 
   return { candidates: final, sources };
 }
@@ -275,10 +269,10 @@ function summariseRecent(queue: any) {
 // ---------------------------------------------------------------------------
 
 export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null) {
-  // Match the agent picker's window (dj-agent.pickViaAgent) — 12h. Anything
-  // shorter and the fallback could pick a track the agent would have rejected.
-  const recentIds = queue.recentlyPlayedIds(12);
-  const recentArtists = queue.recentArtistsSince(2);
+  await library.load();
+  const windows = recencyWindowsForLibrary(library.stats().distinctArtists);
+  const recentIds = queue.recentlyPlayedIds(windows.trackHours);
+  const recentArtists = queue.recentArtistsSince(windows.artistHours);
   const currentTrack = queue.current?.track || null;
   const { candidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget);
 

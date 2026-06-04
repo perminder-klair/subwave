@@ -210,11 +210,12 @@ export function tracksByVector(vec: number[] | Float32Array, k: number): any[] {
 
 export function stats() {
   if (!loaded) {
-    return { total: 0, byMood: {}, byEnergy: {}, byGenre: {}, updatedAt: null };
+    return { total: 0, distinctArtists: 0, byMood: {}, byEnergy: {}, byGenre: {}, updatedAt: null };
   }
   const s = db.stats();
   return {
     total: s.total,
+    distinctArtists: s.distinctArtists,
     byMood: s.byMood,
     byEnergy: s.byEnergy,
     byGenre: s.byGenre,

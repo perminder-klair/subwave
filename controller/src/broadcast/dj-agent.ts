@@ -23,6 +23,7 @@ import { defineAgent } from '../llm/agent.js';
 import { buildPickerTools } from '../llm/tools.js';
 import { recordPick } from '../llm/log.js';
 import { withTrace, logEvent } from '../observability/events.js';
+import { recencyWindowsForLibrary } from '../music/recency.js';
 
 // --- Feature 4: DJ-mode mini-runs ------------------------------------------
 // A short, deliberate tempo/key journey across 2-3 consecutive picks. While a
@@ -195,14 +196,13 @@ async function enqueuePick(queue, song, reason, source, link: string | null = nu
 // ---------------------------------------------------------------------------
 
 async function pickViaAgent(queue, { wantLink }) {
-  // 12h catches heavy-rotation tracks that repeat every 5-11h on this library
-  // (the 8h window missed Welcome To Heartbreak at gap 10h 54min). Includes a
-  // title|artist key set so backfilled entries (which lack track ids) still
-  // block repeats after a controller restart.
-  const { ids: recentIds, keys: recentKeys } = queue.recentlyPlayed(12);
-  // Block every artist heard in the last 2h. The old "last 10 distinct" window
-  // was ~30-40 min of airtime — far too short on a library this dense.
-  const recentArtists = queue.recentArtistsSince(2);
+  await library.load();
+  const windows = recencyWindowsForLibrary(library.stats().distinctArtists);
+  // Scale the recency windows to the tagged library's artist diversity: dense
+  // catalogues keep the long anti-repeat guard, while small-artist libraries
+  // do not exclude every real candidate before the picker sees it.
+  const { ids: recentIds, keys: recentKeys } = queue.recentlyPlayed(windows.trackHours);
+  const recentArtists = queue.recentArtistsSince(windows.artistHours);
 
   const { object, steps, toolCalls, extras } = await pickerAgent.run({
     messages: session.windowMessages(),

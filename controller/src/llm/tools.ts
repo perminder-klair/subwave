@@ -11,6 +11,7 @@ import { z } from 'zod';
 import * as subsonic from '../music/subsonic.js';
 import * as library from '../music/library.js';
 import * as embeddings from '../music/embeddings.js';
+import { filterPickerCandidates } from '../music/recency.js';
 
 function slim(s: any) {
   const base = {
@@ -34,10 +35,6 @@ function slim(s: any) {
     ...(src.musicalKey != null ? { key: src.musicalKey } : {}),
     ...(src.introMs != null ? { intro_ms: src.introMs } : {}),
   };
-}
-
-function artistKey(s: any) {
-  return (s.artist || '').toLowerCase().trim();
 }
 
 // Navidrome (and library.songsByMood) return results in deterministic order:
@@ -82,24 +79,21 @@ export function buildPickerTools({
   // agent — see picker-latency notes in dj-agent.js. The seen map still
   // accumulates across the whole loop, so the agent's id space grows with
   // each tool call regardless.
-  const trackKey = (s: any) =>
-    `${(s.title || '').toLowerCase().trim()}|${(s.artist || '').toLowerCase().trim()}`;
   const collect = (list: any, cap = 8) => {
+    const accepted = filterPickerCandidates(shuffle((list || []) as any[]), {
+      recentIds,
+      recentKeys,
+      recentArtists,
+      seenIds: new Set(seen.keys()),
+      artistCounts,
+      maxPerArtist: MAX_PER_ARTIST,
+      cap,
+    });
     const out: any[] = [];
-    for (const s of shuffle((list || []) as any[])) {
-      if (!s?.id || recentIds.has(s.id) || seen.has(s.id)) continue;
-      if (recentKeys.has(trackKey(s))) continue;   // catches backfilled entries (no id)
-      const key = artistKey(s);
-      if (key && recentArtists.has(key)) continue;
-      if (key) {
-        const n = artistCounts.get(key) || 0;
-        if (n >= MAX_PER_ARTIST) continue;
-        artistCounts.set(key, n + 1);
-      }
+    for (const s of accepted) {
       const slimmed = slim(s);
       seen.set(s.id, slimmed);
       out.push(slimmed);
-      if (out.length >= cap) break;
     }
     return out;
   };

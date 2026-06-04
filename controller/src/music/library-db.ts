@@ -119,6 +119,7 @@ export interface FilterOpts {
 
 export interface LibraryStats {
   total: number;
+  distinctArtists: number;
   byMood: Record<string, number>;
   byEnergy: Record<string, number>;
   byGenre: Record<string, number>;
@@ -718,6 +719,18 @@ export function stats(): LibraryStats {
     (d.prepare(`SELECT COUNT(*) AS n FROM tracks WHERE ${SQL_HAS_MOODS}`).get() as {
       n: number;
     }).n;
+  const distinctArtists =
+    (
+      d
+        .prepare(
+          `SELECT COUNT(DISTINCT LOWER(TRIM(artist))) AS n
+           FROM tracks
+           WHERE ${SQL_HAS_MOODS}
+             AND artist IS NOT NULL
+             AND TRIM(artist) != ''`,
+        )
+        .get() as { n: number }
+    ).n;
   const byMood: Record<string, number> = {};
   for (const r of d
     .prepare(
@@ -757,7 +770,7 @@ export function stats(): LibraryStats {
   const updatedAt =
     ((d.prepare('SELECT MAX(tagged_at) AS t FROM tracks').get() as { t: string | null }).t) ||
     null;
-  return { total, byMood, byEnergy, byGenre, bySource, withEmbedding, updatedAt };
+  return { total, distinctArtists, byMood, byEnergy, byGenre, bySource, withEmbedding, updatedAt };
 }
 
 // ---------------------------------------------------------------------------
