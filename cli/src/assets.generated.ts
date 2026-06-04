@@ -202,10 +202,18 @@ services:
       # Same shared mount as the controller — the sidecar writes WAVs into
       # /var/sub-wave/voice/* and the controller hands the path to Liquidsoap.
       - *state-mount
+      # Persist the per-engine Hugging Face caches across container recreates.
+      # Weights download at boot (the workers load the model before reporting
+      # ready) — without these volumes that multi-GB fetch repeats on every
+      # \`up -d --build\` / image pull / update. With them it happens once.
+      - tts-heavy-chatterbox-cache:/opt/chatterbox/hf-cache
+      - tts-heavy-pocket-cache:/opt/pocket-tts/hf-cache
 
 volumes:
   caddy-data:
   caddy-config:
+  tts-heavy-chatterbox-cache:
+  tts-heavy-pocket-cache:
 `;
 
 // docker-compose.byo.yml
@@ -361,6 +369,16 @@ services:
       - HF_TOKEN=\${HF_TOKEN:-}
     volumes:
       - *state-mount
+      # Persist the per-engine Hugging Face caches across container recreates.
+      # Weights download at boot (the workers load the model before reporting
+      # ready) — without these volumes that multi-GB fetch repeats on every
+      # \`up -d --build\` / image pull / update. With them it happens once.
+      - tts-heavy-chatterbox-cache:/opt/chatterbox/hf-cache
+      - tts-heavy-pocket-cache:/opt/pocket-tts/hf-cache
+
+volumes:
+  tts-heavy-chatterbox-cache:
+  tts-heavy-pocket-cache:
 `;
 
 // docker-compose.dev.yml
@@ -497,6 +515,16 @@ services:
       - HF_TOKEN=\${HF_TOKEN:-}
     volumes:
       - *state-mount
+      # Persist the per-engine Hugging Face caches across container recreates.
+      # Weights download at boot (the workers load the model before reporting
+      # ready) — without these volumes that multi-GB fetch repeats on every
+      # recreate. With them it happens once.
+      - tts-heavy-chatterbox-cache:/opt/chatterbox/hf-cache
+      - tts-heavy-pocket-cache:/opt/pocket-tts/hf-cache
+
+volumes:
+  tts-heavy-chatterbox-cache:
+  tts-heavy-pocket-cache:
 `;
 
 // .env.example
