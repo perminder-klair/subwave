@@ -96,7 +96,10 @@ export default function TopBar({
       {/* Mobile: the context line is too long to share the masthead row, so it
           drops to its own line below; from md it sits inline above. */}
       {tagline && (
-        <span className="v3-caption truncate text-muted md:hidden" title={tagline}>
+        <span
+          className="v3-caption player-topbar-subline truncate text-muted md:hidden"
+          title={tagline}
+        >
           {tagline}
         </span>
       )}

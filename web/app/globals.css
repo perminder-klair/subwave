@@ -765,6 +765,12 @@ body::after {
 .player-topbar .v3-caption {
     font-size: 12px;
 }
+/* Mobile second line (context tagline) reads as supporting text — a notch
+   smaller than the masthead caption and a lighter, more faded ink. */
+.player-topbar .v3-caption.player-topbar-subline {
+    font-size: 10px;
+    color: color-mix(in srgb, var(--muted) 65%, transparent);
+}
 
 /* ─────────────────────────────────────────────────────────────────────────
    CONSOLE DECK — the player footer's hardware controls (TransportBar).
