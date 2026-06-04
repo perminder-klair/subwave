@@ -53,12 +53,6 @@ export default function Masthead() {
         <span aria-hidden="true" className="bs-masthead-sep">
           ·
         </span>
-        <AnimatedLink href="/stations" className="bs-masthead-link">
-          Stations
-        </AnimatedLink>
-        <span aria-hidden="true" className="bs-masthead-sep">
-          ·
-        </span>
         <AnimatedLink href="/manual" className="bs-masthead-link">
           Manual
         </AnimatedLink>
