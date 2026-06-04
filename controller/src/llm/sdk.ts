@@ -123,7 +123,19 @@ function providerOpts({ repeatPenalty = null }: { repeatPenalty?: number | null 
   const opts: any = {};
 
   const ollama: any = { think: reasoning };
-  if (repeatPenalty != null) ollama.options = { repeat_penalty: repeatPenalty };
+  const ollamaOptions: any = {};
+  if (repeatPenalty != null) ollamaOptions.repeat_penalty = repeatPenalty;
+  // num_ctx for LOCAL Ollama only. Ollama's default window is 4096, but the DJ
+  // agent feeds ~8k+ per turn (40-turn session window + tool schemas + discovery
+  // results); the default truncates the front of the prompt — dropping the
+  // system instructions and tool defs — so the model never calls `done` (issue
+  // #291). `:cloud` models run on Ollama's servers and manage their own context,
+  // so skip them. 0 → don't send it (use Ollama's default).
+  const numCtx = Number(llm.numCtx);
+  if (providerName() === 'ollama' && !/:cloud$/i.test(model) && Number.isFinite(numCtx) && numCtx > 0) {
+    ollamaOptions.num_ctx = numCtx;
+  }
+  if (Object.keys(ollamaOptions).length > 0) ollama.options = ollamaOptions;
   opts.ollama = ollama;
 
   if (!reasoning) {

@@ -93,6 +93,7 @@ interface LlmForm {
   provider: string;
   model: string;
   ollamaUrl: string;
+  numCtx: number;
   baseUrl: string;
   reasoning: boolean;
   pickerAgent: boolean;
@@ -332,6 +333,7 @@ export default function SettingsPanel() {
         provider: v.llm?.provider ?? 'ollama',
         model: v.llm?.model ?? '',
         ollamaUrl: v.llm?.ollamaUrl ?? '',
+        numCtx: typeof v.llm?.numCtx === 'number' ? v.llm.numCtx : 16384,
         baseUrl: v.llm?.baseUrl ?? '',
         reasoning: !!v.llm?.reasoning,
         pickerAgent: !!v.llm?.pickerAgent,
@@ -1470,6 +1472,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
       provider: form.llm.provider,
       model: form.llm.model,
       ollamaUrl: form.llm.ollamaUrl,
+      numCtx: form.llm.numCtx,
       baseUrl: form.llm.baseUrl,
       reasoning: form.llm.reasoning,
       pickerAgent: form.llm.pickerAgent,
@@ -1604,6 +1607,32 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
               <div className="field-hint">
                 Where the Ollama server runs. Leave blank for the default
                 (<code>http://localhost:11434</code>).
+              </div>
+            </div>
+          )}
+
+          {form.llm.provider === 'ollama' && (
+            <div className="field">
+              <Label>Context window (num_ctx)</Label>
+              <Input
+                type="number"
+                min={0}
+                step={1024}
+                value={form.llm.numCtx}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, llm: { ...f.llm, numCtx: Number(e.target.value) } }))
+                }
+                placeholder="16384"
+                className="max-w-[200px]"
+              />
+              <div className="field-hint">
+                Tokens of context for <strong>local</strong> Ollama models.
+                Ollama&apos;s own default is 4096, which is too small for the DJ
+                agent — the prompt gets truncated and the model fails to pick a
+                track (the &ldquo;agent did not call the done tool&rdquo; error).
+                16384 is a safe default for a 7&ndash;9B model on a 12GB GPU;
+                raise it for reasoning models, lower it on tight VRAM. Set 0 to
+                use Ollama&apos;s default. Ignored for <code>:cloud</code> models.
               </div>
             </div>
           )}

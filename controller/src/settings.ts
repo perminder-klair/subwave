@@ -358,6 +358,16 @@ const DEFAULTS = {
     // <think> block on a small model balloons every call (see llm/sdk.js
     // token caps + llm/provider.js no-think fetch).
     reasoning: false,
+    // Ollama context window (num_ctx), local Ollama only. Ollama's own default
+    // is 4096, but the session DJ agent feeds ~8k+ (the 40-turn session window
+    // + tool schemas + discovery results), so the default silently truncates
+    // the front of the prompt — dropping the system instructions and tool
+    // defs — and the model never calls `done` ("agent did not call the done
+    // tool", issue #291). 16384 holds a full picker turn comfortably on a 7–9B
+    // model / 12GB GPU. Reasoning models burn more of it on <think>, so bump it
+    // if you run those. Ignored for `:cloud` models and every other provider
+    // (they manage their own context). 0 → don't send num_ctx (Ollama default).
+    numCtx: 16384,
     // When on, the session DJ agent drives track-picking, links and listener
     // requests as a tool-loop over the session chat history (broadcast/
     // dj-agent.js). When off, the stateless pool picker runs instead — still
@@ -777,6 +787,14 @@ export async function load() {
         typeof stored.llm?.baseUrl === 'string' ? stored.llm.baseUrl.trim() : DEFAULTS.llm.baseUrl,
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
+      // Clamp to a sane band: 0 disables (Ollama default), else [2048, 131072].
+      // Non-numeric/NaN falls back to the default. Floored to an integer.
+      numCtx: (() => {
+        const raw = stored.llm?.numCtx;
+        if (typeof raw !== 'number' || !Number.isFinite(raw)) return DEFAULTS.llm.numCtx;
+        if (raw <= 0) return 0;
+        return Math.min(131072, Math.max(2048, Math.floor(raw)));
+      })(),
       pickerAgent:
         typeof stored.llm?.pickerAgent === 'boolean'
           ? stored.llm.pickerAgent
