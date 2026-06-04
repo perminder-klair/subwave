@@ -1,81 +1,108 @@
+import { createMap } from 'svg-dotted-map';
 import type { Station } from '@/lib/stations';
 
-// A world chart for the stations directory. No mapping library and no vendored
-// continent geometry — instead an equirectangular GRATICULE (meridians +
-// parallels, with the equator and prime meridian emphasised), framed in
-// broadsheet rules, with each station plotted as a pulsing vermilion dot. It
-// reads as a shortwave / coverage chart, which suits a radio project, and keeps
-// the page self-contained.
+// A world chart for the stations directory. Renders an actual dotted continent
+// silhouette (via svg-dotted-map's `createMap`) rather than a bare graticule, so
+// it reads as a real coverage map — land stippled in a muted ink, each station
+// plotted as a pulsing vermilion marker with a mono label.
 //
-// Projection (equirectangular): x = lon + 180  ∈ [0, 360];  y = 90 - lat ∈ [0, 180].
-// Server component — pure render from the station list passed in.
+// Pure server render: `createMap` has no DOM dependency, the /stations route is
+// statically generated, so the dot field is computed once at build time. We keep
+// the magicui DottedMap maths (stagger offsets) but inline them — no `useMemo`,
+// no `'use client'` — to stay a server component.
 
-const W = 360; // world width in user units (lon span 360°)
-const H = 180; // world height in user units (lat span 180°)
-const PAD = 14; // breathing room for edge labels / glow
+const W = 360; // viewBox width  — matched to the old chart so the CSS scale carries over
+const H = 180; // viewBox height
+const SAMPLES = 10000; // sample density for the land dot field
 
-function project(lat: number, lon: number): { x: number; y: number } {
-  return { x: lon + 180, y: 90 - lat };
+// Marker payload threaded through addMarkers (lat/lng are stripped on the way out).
+interface StationMarker {
+  size?: number;
+  slug: string;
+  name: string;
+  label: string;
 }
 
 export default function StationMap({ stations }: { stations: Station[] }) {
   const plotted = stations.filter((s) => s.lat != null && s.lon != null);
 
-  // Meridians every 30° of longitude, parallels every 30° of latitude.
-  const meridians: number[] = [];
-  for (let lon = -180; lon <= 180; lon += 30) meridians.push(lon);
-  const parallels: number[] = [];
-  for (let lat = 90; lat >= -90; lat -= 30) parallels.push(lat);
+  const { points, addMarkers } = createMap({ width: W, height: H, mapSamples: SAMPLES });
+
+  const markers = addMarkers(
+    plotted.map<{ lat: number; lng: number } & StationMarker>((s) => ({
+      lat: s.lat as number,
+      lng: s.lon as number,
+      size: 2.4,
+      slug: s.slug,
+      name: s.name,
+      label: s.location || s.name,
+    })),
+  );
+
+  // Stagger: offset every other dot row by half a column so the field reads as a
+  // honeycomb rather than a rigid grid. Single pass — find the row order (y →
+  // index) and the smallest positive x-step within a row.
+  const sorted = [...points].sort((a, b) => a.y - b.y || a.x - b.x);
+  const rowIndexByY = new Map<number, number>();
+  let xStep = 0;
+  let prevY = Number.NaN;
+  let prevX = Number.NaN;
+  for (const p of sorted) {
+    if (p.y !== prevY) {
+      prevY = p.y;
+      prevX = Number.NaN;
+      if (!rowIndexByY.has(p.y)) rowIndexByY.set(p.y, rowIndexByY.size);
+    }
+    if (!Number.isNaN(prevX)) {
+      const delta = p.x - prevX;
+      if (delta > 0) xStep = xStep === 0 ? delta : Math.min(xStep, delta);
+    }
+    prevX = p.x;
+  }
+  if (xStep === 0) xStep = 1;
+  const offsetFor = (y: number) => ((rowIndexByY.get(y) ?? 0) % 2 === 1 ? xStep / 2 : 0);
 
   return (
-    <figure className="bs-station-map" aria-label={`World map of ${plotted.length} SUB/WAVE stations`}>
+    <figure
+      className="bs-station-map"
+      aria-label={`World map of ${plotted.length} SUB/WAVE stations`}
+    >
       <svg
-        viewBox={`${-PAD} ${-PAD} ${W + PAD * 2} ${H + PAD * 2}`}
+        viewBox={`0 0 ${W} ${H}`}
         className="bs-station-map-svg"
         role="img"
         preserveAspectRatio="xMidYMid meet"
       >
-        {/* Frame */}
-        <rect x={0} y={0} width={W} height={H} className="bs-map-frame" />
-
-        {/* Graticule */}
-        {meridians.map((lon) => {
-          const x = lon + 180;
-          const prime = lon === 0;
-          return (
-            <line
-              key={`m${lon}`}
-              x1={x}
-              y1={0}
-              x2={x}
-              y2={H}
-              className={prime ? 'bs-map-axis' : 'bs-map-grid'}
-            />
-          );
-        })}
-        {parallels.map((lat) => {
-          const y = 90 - lat;
-          const equator = lat === 0;
-          return (
-            <line
-              key={`p${lat}`}
-              x1={0}
-              y1={y}
-              x2={W}
-              y2={y}
-              className={equator ? 'bs-map-axis' : 'bs-map-grid'}
-            />
-          );
-        })}
+        {/* Land — stippled dot field */}
+        <g className="bs-map-land">
+          {points.map((p, i) => (
+            <circle key={i} cx={p.x + offsetFor(p.y)} cy={p.y} r={0.55} />
+          ))}
+        </g>
 
         {/* Stations */}
-        {plotted.map((s) => {
-          const { x, y } = project(s.lat as number, s.lon as number);
-          const label = s.location || s.name;
+        {markers.map((m) => {
+          const x = m.x + offsetFor(m.y);
+          const y = m.y;
           const flip = x > W - 70; // keep right-edge labels inside the frame
           return (
-            <g key={s.slug} className="bs-map-station">
-              <title>{`${s.name}${s.location ? ` — ${s.location}` : ''}`}</title>
+            <g key={m.slug} className="bs-map-station">
+              <title>{m.label === m.name ? m.name : `${m.name} — ${m.label}`}</title>
+              {/* Pulse ring */}
+              <circle cx={x} cy={y} r={2.6} className="bs-map-pulse">
+                <animate
+                  attributeName="r"
+                  values="2.6;7"
+                  dur="1.8s"
+                  repeatCount="indefinite"
+                />
+                <animate
+                  attributeName="opacity"
+                  values="0.6;0"
+                  dur="1.8s"
+                  repeatCount="indefinite"
+                />
+              </circle>
               <circle cx={x} cy={y} r={5.5} className="bs-map-halo" />
               <circle cx={x} cy={y} r={2.4} className="bs-map-dot" />
               <text
@@ -84,14 +111,16 @@ export default function StationMap({ stations }: { stations: Station[] }) {
                 className="bs-map-label"
                 textAnchor={flip ? 'end' : 'start'}
               >
-                {label}
+                {m.label}
               </text>
             </g>
           );
         })}
       </svg>
       {plotted.length === 0 ? (
-        <figcaption className="bs-map-caption">No stations plotted yet — add yours below.</figcaption>
+        <figcaption className="bs-map-caption">
+          No stations plotted yet — add yours below.
+        </figcaption>
       ) : null}
     </figure>
   );

@@ -3230,7 +3230,7 @@ body::after {
     opacity: 0.5;
 }
 
-/* World chart — equirectangular graticule with plotted station dots. */
+/* World chart — dotted continent silhouette with plotted station markers. */
 .bs-station-map {
     margin: 0 0 clamp(28px, 4vw, 44px);
     padding: clamp(12px, 2vw, 20px);
@@ -3243,18 +3243,13 @@ body::after {
     height: auto;
     overflow: visible;
 }
-.bs-map-frame {
+.bs-map-land circle {
+    fill: color-mix(in oklab, var(--ink) 26%, transparent);
+}
+.bs-map-pulse {
     fill: none;
-    stroke: var(--separator-strong);
-    stroke-width: 0.6;
-}
-.bs-map-grid {
-    stroke: var(--separator-soft);
+    stroke: var(--accent);
     stroke-width: 0.4;
-}
-.bs-map-axis {
-    stroke: var(--separator-strong);
-    stroke-width: 0.6;
 }
 .bs-map-halo {
     fill: color-mix(in oklab, var(--accent) 22%, transparent);
