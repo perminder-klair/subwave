@@ -49,8 +49,10 @@ DEVICE = os.environ.get("TTS_HEAVY_DEVICE", "cpu").lower()
 POCKET_TTS_DEFAULT_VOICE = os.environ.get("POCKET_TTS_VOICE", "alba")
 
 # Per-worker HF cache homes so the two engines don't fight over the same
-# directory. The Dockerfile pre-warms each cache; the env vars below tell
-# huggingface_hub where to look at runtime.
+# directory. Each is a named volume in the compose files, so the weights a
+# worker downloads on its first boot survive container recreates. The env vars
+# below tell huggingface_hub where to look at runtime (and are passed into each
+# worker's env via env_extra below).
 CHATTERBOX_HF_HOME = os.environ.get("CHATTERBOX_HF_HOME", "/opt/chatterbox/hf-cache")
 POCKET_HF_HOME = os.environ.get("POCKET_HF_HOME", "/opt/pocket-tts/hf-cache")
 

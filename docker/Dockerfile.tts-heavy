@@ -26,13 +26,20 @@
 #
 # Image size: ~5-6GB. CPU-only torch wheels (mirror of the index-url trick in
 # docker/Dockerfile.controller:72-87) to avoid the 3.6GB CUDA build. Models are
-# NOT baked at build time — the workers download them lazily into the HF cache
-# (HF_HOME, set per-engine by server.py) on the first /speak after container
-# start. We used to pre-warm them here with a from_pretrained() smoke test, but
-# that pulled several GB from the Hugging Face Hub *inside CI* over an
-# unauthenticated, heavily rate-limited connection, making the image build slow
-# (20+ min) and flaky (HF 429s / timeouts). The build now only does an
-# import-only smoke test (no network); the multi-GB fetch moves to first run.
+# NOT baked at build time — each worker downloads its weights into the HF cache
+# (HF_HOME, set per-engine by server.py) the first time it boots, before it
+# reports ready (server.py's lifespan starts the workers at container start, so
+# the fetch happens on container boot, not on the first /speak). We used to
+# pre-warm them here with a from_pretrained() smoke test, but that pulled
+# several GB from the Hugging Face Hub *inside CI* over an unauthenticated,
+# heavily rate-limited connection, making the image build slow (20+ min) and
+# flaky (HF 429s / timeouts). The build now only does an import-only smoke test
+# (no network); the multi-GB fetch moves to runtime.
+#
+# The compose files mount a named volume over each HF cache dir
+# (tts-heavy-{chatterbox,pocket}-cache → /opt/{chatterbox,pocket-tts}/hf-cache)
+# so that boot-time download survives container recreates — otherwise it would
+# repeat on every `up -d --build` / image pull / update.
 
 FROM python:3.11-slim-bookworm
 
