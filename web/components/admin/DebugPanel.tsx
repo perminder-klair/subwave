@@ -478,7 +478,7 @@ function SessionChat({ session }: { session: DebugSession }) {
         <div
           key={i}
           className={cn(
-            'grid grid-cols-[auto_64px_1fr] items-baseline gap-2 py-0.5 text-[12px]',
+            'grid grid-cols-[auto_178px_1fr] items-baseline gap-2 py-0.5 text-[12px]',
             i < msgs.length - 1 && 'border-b border-dashed border-separator-strong',
           )}
         >
