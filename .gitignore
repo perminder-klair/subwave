@@ -42,3 +42,6 @@ tmp/
 
 # Source screenshots — originals kept local; site uses web/public/screenshots/*.webp
 docs/screenshots/
+
+# Local host-specific compose overrides (CPU caps, etc.)
+docker-compose.override.yml
