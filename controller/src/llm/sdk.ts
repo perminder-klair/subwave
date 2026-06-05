@@ -44,10 +44,13 @@ const MAX_TOKENS_AGENT  = 8000;
 // stateless pool fallback. Raising this re-opens the middle-step failure
 // window on cloud Ollama; don't, unless the provider honours `toolChoice`.
 //
-// This is independent of djAgent's `maxSteps`: on the done-tool path the loop
-// ends when `done` is called (step 1), well before `maxSteps`; `maxSteps` is
-// just the backstop here and the real step budget for the non-Ollama native
-// Output.object path.
+// This is independent of djAgent's `maxSteps`: every tool-using agent now takes
+// the done-tool path (see djAgent below), so the loop ends when `done` is
+// called (step 1), well before `maxSteps` — which is now just the backstop.
+// The one-discovery-call cap applies to non-Ollama providers too even though
+// they honour `toolChoice` and could safely explore more; keeping it uniform
+// matched the validated behaviour. If a provider would benefit from deeper
+// discovery, make the gate provider-conditional rather than raising it for all.
 const COMMIT_AFTER_STEPS = 1;
 
 // Some models (Qwen 3, DeepSeek R1, etc.) emit a <think>…</think> reasoning
@@ -460,33 +463,47 @@ export async function djObject({
 // final object. Throws on failure so the caller can fall back to a stateless
 // path.
 //
-// When a `schema` is provided the structured-output strategy is chosen per
-// provider, gated by needsToolCallObject():
+// When a `schema` is provided, structured output comes from the AI SDK's
+// documented "done tool" pattern (the canonical forced tool-calling pattern at
+// /app/node_modules/ai/docs/03-agents/04-loop-control.mdx "Forced Tool
+// Calling"): a synthetic `done` tool whose inputSchema IS the schema is added
+// alongside the discovery tools, `toolChoice: 'required'` forces a tool call
+// every step, and prepareStep below corners the model into discovery-then-done.
+// This is used whenever the agent has tools — on EVERY provider.
 //
-// - Ollama: use the AI SDK's "done tool" pattern (the canonical forced
-//   tool-calling pattern documented at
-//   /app/node_modules/ai/docs/03-agents/04-loop-control.mdx "Forced Tool
-//   Calling"). A synthetic `done` tool whose inputSchema IS the schema is
-//   added alongside the discovery tools, `toolChoice: 'required'` forces a
-//   tool call every step, and prepareStep below corners the model into
-//   discovery-then-done. The split matters because Ollama's structured-output
-//   mode (the `format` field, surfaced as Output.object by the AI SDK) forces
-//   the model to emit schema-valid JSON *now* — incompatible with a tool loop
-//   that needs to call discovery tools first. Confirmed empirically when the
-//   ai-sdk-ollama swap landed: dropping the done-tool pattern collapsed
-//   glm-5.1:cloud from 20/20 → 0/20 (model returns {"id":"","reason":""}
-//   without ever calling discovery). The non-Ollama branch keeps Output.object
-//   because those providers' constrained decoders interleave with tool calls
-//   correctly.
+// It used to be gated to Ollama only (needsToolCallObject()), with non-Ollama
+// agents taking the native Output.object path on the assumption that those
+// providers' constrained decoders interleave Output.object with tool calls
+// correctly. They don't: across OpenAI direct (gpt-4o, gpt-4o-mini), OpenRouter
+// (gemini-2.5-flash, claude-haiku-4.5), and others, ToolLoopAgent + tools +
+// Output.object consistently ends the loop without ever emitting the object —
+// the SDK throws "No output generated." and the picker falls back to the pool
+// (issue #300). The AI SDK never documents Output.object as a tool-loop output
+// strategy; the done tool is its recommended one. So tool-using agents now use
+// it everywhere, and only the schema-only (no-tools) case keeps Output.object.
 //
-// Empirical reliability across the picker-test.mjs harness, captured at the
-// ai-sdk-ollama swap (20 short runs each unless noted):
+// Two reasons the done-tool path is needed differ by provider but converge on
+// the same fix:
+//   - Ollama: its structured-output mode (the `format` field, surfaced as
+//     Output.object) forces schema-valid JSON *now* — incompatible with a tool
+//     loop that must call discovery first. Dropping the done tool when the
+//     ai-sdk-ollama swap landed collapsed glm-5.1:cloud from 20/20 → 0/20
+//     (returns {"id":"","reason":""} without ever calling discovery).
+//   - non-Ollama: Output.object after tool calls simply never emits (#300).
+//
+// Empirical reliability across the picker-test.mjs harness (20 short runs each
+// unless noted). The Ollama rows were captured at the ai-sdk-ollama swap; the
+// non-Ollama rows below the line are the #300 reproduction — every one failed
+// to emit on the OLD Output.object path:
 //   ollama:glm-5.1:cloud         done-tool 20/20  median  8.5s  p95 23.9s
 //   ollama:kimi-k2.6:cloud       done-tool 20/20  median 31.8s  p95 55.3s
 //   ollama:nemotron-3-super:cloud (10 runs) 10/10 median 16.5s  p95 208s
-//   google:gemini-3.5-flash      Output.object 5/5
-//   deepseek:deepseek-chat       Output.object 5/5
-//   openrouter:anthropic/claude-haiku-4-5  Output.object 5/5
+//   openai:gpt-4o                Output.object 0/n  "No output generated" (#300)
+//   openai:gpt-4o-mini           Output.object 0/n  "No output generated" (#300)
+//   openrouter:gemini-2.5-flash  Output.object 0/n  "No output generated" (#300)
+//   openrouter:claude-haiku-4.5  Output.object 0/n  "No output generated" (#300)
+// (An earlier table here recorded these models passing 5/5 on Output.object;
+// that no longer reproduces on ai@6 — an SDK-version drift, per #300.)
 // The Ollama latency p95s exceed the picker's 22s `timeoutMs` ceiling, but
 // agent.generate({ timeout }) is not honoured by the ai-sdk-ollama transport
 // — runs that exceed the cap simply run long. Callers (dj-agent.js) still
@@ -527,9 +544,10 @@ export async function djAgent({
       });
       return { object, steps: 0, toolCalls: [] };
     }
-    // done-tool path on Ollama; native Output.object on everything else. See
-    // the header comment above for the per-provider rationale.
-    const useDoneTool = schema != null && needsToolCallObject();
+    // Structured output from a tool-using agent goes through the done-tool
+    // path on EVERY provider; the schema-only (no-tools) case keeps native
+    // Output.object off Ollama. See the header comment above for why.
+    const useDoneTool = schema != null && (needsToolCallObject() || toolCount > 0);
     const allTools = useDoneTool ? {
       ...tools,
       done: tool({

@@ -136,9 +136,8 @@ The messages above are the live session — the last user turn is a listener req
 export const pickerAgent = defineAgent({
   kind: 'djAgentPick',
   schema: PICK_SCHEMA,
-  // On the Ollama done-tool path the loop ends at step 1 (COMMIT_AFTER_STEPS
-  // in sdk.js); maxSteps is the backstop and the budget for the non-Ollama
-  // native path.
+  // The done-tool path ends the loop at step 1 (COMMIT_AFTER_STEPS in sdk.js)
+  // on every provider now; maxSteps is just the backstop.
   maxSteps: 4,
   timeoutMs: 22000,
   buildSystem: () => pickSystem(),
