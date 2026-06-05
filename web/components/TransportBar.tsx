@@ -2,8 +2,10 @@
 
 import { useEffect, useRef } from 'react';
 import { animate as motionAnimate, m, useAnimate } from 'motion/react';
+import { ChevronDown, ChevronUp, Volume2 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { Slider } from './ui/slider';
+import { useIsIOS } from '@/lib/hooks';
 import { SCALE_MAX, type SignalQuality } from '@/hooks/useSignal';
 import type { NowPlayingTrack } from '@/lib/types';
 import type { PlayerStatus } from '@/hooks/usePlayer';
@@ -64,6 +66,12 @@ export default function TransportBar({
   nowPlaying,
   elapsed,
 }: TransportBarProps) {
+  // iOS Safari makes HTMLMediaElement.volume read-only and ignores a Web Audio
+  // GainNode inside an installed PWA, so the on-screen knob can't actually
+  // attenuate there. Swap it for a hardware-volume hint instead of shipping a
+  // dead control (issue #298).
+  const iosVolumeLocked = useIsIOS();
+
   // The window between the tune-in gesture and the first audible frame —
   // surfaced on the power ring so the player doesn't claim to play while silent.
   const connecting = status === 'connecting';
@@ -217,39 +225,56 @@ export default function TransportBar({
         {/* ── VOLUME ─────────────────────────────────────────────── */}
         <div className="relative flex flex-col items-center justify-center gap-1.5 px-4 pt-1 pb-2 [border-left:1px_solid_var(--fz-line)] md:px-5 md:pt-1 md:pb-2.5 lg:gap-2 lg:px-6 lg:pt-1.5 lg:pb-3">
           <span className="v3-caption hidden text-muted lg:block">Volume</span>
-          <div className="flex items-center gap-3 lg:gap-4">
-            <div ref={knobWrapRef} className="fz-knob-wrap h-10 w-10 lg:h-[48px] lg:w-[48px]">
-              <div className="fz-knob-ticks" />
-              <div
-                className="fz-knob"
-                ref={(el) => { if (el) el.style.setProperty('--fz-angle', `${angle}deg`); }}
-              >
-                <span className="fz-cap" />
-                <span className="fz-pointer" />
+          {iosVolumeLocked ? (
+            // iOS: volume is hardware-only (see iosVolumeLocked above). Echo a
+            // phone volume rocker rather than ship a dead knob; the full
+            // explanation lives in the tooltip / accessible label.
+            <div
+              className="flex h-10 items-center gap-1.5 text-muted lg:h-[48px]"
+              title="On iOS, volume is set with your device's buttons"
+              aria-label="Volume is controlled by your device's hardware buttons"
+            >
+              <Volume2 size={20} strokeWidth={1.5} aria-hidden="true" />
+              <span className="-my-0.5 flex flex-col leading-none" aria-hidden="true">
+                <ChevronUp size={12} strokeWidth={2.25} />
+                <ChevronDown size={12} strokeWidth={2.25} />
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 lg:gap-4">
+              <div ref={knobWrapRef} className="fz-knob-wrap h-10 w-10 lg:h-[48px] lg:w-[48px]">
+                <div className="fz-knob-ticks" />
+                <div
+                  className="fz-knob"
+                  ref={(el) => { if (el) el.style.setProperty('--fz-angle', `${angle}deg`); }}
+                >
+                  <span className="fz-cap" />
+                  <span className="fz-pointer" />
+                </div>
+                {/* Interaction layer only — the rotating knob above is the visible
+                    control, so the accessible Radix Slider is overlaid invisibly. */}
+                <Slider
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={[volume]}
+                  onValueChange={([v]) => setVolume(v ?? 0)}
+                  aria-label="Volume"
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                />
               </div>
-              {/* Interaction layer only — the rotating knob above is the visible
-                  control, so the accessible Radix Slider is overlaid invisibly. */}
-              <Slider
-                min={0}
-                max={1}
-                step={0.01}
-                value={[volume]}
-                onValueChange={([v]) => setVolume(v ?? 0)}
-                aria-label="Volume"
-                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+
+              <button
+                type="button"
+                onClick={handleMute}
+                aria-pressed={muted}
+                aria-label={muted ? 'Unmute' : 'Mute'}
+                title={muted ? 'Unmute' : 'Mute'}
+                data-muted={muted ? 'true' : 'false'}
+                className="fz-grille v3-focus h-9 w-9 lg:h-10 lg:w-10"
               />
             </div>
-
-            <button
-              type="button"
-              onClick={handleMute}
-              aria-pressed={muted}
-              aria-label={muted ? 'Unmute' : 'Mute'}
-              title={muted ? 'Unmute' : 'Mute'}
-              data-muted={muted ? 'true' : 'false'}
-              className="fz-grille v3-focus h-9 w-9 lg:h-10 lg:w-10"
-            />
-          </div>
+          )}
         </div>
       </div>
     </div>

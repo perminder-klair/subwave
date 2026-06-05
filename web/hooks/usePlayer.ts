@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
+import { isIOSDevice } from '@/lib/platform';
 
 // We pick MP3 vs Ogg-Opus on the client via canPlayType — Opus is roughly
 // equal-or-better quality at half the bandwidth on browsers that decode it.
@@ -103,14 +104,11 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
   useEffect(() => {
     if (!OPUS_STREAM_URL || opusFailedRef.current) return;
     const ua = navigator.userAgent;
-    const isIOS =
-      /iPad|iPhone|iPod/.test(ua) ||
-      (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
     // Desktop/Android Firefox + Gecko forks (LibreWolf, Waterfox) carry
     // "Firefox" in the UA; Firefox-for-iOS reports "FxiOS" and is already
-    // caught by isIOS above, so /firefox/i doesn't double-handle it.
+    // caught by isIOSDevice() below, so /firefox/i doesn't double-handle it.
     const isFirefox = /firefox/i.test(ua);
-    if (isIOS || isFirefox) return;
+    if (isIOSDevice() || isFirefox) return;
     const tester = document.createElement('audio');
     const opusOk = tester.canPlayType('audio/ogg; codecs=opus');
     if (opusOk === 'probably') {

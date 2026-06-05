@@ -1,6 +1,17 @@
 'use client';
 
 import { useEffect, useRef, useState, type RefObject } from 'react';
+import { isIOSDevice } from './platform';
+
+// SSR-safe iOS flag. Returns false on the server and the first client render
+// (so server and client markup agree and hydration stays clean), then flips to
+// the real value after mount. Components use this to branch UI that can't work
+// on iOS (e.g. the volume slider — issue #298) without a hydration mismatch.
+export function useIsIOS(): boolean {
+  const [ios, setIos] = useState(false);
+  useEffect(() => { setIos(isIOSDevice()); }, []);
+  return ios;
+}
 
 export function useClock(): Date | null {
   const [t, setT] = useState<Date | null>(null);
@@ -47,6 +58,12 @@ interface WebkitWindow {
 // into an internal ref read via `read()`. Returns `{ ready, read }`. If CORS
 // or anything else blocks attachment, `ready` stays false and `read()` returns
 // null — callers should fall back to `useSpectrum`.
+//
+// iOS is opted out entirely: createMediaElementSource on a live MP3 stream only
+// ever yields zeros there, and merely routing the element through Web Audio
+// jeopardises lock-screen / background playback. So on iOS we never build the
+// graph — the element stays a bare <audio> and the Waveform's pseudo-random
+// fallback drives the bars (issue #298).
 export function useAnalyser(
   audioRef: RefObject<HTMLAudioElement | null> | null | undefined,
   active: boolean,
@@ -60,6 +77,8 @@ export function useAnalyser(
 
   useEffect(() => {
     if (!active || !audioRef?.current) return;
+    // iOS: never touch Web Audio (see hook header). Stay not-ready → fallback.
+    if (isIOSDevice()) { setReady(false); return; }
     let cancelled = false;
     const audioEl = audioRef.current;
     let probeInterval: ReturnType<typeof setInterval> | null = null;
@@ -85,10 +104,10 @@ export function useAnalyser(
         if (cancelled) return;
         setReady(true);
 
-        // iOS Safari quirk: createMediaElementSource() on a live HTTP MP3 stream
-        // wires up cleanly but the analyser only ever returns zeros. Probe once
-        // after playback actually starts — if no samples land in ~600 ms, flip
-        // ready=false so the pseudo-random useSpectrum fallback takes over.
+        // Some non-iOS WebKit builds (e.g. desktop Safari on a live MP3 mount)
+        // also wire the graph up but only ever return zeros. Probe once after
+        // playback starts — if no samples land in ~600 ms, flip ready=false so
+        // the pseudo-random useSpectrum fallback takes over.
         if (probedRef.current) return;
         onPlaying = () => {
           if (probedRef.current || cancelled) return;
@@ -113,8 +132,10 @@ export function useAnalyser(
               if (probeInterval) clearInterval(probeInterval);
               probeInterval = null;
               if (max === 0) {
-                try { sourceRef.current?.disconnect(); } catch {}
-                try { analyserRef.current?.disconnect(); } catch {}
+                // No usable data. Fall back to the pseudo-spectrum, but DON'T
+                // disconnect — the source feeds the speakers through this graph,
+                // so tearing it down would mute playback. An idle analyser in
+                // the chain is transparent.
                 setReady(false);
               }
             }
