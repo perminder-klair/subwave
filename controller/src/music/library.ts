@@ -16,7 +16,12 @@ let loaded = false;
 
 export async function load() {
   if (loaded) return;
-  await db.open({ embeddingDim: resolveEmbeddingDim() });
+  // reseed:true makes a model/dim swap self-heal instead of crashing the whole
+  // controller library subsystem (browse/picker/retag). On a mismatch the
+  // vector table is rebuilt empty at the new dim — KNN degrades gracefully
+  // until a tag re-embed refills it, while tagged-row browse/retag (moods live
+  // in `tracks`, not vectors) keep working. It is a no-op when dims match.
+  await db.open({ embeddingDim: resolveEmbeddingDim(), reseed: true });
   loaded = true;
 }
 

@@ -120,7 +120,10 @@ async function main() {
   await settings.load();
 
   const embeddingDim = embeddings.resolveEmbeddingDim();
-  await db.open({ embeddingDim });
+  // Pass reseed so open() can recover from an embedding model/dim swap instead
+  // of throwing the dim-mismatch error before the --reseed logic below ever
+  // runs (the bug in #307). On a same-dim run this is a no-op.
+  await db.open({ embeddingDim, reseed: flags.reseed });
 
   // The DB upserts emit when the model changes; record the current one.
   db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim);

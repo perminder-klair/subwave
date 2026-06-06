@@ -132,7 +132,15 @@ export interface LibraryStats {
 // Open + migrate
 // ---------------------------------------------------------------------------
 
-export async function open(opts: { embeddingDim: number }): Promise<void> {
+// `reseed` controls what happens when the DB's stored embedding dim no longer
+// matches the requested one (the operator swapped embedding models). Without
+// it, migrate() throws an instructive error — the safe default that protects a
+// populated index. With it, migrate() drops the stale-dim vectors and rebuilds
+// the table at the new dim so a re-embed run can refill it. The tagger passes
+// `reseed` from its --reseed flag; the live controller passes it too so a model
+// change self-heals instead of crashing (see music/library.ts). It is a no-op
+// on the normal matching-dim path.
+export async function open(opts: { embeddingDim: number; reseed?: boolean }): Promise<void> {
   if (db) {
     if (opts.embeddingDim !== currentEmbeddingDim) {
       throw new Error(
@@ -148,7 +156,7 @@ export async function open(opts: { embeddingDim: number }): Promise<void> {
   db.pragma('synchronous = NORMAL');
   sqliteVec.load(db);
 
-  await migrate(opts.embeddingDim);
+  await migrate(opts.embeddingDim, opts.reseed === true);
   await maybeMigrateFromMoodsJson();
 }
 
@@ -173,7 +181,7 @@ function requireDb(): Database.Database {
 // Schema
 // ---------------------------------------------------------------------------
 
-async function migrate(embeddingDim: number): Promise<void> {
+async function migrate(embeddingDim: number, reseed = false): Promise<void> {
   const d = requireDb();
   const userVersion = (d.pragma('user_version', { simple: true }) as number) || 0;
 
@@ -235,11 +243,23 @@ async function migrate(embeddingDim: number): Promise<void> {
     | { model: string; dim: number }
     | undefined;
   if (meta && meta.dim !== embeddingDim) {
-    throw new Error(
-      `embedding dim mismatch: state/library.db has ${meta.dim}-d vectors (model: ${meta.model}), ` +
-        `but the current settings ask for ${embeddingDim}-d. ` +
-        `Run \`npm run tag -- --reseed\` to re-embed.`,
+    if (!reseed) {
+      throw new Error(
+        `embedding dim mismatch: state/library.db has ${meta.dim}-d vectors (model: ${meta.model}), ` +
+          `but the current settings ask for ${embeddingDim}-d. ` +
+          `Run \`npm run tag -- --reseed\` to re-embed.`,
+      );
+    }
+    // Reseed across a model/dim change: the stored vectors are unusable at the
+    // new dim, so drop them (the table is recreated at `embeddingDim` just
+    // below) and clear the stale meta row so a later setEmbeddingMeta() seeds
+    // it fresh and the next open() sees a matching (or absent) dim.
+    console.warn(
+      `[library-db] reseed: embedding dim ${meta.dim}→${embeddingDim} ` +
+        `(model: ${meta.model}); dropping vectors for re-embed`,
     );
+    runDdl(d, 'DROP TABLE IF EXISTS track_vectors');
+    d.prepare('DELETE FROM embedding_meta WHERE pk = 1').run();
   }
 
   const hasVecTable = d
