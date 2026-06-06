@@ -72,6 +72,9 @@ export default defineConfig([
             '^admin-',
             '^sw-',
             '^player-',
+            // .lib-* — redesigned /admin/library component classes in
+            // app/globals.css (.admin-root .lib-*). Same legacy-CSS deal.
+            '^lib-',
             // admin-scoped descendant classes from globals.css
             '^eyebrow$',
             '^caption$',
@@ -122,6 +125,13 @@ export default defineConfig([
             '^accent$',
             '^active$',
             '^strip-mobile$',
+            // bare state / descendant classes used with .lib-* parents
+            '^on$',
+            '^box$',
+            '^flash$',
+            '^pct$',
+            '^h-tags$',
+            '^h-album$',
           ],
         },
       ],

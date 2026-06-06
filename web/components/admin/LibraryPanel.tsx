@@ -1,31 +1,39 @@
 'use client';
 
-// Library — /admin/library.
+// Library — /admin/library (redesigned).
 //
-// Three tabs over the same chrome:
-//   • Browse — filters the tagged moods.json index (mood/energy/genre/year/q).
+// One merged "Your DJ knows X%" tagging panel up top — coverage, the primary
+// Start-tagging action, and progressive-disclosure Maintenance & log — then a
+// clearer browse/search/untagged experience:
+//   • Recently added — newest album tracks for quick discovery.
+//   • Browse — filters the tagged moods index (mood/energy/genre/year/q).
 //   • Search — Navidrome free-text (the legacy /dj/search path).
 //   • Untagged — paginates through library tracks that haven't been tagged yet.
-//   • Recently added — newest album tracks for quick discovery.
 //
-// Each row supports `Queue` (push to the live queue) and, where applicable,
-// `Retag` / `Tag` (single-track LLM classification via /library/retag).
-// A tagger strip below the header owns the background batch job.
+// Rows carry album art (via the public /cover/:id proxy, letter-tile fallback)
+// and inline mood/energy tags so operators *see* what tagging produces. Each
+// row supports Queue (push to the live queue) and, where applicable, Retag /
+// Tag (single-track LLM classification via /library/retag).
+//
+// All colours come from theme tokens (the operator picks a theme in Settings),
+// so the page renders correctly under every palette — no hardcoded hex.
 
-import type { ChangeEvent, FormEvent } from 'react';
+import type { ChangeEvent, FormEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Search, RotateCcw } from 'lucide-react';
-import { useAdminAuth } from '../../lib/adminAuth';
+import {
+  Search, RotateCcw, Sparkles, Activity, Play, Square, ChevronDown, ChevronRight,
+  Terminal, RefreshCw, ListPlus, X,
+} from 'lucide-react';
+import { useAdminAuth, ADMIN_API_URL } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../lib/notify';
 import { Input } from '../ui/input';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '../ui/input-group';
 import { Field, FieldLabel } from '../ui/field';
-import { Checkbox } from '../ui/checkbox';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '../ui/select';
-import { Card, Btn, Eyebrow, Seg } from './ui';
+import { Card, Btn, Eyebrow } from './ui';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { cn } from '../../lib/cn';
 
@@ -80,13 +88,71 @@ interface TaggerState {
   lastLog?: string[];
 }
 
-interface SettingsResponse { tagger?: TaggerState }
+// libraryStats rides along on /settings — gives moods-in-use, last-tag time,
+// and withEmbedding (used to nudge a re-embed after a model swap) without an
+// extra request and regardless of which tab is active.
+interface LibraryStatsLite {
+  total: number;
+  byMood: Record<string, number>;
+  byEnergy: Record<string, number>;
+  byGenre: Record<string, number>;
+  withEmbedding: number;
+  updatedAt: string | null;
+}
 
-type Tab = 'browse' | 'search' | 'untagged' | 'recent';
+interface SettingsResponse { tagger?: TaggerState; libraryStats?: LibraryStatsLite }
+
+type Tab = 'recent' | 'browse' | 'search' | 'untagged';
 type Sort = 'artist' | 'title' | 'year' | 'taggedAt';
 type Energy = 'any' | 'low' | 'medium' | 'high';
+type Batch = '100' | '500' | 'all';
+
+type RescanOpts = {
+  reseed?: boolean;
+  reEnrich?: boolean;
+  reAnalyze?: boolean;
+  upgrade?: boolean;
+};
 
 const PAGE_SIZE = 50;
+
+// ---------------------------------------------------------------------------
+// small shared parts
+// ---------------------------------------------------------------------------
+function EnergyMeter({ level }: { level?: string | null }) {
+  const cls = level === 'high' ? 'h' : level === 'medium' ? 'm' : level === 'low' ? 'l' : '';
+  return (
+    <span className={cn('lib-emeter', cls)} aria-hidden>
+      <span /><span /><span />
+    </span>
+  );
+}
+
+// Album thumbnail via the public /cover/:id proxy, with a letter-tile fallback
+// when art is missing or the request errors. The fallback is token-coloured so
+// it never clashes with the active theme.
+function Thumb({ track }: { track: Track }) {
+  const [errored, setErrored] = useState(false);
+  const letter = (track.album || track.title || track.artist || '?').trim()[0]?.toUpperCase() || '?';
+  const showImg = !!track.id && !errored;
+  return (
+    <span className="lib-thumb">
+      {showImg ? (
+         
+        <img
+          src={`${ADMIN_API_URL}/cover/${encodeURIComponent(track.id)}`}
+          alt=""
+          loading="lazy"
+          onError={() => setErrored(true)}
+        />
+      ) : letter}
+    </span>
+  );
+}
+
+function num(n: number | null | undefined): string {
+  return n != null ? n.toLocaleString('en-GB') : '—';
+}
 
 // ---------------------------------------------------------------------------
 // panel
@@ -99,10 +165,17 @@ export default function LibraryPanel() {
   const [tab, setTab] = useState<Tab>('recent');
   const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [tagger, setTagger] = useState<TaggerState | null>(null);
-  const [taggerLimit, setTaggerLimit] = useState('500');
+  const [libStats, setLibStats] = useState<LibraryStatsLite | null>(null);
+  const [batch, setBatch] = useState<Batch>('500');
   const [taggerBusy, setTaggerBusy] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
   const [queuing, setQueuing] = useState<string | null>(null);
   const [retagging, setRetagging] = useState<string | null>(null);
+  const [flashId, setFlashId] = useState<string | null>(null);
+
+  // live-run progress baseline (best-effort: coverage delta vs. a captured
+  // target — the backend has no per-run counter). Set when WE start a run.
+  const [runInfo, setRunInfo] = useState<{ baseline: number; target: number | null } | null>(null);
 
   // browse state
   const [moods, setMoods] = useState<string[]>([]);
@@ -152,6 +225,7 @@ export default function LibraryPanel() {
       if (!r.ok) return;
       const j = (await r.json()) as SettingsResponse;
       setTagger(j.tagger || null);
+      if (j.libraryStats) setLibStats(j.libraryStats);
     } catch { /* transient */ }
   }, [adminFetch, ready]);
 
@@ -169,6 +243,18 @@ export default function LibraryPanel() {
     const id = setInterval(loadTagger, interval);
     return () => clearInterval(id);
   }, [ready, loadTagger, tagger?.running]);
+
+  // While a run is live, poll coverage faster so the % visibly climbs.
+  useEffect(() => {
+    if (!ready || !tagger?.running) return;
+    const id = setInterval(loadCoverage, 3_000);
+    return () => clearInterval(id);
+  }, [ready, tagger?.running, loadCoverage]);
+
+  // Clear the run baseline once the tagger stops.
+  useEffect(() => {
+    if (!tagger?.running) setRunInfo(null);
+  }, [tagger?.running]);
 
   // -----------------------------------------------------------------------
   // browse fetch — debounced on filter change
@@ -326,6 +412,8 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `retag failed (${r.status})`);
       const tagStr = j.moods?.length ? j.moods.join(', ') : '—';
       notify.ok(`retagged · ${tagStr} [${j.energy || '?'}]`);
+      setFlashId(track.id);
+      setTimeout(() => setFlashId(curr => (curr === track.id ? null : curr)), 1100);
       if (tab === 'browse') runBrowse();
       if (tab === 'untagged') setUntagged(prev => prev.filter(t => t.id !== track.id));
       loadCoverage();
@@ -339,18 +427,23 @@ export default function LibraryPanel() {
   // -----------------------------------------------------------------------
   // tagger controls
   // -----------------------------------------------------------------------
+  const remaining = coverage?.total != null ? Math.max(0, coverage.total - coverage.tagged) : null;
+
   const startTagger = async () => {
     setTaggerBusy(true);
     try {
-      const limit = parseInt(taggerLimit, 10);
+      const limit = batch === 'all' ? null : parseInt(batch, 10);
+      const target = batch === 'all' ? remaining : limit;
       const r = await adminFetch('/tag-library', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Number.isFinite(limit) && limit > 0 ? { limit } : {}),
+        body: JSON.stringify(limit && limit > 0 ? { limit } : {}),
       });
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `tagger start failed (${r.status})`);
       notify.ok('tagger started');
+      setLogOpen(true);
+      setRunInfo({ baseline: coverage?.tagged ?? 0, target: target ?? null });
       await loadTagger();
     } catch (err) {
       notify.err(errorMessage(err));
@@ -374,21 +467,15 @@ export default function LibraryPanel() {
     }
   };
 
-  // Re-scan with explicit flags. Each maps to a tag-library CLI flag:
+  // Re-scan with explicit flags — each maps to a tag-library CLI flag:
   //   reseed     drop + rebuild every embedding from scratch (model-swap recovery)
   //   reEnrich   re-fetch Last.fm tags + lyrics that feed the embeddings
   //   reAnalyze  redo acoustic bpm/key analysis
   //   upgrade    re-LLM-tag only rows whose prompt/model is stale
-  // The "Full re-scan" button sends reseed + reEnrich + reAnalyze together; the
-  // advanced checkboxes let an operator compose a narrower run. Sends no limit —
-  // a partial reseed leaves the library in a mixed state KNN can't use. Existing
-  // mood tags survive as seeds, so a reseed re-spends embedding calls, not LLM.
-  const rescanTagger = async (opts: {
-    reseed?: boolean;
-    reEnrich?: boolean;
-    reAnalyze?: boolean;
-    upgrade?: boolean;
-  }) => {
+  // Sends no limit — a partial reseed leaves the library in a mixed state KNN
+  // can't use. Existing mood tags survive as seeds, so a reseed re-spends
+  // embedding calls, not LLM.
+  const rescanTagger = async (opts: RescanOpts) => {
     setTaggerBusy(true);
     try {
       const r = await adminFetch('/tag-library', {
@@ -399,6 +486,7 @@ export default function LibraryPanel() {
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `re-scan failed (${r.status})`);
       notify.ok('re-scan started…');
+      setLogOpen(true);
       await loadTagger();
     } catch (err) {
       notify.err(errorMessage(err));
@@ -412,6 +500,8 @@ export default function LibraryPanel() {
   // -----------------------------------------------------------------------
   const stats = browse?.stats;
   const moodVocab = browse?.moodVocab || [];
+  const moodCounts = stats?.byMood || libStats?.byMood || {};
+  const energyCounts = stats?.byEnergy || libStats?.byEnergy || {};
   const totalPages = browse ? Math.max(1, Math.ceil(browse.total / PAGE_SIZE)) : 1;
   const filtersActive =
     moods.length > 0 || energy !== 'any' || !!genre || !!yearFrom || !!yearTo || !!q.trim();
@@ -419,6 +509,12 @@ export default function LibraryPanel() {
   const clearFilters = () => {
     setMoods([]); setEnergy('any'); setGenre(''); setYearFrom(''); setYearTo(''); setQ('');
     setSort('artist'); setPage(0);
+  };
+
+  const counts = {
+    browse: coverage?.tagged ?? libStats?.total ?? null,
+    untagged: remaining,
+    recent: recent?.length ?? null,
   };
 
   const tableRows: Track[] =
@@ -433,319 +529,436 @@ export default function LibraryPanel() {
     recentLoading;
 
   return (
-    <div className="grid gap-4">
-      <KpiStrip coverage={coverage} stats={stats} onStartTag={startTagger} />
-
-      <TaggerStrip
+    <div className="grid gap-5">
+      <TaggingPanel
         coverage={coverage}
+        libStats={libStats}
         tagger={tagger}
-        limit={taggerLimit}
-        setLimit={setTaggerLimit}
+        runInfo={runInfo}
+        batch={batch}
+        setBatch={setBatch}
         busy={taggerBusy}
+        logOpen={logOpen}
+        setLogOpen={setLogOpen}
         onStart={startTagger}
         onStop={stopTagger}
         onRescan={rescanTagger}
       />
 
-      <div className="stack-mobile grid grid-cols-[260px_1fr] items-start gap-4">
-        <aside className="grid gap-4">
-          <TabRail tab={tab} setTab={setTab} />
+      <Tabs tab={tab} setTab={setTab} counts={counts} />
 
-          {tab === 'browse' && (
-            <BrowseFilters
-              moodVocab={moodVocab}
-              moodCounts={stats?.byMood || {}}
-              energyCounts={stats?.byEnergy || {}}
-              genreList={genreList}
-              moods={moods} setMoods={setMoods}
-              energy={energy} setEnergy={setEnergy}
-              genre={genre} setGenre={setGenre}
-              yearFrom={yearFrom} setYearFrom={setYearFrom}
-              yearTo={yearTo} setYearTo={setYearTo}
-              sort={sort} setSort={setSort}
-              filtersActive={filtersActive}
-              onClear={clearFilters}
-            />
+      {/* contextual controls */}
+      {tab === 'browse' && (
+        <BrowseFilters
+          moodVocab={moodVocab}
+          moodCounts={moodCounts}
+          energyCounts={energyCounts}
+          genreList={genreList}
+          moods={moods} setMoods={setMoods}
+          energy={energy} setEnergy={setEnergy}
+          genre={genre} setGenre={setGenre}
+          yearFrom={yearFrom} setYearFrom={setYearFrom}
+          yearTo={yearTo} setYearTo={setYearTo}
+          q={q} setQ={setQ}
+          sort={sort} setSort={setSort}
+        />
+      )}
+
+      {tab === 'browse' && filtersActive && (
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
+          <span className="caption">active</span>
+          {moods.map(m => (
+            <span key={m} className="lib-active-chip">
+              {m}<button type="button" onClick={() => setMoods(moods.filter(x => x !== m))} aria-label={`remove ${m}`}>×</button>
+            </span>
+          ))}
+          {energy !== 'any' && (
+            <span className="lib-active-chip">{energy} energy<button type="button" onClick={() => setEnergy('any')} aria-label="remove energy">×</button></span>
           )}
-
-          {tab !== 'browse' && (
-            <Card title="About this view" bodyClass="!py-3">
-              <div className="text-[11px] leading-[1.5] text-muted">
-                {tab === 'search' && 'Free-text search against Navidrome — best for finding a specific track to queue right now.'}
-                {tab === 'untagged' && 'Tracks that don\'t yet have moods/energy classified. Tag them one at a time, or kick off the bulk tagger at the top of the page.'}
-                {tab === 'recent' && 'The newest tracks added to your Navidrome library.'}
-              </div>
-            </Card>
+          {genre && (
+            <span className="lib-active-chip">{genre}<button type="button" onClick={() => setGenre('')} aria-label="remove genre">×</button></span>
           )}
-        </aside>
-
-        <div className="grid gap-4">
-          {tab === 'browse' && (
-            <Card bodyClass="!py-3">
-              <div className="grid grid-cols-[1fr_auto] gap-2">
-                <InputGroup>
-                  <InputGroupAddon><Search /></InputGroupAddon>
-                  <InputGroupInput
-                    placeholder="filter results by title, artist, or album…"
-                    value={q}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setQ(e.target.value)}
-                  />
-                </InputGroup>
-                <Btn type="button" onClick={() => runBrowse()} disabled={browseLoading}>
-                  {browseLoading ? 'Loading…' : 'Refresh'}
-                </Btn>
-              </div>
-            </Card>
+          {(yearFrom || yearTo) && (
+            <span className="lib-active-chip">{yearFrom || '…'}–{yearTo || '…'}<button type="button" onClick={() => { setYearFrom(''); setYearTo(''); }} aria-label="remove year">×</button></span>
           )}
-
-          {tab === 'search' && (
-            <Card bodyClass="!py-3">
-              <form onSubmit={runSearch} className="grid grid-cols-[1fr_auto_auto] gap-2">
-                <InputGroup>
-                  <InputGroupAddon><Search /></InputGroupAddon>
-                  <InputGroupInput
-                    placeholder="floating points, kingdoms in colour, 2018…"
-                    value={searchQuery}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
-                  />
-                </InputGroup>
-                <Btn tone="accent" type="submit" disabled={searching || !searchQuery.trim() || !ready}>
-                  {searching ? 'Searching…' : 'Search'}
-                </Btn>
-                <Btn type="button" onClick={() => { setSearchQuery(''); setSearchResults(null); }} disabled={searching}>
-                  Clear
-                </Btn>
-              </form>
-            </Card>
+          {q.trim() && (
+            <span className="lib-active-chip">“{q.trim()}”<button type="button" onClick={() => setQ('')} aria-label="remove search">×</button></span>
           )}
-
-          <Card
-            title={
-              tab === 'browse' ? 'Tracks' :
-              tab === 'search' ? 'Search results' :
-              tab === 'untagged' ? 'Untagged' :
-              'Recently added'
-            }
-            sub={
-              tab === 'browse'
-                ? (browse ? `${browse.total.toLocaleString('en-GB')} match${browse.total === 1 ? '' : 'es'}` : '')
-                : tab === 'search' ? (searchResults ? `${searchResults.length} result${searchResults.length === 1 ? '' : 's'}` : '')
-                : tab === 'untagged' ? `${untagged.length} loaded`
-                : (recent ? `${recent.length} tracks` : '')
-            }
-            right={
-              tab === 'recent' ? (
-                <Btn sm onClick={loadRecent} disabled={recentLoading}>{recentLoading ? 'Loading…' : 'Refresh'}</Btn>
-              ) : null
-            }
-            bodyClass="!p-0"
-          >
-            <TrackTable
-              tab={tab}
-              rows={tableRows}
-              loading={tableLoading}
-              queuing={queuing}
-              retagging={retagging}
-              onQueue={queueTrack}
-              onRetag={retagTrack}
-            />
-          </Card>
-
-          {tab === 'browse' && browse && browse.total > PAGE_SIZE && (
-            <div className="flex items-center justify-between text-[11px] text-muted">
-              <span className="mono-num">
-                {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, browse.total)} of {browse.total.toLocaleString('en-GB')}
-              </span>
-              <span className="flex items-center gap-2">
-                <Btn sm disabled={page === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>‹ prev</Btn>
-                <span className="mono-num">page {page + 1} of {totalPages}</span>
-                <Btn sm disabled={page + 1 >= totalPages} onClick={() => setPage(p => p + 1)}>next ›</Btn>
-              </span>
-            </div>
-          )}
-
-          {tab === 'untagged' && untaggedCursor && (
-            <div className="flex justify-center">
-              <Btn onClick={() => loadUntagged(untaggedCursor, true)} disabled={untaggedLoading}>
-                {untaggedLoading ? 'Loading…' : 'Load more'}
-              </Btn>
-            </div>
-          )}
+          <button type="button" className="inline-flex items-center gap-1 font-bold text-muted hover:text-ink" onClick={clearFilters}>
+            <X size={12} /> clear all
+          </button>
         </div>
-      </div>
+      )}
+
+      {tab === 'search' && (
+        <Card bodyClass="!py-3">
+          <form onSubmit={runSearch} className="grid grid-cols-[1fr_auto_auto] gap-2">
+            <InputGroup>
+              <InputGroupAddon><Search /></InputGroupAddon>
+              <InputGroupInput
+                placeholder="floating points, kingdoms in colour, 2018…"
+                value={searchQuery}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
+              />
+            </InputGroup>
+            <Btn tone="accent" type="submit" disabled={searching || !searchQuery.trim() || !ready}>
+              {searching ? 'Searching…' : 'Search'}
+            </Btn>
+            <Btn type="button" onClick={() => { setSearchQuery(''); setSearchResults(null); }} disabled={searching}>
+              Clear
+            </Btn>
+          </form>
+        </Card>
+      )}
+
+      {/* track list */}
+      <Card
+        title={
+          tab === 'browse' ? 'Tracks' :
+          tab === 'search' ? 'Search results' :
+          tab === 'untagged' ? 'Untagged' :
+          'Recently added'
+        }
+        sub={
+          tab === 'browse'
+            ? (browse ? `${num(browse.total)} match${browse.total === 1 ? '' : 'es'}` : '')
+            : tab === 'search' ? (searchResults ? `${searchResults.length} result${searchResults.length === 1 ? '' : 's'}` : 'enter a query')
+            : tab === 'untagged' ? `${untagged.length} loaded${remaining != null ? ` · ${num(remaining)} need tags` : ''}`
+            : (recent ? `${recent.length} tracks` : '')
+        }
+        right={
+          tab === 'untagged' && untagged.length > 0 ? (
+            <Btn sm tone="accent" onClick={startTagger} disabled={tagger?.running || taggerBusy}>
+              <Sparkles size={11} /> Tag all
+            </Btn>
+          ) : tab === 'recent' ? (
+            <Btn sm onClick={loadRecent} disabled={recentLoading}>
+              <RefreshCw size={11} /> {recentLoading ? 'Loading…' : 'Refresh'}
+            </Btn>
+          ) : null
+        }
+        bodyClass="!p-0"
+      >
+        <TrackTable
+          tab={tab}
+          rows={tableRows}
+          loading={tableLoading}
+          queuing={queuing}
+          retagging={retagging}
+          flashId={flashId}
+          onQueue={queueTrack}
+          onRetag={retagTrack}
+        />
+      </Card>
+
+      {tab === 'browse' && browse && browse.total > PAGE_SIZE && (
+        <div className="flex items-center justify-between text-[11px] text-muted">
+          <span className="mono-num">
+            {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, browse.total)} of {num(browse.total)}
+          </span>
+          <span className="flex items-center gap-2">
+            <Btn sm disabled={page === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>‹ prev</Btn>
+            <span className="mono-num">page {page + 1} of {totalPages}</span>
+            <Btn sm disabled={page + 1 >= totalPages} onClick={() => setPage(p => p + 1)}>next ›</Btn>
+          </span>
+        </div>
+      )}
+
+      {tab === 'untagged' && untaggedCursor && (
+        <div className="flex justify-center">
+          <Btn onClick={() => loadUntagged(untaggedCursor, true)} disabled={untaggedLoading}>
+            {untaggedLoading ? 'Loading…' : 'Load more'}
+          </Btn>
+        </div>
+      )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// KPI strip
+// tagging panel — merged coverage + tagger, framed for humans
 // ---------------------------------------------------------------------------
-// One labelled progress meter: a headline count (done / total), a fill bar,
-// and a trailing percent. The done count comes straight from the library DB
-// so it shows immediately; only the denominator waits on the Subsonic scan.
-function Meter({ label, done, total, percent, scanning, onStart, unavailable, note }: {
-  label: string;
-  done: number | null;
-  total: number | null;
-  percent: number | null;
-  scanning: boolean;
-  onStart?: () => void;
-  // When true, the meter reads "engine off" instead of a misleading 0% — the
-  // pass can't run because no backend is installed.
-  unavailable?: boolean;
-  // Explanatory line shown under the bar (e.g. how to enable the engine).
-  note?: string;
-}) {
-  const fillRef = useRef<HTMLSpanElement>(null);
-  useDynamicStyle(fillRef, { width: !unavailable && percent != null ? `${Math.min(100, percent)}%` : '0%' });
-
-  const doneNum = done != null ? done.toLocaleString('en-GB') : '—';
-  const totalNum = total != null
-    ? total.toLocaleString('en-GB')
-    : (scanning ? 'scanning…' : '—');
-  const complete = percent != null && percent >= 100;
-  const empty = (done ?? 0) === 0;
-
-  return (
-    <div className="grid gap-1.5 p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <span className="text-[10px] font-bold tracking-[0.1em] text-muted uppercase">{label}</span>
-        <span className="caption text-muted">
-          {unavailable
-            ? 'engine off'
-            : complete
-              ? '✓ complete'
-              : percent != null
-                ? `${percent}%`
-                : (empty && onStart ? '' : '…')}
-        </span>
-      </div>
-      <div className="flex items-baseline gap-2">
-        <span className={cn(
-          'mono-num text-[22px] leading-none font-extrabold tracking-[-0.02em]',
-          unavailable && 'text-muted',
-        )}>{doneNum}</span>
-        <span className="caption text-muted">/ {totalNum}</span>
-      </div>
-      <div className={cn('h-1.5 w-full overflow-hidden bg-[var(--ink-soft)]', unavailable && 'opacity-50')}>
-        <span ref={fillRef} className="block h-full bg-[var(--accent)]" />
-      </div>
-      {note && (
-        <div className="mt-0.5 text-[11px] leading-[1.45] text-muted">{note}</div>
-      )}
-      {empty && onStart && !unavailable && (
-        <button
-          type="button"
-          onClick={onStart}
-          className="mt-0.5 w-fit text-[11px] font-bold text-vermilion underline-offset-2 hover:underline"
-        >
-          Start tagging →
-        </button>
-      )}
-    </div>
-  );
-}
-
-function KpiStrip({ coverage, stats, onStartTag }: {
+interface TaggingPanelProps {
   coverage: Coverage | null;
-  stats: BrowseResponse['stats'] | undefined;
-  onStartTag?: () => void;
-}) {
-  // `tagged` / `analysed` are known from the DB without the scan; only the
-  // denominator (`total`) and the derived percents wait on the Subsonic walk.
-  const tagged = coverage?.tagged ?? stats?.total ?? null;
-  const analysed = coverage?.analysed ?? null;
-  const total = coverage?.total ?? null;
-  const scanning = !!coverage?.scanning;
-  const moodCount = stats ? Object.keys(stats.byMood || {}).length : 0;
-  const lastTag = stats?.updatedAt ? new Date(stats.updatedAt).toLocaleString('en-GB') : '—';
+  libStats: LibraryStatsLite | null;
+  tagger: TaggerState | null;
+  runInfo: { baseline: number; target: number | null } | null;
+  batch: Batch;
+  setBatch: (b: Batch) => void;
+  busy: boolean;
+  logOpen: boolean;
+  setLogOpen: (fn: (o: boolean) => boolean) => void;
+  onStart: () => void;
+  onStop: () => void;
+  onRescan: (opts: RescanOpts) => void;
+}
+
+function TaggingPanel(p: TaggingPanelProps) {
+  const [maintOpen, setMaintOpen] = useState(false);
+  const [confirmFull, setConfirmFull] = useState(false);
+  const [passes, setPasses] = useState<RescanOpts>({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false });
+  const logRef = useRef<HTMLPreElement>(null);
+  const moodFillRef = useRef<HTMLSpanElement>(null);
+  const acousticFillRef = useRef<HTMLSpanElement>(null);
+  const runFillRef = useRef<HTMLSpanElement>(null);
+
+  const tagged = p.coverage?.tagged ?? p.libStats?.total ?? null;
+  const total = p.coverage?.total ?? null;
+  const analysed = p.coverage?.analysed ?? null;
+  const pct = p.coverage?.percent ?? null;
+  const apct = p.coverage?.analysedPercent ?? null;
+  const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
+  const running = !!p.tagger?.running;
+  const analysisOff = p.coverage?.analysisAvailable === false;
+  const moodCount = p.libStats ? Object.keys(p.libStats.byMood || {}).length : 0;
+  const lastTag = p.libStats?.updatedAt ? new Date(p.libStats.updatedAt).toLocaleString('en-GB') : '—';
+  const anySel = !!(passes.reseed || passes.reEnrich || passes.reAnalyze || passes.upgrade);
+
+  // Embeddings present but no vectors → likely a model swap dropped them.
+  const embeddingMissing = (tagged ?? 0) > 0 && p.libStats != null && p.libStats.withEmbedding === 0;
+
+  // live-run progress (best-effort: coverage delta vs. captured target)
+  const processed = p.runInfo && tagged != null ? Math.max(0, tagged - p.runInfo.baseline) : null;
+  const runPct = p.runInfo?.target && processed != null
+    ? Math.min(100, Math.round((processed / p.runInfo.target) * 100)) : null;
+
+  useDynamicStyle(moodFillRef, { width: pct != null ? `${Math.min(100, pct)}%` : '0%' });
+  useDynamicStyle(acousticFillRef, { width: !analysisOff && apct != null ? `${Math.min(100, apct)}%` : '0%' });
+  useDynamicStyle(runFillRef, { width: runPct != null ? `${runPct}%` : null });
+
+  useEffect(() => {
+    if (p.logOpen && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [p.logOpen, p.tagger?.lastLog?.length]);
+
+  const togglePass = (k: keyof RescanOpts) => setPasses(prev => ({ ...prev, [k]: !prev[k] }));
 
   return (
     <section className="card">
-      <div className="border-b border-ink p-4">
-        <Eyebrow className="text-vermilion">library · browse · tag · queue</Eyebrow>
-        <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
-          Manage the music your station plays.
+      {/* headline */}
+      <div className="border-b border-ink p-6">
+        <Eyebrow className="text-vermilion">library · tagging</Eyebrow>
+        <h1 className="lib-hero-title">
+          {pct != null
+            ? <>Your DJ knows <span className="pct mono-num">{pct}%</span> of your library.</>
+            : <>Manage the music your station plays.</>}
+        </h1>
+        <p className="lib-hero-sub">
+          To pick the right track for any moment, the DJ reads the <b>mood</b> and <b>energy</b> of
+          every song. New tracks need tagging before they can go on air — that&rsquo;s what this does.
+        </p>
+      </div>
+
+      {/* coverage — mood primary, acoustic optional */}
+      <div className="border-b border-ink">
+        <div className="p-6">
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <span className="flex items-center gap-2 text-[11px] font-bold tracking-[0.16em] text-ink uppercase">
+              <Sparkles size={14} /> Mood &amp; energy tagged
+            </span>
+            <span className="mono-num text-[13px] font-bold">{pct != null ? `${pct}%` : '—'}</span>
+          </div>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="lib-cov-big mono-num">{num(tagged)}</span>
+            <span className="text-[13px] text-muted">/ {total != null ? num(total) : (p.coverage?.scanning ? 'scanning…' : '—')} tracks</span>
+          </div>
+          <div className="lib-bar mt-3"><span ref={moodFillRef} /></div>
+          <div className="mt-2.5 text-[11px] text-muted">
+            {remaining != null && remaining > 0
+              ? <><b className="mono-num text-ink">{num(remaining)}</b> tracks still need tags · <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}</>
+              : <>{remaining === 0 ? 'Every track is tagged' : 'Coverage updating…'} · <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}</>}
+          </div>
+          {embeddingMissing && (
+            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] text-ink">
+              <span><b>Embeddings missing.</b> Your embedding model may have changed — re-embed to restore similarity-based picks.</span>
+              <button
+                type="button"
+                className="font-bold text-vermilion underline-offset-2 hover:underline"
+                onClick={() => { setMaintOpen(true); setPasses(s => ({ ...s, reseed: true })); }}
+              >
+                Set up a re-embed →
+              </button>
+            </div>
+          )}
         </div>
-        <div className="mt-1 text-[11px] text-muted">
-          Filter the tagged index by mood, energy, genre, year, or artist.
-          Re-tag tracks the AI got wrong. Queue anything on demand.
+        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong px-6 py-3.5">
+          <span className="caption flex items-center gap-2">
+            <Activity size={13} /> Acoustic analysis · bpm / key
+          </span>
+          <span className="lib-opt-tag">optional</span>
+          <span className="lib-minibar"><span ref={acousticFillRef} /></span>
+          <span className="caption mono-num !tracking-[0.04em]">
+            {analysisOff ? 'engine off' : <>{num(analysed)} / {num(total)} · {apct != null ? `${apct}%` : '…'}</>}
+          </span>
+          <span className="caption basis-full !tracking-[0.04em] !normal-case">
+            {analysisOff
+              ? 'No analysis engine running. Start the tts-heavy sidecar (docker compose --profile tts-heavy up -d) or configure a local librosa venv to enable it.'
+              : 'Improves beat-matching between tracks. Tagging works fine without it.'}
+          </span>
         </div>
       </div>
-      <div className="grid grid-cols-1 border-b border-ink sm:grid-cols-2">
-        <div className="border-b border-separator-strong sm:border-r sm:border-b-0">
-          <Meter
-            label="mood tagging"
-            done={tagged}
-            total={total}
-            percent={coverage?.percent ?? null}
-            scanning={scanning}
-            onStart={onStartTag}
-          />
+
+      {/* action zone — idle vs running */}
+      {!running ? (
+        <div className="flex flex-wrap items-center gap-4 p-6">
+          <div className="min-w-[220px] flex-1 text-[13px]">
+            {remaining != null && remaining > 0
+              ? <><b>{num(remaining)}</b> tracks are waiting. Tag them and they become DJ-ready.</>
+              : remaining === 0
+                ? <>Library fully tagged. Run a re-scan below if you&rsquo;ve changed the model.</>
+                : <>Start tagging new tracks so the DJ can play them.</>}
+          </div>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="lib-batch">
+              <label htmlFor="lib-batch">Tag</label>
+              <select id="lib-batch" value={p.batch} onChange={e => p.setBatch(e.target.value as Batch)}>
+                <option value="100">next 100</option>
+                <option value="500">next 500</option>
+                <option value="all">all{remaining != null ? ` ${num(remaining)}` : ''} remaining</option>
+              </select>
+            </div>
+            <Btn lg tone="accent" onClick={p.onStart} disabled={p.busy || remaining === 0}>
+              <Play size={13} /> Start tagging
+            </Btn>
+          </div>
         </div>
-        <div>
-          <Meter
-            label="acoustic analysis · bpm/key"
-            done={analysed}
-            total={total}
-            percent={coverage?.analysedPercent ?? null}
-            scanning={scanning}
-            unavailable={coverage?.analysisAvailable === false}
-            note={coverage?.analysisAvailable === false
-              ? 'No analysis engine running. Start the tts-heavy sidecar (docker compose --profile tts-heavy up -d) or configure a local librosa venv to enable BPM/key detection — tagging runs will then fill this in.'
-              : undefined}
-          />
+      ) : (
+        <div className="flex flex-col gap-3 p-6">
+          <div className="flex flex-wrap items-center justify-between gap-3.5">
+            <span className="flex items-center gap-2.5 text-[13px] font-bold">
+              <span className="lib-livedot" /> Tagging in progress…
+            </span>
+            <span className="caption mono-num !tracking-[0.04em]">
+              {processed != null && <>{num(processed)}{p.runInfo?.target ? ` / ${num(p.runInfo.target)}` : ''} this run · </>}
+              {p.tagger?.pid ? `pid ${p.tagger.pid}` : ''}
+              {p.tagger?.startedAt ? ` · started ${new Date(p.tagger.startedAt).toLocaleTimeString('en-GB')}` : ''}
+            </span>
+            <Btn sm tone="danger" onClick={p.onStop} disabled={p.busy}><Square size={11} /> Stop</Btn>
+          </div>
+          {runPct != null && (
+            <div className="lib-bar !h-1.5"><span ref={runFillRef} /></div>
+          )}
+          <div className="caption !tracking-[0.04em] !normal-case">
+            The DJ is listening to each new track and deciding its mood &amp; energy. You can keep
+            browsing — this runs in the background.
+          </div>
         </div>
+      )}
+
+      {/* footer — progressive disclosure */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-dashed border-separator-strong px-6 py-3">
+        <button
+          type="button"
+          className={cn('inline-flex items-center gap-1.5 text-[11px] font-bold', maintOpen ? 'text-ink' : 'text-muted hover:text-ink')}
+          onClick={() => setMaintOpen(o => !o)}
+        >
+          {maintOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Maintenance &amp; re-scan
+        </button>
+        <button
+          type="button"
+          className={cn('inline-flex items-center gap-1.5 text-[11px] font-bold', p.logOpen ? 'text-ink' : 'text-muted hover:text-ink')}
+          onClick={() => p.setLogOpen(o => !o)}
+        >
+          <Terminal size={13} /> {p.logOpen ? 'Hide log' : 'View log'}
+        </button>
       </div>
-      <div className="flex flex-wrap gap-x-2 px-4 py-2 text-[11px] text-muted">
-        <span className="mono-num">{total != null ? total.toLocaleString('en-GB') : (scanning ? 'scanning…' : '—')}</span>
-        <span>tracks</span>
-        <span aria-hidden>·</span>
-        <span className="mono-num">{moodCount}</span>
-        <span>moods in use</span>
-        <span aria-hidden>·</span>
-        <span>last tag {lastTag}</span>
-      </div>
+
+      {/* maintenance disclosure */}
+      {maintOpen && (
+        <div className="flex flex-col gap-3.5 border-t border-ink bg-[var(--ink-soft)] p-6">
+          <div className="max-w-[64ch] text-[12px] leading-[1.55] text-muted">
+            Re-scanning rebuilds parts of the index from scratch — only needed after you change the
+            LLM, embedding model, or analysis engine. Your existing mood tags are kept as seeds.
+            Pick what to re-run:
+          </div>
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            <Pass on={!!passes.reseed} onClick={() => togglePass('reseed')} name="Re-embed all tracks"
+              hint="Drop & rebuild every vector. Run after changing the embedding model." />
+            <Pass on={!!passes.reEnrich} onClick={() => togglePass('reEnrich')} name="Re-enrich metadata"
+              hint="Re-fetch Last.fm tags + lyrics that feed the tagging." />
+            <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics"
+              hint="Redo BPM / key detection for every track." />
+            <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods"
+              hint="Re-tag tracks whose prompt or model is now stale." />
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <Btn sm disabled={p.busy || running} onClick={() => setConfirmFull(true)}>
+              <RefreshCw size={12} /> Full re-scan (everything)
+            </Btn>
+            <Btn sm tone="accent" disabled={!anySel || p.busy || running}
+              onClick={() => { p.onRescan(passes); setPasses({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false }); }}>
+              Run selected passes
+            </Btn>
+          </div>
+        </div>
+      )}
+
+      {/* log drawer — reuses the theme-aware .term surface */}
+      {p.logOpen && (
+        <pre ref={logRef} className="term m-0 max-h-56 overflow-y-auto !border-t !border-l-0 border-separator-strong">
+          {(p.tagger?.lastLog || []).join('\n') || '(no log output yet — start a tagging run to see the booth think)'}
+        </pre>
+      )}
+
+      <V3AlertDialog
+        open={confirmFull}
+        onOpenChange={setConfirmFull}
+        title="Full library re-scan"
+        description="Rebuilds the whole library from scratch: re-embeds every track, re-fetches Last.fm tags + lyrics, and redoes acoustic (bpm/key) analysis. Existing mood tags are kept and reused as seeds — moods are not re-decided. This can take several minutes on a large library and re-spends embedding calls. To re-decide moods too, tick 'Re-decide moods' and use 'Run selected passes'."
+        confirmLabel="full re-scan"
+        danger
+        onConfirm={() => p.onRescan({ reseed: true, reEnrich: true, reAnalyze: true })}
+      />
     </section>
   );
 }
 
-// ---------------------------------------------------------------------------
-// tab rail
-// ---------------------------------------------------------------------------
-function TabRail({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
-  const items: { id: Tab; label: string; hint: string }[] = [
-    { id: 'recent', label: 'Recently added', hint: '' },
-    { id: 'browse', label: 'Browse', hint: 'tagged' },
-    { id: 'search', label: 'Search', hint: 'navidrome' },
-    { id: 'untagged', label: 'Untagged', hint: 'needs tags' },
-  ];
+function Pass({ on, onClick, name, hint }: { on: boolean; onClick: () => void; name: string; hint: string }) {
   return (
-    <Card bodyClass="!p-0">
-      <div className="py-1">
-        {items.map(it => (
-          <button
-            key={it.id}
-            type="button"
-            onClick={() => setTab(it.id)}
-            className={cn(
-              'flex w-full items-center justify-between px-3.5 py-2 text-left text-[12px] transition-colors',
-              tab === it.id
-                ? 'border-l-2 border-[var(--accent)] bg-[var(--ink-soft)] font-bold'
-                : 'border-l-2 border-transparent hover:bg-[var(--ink-soft)]/30',
-            )}
-          >
-            <span>{it.label}</span>
-            {it.hint && <span className="caption text-muted">{it.hint}</span>}
-          </button>
-        ))}
-      </div>
-    </Card>
+    <button type="button" className={cn('lib-pass', on && 'on')} onClick={onClick}>
+      <span className="box">
+        <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+          <path d="M2.5 6.2L4.8 8.5L9.5 3.5" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </span>
+      <span>
+        <span className="lib-pass-name">{name}</span>
+        <span className="lib-pass-hint">{hint}</span>
+      </span>
+    </button>
   );
 }
 
 // ---------------------------------------------------------------------------
-// browse filters sidebar
+// tabs
+// ---------------------------------------------------------------------------
+function Tabs({ tab, setTab, counts }: {
+  tab: Tab;
+  setTab: (t: Tab) => void;
+  counts: { browse: number | null; untagged: number | null; recent: number | null };
+}) {
+  const items: { id: Tab; name: string; hint: string; badge: number | null }[] = [
+    { id: 'recent', name: 'Recently added', hint: 'newest first', badge: counts.recent },
+    { id: 'browse', name: 'Browse', hint: 'tagged index', badge: counts.browse },
+    { id: 'search', name: 'Search', hint: 'navidrome', badge: null },
+    { id: 'untagged', name: 'Untagged', hint: 'needs tags', badge: counts.untagged },
+  ];
+  return (
+    <div className="lib-tabs">
+      {items.map(it => (
+        <button key={it.id} type="button" className={cn('lib-tab', tab === it.id && 'on')} onClick={() => setTab(it.id)}>
+          <span className="lib-tab-name">
+            {it.name}
+            {it.badge != null && <span className="lib-tab-badge">{it.badge.toLocaleString('en-GB')}</span>}
+          </span>
+          <span className="lib-tab-hint">{it.hint}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// browse filters
 // ---------------------------------------------------------------------------
 interface BrowseFiltersProps {
   moodVocab: string[];
@@ -757,127 +970,127 @@ interface BrowseFiltersProps {
   genre: string; setGenre: (g: string) => void;
   yearFrom: string; setYearFrom: (s: string) => void;
   yearTo: string; setYearTo: (s: string) => void;
+  q: string; setQ: (s: string) => void;
   sort: Sort; setSort: (s: Sort) => void;
-  filtersActive: boolean;
-  onClear: () => void;
 }
 
 function BrowseFilters(p: BrowseFiltersProps) {
-  const toggleMood = (m: string) => {
+  const [showAllMoods, setShowAllMoods] = useState(false);
+  const ranked = useMemo(
+    () => [...p.moodVocab].sort((a, b) => (p.moodCounts[b] || 0) - (p.moodCounts[a] || 0)),
+    [p.moodVocab, p.moodCounts],
+  );
+  const shown = showAllMoods ? ranked : ranked.slice(0, 12);
+  const toggleMood = (m: string) =>
     p.setMoods(p.moods.includes(m) ? p.moods.filter(x => x !== m) : [...p.moods, m]);
-  };
-  const sortedMoods = useMemo(() => {
-    const ranked = [...p.moodVocab];
-    ranked.sort((a, b) => (p.moodCounts[b] || 0) - (p.moodCounts[a] || 0));
-    return ranked;
-  }, [p.moodVocab, p.moodCounts]);
+
+  const energyOpts: { id: Energy; label: ReactNode }[] = [
+    { id: 'any', label: 'Any' },
+    { id: 'low', label: <><EnergyMeter level="low" /> Low{p.energyCounts.low ? ` · ${p.energyCounts.low}` : ''}</> },
+    { id: 'medium', label: <><EnergyMeter level="medium" /> Mid{p.energyCounts.medium ? ` · ${p.energyCounts.medium}` : ''}</> },
+    { id: 'high', label: <><EnergyMeter level="high" /> High{p.energyCounts.high ? ` · ${p.energyCounts.high}` : ''}</> },
+  ];
 
   return (
-    <Card
-      title="Filters"
-      right={p.filtersActive ? (
-        <Btn sm tone="danger" onClick={p.onClear} title="Clear all filters">
-          <RotateCcw size={11} /> clear
-        </Btn>
-      ) : null}
-    >
-      <div>
-        <div className="caption mb-1.5">mood</div>
-        <div className="grid max-h-56 gap-0.5 overflow-y-auto pr-1">
-          {sortedMoods.map(m => {
-            const n = p.moodCounts[m] || 0;
-            const checked = p.moods.includes(m);
-            return (
-              <label
-                key={m}
+    <section className="card">
+      {/* filter results text */}
+      <div className="border-b border-dashed border-separator-strong p-4">
+        <InputGroup>
+          <InputGroupAddon><Search /></InputGroupAddon>
+          <InputGroupInput
+            placeholder="filter results by title, artist, or album…"
+            value={p.q}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => p.setQ(e.target.value)}
+          />
+        </InputGroup>
+      </div>
+
+      {/* moods */}
+      <div className="border-b border-dashed border-separator-strong p-4">
+        <div className="caption mb-2.5">mood</div>
+        <div className="flex flex-wrap gap-1.5">
+          {shown.map(m => (
+            <button key={m} type="button" className={cn('lib-chip', p.moods.includes(m) && 'on')} onClick={() => toggleMood(m)}>
+              {m}<span className="n">{p.moodCounts[m] || 0}</span>
+            </button>
+          ))}
+          {ranked.length > 12 && (
+            <button type="button" className="lib-chip lib-chip-more" onClick={() => setShowAllMoods(s => !s)}>
+              {showAllMoods ? '− less' : `+ ${ranked.length - 12} more`}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* energy / genre / year / sort */}
+      <div className="flex flex-wrap items-end gap-x-5 gap-y-4 p-4">
+        <div className="flex flex-col gap-2">
+          <div className="caption">energy</div>
+          <div className="flex flex-wrap border border-ink">
+            {energyOpts.map((o, i) => (
+              <button
+                key={o.id}
+                type="button"
+                onClick={() => p.setEnergy(o.id)}
                 className={cn(
-                  'flex cursor-pointer items-center justify-between gap-2 px-1 py-1 text-[12px]',
-                  checked ? 'text-ink' : 'text-muted hover:text-ink',
+                  'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
+                  i > 0 && 'border-l border-ink',
+                  p.energy === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
                 )}
               >
-                <span className="flex items-center gap-2">
-                  <Checkbox checked={checked} onCheckedChange={() => toggleMood(m)} />
-                  <span>{m}</span>
-                </span>
-                <span className="mono-num text-[10px] text-muted">{n.toLocaleString('en-GB')}</span>
-              </label>
-            );
-          })}
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Field>
+            <FieldLabel htmlFor="genre">genre</FieldLabel>
+            <Select value={p.genre || '__any'} onValueChange={v => p.setGenre(v === '__any' ? '' : v)}>
+              <SelectTrigger id="genre" className="min-w-[150px]"><SelectValue placeholder="Any genre" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__any">Any genre</SelectItem>
+                {p.genreList.slice(0, 80).map(g => (
+                  <SelectItem key={g.value} value={g.value}>
+                    {g.value}{g.songCount ? ` · ${g.songCount}` : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <div className="caption">year</div>
+          <div className="flex items-center gap-2">
+            <Input type="number" inputMode="numeric" placeholder="from" className="w-20" value={p.yearFrom} onChange={e => p.setYearFrom(e.target.value)} />
+            <span className="text-[10px] text-muted">–</span>
+            <Input type="number" inputMode="numeric" placeholder="to" className="w-20" value={p.yearTo} onChange={e => p.setYearTo(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="ml-auto flex flex-col gap-2">
+          <Field>
+            <FieldLabel htmlFor="sort">sort</FieldLabel>
+            <Select value={p.sort} onValueChange={v => p.setSort(v as Sort)}>
+              <SelectTrigger id="sort" className="min-w-[170px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="artist">Artist / album / title</SelectItem>
+                <SelectItem value="title">Title</SelectItem>
+                <SelectItem value="year">Year (newest first)</SelectItem>
+                <SelectItem value="taggedAt">Recently tagged</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
         </div>
       </div>
-
-      <div className="mt-4">
-        <div className="caption mb-1.5">energy</div>
-        <Seg
-          value={p.energy}
-          onChange={id => p.setEnergy(id as Energy)}
-          options={[
-            { id: 'any', label: 'Any' },
-            { id: 'low', label: `Low${p.energyCounts.low ? ` · ${p.energyCounts.low}` : ''}` },
-            { id: 'medium', label: `Mid${p.energyCounts.medium ? ` · ${p.energyCounts.medium}` : ''}` },
-            { id: 'high', label: `High${p.energyCounts.high ? ` · ${p.energyCounts.high}` : ''}` },
-          ]}
-        />
-      </div>
-
-      <div className="mt-4">
-        <Field>
-          <FieldLabel htmlFor="genre">genre</FieldLabel>
-          <Select value={p.genre || '__any'} onValueChange={v => p.setGenre(v === '__any' ? '' : v)}>
-            <SelectTrigger id="genre"><SelectValue placeholder="Any genre" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__any">Any genre</SelectItem>
-              {p.genreList.slice(0, 80).map(g => (
-                <SelectItem key={g.value} value={g.value}>
-                  {g.value}{g.songCount ? ` · ${g.songCount}` : ''}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-      </div>
-
-      <div className="mt-4">
-        <div className="caption mb-1.5">year</div>
-        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-          <Input
-            type="number"
-            inputMode="numeric"
-            placeholder="from"
-            value={p.yearFrom}
-            onChange={e => p.setYearFrom(e.target.value)}
-          />
-          <span className="text-[10px] text-muted">–</span>
-          <Input
-            type="number"
-            inputMode="numeric"
-            placeholder="to"
-            value={p.yearTo}
-            onChange={e => p.setYearTo(e.target.value)}
-          />
-        </div>
-      </div>
-
-      <div className="mt-4">
-        <Field>
-          <FieldLabel htmlFor="sort">sort</FieldLabel>
-          <Select value={p.sort} onValueChange={v => p.setSort(v as Sort)}>
-            <SelectTrigger id="sort"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="artist">Artist / album / title</SelectItem>
-              <SelectItem value="title">Title</SelectItem>
-              <SelectItem value="year">Year (newest first)</SelectItem>
-              <SelectItem value="taggedAt">Recently tagged</SelectItem>
-            </SelectContent>
-          </Select>
-        </Field>
-      </div>
-    </Card>
+    </section>
   );
 }
 
 // ---------------------------------------------------------------------------
-// track table — same chrome across all tabs, action column varies
+// track table
 // ---------------------------------------------------------------------------
 interface TrackTableProps {
   tab: Tab;
@@ -885,22 +1098,21 @@ interface TrackTableProps {
   loading: boolean;
   queuing: string | null;
   retagging: string | null;
+  flashId: string | null;
   onQueue: (t: Track) => void;
   onRetag: (t: Track) => void;
 }
 
 function TrackTable(p: TrackTableProps) {
-  const cols = 'grid grid-cols-[minmax(0,1.6fr)_minmax(0,1.2fr)_140px]';
-
   if (p.loading && p.rows.length === 0) {
-    return <div className="px-4 py-6 text-[12px] text-muted italic">loading…</div>;
+    return <div className="px-4 py-8 text-center text-[12px] text-muted italic">loading…</div>;
   }
   if (p.rows.length === 0) {
     return (
-      <div className="px-4 py-6 text-[12px] text-muted italic">
+      <div className="px-4 py-10 text-center text-[12px] text-muted italic">
         {p.tab === 'browse' && 'no tracks match — try clearing some filters'}
-        {p.tab === 'search' && 'search the library to queue a track'}
-        {p.tab === 'untagged' && 'no untagged tracks found'}
+        {p.tab === 'search' && 'search your library to queue a track on demand'}
+        {p.tab === 'untagged' && 'every track is tagged — nice'}
         {p.tab === 'recent' && 'nothing here yet'}
       </div>
     );
@@ -908,237 +1120,53 @@ function TrackTable(p: TrackTableProps) {
 
   return (
     <div>
-      <div className={cn(cols, 'gap-3 border-b border-ink px-3 py-2 text-[9px] font-bold tracking-[0.22em] text-muted uppercase')}>
+      <div className="lib-colhead">
+        <span />
         <span>title</span>
-        <span>album</span>
+        <span className="h-tags">mood · energy</span>
+        <span className="h-album">album</span>
         <span />
       </div>
-      {p.rows.map(t => (
-        <div
-          key={t.id}
-          className={cn(cols, 'items-center gap-3 border-b border-dashed border-separator-strong px-3 py-2 text-[12px]')}
-        >
-          <div className="min-w-0">
-            <div className="overflow-hidden text-ellipsis whitespace-nowrap text-ink">{t.title || '—'}</div>
-            <div className="overflow-hidden text-[11px] text-ellipsis whitespace-nowrap text-muted">{t.artist || '—'}</div>
-          </div>
-          <span className="overflow-hidden text-[11px] text-ellipsis whitespace-nowrap text-muted">{t.album || '—'}</span>
-          <div className="flex items-center justify-end gap-1.5">
-            <Btn sm onClick={() => p.onQueue(t)} disabled={!!p.queuing}>
-              {p.queuing === t.id ? 'Queuing…' : 'Queue'}
-            </Btn>
-            {(p.tab === 'browse' || p.tab === 'untagged') && (
-              <Btn
-                sm
-                tone={p.tab === 'untagged' ? 'accent' : 'solid'}
-                onClick={() => p.onRetag(t)}
-                disabled={!!p.retagging}
-              >
-                {p.retagging === t.id ? '…' : (p.tab === 'untagged' ? 'Tag' : 'Retag')}
-              </Btn>
-            )}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// tagger strip (sticky bottom)
-// ---------------------------------------------------------------------------
-type RescanOpts = {
-  reseed?: boolean;
-  reEnrich?: boolean;
-  reAnalyze?: boolean;
-  upgrade?: boolean;
-};
-
-interface TaggerStripProps {
-  coverage: Coverage | null;
-  tagger: TaggerState | null;
-  limit: string;
-  setLimit: (s: string) => void;
-  busy: boolean;
-  onStart: () => void;
-  onStop: () => void;
-  onRescan: (opts: RescanOpts) => void;
-}
-
-function TaggerStrip(p: TaggerStripProps) {
-  const [expanded, setExpanded] = useState(false);
-  const [confirmFull, setConfirmFull] = useState(false);
-  const [advanced, setAdvanced] = useState(false);
-  const [adv, setAdv] = useState<RescanOpts>({
-    reseed: false,
-    reEnrich: false,
-    reAnalyze: false,
-    upgrade: false,
-  });
-  const toggleAdv = (key: keyof RescanOpts) =>
-    setAdv(prev => ({ ...prev, [key]: !prev[key] }));
-  const advSelected = adv.reseed || adv.reEnrich || adv.reAnalyze || adv.upgrade;
-  const logRef = useRef<HTMLPreElement>(null);
-  const fillRef = useRef<HTMLSpanElement>(null);
-
-  useEffect(() => {
-    if (expanded && logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
-  }, [expanded, p.tagger?.lastLog?.length]);
-
-  const pct = p.coverage?.percent;
-  const running = p.tagger?.running;
-  // Inline width avoided by mutating .style via the dynamic-style hook.
-  useDynamicStyle(fillRef, { width: pct != null ? `${Math.min(100, pct)}%` : null });
-
-  return (
-    <div>
-      <section className="card border-ink shadow-[0_4px_24px_rgba(0,0,0,0.18)]">
-        <div className="stack-mobile grid grid-cols-[1fr_auto] items-center gap-3 p-3">
-          <div className="grid gap-1.5">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
-              <span className={cn('h-2 w-2 rounded-full', running ? 'animate-pulse bg-vermilion' : 'bg-muted')} />
-              <span className="font-bold">
-                {p.coverage?.tagged?.toLocaleString('en-GB') || '—'}
-                {' / '}
-                {p.coverage?.total != null ? p.coverage.total.toLocaleString('en-GB') : (p.coverage?.scanning ? 'scanning…' : '—')}
-                {' tagged'}
-              </span>
-              {pct != null && <span className="caption text-muted">{pct}%</span>}
-              {running && p.tagger?.startedAt && (
-                <span className="caption text-muted">
-                  pid {p.tagger.pid} · started {new Date(p.tagger.startedAt).toLocaleTimeString('en-GB')}
-                </span>
+      {p.rows.map(t => {
+        const tagged = !!(t.moods && t.moods.length > 0);
+        return (
+          <div key={t.id} className={cn('lib-row', p.flashId === t.id && 'flash')}>
+            <Thumb track={t} />
+            <div className="min-w-0">
+              <div className="lib-title">{t.title || '—'}</div>
+              <div className="lib-artist">{t.artist || '—'}{t.year ? ` · ${t.year}` : ''}</div>
+            </div>
+            <div className="lib-tags">
+              {tagged ? (
+                <>
+                  {t.moods!.slice(0, 2).map(m => <span key={m} className="lib-mtag">{m}</span>)}
+                  {t.energy && <span className="lib-mtag"><EnergyMeter level={t.energy} />{t.energy}</span>}
+                </>
+              ) : (
+                <span className="lib-needs">needs tags</span>
               )}
             </div>
-            {pct != null && (
-              <div className="h-1 w-full overflow-hidden bg-[var(--ink-soft)]">
-                <span ref={fillRef} className="block h-full bg-[var(--accent)]" />
-              </div>
-            )}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              type="number"
-              inputMode="numeric"
-              className="mono-num w-20"
-              value={p.limit}
-              onChange={e => p.setLimit(e.target.value)}
-              disabled={running}
-              title="how many new tracks to tag this run"
-            />
-            {running ? (
-              <Btn tone="danger" onClick={p.onStop} disabled={p.busy}>Stop</Btn>
-            ) : (
-              <>
-                <Btn tone="accent" onClick={p.onStart} disabled={p.busy}>Start tagging</Btn>
-                <Btn
-                  sm
-                  onClick={() => setConfirmFull(true)}
-                  disabled={p.busy}
-                  title="Rebuild embeddings + enrichment + acoustic analysis for the whole library (keeps existing mood tags)"
-                >
-                  Full re-scan
-                </Btn>
-                <Btn
-                  sm
-                  onClick={() => setAdvanced(a => !a)}
-                  disabled={p.busy}
-                  title="Compose a re-scan from individual passes"
-                >
-                  {advanced ? 'advanced ▴' : 'advanced ▾'}
-                </Btn>
-              </>
-            )}
-            <Btn sm onClick={() => setExpanded(e => !e)}>
-              {expanded ? 'hide log' : 'log'}
-            </Btn>
-          </div>
-        </div>
-        {advanced && !running && (
-          <div className="grid gap-2 border-t border-separator-strong p-3">
-            <div className="caption text-muted">
-              Pick which passes to re-run. Unticked tracks keep their current data.
-            </div>
-            <div className="flex flex-wrap gap-x-5 gap-y-2">
-              <AdvCheck
-                label="Re-embed"
-                hint="drop + rebuild all vectors — run after changing the embedding model"
-                checked={!!adv.reseed}
-                onToggle={() => toggleAdv('reseed')}
-              />
-              <AdvCheck
-                label="Re-enrich"
-                hint="re-fetch Last.fm tags + lyrics"
-                checked={!!adv.reEnrich}
-                onToggle={() => toggleAdv('reEnrich')}
-              />
-              <AdvCheck
-                label="Re-analyze"
-                hint="redo acoustic bpm / key"
-                checked={!!adv.reAnalyze}
-                onToggle={() => toggleAdv('reAnalyze')}
-              />
-              <AdvCheck
-                label="Upgrade moods"
-                hint="re-tag stale prompt/model rows"
-                checked={!!adv.upgrade}
-                onToggle={() => toggleAdv('upgrade')}
-              />
-            </div>
-            <div>
-              <Btn
-                sm
-                tone="accent"
-                onClick={() => p.onRescan(adv)}
-                disabled={p.busy || !advSelected}
-                title={advSelected ? 'run the selected passes' : 'select at least one pass'}
-              >
-                Run selected
+            <span className="lib-album">{t.album || '—'}</span>
+            <div className="flex items-center justify-end gap-1.5">
+              <Btn sm onClick={() => p.onQueue(t)} disabled={!!p.queuing}>
+                {p.queuing === t.id ? '…' : <><ListPlus size={12} /> Queue</>}
               </Btn>
+              {(p.tab === 'browse' || p.tab === 'untagged') && (
+                <Btn
+                  sm
+                  tone={p.tab === 'untagged' || !tagged ? 'accent' : 'solid'}
+                  onClick={() => p.onRetag(t)}
+                  disabled={!!p.retagging}
+                >
+                  {p.retagging === t.id ? '…' : tagged
+                    ? <><RotateCcw size={11} /> Retag</>
+                    : <><Sparkles size={11} /> Tag</>}
+                </Btn>
+              )}
             </div>
           </div>
-        )}
-        {expanded && (
-          <pre
-            ref={logRef}
-            className="term m-0 max-h-48 overflow-y-auto border-t border-separator-strong"
-          >
-            {(p.tagger?.lastLog || []).join('\n') || '(no log output yet)'}
-          </pre>
-        )}
-      </section>
-      <V3AlertDialog
-        open={confirmFull}
-        onOpenChange={setConfirmFull}
-        title="Full library re-scan"
-        description="Rebuilds the whole library from scratch: re-embeds every track, re-fetches Last.fm tags + lyrics, and redoes acoustic (bpm/key) analysis. Existing mood tags are kept and reused as seeds — moods are not re-decided. This can take several minutes on a large library and re-spends embedding calls. To re-decide moods too, use the 'Upgrade moods' option under advanced."
-        confirmLabel="full re-scan"
-        danger
-        onConfirm={() => p.onRescan({ reseed: true, reEnrich: true, reAnalyze: true })}
-      />
+        );
+      })}
     </div>
   );
 }
-
-function AdvCheck({
-  label,
-  hint,
-  checked,
-  onToggle,
-}: {
-  label: string;
-  hint: string;
-  checked: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <label className="flex cursor-pointer items-center gap-2 text-[12px]">
-      <Checkbox checked={checked} onCheckedChange={onToggle} />
-      <span className={cn('font-medium', checked ? 'text-ink' : 'text-muted')}>{label}</span>
-      <span className="caption text-muted">· {hint}</span>
-    </label>
-  );
-}
-

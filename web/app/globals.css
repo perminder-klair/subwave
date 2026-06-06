@@ -2865,6 +2865,203 @@ body::after {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
+   LIBRARY — redesigned /admin/library. One merged tagging panel + clearer
+   browse/search/untagged. Every value is a token (or token-derived color-mix)
+   so it follows whichever theme the operator picked — no literal hex.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* tagging hero */
+.admin-root .lib-hero-title {
+    font-size: clamp(22px, 3vw, 34px);
+    font-weight: 800;
+    letter-spacing: -0.025em;
+    line-height: 1.06;
+    margin-top: 10px;
+    max-width: 24ch;
+    text-wrap: balance;
+}
+.admin-root .lib-hero-title .pct { color: var(--accent); }
+.admin-root .lib-hero-sub {
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--muted);
+    max-width: 64ch;
+    margin-top: 10px;
+}
+.admin-root .lib-hero-sub b { color: var(--ink); font-weight: 700; }
+
+/* coverage */
+.admin-root .lib-cov-big { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; line-height: 1; }
+.admin-root .lib-bar {
+    height: 8px; width: 100%;
+    background: var(--field);
+    border: 1px solid var(--separator-strong);
+    overflow: hidden;
+}
+.admin-root .lib-bar > span {
+    display: block; height: 100%;
+    background: var(--accent);
+    transition: width 0.5s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.admin-root .lib-minibar {
+    flex: 1; min-width: 120px; height: 5px;
+    background: var(--field);
+    border: 1px solid var(--separator-soft);
+    overflow: hidden;
+}
+.admin-root .lib-minibar > span { display: block; height: 100%; background: var(--muted); transition: width 0.5s; }
+.admin-root .lib-opt-tag {
+    font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 700;
+    color: var(--muted); border: 1px solid var(--separator-strong); padding: 2px 7px;
+}
+
+/* batch select */
+.admin-root .lib-batch { display: flex; align-items: stretch; border: 1px solid var(--ink); }
+.admin-root .lib-batch label {
+    display: flex; align-items: center; padding: 0 11px;
+    font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 700;
+    color: var(--muted); border-right: 1px solid var(--separator-strong); background: var(--ink-soft);
+}
+.admin-root .lib-batch select {
+    border: 0; background: transparent; font-family: inherit; font-size: 12px; font-weight: 700;
+    color: var(--ink); padding: 10px 12px; cursor: pointer; outline: none;
+}
+
+/* live dot */
+.admin-root .lib-livedot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex: none; position: relative; }
+.admin-root .lib-livedot::after {
+    content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--accent);
+    animation: lib-ring 1.6s cubic-bezier(0.2, 0.7, 0.2, 1) infinite;
+}
+@keyframes lib-ring { 0% { transform: scale(1); opacity: 0.5; } 100% { transform: scale(3); opacity: 0; } }
+
+/* maintenance passes */
+.admin-root .lib-pass {
+    display: flex; gap: 11px; align-items: flex-start; width: 100%;
+    border: 1px solid var(--separator-strong); background: var(--card-bg);
+    padding: 12px 13px; cursor: pointer; text-align: left; font-family: inherit;
+}
+.admin-root .lib-pass:hover { border-color: var(--ink); }
+.admin-root .lib-pass.on { border-color: var(--accent); background: var(--accent-soft); }
+.admin-root .lib-pass .box {
+    width: 15px; height: 15px; border: 1px solid var(--ink); flex: none; margin-top: 2px;
+    display: flex; align-items: center; justify-content: center; background: var(--card-bg);
+}
+.admin-root .lib-pass.on .box { background: var(--accent); border-color: var(--accent); }
+.admin-root .lib-pass .box svg { stroke: var(--bg); display: none; }
+.admin-root .lib-pass.on .box svg { display: block; }
+.admin-root .lib-pass-name { font-size: 12px; font-weight: 700; letter-spacing: 0.02em; display: block; color: var(--ink); }
+.admin-root .lib-pass-hint { font-size: 11px; color: var(--muted); line-height: 1.45; margin-top: 3px; display: block; }
+
+/* tabs */
+.admin-root .lib-tabs { display: flex; border: 1px solid var(--ink); flex-wrap: wrap; background: var(--card-bg); }
+.admin-root .lib-tab {
+    flex: 1; min-width: 130px; font-family: inherit; background: transparent;
+    border: 0; border-left: 1px solid var(--ink); cursor: pointer; color: var(--ink);
+    padding: 12px 14px; text-align: left; display: flex; flex-direction: column; gap: 3px;
+    transition: background 0.12s;
+}
+.admin-root .lib-tab:first-child { border-left: 0; }
+.admin-root .lib-tab:hover { background: var(--ink-soft); }
+.admin-root .lib-tab.on { background: var(--ink); color: var(--bg); }
+.admin-root .lib-tab-name {
+    font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; font-weight: 700;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.admin-root .lib-tab-hint { font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+.admin-root .lib-tab.on .lib-tab-hint { color: color-mix(in oklab, var(--bg) 60%, transparent); }
+.admin-root .lib-tab-badge {
+    font-size: 9px; letter-spacing: 0.06em; font-weight: 700; padding: 1px 6px;
+    border: 1px solid currentColor; opacity: 0.8; font-variant-numeric: tabular-nums;
+}
+.admin-root .lib-tab.on .lib-tab-badge { background: var(--accent); border-color: var(--accent); color: var(--bg); opacity: 1; }
+
+/* filter chips */
+.admin-root .lib-chip {
+    font-family: inherit; font-size: 11px; letter-spacing: 0.02em;
+    border: 1px solid var(--separator-strong); background: transparent; color: var(--muted);
+    padding: 5px 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 7px;
+    transition: all 0.12s;
+}
+.admin-root .lib-chip:hover { border-color: var(--ink); color: var(--ink); }
+.admin-root .lib-chip.on { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.admin-root .lib-chip .n { font-size: 9px; opacity: 0.6; font-variant-numeric: tabular-nums; }
+.admin-root .lib-chip-more { border-style: dashed; }
+
+.admin-root .lib-active-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent);
+    background: var(--accent-soft); color: var(--ink); padding: 4px 9px; font-size: 11px;
+}
+.admin-root .lib-active-chip button {
+    background: none; border: 0; cursor: pointer; color: var(--muted);
+    display: inline-flex; font-size: 13px; line-height: 1; font-family: inherit;
+}
+.admin-root .lib-active-chip button:hover { color: var(--accent); }
+
+/* energy meter glyph */
+.admin-root .lib-emeter { display: inline-flex; align-items: flex-end; gap: 2px; height: 13px; }
+.admin-root .lib-emeter span { width: 3px; background: currentColor; opacity: 0.25; }
+.admin-root .lib-emeter span:nth-child(1) { height: 5px; }
+.admin-root .lib-emeter span:nth-child(2) { height: 9px; }
+.admin-root .lib-emeter span:nth-child(3) { height: 13px; }
+.admin-root .lib-emeter.l span:nth-child(1),
+.admin-root .lib-emeter.m span:nth-child(1),
+.admin-root .lib-emeter.m span:nth-child(2),
+.admin-root .lib-emeter.h span { opacity: 1; }
+
+/* track rows */
+.admin-root .lib-colhead,
+.admin-root .lib-row {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1.5fr) minmax(0, 1.3fr) 1fr auto;
+    gap: 14px; align-items: center;
+}
+.admin-root .lib-colhead { padding: 9px 16px; border-bottom: 1px solid var(--ink); }
+.admin-root .lib-colhead span { font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 700; color: var(--muted); }
+.admin-root .lib-row { padding: 10px 16px; border-bottom: 1px dashed var(--separator-strong); transition: background 0.12s; }
+.admin-root .lib-row:last-child { border-bottom: 0; }
+.admin-root .lib-row:hover { background: var(--ink-soft); }
+.admin-root .lib-row.flash { animation: lib-flash 1.1s ease-out; }
+@keyframes lib-flash { 0% { background: var(--accent-soft); } 100% { background: transparent; } }
+
+.admin-root .lib-thumb {
+    width: 44px; height: 44px; border: 1px solid var(--ink);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 15px; flex: none; overflow: hidden;
+    background: var(--ink-soft); color: var(--muted);
+}
+.admin-root .lib-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.admin-root .lib-title { font-size: 13px; font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-root .lib-artist { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.admin-root .lib-album { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-root .lib-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.admin-root .lib-mtag {
+    font-size: 10px; letter-spacing: 0.02em; border: 1px solid var(--separator-strong);
+    color: var(--muted); padding: 2px 7px; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 6px;
+}
+.admin-root .lib-needs {
+    font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700;
+    color: var(--accent); border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent);
+    background: var(--accent-soft); padding: 3px 8px; white-space: nowrap;
+}
+
+@media (max-width: 860px) {
+    .admin-root .lib-row,
+    .admin-root .lib-colhead { grid-template-columns: 40px 1fr auto; gap: 12px; }
+    .admin-root .lib-row .lib-tags,
+    .admin-root .lib-row .lib-album,
+    .admin-root .lib-colhead .h-tags,
+    .admin-root .lib-colhead .h-album { display: none; }
+    .admin-root .lib-tab { min-width: 46%; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .admin-root .lib-livedot::after,
+    .admin-root .lib-row.flash { animation: none; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
    NEWS — "Dispatches" wire: a broadsheet front page (index) and the article
    body prose. Stays entirely within the bs- token vocabulary; no new colors.
    ───────────────────────────────────────────────────────────────────────── */
