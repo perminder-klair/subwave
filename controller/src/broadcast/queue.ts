@@ -11,6 +11,7 @@ import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
 import { speak } from '../audio/tts.js';
 import * as djAgent from './dj-agent.js';
+import * as handoff from './handoff.js';
 import * as sfx from './sfx.js';
 import * as session from './session.js';
 import { getFullContext, energyForDaypart } from '../context.js';
@@ -407,10 +408,13 @@ class Queue {
   //              song that just started stays audible underneath the voice)
   //   - everything else → say.txt → voice_queue → HEAVY duck (solo voice
   //              dominates; used for station ID / hourly / weather)
-  async announce(text, kind = 'announcement') {
+  // `persona` overrides the voice — used by the DJ-handoff path to air the
+  // outgoing persona's sign-off in their own voice (not the now-effective
+  // incoming one). Omitted everywhere else, so the on-air persona voices it.
+  async announce(text, kind = 'announcement', { persona }: { persona?: any } = {}) {
     if (!text || !text.trim()) return;
     try {
-      const wavPath = await speak(text, { kind });
+      const wavPath = await speak(text, { kind, persona });
       const targetFile = kind === 'link'
         ? config.liquidsoap.introFile
         : config.liquidsoap.sayFile;
@@ -641,6 +645,9 @@ class Queue {
         try {
           const ctx = await getFullContext();
           await session.maybeRoll(ctx);
+          // If that roll (or one a non-watcher caller queued) brought a new DJ
+          // on air, air the changeover here — between tracks, before the pick.
+          await handoff.maybeAir(this, ctx);
           await djAgent.runTrackEvent(this, ctx, { wantLink });
         } catch (err: any) {
           this.log('error', `DJ track event failed: ${err.message}`);

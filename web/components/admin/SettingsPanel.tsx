@@ -98,6 +98,7 @@ interface LlmForm {
   reasoning: boolean;
   pickerAgent: boolean;
   pauseWhenEmpty: boolean;
+  handoffs: boolean;
 }
 
 interface SearchForm {
@@ -338,6 +339,7 @@ export default function SettingsPanel() {
         reasoning: !!v.llm?.reasoning,
         pickerAgent: !!v.llm?.pickerAgent,
         pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
+        handoffs: v.llm?.handoffs !== false,  // default on
       },
       search: {
         provider: v.search?.provider ?? 'duckduckgo',
@@ -1477,6 +1479,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
       reasoning: form.llm.reasoning,
       pickerAgent: form.llm.pickerAgent,
       pauseWhenEmpty: form.llm.pauseWhenEmpty,
+      handoffs: form.llm.handoffs,
     },
   });
 
@@ -1713,6 +1716,31 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
               { id: 'on', label: 'On' },
             ]}
             onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, pauseWhenEmpty: v === 'on' } }))}
+          />
+        </div>
+      </Card>
+
+      <Card title="DJ handoffs" sub="when the persona on air changes">
+        <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+          <div>
+            <div className="text-[13px] font-bold">Spoken changeover</div>
+            <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+              When on, a real DJ changeover — one persona signing off as a
+              different one takes the shift (a scheduled show starting or ending,
+              or the long-session reset) — airs a short handoff: the outgoing DJ
+              passes the mic by name and the incoming DJ acknowledges. Only fires
+              when the persona actually changes, so a single-persona station
+              never hears it.
+            </div>
+          </div>
+          <Seg
+            accent
+            value={form.llm.handoffs ? 'on' : 'off'}
+            options={[
+              { id: 'off', label: 'Off' },
+              { id: 'on', label: 'On' },
+            ]}
+            onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, handoffs: v === 'on' } }))}
           />
         </div>
       </Card>

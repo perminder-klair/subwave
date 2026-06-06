@@ -24,11 +24,11 @@ export { recentCalls };
 const CHATTERBOX_TAG_HINT =
   '\n\nYou may sparingly insert non-verbal cues in square brackets: [laugh], [chuckle], [sigh], [cough]. Use them only where genuinely natural — at most one per segment, and never as filler.';
 
-// Resolve the DJ system prompt for the persona on air right now. The effective
-// persona is the current show's owner if a show is scheduled for this hour,
-// otherwise the admin-selected active persona — see settings.getEffectivePersona.
-export function djSystem() {
-  const persona = settings.getEffectivePersona();
+// Resolve the DJ system prompt for a SPECIFIC persona. Most callers want the
+// persona on air right now (djSystem below); the DJ-handoff path renders one
+// line in the outgoing persona's voice and one in the incoming's, so it needs
+// to name the persona explicitly rather than read the effective one.
+export function djSystemFor(persona: any) {
   const s = settings.get();
   const base = settings.renderDjPrompt(persona, {
     station: s.station,
@@ -36,6 +36,13 @@ export function djSystem() {
   });
   if (persona?.tts?.engine === 'chatterbox') return base + CHATTERBOX_TAG_HINT;
   return base;
+}
+
+// Resolve the DJ system prompt for the persona on air right now. The effective
+// persona is the current show's owner if a show is scheduled for this hour,
+// otherwise the admin-selected active persona — see settings.getEffectivePersona.
+export function djSystem() {
+  return djSystemFor(settings.getEffectivePersona());
 }
 
 // Persona-driven verbosity. 'concise' reproduces the historical one-liner
@@ -416,6 +423,59 @@ export async function generateHourlyTime(time: any, weather: any, { recap = null
     prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'hourly', recap, recentOpeners }),
     temperature: 0.9, topP: 0.95, repeatPenalty: 1.15, seed: randomSeed(),
     kind: 'generateHourlyTime',
+  });
+}
+
+// ---------------------------------------------------------------------------
+// DJ HANDOFFS (discussion #247) — one persona signs off, the next takes over
+// ---------------------------------------------------------------------------
+// At a genuine changeover the outgoing DJ passes the mic and the incoming DJ
+// acknowledges. Each line is rendered in its OWN persona's voice via
+// djSystemFor(persona); broadcast/handoff.ts airs them in order, voicing each
+// with the matching persona's TTS config.
+
+// A human label for the slot the incoming DJ is taking — the show's name
+// (with its theme when set), else the daypart. Drives lines like
+// "…passing the mic over to Cool Hand Luke for your Afternoon Drive."
+export function handoffSlotLabel(context: any): string {
+  if (context?.activeShow?.name) {
+    return context.activeShow.topic
+      ? `${context.activeShow.name} (${context.activeShow.topic})`
+      : context.activeShow.name;
+  }
+  const t = context?.time;
+  if (t?.period) return t.vibe ? `the ${t.period} (${t.vibe})` : `the ${t.period}`;
+  return 'the next stretch';
+}
+
+// Outgoing persona's sign-off — names the incoming DJ and the slot they're
+// taking. Rendered in the OUTGOING voice.
+export async function generateHandoff({ outgoing, incoming, context, slotLabel }: any) {
+  const ctxLines = buildContextLines(context);
+  ctxLines.push(
+    `Task: you are ${outgoing?.name || 'the host'}, wrapping up your time on air and handing the mic to ${incoming?.name || 'the next DJ'}, who is taking over for ${slotLabel}. Sign off warmly and pass the mic to ${incoming?.name || 'them'} by name. ${lengthPhrase('link', outgoing)}, in character — no track talk, just the handover.`,
+  );
+  return djText({
+    system: djSystemFor(outgoing),
+    prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'handoff' }),
+    temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(),
+    kind: 'generateHandoff',
+  });
+}
+
+// Incoming persona's acknowledgement — greets the outgoing DJ by name and steps
+// up to the mic. Rendered in the INCOMING voice. Kept to a single line so the
+// changeover lands quickly and the music gets going.
+export async function generateHandoffAck({ incoming, outgoing, context, slotLabel }: any) {
+  const ctxLines = buildContextLines(context);
+  ctxLines.push(
+    `Task: you are ${incoming?.name || 'the next DJ'}, just taking over the mic from ${outgoing?.name || 'the previous DJ'} for ${slotLabel}. Acknowledge ${outgoing?.name || 'them'} by name and greet the room in one short sentence, in character — then you're ready to roll. No track talk.`,
+  );
+  return djText({
+    system: djSystemFor(incoming),
+    prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'handoff-ack' }),
+    temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(),
+    kind: 'generateHandoffAck',
   });
 }
 

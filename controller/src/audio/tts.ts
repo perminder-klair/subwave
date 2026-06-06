@@ -136,10 +136,15 @@ function normalizeForSpeech(text: string) {
 // admin Stats page can show per-engine usage, latency, and the fallback rate.
 export async function speak(
   text: string,
-  { kind = 'default', outPath, speedScale }: { kind?: string; outPath?: string; speedScale?: number } = {},
+  { kind = 'default', outPath, speedScale, persona }:
+    { kind?: string; outPath?: string; speedScale?: number; persona?: any } = {},
 ) {
   const speakText = normalizeForSpeech(text);
-  const personaTts = djPersonaTts(kind);
+  // An explicit persona always wins — this is how the DJ-handoff path voices the
+  // OUTGOING persona's sign-off, which is no longer the effective persona once
+  // the session has rolled. Without an override we fall back to the on-air
+  // persona for this kind (the historical behaviour).
+  const personaTts = persona ? (persona.tts || null) : djPersonaTts(kind);
   const primary = resolveEngine(kind, personaTts);
   // Delivery pace tracks the daypart for live, persona-voiced segments.
   // `speedScale` is a MULTIPLIER on the engine's configured speech rate (1.0 =

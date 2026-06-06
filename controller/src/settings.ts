@@ -378,6 +378,12 @@ const DEFAULTS = {
     // reports zero listeners — the stream coasts on the auto playlist — and
     // resume as soon as someone tunes in. Off by default.
     pauseWhenEmpty: false,
+    // When on, a real DJ changeover (one persona signs off, a different one
+    // takes the shift at a show boundary or the 4h session cap) airs a spoken
+    // handoff: the outgoing DJ passes the mic by name and the incoming DJ
+    // acknowledges (discussion #247). On by default; only ever fires when the
+    // persona actually changes, so a single-persona station never hears it.
+    handoffs: true,
   },
   // Embedding-propagated library tagger (music/tag-library.ts).
   //
@@ -803,6 +809,10 @@ export async function load() {
         typeof stored.llm?.pauseWhenEmpty === 'boolean'
           ? stored.llm.pauseWhenEmpty
           : DEFAULTS.llm.pauseWhenEmpty,
+      handoffs:
+        typeof stored.llm?.handoffs === 'boolean'
+          ? stored.llm.handoffs
+          : DEFAULTS.llm.handoffs,
     },
     search: {
       provider: SEARCH_PROVIDERS.includes(stored.search?.provider)
@@ -1520,6 +1530,9 @@ export async function update(patch) {
     }
     if (l.pauseWhenEmpty !== undefined) {
       next.llm.pauseWhenEmpty = !!l.pauseWhenEmpty;
+    }
+    if (l.handoffs !== undefined) {
+      next.llm.handoffs = !!l.handoffs;
     }
     // An OpenAI-compatible provider is useless without a server to talk to.
     if (next.llm.provider === 'openai-compatible' && !next.llm.baseUrl) {

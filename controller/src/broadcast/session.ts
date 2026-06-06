@@ -115,6 +115,17 @@ export function getSession() {
   return _session;
 }
 
+// Claim-and-clear a pending DJ handoff (set by maybeRoll on a persona change).
+// Returns { outgoing, incoming } once, then null — so a deferred handoff airs
+// exactly one time even though the queue watcher polls every transition.
+export function takePendingHandoff(): { outgoing: any; incoming: any } | null {
+  if (!_session?.pendingHandoff) return null;
+  const pending = _session.pendingHandoff;
+  delete _session.pendingHandoff;
+  schedulePersist();
+  return pending;
+}
+
 // Append a turn. `role` ∈ event|dj|track|segment; `kind` names the turn type
 // (scenario|pick|request|play|link|station-id|hourly|weather|...).
 export function appendTurn({ role, kind, text, meta = {} }: { role: string; kind: string; text?: string; meta?: any }) {
@@ -181,7 +192,21 @@ export async function maybeRoll(ctx: any): Promise<any> {
 
   const prev = _session;
   await end();
-  return start(ctx, buildHandoff(prev));
+  const next = start(ctx, buildHandoff(prev));
+
+  // DJ handoff (discussion #247): a hard roll that brings a DIFFERENT persona
+  // on air is a real changeover — stash the outgoing/incoming pair so the queue
+  // watcher can air a spoken sign-off + acknowledgement at the next clean
+  // between-tracks moment (see broadcast/handoff.ts). Same-persona rolls (the
+  // 4h cap on a one-persona station, or a show owned by the persona already on
+  // air) produce no pointless self-handoff. Stored on the session so it rides
+  // through persistence and isn't lost if a non-watcher caller triggered the
+  // roll; the watcher clears it once aired.
+  if (prev?.persona?.id && next.persona?.id && prev.persona.id !== next.persona.id) {
+    next.pendingHandoff = { outgoing: prev.persona, incoming: next.persona };
+    schedulePersist();
+  }
+  return next;
 }
 
 // Soft continuation across an autonomous daypart/mood turnover: same session id,
@@ -249,6 +274,7 @@ export function windowMessages() {
     const m = recent[i];
     if (!m.text) continue;
     if (m.kind === 'scenario') continue;  // infra noise
+    if (m.kind === 'handoff') continue;    // changeover ceremony, not DJ conversation (one line is the OUTGOING voice)
     if (m.kind === 'play') continue;       // redundant — current track is in the pick event
     if (m.role === 'event' && m.kind === 'pick' && i !== lastPickEventIdx) continue;  // old pick asks
     const role = (m.role === 'dj' || m.role === 'segment') ? 'assistant' : 'user';
