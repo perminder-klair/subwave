@@ -590,6 +590,9 @@ SITE_URL=
 # MUSIC_LIBRARY_PATH=
 # TTS_SPEED=0.85
 # AUTO_QUEUE_REFRESH_MINUTES=60
+# Convenience only — seeds the News skill's feed on first boot. After that the
+# file wins: edit it in /admin/skills or state/skills/news/SKILL.md (changing
+# these vars won't move an already-scaffolded feed).
 # NEWS_FEED_URL=http://feeds.bbci.co.uk/news/rss.xml
 # NEWS_MAX_ITEMS=10
 
@@ -608,4 +611,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version` and by the TUI release fetch URL).
-export const CLI_VERSION = `0.9.0`;
+export const CLI_VERSION = `0.10.0`;
