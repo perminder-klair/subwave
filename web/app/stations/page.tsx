@@ -13,26 +13,12 @@ export const metadata = pageMeta({
 
 const REPO = 'https://github.com/perminder-klair/subwave';
 
-// Pre-filled "new file" editor on GitHub — clicking opens a ready-to-edit
-// station file, so a submission is fork → tweak → open PR. value= seeds the
-// file body; filename= seeds the path (the contributor renames the slug).
-const SUBMIT_TEMPLATE = `{
-  "name": "Your Station",
-  "url": "https://radio.example.com",
-  "operator": "@yourhandle",
-  "location": "City, Country",
-  "country": "Country",
-  "lat": 0,
-  "lon": 0,
-  "genre": "ambient / downtempo",
-  "description": "One or two sentences about your station.",
-  "featured": false,
-  "submitted": "2026-06-04"
-}
-`;
-const SUBMIT_URL =
-  `${REPO}/new/main?filename=web/content/stations/your-station.json` +
-  `&value=${encodeURIComponent(SUBMIT_TEMPLATE)}`;
+// Submission opens a GitHub Issue Form (no fork, no JSON). A workflow turns the
+// issue into a one-file pull request automatically — see
+// .github/workflows/station-submission.yml. The old new-file editor link forced
+// non-collaborators to fork the repo (discussion #296), so we route through an
+// issue instead: anyone with a GitHub account can submit in one click.
+const SUBMIT_URL = `${REPO}/issues/new?template=add-station.yml`;
 
 export default function StationsIndex() {
   const stations = getAllStations();
