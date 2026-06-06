@@ -113,8 +113,19 @@ app.listen(config.server.port, async () => {
     console.error('[settings] load failed:', err.message);
   }
 
-  // Load operator-dropped custom skills from state/skills — merged into the
-  // segment director's capability set (see skills/loader.js). Never fatal.
+  // Scaffold the built-in skills as editable files under state/skills/<kind>/
+  // (idempotent — never clobbers operator edits) so loadCustomSkills below picks
+  // them up as overrides. Must run before the load. Never fatal.
+  try {
+    const { scaffoldBuiltinSkills } = await import('./skills/scaffold.js');
+    await scaffoldBuiltinSkills();
+  } catch (err: any) {
+    console.error('[skills] scaffold failed:', err.message);
+  }
+
+  // Load operator-dropped custom skills + built-in overrides from state/skills —
+  // merged into the segment director's capability set (see skills/loader.js).
+  // Never fatal.
   try {
     const { loadCustomSkills } = await import('./skills/loader.js');
     const caps = await loadCustomSkills();

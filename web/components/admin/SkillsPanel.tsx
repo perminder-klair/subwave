@@ -26,6 +26,8 @@ interface Skill {
   keyUrl?: string;
   cooldownMs?: number;
   custom?: boolean;
+  feed?: string | null;
+  feedMaxItems?: number | null;
 }
 
 interface SkillsResponse {
@@ -40,6 +42,31 @@ interface SkillToggleResponse {
 interface SkillRunResponse {
   spoken?: string;
   error?: string;
+}
+
+// Response of GET /dj/skills/:kind/file — the editable contents of a built-in
+// skill's SKILL.md (or live defaults when it hasn't been scaffolded yet).
+interface SkillFileResponse {
+  kind: string;
+  exists?: boolean;
+  isNews?: boolean;
+  label?: string;
+  cooldown?: string;
+  feed?: string | null;
+  feedMaxItems?: number | null;
+  brief?: string;
+  error?: string;
+}
+
+// The in-form editing state for one built-in skill.
+interface EditForm {
+  kind: string;
+  isNews: boolean;
+  label: string;
+  cooldown: string;
+  feed: string;
+  feedMaxItems: string;
+  brief: string;
 }
 
 function cooldownLabel(ms?: number): string {
@@ -83,6 +110,9 @@ export default function SkillsPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);   // skill name currently mutating, or null
   const [rescanning, setRescanning] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null); // kind whose edit form is open
+  const [editForm, setEditForm] = useState<EditForm | null>(null);
+  const [editBusy, setEditBusy] = useState(false);             // loading or saving the edit form
 
   useEffect(() => {
     if (!hydrated || needsAuth) return;
@@ -130,6 +160,61 @@ export default function SkillsPanel() {
     } catch (e) {
       notify.err(`Rescan failed: ${errorMessage(e)}`);
     } finally { setRescanning(false); }
+  };
+
+  // Open (or toggle closed) the inline edit form for a built-in skill. Fetches
+  // the current SKILL.md contents so the form prefills with what's on disk.
+  const openEdit = async (kind: string) => {
+    if (editing === kind) { setEditing(null); setEditForm(null); return; }
+    setEditing(kind);
+    setEditForm(null);
+    setEditBusy(true);
+    try {
+      const r = await adminFetch(`/dj/skills/${kind}/file`);
+      const j = (await r.json().catch(() => ({}))) as SkillFileResponse;
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      setEditForm({
+        kind,
+        isNews: !!j.isNews,
+        label: j.label || '',
+        cooldown: j.cooldown || '',
+        feed: j.feed || '',
+        feedMaxItems: j.feedMaxItems != null ? String(j.feedMaxItems) : '',
+        brief: j.brief || '',
+      });
+    } catch (e) {
+      notify.err(`Couldn't load skill: ${errorMessage(e)}`);
+      setEditing(null);
+    } finally { setEditBusy(false); }
+  };
+
+  const saveEdit = async () => {
+    if (!editForm) return;
+    setEditBusy(true);
+    try {
+      const body: Record<string, unknown> = {
+        brief: editForm.brief,
+        cooldown: editForm.cooldown,
+        label: editForm.label,
+      };
+      if (editForm.isNews) {
+        body.feed = editForm.feed;
+        if (editForm.feedMaxItems) body.feedMaxItems = editForm.feedMaxItems;
+      }
+      const r = await adminFetch(`/dj/skills/${editForm.kind}/file`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = (await r.json().catch(() => ({}))) as SkillToggleResponse;
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      if (Array.isArray(j.skills)) setSkills(j.skills);
+      notify.ok(`Saved ${editForm.kind}`);
+      setEditing(null);
+      setEditForm(null);
+    } catch (e) {
+      notify.err(`Save failed: ${errorMessage(e)}`);
+    } finally { setEditBusy(false); }
   };
 
   const runNow = async (name: string) => {
@@ -182,6 +267,11 @@ export default function SkillsPanel() {
             Each skill is an autonomous segment. A skill fires only when it is enabled here
             <strong> and</strong> assigned to the persona on air — set per-persona assignments
             on the Personas page. “Run now” is an operator override and ignores both.
+          </div>
+          <div className="mt-1 text-[11px] leading-[1.6] text-muted">
+            The built-in skills are editable too — hit <strong>Edit</strong> to change a skill&apos;s
+            brief or cooldown (and, for News, its feed URL). Edits are saved to
+            <code> state/skills/&lt;kind&gt;/SKILL.md</code>.
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
             Drop your own skills into <code>state/skills/&lt;name&gt;/SKILL.md</code> and hit
@@ -252,14 +342,91 @@ export default function SkillsPanel() {
                 <Pill className="text-[8px]">kind · {s.kind}</Pill>
               </div>
             </div>
-            <Btn
-              tone="accent"
-              onClick={() => runNow(s.name)}
-              disabled={busy === s.name}
-            >
-              {busy === s.name ? 'Working…' : 'Run now'}
-            </Btn>
+            <div className="flex flex-col gap-2">
+              <Btn
+                tone="accent"
+                onClick={() => runNow(s.name)}
+                disabled={busy === s.name}
+              >
+                {busy === s.name ? 'Working…' : 'Run now'}
+              </Btn>
+              {/* Built-in skills are editable in place; custom skills are edited
+                  on disk + Rescan, so no Edit button for them. */}
+              {!s.custom && (
+                <Btn
+                  onClick={() => openEdit(s.kind || s.name)}
+                  disabled={editBusy && editing === (s.kind || s.name)}
+                >
+                  {editing === (s.kind || s.name) ? 'Close' : 'Edit'}
+                </Btn>
+              )}
+            </div>
           </div>
+
+          {/* ── INLINE EDIT FORM ──────────────────────────────────────────── */}
+          {editing === (s.kind || s.name) && (
+            <div className="mt-3 border-t border-ink pt-3">
+              {!editForm ? (
+                <div className="text-[12px] text-muted italic">loading…</div>
+              ) : (
+                <div className="grid gap-3">
+                  {editForm.isNews && (
+                    <>
+                      <label className="grid gap-1">
+                        <span className="caption">Feed URL (RSS 2.0)</span>
+                        <input
+                          type="url"
+                          value={editForm.feed}
+                          onChange={e => setEditForm({ ...editForm, feed: e.target.value })}
+                          placeholder="https://…/rss.xml"
+                          className="border border-ink bg-transparent px-2 py-1.5 text-[12px] outline-none focus:border-vermilion"
+                        />
+                      </label>
+                      <label className="grid gap-1">
+                        <span className="caption">Max items to scan</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={editForm.feedMaxItems}
+                          onChange={e => setEditForm({ ...editForm, feedMaxItems: e.target.value })}
+                          placeholder="10"
+                          className="w-28 border border-ink bg-transparent px-2 py-1.5 text-[12px] outline-none focus:border-vermilion"
+                        />
+                      </label>
+                    </>
+                  )}
+                  <label className="grid gap-1">
+                    <span className="caption">Cooldown</span>
+                    <input
+                      type="text"
+                      value={editForm.cooldown}
+                      onChange={e => setEditForm({ ...editForm, cooldown: e.target.value })}
+                      placeholder="45m"
+                      className="w-28 border border-ink bg-transparent px-2 py-1.5 text-[12px] outline-none focus:border-vermilion"
+                    />
+                    <span className="text-[10px] text-muted">e.g. <code>45m</code>, <code>6h</code>, <code>2d</code>, or a bare number (minutes)</span>
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="caption">Brief (what the DJ says, and when to stay silent)</span>
+                    <textarea
+                      rows={4}
+                      value={editForm.brief}
+                      onChange={e => setEditForm({ ...editForm, brief: e.target.value })}
+                      className="border border-ink bg-transparent px-2 py-1.5 text-[12px] leading-[1.5] outline-none focus:border-vermilion"
+                    />
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <Btn tone="accent" onClick={saveEdit} disabled={editBusy || !editForm.brief.trim()}>
+                      {editBusy ? 'Saving…' : 'Save'}
+                    </Btn>
+                    <Btn onClick={() => { setEditing(null); setEditForm(null); }} disabled={editBusy}>
+                      Cancel
+                    </Btn>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </Card>
       ))}
     </div>

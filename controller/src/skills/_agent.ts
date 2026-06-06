@@ -37,7 +37,7 @@ import { defineAgent } from '../llm/agent.js';
 import { buildContextLines } from '../llm/dj.js';
 import { buildSegmentTools } from '../llm/segment-tools.js';
 import { searchReady } from './web-search.js';
-import { customCapabilities } from './loader.js';
+import { customCapabilities, getBuiltinOverrides } from './loader.js';
 import * as sfx from '../broadcast/sfx.js';
 
 // Capability table — the single source of truth for the DJ's between-track
@@ -53,8 +53,10 @@ import * as sfx from '../broadcast/sfx.js';
 //   keyUrl      — (optional) where the operator obtains that key
 //   ready       — (optional) () => boolean; false when the env key is missing
 // CAPABILITIES backs the agentic tick, the operator override (runCapability),
-// and the admin catalogue (skillCatalog).
-const CAPABILITIES: any[] = [
+// and the admin catalogue (skillCatalog). It is also the single source of
+// truth the scaffolder seeds editable state/skills/<kind>/SKILL.md files from
+// (see skills/scaffold.js), and the base that built-in overrides merge over.
+export const CAPABILITIES: any[] = [
   {
     kind: 'weather', skill: 'weather', label: 'Weather',
     cooldownMs: 25 * 60 * 1000,
@@ -104,7 +106,17 @@ const CAPABILITIES: any[] = [
 // dropped skill lights up the whole chain. Custom caps carry { custom: true }
 // and are gated more conservatively (disabled until the operator enables them).
 function allCapabilities(): any[] {
-  return [...CAPABILITIES, ...customCapabilities()];
+  return [...builtinCapabilities(), ...customCapabilities()];
+}
+
+// CAPABILITIES with operator edits from state/skills/<kind>/SKILL.md applied.
+// An override (loaded by skills/loader.js) contributes only the keys it
+// specified — desc/cooldownMs/label and, for news, feed/feedMaxItems — spread
+// over the hardcoded defaults; everything else (skill, ready, requiresKey) is
+// preserved. Read live so a rescan takes effect without a restart.
+function builtinCapabilities(): any[] {
+  const ov = getBuiltinOverrides();
+  return CAPABILITIES.map(c => (ov[c.kind] ? { ...c, ...ov[c.kind] } : c));
 }
 
 const SEGMENT_SCHEMA = z.object({
@@ -463,6 +475,10 @@ export function skillCatalog() {
       ready: typeof c.ready === 'function' ? !!c.ready() : true,
       requiresKey,
       keyUrl,
+      // News feed surfaced so /admin/skills can show/edit the current feed
+      // without a second fetch. Undefined on every other capability.
+      feed: c.feed || null,
+      feedMaxItems: c.feedMaxItems || null,
     };
   });
 }

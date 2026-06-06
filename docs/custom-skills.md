@@ -1,9 +1,15 @@
 # Custom skills
 
 SUB/WAVE's **skills** are the things the AI DJ does *between* tracks — a weather
-check, a headline, a tongue-in-cheek traffic gag. The built-in ones live in
-`controller/src/skills/_agent.ts`. You can add your own without touching the
-codebase by dropping a folder into `state/skills/`.
+check, a headline, a tongue-in-cheek traffic gag. The built-in ones are defined in
+`controller/src/skills/_agent.ts` and **scaffolded as editable files** into
+`state/skills/<kind>/SKILL.md` on first boot — so you can change what they say (and,
+for news, which feed they read) without touching the codebase. You can also add
+entirely new skills by dropping a folder into `state/skills/`.
+
+> **TL;DR — News reads UK/BBC and you want something local?** Open
+> **/admin/skills → News → Edit**, paste your own RSS feed URL and rewrite the
+> brief, then Save. (Or edit `state/skills/news/SKILL.md` directly and hit Rescan.)
 
 This borrows the *format* of [Anthropic's skills](https://github.com/anthropics/skills)
 — a `SKILL.md` with YAML frontmatter and a markdown body, plus optional code —
@@ -44,10 +50,11 @@ body becomes the per-segment briefing the DJ agent follows (the same role the
 inline `desc:` strings play for built-in skills) and the description shown in the
 admin UI.
 
-The `name` must be a lowercase slug and must not shadow a built-in kind
-(`weather`, `news`, `traffic`, `curiosity`, `album-anniversary`,
-`library-deep-cut`, `web-search`, …). Bad frontmatter is logged and skipped — it
-never crashes the controller.
+For a **new** skill the `name` must be a lowercase slug that isn't a built-in kind
+(`weather`, `news`, `traffic`, `curiosity`, `album-anniversary`, `library-deep-cut`,
+`web-search`). Naming a folder after a built-in kind instead *edits* that built-in —
+see [Editing the built-in skills](#editing-the-built-in-skills). Bad frontmatter is
+logged and skipped — it never crashes the controller.
 
 ## tool.mjs (optional)
 
@@ -73,6 +80,47 @@ writes from the brief alone.
 > **Security.** `tool.mjs` runs operator-supplied code inside the controller
 > container — the same trust model as a locally-installed Claude Code skill.
 > Only drop in code you've read and trust.
+
+## Editing the built-in skills
+
+The 7 built-ins — `weather`, `news`, `traffic`, `curiosity`, `album-anniversary`,
+`library-deep-cut`, `web-search` — are written into `state/skills/<kind>/SKILL.md`
+the first time the controller boots. A file **named after a built-in kind** is an
+**override**: it edits that skill's brief / cooldown / label in place rather than
+being rejected as a name clash. (For everything else, a built-in kind in `name:` is
+still off-limits.)
+
+Differences from a custom skill:
+
+- **The body may be empty.** An empty brief means "keep the built-in default" — handy
+  when you only want to change the `feed:` or `cooldown` and leave the wording alone.
+- **No `tool.mjs`.** Built-ins already have their data tools wired in code (by kind),
+  so a `tool.mjs` dropped next to a built-in override is ignored.
+- **Stays enabled-by-default.** Editing a built-in doesn't flip it to the
+  discovered-but-disabled state that *new* custom skills start in.
+
+### News: swapping the feed
+
+The `news` skill takes two extra frontmatter keys:
+
+```yaml
+---
+name: news
+label: News headlines
+cooldown: 45m
+feed: https://www.npr.org/rss/rss.php?id=1001   # any RSS 2.0 feed
+feedMaxItems: 10
+---
+Read one fresh headline in a single sentence — keep it conversational, in the
+station's voice. Skip a headline that is dull or stale; silence is fine.
+```
+
+> **Heads-up.** The parser handles **RSS 2.0** (`<item>`) feeds. **Atom** feeds
+> (`<entry>`) return zero items today — use an RSS URL.
+
+`NEWS_FEED_URL` / `NEWS_MAX_ITEMS` in `.env` only *seed* this file on the very first
+boot. Once `state/skills/news/SKILL.md` exists, **the file wins** — change the feed
+there (or in `/admin/skills`), not in `.env`.
 
 ## Lifecycle
 

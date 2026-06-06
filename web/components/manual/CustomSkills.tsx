@@ -6,7 +6,7 @@ export default function CustomSkills() {
     <ManualPage
       eyebrow="MANUAL · 06"
       title="Custom skills."
-      intro="The things the DJ does between tracks — a weather check, a headline, a traffic gag — are skills. A handful ship built in. You can add your own by dropping a folder into state/skills, no code changes to the station."
+      intro="The things the DJ does between tracks — a weather check, a headline, a traffic gag — are skills. Seven ship built in, and you can edit any of them or add your own by dropping a folder into state/skills, no code changes to the station."
       current="/manual/skills"
     >
       <section className="bs-section">
@@ -65,9 +65,45 @@ If tonight's moon is at a notable phase, work it into one short, in-character
 line, the way a late-night presenter might glance out the window. Skip it when
 the phase is unremarkable.`}</CodeBlock>
         <p className="text-muted">
-          The <code className="bs-code-inline">name</code> must be a lowercase slug and
-          can&rsquo;t shadow a built-in skill. Bad frontmatter is logged and skipped — it
-          never crashes the station.
+          For a <em>new</em> skill the <code className="bs-code-inline">name</code> must be a
+          lowercase slug that isn&rsquo;t a built-in kind — naming a folder after a built-in
+          <em>edits</em> that one instead (see below). Bad frontmatter is logged and skipped
+          — it never crashes the station.
+        </p>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">EDITING THE BUILT-INS</p>
+        <h2>The shipped skills are files too.</h2>
+        <p>
+          The seven built-ins — weather, news, traffic, curiosity, album anniversaries,
+          library deep-cuts, and web search — are written into{' '}
+          <code className="bs-code-inline">state/skills/&lt;kind&gt;/SKILL.md</code> the first
+          time the station boots. Editing one (on the admin <strong>Skills</strong> page, or
+          the file directly) overrides its brief, cooldown, or label in place. A built-in
+          file may leave the body empty to keep the default wording, and never loads a{' '}
+          <code className="bs-code-inline">tool.mjs</code> — the built-ins already have their
+          data wired in.
+        </p>
+        <p>
+          The big one: <strong>News reads the BBC by default</strong>. Hit{' '}
+          <strong>Edit</strong> on the News skill, paste your own RSS feed (any RSS 2.0 feed
+          — Atom isn&rsquo;t supported yet) and rewrite the brief in your station&rsquo;s
+          voice, then Save — it&rsquo;s live on the next break, no restart.
+        </p>
+        <CodeBlock>{`---
+name: news
+label: News headlines
+cooldown: 45m
+feed: https://feeds.npr.org/1001/rss.xml   # any RSS 2.0 feed
+feedMaxItems: 10
+---
+One fresh headline in a single sentence — in the station's voice,
+not a newsreader's. Skip anything dull or stale; silence is fine.`}</CodeBlock>
+        <p className="text-muted">
+          The <code className="bs-code-inline">NEWS_FEED_URL</code> environment variable only
+          seeds this file on the very first boot — after that the file (or the admin form)
+          wins.
         </p>
       </section>
 

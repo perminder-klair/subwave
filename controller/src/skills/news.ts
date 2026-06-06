@@ -1,12 +1,14 @@
-// News feed helpers — fetch BBC News RSS (configurable via NEWS_FEED_URL) and
-// hash headlines for dedup. These back the `getHeadlines` segment tool
-// (llm/segment-tools.js); there is no standalone "news skill" object — the
-// segment-director agent (skills/_agent.js) decides when a headline airs.
+// News feed helpers — fetch an RSS feed and hash headlines for dedup. These
+// back the `getHeadlines` segment tool (llm/segment-tools.js); there is no
+// standalone "news skill" object — the segment-director agent (skills/_agent.js)
+// decides when a headline airs. The feed URL/max-items come from the news
+// capability (overridable via state/skills/news/SKILL.md `feed:`), falling back
+// to config.news (env NEWS_FEED_URL / NEWS_MAX_ITEMS, default BBC).
 //
-// Dependency-free RSS parsing: the BBC feed is RSS 2.0 with shallow <item>
-// blocks containing <title> and <description>. We regex-extract those two
-// fields and that's all we need. If a richer feed surfaces, swap in
-// fast-xml-parser as a follow-up.
+// Dependency-free RSS parsing: this matches RSS 2.0 shallow <item> blocks
+// containing <title> and <description>. Atom feeds (<entry>/<summary>) are NOT
+// matched and will return zero items — swap in fast-xml-parser as a follow-up
+// if a richer feed is needed.
 
 import { config } from '../config.js';
 
@@ -32,14 +34,16 @@ export function hashHeadline(title) {
   return h.toString(36);
 }
 
-export async function fetchHeadlines() {
-  const res = await fetch(config.news.feedUrl);
+export async function fetchHeadlines({ feedUrl, maxItems }: { feedUrl?: string; maxItems?: number } = {}) {
+  const url = feedUrl || config.news.feedUrl;
+  const cap = maxItems || config.news.maxItems;
+  const res = await fetch(url);
   if (!res.ok) throw new Error(`News feed HTTP ${res.status}`);
   const xml = await res.text();
   const items: any[] = [];
   let m;
   ITEM_RE.lastIndex = 0;
-  while ((m = ITEM_RE.exec(xml)) !== null && items.length < config.news.maxItems) {
+  while ((m = ITEM_RE.exec(xml)) !== null && items.length < cap) {
     const body = m[1];
     const title = stripHtml((body.match(TITLE_RE) || [, ''])[1]);
     const description = stripHtml((body.match(DESC_RE) || [, ''])[1]);

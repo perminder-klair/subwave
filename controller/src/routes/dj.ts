@@ -11,7 +11,11 @@ import * as subsonic from '../music/subsonic.js';
 import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { skillCatalog, runCapability } from '../skills/_agent.js';
-import { loadCustomSkills } from '../skills/loader.js';
+import { loadCustomSkills, parseFrontmatter, BUILTIN_KINDS } from '../skills/loader.js';
+import { writeBuiltinSkillFile, msToCooldownStr } from '../skills/scaffold.js';
+import { readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { STATE_DIR } from '../config.js';
 import { skipTrack } from '../broadcast/liquidsoap-control.js';
 import { getFullContext } from '../context.js';
 
@@ -41,6 +45,97 @@ router.post('/dj/skills/rescan', requireAdmin, async (req, res) => {
     res.json({ skills: skillCatalog(), custom: caps.length });
   } catch (err) {
     queue.log('error', `/dj/skills/rescan failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /dj/skills/:kind/file — read a built-in skill's editable SKILL.md so the
+// admin UI can prefill its edit form. Scoped to the 7 built-in kinds; custom
+// skills are edited on disk + Rescan, not here. Falls back to live defaults
+// (skillCatalog) when the file hasn't been scaffolded yet.
+// ---------------------------------------------------------------------------
+router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
+  const kind = req.params.kind;
+  if (!BUILTIN_KINDS.has(kind)) {
+    return res.status(400).json({ error: `not an editable built-in skill: ${kind}` });
+  }
+  const file = join(resolve(STATE_DIR, 'skills', kind), 'SKILL.md');
+  const cat = skillCatalog().find(s => s.kind === kind);
+  try {
+    const raw = await readFile(file, 'utf8');
+    const { data, body } = parseFrontmatter(raw);
+    res.json({
+      kind,
+      exists: true,
+      isNews: kind === 'news',
+      label: data.label || cat?.label || kind,
+      cooldown: data.cooldown || msToCooldownStr(cat?.cooldownMs || 0),
+      feed: data.feed || cat?.feed || null,
+      feedMaxItems: data.feedMaxItems ? parseInt(data.feedMaxItems, 10) : (cat?.feedMaxItems || null),
+      brief: body || cat?.description || '',
+    });
+  } catch {
+    // No file yet — hand back the live built-in defaults so the form prefills.
+    res.json({
+      kind,
+      exists: false,
+      isNews: kind === 'news',
+      label: cat?.label || kind,
+      cooldown: msToCooldownStr(cat?.cooldownMs || 0),
+      feed: cat?.feed || null,
+      feedMaxItems: cat?.feedMaxItems || null,
+      brief: cat?.description || '',
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PUT /dj/skills/:kind/file — write a built-in skill's SKILL.md from the admin
+// edit form (brief/cooldown/label, + feed/feedMaxItems for news), then reload
+// so the override applies immediately. Scoped to the 7 built-in kinds.
+// ---------------------------------------------------------------------------
+router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
+  const kind = req.params.kind;
+  if (!BUILTIN_KINDS.has(kind)) {
+    return res.status(400).json({ error: `not an editable built-in skill: ${kind}` });
+  }
+  const b = req.body || {};
+  const brief = typeof b.brief === 'string' ? b.brief.trim() : '';
+  if (!brief) return res.status(400).json({ error: 'brief is required' });
+
+  const cooldown = typeof b.cooldown === 'string' ? b.cooldown.trim() : '';
+  if (cooldown && !/^\d+\s*[smhd]?$/.test(cooldown)) {
+    return res.status(400).json({ error: 'cooldown must look like "45m", "6h", "2d", or a bare number (minutes)' });
+  }
+
+  const label = typeof b.label === 'string' && b.label.trim() ? b.label.trim() : undefined;
+
+  const fields: any = { kind, label, cooldown: cooldown || undefined, brief };
+
+  // Feed is news-only. Validate it parses as an http(s) URL.
+  if (kind === 'news') {
+    const feed = typeof b.feed === 'string' ? b.feed.trim() : '';
+    if (feed) {
+      try {
+        const u = new URL(feed);
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('protocol');
+      } catch {
+        return res.status(400).json({ error: 'feed must be an http(s) URL' });
+      }
+      fields.feed = feed;
+    }
+    const max = parseInt(b.feedMaxItems, 10);
+    if (Number.isFinite(max) && max > 0) fields.feedMaxItems = max;
+  }
+
+  try {
+    await writeBuiltinSkillFile(fields);
+    await loadCustomSkills();
+    queue.log('scheduler', `[skills] built-in "${kind}" edited via admin UI`);
+    res.json({ skills: skillCatalog() });
+  } catch (err: any) {
+    queue.log('error', `PUT /dj/skills/${kind}/file failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

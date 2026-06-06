@@ -45,12 +45,16 @@ export function buildSegmentTools(ctx: any, state: any, caps: any[]) {
   }
 
   if (kinds.has('news')) {
+    // Feed URL / max-items come from the news capability, which may be
+    // overridden by state/skills/news/SKILL.md (`feed:` / `feedMaxItems`).
+    // Undefined → fetchHeadlines falls back to config.news (env NEWS_FEED_URL).
+    const newsCap = caps.find((c: any) => c.kind === 'news');
     tools.getHeadlines = tool({
       description: 'Fetch current news headlines from the configured feed. Returns only headlines not already read on air.',
       inputSchema: z.object({}),
       execute: async () => {
         try {
-          const items = await fetchHeadlines();
+          const items = await fetchHeadlines({ feedUrl: newsCap?.feed, maxItems: newsCap?.feedMaxItems });
           const fresh = items.filter((it: any) => !state.seenHeadlines.has(hashHeadline(it.title)));
           // Mark surfaced headlines as seen so a later tick doesn't re-offer
           // them — same "burn on read" approach as the old news skill.

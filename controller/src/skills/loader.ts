@@ -22,6 +22,13 @@
 //   requiresKey      env var the skill needs; absent → never offered
 //   toolDescription  description shown to the agent for the tool.mjs data tool
 //
+// EDITING BUILT-INS: a folder named after a built-in kind (weather, news, …;
+// see BUILTIN_KINDS) is treated as an OVERRIDE — it edits the shipped built-in's
+// brief/cooldown/label in place (and, for `news`, its `feed:` RSS URL +
+// `feedMaxItems`) rather than being rejected as a clash. Built-in overrides may
+// leave the body empty (= keep the default brief) and never load a tool.mjs.
+// These files are scaffolded on first boot (see skills/scaffold.js).
+//
 // Safety posture (the operator is dropping code into their own controller, same
 // trust model as Claude Code skills, but we still fence it):
 //   - malformed skills are skipped with a logged warning, never crash boot
@@ -38,10 +45,19 @@ import { pathToFileURL } from 'node:url';
 import { STATE_DIR } from '../config.js';
 import { queue } from '../broadcast/queue.js';
 
-// Built-in capability kinds — custom skills may not shadow these.
-const RESERVED_KINDS = new Set([
+// The 7 built-in segment capabilities (see skills/_agent.js CAPABILITIES). A
+// state/skills/<kind>/SKILL.md whose folder name matches one of these is parsed
+// as an OVERRIDE of that built-in (brief/cooldown/label, + feed for news) rather
+// than rejected — that's how operators edit the shipped skills. Everything else
+// in RESERVED_KINDS is queue-internal and stays un-overridable.
+export const BUILTIN_KINDS = new Set([
   'weather', 'news', 'traffic', 'curiosity',
   'album-anniversary', 'library-deep-cut', 'web-search',
+]);
+
+// Built-in capability kinds — custom skills may not shadow these.
+const RESERVED_KINDS = new Set([
+  ...BUILTIN_KINDS,
   // queue.announce reserves 'link' for the light-ducked intro channel.
   'link', 'dj-speak', 'announcement', 'station-id', 'hourly',
 ]);
@@ -52,17 +68,25 @@ const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,48}$/;
 // Loaded custom capabilities, in the same shape as _agent.js CAPABILITIES,
 // plus { custom: true } and an optional wrapped data tool. Rebuilt on reload.
 let loaded: any[] = [];
+// Overrides for built-in capabilities, keyed by kind. A built-in SKILL.md only
+// contributes the keys it actually specifies (desc/cooldownMs/label/feed/…),
+// merged over the hardcoded CAPABILITIES entry in _agent.js. Rebuilt on reload.
+let builtinOverrides: Record<string, any> = {};
 let importCounter = 0; // cache-buster for re-importing edited tool.mjs modules
 
 export function customCapabilities(): any[] {
   return loaded;
 }
 
+export function getBuiltinOverrides(): Record<string, any> {
+  return builtinOverrides;
+}
+
 // Minimal flat-YAML frontmatter parser. The frontmatter we accept is a small,
 // flat key: value block — no nesting, lists, or multiline scalars — so a tiny
 // parser keeps the dependency surface at zero (no gray-matter). Returns
 // { data, body }; body is everything after the closing `---`.
-function parseFrontmatter(raw: string): { data: Record<string, string>; body: string } {
+export function parseFrontmatter(raw: string): { data: Record<string, string>; body: string } {
   const text = raw.replace(/^﻿/, '');
   const m = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/.exec(text);
   if (!m) return { data: {}, body: text.trim() };
@@ -136,6 +160,24 @@ async function loadOne(slug: string): Promise<any | null> {
     queue.log('error', `[skills] "${slug}" rejected — name "${name}" must be a lowercase slug`);
     return null;
   }
+  // A file named after a built-in kind is an OVERRIDE, not a new skill: it
+  // contributes only the keys it specifies, merged over the hardcoded
+  // CAPABILITIES entry (see builtinCapabilities() in _agent.js). Unlike custom
+  // skills, the body may be empty — that just means "keep the default brief but
+  // override e.g. the feed". No tool.mjs is loaded for built-ins (they already
+  // have their own data tool wired by kind in llm/segment-tools.js).
+  if (BUILTIN_KINDS.has(name)) {
+    const override: any = { override: true, kind: name };
+    if (body) override.desc = body;
+    if (data.cooldown) override.cooldownMs = parseCooldownMs(data.cooldown);
+    if (data.label) override.label = data.label.trim();
+    if (data.feed) override.feed = data.feed.trim();
+    if (data.feedMaxItems) {
+      const n = parseInt(data.feedMaxItems, 10);
+      if (Number.isFinite(n) && n > 0) override.feedMaxItems = n;
+    }
+    return override;
+  }
   if (RESERVED_KINDS.has(name)) {
     queue.log('error', `[skills] "${slug}" rejected — "${name}" shadows a built-in capability`);
     return null;
@@ -183,6 +225,7 @@ async function loadOne(slug: string): Promise<any | null> {
 // Scan state/skills and rebuild the loaded capability list. Never throws —
 // a broken skill folder is logged and skipped. Returns the loaded caps.
 export async function loadCustomSkills(): Promise<any[]> {
+  builtinOverrides = {};
   let entries: string[] = [];
   try {
     const dirents = await readdir(SKILLS_DIR, { withFileTypes: true });
@@ -198,6 +241,16 @@ export async function loadCustomSkills(): Promise<any[]> {
     try {
       const cap = await loadOne(slug);
       if (!cap) continue;
+      // Built-in override (file named after a built-in kind) — collected
+      // separately and merged onto CAPABILITIES, never added as a custom skill.
+      if (cap.override) {
+        if (builtinOverrides[cap.kind]) {
+          queue.log('error', `[skills] duplicate built-in override "${cap.kind}" — keeping the first`);
+          continue;
+        }
+        builtinOverrides[cap.kind] = cap;
+        continue;
+      }
       if (seen.has(cap.kind)) {
         queue.log('error', `[skills] duplicate skill kind "${cap.kind}" — keeping the first`);
         continue;
@@ -212,6 +265,10 @@ export async function loadCustomSkills(): Promise<any[]> {
   loaded = out;
   if (out.length) {
     queue.log('scheduler', `[skills] loaded ${out.length} custom skill(s): ${out.map(c => c.kind).join(', ')}`);
+  }
+  const ovKinds = Object.keys(builtinOverrides);
+  if (ovKinds.length) {
+    queue.log('scheduler', `[skills] applied ${ovKinds.length} built-in override(s): ${ovKinds.join(', ')}`);
   }
   return loaded;
 }

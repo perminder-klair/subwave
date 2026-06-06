@@ -28,6 +28,10 @@ There's a ready-made example in the repo at `docs/examples/skills/moon-phase`. C
 
 Want it to react to real data? Add a `tool.mjs` and the DJ can check something live, like tonight's moon or the surf report, before it opens its mouth.
 
+## The ones that ship are yours too
+
+The skills that come in the box are files now, same as your own. On first boot they land in `state/skills/`, so you can open one up and rewrite its brief or change how often it fires. The handy one: the news skill reads the BBC by default. Not your part of the world? Open it on the admin Skills page, paste your own RSS feed, rewrite the brief in your station's voice, and it's reading your headlines on the next break. No restart, no editing `.env`.
+
 ## Why it bothers
 
 Your station starts to sound like yours. The bits between tracks stop being generic and start being the things you actually care about, in the voice you picked.
