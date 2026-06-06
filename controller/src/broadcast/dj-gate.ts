@@ -21,7 +21,11 @@ export function shouldFire(kind, now = new Date()) {
   if (kind === 'stationId') {
     if (f === 'quiet')    return m === 45;
     if (f === 'moderate') return m === 15 || m === 45;
-    return [0, 15, 30, 45].includes(m);
+    // Never at minute 0 — that's reserved for the hourly time check, which
+    // always fires there. Letting both land on the hour stacked a station ID
+    // and an hourly check back to back (and, with a between-track link, talking
+    // over each other) — issue #310. Aggressive idents at 15/30/45 instead.
+    return [15, 30, 45].includes(m);
   }
 
   if (kind === 'hourly') {

@@ -277,8 +277,10 @@ export function startScheduler() {
   // to air a segment; per-kind cooldowns and the frequency floor live in it.
   cron.schedule('*/5 * * * *', skillsTick);
 
-  // Station ID candidate ticks at :00, :15, :30, :45 — handler gates by frequency
-  cron.schedule('0,15,30,45 * * * *', stationId);
+  // Station ID candidate ticks at :15, :30, :45 — handler gates by frequency.
+  // Deliberately NOT :00: the hourly check owns the top of the hour, and firing
+  // both there stacked two voice segments on each other (issue #310).
+  cron.schedule('15,30,45 * * * *', stationId);
 
   // Cleanup every hour
   cron.schedule('0 * * * *', cleanup);

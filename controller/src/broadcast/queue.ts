@@ -3,7 +3,7 @@
 // between upcoming → current → history based on what Liquidsoap reports.
 
 import { writeFile, readFile } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
@@ -414,7 +414,7 @@ class Queue {
       const targetFile = kind === 'link'
         ? config.liquidsoap.introFile
         : config.liquidsoap.sayFile;
-      await writeHandoff(targetFile, wavPath);
+      await airVoice(targetFile, wavPath, text);
       this.log(kind, text);
       session.appendTurn({ role: 'segment', kind, text });
       // The auto-DJ link channel is its own event; everything else (station
@@ -441,7 +441,7 @@ class Queue {
       ? config.liquidsoap.introFile
       : config.liquidsoap.sayFile;
     try {
-      await writeHandoff(targetFile, item.introWav);
+      await airVoice(targetFile, item.introWav, item.introScript || '');
       this.persist();
       this.log(kind, item.introScript);
       session.appendTurn({ role: 'segment', kind, text: item.introScript });
@@ -790,6 +790,94 @@ async function writeHandoff(path: string, contents: string, { maxWaitMs = 1500 }
   const release = next.then(() => waitForConsumed(path, maxWaitMs).catch(() => undefined));
   _handoffChains.set(path, release);
   return next;
+}
+
+// --- Spoken-segment serialiser (issue #310) -------------------------------
+//
+// writeHandoff above stops two writes to ONE file from clobbering each other,
+// but it releases the moment liquidsoap *reads* the path (~0.5s) — long before
+// the ~20s of speech has actually played. And say.txt and intro.txt are
+// separate chains, so nothing stopped a station ID / hourly check (say.txt)
+// from airing on top of a between-track link (intro.txt), or two scheduled
+// idents stacking when their cron handlers fired together.
+//
+// airVoice() chains EVERY spoken segment across BOTH channels through one lock
+// and holds it for the clip's actual playback duration, so the next voice waits
+// for silence instead of talking over the last one. The caller unblocks as soon
+// as its own clip is handed to liquidsoap (writeHandoff resolved); only the
+// *next* caller pays the duration wait.
+let _voiceChain: Promise<void> = Promise.resolve();
+
+const VOICE_LEADIN_MS = 800;   // /sounds/leadin.wav pushed before each spoken clip
+const VOICE_TAIL_MS = 700;     // duck ramp-back + poll/scheduling slack
+// Cap a single hold so a wildly-wrong duration estimate (or a clip that never
+// really aired) can't wedge the voice channel for minutes.
+const VOICE_HOLD_MAX_MS = 90_000;
+
+async function airVoice(path: string, wavPath: string, text: string) {
+  const holdMs = Math.min(VOICE_HOLD_MAX_MS, speechDurationMs(wavPath, text));
+  const turn = _voiceChain
+    .catch(() => undefined)
+    .then(() => writeHandoff(path, wavPath));
+  // Extend the shared lock until this clip has (about) finished playing.
+  _voiceChain = turn.then(() => sleep(holdMs)).then(() => {}, () => {});
+  return turn;
+}
+
+// Best-effort playback duration of a rendered voice clip, plus the lead-in and
+// duck-tail padding. Reads the exact length from a WAV header (the local
+// engines), and estimates from word count for anything else (cloud mp3).
+function speechDurationMs(wavPath: string, text: string): number {
+  const body = wavDurationMs(wavPath) ?? estimateSpeechMs(text);
+  return body + VOICE_LEADIN_MS + VOICE_TAIL_MS;
+}
+
+// ~140 wpm, deliberately on the slow side so we over-, never under-estimate
+// (an over-estimate just adds a little dead air; an under-estimate lets the
+// next segment clip in over the tail).
+function estimateSpeechMs(text: string): number {
+  const words = (text || '').trim().split(/\s+/).filter(Boolean).length;
+  return Math.ceil((words / 2.3) * 1000);
+}
+
+// Duration from a WAV header (byteRate from `fmt `, byte count from `data`).
+// Returns null for non-WAV or anything it can't parse, so the caller falls back
+// to the word-count estimate. Reads only the first 4KB — headers are tiny.
+function wavDurationMs(path: string): number | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, 'r');
+    const head = Buffer.alloc(4096);
+    const n = readSync(fd, head, 0, head.length, 0);
+    if (n < 12 || head.toString('ascii', 0, 4) !== 'RIFF'
+        || head.toString('ascii', 8, 12) !== 'WAVE') return null;
+    let byteRate = 0;
+    let dataSize = 0;
+    let off = 12;
+    while (off + 8 <= n) {
+      const id = head.toString('ascii', off, off + 4);
+      const size = head.readUInt32LE(off + 4);
+      if (id === 'fmt ') {
+        byteRate = head.readUInt32LE(off + 8 + 8);   // fmt body offset 8 → byteRate
+      } else if (id === 'data') {
+        dataSize = size;
+        break;
+      }
+      off += 8 + size + (size % 2);   // chunks are word-aligned
+    }
+    if (!byteRate) return null;
+    // Streamed WAVs sometimes write a bogus/placeholder data size — fall back
+    // to the real file size minus the header we walked.
+    if (!dataSize || dataSize > 0x7fffffff) {
+      dataSize = Math.max(0, statSync(path).size - (off + 8));
+    }
+    if (!dataSize) return null;
+    return Math.ceil((dataSize / byteRate) * 1000);
+  } catch {
+    return null;
+  } finally {
+    if (fd != null) closeSync(fd);
+  }
 }
 
 const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check', 'weather', 'news', 'traffic', 'curiosity', 'album-anniversary', 'library-deep-cut', 'web-search']);
