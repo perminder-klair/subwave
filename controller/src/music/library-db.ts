@@ -596,6 +596,34 @@ export function trackCount(): number {
   }).n;
 }
 
+// Drop track rows (and their vectors) for ids that are no longer in the live
+// Navidrome catalogue. `liveIds` MUST be the id set from a COMPLETE, successful
+// walk of subsonic.iterateAllSongs() — passing a partial set would delete live
+// tags. Callers guard on a non-empty walk so a transient empty Navidrome
+// response can't wipe the DB.
+//
+// Why this is needed: the walk only ever upserts, never deletes. A Navidrome
+// full rescan can re-mint track IDs, orphaning every previous row; across
+// several rescans the DB balloons far past the live catalogue. Those orphans
+// inflate the coverage percentage past 100% and blow up the acoustic-analysis
+// scope with dead, un-downloadable ids. Returns the number of rows deleted.
+export function pruneMissingTracks(liveIds: ReadonlySet<string>): number {
+  const d = requireDb();
+  const all = (d.prepare('SELECT id FROM tracks').all() as Array<{ id: string }>).map(r => r.id);
+  const orphans = all.filter(id => !liveIds.has(id));
+  if (orphans.length === 0) return 0;
+  const delTrack = d.prepare('DELETE FROM tracks WHERE id = ?');
+  const delVec = d.prepare('DELETE FROM track_vectors WHERE id = ?');
+  const runPrune = d.transaction((ids: string[]) => {
+    for (const id of ids) {
+      delTrack.run(id);
+      delVec.run(id);
+    }
+  });
+  runPrune(orphans);
+  return orphans.length;
+}
+
 // Tracks with acoustic analysis. A track is "analysed" iff bpm IS NOT NULL
 // (bpm/musical_key/intro_ms are written together by upsertTrackAnalysis).
 export function analysedCount(): number {
