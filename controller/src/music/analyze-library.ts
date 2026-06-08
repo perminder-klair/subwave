@@ -89,6 +89,7 @@ async function main() {
 
   if (shouldWalk) {
     let walked = 0;
+    const liveIds = new Set<string>();
     for await (const song of subsonic.iterateAllSongs()) {
       db.upsertTrackMeta(song.id, {
         title: song.title,
@@ -98,10 +99,21 @@ async function main() {
         genre: song.genre,
         duration: song.duration,
       });
+      liveIds.add(song.id);
       walked += 1;
       if (walked % 500 === 0) console.log(`[analyze] walked ${walked} tracks`);
     }
     console.log(`[analyze] walked ${walked} total tracks`);
+
+    // Reconcile: drop rows for tracks no longer in Navidrome so the analysis
+    // scope reflects the live catalogue, not orphans from past full rescans.
+    // Guarded on a non-empty walk (a complete, authoritative pass).
+    if (walked > 0) {
+      const pruned = db.pruneMissingTracks(liveIds);
+      if (pruned > 0) {
+        console.log(`[analyze] pruned ${pruned} orphaned tracks no longer in Navidrome`);
+      }
+    }
   }
 
   const stats = await runAnalysisPass({ limit, reAnalyze });
