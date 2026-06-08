@@ -16,9 +16,17 @@ name: Publish images
 # Platforms: the core four images (caddy, broadcast, controller, web) are
 # multi-arch (linux/amd64 + linux/arm64) so Apple Silicon and ARM servers run
 # natively instead of under emulation. Dockerfile.controller selects the
-# matching Piper build via $TARGETARCH; Kokoro/onnx have arm64 wheels. The
-# optional tts-heavy sidecar stays amd64-only — its heavy PyTorch stack makes
-# an arm64 cross-build slow/large, and it's opt-in (runs fine under emulation).
+# matching Piper build via $TARGETARCH; Kokoro/onnx have arm64 wheels.
+#
+# fork-local change: tts-heavy is ALSO built for linux/arm64 here (upstream
+# keeps it amd64-only — see perminder-klair/subwave#206 — citing heavy-PyTorch
+# cross-build cost for an opt-in image). Nothing in Dockerfile.tts-heavy is
+# actually amd64-specific: torch/torchaudio/onnxruntime/chatterbox-tts/
+# pocket-tts/librosa all publish aarch64 wheels (verified against
+# download.pytorch.org/whl/cpu and PyPI). We run it persistently on an arm64
+# node (Apple Silicon Mac mini) and want native performance — no QEMU tax —
+# for the librosa acoustic-analysis pass over a large library plus Chatterbox/
+# PocketTTS voice synthesis.
 
 on:
   push:
@@ -51,7 +59,7 @@ jobs:
             platforms: linux/amd64,linux/arm64
           - image: subwave-tts-heavy
             dockerfile: docker/Dockerfile.tts-heavy
-            platforms: linux/amd64
+            platforms: linux/amd64,linux/arm64
     steps:
       - uses: actions/checkout@v4
 
