@@ -10,6 +10,7 @@ import type {
   ScheduleShow,
   SchedulePersona,
   SchedulePayload,
+  StationContext,
 } from '@/lib/types';
 import { useTheme } from '@/theme/ThemeContext';
 
@@ -50,15 +51,23 @@ function collapseSlots(
 export interface ScheduleDrawerProps {
   api: StationApi;
   activeShow: ActiveShow | null;
+  context: StationContext | null;
 }
 
-export default function ScheduleDrawer({ api, activeShow }: ScheduleDrawerProps) {
+export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDrawerProps) {
   const { colors } = useTheme();
   const [data, setData] = useState<SchedulePayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const today = useMemo(() => new Date().getDay(), []);
   const [day, setDay] = useState(today);
   const currentHour = useMemo(() => new Date().getHours(), []);
+  const [now, setNow] = useState(() => new Date());
+  const location = context?.weather?.location ?? null;
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -78,8 +87,45 @@ export default function ScheduleDrawer({ api, activeShow }: ScheduleDrawerProps)
 
   const slots = collapseSlots(data.schedule?.[day] ?? [], data.shows || [], data.personas || []);
 
+  // Format the station clock with the operator's TZ when present, falling back
+  // to the viewer's local time. Wrapped because Hermes' Intl timeZone support
+  // is narrower than the browser's.
+  let time: string;
+  try {
+    time = new Intl.DateTimeFormat(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      ...(data.timezone ? { timeZone: data.timezone } : {}),
+    }).format(now);
+  } catch {
+    time = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+  }
+
   return (
     <View>
+      <View
+        className="flex-row items-end justify-between"
+        style={{
+          gap: 16,
+          paddingBottom: 12,
+          marginBottom: 16,
+          borderBottomWidth: 1,
+          borderBottomColor: colors.softBorder,
+        }}
+      >
+        <View>
+          <Text className="font-mono text-muted" style={{ fontSize: 9, letterSpacing: 3 }}>STATION TIME</Text>
+          <Text className="font-body-semibold text-ink" style={{ fontSize: 24, marginTop: 4 }}>{time}</Text>
+        </View>
+        {location ? (
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text className="font-mono text-muted" style={{ fontSize: 9, letterSpacing: 3 }}>LOCATION</Text>
+            <Text className="font-body text-ink" style={{ fontSize: 14, marginTop: 4 }}>{location}</Text>
+          </View>
+        ) : null}
+      </View>
+
       {activeShow?.name ? (
         <View
           style={{ borderWidth: 1, borderColor: colors.accent, padding: 12, marginBottom: 16 }}

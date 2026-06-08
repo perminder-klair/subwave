@@ -171,7 +171,7 @@ export default function PlayerScreen() {
     if (id === 'schedule') {
       return api ? (
         <PagePanel title="Shows" sub="weekly schedule">
-          <ScheduleDrawer api={api} activeShow={activeShow} />
+          <ScheduleDrawer api={api} activeShow={activeShow} context={context} />
         </PagePanel>
       ) : null;
     }
