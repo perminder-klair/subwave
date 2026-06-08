@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Default theme tokens — mirror web/app/globals.css. These are the pre-theme
+ * fallback; the station's real palette (from /themes) is applied at runtime by
+ * ThemeProvider via NativeWind's vars(). oklch()/color-mix() from the web are
+ * resolved here to static hex/rgba because RN's style engine doesn't evaluate
+ * them. */
+:root {
+  --bg: #f3efe6;
+  --ink: #161412;
+  --muted: #7a736a;
+  --accent: #d94b2a;
+  --overlay: rgba(0, 0, 0, 0.05);
+  --soft-border: rgba(0, 0, 0, 0.08);
+  --field: #e9e4d8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #100e0c;
+    --ink: #ece6dc;
+    --muted: #c1c0bd;
+    --accent: #d94b2a;
+    --overlay: rgba(0, 0, 0, 0.55);
+    --soft-border: rgba(255, 255, 255, 0.1);
+    --field: #1b1815;
+  }
+}
