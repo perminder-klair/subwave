@@ -40,7 +40,9 @@ export interface StationApi {
   /** Absolute URL for an album cover (for <Image source>). */
   cover(subsonicId: string): string;
   /** Absolute URL for a persona avatar. `path` is the value from
-   *  activeShow.persona.avatar — already includes `/api` per the controller. */
+   *  activeShow.persona.avatar (e.g. `/persona-avatar/<id>`) — the controller
+   *  emits it WITHOUT the `/api` prefix; this client adds it like every other
+   *  endpoint. */
   avatar(path: string): string;
   /** The live MP3 Icecast mount — the universal floor; Opus/Ogg is skipped on
    *  native for the same chained-Ogg reasons the web pins iOS to MP3. */
@@ -91,7 +93,7 @@ export function createApi(rawBase: string): StationApi {
     avatar: (path) => {
       if (!path) return '';
       if (/^https?:\/\//i.test(path)) return path;
-      return `${base}${path.startsWith('/') ? '' : '/'}${path}`;
+      return api(path.startsWith('/') ? path : `/${path}`);
     },
     streamUrl: () => `${base}/stream.mp3`,
   };
