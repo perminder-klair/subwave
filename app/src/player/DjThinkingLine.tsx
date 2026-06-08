@@ -35,7 +35,7 @@ export default function DjThinkingLine({ feed, enabled, onOpenBooth }: DjThinkin
   const display = cls === 'voice' ? `"${text}"` : text;
 
   return (
-    <Pressable onPress={onOpenBooth} className="flex-row mt-5" style={{ gap: 8, maxWidth: '92%' }}>
+    <Pressable onPress={onOpenBooth} accessibilityRole="button" accessibilityLabel="Open booth feed" className="flex-row mt-5" style={{ gap: 8, maxWidth: '92%' }}>
       <Text className="font-mono text-muted" style={{ fontSize: 14, opacity: 0.7 }}>
         {MARKER[cls] || '·'}
       </Text>

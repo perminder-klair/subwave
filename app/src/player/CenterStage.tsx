@@ -42,7 +42,7 @@ export default function CenterStage({
   return (
     <View className="flex-1 justify-center px-5">
       {coverSrc ? (
-        <Pressable onPress={onOpenTimeline} className="mb-7">
+        <Pressable onPress={onOpenTimeline} accessibilityRole="button" accessibilityLabel="Open timeline" className="mb-7">
           <Image
             source={{ uri: coverSrc }}
             style={{

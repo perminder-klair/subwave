@@ -48,17 +48,17 @@ export default function TopBar({
           {(stationName?.trim() || 'SUB/WAVE').toUpperCase()}
         </Text>
         <View className="flex-row items-center" style={{ gap: 18 }}>
-          <Pressable onPress={onOpenThemes} hitSlop={10}>
+          <Pressable onPress={onOpenThemes} hitSlop={10} accessibilityRole="button" accessibilityLabel="Theme">
             <Palette size={18} color={colors.muted} />
           </Pressable>
-          <Pressable onPress={() => router.push('/stations')} hitSlop={10}>
+          <Pressable onPress={() => router.push('/stations')} hitSlop={10} accessibilityRole="button" accessibilityLabel="Switch station">
             <Radio size={18} color={colors.muted} />
           </Pressable>
         </View>
       </View>
 
       {(showName || onAirName) && (
-        <Pressable onPress={onOpenSchedule} className="flex-row flex-wrap items-baseline mt-2" style={{ gap: 8 }}>
+        <Pressable onPress={onOpenSchedule} accessibilityRole="button" accessibilityLabel="Open schedule" className="flex-row flex-wrap items-baseline mt-2" style={{ gap: 8 }}>
           {showName ? (
             <Text className="font-body-medium text-ink" style={{ fontSize: 13 }} numberOfLines={1}>
               ▸ {showName}

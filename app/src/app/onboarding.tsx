@@ -102,6 +102,9 @@ export default function Onboarding() {
           <Pressable
             onPress={connect}
             disabled={busy}
+            accessibilityRole="button"
+            accessibilityLabel="Connect to station"
+            accessibilityState={{ disabled: busy, busy }}
             className="mt-6 rounded-xl items-center justify-center"
             style={{ backgroundColor: colors.accent, paddingVertical: 16, opacity: busy ? 0.7 : 1 }}
           >
@@ -115,7 +118,7 @@ export default function Onboarding() {
           </Pressable>
 
           {base ? (
-            <Pressable onPress={() => router.back()} className="mt-5 items-center">
+            <Pressable onPress={() => router.back()} accessibilityRole="button" accessibilityLabel="Cancel" className="mt-5 items-center">
               <Text className="font-body text-muted" style={{ fontSize: 14 }}>
                 Cancel
               </Text>

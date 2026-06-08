@@ -21,6 +21,8 @@ export default function TuneInOverlay({ onTune, nowPlaying }: TuneInOverlayProps
   return (
     <Pressable
       onPress={onTune}
+      accessibilityRole="button"
+      accessibilityLabel="Tune in to the live stream"
       style={{ backgroundColor: `${colors.bg}f2` }}
       className="absolute inset-0 z-50 items-center justify-center px-6"
     >

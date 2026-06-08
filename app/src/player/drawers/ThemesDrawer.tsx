@@ -13,6 +13,8 @@ export default function ThemesDrawer() {
     <View>
       <Pressable
         onPress={() => setOverride(null)}
+        accessibilityRole="button"
+        accessibilityLabel="Follow station theme"
         className="flex-row items-center justify-between"
         style={{ paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.softBorder }}
       >
@@ -31,6 +33,9 @@ export default function ThemesDrawer() {
           <Pressable
             key={theme.id}
             onPress={() => setOverride(theme.id)}
+            accessibilityRole="button"
+            accessibilityLabel={`Theme: ${theme.name}`}
+            accessibilityState={{ selected: theme.id === activeId }}
             className="flex-row items-center"
             style={{ gap: 12, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.softBorder }}
           >

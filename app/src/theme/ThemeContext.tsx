@@ -47,15 +47,26 @@ const DARK_DEFAULTS: ResolvedColors = {
   field: '#1b1815',
 };
 
+// RN's style engine + Skia only parse hex / rgb(a) / hsl(a) / named colors —
+// NOT the CSS oklch() and color-mix() that the controller's /themes registry
+// uses (browsers handle those natively, RN doesn't). Anything unparseable
+// falls back to the token's dark default, which is visually equivalent for the
+// seeded palettes (e.g. oklch(0.62 0.22 25) ≈ #d94b2a).
+const RN_COLOR_RE = /^(#([0-9a-f]{3,8})|rgba?\(|hsla?\(|transparent$)/i;
+function safeColor(value: string | undefined, fallback: string): string {
+  if (value && RN_COLOR_RE.test(value.trim())) return value;
+  return fallback;
+}
+
 function colorsFromTokens(tokens: Record<string, string>): ResolvedColors {
   return {
-    bg: tokens['--bg'] || DARK_DEFAULTS.bg,
-    ink: tokens['--ink'] || DARK_DEFAULTS.ink,
-    muted: tokens['--muted'] || DARK_DEFAULTS.muted,
-    accent: tokens['--accent'] || DARK_DEFAULTS.accent,
-    overlay: tokens['--overlay'] || DARK_DEFAULTS.overlay,
-    softBorder: tokens['--soft-border'] || DARK_DEFAULTS.softBorder,
-    field: tokens['--field'] || DARK_DEFAULTS.field,
+    bg: safeColor(tokens['--bg'], DARK_DEFAULTS.bg),
+    ink: safeColor(tokens['--ink'], DARK_DEFAULTS.ink),
+    muted: safeColor(tokens['--muted'], DARK_DEFAULTS.muted),
+    accent: safeColor(tokens['--accent'], DARK_DEFAULTS.accent),
+    overlay: safeColor(tokens['--overlay'], DARK_DEFAULTS.overlay),
+    softBorder: safeColor(tokens['--soft-border'], DARK_DEFAULTS.softBorder),
+    field: safeColor(tokens['--field'], DARK_DEFAULTS.field),
   };
 }
 
@@ -125,6 +136,22 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const mode: ThemeMode = activeTheme?.mode ?? 'dark';
   const colors = useMemo(() => colorsFromTokens(tokens), [tokens]);
 
+  // NativeWind className colors resolve to these CSS vars, so they must be
+  // RN-parseable too — feed vars() the sanitized colors, not the raw tokens
+  // (which may carry oklch()/color-mix()).
+  const safeTokens = useMemo(
+    () => ({
+      '--bg': colors.bg,
+      '--ink': colors.ink,
+      '--muted': colors.muted,
+      '--accent': colors.accent,
+      '--overlay': colors.overlay,
+      '--soft-border': colors.softBorder,
+      '--field': colors.field,
+    }),
+    [colors],
+  );
+
   const value = useMemo<ThemeContextValue>(
     () => ({ themes, activeId, mode, colors, setOverride }),
     [themes, activeId, mode, colors, setOverride],
@@ -132,7 +159,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <Ctx.Provider value={value}>
-      <View style={[{ flex: 1 }, vars(tokens)]}>{children}</View>
+      <View style={[{ flex: 1 }, vars(safeTokens)]}>{children}</View>
     </Ctx.Provider>
   );
 }

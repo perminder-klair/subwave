@@ -88,6 +88,9 @@ export default function TransportBar({
       <Pressable
         onPress={handleTune}
         disabled={offline}
+        accessibilityRole="button"
+        accessibilityLabel={offline ? 'Stream offline' : tunedIn ? 'Tune out' : 'Tune in'}
+        accessibilityState={{ disabled: offline, selected: tunedIn }}
         className="items-center justify-center rounded-full"
         style={{
           width: 52,
@@ -144,7 +147,14 @@ export default function TransportBar({
           maximumTrackTintColor={colors.softBorder}
           thumbTintColor={colors.ink}
         />
-        <Pressable onPress={handleMute} hitSlop={8} className="mt-1">
+        <Pressable
+          onPress={handleMute}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={muted ? 'Unmute' : 'Mute'}
+          accessibilityState={{ selected: muted }}
+          className="mt-1"
+        >
           {muted ? (
             <VolumeX size={16} color={colors.muted} />
           ) : (

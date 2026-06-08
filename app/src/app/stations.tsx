@@ -34,7 +34,7 @@ export default function Stations() {
         <Text className="font-display text-ink" style={{ fontSize: 24 }}>
           Stations
         </Text>
-        <Pressable onPress={() => router.back()} hitSlop={12}>
+        <Pressable onPress={() => router.back()} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close">
           <X size={22} color={colors.ink} />
         </Pressable>
       </View>
@@ -47,6 +47,9 @@ export default function Stations() {
             <Pressable
               key={station.url}
               onPress={() => switchTo(station)}
+              accessibilityRole="button"
+              accessibilityLabel={`Station ${station.name}`}
+              accessibilityState={{ selected: active }}
               className="flex-row items-center rounded-xl px-4 py-4 mb-2"
               style={{
                 backgroundColor: colors.field,
@@ -65,7 +68,7 @@ export default function Stations() {
                 </Text>
               </View>
               {!isFeatured ? (
-                <Pressable onPress={() => forgetStation(station.url)} hitSlop={10} className="pl-3">
+                <Pressable onPress={() => forgetStation(station.url)} hitSlop={10} accessibilityRole="button" accessibilityLabel={`Forget ${station.name}`} className="pl-3">
                   <X size={16} color={colors.muted} />
                 </Pressable>
               ) : null}
@@ -75,6 +78,8 @@ export default function Stations() {
 
         <Pressable
           onPress={() => router.push('/onboarding')}
+          accessibilityRole="button"
+          accessibilityLabel="Add a station"
           className="flex-row items-center rounded-xl px-4 py-4 mt-1"
           style={{ borderWidth: 1, borderColor: colors.softBorder, borderStyle: 'dashed' }}
         >

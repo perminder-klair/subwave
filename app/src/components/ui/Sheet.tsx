@@ -1,14 +1,18 @@
 // One bottom sheet, content switched by the active drawer — mirrors the single
-// <Sheet> in web PlayerApp. Driven by an `open` prop (present/dismiss) so the
-// caller stays declarative. Uses @gorhom/bottom-sheet's modal.
+// <Sheet> in web PlayerApp.
+//
+// Driven declaratively by a controlled `index` (0 = open, -1 = closed) rather
+// than imperative present()/dismiss() on a modal ref. The modal+ref+effect
+// approach proved flaky here (the sheet's state and the present() call could
+// race, so it took multiple taps to open); a controlled non-modal BottomSheet
+// animates straight to the target index and is reliable on the first tap.
 
-import {
+import BottomSheet, {
   BottomSheetBackdrop,
-  BottomSheetModal,
   BottomSheetScrollView,
   type BottomSheetBackdropProps,
 } from '@gorhom/bottom-sheet';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import { Text, View } from 'react-native';
 import { useTheme } from '@/theme/ThemeContext';
 
@@ -20,14 +24,9 @@ export interface SheetProps {
 }
 
 export function Sheet({ open, onClose, title, children }: SheetProps) {
-  const ref = useRef<BottomSheetModal>(null);
+  const ref = useRef<BottomSheet>(null);
   const { colors } = useTheme();
   const snapPoints = useMemo(() => ['60%', '92%'], []);
-
-  useEffect(() => {
-    if (open) ref.current?.present();
-    else ref.current?.dismiss();
-  }, [open]);
 
   const renderBackdrop = useCallback(
     (props: BottomSheetBackdropProps) => (
@@ -42,12 +41,25 @@ export function Sheet({ open, onClose, title, children }: SheetProps) {
     [],
   );
 
+  // onClose() is the single source of truth for "user dismissed it" — fired
+  // when the sheet animates to index -1 (pan-down or backdrop press).
+  const handleChange = useCallback(
+    (index: number) => {
+      if (index === -1 && open) onClose();
+    },
+    [open, onClose],
+  );
+
   return (
-    <BottomSheetModal
+    <BottomSheet
       ref={ref}
+      index={open ? 0 : -1}
       snapPoints={snapPoints}
-      onDismiss={onClose}
+      // Explicit snapPoints → dynamic content sizing must be OFF, or the first
+      // layout mis-measures the scroll view height.
+      enableDynamicSizing={false}
       enablePanDownToClose
+      onChange={handleChange}
       backdropComponent={renderBackdrop}
       handleIndicatorStyle={{ backgroundColor: colors.muted }}
       backgroundStyle={{ backgroundColor: colors.bg }}
@@ -65,6 +77,6 @@ export function Sheet({ open, onClose, title, children }: SheetProps) {
         ) : null}
         <View>{children}</View>
       </BottomSheetScrollView>
-    </BottomSheetModal>
+    </BottomSheet>
   );
 }

@@ -100,6 +100,9 @@ export default function ScheduleDrawer({ api, activeShow }: ScheduleDrawerProps)
               <Pressable
                 key={label}
                 onPress={() => setDay(d)}
+                accessibilityRole="button"
+                accessibilityLabel={`Day ${label}`}
+                accessibilityState={{ selected: active }}
                 style={{
                   paddingHorizontal: 12,
                   paddingVertical: 7,

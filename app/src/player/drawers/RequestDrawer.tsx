@@ -222,6 +222,8 @@ export default function RequestDrawer({ api, nowPlaying, context, onClose }: Req
             <Pressable
               key={chip.text}
               onPress={() => setRequestText(chip.text)}
+              accessibilityRole="button"
+              accessibilityLabel={`Suggestion: ${chip.text}`}
               style={{ borderWidth: 1, borderColor: colors.ink, paddingHorizontal: 12, paddingVertical: 6 }}
             >
               <Text className="text-ink" style={{ fontSize: 11, letterSpacing: 0.5 }}>{chip.text}</Text>
@@ -242,6 +244,9 @@ export default function RequestDrawer({ api, nowPlaying, context, onClose }: Req
       <Pressable
         onPress={handleSubmit}
         disabled={!canSend}
+        accessibilityRole="button"
+        accessibilityLabel="Send to the booth"
+        accessibilityState={{ disabled: !canSend, busy: isSubmitting }}
         className="flex-row items-center justify-center mt-4"
         style={{ backgroundColor: colors.accent, paddingVertical: 14, gap: 10, opacity: canSend ? 1 : 0.5 }}
       >

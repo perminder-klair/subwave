@@ -48,6 +48,9 @@ export default function DotRail({ upcomingCount, active, onSelect }: DotRailProp
           <Pressable
             key={item.k}
             onPress={() => onSelect(isActive ? null : item.k)}
+            accessibilityRole="button"
+            accessibilityLabel={item.label}
+            accessibilityState={{ selected: isActive }}
             className="flex-1 items-center justify-center rounded-lg"
             style={{
               paddingVertical: 12,

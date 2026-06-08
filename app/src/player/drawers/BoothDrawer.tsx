@@ -58,6 +58,9 @@ export default function BoothDrawer({ items }: BoothDrawerProps) {
             <Pressable
               key={f.id}
               onPress={() => setFilter(f.id)}
+              accessibilityRole="button"
+              accessibilityLabel={`Filter: ${f.label}`}
+              accessibilityState={{ selected: active }}
               style={{
                 paddingHorizontal: 10,
                 paddingVertical: 5,
