@@ -1,18 +1,34 @@
-// Station switcher: featured (pinned) + recents (MRU). Switching tears down the
-// current playback before re-pointing the app at the new station.
+// Station switcher, styled after the web mock: the tuned-in station as an accent
+// card, recents as live-dot rows, and a dashed "Add a station". Switching tears
+// down playback before re-pointing the app. Long-press a recent to forget it.
 
 import { router } from 'expo-router';
-import { Plus, Radio, X } from 'lucide-react-native';
+import { ChevronRight, X } from 'lucide-react-native';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import LiveDot from '@/components/LiveDot';
 import { teardown } from '@/audio/player';
 import { useStation } from '@/config/StationContext';
 import { normalizeBase } from '@/lib/api';
 import type { StationRef } from '@/lib/station';
 import { useTheme } from '@/theme/ThemeContext';
 
+const stripProto = (u: string) => u.replace(/^https?:\/\//, '');
+
+function Divider({ children }: { children: string }) {
+  const { colors } = useTheme();
+  return (
+    <View className="flex-row items-center" style={{ gap: 10, paddingTop: 18, paddingBottom: 4 }}>
+      <Text className="font-mono text-muted" style={{ fontSize: 10, letterSpacing: 2.2, textTransform: 'uppercase', fontWeight: '700' }}>
+        {children}
+      </Text>
+      <View style={{ flex: 1, height: 1, backgroundColor: colors.softBorder }} />
+    </View>
+  );
+}
+
 export default function Stations() {
-  const { recents, featured, base, selectStation, forgetStation } = useStation();
+  const { recents, featured, base, name, selectStation, forgetStation } = useStation();
   const { colors } = useTheme();
 
   const switchTo = async (ref: StationRef) => {
@@ -23,68 +39,90 @@ export default function Stations() {
     router.replace('/');
   };
 
-  const rows: StationRef[] = [
-    featured,
-    ...recents.filter((r) => normalizeBase(r.url) !== normalizeBase(featured.url)),
-  ];
+  const currentUrl = base;
+  const currentName = name || featured.name;
+  const others: StationRef[] = [featured, ...recents].filter(
+    (r) => normalizeBase(r.url) !== currentUrl,
+  );
+  // de-dupe by url
+  const seen = new Set<string>();
+  const recentRows = others.filter((r) => {
+    const k = normalizeBase(r.url);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 
   return (
     <SafeAreaView className="flex-1 bg-bg">
-      <View className="flex-row items-center justify-between px-6 pt-4 pb-2">
+      <View className="flex-row items-center justify-between px-5 pt-4 pb-1">
         <Text className="font-display text-ink" style={{ fontSize: 24 }}>
           Stations
         </Text>
         <Pressable onPress={() => router.back()} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close">
-          <X size={22} color={colors.ink} />
+          <X size={20} color={colors.ink} />
         </Pressable>
       </View>
 
-      <ScrollView className="flex-1 px-4" contentContainerStyle={{ paddingVertical: 8 }}>
-        {rows.map((station) => {
-          const active = normalizeBase(station.url) === base;
-          const isFeatured = normalizeBase(station.url) === normalizeBase(featured.url);
-          return (
-            <Pressable
-              key={station.url}
-              onPress={() => switchTo(station)}
-              accessibilityRole="button"
-              accessibilityLabel={`Station ${station.name}`}
-              accessibilityState={{ selected: active }}
-              className="flex-row items-center rounded-xl px-4 py-4 mb-2"
-              style={{
-                backgroundColor: colors.field,
-                borderWidth: 1,
-                borderColor: active ? colors.accent : colors.softBorder,
-              }}
-            >
-              <Radio size={20} color={active ? colors.accent : colors.muted} />
-              <View className="flex-1 ml-3">
-                <Text className="font-body-semibold text-ink" style={{ fontSize: 15 }}>
-                  {station.name}
-                  {isFeatured ? '  ·  featured' : ''}
+      <ScrollView className="flex-1 px-5" contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
+        {currentUrl ? (
+          <>
+            <Divider>Tuned in</Divider>
+            <View style={{ borderWidth: 1, borderColor: colors.accent, backgroundColor: `${colors.accent}17`, padding: 14, gap: 6 }}>
+              <View className="flex-row items-center justify-between" style={{ gap: 10 }}>
+                <Text className="font-body-semibold text-ink" style={{ fontSize: 16 }} numberOfLines={1}>
+                  {currentName}
                 </Text>
-                <Text className="font-mono text-muted mt-0.5" style={{ fontSize: 12 }}>
-                  {station.url.replace(/^https?:\/\//, '')}
-                </Text>
+                <View className="flex-row items-center" style={{ gap: 6 }}>
+                  <LiveDot size={6} />
+                  <Text className="font-mono text-accent" style={{ fontSize: 9, letterSpacing: 2, textTransform: 'uppercase', fontWeight: '700' }}>
+                    on air
+                  </Text>
+                </View>
               </View>
-              {!isFeatured ? (
-                <Pressable onPress={() => forgetStation(station.url)} hitSlop={10} accessibilityRole="button" accessibilityLabel={`Forget ${station.name}`} className="pl-3">
-                  <X size={16} color={colors.muted} />
-                </Pressable>
-              ) : null}
-            </Pressable>
-          );
-        })}
+              <Text className="font-mono text-ink" style={{ fontSize: 11, opacity: 0.8 }} numberOfLines={1}>
+                {stripProto(currentUrl)}
+              </Text>
+            </View>
+          </>
+        ) : null}
+
+        {recentRows.length ? <Divider>Recent</Divider> : null}
+        {recentRows.map((st) => (
+          <Pressable
+            key={st.url}
+            onPress={() => switchTo(st)}
+            onLongPress={() => forgetStation(st.url)}
+            accessibilityRole="button"
+            accessibilityLabel={`Tune in to ${st.name}`}
+            accessibilityHint="Long-press to forget"
+            className="flex-row items-center"
+            style={{ gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.softBorder }}
+          >
+            <LiveDot />
+            <View className="flex-1">
+              <Text className="font-body-semibold text-ink" style={{ fontSize: 14 }} numberOfLines={1}>
+                {st.name}
+              </Text>
+              <Text className="font-mono text-muted" style={{ fontSize: 11 }} numberOfLines={1}>
+                {stripProto(st.url)}
+              </Text>
+            </View>
+            <ChevronRight size={15} color={colors.muted} />
+          </Pressable>
+        ))}
 
         <Pressable
           onPress={() => router.push('/onboarding')}
           accessibilityRole="button"
           accessibilityLabel="Add a station"
-          className="flex-row items-center rounded-xl px-4 py-4 mt-1"
-          style={{ borderWidth: 1, borderColor: colors.softBorder, borderStyle: 'dashed' }}
+          className="flex-row items-center justify-center"
+          style={{ gap: 8, marginTop: 14, paddingVertical: 14, borderWidth: 1, borderColor: colors.muted, borderStyle: 'dashed' }}
         >
-          <Plus size={20} color={colors.muted} />
-          <Text className="font-body text-muted ml-3" style={{ fontSize: 15 }}>
+          <Text className="text-accent" style={{ fontSize: 18, fontWeight: '700', lineHeight: 18 }}>
+            +
+          </Text>
+          <Text className="font-mono text-ink" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: 'uppercase', fontWeight: '700' }}>
             Add a station
           </Text>
         </Pressable>

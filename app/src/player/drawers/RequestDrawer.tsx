@@ -3,10 +3,9 @@
 // RequestDrawer — same constants, suggestions, and polling cadence, but it owns
 // its own submit/poll via the station API instead of threaded callbacks.
 
-import { BottomSheetTextInput } from '@gorhom/bottom-sheet';
 import { ArrowUpRight, Radio } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native';
 import type { StationApi } from '@/lib/api';
 import type { NowPlayingTrack, RequestResult, StationContext } from '@/lib/types';
 import { useTheme } from '@/theme/ThemeContext';
@@ -177,7 +176,7 @@ export default function RequestDrawer({ api, nowPlaying, context, onClose }: Req
             DEAR DJ —
           </Text>
           <View style={{ borderLeftWidth: 2, borderLeftColor: colors.accent, paddingLeft: 12 }}>
-            <BottomSheetTextInput
+            <TextInput
               value={requestText}
               onChangeText={(t) => { setRequestText(t); if (result) setResult(null); }}
               placeholder={'play me something for late-night driving…'}
@@ -199,7 +198,7 @@ export default function RequestDrawer({ api, nowPlaying, context, onClose }: Req
             style={{ gap: 8, borderTopWidth: 1, borderTopColor: colors.softBorder, paddingTop: 12 }}
           >
             <Text style={{ fontFamily: 'Fraunces_400Regular', fontSize: 15, color: colors.muted, fontStyle: 'italic' }}>—</Text>
-            <BottomSheetTextInput
+            <TextInput
               value={requesterName}
               onChangeText={setRequesterName}
               placeholder="signed, your name (optional)"

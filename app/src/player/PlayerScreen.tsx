@@ -1,13 +1,21 @@
 // The player composition root — native analog of web PlayerApp. Wires the
 // station feed + RNTP player + signal meter + lock-screen metadata + cover-tint
-// wash, owns drawer state and the first-paint tune-in gate, and lays everything
-// out in a phone column: TopBar / CenterStage (+ Waveform behind) / DotRail /
-// TransportBar, with one bottom sheet for the drawers.
+// wash, and lays the app out as an FM-dial swipe pager: a persistent TopBar and
+// FreqBand tuner above a horizontal pager whose five "stations" are
+// Shows / Timeline / LIVE / Booth / Request, with LIVE dead-centre as home.
+// Swipe (or tap a band stop) to tune across sections; the needle tracks the
+// scroll. Themes open in a bottom sheet from the palette icon, off-band.
 
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { useEffect, useMemo, useState } from 'react';
-import { View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  ScrollView,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Sheet } from '@/components/ui/Sheet';
 import { useStation } from '@/config/StationContext';
@@ -18,10 +26,10 @@ import { useSignal } from '@/hooks/useSignal';
 import { useStationFeed } from '@/hooks/useStationFeed';
 import { useTheme } from '@/theme/ThemeContext';
 import CenterStage from './CenterStage';
-import DotRail, { type PlayerDrawer } from './DotRail';
+import FreqBand, { type BandStop } from './FreqBand';
+import PagePanel from './PagePanel';
 import TopBar from './TopBar';
 import TransportBar from './TransportBar';
-import TuneInOverlay from './TuneInOverlay';
 import Waveform from './Waveform';
 import BoothDrawer from './drawers/BoothDrawer';
 import RequestDrawer from './drawers/RequestDrawer';
@@ -29,15 +37,16 @@ import ScheduleDrawer from './drawers/ScheduleDrawer';
 import ThemesDrawer from './drawers/ThemesDrawer';
 import TimelineDrawer from './drawers/TimelineDrawer';
 
-type Drawer = PlayerDrawer | 'themes';
-
-const DRAWER_TITLES: Record<Drawer, string> = {
-  timeline: 'Timeline',
-  booth: 'Booth feed',
-  request: 'Make a request',
-  schedule: 'Schedule',
-  themes: 'Theme',
-};
+// FM-dial band: the swipeable pager sections, LIVE in the centre.
+const PAGES: readonly BandStop[] = [
+  { id: 'schedule', label: 'Shows', abbr: 'SHWS' },
+  { id: 'timeline', label: 'Timeline', abbr: 'TML' },
+  { id: 'now', label: 'Live', abbr: 'LIVE' },
+  { id: 'booth', label: 'Booth', abbr: 'BTH' },
+  { id: 'request', label: 'Request', abbr: 'REQ' },
+];
+const HOME_INDEX = PAGES.findIndex((p) => p.id === 'now');
+const indexOf = (id: string) => PAGES.findIndex((p) => p.id === id);
 
 export default function PlayerScreen() {
   const { api } = useStation();
@@ -82,20 +91,118 @@ export default function PlayerScreen() {
     if (offline && tunedIn) stop();
   }, [offline, tunedIn, stop]);
 
-  const [drawer, setDrawer] = useState<Drawer | null>(null);
-  const [showTuneIn, setShowTuneIn] = useState(true);
+  // --- swipe pager -------------------------------------------------------
+  const pagerRef = useRef<ScrollView>(null);
+  const [pagerW, setPagerW] = useState(0);
+  const [active, setActive] = useState(HOME_INDEX);
+  const [needle, setNeedle] = useState(HOME_INDEX / (PAGES.length - 1));
+  const didInit = useRef(false);
 
-  const openDrawer = (d: Drawer | null) => {
-    Haptics.selectionAsync().catch(() => {});
-    setDrawer(d);
+  const onPagerLayout = (e: LayoutChangeEvent) => {
+    const w = e.nativeEvent.layout.width;
+    if (w > 0 && w !== pagerW) setPagerW(w);
   };
 
-  const tuneInFromOverlay = () => {
-    setShowTuneIn(false);
-    tune();
-  };
+  // Land on LIVE without animating the first scroll (belt-and-suspenders for
+  // platforms that ignore the ScrollView's initial contentOffset).
+  useEffect(() => {
+    if (pagerW > 0 && !didInit.current) {
+      didInit.current = true;
+      requestAnimationFrame(() => pagerRef.current?.scrollTo({ x: HOME_INDEX * pagerW, animated: false }));
+    }
+  }, [pagerW]);
+
+  const onPagerScroll = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (pagerW <= 0) return;
+      const x = e.nativeEvent.contentOffset.x;
+      const max = pagerW * (PAGES.length - 1);
+      setNeedle(max > 0 ? Math.min(1, Math.max(0, x / max)) : 0);
+      setActive(Math.round(x / pagerW));
+    },
+    [pagerW],
+  );
+
+  const goToPage = useCallback(
+    (i: number) => {
+      if (pagerW <= 0) return;
+      Haptics.selectionAsync().catch(() => {});
+      pagerRef.current?.scrollTo({ x: i * pagerW, animated: true });
+      setActive(i);
+    },
+    [pagerW],
+  );
+
+  const [themesOpen, setThemesOpen] = useState(false);
 
   const tint = coverColors.vibrant;
+
+  const renderPage = (id: string) => {
+    if (id === 'now') {
+      return (
+        <View style={{ flex: 1 }}>
+          <CenterStage
+            nowPlaying={nowPlaying}
+            coverSrc={coverSrc}
+            elapsed={elapsed}
+            feed={boothFeed}
+            djLineOn
+            live={tunedIn}
+            onOpenBooth={() => goToPage(indexOf('booth'))}
+            onOpenTimeline={() => goToPage(indexOf('timeline'))}
+          />
+          <Waveform tunedIn={tunedIn} progress={progress} />
+          <TransportBar
+            tunedIn={tunedIn}
+            status={status}
+            onTune={tune}
+            offline={offline}
+            volume={volume}
+            setVolume={setVolume}
+            muted={muted}
+            onToggleMute={toggleMute}
+            latencyMs={signal.latencyMs}
+            signalQuality={signal.quality}
+            listeners={listenerCount}
+          />
+        </View>
+      );
+    }
+    if (id === 'schedule') {
+      return api ? (
+        <PagePanel title="Shows" sub="weekly schedule">
+          <ScheduleDrawer api={api} activeShow={activeShow} />
+        </PagePanel>
+      ) : null;
+    }
+    if (id === 'timeline') {
+      return (
+        <PagePanel title="Timeline" sub="the dial, in order">
+          <TimelineDrawer upcoming={state.upcoming} history={state.history} />
+        </PagePanel>
+      );
+    }
+    if (id === 'booth') {
+      return (
+        <PagePanel title="The booth" sub="DJ on the mic">
+          <BoothDrawer items={boothFeed} />
+        </PagePanel>
+      );
+    }
+    if (id === 'request') {
+      return api ? (
+        <PagePanel title="Make a request" sub="to the booth">
+          <RequestDrawer
+            api={api}
+            nowPlaying={nowPlaying}
+            context={context}
+            onClose={() => goToPage(HOME_INDEX)}
+          />
+        </PagePanel>
+      ) : null;
+    }
+    return null;
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -117,66 +224,36 @@ export default function PlayerScreen() {
           stationName={stationName}
           djName={djName}
           activeShow={activeShow}
-          onOpenSchedule={() => openDrawer('schedule')}
-          onOpenThemes={() => openDrawer('themes')}
+          onOpenThemes={() => setThemesOpen(true)}
         />
 
-        <View style={{ flex: 1 }}>
-          <Waveform tunedIn={tunedIn} progress={progress} />
-          <CenterStage
-            nowPlaying={nowPlaying}
-            coverSrc={coverSrc}
-            elapsed={elapsed}
-            feed={boothFeed}
-            djLineOn
-            onOpenBooth={() => openDrawer('booth')}
-            onOpenTimeline={() => openDrawer('timeline')}
-          />
-        </View>
+        <FreqBand pages={PAGES} active={active} needle={needle} onPick={goToPage} />
 
-        <View style={{ gap: 12, paddingBottom: 4 }}>
-          <DotRail
-            upcomingCount={state.upcoming?.length ?? 0}
-            active={drawer === 'themes' ? null : (drawer as PlayerDrawer | null)}
-            onSelect={(d) => openDrawer(d)}
-          />
-          <TransportBar
-            tunedIn={tunedIn}
-            status={status}
-            onTune={tune}
-            offline={offline}
-            volume={volume}
-            setVolume={setVolume}
-            muted={muted}
-            onToggleMute={toggleMute}
-            latencyMs={signal.latencyMs}
-            signalQuality={signal.quality}
-            listeners={listenerCount}
-          />
+        <View style={{ flex: 1 }} onLayout={onPagerLayout}>
+          {pagerW > 0 ? (
+            <ScrollView
+              ref={pagerRef}
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+              scrollEventThrottle={16}
+              onScroll={onPagerScroll}
+              contentOffset={{ x: HOME_INDEX * pagerW, y: 0 }}
+              keyboardShouldPersistTaps="handled"
+            >
+              {PAGES.map((p) => (
+                <View key={p.id} style={{ width: pagerW }}>
+                  {renderPage(p.id)}
+                </View>
+              ))}
+            </ScrollView>
+          ) : null}
         </View>
       </SafeAreaView>
 
-      <Sheet
-        open={drawer != null}
-        onClose={() => setDrawer(null)}
-        title={drawer ? DRAWER_TITLES[drawer] : ''}
-      >
-        {drawer === 'timeline' ? (
-          <TimelineDrawer upcoming={state.upcoming} history={state.history} />
-        ) : null}
-        {drawer === 'booth' ? <BoothDrawer items={boothFeed} /> : null}
-        {drawer === 'request' && api ? (
-          <RequestDrawer api={api} nowPlaying={nowPlaying} context={context} onClose={() => setDrawer(null)} />
-        ) : null}
-        {drawer === 'schedule' && api ? (
-          <ScheduleDrawer api={api} activeShow={activeShow} />
-        ) : null}
-        {drawer === 'themes' ? <ThemesDrawer /> : null}
+      <Sheet open={themesOpen} onClose={() => setThemesOpen(false)} title="Theme">
+        {themesOpen ? <ThemesDrawer /> : null}
       </Sheet>
-
-      {showTuneIn && !offline ? (
-        <TuneInOverlay onTune={tuneInFromOverlay} nowPlaying={nowPlaying} />
-      ) : null}
     </View>
   );
 }

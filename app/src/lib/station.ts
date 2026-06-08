@@ -29,7 +29,7 @@ export function featuredStation(): StationRef {
   const f = (Constants.expoConfig?.extra as { featuredStation?: StationRef } | undefined)
     ?.featuredStation;
   return {
-    url: normalizeBase(f?.url || 'https://radio.getsubwave.com'),
+    url: normalizeBase(f?.url || 'https://www.getsubwave.com'),
     name: f?.name || 'SUB/WAVE',
   };
 }

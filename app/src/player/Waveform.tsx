@@ -10,7 +10,7 @@ import { useSpectrum } from '@/hooks/useSpectrum';
 import { useTheme } from '@/theme/ThemeContext';
 
 const BARS = 120;
-const HEIGHT = 150;
+const HEIGHT = 60;
 
 export interface WaveformProps {
   tunedIn: boolean;
@@ -30,7 +30,7 @@ export default function Waveform({ tunedIn, progress }: WaveformProps) {
     <View
       pointerEvents="none"
       onLayout={onLayout}
-      style={{ position: 'absolute', left: 12, right: 12, bottom: 96, height: HEIGHT, opacity: 0.2 }}
+      style={{ marginHorizontal: 16, marginBottom: 10, height: HEIGHT, opacity: 0.42 }}
     >
       {width > 0 ? (
         <Canvas style={{ flex: 1 }}>

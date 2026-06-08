@@ -3,8 +3,8 @@
 // phone column; the cover "glitch" CSS effects are dropped in favour of a
 // clean cross-fade (expo-image handles the fade on src change).
 
-import { Image } from 'expo-image';
-import { Pressable, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
+import CoverArt from './CoverArt';
 import DjThinkingLine from './DjThinkingLine';
 import { fmtTime } from '@/lib/format';
 import type { NowPlayingTrack, SessionTurn } from '@/lib/types';
@@ -16,6 +16,7 @@ export interface CenterStageProps {
   elapsed: number;
   feed: SessionTurn[];
   djLineOn: boolean;
+  live: boolean;
   onOpenBooth: () => void;
   onOpenTimeline: () => void;
 }
@@ -26,6 +27,7 @@ export default function CenterStage({
   elapsed,
   feed,
   djLineOn,
+  live,
   onOpenBooth,
   onOpenTimeline,
 }: CenterStageProps) {
@@ -42,20 +44,9 @@ export default function CenterStage({
   return (
     <View className="flex-1 justify-center px-5">
       {coverSrc ? (
-        <Pressable onPress={onOpenTimeline} accessibilityRole="button" accessibilityLabel="Open timeline" className="mb-7">
-          <Image
-            source={{ uri: coverSrc }}
-            style={{
-              width: 168,
-              height: 168,
-              borderRadius: 4,
-              borderWidth: 1,
-              borderColor: colors.softBorder,
-            }}
-            contentFit="cover"
-            transition={280}
-          />
-        </Pressable>
+        <View className="mb-8" style={{ alignItems: 'flex-start' }}>
+          <CoverArt uri={coverSrc} live={live} size={160} onPress={onOpenTimeline} />
+        </View>
       ) : null}
 
       <Text
