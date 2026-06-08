@@ -55,7 +55,8 @@
           "android": { "compileSdkVersion": 36, "targetSdkVersion": 36 },
           "ios": { "deploymentTarget": "16.4" }
         }
-      ]
+      ],
+      ["./plugins/withGradleVersion", { "version": "8.14.3" }]
     ],
     "experiments": {
       "typedRoutes": true
