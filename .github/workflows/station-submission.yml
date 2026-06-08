@@ -14,9 +14,13 @@ name: Station submission → PR
 # workflows, which is fine here — the content is generated, and lint runs on the
 # push to develop after merge.
 
+# NOTE: the `station-submission` label MUST exist as a repo label, otherwise
+# GitHub silently drops it from the issue template and the `if:` guard below
+# never matches (every run shows "skipped"). `labeled` is included so a
+# maintainer can re-trigger a stuck submission by re-applying the label.
 on:
   issues:
-    types: [opened, edited]
+    types: [opened, edited, labeled]
 
 permissions:
   contents: write

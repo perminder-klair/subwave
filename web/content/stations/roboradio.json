@@ -1,0 +1,13 @@
+{
+  "name": "RoboRadio",
+  "url": "https://radio.kitten.synology.me",
+  "operator": "@diablo581",
+  "location": "Smiths Grove, KY",
+  "country": "United States",
+  "lat": 37.11,
+  "lon": -86.24,
+  "genre": "Mix of all kinds of music",
+  "description": "This station leans into the \"Ran by Robots\" vibe and has all the DJ's running \"cloned\" voice models of Robots/AIs from movies/TVs/games.\n\nCurrent DJs include:\n\nBender (Futurama)\nCortana (Halo)\nGlaDoS (Portal)\nHal9000 (2001 A Space Odyssey)\nJ.A.R.V.I.S. (Iron Man, Avengers)\nBaymax (Big Hero 6)\nTARS (Interstellar)",
+  "featured": false,
+  "submitted": "2026-06-07"
+}
