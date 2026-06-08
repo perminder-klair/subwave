@@ -89,6 +89,16 @@ interface TtsForm {
   cloud: CloudTtsCfg;
 }
 
+interface LlmFallbackForm {
+  enabled: boolean;
+  provider: string;
+  model: string;
+  ollamaUrl: string;
+  numCtx: number;
+  baseUrl: string;
+  reasoning: boolean;
+}
+
 interface LlmForm {
   provider: string;
   model: string;
@@ -98,6 +108,7 @@ interface LlmForm {
   reasoning: boolean;
   pickerAgent: boolean;
   pauseWhenEmpty: boolean;
+  fallback: LlmFallbackForm;
 }
 
 interface SearchForm {
@@ -338,6 +349,15 @@ export default function SettingsPanel() {
         reasoning: !!v.llm?.reasoning,
         pickerAgent: !!v.llm?.pickerAgent,
         pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
+        fallback: {
+          enabled: !!v.llm?.fallback?.enabled,
+          provider: v.llm?.fallback?.provider ?? 'ollama',
+          model: v.llm?.fallback?.model ?? '',
+          ollamaUrl: v.llm?.fallback?.ollamaUrl ?? '',
+          numCtx: typeof v.llm?.fallback?.numCtx === 'number' ? v.llm.fallback.numCtx : 16384,
+          baseUrl: v.llm?.fallback?.baseUrl ?? '',
+          reasoning: !!v.llm?.fallback?.reasoning,
+        },
       },
       search: {
         provider: v.search?.provider ?? 'duckduckgo',
@@ -1477,6 +1497,15 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
       reasoning: form.llm.reasoning,
       pickerAgent: form.llm.pickerAgent,
       pauseWhenEmpty: form.llm.pauseWhenEmpty,
+      fallback: {
+        enabled: form.llm.fallback.enabled,
+        provider: form.llm.fallback.provider,
+        model: form.llm.fallback.model,
+        ollamaUrl: form.llm.fallback.ollamaUrl,
+        numCtx: form.llm.fallback.numCtx,
+        baseUrl: form.llm.fallback.baseUrl,
+        reasoning: form.llm.fallback.reasoning,
+      },
     },
   });
 
@@ -1642,6 +1671,171 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
               envVar={LLM_ENV_VARS[form.llm.provider]!}
               present={!!data.env?.[LLM_ENV_VARS[form.llm.provider]!]}
             />
+          )}
+        </div>
+      </Card>
+
+      <Card title="Fallback" sub="backup when the primary is offline">
+        <div className="grid gap-[18px]">
+          <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+            <div>
+              <div className="text-[13px] font-bold">Use a backup LLM</div>
+              <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+                When the primary host can&apos;t be reached — connection refused,
+                DNS failure, timeout (e.g. a GPU box that&apos;s powered off) — the
+                call is retried once against this backup, then routes straight back
+                to the primary on the next call. A primary that&apos;s up but busy
+                (rate-limited or erroring) is <em>not</em> failed over. Heavy work
+                like library tagging stays on the primary, so a smaller backup
+                model is fine here.
+              </div>
+            </div>
+            <Seg
+              accent
+              value={form.llm.fallback.enabled ? 'on' : 'off'}
+              options={[
+                { id: 'off', label: 'Off' },
+                { id: 'on', label: 'On' },
+              ]}
+              onChange={v =>
+                setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, enabled: v === 'on' } } }))
+              }
+            />
+          </div>
+
+          {form.llm.fallback.enabled && (
+            <>
+              <div className="field">
+                <Label>Backup provider</Label>
+                <Select
+                  value={form.llm.fallback.provider}
+                  onValueChange={v =>
+                    setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, provider: v } } }))
+                  }
+                >
+                  <SelectTrigger className="max-w-[360px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {(data.llm?.providers || ['ollama']).map(p => (
+                        <SelectItem key={p} value={p}>{llmProviderLabel(p)}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <div className="field-hint">
+                  The provider to fall back to. Can differ from the primary — e.g.
+                  primary on a self-hosted box, backup on always-on Ollama.
+                </div>
+              </div>
+
+              <div className="field">
+                <Label>Backup model</Label>
+                <Input
+                  value={form.llm.fallback.model}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, model: e.target.value } } }))
+                  }
+                  placeholder={
+                    form.llm.fallback.provider === 'ollama'
+                      ? 'llama3.2:3b'
+                      : form.llm.fallback.provider === 'openai-compatible'
+                        ? 'model id as the server reports it'
+                        : 'model id'
+                  }
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">
+                  Model id for the backup provider. Leave blank only for Ollama
+                  (uses its default).
+                </div>
+              </div>
+
+              {form.llm.fallback.provider === 'openai-compatible' && (
+                <div className="field">
+                  <Label>Backup server base URL</Label>
+                  <Input
+                    value={form.llm.fallback.baseUrl}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, baseUrl: e.target.value } } }))
+                    }
+                    placeholder="http://192.168.1.101:8080/v1"
+                    className="max-w-[360px]"
+                  />
+                  <div className="field-hint">
+                    OpenAI-compatible server URL including the <code>/v1</code>
+                    suffix — required for this provider.
+                  </div>
+                </div>
+              )}
+
+              {form.llm.fallback.provider === 'ollama' && (
+                <div className="field">
+                  <Label>Backup Ollama server URL</Label>
+                  <Input
+                    value={form.llm.fallback.ollamaUrl}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, ollamaUrl: e.target.value } } }))
+                    }
+                    placeholder="http://localhost:11434"
+                    className="max-w-[360px]"
+                  />
+                  <div className="field-hint">
+                    Where the backup Ollama server runs. Leave blank for the
+                    default (<code>http://localhost:11434</code>).
+                  </div>
+                </div>
+              )}
+
+              {form.llm.fallback.provider === 'ollama' && (
+                <div className="field">
+                  <Label>Backup context window (num_ctx)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1024}
+                    value={form.llm.fallback.numCtx}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, numCtx: Number(e.target.value) } } }))
+                    }
+                    placeholder="16384"
+                    className="max-w-[200px]"
+                  />
+                  <div className="field-hint">
+                    Tokens of context for a <strong>local</strong> backup Ollama
+                    model. Set 0 for Ollama&apos;s default. Ignored for
+                    <code>:cloud</code> models.
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+                <div>
+                  <div className="text-[13px] font-bold">Backup chain-of-thought</div>
+                  <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+                    Whether the backup model may emit a reasoning step. Off by
+                    default, like the primary.
+                  </div>
+                </div>
+                <Seg
+                  accent
+                  value={form.llm.fallback.reasoning ? 'on' : 'off'}
+                  options={[
+                    { id: 'off', label: 'Off' },
+                    { id: 'on', label: 'On' },
+                  ]}
+                  onChange={v =>
+                    setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, reasoning: v === 'on' } } }))
+                  }
+                />
+              </div>
+
+              {LLM_ENV_VARS[form.llm.fallback.provider] && (
+                <KeyStatus
+                  envVar={LLM_ENV_VARS[form.llm.fallback.provider]!}
+                  present={!!data.env?.[LLM_ENV_VARS[form.llm.fallback.provider]!]}
+                />
+              )}
+            </>
           )}
         </div>
       </Card>

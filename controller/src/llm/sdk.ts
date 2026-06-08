@@ -6,11 +6,17 @@
 //
 // Both resolve their model through llm/provider.js, so switching providers in
 // Settings reroutes every call with no change here or at the call sites.
+//
+// Every primitive runs inside withFailover(): the primary leg is tried first,
+// and only when its host is unreachable (connection refused / DNS / timeout —
+// see isUnreachable) is the call retried once against the optional fallback leg
+// (discussion #320). The structured-output strategy and sampling are resolved
+// per leg from that leg's provider, so a primary→fallback switch across
+// different providers picks the right path on each.
 
 import { generateText, Output, stepCountIs, hasToolCall, ToolLoopAgent, tool } from 'ai';
-import { languageModel, activeModelLabel, providerName } from './provider.js';
+import { primaryLeg, fallbackLeg } from './provider.js';
 import { record } from './log.js';
-import * as settings from '../settings.js';
 
 // Hard output-token caps. A reasoning model with no cap can generate until it
 // fills the whole context window — one runaway <think> ramble then ties up the
@@ -119,8 +125,8 @@ function usageOf(result) {
 // - DeepSeek / OpenRouter / Gateway: no first-class knob. DeepSeek picks
 //   reasoning by model variant (deepseek-reasoner vs -chat); OpenRouter and
 //   Gateway pass through to the underlying provider's defaults.
-function providerOpts({ repeatPenalty = null }: { repeatPenalty?: number | null } = {}) {
-  const llm = settings.get().llm || {};
+function providerOpts(cfg: any, { repeatPenalty = null }: { repeatPenalty?: number | null } = {}) {
+  const llm = cfg || {};
   const reasoning = llm.reasoning === true;
   const model = llm.model || '';
   const opts: any = {};
@@ -135,7 +141,7 @@ function providerOpts({ repeatPenalty = null }: { repeatPenalty?: number | null 
   // #291). `:cloud` models run on Ollama's servers and manage their own context,
   // so skip them. 0 → don't send it (use Ollama's default).
   const numCtx = Number(llm.numCtx);
-  if (providerName() === 'ollama' && !/:cloud$/i.test(model) && Number.isFinite(numCtx) && numCtx > 0) {
+  if (llm.provider === 'ollama' && !/:cloud$/i.test(model) && Number.isFinite(numCtx) && numCtx > 0) {
     ollamaOptions.num_ctx = numCtx;
   }
   if (Object.keys(ollamaOptions).length > 0) ollama.options = ollamaOptions;
@@ -165,8 +171,8 @@ function providerOpts({ repeatPenalty = null }: { repeatPenalty?: number | null 
 // JSON-schema constrained decoding (Ollama's `format` field) and just emit
 // prose, so Output.object throws NoObjectGeneratedError. Their tool-calling,
 // however, works: see objectViaToolCall.
-function needsToolCallObject() {
-  return providerName() === 'ollama';
+function needsToolCallObject(cfg: any) {
+  return cfg?.provider === 'ollama';
 }
 
 // True when repeat_penalty actually reaches the model. It's bundled inside
@@ -175,8 +181,8 @@ function needsToolCallObject() {
 // sampling log uses this to avoid claiming the value was applied when it
 // wasn't. If a future provider gains a real repetition-penalty channel, widen
 // this check and pipe the value through providerOpts's equivalent there.
-function repeatPenaltyApplies() {
-  return providerName() === 'ollama';
+function repeatPenaltyApplies(cfg: any) {
+  return cfg?.provider === 'ollama';
 }
 
 // Centralised success/failure record writers. Every LLM call goes through one
@@ -185,12 +191,12 @@ function repeatPenaltyApplies() {
 // can't silently lack a field — the `usage: undefined` drift in the Ollama
 // tool-call branch was the kind of bug this prevents. Per-primitive payload
 // (system, messages, toolCalls, response, user, …) goes in `extra`.
-function recordSuccess({ kind, started, via, sampling, usage, extra = {} }) {
+function recordSuccess({ kind, started, via, model, sampling, usage, extra = {} }) {
   record({
     kind,
     ok: true,
     ms: Date.now() - started,
-    model: activeModelLabel(),
+    model,
     via,
     sampling,
     usage,
@@ -199,12 +205,12 @@ function recordSuccess({ kind, started, via, sampling, usage, extra = {} }) {
   });
 }
 
-function recordFailure({ kind, started, via, error, extra = {} }) {
+function recordFailure({ kind, started, via, model, error, extra = {} }) {
   record({
     kind,
     ok: false,
     ms: Date.now() - started,
-    model: activeModelLabel(),
+    model,
     via,
     error,
     t: new Date().toISOString(),
@@ -299,13 +305,79 @@ async function withTransientRetry<T>(kind: string, fn: () => Promise<T>): Promis
   throw lastErr;
 }
 
+// Host-unreachable: the primary box is DOWN, not merely busy. A strict subset
+// of isTransient — connection refused / DNS failure / connect timeout / socket
+// hang-up. Deliberately EXCLUDES 408/425/429 and 5xx: a host that answers with
+// a status is reachable, so those stay with withTransientRetry on the
+// configured model rather than being masked by a silent failover to a different
+// model. This is what gates failover to the backup leg (discussion #320).
+const UNREACHABLE_CODE = new Set([
+  'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT',
+]);
+function isUnreachable(err: any): boolean {
+  if (!err) return false;
+  const code = err.code ?? err.cause?.code;
+  if (typeof code === 'string' && UNREACHABLE_CODE.has(code)) return true;
+  const name = err.name ?? err.cause?.name;
+  if (name === 'AbortError' || name === 'TimeoutError') return true;
+  const msg = String(err.message || err.cause?.message || '');
+  if (/fetch failed|socket hang up|getaddrinfo|connect ECONNREFUSED|connect ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(msg)) {
+    return true;
+  }
+  return false;
+}
+
+// Run an LLM operation with primary→fallback failover. `attempt(leg)` performs
+// one full generation against a single leg and returns a record-ready result
+// ({ value, via, sampling, usage, extra }); it throws on error, optionally
+// tagging the error with `__via` so the failure record attributes to the right
+// sub-path (djObject/djAgent set this). The primary leg is tried first; only on
+// a host-unreachable error — and only when a fallback is configured — is
+// `attempt` retried once against the backup leg. record* lives here, so it's
+// written exactly once per primitive with the leg that actually ran. On a
+// failover the primary's failure is also recorded (via `…:failover→<backup>`)
+// so /debug shows the switch happened.
+async function withFailover<T>(
+  kind: string,
+  failExtra: (err: any) => any,
+  attempt: (leg: any) => Promise<{ value: T; via: string; sampling?: any; usage?: any; extra?: any }>,
+): Promise<T> {
+  const primary = primaryLeg();
+  const primaryStarted = Date.now();
+  try {
+    const r = await attempt(primary);
+    recordSuccess({ kind, started: primaryStarted, via: r.via, model: primary.label, sampling: r.sampling, usage: r.usage, extra: r.extra });
+    return r.value;
+  } catch (err: any) {
+    const primaryVia = err?.__via || 'ai-sdk';
+    const backup = isUnreachable(err) ? fallbackLeg() : null;
+    if (!backup) {
+      logFailurePreview(kind, err);
+      recordFailure({ kind, started: primaryStarted, via: primaryVia, model: primary.label, error: err?.message, extra: failExtra(err) });
+      throw err;
+    }
+    console.log(`[${kind}] primary LLM (${primary.label}) unreachable (${err?.code || err?.cause?.code || err?.name || 'unknown'}) — failing over to ${backup.label}`);
+    recordFailure({ kind, started: primaryStarted, via: `${primaryVia}:failover→${backup.label}`, model: primary.label, error: err?.message, extra: failExtra(err) });
+    const backupStarted = Date.now();
+    try {
+      const r = await attempt(backup);
+      recordSuccess({ kind, started: backupStarted, via: r.via, model: backup.label, sampling: r.sampling, usage: r.usage, extra: r.extra });
+      return r.value;
+    } catch (err2: any) {
+      logFailurePreview(kind, err2);
+      recordFailure({ kind, started: backupStarted, via: err2?.__via || 'ai-sdk', model: backup.label, error: err2?.message, extra: failExtra(err2) });
+      throw err2;
+    }
+  }
+}
+
 // Structured output via a forced tool call. The result schema is presented as
 // an `emit` tool the model MUST call (toolChoice:'required'); we capture and
 // Zod-validate its input. This is the reliable structured-output path for
 // models that ignore JSON mode but handle tool calls fine. Single step — the
 // model's only legal move is to call `emit` once. Returns the validated object
 // plus a token-usage block so callers can log it alongside the other branches.
-async function objectViaToolCall({ system, prompt, messages, schema, temperature, maxOutputTokens }: any) {
+async function objectViaToolCall(leg: any, { system, prompt, messages, schema, temperature, maxOutputTokens }: any) {
   let captured: any;
   const emit = tool({
     description: 'Return your final answer. Call this tool exactly once, with the complete result — calling it IS how you answer.',
@@ -313,7 +385,7 @@ async function objectViaToolCall({ system, prompt, messages, schema, temperature
     execute: async (input: any) => { captured = input; return 'received'; },
   });
   const result = await generateText({
-    model: languageModel(),
+    model: leg.model,
     system,
     ...(messages ? { messages } : { prompt }),
     temperature,
@@ -321,7 +393,7 @@ async function objectViaToolCall({ system, prompt, messages, schema, temperature
     tools: { emit },
     toolChoice: 'required',
     stopWhen: stepCountIs(1),
-    providerOptions: providerOpts(),
+    providerOptions: providerOpts(leg.cfg),
   } as any);
   if (captured === undefined) throw new Error('model never called the emit tool');
   return { object: schema.parse(captured), usage: usageOf(result) };
@@ -338,40 +410,35 @@ export async function djText({
   maxOutputTokens = MAX_TOKENS_TEXT,
   kind = 'sdk.djText',
 }: any) {
-  const started = Date.now();
-  try {
-    const result = await withTransientRetry(kind, () => generateText({
-      model: languageModel(),
-      system,
-      prompt,
-      temperature,
-      topP,
-      ...(seed != null ? { seed } : {}),
-      maxOutputTokens,
-      providerOptions: providerOpts({ repeatPenalty }),
-    }));
-    const out = stripThinking(result.text);
-    // Only record sampling knobs that actually reached the model — see
-    // repeatPenaltyApplies() and providerOptions handling above.
-    const sampling: any = { temperature, top_p: topP, seed };
-    if (repeatPenaltyApplies()) sampling.repeat_penalty = repeatPenalty;
-    recordSuccess({
-      kind, started, via: 'ai-sdk',
-      sampling,
-      usage: usageOf(result),
-      // Full, untruncated — the /debug surface shows the whole system prompt.
-      extra: { system, user: prompt, response: out },
-    });
-    return out;
-  } catch (err) {
-    logFailurePreview(kind, err);
-    recordFailure({
-      kind, started, via: 'ai-sdk',
-      error: err.message,
-      extra: { user: prompt, ...failureDiagnostics(err) },
-    });
-    throw err;
-  }
+  return withFailover(
+    kind,
+    (err) => ({ user: prompt, ...failureDiagnostics(err) }),
+    async (leg) => {
+      const result = await withTransientRetry(kind, () => generateText({
+        model: leg.model,
+        system,
+        prompt,
+        temperature,
+        topP,
+        ...(seed != null ? { seed } : {}),
+        maxOutputTokens,
+        providerOptions: providerOpts(leg.cfg, { repeatPenalty }),
+      }));
+      const out = stripThinking(result.text);
+      // Only record sampling knobs that actually reached the model — see
+      // repeatPenaltyApplies() and providerOptions handling above.
+      const sampling: any = { temperature, top_p: topP, seed };
+      if (repeatPenaltyApplies(leg.cfg)) sampling.repeat_penalty = repeatPenalty;
+      return {
+        value: out,
+        via: 'ai-sdk',
+        sampling,
+        usage: usageOf(result),
+        // Full, untruncated — the /debug surface shows the whole system prompt.
+        extra: { system, user: prompt, response: out },
+      };
+    },
+  );
 }
 
 // Schema-validated structured output. `schema` is a Zod object schema; the
@@ -395,65 +462,68 @@ export async function djObject({
   maxOutputTokens = MAX_TOKENS_OBJECT,
   kind = 'sdk.djObject',
 }: any) {
-  const started = Date.now();
-  let lastErr;
-  // Track the strategy actually attempted so a failure record attributes to
-  // the right sub-path — bucketing every failure as 'ai-sdk' hides which
-  // structured-output branch is breaking in /stats.
-  let lastVia;
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      let object;
-      let usage;
-      if (attempt === 1 && needsToolCallObject()) {
-        lastVia = 'ai-sdk:tool';
-        ({ object, usage } = await withTransientRetry(kind,
-          () => objectViaToolCall({ system, prompt, schema, temperature, maxOutputTokens })));
-      } else if (attempt === 1) {
-        lastVia = 'ai-sdk';
-        const result = await withTransientRetry(kind, () => generateText({
-          model: languageModel(),
-          system,
-          prompt,
-          temperature,
-          maxOutputTokens,
-          output: Output.object({ schema }),
-          providerOptions: providerOpts(),
-        }));
-        object = result.output;
-        usage = usageOf(result);
-      } else {
-        lastVia = 'ai-sdk:recovery';
-        const result = await withTransientRetry(kind, () => generateText({
-          model: languageModel(),
-          system,
-          prompt: `${prompt}\n\nRespond with a single JSON object only — no prose, no markdown fences.`,
-          temperature,
-          maxOutputTokens,
-          providerOptions: providerOpts(),
-        }));
-        object = schema.parse(JSON.parse(extractJson(stripThinking(result.text))));
-        usage = usageOf(result);
+  return withFailover(
+    kind,
+    (err) => ({ user: prompt, ...failureDiagnostics(err) }),
+    async (leg) => {
+      let lastErr;
+      // Track the strategy actually attempted so a failure record attributes to
+      // the right sub-path — bucketing every failure as 'ai-sdk' hides which
+      // structured-output branch is breaking in /stats.
+      let lastVia;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          let object;
+          let usage;
+          if (attempt === 1 && needsToolCallObject(leg.cfg)) {
+            lastVia = 'ai-sdk:tool';
+            ({ object, usage } = await withTransientRetry(kind,
+              () => objectViaToolCall(leg, { system, prompt, schema, temperature, maxOutputTokens })));
+          } else if (attempt === 1) {
+            lastVia = 'ai-sdk';
+            const result = await withTransientRetry(kind, () => generateText({
+              model: leg.model,
+              system,
+              prompt,
+              temperature,
+              maxOutputTokens,
+              output: Output.object({ schema }),
+              providerOptions: providerOpts(leg.cfg),
+            }));
+            object = result.output;
+            usage = usageOf(result);
+          } else {
+            lastVia = 'ai-sdk:recovery';
+            const result = await withTransientRetry(kind, () => generateText({
+              model: leg.model,
+              system,
+              prompt: `${prompt}\n\nRespond with a single JSON object only — no prose, no markdown fences.`,
+              temperature,
+              maxOutputTokens,
+              providerOptions: providerOpts(leg.cfg),
+            }));
+            object = schema.parse(JSON.parse(extractJson(stripThinking(result.text))));
+            usage = usageOf(result);
+          }
+          return {
+            value: object,
+            via: lastVia,
+            sampling: { temperature },
+            usage,
+            // Full, untruncated — the /debug surface shows the whole system prompt.
+            extra: { system, user: prompt, response: JSON.stringify(object).slice(0, 500) },
+          };
+        } catch (err) {
+          lastErr = err;
+        }
       }
-      recordSuccess({
-        kind, started, via: lastVia,
-        sampling: { temperature },
-        usage,
-        // Full, untruncated — the /debug surface shows the whole system prompt.
-        extra: { system, user: prompt, response: JSON.stringify(object).slice(0, 500) },
-      });
-      return object;
-    } catch (err) {
-      lastErr = err;
-    }
-  }
-  logFailurePreview(kind, lastErr);
-  recordFailure({
-    kind, started, via: lastVia,
-    error: lastErr.message,
-    extra: { user: prompt, ...failureDiagnostics(lastErr) },
-  });
-  throw lastErr;
+      // Attribute the failure to the last sub-path tried, then let withFailover
+      // decide whether the error is host-unreachable (→ try the backup leg) or
+      // a model/parse failure (→ surface it).
+      (lastErr as any).__via = lastVia;
+      throw lastErr;
+    },
+  );
 }
 
 // Conversational tool-loop with structured output — the primitive behind the
@@ -523,178 +593,180 @@ export async function djAgent({
   kind = 'sdk.djAgent',
   timeoutMs,
 }: any) {
-  const started = Date.now();
-  // Default to the agent path; the fast-path branch overrides before its await.
-  // A failure record always attributes to the path actually attempted.
-  let lastVia = 'ai-sdk:agent';
-  try {
-    // No discovery tools + an Ollama model that ignores JSON mode: there is no
-    // loop to run, and ToolLoopAgent + Output.object would throw
-    // NoObjectGeneratedError. Get the structured result from a forced tool call.
-    const toolCount = tools ? Object.keys(tools).length : 0;
-    if (schema && toolCount === 0 && needsToolCallObject()) {
-      lastVia = 'ai-sdk:tool';
-      const { object, usage } = await withTransientRetry(kind,
-        () => objectViaToolCall({ system, prompt: undefined, messages, schema, temperature, maxOutputTokens }));
-      recordSuccess({
-        kind, started, via: lastVia,
-        sampling: { temperature },
-        usage,
-        extra: { system, messages, toolCalls: [], steps: 0, response: JSON.stringify(object, null, 2) },
-      });
-      return { object, steps: 0, toolCalls: [] };
-    }
-    // Structured output from a tool-using agent goes through the done-tool
-    // path on EVERY provider; the schema-only (no-tools) case keeps native
-    // Output.object off Ollama. See the header comment above for why.
-    const useDoneTool = schema != null && (needsToolCallObject() || toolCount > 0);
-    const allTools = useDoneTool ? {
-      ...tools,
-      done: tool({
-        description: 'Call this exactly once when you have your final answer. Pass the answer as input. Calling this tool IS how you respond — do not emit text after.',
-        inputSchema: schema,
-      }),
-    } : tools;
+  return withFailover(
+    kind,
+    (err) => ({ system, messages, ...failureDiagnostics(err) }),
+    async (leg) => {
+    // Default to the agent path; the fast-path branch overrides before its await.
+    // A failure record always attributes to the path actually attempted.
+    let lastVia = 'ai-sdk:agent';
+    try {
+      // No discovery tools + an Ollama model that ignores JSON mode: there is no
+      // loop to run, and ToolLoopAgent + Output.object would throw
+      // NoObjectGeneratedError. Get the structured result from a forced tool call.
+      const toolCount = tools ? Object.keys(tools).length : 0;
+      if (schema && toolCount === 0 && needsToolCallObject(leg.cfg)) {
+        lastVia = 'ai-sdk:tool';
+        const { object, usage } = await withTransientRetry(kind,
+          () => objectViaToolCall(leg, { system, prompt: undefined, messages, schema, temperature, maxOutputTokens }));
+        return {
+          value: { object, steps: 0, toolCalls: [] },
+          via: lastVia,
+          sampling: { temperature },
+          usage,
+          extra: { system, messages, toolCalls: [], steps: 0, response: JSON.stringify(object, null, 2) },
+        };
+      }
+      // Structured output from a tool-using agent goes through the done-tool
+      // path on EVERY provider; the schema-only (no-tools) case keeps native
+      // Output.object off Ollama. See the header comment above for why.
+      const useDoneTool = schema != null && (needsToolCallObject(leg.cfg) || toolCount > 0);
+      const allTools = useDoneTool ? {
+        ...tools,
+        done: tool({
+          description: 'Call this exactly once when you have your final answer. Pass the answer as input. Calling this tool IS how you respond — do not emit text after.',
+          inputSchema: schema,
+        }),
+      } : tools;
 
-    // When schema is set and we have discovery tools, force the first step to
-    // be a discovery tool call — never `done`. This prevents the failure mode
-    // where the model calls `done` with a hallucinated id without exploring
-    // the library (observed on minimax-m2.7:cloud: model emitted a UUID-shaped
-    // string that wasn't in any tool's results). Cloud Ollama models often
-    // ignore plain `toolChoice: 'required'` too, but activeTools is enforced
-    // at the request level — they can't see `done` until step 1, so they
-    // can't call it.
-    const discoveryToolNames = tools ? Object.keys(tools) : [];
-    const useGatedDiscovery = useDoneTool && discoveryToolNames.length > 0;
-    const prepareStep = useGatedDiscovery
-      ? async ({ stepNumber }: { stepNumber: number }) => {
-          // Step 0: force a discovery tool — never `done`. Stops the model
-          // committing a hallucinated id before seeing any library results.
-          if (stepNumber === 0) {
-            return { activeTools: discoveryToolNames, toolChoice: 'required' };
+      // When schema is set and we have discovery tools, force the first step to
+      // be a discovery tool call — never `done`. This prevents the failure mode
+      // where the model calls `done` with a hallucinated id without exploring
+      // the library (observed on minimax-m2.7:cloud: model emitted a UUID-shaped
+      // string that wasn't in any tool's results). Cloud Ollama models often
+      // ignore plain `toolChoice: 'required'` too, but activeTools is enforced
+      // at the request level — they can't see `done` until step 1, so they
+      // can't call it.
+      const discoveryToolNames = tools ? Object.keys(tools) : [];
+      const useGatedDiscovery = useDoneTool && discoveryToolNames.length > 0;
+      const prepareStep = useGatedDiscovery
+        ? async ({ stepNumber }: { stepNumber: number }) => {
+            // Step 0: force a discovery tool — never `done`. Stops the model
+            // committing a hallucinated id before seeing any library results.
+            if (stepNumber === 0) {
+              return { activeTools: discoveryToolNames, toolChoice: 'required' };
+            }
+            // Step >= COMMIT_AFTER_STEPS: force `done`. Cloud Ollama models
+            // honour activeTools at the request level — with only `done` active
+            // they cannot keep exploring and must emit their final answer. This
+            // is what guarantees a `done` call before the step cap is hit.
+            if (stepNumber >= COMMIT_AFTER_STEPS) {
+              return { activeTools: ['done'], toolChoice: 'required' };
+            }
+            // Middle steps: all tools active — explore more, or commit early.
+            return {};
           }
-          // Step >= COMMIT_AFTER_STEPS: force `done`. Cloud Ollama models
-          // honour activeTools at the request level — with only `done` active
-          // they cannot keep exploring and must emit their final answer. This
-          // is what guarantees a `done` call before the step cap is hit.
-          if (stepNumber >= COMMIT_AFTER_STEPS) {
-            return { activeTools: ['done'], toolChoice: 'required' };
-          }
-          // Middle steps: all tools active — explore more, or commit early.
-          return {};
-        }
-      : undefined;
+        : undefined;
 
-    const agent = new ToolLoopAgent({
-      model: languageModel(),
-      instructions: system,
-      tools: allTools,
-      // The no-execute `done` tool already terminates the loop when called;
-      // hasToolCall('done') is belt-and-suspenders, and inert on the
-      // non-Ollama path where no `done` tool exists.
-      stopWhen: [stepCountIs(maxSteps), hasToolCall('done')],
-      temperature,
-      maxOutputTokens,
-      providerOptions: providerOpts(),
-      ...(useDoneTool ? { toolChoice: 'required' } : {}),
-      ...(prepareStep ? { prepareStep } : {}),
-      // Non-Ollama path: native structured-output via Output.object. Ollama
-      // path: schema lives on the `done` tool, so no agent-level output.
-      ...(schema && !useDoneTool ? { output: Output.object({ schema }) } : {}),
-    } as any);
-    // timeoutMs (when set by a caller) is a hard ceiling — a slow/looping run
-    // throws, flows through the catch below, and the caller falls back to its
-    // stateless path rather than blocking on a pathological model call.
-    let result = await withTransientRetry(kind, () => agent.generate({
-      messages,
-      ...(timeoutMs ? { timeout: timeoutMs } : {}),
-    }));
-    let steps = result.steps?.length ?? 0;
-
-    // Recovery for the "agent did not call the done tool" failure mode (issue
-    // #140). Local/cloud Ollama models occasionally ignore toolChoice:'required'
-    // at step 0 — they emit prose instead of any tool call, the loop ends with
-    // zero tool calls, and we'd otherwise throw. Re-run once with prepareStep
-    // pinned to `done`-only at step 0 so `done` is the model's only legal move.
-    // The recovery agent has no discovery tools active, so the answer comes
-    // from prior knowledge / the message history — a worse pick than a
-    // discovery-then-done run, but better than throwing and silencing the
-    // station ID / hourly check / segment entirely.
-    if (useDoneTool && !(result.staticToolCalls || []).some((c: any) => c.toolName === 'done')) {
-      console.log(`[${kind}] agent stopped without calling done — retrying with done-only`);
-      lastVia = 'ai-sdk:agent:recovery';
-      // Carry the first run's conversation forward — crucially its tool-call +
-      // tool-result messages (the discovery trail). The first run DID surface
-      // candidates into the caller's `seen` map (gated discovery forces a tool
-      // call at step 0); it just never emitted `done`. Replaying only the bare
-      // `messages` here strips those candidates, so a picker/request agent
-      // cornered into done-only has no ids in context and can only fabricate
-      // one — which is why 100% of recovery picks returned an "unknown id".
-      // Feeding the discovery trail back lets the model commit to a REAL
-      // surfaced id. Harmless for free-text recovery (no tool messages to add).
-      const priorMessages = (result as any).response?.messages || [];
-      const recoveryMessages = priorMessages.length ? [...messages, ...priorMessages] : messages;
-      const recoveryAgent = new ToolLoopAgent({
-        model: languageModel(),
+      const agent = new ToolLoopAgent({
+        model: leg.model,
         instructions: system,
         tools: allTools,
-        stopWhen: [stepCountIs(2), hasToolCall('done')],
+        // The no-execute `done` tool already terminates the loop when called;
+        // hasToolCall('done') is belt-and-suspenders, and inert on the
+        // non-Ollama path where no `done` tool exists.
+        stopWhen: [stepCountIs(maxSteps), hasToolCall('done')],
         temperature,
         maxOutputTokens,
-        providerOptions: providerOpts(),
-        toolChoice: 'required',
-        prepareStep: async () => ({ activeTools: ['done'], toolChoice: 'required' }),
+        providerOptions: providerOpts(leg.cfg),
+        ...(useDoneTool ? { toolChoice: 'required' } : {}),
+        ...(prepareStep ? { prepareStep } : {}),
+        // Non-Ollama path: native structured-output via Output.object. Ollama
+        // path: schema lives on the `done` tool, so no agent-level output.
+        ...(schema && !useDoneTool ? { output: Output.object({ schema }) } : {}),
       } as any);
-      result = await withTransientRetry(kind, () => recoveryAgent.generate({
-        messages: recoveryMessages,
+      // timeoutMs (when set by a caller) is a hard ceiling — a slow/looping run
+      // throws, flows through the catch below, and the caller falls back to its
+      // stateless path rather than blocking on a pathological model call.
+      let result = await withTransientRetry(kind, () => agent.generate({
+        messages,
         ...(timeoutMs ? { timeout: timeoutMs } : {}),
       }));
-      steps = result.steps?.length ?? 0;
-    }
+      let steps = result.steps?.length ?? 0;
 
-    let object;
-    if (useDoneTool) {
-      // staticToolCalls carries tool calls from the FINAL step — the SDK
-      // surfaces calls that weren't executed (like our no-execute `done`) here.
-      const doneCall = (result.staticToolCalls || []).find((c: any) => c.toolName === 'done');
-      if (!doneCall) throw new Error('agent did not call the done tool before stopping');
-      object = (doneCall as any).input;
-    } else if (schema) {
-      object = result.output;
-    } else {
-      object = stripThinking(result.text);
-    }
-
-    // Flatten the discovery-tool trail for /debug. Exclude `done` — it's the
-    // schema-emit signal, not a real library discovery action.
-    const toolCalls = ((result.steps as any) || []).flatMap((s: any) => {
-      const results = s.toolResults || [];
-      return (s.toolCalls || [])
-        .filter((c: any) => c.toolName !== 'done')
-        .map((c: any, i: number) => ({
-          name: c.toolName,
-          args: c.input ?? c.args ?? null,
-          result: results[i]?.output ?? results[i]?.result ?? null,
+      // Recovery for the "agent did not call the done tool" failure mode (issue
+      // #140). Local/cloud Ollama models occasionally ignore toolChoice:'required'
+      // at step 0 — they emit prose instead of any tool call, the loop ends with
+      // zero tool calls, and we'd otherwise throw. Re-run once with prepareStep
+      // pinned to `done`-only at step 0 so `done` is the model's only legal move.
+      // The recovery agent has no discovery tools active, so the answer comes
+      // from prior knowledge / the message history — a worse pick than a
+      // discovery-then-done run, but better than throwing and silencing the
+      // station ID / hourly check / segment entirely.
+      if (useDoneTool && !(result.staticToolCalls || []).some((c: any) => c.toolName === 'done')) {
+        console.log(`[${kind}] agent stopped without calling done — retrying with done-only`);
+        lastVia = 'ai-sdk:agent:recovery';
+        // Carry the first run's conversation forward — crucially its tool-call +
+        // tool-result messages (the discovery trail). The first run DID surface
+        // candidates into the caller's `seen` map (gated discovery forces a tool
+        // call at step 0); it just never emitted `done`. Replaying only the bare
+        // `messages` here strips those candidates, so a picker/request agent
+        // cornered into done-only has no ids in context and can only fabricate
+        // one — which is why 100% of recovery picks returned an "unknown id".
+        // Feeding the discovery trail back lets the model commit to a REAL
+        // surfaced id. Harmless for free-text recovery (no tool messages to add).
+        const priorMessages = (result as any).response?.messages || [];
+        const recoveryMessages = priorMessages.length ? [...messages, ...priorMessages] : messages;
+        const recoveryAgent = new ToolLoopAgent({
+          model: leg.model,
+          instructions: system,
+          tools: allTools,
+          stopWhen: [stepCountIs(2), hasToolCall('done')],
+          temperature,
+          maxOutputTokens,
+          providerOptions: providerOpts(leg.cfg),
+          toolChoice: 'required',
+          prepareStep: async () => ({ activeTools: ['done'], toolChoice: 'required' }),
+        } as any);
+        result = await withTransientRetry(kind, () => recoveryAgent.generate({
+          messages: recoveryMessages,
+          ...(timeoutMs ? { timeout: timeoutMs } : {}),
         }));
-    });
-    recordSuccess({
-      kind, started, via: lastVia,
-      sampling: { temperature },
-      usage: usageOf(result),
-      // Full, untruncated — the agent's entire input and trail.
-      extra: {
-        system, messages, toolCalls, steps,
-        response: schema ? JSON.stringify(object, null, 2) : String(object ?? ''),
-      },
-    });
-    return { object, steps, toolCalls };
-  } catch (err) {
-    logFailurePreview(kind, err);
-    recordFailure({
-      kind, started, via: lastVia,
-      error: err.message,
-      extra: { system, messages, ...failureDiagnostics(err) },
-    });
-    throw err;
-  }
+        steps = result.steps?.length ?? 0;
+      }
+
+      let object;
+      if (useDoneTool) {
+        // staticToolCalls carries tool calls from the FINAL step — the SDK
+        // surfaces calls that weren't executed (like our no-execute `done`) here.
+        const doneCall = (result.staticToolCalls || []).find((c: any) => c.toolName === 'done');
+        if (!doneCall) throw new Error('agent did not call the done tool before stopping');
+        object = (doneCall as any).input;
+      } else if (schema) {
+        object = result.output;
+      } else {
+        object = stripThinking(result.text);
+      }
+
+      // Flatten the discovery-tool trail for /debug. Exclude `done` — it's the
+      // schema-emit signal, not a real library discovery action.
+      const toolCalls = ((result.steps as any) || []).flatMap((s: any) => {
+        const results = s.toolResults || [];
+        return (s.toolCalls || [])
+          .filter((c: any) => c.toolName !== 'done')
+          .map((c: any, i: number) => ({
+            name: c.toolName,
+            args: c.input ?? c.args ?? null,
+            result: results[i]?.output ?? results[i]?.result ?? null,
+          }));
+      });
+      return {
+        value: { object, steps, toolCalls },
+        via: lastVia,
+        sampling: { temperature },
+        usage: usageOf(result),
+        // Full, untruncated — the agent's entire input and trail.
+        extra: {
+          system, messages, toolCalls, steps,
+          response: schema ? JSON.stringify(object, null, 2) : String(object ?? ''),
+        },
+      };
+    } catch (err) {
+      // Attribute to the path actually attempted; withFailover writes the
+      // record and decides whether a host-unreachable error tries the backup.
+      (err as any).__via = lastVia;
+      throw err;
+    }
+    },
+  );
 }

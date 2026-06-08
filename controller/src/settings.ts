@@ -101,6 +101,65 @@ export const LLM_PROVIDERS = [
   'gateway',
 ];
 
+// Coerce a stored Ollama context-window value. 0 disables (use Ollama's own
+// default); any other number is clamped to a sane [2048, 131072] band and
+// floored to an integer. Non-numeric/NaN falls back to `def`. Shared by the
+// primary and fallback LLM legs so the rule can't drift between them.
+function clampNumCtx(raw: any, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  if (raw <= 0) return 0;
+  return Math.min(131072, Math.max(2048, Math.floor(raw)));
+}
+
+// Validate + apply the connection fields shared by the primary LLM leg and its
+// optional fallback (provider/model/apiKey/ollamaUrl/baseUrl/reasoning/numCtx).
+// `target` is the live settings sub-object to mutate; `patch` is the incoming
+// partial; `label` prefixes error messages ('llm' or 'llm.fallback'). The
+// "openai-compatible needs baseUrl" rule is left to the caller — the fallback
+// only enforces it when enabled. Station-level toggles (pickerAgent,
+// pauseWhenEmpty) are primary-only and handled at the call site.
+function applyLlmLegPatch(target: any, patch: any, label: string): void {
+  const l = patch || {};
+  if (l.provider !== undefined) {
+    if (!LLM_PROVIDERS.includes(l.provider)) {
+      throw new Error(`${label}.provider must be one of: ${LLM_PROVIDERS.join(', ')}`);
+    }
+    target.provider = l.provider;
+  }
+  if (l.model !== undefined) {
+    const v = String(l.model).trim();
+    if (v.length > 100) throw new Error(`${label}.model must be 0-100 chars`);
+    target.model = v;
+  }
+  // 'set' is the redaction sentinel from getRedacted() — ignore it so a
+  // round-tripped settings form doesn't overwrite the real key.
+  if (l.apiKey !== undefined && l.apiKey !== 'set') {
+    target.apiKey = String(l.apiKey);
+  }
+  if (l.ollamaUrl !== undefined) {
+    const v = String(l.ollamaUrl).trim();
+    if (v.length > 200) throw new Error(`${label}.ollamaUrl must be 0-200 chars`);
+    if (v && !/^https?:\/\//i.test(v)) {
+      throw new Error(`${label}.ollamaUrl must start with http:// or https://`);
+    }
+    target.ollamaUrl = v.replace(/\/+$/, ''); // strip trailing slashes
+  }
+  if (l.baseUrl !== undefined) {
+    const v = String(l.baseUrl).trim();
+    if (v.length > 200) throw new Error(`${label}.baseUrl must be 0-200 chars`);
+    if (v && !/^https?:\/\//i.test(v)) {
+      throw new Error(`${label}.baseUrl must start with http:// or https://`);
+    }
+    target.baseUrl = v.replace(/\/+$/, ''); // strip trailing slashes
+  }
+  if (l.reasoning !== undefined) {
+    target.reasoning = !!l.reasoning;
+  }
+  if (l.numCtx !== undefined) {
+    target.numCtx = clampNumCtx(Number(l.numCtx), target.numCtx);
+  }
+}
+
 // Cloud TTS vendors usable by the `cloud` engine. `openai-compatible` targets
 // any self-hosted OpenAI-compatible speech server (Chatterbox, Qwen3 TTS,
 // VibeVoice, etc.) via the operator-supplied `tts.cloud.baseUrl` — mirrors the
@@ -378,6 +437,25 @@ const DEFAULTS = {
     // reports zero listeners — the stream coasts on the auto playlist — and
     // resume as soon as someone tunes in. Off by default.
     pauseWhenEmpty: false,
+    // Optional backup LLM. When `enabled`, any LLM call whose primary host is
+    // unreachable (connection refused / DNS / timeout — NOT a 429/5xx from a
+    // host that's up) is retried once against this leg, then routed straight
+    // back to the primary on the next call (stateless fail-back). Built for the
+    // "primary is a GPU box that's sometimes powered off, backup is the
+    // always-on server running a smaller model" case (discussion #320). Same
+    // connection fields as the primary; the station-level toggles (pickerAgent,
+    // pauseWhenEmpty) are not per-leg. Heavy work (library tagging via
+    // embeddings) does NOT fail over — it stays on the primary.
+    fallback: {
+      enabled: false,
+      provider: 'ollama',
+      model: '',
+      apiKey: '',
+      ollamaUrl: '',
+      baseUrl: '',
+      reasoning: false,
+      numCtx: 16384,
+    },
   },
   // Embedding-propagated library tagger (music/tag-library.ts).
   //
@@ -789,12 +867,7 @@ export async function load() {
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
       // Clamp to a sane band: 0 disables (Ollama default), else [2048, 131072].
       // Non-numeric/NaN falls back to the default. Floored to an integer.
-      numCtx: (() => {
-        const raw = stored.llm?.numCtx;
-        if (typeof raw !== 'number' || !Number.isFinite(raw)) return DEFAULTS.llm.numCtx;
-        if (raw <= 0) return 0;
-        return Math.min(131072, Math.max(2048, Math.floor(raw)));
-      })(),
+      numCtx: clampNumCtx(stored.llm?.numCtx, DEFAULTS.llm.numCtx),
       pickerAgent:
         typeof stored.llm?.pickerAgent === 'boolean'
           ? stored.llm.pickerAgent
@@ -803,6 +876,25 @@ export async function load() {
         typeof stored.llm?.pauseWhenEmpty === 'boolean'
           ? stored.llm.pauseWhenEmpty
           : DEFAULTS.llm.pauseWhenEmpty,
+      // Backup leg — same connection fields as the primary, coerced identically.
+      fallback: (() => {
+        const fb = stored.llm?.fallback || {};
+        return {
+          enabled: typeof fb.enabled === 'boolean' ? fb.enabled : DEFAULTS.llm.fallback.enabled,
+          provider: LLM_PROVIDERS.includes(fb.provider)
+            ? fb.provider
+            : DEFAULTS.llm.fallback.provider,
+          model: typeof fb.model === 'string' ? fb.model.trim() : DEFAULTS.llm.fallback.model,
+          apiKey: typeof fb.apiKey === 'string' ? fb.apiKey : DEFAULTS.llm.fallback.apiKey,
+          ollamaUrl:
+            typeof fb.ollamaUrl === 'string' ? fb.ollamaUrl.trim() : DEFAULTS.llm.fallback.ollamaUrl,
+          baseUrl:
+            typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl,
+          reasoning:
+            typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
+          numCtx: clampNumCtx(fb.numCtx, DEFAULTS.llm.fallback.numCtx),
+        };
+      })(),
     },
     search: {
       provider: SEARCH_PROVIDERS.includes(stored.search?.provider)
@@ -953,6 +1045,7 @@ export function getRedacted() {
   const s = get();
   const clone = JSON.parse(JSON.stringify(s));
   if (clone.llm) clone.llm.apiKey = s.llm?.apiKey ? 'set' : '';
+  if (clone.llm?.fallback) clone.llm.fallback.apiKey = s.llm?.fallback?.apiKey ? 'set' : '';
   if (clone.tts?.cloud) clone.tts.cloud.apiKey = s.tts?.cloud?.apiKey ? 'set' : '';
   if (clone.search) clone.search.apiKey = s.search?.apiKey ? 'set' : '';
   if (Array.isArray(clone.webhooks)) {
@@ -1482,39 +1575,7 @@ export async function update(patch) {
   }
   if ('llm' in patch) {
     const l = patch.llm || {};
-    if (l.provider !== undefined) {
-      if (!LLM_PROVIDERS.includes(l.provider)) {
-        throw new Error(`llm.provider must be one of: ${LLM_PROVIDERS.join(', ')}`);
-      }
-      next.llm.provider = l.provider;
-    }
-    if (l.model !== undefined) {
-      const v = String(l.model).trim();
-      if (v.length > 100) throw new Error('llm.model must be 0-100 chars');
-      next.llm.model = v;
-    }
-    if (l.apiKey !== undefined && l.apiKey !== 'set') {
-      next.llm.apiKey = String(l.apiKey);
-    }
-    if (l.ollamaUrl !== undefined) {
-      const v = String(l.ollamaUrl).trim();
-      if (v.length > 200) throw new Error('llm.ollamaUrl must be 0-200 chars');
-      if (v && !/^https?:\/\//i.test(v)) {
-        throw new Error('llm.ollamaUrl must start with http:// or https://');
-      }
-      next.llm.ollamaUrl = v.replace(/\/+$/, ''); // strip trailing slashes
-    }
-    if (l.baseUrl !== undefined) {
-      const v = String(l.baseUrl).trim();
-      if (v.length > 200) throw new Error('llm.baseUrl must be 0-200 chars');
-      if (v && !/^https?:\/\//i.test(v)) {
-        throw new Error('llm.baseUrl must start with http:// or https://');
-      }
-      next.llm.baseUrl = v.replace(/\/+$/, ''); // strip trailing slashes
-    }
-    if (l.reasoning !== undefined) {
-      next.llm.reasoning = !!l.reasoning;
-    }
+    applyLlmLegPatch(next.llm, l, 'llm');
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
     }
@@ -1524,6 +1585,25 @@ export async function update(patch) {
     // An OpenAI-compatible provider is useless without a server to talk to.
     if (next.llm.provider === 'openai-compatible' && !next.llm.baseUrl) {
       throw new Error('llm.baseUrl is required when provider is "openai-compatible"');
+    }
+    // Backup leg — same connection fields, validated identically. The
+    // openai-compatible-needs-baseUrl rule is enforced only when the fallback
+    // is enabled, so a half-filled, disabled backup never blocks a save.
+    if (l.fallback !== undefined) {
+      const fb = l.fallback || {};
+      if (fb.enabled !== undefined) {
+        next.llm.fallback.enabled = !!fb.enabled;
+      }
+      applyLlmLegPatch(next.llm.fallback, fb, 'llm.fallback');
+      if (
+        next.llm.fallback.enabled &&
+        next.llm.fallback.provider === 'openai-compatible' &&
+        !next.llm.fallback.baseUrl
+      ) {
+        throw new Error(
+          'llm.fallback.baseUrl is required when its provider is "openai-compatible"',
+        );
+      }
     }
   }
   if ('search' in patch) {
