@@ -48,6 +48,15 @@ ANALYZE_SECONDS = os.environ.get("ANALYZE_SECONDS", "60")
 DEVICE = os.environ.get("TTS_HEAVY_DEVICE", "cpu").lower()
 POCKET_TTS_DEFAULT_VOICE = os.environ.get("POCKET_TTS_VOICE", "alba")
 
+# Set DISABLE_CHATTERBOX=1 or DISABLE_POCKET_TTS=1 to skip loading those
+# workers entirely. The /health endpoint only advertises engines whose workers
+# are running, so the controller's probe will see neither engine as available
+# and TTS falls back to Piper. Useful when the host has insufficient CPU/GPU
+# for real-time synthesis but the acoustic analyzer is still wanted.
+_truthy = {"1", "true", "yes"}
+DISABLE_CHATTERBOX = os.environ.get("DISABLE_CHATTERBOX", "").lower() in _truthy
+DISABLE_POCKET_TTS = os.environ.get("DISABLE_POCKET_TTS", "").lower() in _truthy
+
 # Per-worker HF cache homes so the two engines don't fight over the same
 # directory. Each is a named volume in the compose files, so the weights a
 # worker downloads on its first boot survive container recreates. The env vars
@@ -267,11 +276,16 @@ async def lifespan(_app: FastAPI):
     # the port bind and the controller's probe would see "connection refused"
     # for the entire boot — leading operators to think the sidecar is broken
     # when it's just still loading.
-    tasks = [
-        asyncio.create_task(chatterbox_worker.run(), name="chatterbox-run"),
-        asyncio.create_task(pocket_worker.run(), name="pocket-tts-run"),
-        asyncio.create_task(analyzer_worker.run(), name="analyze-run"),
-    ]
+    tasks = []
+    if not DISABLE_CHATTERBOX:
+        tasks.append(asyncio.create_task(chatterbox_worker.run(), name="chatterbox-run"))
+    else:
+        log.info("[chatterbox] disabled via DISABLE_CHATTERBOX — skipping worker")
+    if not DISABLE_POCKET_TTS:
+        tasks.append(asyncio.create_task(pocket_worker.run(), name="pocket-tts-run"))
+    else:
+        log.info("[pocket-tts] disabled via DISABLE_POCKET_TTS — skipping worker")
+    tasks.append(asyncio.create_task(analyzer_worker.run(), name="analyze-run"))
     try:
         yield
     finally:
