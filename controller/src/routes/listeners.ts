@@ -2,7 +2,12 @@
 // by broadcast/listeners.ts. Feeds the admin sparkline.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
-import { history, historyBytes, getListenerCount } from '../broadcast/listeners.js';
+import {
+  history,
+  historyBytes,
+  getListenerCount,
+  getConnections,
+} from '../broadcast/listeners.js';
 
 export const router = express.Router();
 
@@ -26,5 +31,19 @@ router.get('/listeners', requireAdmin, async (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin-gated GET /listeners/connections — live per-listener detail (IP,
+// mount, user-agent, connected-for) read from Icecast's admin interface.
+// Feeds the admin connections table. 502 on a real Icecast auth/transport
+// failure so the UI can distinguish "nobody listening" (200, empty) from
+// "couldn't reach Icecast admin".
+router.get('/listeners/connections', requireAdmin, async (_req, res) => {
+  try {
+    const connections = await getConnections();
+    res.json({ count: connections.length, connections });
+  } catch (err: any) {
+    res.status(502).json({ error: err.message });
   }
 });

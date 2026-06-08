@@ -155,6 +155,11 @@ export const config = {
     // Icecast lives inside the merged `broadcast` container; its hostname on
     // the compose network is the service name.
     statusUrl: process.env.ICECAST_STATUS_URL || 'http://broadcast:7702/status-json.xsl',
+    // Admin listclients endpoint — per-connection detail (IP, user-agent,
+    // connected-for). Basic-auth gated; credentials resolved at call time from
+    // ICECAST_ADMIN_PASSWORD or state/icecast-secrets.env (see listeners.ts).
+    adminUrl: process.env.ICECAST_ADMIN_URL || 'http://broadcast:7702/admin/listclients',
+    adminUser: process.env.ICECAST_ADMIN_USER || 'admin',
   },
   liquidsoap: {
     queueFile: `${STATE_DIR}/next.txt`,

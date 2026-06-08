@@ -62,6 +62,106 @@ interface ActResponse {
   error?: string;
 }
 
+interface ListenerConnection {
+  ip: string;
+  mount: string;
+  userAgent: string;
+  connectedSeconds: number;
+}
+
+interface ConnectionsState {
+  count: number;
+  connections: ListenerConnection[];
+}
+
+// connectedSeconds → short human string. Listeners rarely sit for days, so
+// hours is the coarsest unit we bother with.
+function fmtConnected(s: number): string {
+  if (!Number.isFinite(s) || s < 0) return '—';
+  if (s < 60) return `${Math.round(s)}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+// Hide the host portion of an IP so a glance at the screen doesn't expose a
+// listener's full address. IPv4 drops the last octet, IPv6 keeps the first two
+// groups (the routing prefix) and masks the rest. The raw IP is still in the
+// row's title attribute and one toggle away — this is a display default, not
+// redaction.
+function maskIp(ip: string): string {
+  if (!ip) return '—';
+  if (ip.includes('.')) return ip.replace(/\.\d+$/, '.×');
+  if (ip.includes(':')) {
+    const groups = ip.split(':').filter(Boolean);
+    return groups.length > 2 ? `${groups[0]}:${groups[1]}:×` : ip;
+  }
+  return ip;
+}
+
+// Collapse a raw user-agent into a short "Device · App" label. Best-effort and
+// deliberately shallow — the full UA stays in the title attribute. Order
+// matters: check the specific players (Sonos, VLC) before the generic browser
+// families, since some embed "Mozilla" boilerplate.
+function clientLabel(ua: string): string {
+  if (!ua) return 'unknown';
+  const u = ua.toLowerCase();
+  if (u.includes('sonos')) return 'Sonos';
+  if (u.includes('vlc')) return 'VLC';
+  if (u.includes('itunes') || u.includes('applecoremedia')) return 'iTunes / Music';
+  if (u.includes('winamp')) return 'Winamp';
+  if (u.includes('foobar')) return 'foobar2000';
+  const device = u.includes('iphone')
+    ? 'iPhone'
+    : u.includes('ipad')
+      ? 'iPad'
+      : u.includes('android')
+        ? 'Android'
+        : u.includes('macintosh') || u.includes('mac os')
+          ? 'Mac'
+          : u.includes('windows')
+            ? 'Windows'
+            : u.includes('linux')
+              ? 'Linux'
+              : '';
+  const browser = u.includes('firefox')
+    ? 'Firefox'
+    : u.includes('edg')
+      ? 'Edge'
+      : u.includes('chrome') || u.includes('chromium')
+        ? 'Chrome'
+        : u.includes('safari')
+          ? 'Safari'
+          : '';
+  const label = [device, browser].filter(Boolean).join(' · ');
+  // Nothing recognised — show the first token of the raw UA rather than a
+  // useless "unknown" (helps with hardware radios / odd clients).
+  return label || ua.split(/[\s/]/)[0] || 'unknown';
+}
+
+type SortKey = 'ip' | 'mount' | 'connectedSeconds' | 'client';
+interface SortState {
+  key: SortKey;
+  dir: 'asc' | 'desc';
+}
+
+// Sort connections by the active column. `client` sorts on the friendly label
+// (what the operator actually sees), everything else on the raw field.
+function sortConnections(
+  rows: ListenerConnection[],
+  { key, dir }: SortState,
+): ListenerConnection[] {
+  const sign = dir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    let cmp: number;
+    if (key === 'connectedSeconds') cmp = a.connectedSeconds - b.connectedSeconds;
+    else if (key === 'client') cmp = clientLabel(a.userAgent).localeCompare(clientLabel(b.userAgent));
+    else cmp = String(a[key]).localeCompare(String(b[key]));
+    return cmp * sign;
+  });
+}
+
 export default function DashPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [status, setStatus] = useState<DashStatus | null>(null);
@@ -72,6 +172,12 @@ export default function DashPanel() {
   const [sayMode, setSayMode] = useState('raw');
   const [sayKind, setSayKind] = useState('dj-speak');
   const [confirmSkip, setConfirmSkip] = useState(false);
+
+  const [conns, setConns] = useState<ConnectionsState | null>(null);
+  const [connErr, setConnErr] = useState<string | null>(null);
+  // Longest-connected first by default — the most stable listeners on top.
+  const [sort, setSort] = useState<SortState>({ key: 'connectedSeconds', dir: 'desc' });
+  const [revealIps, setRevealIps] = useState(false);
 
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -102,6 +208,33 @@ export default function DashPanel() {
     };
     tick();
     const id = setInterval(tick, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [hydrated, needsAuth, adminFetch]);
+
+  // Live listener connections — polled slower than status (10s) since it hits
+  // Icecast's admin interface, and the table doesn't need 3s freshness.
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await adminFetch('/listeners/connections');
+        const j = (await r.json().catch(() => null)) as
+          | (ConnectionsState & { error?: string })
+          | null;
+        if (cancelled) return;
+        if (!r.ok) throw new Error(j?.error || `failed (${r.status})`);
+        setConns({ count: j?.count ?? 0, connections: j?.connections ?? [] });
+        setConnErr(null);
+      } catch (e) {
+        if (!cancelled) setConnErr(e instanceof Error ? e.message : String(e));
+      }
+    };
+    tick();
+    const id = setInterval(tick, 10000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -355,6 +488,71 @@ export default function DashPanel() {
         </div>
       </div>
 
+      {/* ── LISTENERS ──────────────────────────────────────────────────── */}
+      <Card
+        title="Listeners"
+        sub={conns ? `${conns.count} connected` : 'live connections'}
+        right={
+          connErr ? (
+            <Pill>unavailable</Pill>
+          ) : conns && conns.connections.length > 0 ? (
+            <button
+              type="button"
+              className="text-[9px] font-bold tracking-[0.2em] text-muted uppercase hover:text-ink"
+              onClick={() => setRevealIps(v => !v)}
+            >
+              {revealIps ? 'hide IPs' : 'show IPs'}
+            </button>
+          ) : null
+        }
+      >
+        {connErr ? (
+          <div className="text-muted italic">can’t reach Icecast admin — {connErr}</div>
+        ) : !conns ? (
+          <div className="text-muted italic">loading…</div>
+        ) : conns.connections.length === 0 ? (
+          <div className="text-muted italic">nobody listening right now</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr className="text-left text-[9px] tracking-[0.2em] text-muted uppercase">
+                  <SortableTh label="IP" col="ip" sort={sort} onSort={setSort} className="pr-3" />
+                  <SortableTh label="Mount" col="mount" sort={sort} onSort={setSort} className="pr-3" />
+                  <SortableTh
+                    label="Connected"
+                    col="connectedSeconds"
+                    sort={sort}
+                    onSort={setSort}
+                    className="pr-3"
+                  />
+                  <SortableTh label="Client" col="client" sort={sort} onSort={setSort} />
+                </tr>
+              </thead>
+              <tbody>
+                {sortConnections(conns.connections, sort).map((c, i) => (
+                  <tr
+                    key={`${c.ip}:${c.mount}:${i}`}
+                    className="border-t border-dashed border-separator-strong"
+                  >
+                    <td className="py-1.5 pr-3 font-mono whitespace-nowrap" title={c.ip}>
+                      {revealIps ? c.ip || '—' : maskIp(c.ip)}
+                    </td>
+                    <td className="py-1.5 pr-3 whitespace-nowrap text-muted">{c.mount}</td>
+                    <td className="py-1.5 pr-3 whitespace-nowrap">
+                      {fmtConnected(c.connectedSeconds)}
+                    </td>
+                    <td className="max-w-[360px] truncate py-1.5" title={c.userAgent}>
+                      {clientLabel(c.userAgent)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
       {!status && !err && <div className="text-muted italic">connecting…</div>}
 
       <V3AlertDialog
@@ -367,6 +565,44 @@ export default function DashPanel() {
         onConfirm={doSkip}
       />
     </div>
+  );
+}
+
+// A clickable column header. Clicking the active column flips direction;
+// clicking a new one selects it (descending for the duration column, ascending
+// for the text columns — the order an operator usually wants first).
+function SortableTh({
+  label,
+  col,
+  sort,
+  onSort,
+  className,
+}: {
+  label: string;
+  col: SortKey;
+  sort: SortState;
+  onSort: (s: SortState) => void;
+  className?: string;
+}) {
+  const active = sort.key === col;
+  const arrow = active ? (sort.dir === 'asc' ? '↑' : '↓') : '';
+  return (
+    <th className={cn('py-1.5 font-bold', className)}>
+      <button
+        type="button"
+        className={cn('uppercase hover:text-ink', active && 'text-ink')}
+        onClick={() =>
+          onSort(
+            active
+              ? { key: col, dir: sort.dir === 'asc' ? 'desc' : 'asc' }
+              : { key: col, dir: col === 'connectedSeconds' ? 'desc' : 'asc' },
+          )
+        }
+      >
+        {label}
+        {arrow ? <span className="ml-1">{arrow}</span> : null}
+      </button>
+    </th>
   );
 }
 
