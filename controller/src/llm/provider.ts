@@ -216,17 +216,18 @@ function defaultEmbeddingModelFor(provider: string): string {
 }
 
 function defaultEmbeddingDimFor(model: string): number {
-  // Authoritative dim lookup for the default models. If the operator picks a
-  // model not in this table, library-db will reject the dim mismatch at
-  // upsert time with a friendly --reseed message.
+  // Best-effort dim guess for known model names. This is only a FALLBACK seed:
+  // the tagger probes the live server and uses the real vector length as the
+  // authoritative dim (music/embeddings.ts probeOnce → tag-library.ts), and the
+  // live controller adopts whatever dim the tagger recorded (library-db
+  // adoptStoredDim). So an unknown / arbitrarily-named embedding model still
+  // works — this table just seeds the schema before the first tag run (#319).
   if (model === 'nomic-embed-text') return 768;
   if (model === 'mxbai-embed-large') return 1024;
   if (model === 'text-embedding-3-small') return 1536;
   if (model === 'text-embedding-3-large') return 3072;
   if (model === 'text-embedding-004') return 768;
-  // Unknown model — assume the homelab default until the operator says
-  // otherwise via settings.embedding.dim.
-  return 768;
+  return 768; // homelab default until a probe says otherwise
 }
 
 export function embeddingModel() {

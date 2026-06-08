@@ -16,12 +16,14 @@ let loaded = false;
 
 export async function load() {
   if (loaded) return;
-  // reseed:true makes a model/dim swap self-heal instead of crashing the whole
-  // controller library subsystem (browse/picker/retag). On a mismatch the
-  // vector table is rebuilt empty at the new dim — KNN degrades gracefully
-  // until a tag re-embed refills it, while tagged-row browse/retag (moods live
-  // in `tracks`, not vectors) keep working. It is a no-op when dims match.
-  await db.open({ embeddingDim: resolveEmbeddingDim(), reseed: true });
+  // adoptStoredDim:true makes the live controller honour whatever dim the tagger
+  // actually probed and recorded, instead of trusting the name→dim guess. A
+  // model whose name resolves to a different default than its real vector width
+  // (e.g. a custom embedding model named like an OpenAI one) no longer makes the
+  // controller wipe a populated index on boot (#319). resolveEmbeddingDim() is
+  // only the fallback used when the DB has never been tagged. A deliberate model
+  // swap is reconciled by the tagger's --reseed path, not here.
+  await db.open({ embeddingDim: resolveEmbeddingDim(), adoptStoredDim: true });
   loaded = true;
 }
 

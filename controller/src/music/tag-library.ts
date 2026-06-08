@@ -119,7 +119,24 @@ async function main() {
   await applyWizardOverlay();
   await settings.load();
 
-  const embeddingDim = embeddings.resolveEmbeddingDim();
+  if (!embeddings.isAvailable()) {
+    console.error('[tag] embeddings not available — set settings.embedding.enabled / provider');
+    process.exit(1);
+  }
+
+  // Preflight FIRST — catch the common misconfigurations (model not pulled,
+  // cloud Ollama 401, server unreachable, a chat model that can't embed) BEFORE
+  // we open the DB or walk Navidrome and burn through a 28k-track embed loop
+  // only to die on the first batch (issues #174, #319). The probe also reports
+  // the embedding dimension measured from a real vector — authoritative over the
+  // name→dim guess, so an arbitrarily-named embedding model just works.
+  const probe = await embeddings.ensureReady();
+  if (probe.code !== 'ok') {
+    console.error(`[tag] embedding preflight failed (${probe.code}):\n${probe.message}`);
+    process.exit(1);
+  }
+  const embeddingDim = probe.dim ?? embeddings.resolveEmbeddingDim();
+
   // Pass reseed so open() can recover from an embedding model/dim swap instead
   // of throwing the dim-mismatch error before the --reseed logic below ever
   // runs (the bug in #307). On a same-dim run this is a no-op.
@@ -150,20 +167,6 @@ async function main() {
   if (flags.reseed) {
     console.log('[tag] --reseed: dropping track_vectors, re-embedding from scratch');
     db.dropVectors();
-  }
-
-  if (!embeddings.isAvailable()) {
-    console.error('[tag] embeddings not available — set settings.embedding.enabled / provider');
-    process.exit(1);
-  }
-
-  // Preflight — catch the common misconfigurations (model not pulled, cloud
-  // Ollama 401, server unreachable) BEFORE we walk Navidrome and burn through
-  // a 28k-track embed loop only to die on the first batch. Issue #174.
-  const probe = await embeddings.ensureReady();
-  if (probe.code !== 'ok') {
-    console.error(`[tag] embedding preflight failed (${probe.code}):\n${probe.message}`);
-    process.exit(1);
   }
 
   const promptHash = embeddings.promptVocabHash(TAGGER_BATCH_SYSTEM);

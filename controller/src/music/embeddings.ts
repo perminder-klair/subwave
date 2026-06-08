@@ -102,14 +102,18 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
 export type ProbeCode =
   | 'ok'
   | 'disabled'
-  | 'not_found'      // Ollama 404 — model isn't pulled
-  | 'unauthorized'   // 401 — typically cloud-routed Ollama or wrong API key
-  | 'unreachable'    // connection refused / DNS / timeout
-  | 'unknown';       // anything else — message has the raw error
+  | 'not_found'           // Ollama 404 — model isn't pulled
+  | 'unauthorized'        // 401 — typically cloud-routed Ollama or wrong API key
+  | 'unreachable'         // connection refused / DNS / timeout
+  | 'not_embedding_model' // server reached, but it's a chat model / no pooling (#319)
+  | 'unknown';            // anything else — message has the raw error
 
 export interface ProbeResult {
   code: ProbeCode;
   message: string;
+  // Vector length measured from a successful probe. Authoritative dim for the
+  // schema — beats guessing from the model name (#319). Only set when code==ok.
+  dim?: number;
 }
 
 function classifyEmbeddingError(err: any): { code: ProbeCode; raw: string } {
@@ -121,6 +125,17 @@ function classifyEmbeddingError(err: any): { code: ProbeCode; raw: string } {
   }
   if (status === 401 || status === 403 || txt.includes('unauthorized') || txt.includes('forbidden')) {
     return { code: 'unauthorized', raw };
+  }
+  // Server is up and authenticated, but the loaded model can't embed: either it
+  // was started without the embeddings endpoint, or it's a generative/chat model
+  // whose pooling type is 'none' (not OAI-compatible). The classic trap when an
+  // openai-compatible embedding config inherits the *chat* server's baseUrl (#319).
+  if (
+    txt.includes('does not support embeddings') ||
+    txt.includes('start it with') ||         // llama.cpp: "Start it with `--embeddings`"
+    txt.includes('pooling')                  // llama.cpp: "Pooling type 'none' is not OAI compatible"
+  ) {
+    return { code: 'not_embedding_model', raw };
   }
   if (
     err?.code === 'ECONNREFUSED' ||
@@ -174,6 +189,29 @@ function actionableMessage(code: ProbeCode, raw: string): string {
         );
       }
       return `Can't reach provider "${provider}" — check network / baseUrl. (${raw})`;
+    case 'not_embedding_model':
+      if (provider === 'openai-compatible') {
+        return (
+          `The embedding endpoint is reachable but "${model}" can't produce embeddings —\n` +
+          `  it's a chat/generative model, not an embedding model.\n` +
+          `  By default settings.embedding inherits settings.llm.baseUrl, so embeddings\n` +
+          `  point at your CHAT server. Run a DEDICATED embedding model on its own\n` +
+          `  llama.cpp server (note --embeddings --pooling mean):\n` +
+          `        llama-server -m nomic-embed-text-v1.5.Q8_0.gguf \\\n` +
+          `          --embeddings --pooling mean --host 0.0.0.0 --port 8090\n` +
+          `  then in /admin/settings → Embedding set:\n` +
+          `        baseUrl = http://<host>:8090/v1\n` +
+          `        model   = nomic-embed-text\n` +
+          `  (server said: ${raw})`
+        );
+      }
+      return (
+        `The embedding endpoint is reachable but "${model}" can't produce embeddings —\n` +
+        `  it looks like a chat/generative model, not an embedding model.\n` +
+        `  Point settings.embedding at a real embedding model (e.g. nomic-embed-text),\n` +
+        `  served with embeddings enabled and a pooling type other than 'none'.\n` +
+        `  (server said: ${raw})`
+      );
     case 'unknown':
     default:
       return `Embedding probe failed: ${raw}`;
@@ -233,8 +271,11 @@ async function tryOllamaPull(model: string, ollamaUrl: string): Promise<boolean>
 
 async function probeOnce(): Promise<ProbeResult> {
   try {
-    await embedTexts(['subwave embedding probe']);
-    return { code: 'ok', message: 'ok' };
+    const vecs = await embedTexts(['subwave embedding probe']);
+    // Measure the real vector length from the live server — authoritative dim,
+    // independent of the name→dim guess table (#319).
+    const dim = Array.isArray(vecs[0]) ? vecs[0].length : undefined;
+    return { code: 'ok', message: 'ok', dim };
   } catch (err: any) {
     const { code, raw } = classifyEmbeddingError(err);
     return { code, message: actionableMessage(code, raw) };

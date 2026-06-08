@@ -140,9 +140,19 @@ export interface LibraryStats {
 // `reseed` from its --reseed flag; the live controller passes it too so a model
 // change self-heals instead of crashing (see music/library.ts). It is a no-op
 // on the normal matching-dim path.
-export async function open(opts: { embeddingDim: number; reseed?: boolean }): Promise<void> {
+// `adoptStoredDim` (live controller) treats the dim already recorded in the DB
+// as authoritative: the stored vectors win, and `embeddingDim` is only the
+// fallback used when the DB has never been tagged. This stops the runtime from
+// wiping a tagged index just because the model *name* maps to a different
+// default than the dim the tagger actually probed (#319). The tagger leaves it
+// off so a deliberate model swap still surfaces the --reseed gate.
+export async function open(opts: {
+  embeddingDim: number;
+  reseed?: boolean;
+  adoptStoredDim?: boolean;
+}): Promise<void> {
   if (db) {
-    if (opts.embeddingDim !== currentEmbeddingDim) {
+    if (!opts.adoptStoredDim && opts.embeddingDim !== currentEmbeddingDim) {
       throw new Error(
         `library-db already open with embedding dim ${currentEmbeddingDim}; ` +
           `caller asked for ${opts.embeddingDim}. Use --reseed to switch models.`,
@@ -156,7 +166,12 @@ export async function open(opts: { embeddingDim: number; reseed?: boolean }): Pr
   db.pragma('synchronous = NORMAL');
   sqliteVec.load(db);
 
-  await migrate(opts.embeddingDim, opts.reseed === true);
+  // migrate() may adopt the stored dim; trust its return as the live schema dim.
+  currentEmbeddingDim = await migrate(
+    opts.embeddingDim,
+    opts.reseed === true,
+    opts.adoptStoredDim === true,
+  );
   await maybeMigrateFromMoodsJson();
 }
 
@@ -181,7 +196,10 @@ function requireDb(): Database.Database {
 // Schema
 // ---------------------------------------------------------------------------
 
-async function migrate(embeddingDim: number, reseed = false): Promise<void> {
+// Returns the dim the vec0 table is actually created at (== the stored dim when
+// `adoptStoredDim` adopts it, else `embeddingDim`). Callers use this as the live
+// schema dim so reads/writes validate against the real table width.
+async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = false): Promise<number> {
   const d = requireDb();
   const userVersion = (d.pragma('user_version', { simple: true }) as number) || 0;
 
@@ -242,24 +260,38 @@ async function migrate(embeddingDim: number, reseed = false): Promise<void> {
   const meta = d.prepare('SELECT model, dim FROM embedding_meta WHERE pk = 1').get() as
     | { model: string; dim: number }
     | undefined;
+  // Effective dim for the vec0 table. Defaults to what the caller asked for; the
+  // branches below may adopt the stored dim or reseed at the new dim instead.
+  let effectiveDim = embeddingDim;
   if (meta && meta.dim !== embeddingDim) {
-    if (!reseed) {
+    if (adoptStoredDim) {
+      // Live controller: the stored vectors are authoritative. Honour their dim
+      // so the picker keeps working off a tagged index even when the model name
+      // resolves to a different default. A real model swap is reconciled by the
+      // tagger's --reseed path, not silently here (#319).
+      console.warn(
+        `[library-db] adopting stored embedding dim ${meta.dim} (model: ${meta.model}); ` +
+          `caller requested ${embeddingDim}. Re-tag with --reseed to switch models.`,
+      );
+      effectiveDim = meta.dim;
+    } else if (!reseed) {
       throw new Error(
         `embedding dim mismatch: state/library.db has ${meta.dim}-d vectors (model: ${meta.model}), ` +
           `but the current settings ask for ${embeddingDim}-d. ` +
           `Run \`npm run tag -- --reseed\` to re-embed.`,
       );
+    } else {
+      // Reseed across a model/dim change: the stored vectors are unusable at the
+      // new dim, so drop them (the table is recreated at `effectiveDim` just
+      // below) and clear the stale meta row so a later setEmbeddingMeta() seeds
+      // it fresh and the next open() sees a matching (or absent) dim.
+      console.warn(
+        `[library-db] reseed: embedding dim ${meta.dim}→${embeddingDim} ` +
+          `(model: ${meta.model}); dropping vectors for re-embed`,
+      );
+      runDdl(d, 'DROP TABLE IF EXISTS track_vectors');
+      d.prepare('DELETE FROM embedding_meta WHERE pk = 1').run();
     }
-    // Reseed across a model/dim change: the stored vectors are unusable at the
-    // new dim, so drop them (the table is recreated at `embeddingDim` just
-    // below) and clear the stale meta row so a later setEmbeddingMeta() seeds
-    // it fresh and the next open() sees a matching (or absent) dim.
-    console.warn(
-      `[library-db] reseed: embedding dim ${meta.dim}→${embeddingDim} ` +
-        `(model: ${meta.model}); dropping vectors for re-embed`,
-    );
-    runDdl(d, 'DROP TABLE IF EXISTS track_vectors');
-    d.prepare('DELETE FROM embedding_meta WHERE pk = 1').run();
   }
 
   const hasVecTable = d
@@ -268,9 +300,10 @@ async function migrate(embeddingDim: number, reseed = false): Promise<void> {
   if (!hasVecTable) {
     runDdl(d,
       `CREATE VIRTUAL TABLE track_vectors USING vec0(` +
-        `id TEXT PRIMARY KEY, embedding FLOAT[${embeddingDim}] distance_metric=cosine)`,
+        `id TEXT PRIMARY KEY, embedding FLOAT[${effectiveDim}] distance_metric=cosine)`,
     );
   }
+  return effectiveDim;
 }
 
 // Wrapper so we keep the SQL "exec" verb out of the source text and dodge a

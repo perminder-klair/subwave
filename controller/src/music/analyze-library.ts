@@ -65,9 +65,9 @@ async function main() {
   await applyWizardOverlay();
   await settings.load();
   const embeddingDim = embeddings.resolveEmbeddingDim();
-  // reseed:true so an embedding model/dim swap doesn't block acoustic analysis
-  // (which doesn't touch vectors) — see music/library.ts. No-op when dims match.
-  await db.open({ embeddingDim, reseed: true });
+  // adoptStoredDim:true so an embedding model/dim swap doesn't block acoustic
+  // analysis (which doesn't touch vectors) — see music/library.ts (#319).
+  await db.open({ embeddingDim, adoptStoredDim: true });
 
   // Walk only when forced, or when the catalogue is empty (bootstrap).
   // --skip-walk hard-disables either way.
