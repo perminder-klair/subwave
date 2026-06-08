@@ -1,0 +1,1597 @@
+diff --git a/node_modules/react-native-track-player/android/build/.transforms/bc3b2dcfbd6994747e85d3c4346c49a4/results.bin b/node_modules/react-native-track-player/android/build/.transforms/bc3b2dcfbd6994747e85d3c4346c49a4/results.bin
+new file mode 100644
+index 0000000..0d259dd
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/.transforms/bc3b2dcfbd6994747e85d3c4346c49a4/results.bin
+@@ -0,0 +1 @@
++o/classes
+diff --git a/node_modules/react-native-track-player/android/build/.transforms/bc3b2dcfbd6994747e85d3c4346c49a4/transformed/classes/classes_dex/classes.dex b/node_modules/react-native-track-player/android/build/.transforms/bc3b2dcfbd6994747e85d3c4346c49a4/transformed/classes/classes_dex/classes.dex
+new file mode 100644
+index 0000000..50a4ae8
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/.transforms/bc3b2dcfbd6994747e85d3c4346c49a4/transformed/classes/classes_dex/classes.dex differ
+diff --git a/node_modules/react-native-track-player/android/build/generated/source/buildConfig/debug/com/doublesymmetry/trackplayer/BuildConfig.java b/node_modules/react-native-track-player/android/build/generated/source/buildConfig/debug/com/doublesymmetry/trackplayer/BuildConfig.java
+new file mode 100644
+index 0000000..7b5e7c0
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/generated/source/buildConfig/debug/com/doublesymmetry/trackplayer/BuildConfig.java
+@@ -0,0 +1,10 @@
++/**
++ * Automatically generated file. DO NOT MODIFY
++ */
++package com.doublesymmetry.trackplayer;
++
++public final class BuildConfig {
++  public static final boolean DEBUG = Boolean.parseBoolean("true");
++  public static final String LIBRARY_PACKAGE_NAME = "com.doublesymmetry.trackplayer";
++  public static final String BUILD_TYPE = "debug";
++}
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/AndroidManifest.xml b/node_modules/react-native-track-player/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/AndroidManifest.xml
+new file mode 100644
+index 0000000..b792434
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/AndroidManifest.xml
+@@ -0,0 +1,25 @@
++<?xml version="1.0" encoding="utf-8"?>
++<manifest xmlns:android="http://schemas.android.com/apk/res/android"
++    package="com.doublesymmetry.trackplayer" >
++
++    <uses-sdk android:minSdkVersion="24" />
++
++    <uses-permission android:name="android.permission.WAKE_LOCK" />
++    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
++    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
++
++    <application>
++
++        <!-- The main service, handles playback, playlists and media buttons -->
++        <service
++            android:name="com.doublesymmetry.trackplayer.service.MusicService"
++            android:enabled="true"
++            android:exported="true"
++            android:foregroundServiceType="mediaPlayback" >
++            <intent-filter>
++                <action android:name="android.intent.action.MEDIA_BUTTON" />
++            </intent-filter>
++        </service>
++    </application>
++
++</manifest>
+\ No newline at end of file
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/output-metadata.json b/node_modules/react-native-track-player/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/output-metadata.json
+new file mode 100644
+index 0000000..745a7ed
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/output-metadata.json
+@@ -0,0 +1,18 @@
++{
++  "version": 3,
++  "artifactType": {
++    "type": "AAPT_FRIENDLY_MERGED_MANIFESTS",
++    "kind": "Directory"
++  },
++  "applicationId": "com.doublesymmetry.trackplayer",
++  "variantName": "debug",
++  "elements": [
++    {
++      "type": "SINGLE",
++      "filters": [],
++      "attributes": [],
++      "outputFile": "AndroidManifest.xml"
++    }
++  ],
++  "elementType": "File"
++}
+\ No newline at end of file
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/aar_metadata/debug/writeDebugAarMetadata/aar-metadata.properties b/node_modules/react-native-track-player/android/build/intermediates/aar_metadata/debug/writeDebugAarMetadata/aar-metadata.properties
+new file mode 100644
+index 0000000..1211b1e
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/aar_metadata/debug/writeDebugAarMetadata/aar-metadata.properties
+@@ -0,0 +1,6 @@
++aarFormatVersion=1.0
++aarMetadataVersion=1.0
++minCompileSdk=1
++minCompileSdkExtension=0
++minAndroidGradlePluginVersion=1.0.0
++coreLibraryDesugaringEnabled=false
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/annotation_processor_list/debug/javaPreCompileDebug/annotationProcessors.json b/node_modules/react-native-track-player/android/build/intermediates/annotation_processor_list/debug/javaPreCompileDebug/annotationProcessors.json
+new file mode 100644
+index 0000000..9e26dfe
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/annotation_processor_list/debug/javaPreCompileDebug/annotationProcessors.json
+@@ -0,0 +1 @@
++{}
+\ No newline at end of file
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/compile_library_classes_jar/debug/bundleLibCompileToJarDebug/classes.jar b/node_modules/react-native-track-player/android/build/intermediates/compile_library_classes_jar/debug/bundleLibCompileToJarDebug/classes.jar
+new file mode 100644
+index 0000000..4a26762
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/intermediates/compile_library_classes_jar/debug/bundleLibCompileToJarDebug/classes.jar differ
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/compile_r_class_jar/debug/generateDebugRFile/R.jar b/node_modules/react-native-track-player/android/build/intermediates/compile_r_class_jar/debug/generateDebugRFile/R.jar
+new file mode 100644
+index 0000000..42d3912
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/intermediates/compile_r_class_jar/debug/generateDebugRFile/R.jar differ
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/compile_symbol_list/debug/generateDebugRFile/R.txt b/node_modules/react-native-track-player/android/build/intermediates/compile_symbol_list/debug/generateDebugRFile/R.txt
+new file mode 100644
+index 0000000..80e4515
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/compile_symbol_list/debug/generateDebugRFile/R.txt
+@@ -0,0 +1,4 @@
++int drawable forward 0x0
++int drawable rewind 0x0
++int string rntp_temporary_channel_id 0x0
++int string rntp_temporary_channel_name 0x0
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/compiled_local_resources/debug/compileDebugLibraryResources/out/drawable_forward.xml.flat b/node_modules/react-native-track-player/android/build/intermediates/compiled_local_resources/debug/compileDebugLibraryResources/out/drawable_forward.xml.flat
+new file mode 100644
+index 0000000..0d748bb
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/intermediates/compiled_local_resources/debug/compileDebugLibraryResources/out/drawable_forward.xml.flat differ
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/compiled_local_resources/debug/compileDebugLibraryResources/out/drawable_rewind.xml.flat b/node_modules/react-native-track-player/android/build/intermediates/compiled_local_resources/debug/compileDebugLibraryResources/out/drawable_rewind.xml.flat
+new file mode 100644
+index 0000000..9a1ce99
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/intermediates/compiled_local_resources/debug/compileDebugLibraryResources/out/drawable_rewind.xml.flat differ
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/incremental/debug/packageDebugResources/compile-file-map.properties b/node_modules/react-native-track-player/android/build/intermediates/incremental/debug/packageDebugResources/compile-file-map.properties
+new file mode 100644
+index 0000000..5c521c2
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/incremental/debug/packageDebugResources/compile-file-map.properties
+@@ -0,0 +1,3 @@
++#Mon Jun 08 11:47:04 BST 2026
++com.doublesymmetry.trackplayer.react-native-track-player-main-6\:/drawable/forward.xml=/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/build/intermediates/packaged_res/debug/packageDebugResources/drawable/forward.xml
++com.doublesymmetry.trackplayer.react-native-track-player-main-6\:/drawable/rewind.xml=/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/build/intermediates/packaged_res/debug/packageDebugResources/drawable/rewind.xml
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/incremental/debug/packageDebugResources/merged.dir/values/values.xml b/node_modules/react-native-track-player/android/build/intermediates/incremental/debug/packageDebugResources/merged.dir/values/values.xml
+new file mode 100644
+index 0000000..80a694d
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/incremental/debug/packageDebugResources/merged.dir/values/values.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="rntp_temporary_channel_id">rntp_temporary_channel</string>
++    <string name="rntp_temporary_channel_name">temporary_channel</string>
++</resources>
+\ No newline at end of file
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/incremental/debug/packageDebugResources/merger.xml b/node_modules/react-native-track-player/android/build/intermediates/incremental/debug/packageDebugResources/merger.xml
+new file mode 100644
+index 0000000..2a78d50
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/incremental/debug/packageDebugResources/merger.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<merger version="3"><dataSet aapt-namespace="http://schemas.android.com/apk/res-auto" config="main$Generated" generated="true" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/res"/></dataSet><dataSet aapt-namespace="http://schemas.android.com/apk/res-auto" config="main" generated-set="main$Generated" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/res"><file name="forward" path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/res/drawable/forward.xml" qualifiers="" type="drawable"/><file name="rewind" path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/res/drawable/rewind.xml" qualifiers="" type="drawable"/><file path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/res/values/strings.xml" qualifiers=""><string name="rntp_temporary_channel_id">rntp_temporary_channel</string><string name="rntp_temporary_channel_name">temporary_channel</string></file></source></dataSet><dataSet aapt-namespace="http://schemas.android.com/apk/res-auto" config="debug$Generated" generated="true" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/debug/res"/></dataSet><dataSet aapt-namespace="http://schemas.android.com/apk/res-auto" config="debug" generated-set="debug$Generated" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/debug/res"/></dataSet><dataSet aapt-namespace="http://schemas.android.com/apk/res-auto" config="generated$Generated" generated="true" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/build/generated/res/resValues/debug"/></dataSet><dataSet aapt-namespace="http://schemas.android.com/apk/res-auto" config="generated" generated-set="generated$Generated" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/build/generated/res/resValues/debug"/></dataSet><mergedItems/></merger>
+\ No newline at end of file
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/incremental/mergeDebugAssets/merger.xml b/node_modules/react-native-track-player/android/build/intermediates/incremental/mergeDebugAssets/merger.xml
+new file mode 100644
+index 0000000..6f54f4a
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/incremental/mergeDebugAssets/merger.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<merger version="3"><dataSet config="main" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/assets"/></dataSet><dataSet config="debug" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/debug/assets"/></dataSet><dataSet config="generated" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/build/intermediates/shader_assets/debug/compileDebugShaders/out"/></dataSet></merger>
+\ No newline at end of file
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/incremental/mergeDebugJniLibFolders/merger.xml b/node_modules/react-native-track-player/android/build/intermediates/incremental/mergeDebugJniLibFolders/merger.xml
+new file mode 100644
+index 0000000..789ea76
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/incremental/mergeDebugJniLibFolders/merger.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<merger version="3"><dataSet config="main" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/jniLibs"/></dataSet><dataSet config="debug" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/debug/jniLibs"/></dataSet></merger>
+\ No newline at end of file
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/incremental/mergeDebugShaders/merger.xml b/node_modules/react-native-track-player/android/build/intermediates/incremental/mergeDebugShaders/merger.xml
+new file mode 100644
+index 0000000..5b2d99e
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/incremental/mergeDebugShaders/merger.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<merger version="3"><dataSet config="main" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/shaders"/></dataSet><dataSet config="debug" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/debug/shaders"/></dataSet></merger>
+\ No newline at end of file
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/java_res/debug/processDebugJavaRes/out/META-INF/react-native-track-player_debug.kotlin_module b/node_modules/react-native-track-player/android/build/intermediates/java_res/debug/processDebugJavaRes/out/META-INF/react-native-track-player_debug.kotlin_module
+new file mode 100644
+index 0000000..8539fc3
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/intermediates/java_res/debug/processDebugJavaRes/out/META-INF/react-native-track-player_debug.kotlin_module differ
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes/com/doublesymmetry/trackplayer/BuildConfig.class b/node_modules/react-native-track-player/android/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes/com/doublesymmetry/trackplayer/BuildConfig.class
+new file mode 100644
+index 0000000..8caddf0
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes/com/doublesymmetry/trackplayer/BuildConfig.class differ
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/local_only_symbol_list/debug/parseDebugLocalResources/R-def.txt b/node_modules/react-native-track-player/android/build/intermediates/local_only_symbol_list/debug/parseDebugLocalResources/R-def.txt
+new file mode 100644
+index 0000000..3655221
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/local_only_symbol_list/debug/parseDebugLocalResources/R-def.txt
+@@ -0,0 +1,6 @@
++R_DEF: Internal format may change without notice
++local
++drawable forward
++drawable rewind
++string rntp_temporary_channel_id
++string rntp_temporary_channel_name
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/manifest_merge_blame_file/debug/processDebugManifest/manifest-merger-blame-debug-report.txt b/node_modules/react-native-track-player/android/build/intermediates/manifest_merge_blame_file/debug/processDebugManifest/manifest-merger-blame-debug-report.txt
+new file mode 100644
+index 0000000..fc1be89
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/manifest_merge_blame_file/debug/processDebugManifest/manifest-merger-blame-debug-report.txt
+@@ -0,0 +1,40 @@
++1<?xml version="1.0" encoding="utf-8"?>
++2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
++3    package="com.doublesymmetry.trackplayer" >
++4
++5    <uses-sdk android:minSdkVersion="24" />
++6
++7    <uses-permission android:name="android.permission.WAKE_LOCK" />
++7-->/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:5:5-68
++7-->/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:5:22-65
++8    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
++8-->/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:6:5-77
++8-->/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:6:22-74
++9    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
++9-->/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:8:5-9:79
++9-->/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:9:9-76
++10
++11    <application>
++11-->/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:11:5-19:19
++12
++13        <!-- The main service, handles playback, playlists and media buttons -->
++14        <service
++14-->/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:14:9-18:19
++15            android:name="com.doublesymmetry.trackplayer.service.MusicService"
++15-->/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:14:18-84
++16            android:enabled="true"
++16-->/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:14:85-107
++17            android:exported="true"
++17-->/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:14:108-131
++18            android:foregroundServiceType="mediaPlayback" >
++18-->/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:14:132-177
++19            <intent-filter>
++19-->/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:15:13-17:29
++20                <action android:name="android.intent.action.MEDIA_BUTTON" />
++20-->/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:16:17-77
++20-->/Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:16:25-74
++21            </intent-filter>
++22        </service>
++23    </application>
++24
++25</manifest>
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml b/node_modules/react-native-track-player/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml
+new file mode 100644
+index 0000000..b792434
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml
+@@ -0,0 +1,25 @@
++<?xml version="1.0" encoding="utf-8"?>
++<manifest xmlns:android="http://schemas.android.com/apk/res/android"
++    package="com.doublesymmetry.trackplayer" >
++
++    <uses-sdk android:minSdkVersion="24" />
++
++    <uses-permission android:name="android.permission.WAKE_LOCK" />
++    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
++    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
++
++    <application>
++
++        <!-- The main service, handles playback, playlists and media buttons -->
++        <service
++            android:name="com.doublesymmetry.trackplayer.service.MusicService"
++            android:enabled="true"
++            android:exported="true"
++            android:foregroundServiceType="mediaPlayback" >
++            <intent-filter>
++                <action android:name="android.intent.action.MEDIA_BUTTON" />
++            </intent-filter>
++        </service>
++    </application>
++
++</manifest>
+\ No newline at end of file
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/navigation_json/debug/extractDeepLinksDebug/navigation.json b/node_modules/react-native-track-player/android/build/intermediates/navigation_json/debug/extractDeepLinksDebug/navigation.json
+new file mode 100644
+index 0000000..0637a08
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/navigation_json/debug/extractDeepLinksDebug/navigation.json
+@@ -0,0 +1 @@
++[]
+\ No newline at end of file
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/nested_resources_validation_report/debug/generateDebugResources/nestedResourcesValidationReport.txt b/node_modules/react-native-track-player/android/build/intermediates/nested_resources_validation_report/debug/generateDebugResources/nestedResourcesValidationReport.txt
+new file mode 100644
+index 0000000..08f4ebe
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/nested_resources_validation_report/debug/generateDebugResources/nestedResourcesValidationReport.txt
+@@ -0,0 +1 @@
++0 Warning/Error
+\ No newline at end of file
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/packaged_res/debug/packageDebugResources/drawable/forward.xml b/node_modules/react-native-track-player/android/build/intermediates/packaged_res/debug/packageDebugResources/drawable/forward.xml
+new file mode 100644
+index 0000000..32e3663
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/packaged_res/debug/packageDebugResources/drawable/forward.xml
+@@ -0,0 +1,5 @@
++<vector android:autoMirrored="true" android:height="24dp"
++    android:tint="#FFFFFF" android:viewportHeight="24"
++    android:viewportWidth="24" android:width="24dp" xmlns:android="http://schemas.android.com/apk/res/android">
++    <path android:fillColor="@android:color/white" android:pathData="M18,13c0,3.31 -2.69,6 -6,6s-6,-2.69 -6,-6s2.69,-6 6,-6v4l5,-5l-5,-5v4c-4.42,0 -8,3.58 -8,8c0,4.42 3.58,8 8,8c4.42,0 8,-3.58 8,-8H18z"/>
++    </vector>
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/packaged_res/debug/packageDebugResources/drawable/rewind.xml b/node_modules/react-native-track-player/android/build/intermediates/packaged_res/debug/packageDebugResources/drawable/rewind.xml
+new file mode 100644
+index 0000000..99c06c4
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/packaged_res/debug/packageDebugResources/drawable/rewind.xml
+@@ -0,0 +1,5 @@
++<vector android:autoMirrored="true" android:height="24dp"
++    android:tint="#FFFFFF" android:viewportHeight="24"
++    android:viewportWidth="24" android:width="24dp" xmlns:android="http://schemas.android.com/apk/res/android">
++    <path android:fillColor="@android:color/white" android:pathData="M12,5V1L7,6l5,5V7c3.31,0 6,2.69 6,6s-2.69,6 -6,6 -6,-2.69 -6,-6H4c0,4.42 3.58,8 8,8s8,-3.58 8,-8 -3.58,-8 -8,-8z"/>
++</vector>
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/packaged_res/debug/packageDebugResources/values/values.xml b/node_modules/react-native-track-player/android/build/intermediates/packaged_res/debug/packageDebugResources/values/values.xml
+new file mode 100644
+index 0000000..80a694d
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/packaged_res/debug/packageDebugResources/values/values.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="rntp_temporary_channel_id">rntp_temporary_channel</string>
++    <string name="rntp_temporary_channel_name">temporary_channel</string>
++</resources>
+\ No newline at end of file
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/runtime_library_classes_jar/debug/bundleLibRuntimeToJarDebug/classes.jar b/node_modules/react-native-track-player/android/build/intermediates/runtime_library_classes_jar/debug/bundleLibRuntimeToJarDebug/classes.jar
+new file mode 100644
+index 0000000..f10e5ca
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/intermediates/runtime_library_classes_jar/debug/bundleLibRuntimeToJarDebug/classes.jar differ
+diff --git a/node_modules/react-native-track-player/android/build/intermediates/symbol_list_with_package_name/debug/generateDebugRFile/package-aware-r.txt b/node_modules/react-native-track-player/android/build/intermediates/symbol_list_with_package_name/debug/generateDebugRFile/package-aware-r.txt
+new file mode 100644
+index 0000000..d16dca5
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/intermediates/symbol_list_with_package_name/debug/generateDebugRFile/package-aware-r.txt
+@@ -0,0 +1,5 @@
++com.doublesymmetry.trackplayer
++drawable forward
++drawable rewind
++string rntp_temporary_channel_id
++string rntp_temporary_channel_name
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab
+new file mode 100644
+index 0000000..44d4b67
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.keystream b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.keystream
+new file mode 100644
+index 0000000..b277a6e
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.keystream differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.keystream.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.keystream.len
+new file mode 100644
+index 0000000..c563e6b
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.keystream.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.len
+new file mode 100644
+index 0000000..385642d
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.values.at b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.values.at
+new file mode 100644
+index 0000000..65af052
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab.values.at differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab_i b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab_i
+new file mode 100644
+index 0000000..9dde87e
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab_i differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab_i.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab_i.len
+new file mode 100644
+index 0000000..131e265
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/inputs/source-to-output.tab_i.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab
+new file mode 100644
+index 0000000..be72ad7
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.keystream b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.keystream
+new file mode 100644
+index 0000000..16bf740
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.keystream differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.keystream.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.keystream.len
+new file mode 100644
+index 0000000..96ab2f7
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.keystream.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.len
+new file mode 100644
+index 0000000..c14ff15
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.values.at b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.values.at
+new file mode 100644
+index 0000000..0dfccae
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab.values.at differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab_i b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab_i
+new file mode 100644
+index 0000000..033b662
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab_i differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab_i.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab_i.len
+new file mode 100644
+index 0000000..131e265
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-attributes.tab_i.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab
+new file mode 100644
+index 0000000..3f4edfd
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.keystream b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.keystream
+new file mode 100644
+index 0000000..16bf740
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.keystream differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.keystream.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.keystream.len
+new file mode 100644
+index 0000000..96ab2f7
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.keystream.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.len
+new file mode 100644
+index 0000000..c14ff15
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.values.at b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.values.at
+new file mode 100644
+index 0000000..7c2501a
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab.values.at differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab_i b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab_i
+new file mode 100644
+index 0000000..033b662
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab_i differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab_i.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab_i.len
+new file mode 100644
+index 0000000..131e265
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/class-fq-name-to-source.tab_i.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab
+new file mode 100644
+index 0000000..642e396
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.keystream b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.keystream
+new file mode 100644
+index 0000000..5f7dcd6
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.keystream differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.keystream.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.keystream.len
+new file mode 100644
+index 0000000..fd5292d
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.keystream.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.len
+new file mode 100644
+index 0000000..01bdaa1
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.values.at b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.values.at
+new file mode 100644
+index 0000000..c3a09b6
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab.values.at differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab_i b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab_i
+new file mode 100644
+index 0000000..b47dd60
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab_i differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab_i.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab_i.len
+new file mode 100644
+index 0000000..131e265
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/constants.tab_i.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab
+new file mode 100644
+index 0000000..bdf584a
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab.keystream b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab.keystream
+new file mode 100644
+index 0000000..88c57d3
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab.keystream differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab.keystream.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab.keystream.len
+new file mode 100644
+index 0000000..e5009a4
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab.keystream.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab.len
+new file mode 100644
+index 0000000..2a17e6e
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab.values.at b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab.values.at
+new file mode 100644
+index 0000000..1c6bbc6
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab.values.at differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab_i b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab_i
+new file mode 100644
+index 0000000..0967b17
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab_i differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab_i.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab_i.len
+new file mode 100644
+index 0000000..131e265
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/inline-functions.tab_i.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab
+new file mode 100644
+index 0000000..a007838
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.keystream b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.keystream
+new file mode 100644
+index 0000000..9e7b566
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.keystream differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.keystream.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.keystream.len
+new file mode 100644
+index 0000000..2da1fb2
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.keystream.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.len
+new file mode 100644
+index 0000000..68c8906
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.values.at b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.values.at
+new file mode 100644
+index 0000000..0a98a23
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab.values.at differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab_i b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab_i
+new file mode 100644
+index 0000000..2cb2625
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab_i differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab_i.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab_i.len
+new file mode 100644
+index 0000000..131e265
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/internal-name-to-source.tab_i.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab
+new file mode 100644
+index 0000000..6038ad0
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab.keystream b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab.keystream
+new file mode 100644
+index 0000000..e780ace
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab.keystream differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab.keystream.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab.keystream.len
+new file mode 100644
+index 0000000..9d30930
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab.keystream.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab.len
+new file mode 100644
+index 0000000..01bdaa1
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab.values.at b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab.values.at
+new file mode 100644
+index 0000000..6fcb00a
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab.values.at differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab_i b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab_i
+new file mode 100644
+index 0000000..1d5a523
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab_i differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab_i.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab_i.len
+new file mode 100644
+index 0000000..131e265
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/package-parts.tab_i.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab
+new file mode 100644
+index 0000000..56b3bc0
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.keystream b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.keystream
+new file mode 100644
+index 0000000..fef5c29
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.keystream differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.keystream.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.keystream.len
+new file mode 100644
+index 0000000..d4928ab
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.keystream.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.len
+new file mode 100644
+index 0000000..be9fd94
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.values.at b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.values.at
+new file mode 100644
+index 0000000..26bdf73
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab.values.at differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab_i b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab_i
+new file mode 100644
+index 0000000..0bbf4f1
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab_i differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab_i.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab_i.len
+new file mode 100644
+index 0000000..131e265
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/proto.tab_i.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab
+new file mode 100644
+index 0000000..d66fd9a
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.keystream b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.keystream
+new file mode 100644
+index 0000000..b277a6e
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.keystream differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.keystream.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.keystream.len
+new file mode 100644
+index 0000000..c563e6b
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.keystream.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.len
+new file mode 100644
+index 0000000..385642d
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.values.at b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.values.at
+new file mode 100644
+index 0000000..cc7e5b0
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab.values.at differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab_i b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab_i
+new file mode 100644
+index 0000000..9dde87e
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab_i differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab_i.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab_i.len
+new file mode 100644
+index 0000000..131e265
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/source-to-classes.tab_i.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab
+new file mode 100644
+index 0000000..2b6d57a
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.keystream b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.keystream
+new file mode 100644
+index 0000000..8cbbc5d
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.keystream differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.keystream.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.keystream.len
+new file mode 100644
+index 0000000..0aec25e
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.keystream.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.len
+new file mode 100644
+index 0000000..a541356
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.values.at b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.values.at
+new file mode 100644
+index 0000000..1f49ccb
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab.values.at differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab_i b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab_i
+new file mode 100644
+index 0000000..e15b786
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab_i differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab_i.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab_i.len
+new file mode 100644
+index 0000000..131e265
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/subtypes.tab_i.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab
+new file mode 100644
+index 0000000..bdab3d3
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.keystream b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.keystream
+new file mode 100644
+index 0000000..ebec08c
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.keystream differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.keystream.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.keystream.len
+new file mode 100644
+index 0000000..88533de
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.keystream.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.len
+new file mode 100644
+index 0000000..a363176
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.values.at b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.values.at
+new file mode 100644
+index 0000000..6392d62
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab.values.at differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab_i b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab_i
+new file mode 100644
+index 0000000..c1e98c5
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab_i differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab_i.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab_i.len
+new file mode 100644
+index 0000000..131e265
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/jvm/kotlin/supertypes.tab_i.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/counters.tab b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/counters.tab
+new file mode 100644
+index 0000000..2345f6d
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/counters.tab
+@@ -0,0 +1,2 @@
++17
++0
+\ No newline at end of file
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab
+new file mode 100644
+index 0000000..ef9738a
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.keystream b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.keystream
+new file mode 100644
+index 0000000..b277a6e
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.keystream differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.keystream.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.keystream.len
+new file mode 100644
+index 0000000..c563e6b
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.keystream.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.len
+new file mode 100644
+index 0000000..385642d
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.values.at b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.values.at
+new file mode 100644
+index 0000000..2adfebf
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab.values.at differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab_i b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab_i
+new file mode 100644
+index 0000000..9dde87e
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab_i differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab_i.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab_i.len
+new file mode 100644
+index 0000000..131e265
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/file-to-id.tab_i.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab
+new file mode 100644
+index 0000000..957e63f
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.keystream b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.keystream
+new file mode 100644
+index 0000000..0043dfe
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.keystream differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.keystream.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.keystream.len
+new file mode 100644
+index 0000000..8f2199b
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.keystream.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.len
+new file mode 100644
+index 0000000..385642d
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.values.at b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.values.at
+new file mode 100644
+index 0000000..907b072
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab.values.at differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab_i b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab_i
+new file mode 100644
+index 0000000..dc7ae39
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab_i differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab_i.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab_i.len
+new file mode 100644
+index 0000000..131e265
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/id-to-file.tab_i.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab
+new file mode 100644
+index 0000000..2160446
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.keystream b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.keystream
+new file mode 100644
+index 0000000..774d9af
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.keystream differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.keystream.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.keystream.len
+new file mode 100644
+index 0000000..5b92318
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.keystream.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.len
+new file mode 100644
+index 0000000..4001d0e
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.values.at b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.values.at
+new file mode 100644
+index 0000000..02c3638
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab.values.at differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab_i b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab_i
+new file mode 100644
+index 0000000..ee6139f
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab_i differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab_i.len b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab_i.len
+new file mode 100644
+index 0000000..131e265
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/caches-jvm/lookups/lookups.tab_i.len differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/last-build.bin b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/last-build.bin
+new file mode 100644
+index 0000000..37aca58
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/cacheable/last-build.bin differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/classpath-snapshot/shrunk-classpath-snapshot.bin b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/classpath-snapshot/shrunk-classpath-snapshot.bin
+new file mode 100644
+index 0000000..3d105d9
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/classpath-snapshot/shrunk-classpath-snapshot.bin differ
+diff --git a/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/local-state/build-history.bin b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/local-state/build-history.bin
+new file mode 100644
+index 0000000..8ce23e8
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/kotlin/compileDebugKotlin/local-state/build-history.bin differ
+diff --git a/node_modules/react-native-track-player/android/build/outputs/logs/manifest-merger-debug-report.txt b/node_modules/react-native-track-player/android/build/outputs/logs/manifest-merger-debug-report.txt
+new file mode 100644
+index 0000000..de3ede3
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/build/outputs/logs/manifest-merger-debug-report.txt
+@@ -0,0 +1,47 @@
++-- Merging decision tree log ---
++manifest
++ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:2:1-21:12
++INJECTED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:2:1-21:12
++	package
++		ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:3:11-51
++		INJECTED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml
++	xmlns:android
++		ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:2:11-69
++uses-permission#android.permission.WAKE_LOCK
++ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:5:5-68
++	android:name
++		ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:5:22-65
++uses-permission#android.permission.FOREGROUND_SERVICE
++ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:6:5-77
++	android:name
++		ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:6:22-74
++uses-permission#android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK
++ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:8:5-9:79
++	android:name
++		ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:9:9-76
++application
++ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:11:5-19:19
++service#com.doublesymmetry.trackplayer.service.MusicService
++ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:14:9-18:19
++	android:enabled
++		ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:14:85-107
++	android:exported
++		ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:14:108-131
++	android:foregroundServiceType
++		ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:14:132-177
++	android:name
++		ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:14:18-84
++intent-filter#action:name:android.intent.action.MEDIA_BUTTON
++ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:15:13-17:29
++action#android.intent.action.MEDIA_BUTTON
++ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:16:17-77
++	android:name
++		ADDED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml:16:25-74
++uses-sdk
++INJECTED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml reason: use-sdk injection requested
++INJECTED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml
++INJECTED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml
++	android:targetSdkVersion
++		INJECTED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml
++	android:minSdkVersion
++		INJECTED from /Users/klair/Projects/subwave/web/.claude/worktrees/expo-native-app/app/node_modules/react-native-track-player/android/src/main/AndroidManifest.xml
+diff --git a/node_modules/react-native-track-player/android/build/tmp/compileDebugJavaWithJavac/previous-compilation-data.bin b/node_modules/react-native-track-player/android/build/tmp/compileDebugJavaWithJavac/previous-compilation-data.bin
+new file mode 100644
+index 0000000..e234610
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/compileDebugJavaWithJavac/previous-compilation-data.bin differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/META-INF/react-native-track-player_debug.kotlin_module b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/META-INF/react-native-track-player_debug.kotlin_module
+new file mode 100644
+index 0000000..8539fc3
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/META-INF/react-native-track-player_debug.kotlin_module differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/TrackPlayer.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/TrackPlayer.class
+new file mode 100644
+index 0000000..f28fd5d
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/TrackPlayer.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/extensions/AudioPlayerStateExtKt$WhenMappings.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/extensions/AudioPlayerStateExtKt$WhenMappings.class
+new file mode 100644
+index 0000000..f48bbd6
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/extensions/AudioPlayerStateExtKt$WhenMappings.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/extensions/AudioPlayerStateExtKt.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/extensions/AudioPlayerStateExtKt.class
+new file mode 100644
+index 0000000..b7e1126
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/extensions/AudioPlayerStateExtKt.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/extensions/EnumExtensionsKt.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/extensions/EnumExtensionsKt.class
+new file mode 100644
+index 0000000..d2bc784
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/extensions/EnumExtensionsKt.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/extensions/NumberExt$Companion.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/extensions/NumberExt$Companion.class
+new file mode 100644
+index 0000000..7bbc2ef
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/extensions/NumberExt$Companion.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/extensions/NumberExt.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/extensions/NumberExt.class
+new file mode 100644
+index 0000000..bdd705d
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/extensions/NumberExt.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/MetadataAdapter$Companion.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/MetadataAdapter$Companion.class
+new file mode 100644
+index 0000000..5194f1b
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/MetadataAdapter$Companion.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/MetadataAdapter.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/MetadataAdapter.class
+new file mode 100644
+index 0000000..1ac7fd3
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/MetadataAdapter.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/NowPlayingMetadata.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/NowPlayingMetadata.class
+new file mode 100644
+index 0000000..a7bb73a
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/NowPlayingMetadata.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/PlaybackMetadata$Companion.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/PlaybackMetadata$Companion.class
+new file mode 100644
+index 0000000..9b35f24
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/PlaybackMetadata$Companion.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/PlaybackMetadata.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/PlaybackMetadata.class
+new file mode 100644
+index 0000000..6464615
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/PlaybackMetadata.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/State.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/State.class
+new file mode 100644
+index 0000000..3810778
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/State.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/Track.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/Track.class
+new file mode 100644
+index 0000000..be5eb2f
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/Track.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/TrackAudioItem.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/TrackAudioItem.class
+new file mode 100644
+index 0000000..be56879
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/TrackAudioItem.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/TrackMetadata.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/TrackMetadata.class
+new file mode 100644
+index 0000000..c57f158
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/model/TrackMetadata.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicEvents$Companion.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicEvents$Companion.class
+new file mode 100644
+index 0000000..dd8d4c2
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicEvents$Companion.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicEvents.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicEvents.class
+new file mode 100644
+index 0000000..1762f91
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicEvents.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$add$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$add$1.class
+new file mode 100644
+index 0000000..9dc2d14
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$add$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$clearNowPlayingMetadata$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$clearNowPlayingMetadata$1.class
+new file mode 100644
+index 0000000..5bce04a
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$clearNowPlayingMetadata$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getActiveTrack$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getActiveTrack$1.class
+new file mode 100644
+index 0000000..c205687
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getActiveTrack$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getActiveTrackIndex$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getActiveTrackIndex$1.class
+new file mode 100644
+index 0000000..c5b3b28
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getActiveTrackIndex$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getBufferedPosition$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getBufferedPosition$1.class
+new file mode 100644
+index 0000000..cd95f48
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getBufferedPosition$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getDuration$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getDuration$1.class
+new file mode 100644
+index 0000000..6c067fd
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getDuration$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getPlayWhenReady$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getPlayWhenReady$1.class
+new file mode 100644
+index 0000000..ee4d45f
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getPlayWhenReady$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getPlaybackState$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getPlaybackState$1.class
+new file mode 100644
+index 0000000..16debb2
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getPlaybackState$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getPosition$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getPosition$1.class
+new file mode 100644
+index 0000000..86f6465
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getPosition$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getProgress$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getProgress$1.class
+new file mode 100644
+index 0000000..b640386
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getProgress$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getQueue$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getQueue$1.class
+new file mode 100644
+index 0000000..d400566
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getQueue$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getRate$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getRate$1.class
+new file mode 100644
+index 0000000..e20d6a9
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getRate$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getRepeatMode$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getRepeatMode$1.class
+new file mode 100644
+index 0000000..ed04c9f
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getRepeatMode$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getTrack$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getTrack$1.class
+new file mode 100644
+index 0000000..8204148
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getTrack$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getVolume$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getVolume$1.class
+new file mode 100644
+index 0000000..eae2688
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$getVolume$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$load$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$load$1.class
+new file mode 100644
+index 0000000..9302d89
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$load$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$move$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$move$1.class
+new file mode 100644
+index 0000000..03a90db
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$move$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$onServiceConnected$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$onServiceConnected$1.class
+new file mode 100644
+index 0000000..86e8206
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$onServiceConnected$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$onServiceDisconnected$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$onServiceDisconnected$1.class
+new file mode 100644
+index 0000000..36bcc76
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$onServiceDisconnected$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$pause$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$pause$1.class
+new file mode 100644
+index 0000000..8f3d4b1
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$pause$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$play$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$play$1.class
+new file mode 100644
+index 0000000..c33945e
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$play$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$remove$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$remove$1.class
+new file mode 100644
+index 0000000..6d7b8f6
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$remove$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$removeUpcomingTracks$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$removeUpcomingTracks$1.class
+new file mode 100644
+index 0000000..e277a9f
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$removeUpcomingTracks$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$reset$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$reset$1.class
+new file mode 100644
+index 0000000..23d89b1
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$reset$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$retry$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$retry$1.class
+new file mode 100644
+index 0000000..a756500
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$retry$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$seekBy$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$seekBy$1.class
+new file mode 100644
+index 0000000..71bcb21
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$seekBy$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$seekTo$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$seekTo$1.class
+new file mode 100644
+index 0000000..285b7e9
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$seekTo$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$setPlayWhenReady$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$setPlayWhenReady$1.class
+new file mode 100644
+index 0000000..fcb1a89
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$setPlayWhenReady$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$setQueue$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$setQueue$1.class
+new file mode 100644
+index 0000000..07662f4
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$setQueue$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$setRate$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$setRate$1.class
+new file mode 100644
+index 0000000..b032e45
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$setRate$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$setRepeatMode$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$setRepeatMode$1.class
+new file mode 100644
+index 0000000..335cfe1
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$setRepeatMode$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$setVolume$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$setVolume$1.class
+new file mode 100644
+index 0000000..8124d12
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$setVolume$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$skip$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$skip$1.class
+new file mode 100644
+index 0000000..8e4fa3c
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$skip$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$skipToNext$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$skipToNext$1.class
+new file mode 100644
+index 0000000..4ca49e9
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$skipToNext$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$skipToPrevious$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$skipToPrevious$1.class
+new file mode 100644
+index 0000000..25813ea
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$skipToPrevious$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$stop$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$stop$1.class
+new file mode 100644
+index 0000000..1b2c506
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$stop$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$updateMetadataForTrack$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$updateMetadataForTrack$1.class
+new file mode 100644
+index 0000000..bd7168b
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$updateMetadataForTrack$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$updateNowPlayingMetadata$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$updateNowPlayingMetadata$1.class
+new file mode 100644
+index 0000000..7899ffc
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$updateNowPlayingMetadata$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$updateOptions$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$updateOptions$1.class
+new file mode 100644
+index 0000000..b478286
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule$updateOptions$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule.class
+new file mode 100644
+index 0000000..954550c
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/module/MusicModule.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$AppKilledPlaybackBehavior.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$AppKilledPlaybackBehavior.class
+new file mode 100644
+index 0000000..c087a6c
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$AppKilledPlaybackBehavior.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$Companion.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$Companion.class
+new file mode 100644
+index 0000000..48c3b69
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$Companion.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$MusicBinder.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$MusicBinder.class
+new file mode 100644
+index 0000000..f4c659b
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$MusicBinder.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$WhenMappings.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$WhenMappings.class
+new file mode 100644
+index 0000000..ea78062
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$WhenMappings.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$1$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$1$1.class
+new file mode 100644
+index 0000000..7c91704
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$1$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$1.class
+new file mode 100644
+index 0000000..9719d70
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$2$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$2$1.class
+new file mode 100644
+index 0000000..48c6f39
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$2$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$2.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$2.class
+new file mode 100644
+index 0000000..3ee7f23
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$2.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$3$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$3$1.class
+new file mode 100644
+index 0000000..b601eac
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$3$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$3.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$3.class
+new file mode 100644
+index 0000000..a6ab8ff
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$3.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$4$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$4$1.class
+new file mode 100644
+index 0000000..6dafa7b
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$4$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$4.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$4.class
+new file mode 100644
+index 0000000..2f56ceb
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$4.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$5$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$5$1.class
+new file mode 100644
+index 0000000..eaaa7a0
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$5$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$5.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$5.class
+new file mode 100644
+index 0000000..07e2d40
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$5.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$6$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$6$1.class
+new file mode 100644
+index 0000000..5d13e1e
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$6$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$6.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$6.class
+new file mode 100644
+index 0000000..0a89e98
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$6.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$7$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$7$1.class
+new file mode 100644
+index 0000000..c59f6f5
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$7$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$7.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$7.class
+new file mode 100644
+index 0000000..a43291f
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$7.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$8$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$8$1.class
+new file mode 100644
+index 0000000..a2b3e24
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$8$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$8.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$8.class
+new file mode 100644
+index 0000000..4a867d5
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$observeEvents$8.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$progressUpdateEvent$2.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$progressUpdateEvent$2.class
+new file mode 100644
+index 0000000..f6aa44f
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$progressUpdateEvent$2.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$progressUpdateEventFlow$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$progressUpdateEventFlow$1.class
+new file mode 100644
+index 0000000..dcda9a4
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$progressUpdateEventFlow$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$setupForegrounding$1$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$setupForegrounding$1$1.class
+new file mode 100644
+index 0000000..def8866
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$setupForegrounding$1$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$setupForegrounding$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$setupForegrounding$1.class
+new file mode 100644
+index 0000000..9371a16
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$setupForegrounding$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$setupForegrounding$2$1$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$setupForegrounding$2$1$1.class
+new file mode 100644
+index 0000000..903e5d7
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$setupForegrounding$2$1$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$setupForegrounding$2$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$setupForegrounding$2$1.class
+new file mode 100644
+index 0000000..c391885
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$setupForegrounding$2$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$setupForegrounding$2.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$setupForegrounding$2.class
+new file mode 100644
+index 0000000..8d5dc22
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$setupForegrounding$2.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$updateOptions$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$updateOptions$1.class
+new file mode 100644
+index 0000000..1c5c1bd
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$updateOptions$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$updateOptions$7$1.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$updateOptions$7$1.class
+new file mode 100644
+index 0000000..950e6f4
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$updateOptions$7$1.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$updateOptions$7.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$updateOptions$7.class
+new file mode 100644
+index 0000000..612f8f8
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService$updateOptions$7.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService.class
+new file mode 100644
+index 0000000..76abf33
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/service/MusicService.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/utils/AppForegroundTracker$Observer.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/utils/AppForegroundTracker$Observer.class
+new file mode 100644
+index 0000000..4287f66
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/utils/AppForegroundTracker$Observer.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/utils/AppForegroundTracker.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/utils/AppForegroundTracker.class
+new file mode 100644
+index 0000000..6388cf1
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/utils/AppForegroundTracker.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/utils/BundleUtils.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/utils/BundleUtils.class
+new file mode 100644
+index 0000000..b8b09c7
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/utils/BundleUtils.class differ
+diff --git a/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/utils/RejectionException.class b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/utils/RejectionException.class
+new file mode 100644
+index 0000000..6628b17
+Binary files /dev/null and b/node_modules/react-native-track-player/android/build/tmp/kotlin-classes/debug/com/doublesymmetry/trackplayer/utils/RejectionException.class differ
+diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
+index b2409a0..fe7284f 100644
+--- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
++++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
+@@ -18,6 +18,7 @@ import com.doublesymmetry.trackplayer.utils.RejectionException
+ import com.facebook.react.bridge.*
+ import com.google.android.exoplayer2.DefaultLoadControl.*
+ import com.google.android.exoplayer2.Player
++import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.MainScope
+ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
+@@ -38,6 +39,14 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     private lateinit var musicService: MusicService
+     private val context = reactContext
+ 
++    // New Architecture / TurboModule interop requires async @ReactMethods to
++    // return void. `scope.launch {}` returns a Job, so route them through this
++    // Unit-returning helper. Named `launch` so existing `return@launch` labels
++    // stay valid. (patched for RN 0.85 new-arch — see patch-package)
++    private fun launch(block: suspend CoroutineScope.() -> Unit) {
++        scope.launch(block = block)
++    }
++
+     @Nonnull
+     override fun getName(): String {
+         return "TrackPlayerModule"
+@@ -251,7 +260,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun updateOptions(data: ReadableMap?, callback: Promise) = scope.launch {
++    fun updateOptions(data: ReadableMap?, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         val options = Arguments.toBundle(data)
+@@ -264,7 +273,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun add(data: ReadableArray?, insertBeforeIndex: Int, callback: Promise) = scope.launch {
++    fun add(data: ReadableArray?, insertBeforeIndex: Int, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         try {
+@@ -285,7 +294,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun load(data: ReadableMap?, callback: Promise) = scope.launch {
++    fun load(data: ReadableMap?, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+         if (data == null) {
+             callback.resolve(null)
+@@ -301,14 +310,14 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun move(fromIndex: Int, toIndex: Int, callback: Promise) = scope.launch {
++    fun move(fromIndex: Int, toIndex: Int, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+         musicService.move(fromIndex, toIndex)
+         callback.resolve(null)
+     }
+ 
+     @ReactMethod
+-    fun remove(data: ReadableArray?, callback: Promise) = scope.launch {
++    fun remove(data: ReadableArray?, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+         val inputIndexes = Arguments.toList(data)
+         if (inputIndexes != null) {
+@@ -332,7 +341,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+ 
+     @ReactMethod
+     fun updateMetadataForTrack(index: Int, map: ReadableMap?, callback: Promise) =
+-        scope.launch {
++        launch {
+             if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+             if (index < 0 || index >= musicService.tracks.size) {
+@@ -348,7 +357,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+         }
+ 
+     @ReactMethod
+-    fun updateNowPlayingMetadata(map: ReadableMap?, callback: Promise) = scope.launch {
++    fun updateNowPlayingMetadata(map: ReadableMap?, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         if (musicService.tracks.isEmpty())
+@@ -364,7 +373,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun clearNowPlayingMetadata(callback: Promise) = scope.launch {
++    fun clearNowPlayingMetadata(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         if (musicService.tracks.isEmpty())
+@@ -375,7 +384,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun removeUpcomingTracks(callback: Promise) = scope.launch {
++    fun removeUpcomingTracks(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         musicService.removeUpcomingTracks()
+@@ -383,7 +392,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun skip(index: Int, initialTime: Float, callback: Promise) = scope.launch {
++    fun skip(index: Int, initialTime: Float, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         musicService.skip(index)
+@@ -396,7 +405,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun skipToNext(initialTime: Float, callback: Promise) = scope.launch {
++    fun skipToNext(initialTime: Float, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         musicService.skipToNext()
+@@ -409,7 +418,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun skipToPrevious(initialTime: Float, callback: Promise) = scope.launch {
++    fun skipToPrevious(initialTime: Float, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         musicService.skipToPrevious()
+@@ -422,7 +431,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun reset(callback: Promise) = scope.launch {
++    fun reset(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         musicService.stop()
+@@ -433,7 +442,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun play(callback: Promise) = scope.launch {
++    fun play(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         musicService.play()
+@@ -441,7 +450,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun pause(callback: Promise) = scope.launch {
++    fun pause(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         musicService.pause()
+@@ -449,7 +458,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun stop(callback: Promise) = scope.launch {
++    fun stop(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         musicService.stop()
+@@ -457,7 +466,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun seekTo(seconds: Float, callback: Promise) = scope.launch {
++    fun seekTo(seconds: Float, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         musicService.seekTo(seconds)
+@@ -465,7 +474,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun seekBy(offset: Float, callback: Promise) = scope.launch {
++    fun seekBy(offset: Float, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         musicService.seekBy(offset)
+@@ -473,7 +482,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun retry(callback: Promise) = scope.launch {
++    fun retry(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         musicService.retry()
+@@ -481,7 +490,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun setVolume(volume: Float, callback: Promise) = scope.launch {
++    fun setVolume(volume: Float, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         musicService.setVolume(volume)
+@@ -489,14 +498,14 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun getVolume(callback: Promise) = scope.launch {
++    fun getVolume(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         callback.resolve(musicService.getVolume())
+     }
+ 
+     @ReactMethod
+-    fun setRate(rate: Float, callback: Promise) = scope.launch {
++    fun setRate(rate: Float, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         musicService.setRate(rate)
+@@ -504,14 +513,14 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun getRate(callback: Promise) = scope.launch {
++    fun getRate(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         callback.resolve(musicService.getRate())
+     }
+ 
+     @ReactMethod
+-    fun setRepeatMode(mode: Int, callback: Promise) = scope.launch {
++    fun setRepeatMode(mode: Int, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         musicService.setRepeatMode(RepeatMode.fromOrdinal(mode))
+@@ -519,14 +528,14 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun getRepeatMode(callback: Promise) = scope.launch {
++    fun getRepeatMode(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         callback.resolve(musicService.getRepeatMode().ordinal)
+     }
+ 
+     @ReactMethod
+-    fun setPlayWhenReady(playWhenReady: Boolean, callback: Promise) = scope.launch {
++    fun setPlayWhenReady(playWhenReady: Boolean, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         musicService.playWhenReady = playWhenReady
+@@ -534,32 +543,32 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun getPlayWhenReady(callback: Promise) = scope.launch {
++    fun getPlayWhenReady(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         callback.resolve(musicService.playWhenReady)
+     }
+ 
+     @ReactMethod
+-    fun getTrack(index: Int, callback: Promise) = scope.launch {
++    fun getTrack(index: Int, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         if (index >= 0 && index < musicService.tracks.size) {
+-            callback.resolve(Arguments.fromBundle(musicService.tracks[index].originalItem))
++            callback.resolve(Arguments.fromBundle(musicService.tracks[index].originalItem!!))
+         } else {
+             callback.resolve(null)
+         }
+     }
+ 
+     @ReactMethod
+-    fun getQueue(callback: Promise) = scope.launch {
++    fun getQueue(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         callback.resolve(Arguments.fromList(musicService.tracks.map { it.originalItem }))
+     }
+ 
+     @ReactMethod
+-    fun setQueue(data: ReadableArray?, callback: Promise) = scope.launch {
++    fun setQueue(data: ReadableArray?, callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         try {
+@@ -572,7 +581,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun getActiveTrackIndex(callback: Promise) = scope.launch {
++    fun getActiveTrackIndex(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+         callback.resolve(
+             if (musicService.tracks.isEmpty()) null else musicService.getCurrentTrackIndex()
+@@ -580,39 +589,39 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun getActiveTrack(callback: Promise) = scope.launch {
++    fun getActiveTrack(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+         callback.resolve(
+             if (musicService.tracks.isEmpty()) null
+             else Arguments.fromBundle(
+-                musicService.tracks[musicService.getCurrentTrackIndex()].originalItem
++                musicService.tracks[musicService.getCurrentTrackIndex()].originalItem!!
+             )
+         )
+     }
+ 
+     @ReactMethod
+-    fun getDuration(callback: Promise) = scope.launch {
++    fun getDuration(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         callback.resolve(musicService.getDurationInSeconds())
+     }
+ 
+     @ReactMethod
+-    fun getBufferedPosition(callback: Promise) = scope.launch {
++    fun getBufferedPosition(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         callback.resolve(musicService.getBufferedPositionInSeconds())
+     }
+ 
+     @ReactMethod
+-    fun getPosition(callback: Promise) = scope.launch {
++    fun getPosition(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         callback.resolve(musicService.getPositionInSeconds())
+     }
+ 
+     @ReactMethod
+-    fun getProgress(callback: Promise) = scope.launch {
++    fun getProgress(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+         var bundle = Bundle()
+         bundle.putDouble("duration", musicService.getDurationInSeconds());
+@@ -622,7 +631,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+     }
+ 
+     @ReactMethod
+-    fun getPlaybackState(callback: Promise) = scope.launch {
++    fun getPlaybackState(callback: Promise) = launch {
+         if (verifyServiceBoundOrReject(callback)) return@launch
+         callback.resolve(Arguments.fromBundle(musicService.getPlayerStateBundle(musicService.state)))
+     }
+diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
+index afa6b0f..67e046e 100644
+--- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
++++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
+@@ -30,7 +30,9 @@ import com.doublesymmetry.trackplayer.module.MusicEvents.Companion.METADATA_PAYL
+ import com.doublesymmetry.trackplayer.utils.BundleUtils
+ import com.doublesymmetry.trackplayer.utils.BundleUtils.setRating
+ import com.facebook.react.HeadlessJsTaskService
++import com.facebook.react.ReactApplication
+ import com.facebook.react.bridge.Arguments
++import com.facebook.react.bridge.ReactContext
+ import com.facebook.react.jstasks.HeadlessJsTaskConfig
+ import com.facebook.react.modules.core.DeviceEventManagerModule
+ import com.google.android.exoplayer2.ui.R as ExoPlayerR
+@@ -739,9 +741,21 @@ class MusicService : HeadlessJsTaskService() {
+         return bundle
+     }
+ 
++    // New Architecture forbids ReactNativeHost.getReactNativeHost(); the current
++    // ReactContext must come from ReactHost. Fall back to the old-arch path when
++    // reactHost is null (old arch). (patched for RN 0.85 new-arch — patch-package)
++    private fun currentReactContextCompat(): ReactContext? {
++        val app = applicationContext as ReactApplication
++        return app.reactHost?.currentReactContext
++            ?: runCatching {
++                @Suppress("DEPRECATION")
++                app.reactNativeHost.reactInstanceManager.currentReactContext
++            }.getOrNull()
++    }
++
+     @MainThread
+     private fun emit(event: String, data: Bundle? = null) {
+-        reactNativeHost.reactInstanceManager.currentReactContext
++        currentReactContextCompat()
+             ?.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+             ?.emit(event, data?.let { Arguments.fromBundle(it) })
+     }
+@@ -751,7 +765,7 @@ class MusicService : HeadlessJsTaskService() {
+         val payload = Arguments.createArray()
+         data.forEach { payload.pushMap(Arguments.fromBundle(it)) }
+ 
+-        reactNativeHost.reactInstanceManager.currentReactContext
++        currentReactContextCompat()
+             ?.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+             ?.emit(event, payload)
+     }
