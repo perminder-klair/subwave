@@ -15,6 +15,15 @@ import { filterPickerCandidates } from '../music/recency.js';
 
 const MAX_DURATION_SEC = 600; // 10 min — epics are fine on an album, not on radio
 
+// Patterns in track titles that identify non-studio versions. Checked
+// case-insensitively. LLM text rules aren't reliable enough for this — a hard
+// filter is the only way to keep live/demo tracks off a radio stream.
+const NON_STUDIO_RE = /\b(live(?: at| from| in|$)|\(live\)|acoustic(?: version)?|demo(?: version)?|rehearsal|bootleg|unplugged)\b/i;
+
+export function isStudioTrack(title: string): boolean {
+  return !NON_STUDIO_RE.test(title ?? '');
+}
+
 function slim(s: any) {
   const base = {
     id: s.id,
@@ -83,7 +92,8 @@ export function buildPickerTools({
   // accumulates across the whole loop, so the agent's id space grows with
   // each tool call regardless.
   const collect = (list: any, cap = 8) => {
-    const withinLength = (list || []).filter((s: any) => !s.duration || s.duration <= MAX_DURATION_SEC);
+    const withinLength = (list || []).filter((s: any) =>
+      (!s.duration || s.duration <= MAX_DURATION_SEC) && isStudioTrack(s.title ?? ''));
     const accepted = filterPickerCandidates(shuffle(withinLength as any[]), {
       recentIds,
       recentKeys,

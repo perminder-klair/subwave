@@ -10,6 +10,7 @@ import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as dj from '../llm/dj.js';
 import * as settings from '../settings.js';
+import { isStudioTrack } from '../llm/tools.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
 
@@ -282,10 +283,11 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   // filter would empty the pool entirely, keep the originals (better than
   // dead air) and log a warning.
   const MAX_DURATION_SEC = 600;
-  const durationFiltered = rawCandidates.filter(c => !c.duration || c.duration <= MAX_DURATION_SEC);
+  const durationFiltered = rawCandidates.filter(c =>
+    (!c.duration || c.duration <= MAX_DURATION_SEC) && isStudioTrack(c.title ?? ''));
   const candidates = durationFiltered.length > 0 ? durationFiltered : rawCandidates;
   if (durationFiltered.length < rawCandidates.length) {
-    queue.log('picker', `dropped ${rawCandidates.length - durationFiltered.length} track(s) over ${MAX_DURATION_SEC / 60}min`);
+    queue.log('picker', `dropped ${rawCandidates.length - durationFiltered.length} track(s) over ${MAX_DURATION_SEC / 60}min or non-studio`);
   }
 
   if (candidates.length === 0) {

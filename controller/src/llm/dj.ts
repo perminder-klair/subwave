@@ -426,10 +426,7 @@ export async function generateHourlyTime(time: any, weather: any, { recap = null
 // Shared selection criteria — used by both the pool picker (pickerSystem
 // below) and the conversational agent picker (pickSystem in broadcast/
 // dj-agent.js) so the two strategies can't drift apart on selection rules.
-export const PICKER_CRITERIA = `Hard rules (non-negotiable):
-- Never pick live recordings, live albums, demos, or rehearsal versions — look for "Live", "Live at", "Demo", "Rehearsal", "Bootleg" in the title and avoid them.
-
-Selection criteria, in order:
+export const PICKER_CRITERIA = `Selection criteria, in order:
 1. FLOW — does it transition naturally from what just played (energy, mood, tempo)? When a candidate shows a "bpm" and/or Camelot "key", those are MEASURED — prefer a next track whose tempo sits near the current one (or steps it deliberately for the daypart) and whose key is harmonically close. Treat them as a tie-breaker, never a hard rule; many tracks won't have them.
 2. CONTEXT — does it fit the time of day, weather, and dominant mood?
 3. VARIETY — avoid the same artist back-to-back; don't repeat tracks you've already played today; rotate energy. Mix well-known tracks with deeper cuts — don't cluster obvious global hits back to back. Variety over cleverness — never pick a track because its title literally matches the time of day, the weather, or anything else literal.
