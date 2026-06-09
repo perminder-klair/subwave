@@ -13,6 +13,8 @@ import * as library from '../music/library.js';
 import * as embeddings from '../music/embeddings.js';
 import { filterPickerCandidates } from '../music/recency.js';
 
+const MAX_DURATION_SEC = 600; // 10 min — epics are fine on an album, not on radio
+
 function slim(s: any) {
   const base = {
     id: s.id,
@@ -21,6 +23,7 @@ function slim(s: any) {
     album: s.album || null,
     year: s.year || null,
     genre: s.genre || null,
+    ...(s.duration != null ? { duration: Math.round(s.duration) } : {}),
   };
   // Surface measured tempo/key when known — from the song itself (library
   // sources) or a library lookup (Subsonic sources). Omitted when un-analysed
@@ -80,7 +83,8 @@ export function buildPickerTools({
   // accumulates across the whole loop, so the agent's id space grows with
   // each tool call regardless.
   const collect = (list: any, cap = 8) => {
-    const accepted = filterPickerCandidates(shuffle((list || []) as any[]), {
+    const withinLength = (list || []).filter((s: any) => !s.duration || s.duration <= MAX_DURATION_SEC);
+    const accepted = filterPickerCandidates(shuffle(withinLength as any[]), {
       recentIds,
       recentKeys,
       recentArtists,

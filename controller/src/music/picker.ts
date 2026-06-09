@@ -275,7 +275,18 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const recentIds = queue.recentlyPlayedIds(windows.trackHours);
   const recentArtists = queue.recentArtistsSince(windows.artistHours);
   const currentTrack = queue.current?.track || null;
-  const { candidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget);
+  const { candidates: rawCandidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget);
+
+  // Hard cap: drop anything over 10 minutes. Epics are fine on an album; a
+  // 15-minute track playing unannounced on a radio stream is not. If the
+  // filter would empty the pool entirely, keep the originals (better than
+  // dead air) and log a warning.
+  const MAX_DURATION_SEC = 600;
+  const durationFiltered = rawCandidates.filter(c => !c.duration || c.duration <= MAX_DURATION_SEC);
+  const candidates = durationFiltered.length > 0 ? durationFiltered : rawCandidates;
+  if (durationFiltered.length < rawCandidates.length) {
+    queue.log('picker', `dropped ${rawCandidates.length - durationFiltered.length} track(s) over ${MAX_DURATION_SEC / 60}min`);
+  }
 
   if (candidates.length === 0) {
     queue.log('picker', 'no candidates available, skipping LLM pick');
@@ -311,6 +322,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           // the LLM only sees them when they're real.
           bpm: a.bpm ?? undefined,
           key: a.key ?? undefined,
+          duration: c.duration ? Math.round(c.duration) : undefined,
           source: c._source || null,
         };
       }),
