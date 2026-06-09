@@ -50,11 +50,26 @@ const OTHER_PATHS = [
   ['playlists', 'playlist'], ['artist', 'album'],
 ];
 
+// The OpenSubsonic `sonicSimilarity` extension returns a different shape from
+// every other song endpoint: a `sonicMatch` array whose elements wrap the song
+// in `entry` alongside a `similarity` score, rather than a flat song array.
+// Some servers nest it under `sonicSimilarTracks`; tolerate both, and fall back
+// to the element itself for servers that inline the Child. Shared by the public
+// getter and the coverage-logging extractor so /debug analytics stay accurate.
+function sonicSimilarSongs(sub: any): any[] {
+  const matches = sub?.sonicMatch ?? sub?.sonicSimilarTracks?.sonicMatch ?? [];
+  if (!Array.isArray(matches)) return [];
+  return matches.map((m: any) => m?.entry ?? m?.song ?? m).filter(Boolean);
+}
+
 function extractSongs(sub) {
   for (const [a, b] of SONG_PATHS) {
     const v = sub[a]?.[b];
     if (Array.isArray(v)) return v;
   }
+  // sonicSimilarity uses the `sonicMatch` wrapper shape, not a SONG_PATHS entry.
+  const sonic = sonicSimilarSongs(sub);
+  if (sonic.length) return sonic;
   return [];
 }
 
@@ -163,6 +178,43 @@ export async function getGenres() {
 export async function getSimilarSongs(id, { count = 20 } = {}) {
   const r = await call('getSimilarSongs2', { id, count });
   return rejectArchive(r.similarSongs2?.song || []);
+}
+
+// ---------------------------------------------------------------------------
+// OpenSubsonic `sonicSimilarity` extension (Navidrome ≥0.62 + plugin enabled)
+// ---------------------------------------------------------------------------
+// Audio-based neighbours computed from the actual audio by Navidrome's plugin
+// system — a third similarity signal alongside the Last.fm graph
+// (getSimilarSongs) and the controller's own embedding-KNN (library.tracksLikeThis).
+// Gated behind a capability probe because the extension is optional: when the
+// operator hasn't installed/enabled the plugin the endpoint 404s, so the picker
+// must check support first rather than eat a failing call every pick.
+
+let sonicExtCache: { ok: boolean; at: number } | null = null;
+const EXT_PROBE_TTL_MS = 30 * 60 * 1000;
+
+// True if the server advertises the `sonicSimilarity` extension. Result cached
+// 30 min: a missing extension won't appear mid-session and a present one won't
+// vanish, but the TTL means a just-upgraded Navidrome is picked up without a
+// controller restart. Failures (old Navidrome, network) resolve to false and
+// are cached the same way — the probe is best-effort, never throws.
+export async function supportsSonicSimilarity(): Promise<boolean> {
+  if (sonicExtCache && Date.now() - sonicExtCache.at < EXT_PROBE_TTL_MS) return sonicExtCache.ok;
+  let ok = false;
+  try {
+    const r = await call('getOpenSubsonicExtensions');
+    const exts = r.openSubsonicExtensions || [];
+    ok = exts.some((e: any) => (typeof e === 'string' ? e : e?.name) === 'sonicSimilarity');
+  } catch {
+    ok = false;
+  }
+  sonicExtCache = { ok, at: Date.now() };
+  return ok;
+}
+
+export async function getSonicSimilarTracks(id, { count = 20 } = {}) {
+  const r = await call('getSonicSimilarTracks', { id, count });
+  return rejectArchive(sonicSimilarSongs(r));
 }
 
 export async function getStarred() {

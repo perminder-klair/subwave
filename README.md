@@ -217,6 +217,15 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle, play
   call goes through the Vercel AI SDK.
 - **There is no `/skip` for listeners.** Track-end is the only natural
   transition; operators have an admin-only skip endpoint.
+- **Navidrome ≥0.62 is recommended.** It ships several security hardening
+  fixes (internet-radio management now admin-gated, transcode-config
+  disclosure restricted to admins, concurrent-transcode DoS limits) and the
+  OpenSubsonic `sonicSimilarity` extension. SUB/WAVE streams with `format=raw`
+  so the transcode limits never throttle the radio, and when `sonicSimilarity`
+  is enabled the picker automatically folds Navidrome's audio-based neighbours
+  in as an extra track-selection source — no config, capability-probed, and a
+  silent no-op when the extension is absent. Any reasonably recent Navidrome
+  still works.
 - Several areas (queue/playback path, `radio.liq`, the crossfade, voice
   ducking, the LLM layer) have **non-obvious constraints** that are easy to
   regress. Read the relevant note in **[`CLAUDE.md`](CLAUDE.md)** before
