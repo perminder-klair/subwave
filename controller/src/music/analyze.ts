@@ -55,24 +55,35 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // The backend stays single-threaded — we only hide fetch latency. Each
   // download resolves to a temp path on the shared volume; on download failure
   // we fall back to the url path for that one id so it still gets analysed.
+  //
+  // SIDECAR EXCEPTION: the sidecar (tts-heavy) runs on talos-macmini-01, which
+  // has no access to the controller's Longhorn state volume where analyze-tmp
+  // lives (macmini has no Longhorn CSI). Prefetching to a local file and then
+  // handing the path to tts-heavy always yields a 500 "No such file or
+  // directory". Skip the prefetch entirely for sidecar — tts-heavy fetches the
+  // audio from Navidrome itself when given a URL, so the network cost is
+  // equivalent (tts-heavy's download overlaps its own DSP anyway).
+  const usePrefetch = backend !== 'sidecar';
   type Prefetch = Promise<string>;
-  let inflight: Prefetch | null = ids.length > 0 ? analyzer.downloadCapped(ids[0]) : null;
+  let inflight: Prefetch | null = usePrefetch && ids.length > 0 ? analyzer.downloadCapped(ids[0]) : null;
 
   for (let i = 0; i < ids.length; i++) {
     const id = ids[i];
     const downloadPromise = inflight;
     // Kick off the NEXT download before awaiting this one's analysis so the
-    // fetch overlaps the compute.
-    inflight = i + 1 < ids.length ? analyzer.downloadCapped(ids[i + 1]) : null;
+    // fetch overlaps the compute (local backend only).
+    inflight = usePrefetch && i + 1 < ids.length ? analyzer.downloadCapped(ids[i + 1]) : null;
 
     let localPath: string | null = null;
     try {
-      try {
-        localPath = downloadPromise ? await downloadPromise : null;
-      } catch (err: any) {
-        // Prefetch failed — fall back to the url path for this one track.
-        console.error(`[analyze] ${id} prefetch failed (${err?.message || err}); using url path`);
-        localPath = null;
+      if (usePrefetch) {
+        try {
+          localPath = downloadPromise ? await downloadPromise : null;
+        } catch (err: any) {
+          // Prefetch failed — fall back to the url path for this one track.
+          console.error(`[analyze] ${id} prefetch failed (${err?.message || err}); using url path`);
+          localPath = null;
+        }
       }
       const a = localPath ? await analyzer.analyzePath(localPath) : await analyzer.analyze(id);
       db.upsertTrackAnalysis(id, {

@@ -215,11 +215,14 @@ export async function analyze(songId: string): Promise<AnalysisResult> {
 }
 
 // Download a track's audio to a capped temp file on the shared state volume
-// and return the absolute path. The controller does this AHEAD of the
-// backend's compute so network fetch (controller) overlaps DSP (backend) —
-// the path is valid in both containers because the shared dir mounts at the
-// same location. Caps bytes + applies the analyzer request timeout. Throws
-// on any error; the caller falls back to the url path for that one track.
+// and return the absolute path. The controller does this AHEAD of the local
+// backend's compute so network fetch (controller) overlaps DSP (backend).
+// NOTE: only valid for the 'local' backend — the 'sidecar' (tts-heavy on
+// talos-macmini-01) cannot access the controller's Longhorn state volume where
+// analyze-tmp lives. The analyze pass (analyze.ts) skips prefetch entirely
+// when backend === 'sidecar'; see the comment there. Caps bytes + applies the
+// analyzer request timeout. Throws on any error; the caller falls back to the
+// url path for that one track.
 export async function downloadCapped(songId: string): Promise<string> {
   mkdirSync(ANALYZE_TMP_DIR, { recursive: true });
   const dest = `${ANALYZE_TMP_DIR}/${encodeURIComponent(songId)}.audio`;
