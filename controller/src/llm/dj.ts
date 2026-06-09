@@ -470,10 +470,16 @@ export const PICKER_CRITERIA = `Selection criteria, in order:
 3. VARIETY — avoid the same artist back-to-back; don't repeat tracks you've already played today; rotate energy. Variety over cleverness — never pick a track because its title literally matches the time of day, the weather, or anything else literal.
 4. INTEREST — prefer something that creates a moment, not the most generic option.`;
 
-function pickerSystem() {
+function pickerSystem(show?: { name: string; topic: string } | null, hourPlan?: string | null) {
   const stationName = settings.get().station;
+  const showLine = show?.topic
+    ? `\n\nCurrent show brief — follow this for every pick:\n${show.topic}`
+    : '';
+  const hourPlanLine = hourPlan
+    ? `\n\nThis hour's editorial direction (based on recent rotation):\n${hourPlan}`
+    : '';
   return `You are the DJ for ${stationName}, a personal internet radio station.
-Pick the single best NEXT track from the candidate pool, given recent plays and the current context.
+Pick the single best NEXT track from the candidate pool, given recent plays and the current context.${showLine}${hourPlanLine}
 
 ${PICKER_CRITERIA}
 
@@ -491,7 +497,13 @@ unplayed, so you never need to reject one for being recent.
 Pick exactly one candidate.`;
 }
 
-export async function pickNextTrack({ candidates, recentPlays, context }) {
+export async function pickNextTrack({ candidates, recentPlays, context, show = null, hourPlan = null }: {
+  candidates: any[];
+  recentPlays: any;
+  context: any;
+  show?: { name: string; topic: string } | null;
+  hourPlan?: string | null;
+}) {
   const user = JSON.stringify({
     now: {
       time: context.time?.period,
@@ -505,7 +517,7 @@ export async function pickNextTrack({ candidates, recentPlays, context }) {
   }, null, 2);
 
   return djObject({
-    system: pickerSystem(),
+    system: pickerSystem(show, hourPlan),
     prompt: user,
     schema: z.object({
       id: z.string().describe('the exact id of one candidate'),

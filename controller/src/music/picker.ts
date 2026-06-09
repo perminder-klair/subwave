@@ -9,6 +9,8 @@
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as dj from '../llm/dj.js';
+import * as settings from '../settings.js';
+import * as session from '../broadcast/session.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
 
@@ -292,7 +294,11 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
 
   let pickRaw;
   try {
+    const activeShow = settings.resolveActiveShow();
+    const hourPlan = session.getSession()?.hourPlan ?? null;
     pickRaw = await dj.pickNextTrack({
+      show: activeShow ? { name: activeShow.name, topic: activeShow.topic } : null,
+      hourPlan,
       candidates: candidates.map(c => {
         const a = analysisFor(c);
         return {
