@@ -148,22 +148,6 @@ async function refreshAutoPlaylistInner() {
 export async function runHourlyCheck() {
   return withTrace({ kind: 'hourly' }, async () => {
     const ctx = await getFullContext();
-
-    // When a show is running, generate an hour-plan in parallel with the time
-    // check so it's ready before the next pick. The plan considers what's been
-    // heavy in rotation and sets fresh directional constraints for the next
-    // hour — preventing single-artist flooding when the picker loses show
-    // context mid-session.
-    if (ctx.activeShow?.topic) {
-      const recentTracks = queue.getRecentTracks(30);
-      dj.generateHourPlan(ctx.activeShow, recentTracks)
-        .then(plan => {
-          session.setHourPlan(plan);
-          queue.log('scheduler', `[hour-plan] ${plan.slice(0, 160)}…`);
-        })
-        .catch((err: Error) => queue.log('error', `Hour plan failed: ${err.message}`));
-    }
-
     const script = await dj.generateHourlyTime(ctx.time, ctx.weather, {
       recap: queue.getDjRecap(),
       context: ctx,

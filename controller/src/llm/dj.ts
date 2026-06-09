@@ -407,44 +407,6 @@ export async function generateLink({ previous, current, context, recap = null, r
   });
 }
 
-// Generate a short editorial brief for the next hour of a scheduled show.
-// Called at the top of each hour; the result is stored on the session and
-// injected into every picker system prompt so the picker has fresh directional
-// guidance regardless of how far the session window has scrolled.
-//
-// Input: the active show (name + topic) and a snapshot of recent plays so the
-// planner can see what's been heavy in rotation and correct for it.
-export async function generateHourPlan(
-  show: { name: string; topic: string },
-  recentTracks: Array<{ title: string; artist: string | null }>,
-): Promise<string> {
-  const recentList = recentTracks.length > 0
-    ? recentTracks.map(t => `${t.artist || 'Unknown'} — ${t.title}`).join('\n')
-    : '(none yet — this is the opening hour)';
-  const prompt = `You are planning the next hour of "${show.name}".
-
-Show brief:
-${show.topic}
-
-Tracks played so far this show (most recent first):
-${recentList}
-
-Write a 2-3 sentence editorial brief for the NEXT HOUR of picks. Be specific and actionable:
-- Which artists or styles to lean into or deliberately avoid given the recent rotation
-- The energy arc for this hour (build, cruise, wind down, etc.)
-- Any variety callout if one act or style has dominated
-
-This brief is used directly by the track picker — be direct, no preamble.`;
-
-  return djText({
-    system: `You are the editorial director for "${show.name}". Your job is programme planning, not on-air performance. No DJ voice, no fluff — write a concise internal brief.`,
-    prompt,
-    temperature: 0.65,
-    topP: 0.9,
-    kind: 'generateHourPlan',
-  });
-}
-
 export async function generateHourlyTime(time: any, weather: any, { recap = null, context = null, recentOpeners = null }: any = {}) {
   const ctx = context || { time, weather };
   const ctxLines = buildContextLines(ctx);
@@ -470,16 +432,13 @@ export const PICKER_CRITERIA = `Selection criteria, in order:
 3. VARIETY — avoid the same artist back-to-back; don't repeat tracks you've already played today; rotate energy. Variety over cleverness — never pick a track because its title literally matches the time of day, the weather, or anything else literal.
 4. INTEREST — prefer something that creates a moment, not the most generic option.`;
 
-function pickerSystem(show?: { name: string; topic: string } | null, hourPlan?: string | null) {
+function pickerSystem(show?: { name: string; topic: string } | null) {
   const stationName = settings.get().station;
   const showLine = show?.topic
     ? `\n\nCurrent show brief — follow this for every pick:\n${show.topic}`
     : '';
-  const hourPlanLine = hourPlan
-    ? `\n\nThis hour's editorial direction (based on recent rotation):\n${hourPlan}`
-    : '';
   return `You are the DJ for ${stationName}, a personal internet radio station.
-Pick the single best NEXT track from the candidate pool, given recent plays and the current context.${showLine}${hourPlanLine}
+Pick the single best NEXT track from the candidate pool, given recent plays and the current context.${showLine}
 
 ${PICKER_CRITERIA}
 
@@ -497,12 +456,11 @@ unplayed, so you never need to reject one for being recent.
 Pick exactly one candidate.`;
 }
 
-export async function pickNextTrack({ candidates, recentPlays, context, show = null, hourPlan = null }: {
+export async function pickNextTrack({ candidates, recentPlays, context, show = null }: {
   candidates: any[];
   recentPlays: any;
   context: any;
   show?: { name: string; topic: string } | null;
-  hourPlan?: string | null;
 }) {
   const user = JSON.stringify({
     now: {
@@ -517,7 +475,7 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
   }, null, 2);
 
   return djObject({
-    system: pickerSystem(show, hourPlan),
+    system: pickerSystem(show),
     prompt: user,
     schema: z.object({
       id: z.string().describe('the exact id of one candidate'),

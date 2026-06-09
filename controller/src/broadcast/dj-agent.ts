@@ -123,17 +123,9 @@ export function pickSystem() {
   const showLine = activeShow?.topic
     ? `\n\nCurrent show brief — follow this for every pick:\n${activeShow.topic}`
     : '';
-  // Hour plan: generated at the top of each hour by the scheduler; gives the
-  // picker specific directional guidance based on what's been in rotation this
-  // show (e.g. "avoid CamelPhat this hour, rotate through X/Y/Z"). Absent for
-  // the first hour until the first hourly check fires.
-  const hourPlan = session.getSession()?.hourPlan;
-  const hourPlanLine = hourPlan
-    ? `\n\nThis hour's editorial direction (based on recent rotation):\n${hourPlan}`
-    : '';
   return `${settings.agentPersonaPreamble(persona, { rules: false })}
 
-You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}${hourPlanLine}
+You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}
 
 ${dj.PICKER_CRITERIA}`;
 }
