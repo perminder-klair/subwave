@@ -70,7 +70,7 @@ export function filterPickerCandidates<T extends CandidateLike>(
 ): T[] {
   const modes = [
     { recentTracks: true, recentArtists: true },
-    { recentTracks: true, recentArtists: false },
+    { recentTracks: false, recentArtists: true },  // relax track recency before artist constraint
     { recentTracks: false, recentArtists: false },
   ];
 
