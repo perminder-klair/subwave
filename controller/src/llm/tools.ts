@@ -15,13 +15,20 @@ import { filterPickerCandidates } from '../music/recency.js';
 
 const MAX_DURATION_SEC = 600; // 10 min — epics are fine on an album, not on radio
 
-// Patterns in track titles that identify non-studio versions. Checked
-// case-insensitively. LLM text rules aren't reliable enough for this — a hard
-// filter is the only way to keep live/demo tracks off a radio stream.
+// Hard excludes applied to every candidate before the LLM sees it.
+// LLM text rules are not reliable for structural constraints — enforce in code.
+//
+// NON_STUDIO_RE: live recordings, demos, bootlegs — checked against title.
+// SOUNDTRACK_RE: film/TV/game scores — checked against album (primary) and
+//   title. These are background-music contexts that don't suit radio rotation.
 const NON_STUDIO_RE = /\b(live(?: at| from| in|$)|\(live\)|acoustic(?: version)?|demo(?: version)?|rehearsal|bootleg|unplugged)\b/i;
+const SOUNDTRACK_RE = /\b(soundtrack|original score|original motion picture|motion picture|ost|from the (?:film|movie|series|show))\b/i;
 
-export function isStudioTrack(title: string): boolean {
-  return !NON_STUDIO_RE.test(title ?? '');
+export function isRadioPickable(title: string, album?: string | null): boolean {
+  if (NON_STUDIO_RE.test(title ?? '')) return false;
+  if (SOUNDTRACK_RE.test(title ?? '')) return false;
+  if (album && SOUNDTRACK_RE.test(album)) return false;
+  return true;
 }
 
 function slim(s: any) {
@@ -93,7 +100,7 @@ export function buildPickerTools({
   // each tool call regardless.
   const collect = (list: any, cap = 8) => {
     const withinLength = (list || []).filter((s: any) =>
-      (!s.duration || s.duration <= MAX_DURATION_SEC) && isStudioTrack(s.title ?? ''));
+      (!s.duration || s.duration <= MAX_DURATION_SEC) && isRadioPickable(s.title ?? '', s.album));
     const accepted = filterPickerCandidates(shuffle(withinLength as any[]), {
       recentIds,
       recentKeys,
