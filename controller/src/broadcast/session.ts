@@ -115,6 +115,20 @@ export function getSession() {
   return _session;
 }
 
+// Store an editorial hour-plan for the active show. Generated at the top of
+// each hour by the scheduler; read by pickSystem() and included in every
+// picker system prompt for the duration of that hour. Cleared on session start
+// (new show or 4h cap) so a stale plan never bleeds across shows.
+export function setHourPlan(plan: string | null) {
+  if (!_session) return;
+  if (plan) {
+    _session.hourPlan = plan;
+  } else {
+    delete _session.hourPlan;
+  }
+  schedulePersist();
+}
+
 // Append a turn. `role` ∈ event|dj|track|segment; `kind` names the turn type
 // (scenario|pick|request|play|link|station-id|hourly|weather|...).
 export function appendTurn({ role, kind, text, meta = {} }: { role: string; kind: string; text?: string; meta?: any }) {

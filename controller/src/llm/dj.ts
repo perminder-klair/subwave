@@ -407,6 +407,44 @@ export async function generateLink({ previous, current, context, recap = null, r
   });
 }
 
+// Generate a short editorial brief for the next hour of a scheduled show.
+// Called at the top of each hour; the result is stored on the session and
+// injected into every picker system prompt so the picker has fresh directional
+// guidance regardless of how far the session window has scrolled.
+//
+// Input: the active show (name + topic) and a snapshot of recent plays so the
+// planner can see what's been heavy in rotation and correct for it.
+export async function generateHourPlan(
+  show: { name: string; topic: string },
+  recentTracks: Array<{ title: string; artist: string | null }>,
+): Promise<string> {
+  const recentList = recentTracks.length > 0
+    ? recentTracks.map(t => `${t.artist || 'Unknown'} — ${t.title}`).join('\n')
+    : '(none yet — this is the opening hour)';
+  const prompt = `You are planning the next hour of "${show.name}".
+
+Show brief:
+${show.topic}
+
+Tracks played so far this show (most recent first):
+${recentList}
+
+Write a 2-3 sentence editorial brief for the NEXT HOUR of picks. Be specific and actionable:
+- Which artists or styles to lean into or deliberately avoid given the recent rotation
+- The energy arc for this hour (build, cruise, wind down, etc.)
+- Any variety callout if one act or style has dominated
+
+This brief is used directly by the track picker — be direct, no preamble.`;
+
+  return djText({
+    system: `You are the editorial director for "${show.name}". Your job is programme planning, not on-air performance. No DJ voice, no fluff — write a concise internal brief.`,
+    prompt,
+    temperature: 0.65,
+    topP: 0.9,
+    kind: 'generateHourPlan',
+  });
+}
+
 export async function generateHourlyTime(time: any, weather: any, { recap = null, context = null, recentOpeners = null }: any = {}) {
   const ctx = context || { time, weather };
   const ctxLines = buildContextLines(ctx);
