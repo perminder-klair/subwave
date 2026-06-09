@@ -18,6 +18,8 @@ import { shouldFire } from './dj-gate.js';
 import { djCallsAllowed } from './listeners.js';
 import { agenticTick, skillCatalog } from '../skills/_agent.js';
 import { withTrace } from '../observability/events.js';
+import { isRadioPickable } from '../llm/tools.js';
+import * as settings from '../settings.js';
 
 const TARGET_POOL = 30;
 const MOOD_WEIGHT = 12;          // up to this many mood-tagged tracks per pool
@@ -56,6 +58,9 @@ async function refreshAutoPlaylistInner() {
   const mood = ctx.dominantMood;
   // Match the auto-DJ picker's window (dj-agent.pickViaAgent) — 12h.
   const recent = queue.recentlyPlayedIds(12);
+  // Apply the same hard excludes as the DJ agent — station-wide patterns
+  // (e.g. christmas, live, demo) must never appear in the fallback pool.
+  const { excludePatterns } = settings.getPickerConfig(ctx.activeShow);
 
   const pool: any[] = [];
   const fromSource: Record<string, number> = { mood: 0, playlist: 0, recent: 0, frequent: 0, starred: 0, random: 0 };
@@ -64,6 +69,7 @@ async function refreshAutoPlaylistInner() {
     for (const t of items) {
       if (n >= cap || pool.length >= TARGET_POOL) break;
       if (!t?.id || recent.has(t.id) || pool.find((p: any) => p.id === t.id)) continue;
+      if (!isRadioPickable(t.title ?? '', t.album, excludePatterns)) continue;
       pool.push({ ...t, _source: label });
       fromSource[label]++;
       n++;
