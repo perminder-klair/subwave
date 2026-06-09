@@ -22,7 +22,7 @@ import { Field } from '../ui/field';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
 } from '../ui/select';
-import { Card, Btn, Pill, Eyebrow, Metric } from './ui';
+import { Card, Btn, Pill, Eyebrow, Metric, Seg } from './ui';
 import { Modal } from '../ui/modal';
 import { cn } from '../../lib/cn';
 
@@ -58,6 +58,9 @@ interface Show {
    *  default while this show is on air". Validated against the live theme
    *  registry by the controller; a stale id silently falls back too. */
   themeId: string;
+  /** null = inherit station-wide excludePatterns; [] = no filters for this
+   *  show; [...] = this show's own replacement list. */
+  excludePatterns: string[] | null;
 }
 
 // Slim view of a theme returned by GET /themes — only the bits the picker
@@ -167,6 +170,8 @@ export default function ShowsPanel() {
   // Modal state: `editIndex` is null (closed), -1 (new show), or a show index.
   const [editIndex, setEditIndex] = useState<number | null>(null);
   const [draft, setDraft] = useState<Show | null>(null);
+  // Input for adding per-show exclude patterns in the editor modal.
+  const [excludePatternInput, setExcludePatternInput] = useState('');
   // Theme list for the per-show override dropdown. Public endpoint, no auth
   // needed — same source the player ThemeBootstrap reads.
   const [themes, setThemes] = useState<ThemeOption[]>([]);
@@ -225,6 +230,7 @@ export default function ShowsPanel() {
           personaId: s.personaId ?? '',
           mood: s.mood ?? '',
           themeId: s.themeId ?? '',
+          excludePatterns: Array.isArray(s.excludePatterns) ? s.excludePatterns : null,
         }));
         setForm({ shows, schedule: week });
         // Arm the first valid show as the brush so the grid is paintable at once.
@@ -270,6 +276,7 @@ export default function ShowsPanel() {
       id: '', name: '', topic: '',
       personaId: personas[0]?.id || '', mood: moods[0] || '',
       themeId: '',
+      excludePatterns: null,
     });
   };
   const openEdit = (i: number) => {
@@ -281,9 +288,10 @@ export default function ShowsPanel() {
       id: s.id, name: s.name, topic: s.topic,
       personaId: s.personaId, mood: s.mood,
       themeId: s.themeId || '',
+      excludePatterns: s.excludePatterns ?? null,
     });
   };
-  const closeModal = () => { setEditIndex(null); setDraft(null); };
+  const closeModal = () => { setEditIndex(null); setDraft(null); setExcludePatternInput(''); };
   const setDraftField = (patch: Partial<Show>) => setDraft(d => d ? ({ ...d, ...patch }) : d);
   const commitDraft = () => {
     if (!draft || !showValid(draft)) return;
@@ -291,6 +299,7 @@ export default function ShowsPanel() {
       name: draft.name.trim(), topic: draft.topic.trim(),
       personaId: draft.personaId, mood: draft.mood,
       themeId: draft.themeId || '',
+      excludePatterns: draft.excludePatterns,
     };
     if (editIndex === -1) {
       const id = clientMintId();
@@ -426,6 +435,7 @@ export default function ShowsPanel() {
             id: s.id, name: s.name.trim(), topic: s.topic.trim(),
             personaId: s.personaId, mood: s.mood,
             themeId: s.themeId || '',
+            excludePatterns: s.excludePatterns ?? null,
           })),
           schedule: form.schedule,
         }),
@@ -772,6 +782,101 @@ export default function ShowsPanel() {
                 placeholder="e.g. Slow ambient, modern classical and downtempo for the late shift. Think Nils Frahm, Hammock, Bonobo's quieter side — nothing with a hard beat. Keep the host calm and unhurried, like a friend talking you down at 1am."
               />
               <span className="field-hint">{draft.topic.trim().length}/{TOPIC_MAX}</span>
+            </Field>
+
+            <Field>
+              <Label>exclude patterns — picker hard-filters for this show</Label>
+              <div className="flex items-center gap-2 pb-1">
+                <Seg
+                  options={[
+                    { id: 'inherit', label: 'Inherit' },
+                    { id: 'override', label: 'Override' },
+                  ]}
+                  value={draft.excludePatterns === null ? 'inherit' : 'override'}
+                  onChange={id =>
+                    setDraftField({
+                      excludePatterns: id === 'inherit' ? null : (draft.excludePatterns ?? []),
+                    })
+                  }
+                />
+              </div>
+              {draft.excludePatterns === null ? (
+                <span className="field-hint">
+                  Inheriting station-wide defaults from{' '}
+                  <strong>Settings → Track filters</strong>. Override to replace
+                  them for this show's hours — set an empty list to allow all tracks
+                  (e.g. a live-sets hour).
+                </span>
+              ) : (
+                <div className="grid gap-2">
+                  <div className="flex flex-wrap gap-1.5 border border-ink bg-[var(--field)] p-2 min-h-[36px]">
+                    {draft.excludePatterns.length === 0 && (
+                      <span className="text-[11px] text-muted italic">
+                        No patterns — all tracks eligible for this show.
+                      </span>
+                    )}
+                    {draft.excludePatterns.map(p => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() =>
+                          setDraftField({
+                            excludePatterns: (draft.excludePatterns ?? []).filter(x => x !== p),
+                          })
+                        }
+                        className="inline-flex cursor-pointer items-center gap-1 border border-separator-strong bg-transparent px-2 py-0.5 font-[inherit] text-[11px] text-ink hover:border-[var(--danger)] hover:text-[var(--danger)]"
+                      >
+                        <code>{p}</code>
+                        <span className="text-[10px] opacity-60">×</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={excludePatternInput}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setExcludePatternInput(e.target.value)
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return;
+                        e.preventDefault();
+                        const p = excludePatternInput.trim().toLowerCase();
+                        if (!p || p.length > 100 || (draft.excludePatterns?.length ?? 0) >= 50
+                            || draft.excludePatterns?.includes(p)) return;
+                        setDraftField({ excludePatterns: [...(draft.excludePatterns ?? []), p] });
+                        setExcludePatternInput('');
+                      }}
+                      placeholder="add pattern, press Enter"
+                      className="max-w-[240px] text-[12px]"
+                      maxLength={100}
+                      disabled={(draft.excludePatterns?.length ?? 0) >= 50}
+                    />
+                    <Btn
+                      sm
+                      onClick={() => {
+                        const p = excludePatternInput.trim().toLowerCase();
+                        if (!p || p.length > 100 || (draft.excludePatterns?.length ?? 0) >= 50
+                            || draft.excludePatterns?.includes(p)) return;
+                        setDraftField({ excludePatterns: [...(draft.excludePatterns ?? []), p] });
+                        setExcludePatternInput('');
+                      }}
+                      disabled={!excludePatternInput.trim() || (draft.excludePatterns?.length ?? 0) >= 50}
+                    >
+                      Add
+                    </Btn>
+                    {(draft.excludePatterns?.length ?? 0) > 0 && (
+                      <Btn sm tone="danger" onClick={() => setDraftField({ excludePatterns: [] })}>
+                        Clear all
+                      </Btn>
+                    )}
+                  </div>
+                  <span className="field-hint">
+                    Replaces the station-wide list for this show's hours. Empty = no
+                    filtering. Patterns match track title and album (case-insensitive,
+                    word boundaries).
+                  </span>
+                </div>
+              )}
             </Field>
 
             {!draftValid && (
