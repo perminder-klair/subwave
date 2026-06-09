@@ -2172,7 +2172,7 @@ function PickerSection({ data, form, setForm, busy, saveSettings }: SectionProps
 
           <div className="field">
             <Label>Excluded — click × to remove</Label>
-            <div className="flex flex-wrap gap-1.5 border border-ink bg-[var(--field)] p-2.5 min-h-[40px]">
+            <div className="flex min-h-[40px] flex-wrap gap-1.5 border border-ink bg-[var(--field)] p-2.5">
               {form.picker.excludePatterns.length === 0 && (
                 <span className="text-[11px] text-muted italic">
                   No patterns — all tracks eligible.

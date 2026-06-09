@@ -809,7 +809,7 @@ export default function ShowsPanel() {
                 </span>
               ) : (
                 <div className="grid gap-2">
-                  <div className="flex flex-wrap gap-1.5 border border-ink bg-[var(--field)] p-2 min-h-[36px]">
+                  <div className="flex min-h-[36px] flex-wrap gap-1.5 border border-ink bg-[var(--field)] p-2">
                     {draft.excludePatterns.length === 0 && (
                       <span className="text-[11px] text-muted italic">
                         No patterns — all tracks eligible for this show.
