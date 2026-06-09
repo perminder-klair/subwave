@@ -504,6 +504,25 @@ const DEFAULTS = {
   sfx: {
     enabled: true,
   },
+  // Track picker constraints. These are editorial decisions, not technical
+  // ones — hardcoding them prevents valid programming choices like a live-sets
+  // show or a film-scores hour. The defaults reflect sensible radio behaviour
+  // but the operator can clear or replace them per-station and per-show.
+  //
+  // maxDurationSec: hard cap on track length before the LLM sees a candidate.
+  // excludePatterns: case-insensitive word/phrase patterns matched against
+  //   track title and album name. Any match removes the candidate from the
+  //   pool. Word-boundary matching applied on word-char edges (so "live" won't
+  //   match "alive", but "(live)" will match literally).
+  picker: {
+    maxDurationSec: 600,
+    excludePatterns: [
+      'live at', 'live from', 'live in', '(live)',
+      'acoustic version', 'demo version', 'rehearsal', 'bootleg', 'unplugged',
+      'soundtrack', 'original score', 'original motion picture', 'motion picture', 'ost',
+      'from the film', 'from the movie', 'from the series', 'from the show',
+    ],
+  },
   // Outbound webhooks. Each entry POSTs station events (see broadcast/
   // webhooks.ts for the event list) to `url` with a fire-and-forget HTTP
   // call. Empty by default — operators add hooks via the admin UI.
@@ -664,6 +683,15 @@ function normalizeShows(raw: any, personaIds: string[]) {
       typeof item.themeId === 'string' && item.themeId.trim()
         ? item.themeId.trim().slice(0, 64)
         : '';
+    // excludePatterns: null = inherit station-wide; [] = no excludes (e.g.
+    // a live-sets show); [...] = show-specific list that replaces station-wide.
+    let excludePatterns: string[] | null = null;
+    if (Array.isArray(item.excludePatterns)) {
+      excludePatterns = item.excludePatterns
+        .filter((p: any) => typeof p === 'string' && p.trim().length > 0)
+        .map((p: any) => p.trim().slice(0, 100))
+        .slice(0, 50);
+    }
     out.push({
       id,
       name,
@@ -671,6 +699,7 @@ function normalizeShows(raw: any, personaIds: string[]) {
       personaId: item.personaId,
       mood: item.mood,
       themeId,
+      excludePatterns,
     });
     if (out.length >= SHOWS_LIMIT) break;
   }
@@ -958,6 +987,21 @@ export async function load() {
     },
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
+    },
+    picker: {
+      maxDurationSec: (() => {
+        const v = stored.picker?.maxDurationSec;
+        if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
+          return DEFAULTS.picker.maxDurationSec;
+        }
+        return Math.max(60, Math.min(3600, Math.floor(v)));
+      })(),
+      excludePatterns: Array.isArray(stored.picker?.excludePatterns)
+        ? stored.picker.excludePatterns
+            .filter((p: any) => typeof p === 'string' && p.trim().length > 0)
+            .map((p: any) => (p as string).trim().slice(0, 100))
+            .slice(0, 50)
+        : [...DEFAULTS.picker.excludePatterns],
     },
     webhooks: normalizeWebhooks(stored.webhooks),
     scrobble: {
@@ -1251,7 +1295,25 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId };
+    // excludePatterns: optional. null/absent = use station-wide; [] = no
+    // excludes (e.g. a live-sets show); [...] = show-specific replacement.
+    let excludePatterns: string[] | null = null;
+    if (item.excludePatterns !== undefined && item.excludePatterns !== null) {
+      if (!Array.isArray(item.excludePatterns)) {
+        throw new Error(`shows[${i}].excludePatterns must be an array or null`);
+      }
+      if (item.excludePatterns.length > 50) {
+        throw new Error(`shows[${i}].excludePatterns must be at most 50 entries`);
+      }
+      excludePatterns = item.excludePatterns.map((p: any, pi: number) => {
+        const v = String(p ?? '').trim();
+        if (v.length === 0 || v.length > 100) {
+          throw new Error(`shows[${i}].excludePatterns[${pi}] must be 1-100 chars`);
+        }
+        return v;
+      });
+    }
+    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId, excludePatterns };
   });
 }
 
@@ -1705,6 +1767,32 @@ export async function update(patch) {
       next.sfx.enabled = !!sx.enabled;
     }
   }
+  if ('picker' in patch) {
+    const p = patch.picker || {};
+    if (!next.picker) next.picker = { ...DEFAULTS.picker, excludePatterns: [...DEFAULTS.picker.excludePatterns] };
+    if (p.maxDurationSec !== undefined) {
+      const v = parseInt(p.maxDurationSec, 10);
+      if (!Number.isFinite(v) || v < 60 || v > 3600) {
+        throw new Error('picker.maxDurationSec must be an integer between 60 and 3600');
+      }
+      next.picker.maxDurationSec = v;
+    }
+    if (p.excludePatterns !== undefined) {
+      if (!Array.isArray(p.excludePatterns)) {
+        throw new Error('picker.excludePatterns must be an array of strings');
+      }
+      if (p.excludePatterns.length > 50) {
+        throw new Error('picker.excludePatterns must be at most 50 entries');
+      }
+      next.picker.excludePatterns = p.excludePatterns.map((item: any, i: number) => {
+        const v = String(item ?? '').trim();
+        if (v.length === 0 || v.length > 100) {
+          throw new Error(`picker.excludePatterns[${i}] must be 1-100 chars`);
+        }
+        return v;
+      });
+    }
+  }
   if ('webhooks' in patch) {
     next.webhooks = validateWebhooksStrict(patch.webhooks, next.webhooks || []);
   }
@@ -1826,9 +1914,36 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     // layer is responsible for resolving an empty/stale id against the live
     // theme registry; we just surface what the show declares.
     themeId: typeof show.themeId === 'string' ? show.themeId : '',
+    // null = use station-wide picker.excludePatterns; [] = no excludes for
+    // this show (e.g. a live-sets hour); [...] = show-specific override list.
+    excludePatterns: Array.isArray(show.excludePatterns) ? show.excludePatterns : null,
     persona: persona
       ? { id: persona.id, name: persona.name, avatar: persona.avatar || '' }
       : null,
+  };
+}
+
+// Effective picker config for the current show (or station-wide when no show
+// is active, or when the show has no override). Call at pick time — reads from
+// the in-memory cache so no await needed.
+//
+// show.excludePatterns is the resolved value from resolveActiveShow():
+//   null   → show has no override; use station-wide list
+//   []     → show explicitly has no excludes (e.g. a live-sets show)
+//   [...]  → show-specific list that REPLACES station-wide
+export function getPickerConfig(show?: { excludePatterns?: string[] | null } | null): {
+  maxDurationSec: number;
+  excludePatterns: string[];
+} {
+  const s: any = get();
+  const stationWide = s.picker ?? DEFAULTS.picker;
+  const patterns =
+    show?.excludePatterns !== null && show?.excludePatterns !== undefined
+      ? show.excludePatterns       // show overrides (incl. [] to clear all)
+      : stationWide.excludePatterns ?? [...DEFAULTS.picker.excludePatterns];
+  return {
+    maxDurationSec: stationWide.maxDurationSec ?? DEFAULTS.picker.maxDurationSec,
+    excludePatterns: patterns,
   };
 }
 

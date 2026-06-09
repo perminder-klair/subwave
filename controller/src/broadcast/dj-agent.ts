@@ -152,7 +152,9 @@ export const pickerAgent = defineAgent({
   timeoutMs: 22000,
   buildSystem: () => pickSystem(),
   buildTools: ({ recentIds, recentKeys, recentArtists }) => {
-    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, recentArtists });
+    const activeShow = settings.resolveActiveShow();
+    const { maxDurationSec, excludePatterns } = settings.getPickerConfig(activeShow);
+    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, recentArtists, maxDurationSec, excludePatterns });
     return { tools, extras: { seen } };
   },
 });
@@ -166,7 +168,9 @@ export const requestAgent = defineAgent({
   // recentArtists deliberately empty — a request for a recently-played artist
   // must still resolve.
   buildTools: ({ recentIds }) => {
-    const { tools, seen } = buildPickerTools({ recentIds });
+    const activeShow = settings.resolveActiveShow();
+    const { maxDurationSec, excludePatterns } = settings.getPickerConfig(activeShow);
+    const { tools, seen } = buildPickerTools({ recentIds, maxDurationSec, excludePatterns });
     return { tools, extras: { seen } };
   },
 });

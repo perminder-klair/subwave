@@ -24,6 +24,7 @@ const SECTIONS = [
   { id: 'theme',    label: 'Theme', hint: 'station-wide palette' },
   { id: 'tts',      label: 'TTS voice', hint: 'default engine' },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing' },
+  { id: 'picker',   label: 'Track filters', hint: 'duration · excludes' },
   { id: 'search',   label: 'Web search', hint: 'live-facts backend' },
   { id: 'library',  label: 'Library tagger', hint: 'embedding · propagation' },
   { id: 'jingles',  label: 'Jingles', hint: 'stingers' },
@@ -152,6 +153,11 @@ interface ScrobbleForm {
   listenbrainz: ScrobbleListenbrainzForm;
 }
 
+interface PickerForm {
+  maxDurationSec: string;
+  excludePatterns: string[];
+}
+
 interface ArchiveForm {
   enabled: boolean;
   bitrate: string;
@@ -165,6 +171,14 @@ interface StreamForm {
 // has a literal `%mp3(bitrate=…)` branch per value, so this set is fixed.
 const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
 
+// Mirrors DEFAULTS.picker.excludePatterns in controller/src/settings.ts.
+const DEFAULT_EXCLUDE_PATTERNS: string[] = [
+  'live at', 'live from', 'live in', '(live)',
+  'acoustic version', 'demo version', 'rehearsal', 'bootleg', 'unplugged',
+  'soundtrack', 'original score', 'original motion picture', 'motion picture', 'ost',
+  'from the film', 'from the movie', 'from the series', 'from the show',
+];
+
 interface FormState {
   jingleRatio: string;
   crossfadeDuration: string;
@@ -174,6 +188,7 @@ interface FormState {
   weather: WeatherCfg;
   tts: TtsForm;
   llm: LlmForm;
+  picker: PickerForm;
   search: SearchForm;
   embedding: EmbeddingForm;
   scrobble: ScrobbleForm;
@@ -229,6 +244,7 @@ interface SettingsData {
       maxActiveLearningRounds?: number;
       enrichment?: Partial<EmbeddingEnrichmentForm>;
     };
+    picker?: { maxDurationSec?: number; excludePatterns?: string[] };
     sfx?: { enabled?: boolean };
     scrobble?: {
       lastfm?: Partial<ScrobbleLastfmForm>;
@@ -358,6 +374,12 @@ export default function SettingsPanel() {
           baseUrl: v.llm?.fallback?.baseUrl ?? '',
           reasoning: !!v.llm?.fallback?.reasoning,
         },
+      },
+      picker: {
+        maxDurationSec: String(v.picker?.maxDurationSec ?? 600),
+        excludePatterns: Array.isArray(v.picker?.excludePatterns)
+          ? [...v.picker.excludePatterns]
+          : [...DEFAULT_EXCLUDE_PATTERNS],
       },
       search: {
         provider: v.search?.provider ?? 'duckduckgo',
@@ -581,6 +603,12 @@ export default function SettingsPanel() {
             )}
             {activeSection === 'llm' && data.llm && (
               <LlmSection
+                data={data} form={form} setForm={updateForm} busy={busy}
+                saveSettings={saveSettings}
+              />
+            )}
+            {activeSection === 'picker' && (
+              <PickerSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings}
               />
@@ -2030,6 +2058,186 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
         busy={busy}
         onSave={save}
         saveLabel="Save web search"
+      />
+    </>
+  );
+}
+
+/* ── Track filters (picker config) ──────────────────────────────────── */
+
+function PickerSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
+  const [patternInput, setPatternInput] = useState('');
+
+  const savedPicker = data.values?.picker;
+  const savedMaxDuration = savedPicker?.maxDurationSec ?? 600;
+  const savedPatterns = savedPicker?.excludePatterns ?? DEFAULT_EXCLUDE_PATTERNS;
+
+  const durationSec = parseInt(form.picker.maxDurationSec, 10) || 600;
+  const durationMin = durationSec % 60 === 0
+    ? `${durationSec / 60} min`
+    : `${(durationSec / 60).toFixed(1)} min`;
+
+  const pickerDirty =
+    durationSec !== savedMaxDuration ||
+    JSON.stringify(form.picker.excludePatterns) !== JSON.stringify(savedPatterns);
+
+  const save = () => saveSettings({
+    picker: {
+      maxDurationSec: durationSec,
+      excludePatterns: form.picker.excludePatterns,
+    },
+  });
+
+  const addPattern = () => {
+    const p = patternInput.trim().toLowerCase();
+    if (!p || p.length > 100 || form.picker.excludePatterns.length >= 50
+        || form.picker.excludePatterns.includes(p)) return;
+    setForm(f => ({ ...f, picker: { ...f.picker, excludePatterns: [...f.picker.excludePatterns, p] } }));
+    setPatternInput('');
+  };
+
+  const removePattern = (p: string) =>
+    setForm(f => ({ ...f, picker: { ...f.picker, excludePatterns: f.picker.excludePatterns.filter(x => x !== p) } }));
+
+  const resetDefaults = () =>
+    setForm(f => ({ ...f, picker: { ...f.picker, excludePatterns: [...DEFAULT_EXCLUDE_PATTERNS] } }));
+
+  return (
+    <>
+      <SectionHeader
+        eyebrow="track filters"
+        title="What the picker will and won't queue."
+        sub={<>
+          Hard filters applied before the LLM sees any candidates — neither picker
+          path can queue a track that fails these. Defaults are sensible radio rules,
+          but you control them: a live-sets show can clear all excludes, a film-scores
+          hour can remove the soundtrack pattern. Per-show overrides are set in{' '}
+          <strong>Admin → Shows</strong>.
+        </>}
+        metrics={[
+          { n: String(durationSec), l: 'max sec', accent: true },
+          { n: String(form.picker.excludePatterns.length), l: 'patterns' },
+        ]}
+      />
+
+      <Card title="Track duration cap" sub="hard limit before LLM sees candidates">
+        <div className="field">
+          <Label>Maximum track duration</Label>
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              min={60}
+              max={3600}
+              step={30}
+              className="mono-num w-28"
+              value={form.picker.maxDurationSec}
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({ ...f, picker: { ...f.picker, maxDurationSec: e.target.value } }))
+              }
+            />
+            <span className="text-[12px] text-muted">sec</span>
+            <span className="text-[12px] text-muted">= {durationMin}</span>
+          </div>
+          <div className="field-hint">
+            Candidates longer than this are dropped before the LLM call —{' '}
+            {savedMaxDuration} s ({savedMaxDuration / 60} min) is the saved value.
+            If the entire pool would be dropped, the cap is ignored and a warning
+            is logged. Set higher for long-form ambient shows; lower to keep tracks
+            punchy. Range: 60–3600 s.
+          </div>
+        </div>
+      </Card>
+
+      <Card
+        title="Exclude patterns"
+        sub="matched against track title and album"
+        right={<Pill tone="ink">station-wide default</Pill>}
+      >
+        <div className="grid gap-4">
+          <div className="flex items-start gap-2.5 border border-[var(--accent)] bg-[var(--ink-softer)] p-3">
+            <span className="mt-1 size-1.5 flex-none rounded-full bg-vermilion" />
+            <div className="grid min-w-0 gap-0.5">
+              <span className="text-[11px] font-bold tracking-[0.12em] text-vermilion uppercase">
+                {form.picker.excludePatterns.length} exclusions active
+              </span>
+              <span className="text-[11px] leading-[1.5] text-muted">
+                Applied by both the agent picker and the pool picker before any LLM
+                call. Each pattern is matched case-insensitively against track{' '}
+                <strong>title</strong> and <strong>album</strong>. Word boundaries are
+                applied on word-char edges — <code>live</code> won&apos;t match{' '}
+                <code>alive</code>, but <code>(live)</code> matches literally.
+              </span>
+            </div>
+          </div>
+
+          <div className="field">
+            <Label>Excluded — click × to remove</Label>
+            <div className="flex min-h-[40px] flex-wrap gap-1.5 border border-ink bg-[var(--field)] p-2.5">
+              {form.picker.excludePatterns.length === 0 && (
+                <span className="text-[11px] text-muted italic">
+                  No patterns — all tracks eligible.
+                </span>
+              )}
+              {form.picker.excludePatterns.map(p => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => removePattern(p)}
+                  className="inline-flex cursor-pointer items-center gap-1 border border-separator-strong bg-transparent px-2 py-0.5 font-[inherit] text-[11px] text-ink hover:border-[var(--danger)] hover:text-[var(--danger)]"
+                >
+                  <code>{p}</code>
+                  <span className="text-[10px] opacity-60">×</span>
+                </button>
+              ))}
+            </div>
+            <div className="field-hint">
+              Any track whose title or album contains a pattern is dropped from the
+              candidate pool — the LLM never sees it. Empty list = no filtering (all
+              tracks eligible). Per-show overrides can replace this list entirely for
+              a single hour — set them in <strong>Admin → Shows</strong>.
+            </div>
+          </div>
+
+          <div className="field">
+            <Label>Add pattern</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                value={patternInput}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setPatternInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); addPattern(); }
+                }}
+                placeholder="e.g. karaoke"
+                className="max-w-[260px]"
+                maxLength={100}
+                disabled={form.picker.excludePatterns.length >= 50}
+              />
+              <Btn sm onClick={addPattern}
+                disabled={!patternInput.trim() || form.picker.excludePatterns.length >= 50}>
+                Add
+              </Btn>
+              <Btn sm onClick={resetDefaults}>Reset defaults</Btn>
+            </div>
+            <div className="field-hint">
+              Case-insensitive phrase — matched as a word/phrase boundary. Avoid
+              overly short patterns (<code>mix</code> would drop &ldquo;Remixed
+              Version&rdquo; but also &ldquo;Mixtape&rdquo; — be specific).
+              {form.picker.excludePatterns.length >= 50 && (
+                <span className="text-[var(--danger)]"> Maximum 50 patterns.</span>
+              )}
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <SaveBar
+        note={pickerDirty
+          ? 'Unsaved changes — applies to the next pick, no restart needed.'
+          : 'Applies to the next pick — no restart needed. Per-show overrides are managed in Admin → Shows.'}
+        busy={busy}
+        onSave={save}
+        saveLabel="Save track filters"
+        extra={pickerDirty ? <Pill tone="accent" dot>unsaved</Pill> : undefined}
       />
     </>
   );

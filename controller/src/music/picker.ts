@@ -10,6 +10,7 @@ import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as dj from '../llm/dj.js';
 import * as settings from '../settings.js';
+import { isRadioPickable } from '../llm/tools.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
 
@@ -275,7 +276,19 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const recentIds = queue.recentlyPlayedIds(windows.trackHours);
   const recentArtists = queue.recentArtistsSince(windows.artistHours);
   const currentTrack = queue.current?.track || null;
-  const { candidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget);
+  const { candidates: rawCandidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget);
+
+  // Apply picker constraints from settings — duration cap and exclude patterns.
+  // Per-show overrides apply here: a live-sets show can set excludePatterns=[]
+  // to clear all station-wide filters for that hour.
+  const activeShow = settings.resolveActiveShow();
+  const { maxDurationSec, excludePatterns } = settings.getPickerConfig(activeShow);
+  const filtered = rawCandidates.filter(c =>
+    (!c.duration || c.duration <= maxDurationSec) && isRadioPickable(c.title ?? '', c.album, excludePatterns));
+  const candidates = filtered.length > 0 ? filtered : rawCandidates;
+  if (filtered.length < rawCandidates.length) {
+    queue.log('picker', `dropped ${rawCandidates.length - filtered.length} track(s) over ${maxDurationSec / 60}min or matching exclude patterns`);
+  }
 
   if (candidates.length === 0) {
     queue.log('picker', 'no candidates available, skipping LLM pick');
@@ -311,6 +324,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           // the LLM only sees them when they're real.
           bpm: a.bpm ?? undefined,
           key: a.key ?? undefined,
+          duration: c.duration ? Math.round(c.duration) : undefined,
           source: c._source || null,
         };
       }),
