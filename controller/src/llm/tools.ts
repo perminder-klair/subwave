@@ -159,7 +159,7 @@ export function buildPickerTools({
     }),
 
     similarSongs: tool({
-      description: 'Find songs similar to a given song id. Pass the currently-playing song id to keep the flow going.',
+      description: 'Find songs similar to a given song id. Use as one source of candidates — verify results fit the active show brief before committing. Do not use this as the only tool when a show genre is specified.',
       inputSchema: z.object({ songId: z.string() }),
       execute: async ({ songId }) => {
         try { return collect(await subsonic.getSimilarSongs(songId, { count: 20 })); }

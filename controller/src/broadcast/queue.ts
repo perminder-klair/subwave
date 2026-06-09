@@ -689,6 +689,13 @@ class Queue {
     if (this.current?.track?.artist) {
       out.add(this.current.track.artist.toLowerCase().trim());
     }
+    // Include artists already queued but not yet played — prevents the same
+    // artist from appearing multiple times in the upcoming queue when the
+    // picker is called mid-queue (e.g. 4× same artist before any play back).
+    for (const item of this.upcoming) {
+      const k = (item.track?.artist || '').toLowerCase().trim();
+      if (k) out.add(k);
+    }
     for (const p of this._recentPlays) {
       if (new Date(p.endedAt).getTime() < cutoff) break;
       const k = (p.artist || '').toLowerCase().trim();
