@@ -278,16 +278,16 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const currentTrack = queue.current?.track || null;
   const { candidates: rawCandidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget);
 
-  // Hard cap: drop anything over 10 minutes. Epics are fine on an album; a
-  // 15-minute track playing unannounced on a radio stream is not. If the
-  // filter would empty the pool entirely, keep the originals (better than
-  // dead air) and log a warning.
-  const MAX_DURATION_SEC = 600;
-  const durationFiltered = rawCandidates.filter(c =>
-    (!c.duration || c.duration <= MAX_DURATION_SEC) && isRadioPickable(c.title ?? '', c.album));
-  const candidates = durationFiltered.length > 0 ? durationFiltered : rawCandidates;
-  if (durationFiltered.length < rawCandidates.length) {
-    queue.log('picker', `dropped ${rawCandidates.length - durationFiltered.length} track(s) over ${MAX_DURATION_SEC / 60}min or non-studio`);
+  // Apply picker constraints from settings — duration cap and exclude patterns.
+  // Per-show overrides apply here: a live-sets show can set excludePatterns=[]
+  // to clear all station-wide filters for that hour.
+  const activeShow = settings.resolveActiveShow();
+  const { maxDurationSec, excludePatterns } = settings.getPickerConfig(activeShow);
+  const filtered = rawCandidates.filter(c =>
+    (!c.duration || c.duration <= maxDurationSec) && isRadioPickable(c.title ?? '', c.album, excludePatterns));
+  const candidates = filtered.length > 0 ? filtered : rawCandidates;
+  if (filtered.length < rawCandidates.length) {
+    queue.log('picker', `dropped ${rawCandidates.length - filtered.length} track(s) over ${maxDurationSec / 60}min or matching exclude patterns`);
   }
 
   if (candidates.length === 0) {

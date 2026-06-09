@@ -13,22 +13,30 @@ import * as library from '../music/library.js';
 import * as embeddings from '../music/embeddings.js';
 import { filterPickerCandidates } from '../music/recency.js';
 
-const MAX_DURATION_SEC = 600; // 10 min — epics are fine on an album, not on radio
+// Compile a list of user-supplied exclude patterns into regexes. Each pattern
+// is treated as a case-insensitive phrase; word boundaries are added on
+// word-char edges (so "live" won't match "alive", but "(live)" matches
+// literally). Called at filter time (once per pick) so settings changes take
+// effect without restart; the overhead is negligible.
+function buildExcludeRegexes(patterns: string[]): RegExp[] {
+  return patterns.map(pattern => {
+    const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const prefix = /^\w/.test(pattern) ? '\\b' : '';
+    const suffix = /\w$/.test(pattern) ? '\\b' : '';
+    return new RegExp(prefix + escaped + suffix, 'i');
+  });
+}
 
-// Hard excludes applied to every candidate before the LLM sees it.
-// LLM text rules are not reliable for structural constraints — enforce in code.
-//
-// NON_STUDIO_RE: live recordings, demos, bootlegs — checked against title.
-// SOUNDTRACK_RE: film/TV/game scores — checked against album (primary) and
-//   title. These are background-music contexts that don't suit radio rotation.
-const NON_STUDIO_RE = /\b(live(?: at| from| in|$)|\(live\)|acoustic(?: version)?|demo(?: version)?|rehearsal|bootleg|unplugged)\b/i;
-const SOUNDTRACK_RE = /\b(soundtrack|original score|original motion picture|motion picture|ost|from the (?:film|movie|series|show))\b/i;
-
-export function isRadioPickable(title: string, album?: string | null): boolean {
-  if (NON_STUDIO_RE.test(title ?? '')) return false;
-  if (SOUNDTRACK_RE.test(title ?? '')) return false;
-  if (album && SOUNDTRACK_RE.test(album)) return false;
-  return true;
+// Returns true if the track passes the current picker exclude filters.
+// `patterns` is the effective list from settings.getPickerConfig() — pass it
+// explicitly so callers can resolve the correct station/show context once and
+// reuse across a whole candidate list rather than hitting settings N times.
+export function isRadioPickable(title: string, album: string | null | undefined, patterns: string[]): boolean {
+  if (!patterns.length) return true;
+  const regexes = buildExcludeRegexes(patterns);
+  const t = title ?? '';
+  const a = album ?? '';
+  return !regexes.some(re => re.test(t) || re.test(a));
 }
 
 function slim(s: any) {
@@ -79,14 +87,22 @@ const MAX_PER_ARTIST = 2;
 // filtered out inside every tool so the agent never has to be told "avoid
 // these" — it simply can't see them. `recentArtists` is left empty on the
 // listener-request path so a request for a recent artist still resolves.
+//
+// `maxDurationSec` and `excludePatterns` come from settings.getPickerConfig()
+// (station-wide or per-show override). Callers should resolve these once and
+// pass them in; defaults are applied here if absent for call-site safety.
 export function buildPickerTools({
   recentIds = new Set<string>(),
   recentKeys = new Set<string>(),
   recentArtists = new Set<string>(),
+  maxDurationSec = 600,
+  excludePatterns = [] as string[],
 }: {
   recentIds?: Set<string>;
   recentKeys?: Set<string>;        // lowercased "title|artist" — backfilled entries lack ids
   recentArtists?: Set<string>;
+  maxDurationSec?: number;
+  excludePatterns?: string[];
 } = {}) {
   const seen = new Map<string, any>(); // id → slim song, accumulated across all tool calls
   const artistCounts = new Map<string, number>(); // artist key → songs already accepted into `seen`
@@ -100,7 +116,7 @@ export function buildPickerTools({
   // each tool call regardless.
   const collect = (list: any, cap = 8) => {
     const withinLength = (list || []).filter((s: any) =>
-      (!s.duration || s.duration <= MAX_DURATION_SEC) && isRadioPickable(s.title ?? '', s.album));
+      (!s.duration || s.duration <= maxDurationSec) && isRadioPickable(s.title ?? '', s.album, excludePatterns));
     const accepted = filterPickerCandidates(shuffle(withinLength as any[]), {
       recentIds,
       recentKeys,
