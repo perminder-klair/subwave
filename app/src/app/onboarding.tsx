@@ -181,8 +181,8 @@ export default function Onboarding() {
                   inputMode="url"
                   returnKeyType="go"
                   onSubmitEditing={() => host.trim() && runCheck(host)}
-                  className="font-mono text-ink flex-1"
-                  style={{ fontSize: 14, paddingVertical: 14, paddingRight: 13, paddingLeft: 4 }}
+                  className="font-mono flex-1"
+                  style={{ color: colors.ink, fontSize: 14, paddingVertical: 14, paddingRight: 13, paddingLeft: 4 }}
                 />
               </View>
 
