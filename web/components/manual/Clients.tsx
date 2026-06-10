@@ -80,9 +80,9 @@ export default function Clients() {
           the apps below use, typed in once and saved.
         </p>
         <p className="text-muted">
-          The apps are in public beta while they work through the stores. On iOS, join over
-          TestFlight (install the TestFlight app first); on Android, tap the link to install
-          the APK directly &mdash; no account, no Play Store:
+          The apps are in public beta. On iOS, join over TestFlight (install the TestFlight
+          app first); on Android, join the open test on Google Play &mdash; it installs and
+          auto-updates like any Play Store app:
         </p>
         <table className="bs-doc-table">
           <thead>
@@ -109,14 +109,14 @@ export default function Clients() {
               <td><strong>Android</strong></td>
               <td>
                 <a
-                  href="https://expo.dev/accounts/pinku1/projects/subwave/builds/8bc3116d-c9b0-4a32-87b9-747640270b23"
+                  href="https://play.google.com/apps/testing/com.getsubwave.app"
                   className="bs-link"
                   target="_blank"
                   rel="noreferrer"
                 >
-                  Install APK ↗
+                  Join on Google Play ↗
                 </a>{' '}
-                (approve the one-time &ldquo;unknown sources&rdquo; prompt)
+                (open the link on your phone, tap to become a tester, then install)
               </td>
             </tr>
           </tbody>
@@ -124,10 +124,10 @@ export default function Clients() {
         <div className="bs-callout">
           <div className="bs-eyebrow">APP STORE &amp; PLAY STORE</div>
           <p>
-            Coming once the betas settle. Until then the links above are the way in &mdash;
-            the Android build installs straight from the link (you&rsquo;ll approve a
-            one-time &ldquo;install from unknown sources&rdquo; prompt), and iOS goes through
-            TestFlight.
+            Android is already on Google Play through open testing &mdash; the link above
+            enrols you and the app updates itself from the Play Store from then on. iOS rides
+            TestFlight for now; the full public App Store listing follows once the betas
+            settle.
           </p>
         </div>
       </section>
