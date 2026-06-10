@@ -51,11 +51,14 @@ The structural difference from the web player: the web bakes its base URL in at 
 
 ## Known risks (validate in the device spike — M0)
 
-- **react-native-track-player + New Architecture.** SDK 56 mandates the New Architecture; RNTP 4.1.x is not *officially* declared New-Arch-compatible (it runs through the RN interop layer). This is the single biggest thing to verify on a real device build. The audio layer is deliberately isolated behind `src/audio/player.ts` + `usePlayer` — if RNTP misbehaves under New Arch, swapping to `expo-audio` touches only those two files + `service.ts`. (The doctor warning for this package is intentionally excluded in `package.json`.)
+- **react-native-track-player + New Architecture.** RN 0.85 mandates the New Architecture on **both** platforms (the `newArchEnabled=false` flags in `gradle.properties`/`app.json` are ignored no-ops since RN 0.82). Reanimated 4.3.1 requires it. RNTP 4.1.2 isn't natively new-arch-compatible, so `patches/react-native-track-player+4.1.2.patch` carries the fix (2 source files: a Unit-returning `launch` helper in `MusicModule.kt`, and `currentReactContextCompat()` in `MusicService.kt` — without it Android crashes on the first playback event). Validated: iOS live playback on the simulator + Android `BUILD SUCCESSFUL`. See `docs/TESTING.md` → "Architecture-critical facts". The audio layer is still isolated behind `src/audio/player.ts` + `usePlayer` + `service.ts` should a swap to `expo-audio` ever be needed. (The doctor warning for this package is intentionally excluded in `package.json`.)
 - **HTTP-only stations.** iOS App Transport Security blocks plain HTTP. Stations should be HTTPS; `NSAllowsLocalNetworking` is on for LAN dev against a local controller. For a non-HTTPS dev controller over Wi-Fi, add a temporary ATS exception in `app.json` → `ios.infoPlist`.
 - **Background-audio review.** iOS declares `UIBackgroundModes: ["audio"]` (legitimate — live radio). Android uses RNTP's foreground service (`FOREGROUND_SERVICE_MEDIA_PLAYBACK`).
 
 ## Verification done
 
 - `tsc --noEmit` clean · `expo-doctor` 21/21 · `expo export` bundles cleanly for both iOS and Android.
-- Not yet validated (needs a device build + a live station): background audio, lock-screen metadata + persona-avatar swap, the RNTP/New-Arch question above.
+- **iOS simulator (2026-06):** `expo run:ios` builds clean (new arch ON), installs, bundles 4075 modules, and runs the full flow — onboarding → health check (all 4 probes OK vs live getsubwave.com) → player with **live audio** (NOW PLAYING timer advances), runtime theming, cover art, Skia spectrum. RNTP works under new arch on iOS.
+- **Android emulator (2026-06):** `expo run:android` (JDK 17, new arch OFF) `BUILD SUCCESSFUL`, debug APK installs. Physical-device run is proven via the `subwave-app-android` skill.
+- Still device-only / not yet validated: background audio + lock-screen metadata + persona-avatar swap (needs a physical device).
+- **How to run/test it all:** see [`docs/TESTING.md`](docs/TESTING.md) (local sim/emulator, physical devices, EAS cloud builds, known gotchas).
