@@ -125,13 +125,15 @@ edge cases — the distribution certificate expiring (this one lasts until
 asking to "log in to your Apple account" or for an "App Store Connect API Key",
 feed it the API key instead of an interactive login:
 
+Keep the App Store Connect API key (`.p8`) **outside the repo** and never commit
+it — the `.p8`, its Key ID, and Issuer ID are the credential. Point the env vars
+at wherever you store it:
+
 ```bash
-# The .p8 key + its Key ID / Issuer ID live outside the repo:
-#   /Users/klair/Projects/subwave/keys/   (AuthKey_*.p8 + README.md with the IDs)
-export EXPO_ASC_API_KEY_PATH=/Users/klair/Projects/subwave/keys/AuthKey_<KEYID>.p8
-export EXPO_ASC_KEY_ID=<KEY_ID>            # from keys/README.md
-export EXPO_ASC_ISSUER_ID=<ISSUER_ID>     # from keys/README.md
-export EXPO_APPLE_TEAM_ID=BU9RD766GN
+export EXPO_ASC_API_KEY_PATH=/path/to/your/AuthKey_<KEYID>.p8
+export EXPO_ASC_KEY_ID=<KEY_ID>
+export EXPO_ASC_ISSUER_ID=<ISSUER_ID>
+export EXPO_APPLE_TEAM_ID=BU9RD766GN   # already in eas.json; non-secret
 # then re-run the eas command
 ```
 
