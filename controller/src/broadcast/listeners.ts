@@ -15,6 +15,19 @@ import * as settings from '../settings.js';
 
 let lastCount: number | null = null;        // null = unknown (not yet polled, or Icecast down)
 
+// Full cached stream status, refreshed by the same poll that maintains
+// lastCount. `online` is true when at least one broadcast mount has a source
+// attached; `peak` sums listener_peak across both mounts. Read by the public
+// /now-playing route, which every listener polls every 5s — serving the
+// cached value means N listeners cost one Icecast status fetch per 15s
+// instead of one per request (and a wedged Icecast can no longer stall the
+// route for its 1.5s timeout on every poll).
+export interface StreamStatus {
+  online: boolean;
+  listeners: { current: number; peak: number };
+}
+let lastStatus: StreamStatus = { online: false, listeners: { current: 0, peak: 0 } };
+
 // Time-series file. JSONL of {t, count} rows, one per persisted sample.
 // We persist every minute (not every 15s poll) — keeps the file at ~1440
 // rows/day, easily tail-readable, and that resolution is plenty for the
@@ -30,17 +43,24 @@ async function fetchCount() {
     clearTimeout(timer);
     const ic = ((await r.json()) as any)?.icestats;
     const sources = Array.isArray(ic?.source) ? ic.source : ic?.source ? [ic.source] : [];
-    // Sum listeners across our two broadcast mounts. Anything else (e.g. an
-    // /admin source) is ignored so stray test mounts don't inflate the count.
-    const broadcastMounts = ['/stream.mp3', '/stream.opus'];
-    lastCount = sources.reduce((sum: number, s: any) => {
-      const url = String(s?.listenurl || '');
-      return broadcastMounts.some(m => url.includes(m))
-        ? sum + Number(s.listeners || 0)
-        : sum;
-    }, 0);
+    // Only our two broadcast mounts count. Anything else (e.g. an /admin
+    // source) is ignored so stray test mounts don't inflate the numbers.
+    const broadcastSources = sources.filter((s: any) =>
+      BROADCAST_MOUNTS.some(m => String(s?.listenurl || '').includes(m))
+    );
+    lastCount = broadcastSources.reduce(
+      (sum: number, s: any) => sum + Number(s.listeners || 0), 0);
+    lastStatus = {
+      online: broadcastSources.length > 0,
+      listeners: {
+        current: lastCount,
+        peak: broadcastSources.reduce(
+          (sum: number, s: any) => sum + Number(s.listener_peak || 0), 0),
+      },
+    };
   } catch {
     lastCount = null;
+    lastStatus = { online: false, listeners: { current: 0, peak: 0 } };
   }
   // Persist at most one row per wall-clock minute. Skip null samples — a
   // stats outage shouldn't leave a misleading "0 listeners" stripe in the
@@ -60,6 +80,12 @@ async function fetchCount() {
 // Last known listener count — a number, or null when it couldn't be read.
 export function getListenerCount() {
   return lastCount;
+}
+
+// Last known stream status, from the same 15s poll. Returns offline + 0/0
+// until the first successful poll — same shape /now-playing always exposed.
+export function getStreamStatus(): StreamStatus {
+  return lastStatus;
 }
 
 // Force an immediate poll. Used by the request route so a listener who just
