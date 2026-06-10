@@ -178,6 +178,18 @@ export function buildPickerTools({
       },
     }),
 
+    tracksThatSoundLikeThis: tool({
+      description: 'Tracks whose ACTUAL SOUND (timbre, instrumentation, production, energy — a CLAP audio embedding of the waveform) is closest to a seed track. Unlike tracksLikeThis (which compares mood/lyrics/metadata), this is blind to tags and metadata, so it shines for instrumentals, non-English tracks, or anything with thin Last.fm coverage. Pass the currently-playing song id (best) OR a track title. Returns [] only when neither matches anything with an audio embedding (audio analysis not enabled / not yet run).',
+      inputSchema: z.object({
+        songId: z.string().describe('a song id (preferred) or a track title'),
+        k: z.number().int().min(1).max(50).default(20),
+      }),
+      execute: async ({ songId, k }) => {
+        try { await library.load(); return collect(library.tracksLikeThisAudio(songId, k)); }
+        catch (err) { return { error: err.message }; }
+      },
+    }),
+
     searchByLyrics: tool({
       description: 'Semantic lyric / theme search over the library. Embed the query and return tracks whose lyrics + metadata are closest to it. Use for thematic picks the mood vocab can\'t express — e.g. "songs about hometown", "tracks with hopeful lyrics", "feeling stuck". Tracks without lyrics or without embeddings simply rank low; the search still returns the best of what it has.',
       inputSchema: z.object({

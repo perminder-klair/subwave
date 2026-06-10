@@ -71,9 +71,13 @@ interface UntaggedResponse { rows: Track[]; nextCursor: string | null }
 interface Coverage {
   tagged: number;
   analysed: number;
+  // Tracks with a CLAP audio (sounds-like) embedding. Same analysis backend,
+  // gated on ANALYZE_AUDIO_EMBEDDING — 0 when that's off even if bpm/key runs.
+  audioEmbedded?: number;
   total: number | null;
   percent: number | null;
   analysedPercent: number | null;
+  audioEmbeddedPercent?: number | null;
   scannedAt: string | null;
   scanning: boolean;
   // null = still probing; false = no analysis backend (sidecar/librosa) running.
@@ -700,13 +704,19 @@ function TaggingPanel(p: TaggingPanelProps) {
   const logRef = useRef<HTMLPreElement>(null);
   const moodFillRef = useRef<HTMLSpanElement>(null);
   const acousticFillRef = useRef<HTMLSpanElement>(null);
+  const audioFillRef = useRef<HTMLSpanElement>(null);
   const runFillRef = useRef<HTMLSpanElement>(null);
 
   const tagged = p.coverage?.tagged ?? p.libStats?.total ?? null;
   const total = p.coverage?.total ?? null;
   const analysed = p.coverage?.analysed ?? null;
+  const audioEmbedded = p.coverage?.audioEmbedded ?? null;
   const pct = p.coverage?.percent ?? null;
   const apct = p.coverage?.analysedPercent ?? null;
+  const audpct = p.coverage?.audioEmbeddedPercent ?? null;
+  // Audio embeddings only exist once at least one is written; until then the
+  // row reads "not enabled" rather than a misleading 0% (CLAP is opt-in).
+  const audioOn = (audioEmbedded ?? 0) > 0;
   const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
   const running = !!p.tagger?.running;
   const analysisOff = p.coverage?.analysisAvailable === false;
@@ -724,6 +734,7 @@ function TaggingPanel(p: TaggingPanelProps) {
 
   useDynamicStyle(moodFillRef, { width: pct != null ? `${Math.min(100, pct)}%` : '0%' });
   useDynamicStyle(acousticFillRef, { width: !analysisOff && apct != null ? `${Math.min(100, apct)}%` : '0%' });
+  useDynamicStyle(audioFillRef, { width: audioOn && audpct != null ? `${Math.min(100, audpct)}%` : '0%' });
   useDynamicStyle(runFillRef, { width: runPct != null ? `${runPct}%` : null });
 
   useEffect(() => {
@@ -793,6 +804,23 @@ function TaggingPanel(p: TaggingPanelProps) {
             {analysisOff
               ? 'No analysis engine running. Start the tts-heavy sidecar (docker compose --profile tts-heavy up -d) or configure a local librosa venv to enable it.'
               : 'Improves beat-matching between tracks. Tagging works fine without it.'}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong px-6 py-3.5">
+          <span className="caption flex items-center gap-2">
+            <Activity size={13} /> Audio fingerprint · sounds-like
+          </span>
+          <span className="lib-opt-tag">optional</span>
+          <span className="lib-minibar"><span ref={audioFillRef} /></span>
+          <span className="caption mono-num !tracking-[0.04em]">
+            {analysisOff ? 'engine off' : audioOn ? <>{num(audioEmbedded)} / {num(total)} · {audpct != null ? `${audpct}%` : '…'}</> : 'not enabled'}
+          </span>
+          <span className="caption basis-full !tracking-[0.04em] !normal-case">
+            {analysisOff
+              ? 'Needs the analysis engine above.'
+              : audioOn
+                ? 'CLAP audio embeddings power “sounds-like” picks — catches sonic neighbours that metadata misses.'
+                : 'Set ANALYZE_AUDIO_EMBEDDING=1 on the analysis backend, then re-run analysis with --audio to add CLAP “sounds-like” embeddings.'}
           </span>
         </div>
       </div>

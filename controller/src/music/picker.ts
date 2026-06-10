@@ -23,6 +23,7 @@ const CAP_RECENT = 4;
 const CAP_FREQUENT = 4;
 const CAP_SIMILAR_ARTIST = 4;
 const CAP_EMBEDDING_SIMILAR = 4;
+const CAP_AUDIO_SIMILAR = 4;
 
 // TTL cache for sources that don't change between picks. Without this, every
 // pick would re-fetch playlists, recent/frequent album lists and re-walk their
@@ -127,6 +128,20 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     try {
       const knn = library.tracksLikeThis(currentTrack.id, 15);
       add('embedding-similar', sampleWithRecentFallback(knn, recentIds, CAP_EMBEDDING_SIMILAR));
+    } catch {}
+  }
+
+  // 1c. Audio-KNN (CLAP) from current track — "sounds like this" over the
+  // waveform itself (timbre / instrumentation / production / energy), blind to
+  // metadata. Complements embedding-similar: text catches same scene/era/theme,
+  // audio catches same sound — especially for thin-metadata or non-Western
+  // tracks where Last.fm + lyric coverage is sparse. Returns [] when the seed
+  // has no audio vector (CLAP disabled / un-analysed), so it silently no-ops on
+  // a library without audio embeddings — behaviour is identical to today's.
+  if (currentTrack?.id) {
+    try {
+      const knn = library.tracksLikeThisAudio(currentTrack.id, 15);
+      add('audio-similar', sampleWithRecentFallback(knn, recentIds, CAP_AUDIO_SIMILAR));
     } catch {}
   }
 
@@ -309,6 +324,11 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           bpm: a.bpm ?? undefined,
           key: a.key ?? undefined,
           source: c._source || null,
+          // Cosine similarity to the current track for the KNN sources
+          // (embedding-similar / audio-similar). Omitted for the other sources,
+          // which carry no similarity score. Lets the pick reason lean on "very
+          // close match" vs "loose neighbour".
+          similarity: c._similarity != null ? Math.round(c._similarity * 100) / 100 : undefined,
         };
       }),
       recentPlays,

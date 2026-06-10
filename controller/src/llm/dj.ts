@@ -441,11 +441,15 @@ ${PICKER_CRITERIA}
 
 Each candidate carries a "source" tag — a hint about where it came from:
 - similar / similar-artist: flows from what's playing now
+- embedding-similar: closest in mood / lyric / metadata space to what's playing
+- audio-similar: SOUNDS closest to what's playing (timbre, instrumentation, production)
 - recent: newly added to the library
 - frequent / starred / playlist: an established favourite
 - mood-library: matches the room's mood
 - random: a wildcard for breaking a predictable run
-Use it to balance familiarity against discovery.
+Use it to balance familiarity against discovery. The two *-similar sources may
+carry a "similarity" (0–1, higher = closer) — a high value means a very tight
+match you can lean on for a smooth segue.
 
 recentPlays is context for judging flow — every candidate is already guaranteed
 unplayed, so you never need to reject one for being recent.
