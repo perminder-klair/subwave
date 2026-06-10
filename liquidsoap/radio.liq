@@ -110,7 +110,7 @@ dj_queue = request.queue(id="dj_queue")
 # Periodically drain the queue file into request.queue
 def poll_queue() =
   if file.exists("/var/sub-wave/next.txt") then
-    contents = file.contents("/var/sub-wave/next.txt")
+    contents = string.trim(file.contents("/var/sub-wave/next.txt"))
     file.remove("/var/sub-wave/next.txt")
     if contents != "" then
       log("Queueing: #{contents}")
@@ -239,7 +239,7 @@ end
 
 def poll_voice() =
   if file.exists("/var/sub-wave/say.txt") then
-    contents = file.contents("/var/sub-wave/say.txt")
+    contents = string.trim(file.contents("/var/sub-wave/say.txt"))
     file.remove("/var/sub-wave/say.txt")
     if contents != "" then
       log("DJ says: #{contents}")
@@ -254,7 +254,7 @@ thread.run(every=0.5, poll_voice)
 
 def poll_intro() =
   if file.exists("/var/sub-wave/intro.txt") then
-    contents = file.contents("/var/sub-wave/intro.txt")
+    contents = string.trim(file.contents("/var/sub-wave/intro.txt"))
     file.remove("/var/sub-wave/intro.txt")
     if contents != "" then
       log("DJ talk-over: #{contents}")
@@ -269,7 +269,7 @@ thread.run(every=0.5, poll_intro)
 
 def poll_sfx() =
   if file.exists("/var/sub-wave/sfx.txt") then
-    contents = file.contents("/var/sub-wave/sfx.txt")
+    contents = string.trim(file.contents("/var/sub-wave/sfx.txt"))
     file.remove("/var/sub-wave/sfx.txt")
     if contents != "" then
       log("DJ sound effect: #{contents}")
