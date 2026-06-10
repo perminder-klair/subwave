@@ -114,9 +114,17 @@ export function pickSystem() {
   const djModeLine = persona?.djMode
     ? `\n\nYou're in full DJ mode — keep the thread alive across tracks: call back to something you played or said earlier in this session when it fits, and build a little momentum rather than treating each pick as isolated.`
     : '';
+  // The show topic must live in the system prompt, not only in the session-
+  // opening message: the session window (~40 turns) scrolls past the opener
+  // within the first hour, after which the picker would lose every show
+  // constraint mid-show and revert to generic picks.
+  const activeShow = settings.resolveActiveShow();
+  const showLine = activeShow?.topic
+    ? `\n\nCurrent show brief — follow this for every pick:\n${activeShow.topic}`
+    : '';
   return `${settings.agentPersonaPreamble(persona, { rules: false })}
 
-You run the station as one continuous shift. The messages above are the live session.${djModeLine}
+You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}
 
 ${dj.PICKER_CRITERIA}`;
 }

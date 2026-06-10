@@ -9,6 +9,7 @@
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as dj from '../llm/dj.js';
+import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
 
@@ -292,7 +293,11 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
 
   let pickRaw;
   try {
+    // Same show-brief plumbing as the agent picker (dj-agent.pickSystem) —
+    // this is its fallback, so it must honour the brief too.
+    const activeShow = settings.resolveActiveShow();
     pickRaw = await dj.pickNextTrack({
+      show: activeShow ? { name: activeShow.name, topic: activeShow.topic } : null,
       candidates: candidates.map(c => {
         const a = analysisFor(c);
         return {
