@@ -54,7 +54,11 @@
 		reverse_proxy web:7700
 	}
 
-	encode gzip zstd
+	# Don't compress the live audio mounts — MP3/Opus are already compressed
+	# (gzip just burns CPU on incompressible data) and an encoder layer on the
+	# never-ending body fights the `flush_interval -1` live path above.
+	@compressible not path /stream.mp3 /stream.opus
+	encode @compressible gzip zstd
 
 	log {
 		output stdout
