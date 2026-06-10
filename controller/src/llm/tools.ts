@@ -11,7 +11,7 @@ import { z } from 'zod';
 import * as subsonic from '../music/subsonic.js';
 import * as library from '../music/library.js';
 import * as embeddings from '../music/embeddings.js';
-import { filterPickerCandidates } from '../music/recency.js';
+import { artistKey, coreArtistKey, filterPickerCandidates } from '../music/recency.js';
 
 // Compile a list of user-supplied exclude patterns into regexes. Each pattern
 // is treated as a case-insensitive phrase; word boundaries are added on
@@ -172,10 +172,22 @@ export function buildPickerTools({
     }),
 
     topSongsByArtist: tool({
-      description: 'Top songs for a named artist — good for staying in an artist\'s orbit without repeating a track.',
+      description: 'Top songs for a named artist — good for staying in an artist\'s orbit without repeating a track. Refuses artists that played too recently — pick a different tool or artist in that case.',
       inputSchema: z.object({ artist: z.string() }),
       execute: async ({ artist }) => {
-        try { return collect(await subsonic.getTopSongs(artist, { count: 15 })); }
+        try {
+          // This tool's results are 100% one artist by construction. If that
+          // artist is in recentArtists, filterPickerCandidates' fallback
+          // cascade would relax the artist constraint (pass 3) and hand back
+          // exactly the artist we're trying to avoid — refuse up front instead
+          // so the agent's one discovery shot isn't spent on a dead end.
+          const key = artistKey({ artist });
+          const core = coreArtistKey({ artist });
+          if ((key && recentArtists.has(key)) || (core && recentArtists.has(core))) {
+            return { error: `${artist} played too recently — try a different artist or tool` };
+          }
+          return collect(await subsonic.getTopSongs(artist, { count: 15 }));
+        }
         catch (err) { return { error: err.message }; }
       },
     }),
