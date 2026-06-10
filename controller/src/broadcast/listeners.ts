@@ -48,12 +48,13 @@ async function fetchCount() {
     const broadcastSources = sources.filter((s: any) =>
       BROADCAST_MOUNTS.some(m => String(s?.listenurl || '').includes(m))
     );
-    lastCount = broadcastSources.reduce(
+    const current: number = broadcastSources.reduce(
       (sum: number, s: any) => sum + Number(s.listeners || 0), 0);
+    lastCount = current;
     lastStatus = {
       online: broadcastSources.length > 0,
       listeners: {
-        current: lastCount,
+        current,
         peak: broadcastSources.reduce(
           (sum: number, s: any) => sum + Number(s.listener_peak || 0), 0),
       },
