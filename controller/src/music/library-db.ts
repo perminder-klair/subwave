@@ -33,6 +33,18 @@ export const TAGGER_VERSION = 3;
 // or method changes so `--re-analyze` / staleness checks can target old rows.
 export const ANALYSIS_VERSION = 1;
 
+// CLAP audio-embedding dim. Fixed by the model (LAION-CLAP's audio projection
+// is 512-d), so — unlike the text index in track_vectors — there's no per-model
+// dim negotiation. Audio vectors are a DIFFERENT space (waveform-derived, not
+// metadata/lyric-derived) and live in their own vec0 table.
+export const AUDIO_EMBEDDING_DIM = 512;
+
+// Audio-embedding model+method version. Independent of ANALYSIS_VERSION
+// (bpm/key/intro) so a CLAP model swap can re-target audio vectors without
+// forcing a full bpm/key re-analysis, and vice-versa. Bump when the CLAP model
+// or its preprocessing changes.
+export const AUDIO_EMBEDDING_VERSION = 1;
+
 // A track counts as "tagged" only when it carries at least one mood. An empty
 // array ('[]') is written by the legacy moods.json migration and by the tagger
 // when the LLM returns no moods for a track — and an analysis-only track that
@@ -125,6 +137,7 @@ export interface LibraryStats {
   byGenre: Record<string, number>;
   bySource: Record<string, number>;
   withEmbedding: number;
+  withAudioEmbedding: number;
   updatedAt: string | null;
 }
 
@@ -254,6 +267,24 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     d.pragma('user_version = 2');
   }
 
+  if (userVersion < 3) {
+    // Audio (CLAP) embeddings — a SECOND vector space alongside track_vectors.
+    // Only the provenance/meta table is created here; the vec0 table itself is
+    // created (and can be reseeded) below, mirroring the text-vector pattern.
+    // The dim is fixed at AUDIO_EMBEDDING_DIM so there's no dim-negotiation
+    // dance — but the meta row still records model+dim+timestamp so a future
+    // model swap has provenance to reason about.
+    runDdl(d, `
+      CREATE TABLE IF NOT EXISTS audio_embedding_meta (
+        pk      INTEGER PRIMARY KEY CHECK (pk = 1),
+        model   TEXT NOT NULL,
+        dim     INTEGER NOT NULL,
+        set_at  TEXT NOT NULL
+      );
+    `);
+    d.pragma('user_version = 3');
+  }
+
   // The vec0 virtual table carries the embedding dim in its schema. If the
   // stored dim doesn't match the requested one, the caller asked for a model
   // swap — that's a --reseed operation, not an auto-migration.
@@ -301,6 +332,20 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     runDdl(d,
       `CREATE VIRTUAL TABLE track_vectors USING vec0(` +
         `id TEXT PRIMARY KEY, embedding FLOAT[${effectiveDim}] distance_metric=cosine)`,
+    );
+  }
+
+  // Audio-vector table — a parallel vec0 index at the fixed CLAP dim. Created
+  // on demand and self-heals if a future audio reseed (dropAudioVectors) drops
+  // it, exactly like track_vectors above. It needs no dim negotiation because
+  // AUDIO_EMBEDDING_DIM is constant, so it lives outside the reseed branch.
+  const hasAudioVecTable = d
+    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='track_audio_vectors'`)
+    .get();
+  if (!hasAudioVecTable) {
+    runDdl(d,
+      `CREATE VIRTUAL TABLE track_audio_vectors USING vec0(` +
+        `id TEXT PRIMARY KEY, embedding FLOAT[${AUDIO_EMBEDDING_DIM}] distance_metric=cosine)`,
     );
   }
   return effectiveDim;
@@ -400,6 +445,25 @@ export function setEmbeddingMeta(model: string, dim: number): void {
   requireDb()
     .prepare(
       `INSERT INTO embedding_meta (pk, model, dim, set_at) VALUES (1, ?, ?, ?)
+       ON CONFLICT(pk) DO UPDATE SET model = excluded.model, dim = excluded.dim, set_at = excluded.set_at`,
+    )
+    .run(model, dim, new Date().toISOString());
+}
+
+// Audio-embedding provenance — which CLAP model wrote the current audio
+// vectors. Distinct table from embedding_meta (text); the two spaces are
+// independent. Null until the first audio vector is written.
+export function getAudioEmbeddingMeta(): { model: string; dim: number } | null {
+  const row = requireDb()
+    .prepare('SELECT model, dim FROM audio_embedding_meta WHERE pk = 1')
+    .get() as { model: string; dim: number } | undefined;
+  return row || null;
+}
+
+export function setAudioEmbeddingMeta(model: string, dim: number): void {
+  requireDb()
+    .prepare(
+      `INSERT INTO audio_embedding_meta (pk, model, dim, set_at) VALUES (1, ?, ?, ?)
        ON CONFLICT(pk) DO UPDATE SET model = excluded.model, dim = excluded.dim, set_at = excluded.set_at`,
     )
     .run(model, dim, new Date().toISOString());
@@ -537,12 +601,14 @@ export function needsAnalysisIds(limit?: number): string[] {
 }
 
 export function clearAnalysis(): void {
-  requireDb()
-    .prepare(
-      `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
-        analysis_confidence = NULL, analysis_version = NULL`,
-    )
-    .run();
+  const d = requireDb();
+  d.prepare(
+    `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
+      analysis_confidence = NULL, analysis_version = NULL`,
+  ).run();
+  // The audio (CLAP) vectors are written in the same pass, so a --re-analyze
+  // that redoes bpm/key drops them too — the next pass re-embeds from scratch.
+  d.prepare('DELETE FROM track_audio_vectors').run();
 }
 
 export function upsertTrackVector(id: string, vector: number[] | Float32Array): void {
@@ -574,6 +640,35 @@ export function dropVectors(): void {
   );
 }
 
+// Write a CLAP audio embedding for a track. Independent of currentEmbeddingDim
+// (that's the TEXT index's dim) — the audio space is fixed at
+// AUDIO_EMBEDDING_DIM. Same delete+insert upsert pattern vec0 requires.
+export function upsertTrackAudioVector(id: string, vector: number[] | Float32Array): void {
+  if (vector.length !== AUDIO_EMBEDDING_DIM) {
+    throw new Error(
+      `audio vector dim ${vector.length} != ${AUDIO_EMBEDDING_DIM} (CLAP); ` +
+        `check CLAP_MODEL / the analyzer's audio_embedding output`,
+    );
+  }
+  const buf = Buffer.from(
+    vector instanceof Float32Array ? vector.buffer : new Float32Array(vector).buffer,
+  );
+  const d = requireDb();
+  d.prepare(`DELETE FROM track_audio_vectors WHERE id = ?`).run(id);
+  d.prepare(`INSERT INTO track_audio_vectors (id, embedding) VALUES (?, ?)`).run(id, buf);
+}
+
+// Drop + recreate the audio vec0 table at the fixed CLAP dim — the audio
+// counterpart to dropVectors(), for an AUDIO_EMBEDDING_VERSION / model swap.
+export function dropAudioVectors(): void {
+  const d = requireDb();
+  runDdl(d, 'DROP TABLE IF EXISTS track_audio_vectors');
+  runDdl(d,
+    `CREATE VIRTUAL TABLE track_audio_vectors USING vec0(` +
+      `id TEXT PRIMARY KEY, embedding FLOAT[${AUDIO_EMBEDDING_DIM}] distance_metric=cosine)`,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Vector queries
 // ---------------------------------------------------------------------------
@@ -589,21 +684,47 @@ export function knnById(id: string, k: number): KnnHit[] {
     | { embedding: Buffer }
     | undefined;
   if (!row) return [];
-  return knnByBuffer(row.embedding, k, id);
+  return knnByBuffer(row.embedding, k, id, 'track_vectors');
 }
 
 export function knnByVector(vec: number[] | Float32Array, k: number): KnnHit[] {
   const buf = Buffer.from(
     vec instanceof Float32Array ? vec.buffer : new Float32Array(vec).buffer,
   );
-  return knnByBuffer(buf, k, null);
+  return knnByBuffer(buf, k, null, 'track_vectors');
 }
 
-function knnByBuffer(buf: Buffer, k: number, excludeId: string | null): KnnHit[] {
+// Audio (CLAP) KNN — same logic as the text path, against track_audio_vectors.
+// Returns [] when the seed has no audio vector, so callers fall through exactly
+// like the text path does on an un-embedded seed.
+export function knnAudioById(id: string, k: number): KnnHit[] {
+  const d = requireDb();
+  const row = d.prepare(`SELECT embedding FROM track_audio_vectors WHERE id = ?`).get(id) as
+    | { embedding: Buffer }
+    | undefined;
+  if (!row) return [];
+  return knnByBuffer(row.embedding, k, id, 'track_audio_vectors');
+}
+
+export function knnByAudioVector(vec: number[] | Float32Array, k: number): KnnHit[] {
+  const buf = Buffer.from(
+    vec instanceof Float32Array ? vec.buffer : new Float32Array(vec).buffer,
+  );
+  return knnByBuffer(buf, k, null, 'track_audio_vectors');
+}
+
+// `table` is always a hardcoded vec0 table name from our own code (never user
+// input), so interpolating it is safe — the MATCH buffer is still bound.
+function knnByBuffer(
+  buf: Buffer,
+  k: number,
+  excludeId: string | null,
+  table: 'track_vectors' | 'track_audio_vectors',
+): KnnHit[] {
   const limit = excludeId ? k + 1 : k;
   const rows = requireDb()
     .prepare(
-      `SELECT id, distance FROM track_vectors WHERE embedding MATCH ? ORDER BY distance LIMIT ?`,
+      `SELECT id, distance FROM ${table} WHERE embedding MATCH ? ORDER BY distance LIMIT ?`,
     )
     .all(buf, limit) as Array<{ id: string; distance: number }>;
   const hits: KnnHit[] = [];
@@ -619,6 +740,29 @@ export function vectorCount(): number {
   return (requireDb().prepare('SELECT COUNT(*) AS n FROM track_vectors').get() as {
     n: number;
   }).n;
+}
+
+export function hasAudioVector(id: string): boolean {
+  return !!requireDb().prepare(`SELECT 1 FROM track_audio_vectors WHERE id = ?`).get(id);
+}
+
+export function audioVectorCount(): number {
+  return (requireDb().prepare('SELECT COUNT(*) AS n FROM track_audio_vectors').get() as {
+    n: number;
+  }).n;
+}
+
+// Ids that have no audio vector yet (never embedded). Resumable, ordered for
+// stable resumption, independent of the bpm/key analysis scope so the audio
+// backfill can run on its own cadence. LEFT JOIN where the vector row is absent.
+export function unanalysedAudioIds(limit?: number): string[] {
+  const q = limit && limit > 0
+    ? `SELECT t.id FROM tracks t LEFT JOIN track_audio_vectors v ON v.id = t.id
+       WHERE v.id IS NULL ORDER BY t.id LIMIT ${Math.floor(limit)}`
+    : `SELECT t.id FROM tracks t LEFT JOIN track_audio_vectors v ON v.id = t.id
+       WHERE v.id IS NULL ORDER BY t.id`;
+  const rows = requireDb().prepare(q).all() as Array<{ id: string }>;
+  return rows.map(r => r.id);
 }
 
 // Total tracks known to the catalogue. Used by the analyze CLI to decide
@@ -647,10 +791,12 @@ export function pruneMissingTracks(liveIds: ReadonlySet<string>): number {
   if (orphans.length === 0) return 0;
   const delTrack = d.prepare('DELETE FROM tracks WHERE id = ?');
   const delVec = d.prepare('DELETE FROM track_vectors WHERE id = ?');
+  const delAudioVec = d.prepare('DELETE FROM track_audio_vectors WHERE id = ?');
   const runPrune = d.transaction((ids: string[]) => {
     for (const id of ids) {
       delTrack.run(id);
       delVec.run(id);
+      delAudioVec.run(id);
     }
   });
   runPrune(orphans);
@@ -848,10 +994,16 @@ export function stats(): LibraryStats {
   const withEmbedding = (d.prepare('SELECT COUNT(*) AS n FROM track_vectors').get() as {
     n: number;
   }).n;
+  const withAudioEmbedding = (
+    d.prepare('SELECT COUNT(*) AS n FROM track_audio_vectors').get() as { n: number }
+  ).n;
   const updatedAt =
     ((d.prepare('SELECT MAX(tagged_at) AS t FROM tracks').get() as { t: string | null }).t) ||
     null;
-  return { total, distinctArtists, byMood, byEnergy, byGenre, bySource, withEmbedding, updatedAt };
+  return {
+    total, distinctArtists, byMood, byEnergy, byGenre, bySource,
+    withEmbedding, withAudioEmbedding, updatedAt,
+  };
 }
 
 // ---------------------------------------------------------------------------
