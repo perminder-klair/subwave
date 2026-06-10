@@ -9,7 +9,7 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": false,
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "bundleIdentifier": "com.getsubwave.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
