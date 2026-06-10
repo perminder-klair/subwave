@@ -38,6 +38,10 @@ export default function StationFooter({ djName }: { djName?: string }) {
         <AnimatedLink href="/listen" className="font-semibold tracking-[inherit] text-ink hover:text-vermilion">
           open the player
         </AnimatedLink>{' '}
+        ·{' '}
+        <AnimatedLink href="/privacy" className="font-semibold tracking-[inherit] text-ink hover:text-vermilion">
+          privacy
+        </AnimatedLink>{' '}
         —
       </div>
       <div className="pb-[6px] text-center text-[10px] tracking-[0.3em] text-balance text-muted uppercase">
