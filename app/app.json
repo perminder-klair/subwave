@@ -12,6 +12,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.getsubwave.app",
       "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
         "UIBackgroundModes": [
           "audio"
         ],
