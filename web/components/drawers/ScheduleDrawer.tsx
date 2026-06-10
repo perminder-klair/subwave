@@ -10,8 +10,7 @@ import type {
   ScheduleShow,
   StationContext,
 } from '@/lib/types';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+import { useStationOrigin } from '@/lib/stationOrigin';
 
 const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
@@ -20,9 +19,9 @@ const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 // matches its environment — Caddy strips `/api` in production, the dev web
 // process talks to the controller on a different port. Empty input stays
 // empty so `<img>` falls back to the initials placeholder.
-function resolveAvatar(path: string | undefined | null): string {
+function resolveAvatar(apiUrl: string, path: string | undefined | null): string {
   if (!path) return '';
-  return `${API_URL}${path}`;
+  return `${apiUrl}${path}`;
 }
 
 export interface ScheduleDrawerProps {
@@ -84,6 +83,7 @@ function endHourForCurrentBlock(grid: ScheduleGrid, day: number, hour: number): 
 }
 
 export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerProps) {
+  const { apiUrl } = useStationOrigin();
   const [data, setData] = useState<SchedulePayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
@@ -94,7 +94,7 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`${API_URL}/schedule`);
+        const r = await fetch(`${apiUrl}/schedule`);
         if (!r.ok) throw new Error(`schedule fetch ${r.status}`);
         const j = (await r.json()) as SchedulePayload;
         if (!cancelled) setData(j);
@@ -105,7 +105,7 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [apiUrl]);
 
   // Drives both the on-now indicator (grid resolution is 1 h, so 60 s would
   // be enough on its own) and the station-time clock at the top of the drawer
@@ -305,6 +305,7 @@ function OnNowCard(props: {
   activeShow: ActiveShow | null;
 }) {
   const { onNow, activeShow } = props;
+  const { apiUrl } = useStationOrigin();
   if (!onNow) {
     return (
       <section>
@@ -320,7 +321,7 @@ function OnNowCard(props: {
     );
   }
   const personaName = onNow.persona?.name || activeShow?.persona?.name || 'Host';
-  const avatar = resolveAvatar(onNow.persona?.avatar || activeShow?.persona?.avatar || '');
+  const avatar = resolveAvatar(apiUrl, onNow.persona?.avatar || activeShow?.persona?.avatar || '');
   return (
     <section>
       <SectionLabel>On now · until {fmtHour((onNow.endHour + 1) % 24)}</SectionLabel>
@@ -345,8 +346,9 @@ function OnNowCard(props: {
 }
 
 function ScheduleRow({ slot, isNow }: { slot: Slot; isNow: boolean }) {
+  const { apiUrl } = useStationOrigin();
   const personaName = slot.persona?.name || (slot.show ? 'Host' : null);
-  const avatar = resolveAvatar(slot.persona?.avatar || '');
+  const avatar = resolveAvatar(apiUrl, slot.persona?.avatar || '');
   const time = slot.hour === slot.endHour ? fmtHour(slot.hour) : fmtHourRange(slot.hour, slot.endHour);
   return (
     <li

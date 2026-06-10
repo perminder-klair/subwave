@@ -1,4 +1,5 @@
 import Landing from '../../components/Landing';
+import { getShowcaseStations } from '@/lib/stations';
 import { pageMeta } from '@/lib/seo';
 
 export const metadata = pageMeta({
@@ -15,5 +16,5 @@ export const viewport = {
 };
 
 export default function LandingPreviewPage() {
-  return <Landing />;
+  return <Landing stations={getShowcaseStations()} />;
 }

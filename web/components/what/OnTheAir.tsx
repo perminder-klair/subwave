@@ -1,5 +1,6 @@
 import PlayerShowcase from '../landing/PlayerShowcase';
 import EditorialReveal from '../landing/EditorialReveal';
+import type { ShowcaseStation } from '@/lib/stations';
 
 const POINTS = [
   {
@@ -28,7 +29,7 @@ const POINTS = [
   },
 ];
 
-export default function OnTheAir() {
+export default function OnTheAir({ stations = [] }: { stations?: ShowcaseStation[] }) {
   return (
     <EditorialReveal className="bs-section border-t-0">
       <p className="bs-eyebrow">PART ONE · THE PLAYER</p>
@@ -38,7 +39,7 @@ export default function OnTheAir() {
         what a listener actually sees.
       </p>
 
-      <PlayerShowcase />
+      <PlayerShowcase stations={stations} />
 
       <div className="bs-whatis-grid mt-4">
         {POINTS.map((p) => (

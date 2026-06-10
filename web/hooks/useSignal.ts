@@ -2,9 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { pollWhileVisible } from '@/lib/poll';
+import { useStationOrigin } from '@/lib/stationOrigin';
 import type { PlayerStatus } from '@/hooks/usePlayer';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 // The signal meter reads round-trip latency to the controller as a proxy for
 // connection health — there's no lower-level stream-jitter signal available in
@@ -38,6 +37,7 @@ export interface UseSignalOptions {
 // measured latency + a derived quality band for the footer's signal meter.
 // Probes only while tuned in and on air, so the landing page makes no requests.
 export function useSignal({ tunedIn, status, offline }: UseSignalOptions): Signal {
+  const { apiUrl } = useStationOrigin();
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -55,7 +55,7 @@ export function useSignal({ tunedIn, status, offline }: UseSignalOptions): Signa
       const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
       const t0 = performance.now();
       try {
-        await fetch(`${API_URL}/health`, { cache: 'no-store', signal: ctrl.signal });
+        await fetch(`${apiUrl}/health`, { cache: 'no-store', signal: ctrl.signal });
         if (cancelled) return;
         setLatencyMs(Math.round(performance.now() - t0));
         setFailed(false);
@@ -78,7 +78,7 @@ export function useSignal({ tunedIn, status, offline }: UseSignalOptions): Signa
       cancelled = true;
       stopPolling();
     };
-  }, [tunedIn, offline]);
+  }, [tunedIn, offline, apiUrl]);
 
   const quality = useMemo<SignalQuality>(() => {
     if (offline) return 'offline';

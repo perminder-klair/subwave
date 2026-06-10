@@ -2,30 +2,16 @@
 
 import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { isIOSDevice } from '@/lib/platform';
+import { useStationOrigin } from '@/lib/stationOrigin';
 
 // We pick MP3 vs Ogg-Opus on the client via canPlayType — Opus is roughly
 // equal-or-better quality at half the bandwidth on browsers that decode it.
 //
-// `NEXT_PUBLIC_STREAM_URL` is the build-time host override (dev points the
-// player at `http://localhost:7702/stream.mp3` because Icecast isn't on the
-// web origin there). It used to pin a single URL; now it pins the *host* and
-// we swap the path between `/stream.mp3` and `/stream.opus` on the same host.
-// Operators who pointed it at a non-standard URL that doesn't end in
-// `/stream.mp3` still get it verbatim (opus is null → codec detection off).
-const STREAM_URL_OVERRIDE = process.env.NEXT_PUBLIC_STREAM_URL || '';
-const MP3_PATH = '/stream.mp3';
-const OPUS_PATH = '/stream.opus';
-
-function resolveStreamUrls(): { mp3: string; opus: string | null } {
-  if (!STREAM_URL_OVERRIDE) return { mp3: MP3_PATH, opus: OPUS_PATH };
-  const idx = STREAM_URL_OVERRIDE.lastIndexOf(MP3_PATH);
-  if (idx === -1) return { mp3: STREAM_URL_OVERRIDE, opus: null };
-  const before = STREAM_URL_OVERRIDE.slice(0, idx);
-  const after = STREAM_URL_OVERRIDE.slice(idx + MP3_PATH.length);
-  return { mp3: STREAM_URL_OVERRIDE, opus: `${before}${OPUS_PATH}${after}` };
-}
-
-const { mp3: MP3_STREAM_URL, opus: OPUS_STREAM_URL } = resolveStreamUrls();
+// The mount URLs come from StationOriginContext (env defaults when no
+// provider; a remote station's host when the landing showcase tabs over).
+// Consumers that retarget the player remount it (key) — the hook still
+// mirrors the URLs into a ref so the long-lived watchdog listeners read
+// fresh values either way.
 
 export type PlayerStatus = 'idle' | 'connecting' | 'playing';
 
@@ -49,11 +35,12 @@ export interface UsePlayerOptions {
 // an <audio> tag rendered by the consumer (so the Waveform's Web Audio API
 // can also reach it).
 export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player {
+  const { streams } = useStationOrigin();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // Resolved at mount via canPlayType. SSR + first render use the MP3 URL so
   // server and client markup agree; the useEffect below upgrades to Opus when
   // the browser confirms it can decode it.
-  const [streamUrl, setStreamUrl] = useState<string>(MP3_STREAM_URL);
+  const [streamUrl, setStreamUrl] = useState<string>(streams.mp3);
   const [tunedIn, setTunedIn] = useState(false);
   // 'idle' | 'connecting' | 'playing'. 'connecting' covers the unavoidable
   // gap between the tune-in gesture and the first audible audio frames —
@@ -74,6 +61,7 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
   // so its event listeners can stay registered once and still see fresh data.
   const tunedInRef = useRef(tunedIn);
   const streamUrlRef = useRef(streamUrl);
+  const streamsRef = useRef(streams);
   const volumeRef = useRef(volume);
   const watchdogTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Set once if the optional Opus mount fails to load — pins us to MP3 so the
@@ -82,6 +70,7 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
   const opusFailedRef = useRef(false);
   useEffect(() => { tunedInRef.current = tunedIn; }, [tunedIn]);
   useEffect(() => { streamUrlRef.current = streamUrl; }, [streamUrl]);
+  useEffect(() => { streamsRef.current = streams; }, [streams]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
 
   useEffect(() => {
@@ -102,7 +91,7 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
   // iOS-family devices (iPad on iPadOS 13+ reports the desktop Macintosh UA so
   // we also check maxTouchPoints), and skip Firefox by UA.
   useEffect(() => {
-    if (!OPUS_STREAM_URL || opusFailedRef.current) return;
+    if (!streams.opus || opusFailedRef.current) return;
     const ua = navigator.userAgent;
     // Desktop/Android Firefox + Gecko forks (LibreWolf, Waterfox) carry
     // "Firefox" in the UA; Firefox-for-iOS reports "FxiOS" and is already
@@ -112,9 +101,9 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
     const tester = document.createElement('audio');
     const opusOk = tester.canPlayType('audio/ogg; codecs=opus');
     if (opusOk === 'probably') {
-      setStreamUrl(OPUS_STREAM_URL);
+      setStreamUrl(streams.opus);
     }
-  }, []);
+  }, [streams.opus]);
 
   // Drive `status` from the <audio> element's own events, and reconnect the
   // stream when the element gets stuck mid-broadcast (the symptom: a few
@@ -171,10 +160,11 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
       // If the optional Opus mount errors (commonly a 404 when the operator
       // has disabled Opus server-side), fall back permanently to the universal
       // MP3 mount rather than reconnecting to the dead Opus URL on every retry.
-      if (OPUS_STREAM_URL && streamUrlRef.current === OPUS_STREAM_URL) {
+      const { mp3, opus } = streamsRef.current;
+      if (opus && streamUrlRef.current === opus) {
         opusFailedRef.current = true;
-        streamUrlRef.current = MP3_STREAM_URL;
-        setStreamUrl(MP3_STREAM_URL);
+        streamUrlRef.current = mp3;
+        setStreamUrl(mp3);
       }
       armWatchdog(500);
     };

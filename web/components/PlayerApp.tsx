@@ -26,9 +26,8 @@ import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useCoverColors } from '@/hooks/useCoverColors';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import { cn } from '@/lib/cn';
+import { useStationOrigin } from '@/lib/stationOrigin';
 import type { RequestResult } from '@/lib/types';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 const DRAWER_TITLES: Record<PlayerDrawer, string> = {
   timeline: 'Timeline',
@@ -48,6 +47,7 @@ export interface PlayerAppProps {
 }
 
 export default function PlayerApp({ contained = false }: PlayerAppProps) {
+  const { apiUrl } = useStationOrigin();
   const { nowPlaying, context, dj, activeShow, listeners, streamOnline, state, session, trackStartedAt } = useStationFeed();
   const boothFeed = session.messages;
   const { audioRef, tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = usePlayer();
@@ -74,13 +74,14 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
   // Persona avatar to surface on the OS lock screen while the DJ is talking.
   // Prefer the on-air show's persona (a scheduled show can hand the hour to a
   // different DJ); fall back to the global "active" persona from /now-playing.
-  // The controller emits a path without the `/api` prefix; prepend API_URL
-  // so this resolves the same way in prod (via Caddy) and dev (direct origin).
+  // The controller emits a path without the `/api` prefix; prepend the
+  // station's API base so this resolves the same way in prod (via Caddy),
+  // dev (direct origin), and the landing showcase (remote station).
   const avatarPath =
     (typeof activeShow?.persona?.avatar === 'string' && activeShow.persona.avatar) ||
     (typeof dj?.avatar === 'string' ? dj.avatar : '') ||
     '';
-  const personaAvatarUrl = avatarPath ? `${API_URL}${avatarPath}` : null;
+  const personaAvatarUrl = avatarPath ? `${apiUrl}${avatarPath}` : null;
   const personaName =
     (typeof activeShow?.persona?.name === 'string' && activeShow.persona.name) ||
     (typeof dj?.name === 'string' ? dj.name : '') ||
@@ -109,7 +110,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
   // shape as CenterStage so the extraction hits the controller's cached proxy.
   const coverSubsonicId = nowPlaying?.subsonic_id ?? null;
   const coverSrc = coverSubsonicId
-    ? `${API_URL}/cover/${encodeURIComponent(coverSubsonicId)}`
+    ? `${apiUrl}/cover/${encodeURIComponent(coverSubsonicId)}`
     : null;
   const coverColors = useCoverColors(coverSrc);
   const ambientRef = useRef<HTMLDivElement | null>(null);
@@ -215,7 +216,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
     if (!requestText.trim() || isSubmitting) return null;
     setIsSubmitting(true);
     try {
-      const res = await fetch(`${API_URL}/request`, {
+      const res = await fetch(`${apiUrl}/request`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: requestText.trim(), name: requesterName.trim() }),
@@ -235,7 +236,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
   // status payload, or null on a network error so the drawer keeps trying.
   const pollRequest = async (requestId: string): Promise<RequestResult | null> => {
     try {
-      const res = await fetch(`${API_URL}/request/${requestId}`);
+      const res = await fetch(`${apiUrl}/request/${requestId}`);
       if (res.status === 404) return { success: false, status: 'unknown' };
       return (await res.json()) as RequestResult;
     } catch {

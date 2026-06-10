@@ -3,6 +3,7 @@ import PlayerApp from '@/components/PlayerApp';
 import Landing from '@/components/Landing';
 import { absoluteUrl } from '@/lib/seo';
 import { fetchStationIdentity } from '@/lib/station';
+import { getShowcaseStations } from '@/lib/stations';
 
 // Read at request time so a deployment can flip player ↔ landing by just
 // restarting the web container with a different env value, no rebuild.
@@ -71,5 +72,5 @@ export const viewport: Viewport = {
 
 export default function HomePage() {
   const mode = (process.env.SUBWAVE_HOMEPAGE || 'player').toLowerCase();
-  return mode === 'landing' ? <Landing /> : <PlayerApp />;
+  return mode === 'landing' ? <Landing stations={getShowcaseStations()} /> : <PlayerApp />;
 }

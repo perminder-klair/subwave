@@ -9,6 +9,7 @@
 // and are trivial to review or revert. Mirrors the content/news pattern.
 import fs from 'node:fs';
 import path from 'node:path';
+import { SITE_URL } from './site';
 
 export interface Station {
   /** Derived from the filename; stable id for keys + map markers. */
@@ -100,6 +101,51 @@ export function getAllStations(): Station[] {
 /** Stations with usable coordinates — the ones the map can plot. */
 export function getMappableStations(): Station[] {
   return getAllStations().filter((s) => s.lat != null && s.lon != null);
+}
+
+// ── Landing showcase tabs ────────────────────────────────────────────────
+// The landing page's embedded player can tune the demo to any directory
+// station (PlayerShowcase tabs). This is the serialisable subset that crosses
+// the server→client boundary; the full Station stays server-side.
+
+export interface ShowcaseStation {
+  slug: string;
+  name: string;
+  /** Public site origin. Ignored when `isLocal` — the player then keeps its
+   *  env-default same-origin wiring, which is what makes a self-hosted
+   *  landing page demo that operator's own station, not the flagship. */
+  url: string;
+  genre?: string;
+  isLocal?: boolean;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host.replace(/^www\./, '').toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+/** Directory stations shaped for the landing showcase tabs, local station
+ *  first. The directory entry whose host matches SITE_URL is marked local
+ *  (the flagship, on getsubwave.com); when none matches — a self-hosted or
+ *  dev deployment — a synthetic "This station" tab is prepended so the demo
+ *  still opens on the operator's own broadcast. */
+export function getShowcaseStations(): ShowcaseStation[] {
+  const siteHost = hostOf(SITE_URL);
+  const all = getAllStations().map<ShowcaseStation>((s) => ({
+    slug: s.slug,
+    name: s.name,
+    url: s.url,
+    ...(s.genre ? { genre: s.genre } : {}),
+    ...(siteHost && hostOf(s.url) === siteHost ? { isLocal: true } : {}),
+  }));
+  const local = all.find((s) => s.isLocal);
+  if (!local) {
+    return [{ slug: '__local', name: 'This station', url: SITE_URL, isLocal: true }, ...all];
+  }
+  return [local, ...all.filter((s) => s !== local)];
 }
 
 /** Header tallies: total stations + distinct countries. */

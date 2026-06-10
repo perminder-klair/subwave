@@ -1,9 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState, type RefObject } from 'react';
+import { useStationOrigin } from '@/lib/stationOrigin';
 import type { NowPlayingTrack, SessionTurn } from '@/lib/types';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 // How long after the last spoken turn we keep showing the DJ avatar on the
 // lock screen. Match this to typical voice-segment length plus a small tail —
@@ -100,6 +99,7 @@ export function useMediaSession({
   personaAvatarUrl,
   personaName,
 }: UseMediaSessionParams): void {
+  const { apiUrl } = useStationOrigin();
   // `talking` is a derived bit — true for TALKING_LINGER_MS after the most
   // recent voice turn lands in the booth feed. We hold it in state (rather
   // than recomputing on every render) so a setTimeout can flip it back off
@@ -142,7 +142,7 @@ export function useMediaSession({
     const subsonicId = nowPlaying?.subsonic_id;
     const coverArt: MediaImage | null = subsonicId
       ? {
-          src: `${API_URL}/cover/${encodeURIComponent(subsonicId)}`,
+          src: `${apiUrl}/cover/${encodeURIComponent(subsonicId)}`,
           sizes: '512x512',
           type: 'image/jpeg',
         }
@@ -194,6 +194,7 @@ export function useMediaSession({
     talking,
     personaAvatarUrl,
     personaName,
+    apiUrl,
   ]);
 
   // Action handlers. These are bound once per change to the dependencies so

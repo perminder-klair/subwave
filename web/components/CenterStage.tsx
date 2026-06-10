@@ -9,9 +9,8 @@ import { useElapsed } from '@/hooks/useElapsed';
 import DjThinkingLine from './DjThinkingLine';
 import { Ripple } from './ui/ripple';
 import { isDjTurn } from '@/lib/sessionFeed';
+import { useStationOrigin } from '@/lib/stationOrigin';
 import type { NowPlayingTrack, SessionTurn } from '@/lib/types';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 export interface CenterStageProps {
   nowPlaying: NowPlayingTrack | null;
@@ -24,6 +23,7 @@ export interface CenterStageProps {
 }
 
 export default memo(function CenterStage({ nowPlaying, trackStartedAt, feed, djLineOn, onOpenBooth, onOpenTimeline }: CenterStageProps) {
+  const { apiUrl } = useStationOrigin();
   // The 1s elapsed tick lives here, in the component that displays it, so it
   // only re-renders this subtree — not the whole player (see useElapsed).
   const elapsed = useElapsed(trackStartedAt);
@@ -31,7 +31,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, feed, djL
   const duration = nowPlaying?.duration ?? 0;
   const subsonicId = nowPlaying?.subsonic_id ?? null;
   const coverSrc = subsonicId
-    ? `${API_URL}/cover/${encodeURIComponent(subsonicId)}`
+    ? `${apiUrl}/cover/${encodeURIComponent(subsonicId)}`
     : null;
   // Title key keeps placeholder + real titles in the same AnimatePresence so
   // the first-track-arrives transition cross-dissolves the "scanning" line out.

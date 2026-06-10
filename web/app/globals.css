@@ -1343,6 +1343,60 @@ body::after {
         0 8px 24px -16px rgba(0, 0, 0, 0.6);
 }
 
+/* Station tabs — a browser-tab strip above the chrome bar. Fed from the
+   stations directory; picking one retunes the embedded demo player. */
+.bs-frame-tabs {
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+    padding: 8px 10px 0;
+    background: color-mix(in oklab, var(--bg) 80%, var(--ink));
+    border-bottom: 1px solid var(--ink);
+    overflow-x: auto;
+    scrollbar-width: none;
+    position: relative;
+    z-index: 2;
+}
+.bs-frame-tabs::-webkit-scrollbar {
+    display: none;
+}
+.bs-frame-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 14px 8px;
+    margin-bottom: -1px; /* active tab fuses with the bar below */
+    border: 1px solid transparent;
+    border-bottom: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    cursor: pointer;
+    flex: 0 0 auto;
+}
+.bs-frame-tab:hover {
+    color: var(--ink);
+}
+.bs-frame-tab[data-active] {
+    background: color-mix(in oklab, var(--bg) 90%, var(--ink));
+    border-color: var(--ink);
+    color: var(--ink);
+}
+.bs-frame-tab-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--separator-strong);
+    flex: 0 0 auto;
+}
+.bs-frame-tab[data-active] .bs-frame-tab-dot {
+    background: var(--accent);
+}
+
 .bs-frame-bar {
     display: grid;
     grid-template-columns: auto 1fr auto;
