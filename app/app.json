@@ -12,7 +12,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.getsubwave.app",
       "infoPlist": {
-        "UIBackgroundModes": ["audio"],
+        "UIBackgroundModes": [
+          "audio"
+        ],
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false,
           "NSAllowsLocalNetworking": true
@@ -52,11 +54,21 @@
       [
         "expo-build-properties",
         {
-          "android": { "compileSdkVersion": 36, "targetSdkVersion": 36 },
-          "ios": { "deploymentTarget": "16.4" }
+          "android": {
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36
+          },
+          "ios": {
+            "deploymentTarget": "16.4"
+          }
         }
       ],
-      ["./plugins/withGradleVersion", { "version": "8.14.3" }]
+      [
+        "./plugins/withGradleVersion",
+        {
+          "version": "8.14.3"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
@@ -65,7 +77,12 @@
       "featuredStation": {
         "url": "https://www.getsubwave.com",
         "name": "SUB/WAVE"
+      },
+      "router": {},
+      "eas": {
+        "projectId": "b834b64c-f694-4f45-b3fa-0f2c0a4df5ba"
       }
-    }
+    },
+    "owner": "pinku1"
   }
 }
