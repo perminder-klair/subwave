@@ -136,6 +136,19 @@ function requestSystem() {
 The messages above are the live session — the last user turn is a listener request.`;
 }
 
+// With a show brief active, the picker gets exactly one discovery call
+// (COMMIT_AFTER_STEPS in sdk.js) and PICKER_CRITERIA #1 makes the brief's
+// genre/mood a hard constraint — but several discovery tools carry no
+// mood/genre signal at all (similarSongs is seed-similarity, topSongsByArtist
+// is a discography lookup, recentlyAdded/starredSongs/randomSongs are blind
+// library samples). If the model's one shot lands on one of those, the whole
+// candidate pool can be off-brief regardless of how well the prompt is
+// written — there's nothing on-brief in it to choose. Restrict step-0 tools
+// to the mood/genre-aware set whenever a brief is active; the agent always
+// has tools that can return brief-fitting candidates. No restriction when no
+// show is active (general rotation can use the full toolset).
+const MOOD_AWARE_TOOLS = ['searchLibrary', 'tracksByMood', 'tracksByEnergy', 'tracksLikeThis', 'searchByLyrics'];
+
 // Named agents — the picker and request-handler specs in one declarable block
 // each. `buildSystem` and `buildTools` resolve persona / per-call filters at
 // run time; everything else (schema, step cap, hard timeout, log kind) is
@@ -155,6 +168,12 @@ export const pickerAgent = defineAgent({
     const activeShow = settings.resolveActiveShow();
     const { maxDurationSec, excludePatterns } = settings.getPickerConfig(activeShow);
     const { tools, seen } = buildPickerTools({ recentIds, recentKeys, recentArtists, maxDurationSec, excludePatterns });
+    if (activeShow?.topic) {
+      const filtered = Object.fromEntries(
+        Object.entries(tools).filter(([name]) => MOOD_AWARE_TOOLS.includes(name)),
+      );
+      return { tools: filtered, extras: { seen } };
+    }
     return { tools, extras: { seen } };
   },
 });
