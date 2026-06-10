@@ -18,6 +18,8 @@ import { shouldFire } from './dj-gate.js';
 import { djCallsAllowed } from './listeners.js';
 import { agenticTick, skillCatalog } from '../skills/_agent.js';
 import { withTrace } from '../observability/events.js';
+import { isRadioPickable } from '../llm/tools.js';
+import * as settings from '../settings.js';
 
 const TARGET_POOL = 30;
 const MOOD_WEIGHT = 12;          // up to this many mood-tagged tracks per pool
@@ -57,6 +59,15 @@ async function refreshAutoPlaylistInner() {
   // Match the auto-DJ picker's window (dj-agent.pickViaAgent) — 12h.
   const recent = queue.recentlyPlayedIds(12);
 
+  // Auto-playlist is Liquidsoap's fallback source — it plays directly from
+  // this file (no picker/LLM in the loop) whenever the queue runs dry, so it
+  // must honour the same exclude patterns / duration cap as every other pick
+  // path. Without this, station-wide excludes (e.g. "demo", "live", holiday
+  // tracks) only applied to LLM-driven picks and a previously-built auto.m3u
+  // could keep airing excluded tracks indefinitely on underrun.
+  const activeShow = settings.resolveActiveShow();
+  const { maxDurationSec, excludePatterns } = settings.getPickerConfig(activeShow);
+
   const pool: any[] = [];
   const fromSource: Record<string, number> = { mood: 0, playlist: 0, recent: 0, frequent: 0, starred: 0, random: 0 };
   const take = (label: string, items: any[], cap: number) => {
@@ -64,6 +75,8 @@ async function refreshAutoPlaylistInner() {
     for (const t of items) {
       if (n >= cap || pool.length >= TARGET_POOL) break;
       if (!t?.id || recent.has(t.id) || pool.find((p: any) => p.id === t.id)) continue;
+      if (t.duration && t.duration > maxDurationSec) continue;
+      if (!isRadioPickable(t.title ?? '', t.album, excludePatterns, t.genre)) continue;
       pool.push({ ...t, _source: label });
       fromSource[label]++;
       n++;
