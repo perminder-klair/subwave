@@ -47,6 +47,21 @@ const DARK_DEFAULTS: ResolvedColors = {
   field: '#1b1815',
 };
 
+// Light-mode counterpart. A light theme can ship a parseable dark `--ink`
+// alongside an `--bg`/`--field` expressed as oklch()/color-mix() (which RN
+// can't parse). Falling those back to the DARK defaults yields dark text on a
+// dark field — invisible. Mode-aware fallbacks keep an unparseable light field
+// light. Values track the seeded `classic-light` palette.
+const LIGHT_DEFAULTS: ResolvedColors = {
+  bg: '#f3efe6',
+  ink: '#161412',
+  muted: '#7a736a',
+  accent: '#d94b2a',
+  overlay: 'rgba(0,0,0,0.05)',
+  softBorder: 'rgba(0,0,0,0.08)',
+  field: '#e1ddd4',
+};
+
 // RN's style engine + Skia only parse hex / rgb(a) / hsl(a) / named colors —
 // NOT the CSS oklch() and color-mix() that the controller's /themes registry
 // uses (browsers handle those natively, RN doesn't). Anything unparseable
@@ -58,15 +73,19 @@ function safeColor(value: string | undefined, fallback: string): string {
   return fallback;
 }
 
-function colorsFromTokens(tokens: Record<string, string>): ResolvedColors {
+function colorsFromTokens(
+  tokens: Record<string, string>,
+  mode: ThemeMode,
+): ResolvedColors {
+  const d = mode === 'light' ? LIGHT_DEFAULTS : DARK_DEFAULTS;
   return {
-    bg: safeColor(tokens['--bg'], DARK_DEFAULTS.bg),
-    ink: safeColor(tokens['--ink'], DARK_DEFAULTS.ink),
-    muted: safeColor(tokens['--muted'], DARK_DEFAULTS.muted),
-    accent: safeColor(tokens['--accent'], DARK_DEFAULTS.accent),
-    overlay: safeColor(tokens['--overlay'], DARK_DEFAULTS.overlay),
-    softBorder: safeColor(tokens['--soft-border'], DARK_DEFAULTS.softBorder),
-    field: safeColor(tokens['--field'], DARK_DEFAULTS.field),
+    bg: safeColor(tokens['--bg'], d.bg),
+    ink: safeColor(tokens['--ink'], d.ink),
+    muted: safeColor(tokens['--muted'], d.muted),
+    accent: safeColor(tokens['--accent'], d.accent),
+    overlay: safeColor(tokens['--overlay'], d.overlay),
+    softBorder: safeColor(tokens['--soft-border'], d.softBorder),
+    field: safeColor(tokens['--field'], d.field),
   };
 }
 
@@ -134,7 +153,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   const tokens = activeTheme?.tokens ?? DARK_TOKENS;
   const mode: ThemeMode = activeTheme?.mode ?? 'dark';
-  const colors = useMemo(() => colorsFromTokens(tokens), [tokens]);
+  const colors = useMemo(() => colorsFromTokens(tokens, mode), [tokens, mode]);
 
   // NativeWind className colors resolve to these CSS vars, so they must be
   // RN-parseable too — feed vars() the sanitized colors, not the raw tokens
