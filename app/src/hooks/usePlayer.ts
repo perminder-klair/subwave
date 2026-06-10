@@ -109,6 +109,20 @@ export function usePlayer(api: StationApi | null, initialVolume = 1): Player {
     teardown().catch(() => {});
   }, [clearWatchdog]);
 
+  // When the station changes out from under us (switch / add / sign-out),
+  // selectStation has already torn the old stream down at the RNTP level —
+  // drop our local tuned-in state to match so the UI doesn't claim "on air"
+  // over dead audio. (RNTP lands in State.None after reset(); the event
+  // handler above deliberately ignores None because reset() also fires that
+  // mid tune-in and mid reconnect.)
+  const prevBaseRef = useRef(api?.base ?? null);
+  useEffect(() => {
+    const nextBase = api?.base ?? null;
+    if (prevBaseRef.current === nextBase) return;
+    prevBaseRef.current = nextBase;
+    if (tunedInRef.current) stop();
+  }, [api, stop]);
+
   const tune = useCallback(() => {
     if (tunedInRef.current) {
       stop();

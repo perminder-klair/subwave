@@ -11,6 +11,7 @@ import React, {
   useMemo,
   useState,
 } from 'react';
+import { teardown } from '@/audio/player';
 import { createApi, type StationApi } from '@/lib/api';
 import {
   clearActiveStation,
@@ -61,6 +62,10 @@ export function StationProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const selectStation = useCallback(async (ref: StationRef) => {
+    // Single choke point for re-pointing the app: stop the current station's
+    // audio BEFORE the base changes, so every caller (stations screen,
+    // onboarding add-station) gets the teardown for free.
+    await teardown();
     const next = await setActiveStation(ref);
     setStore(next);
   }, []);
@@ -71,6 +76,7 @@ export function StationProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    await teardown();
     const next = await clearActiveStation();
     setStore(next);
   }, []);

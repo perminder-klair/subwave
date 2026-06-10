@@ -122,8 +122,17 @@ export default function Onboarding() {
 
   const tuneIn = async () => {
     if (!target) return;
+    // selectStation tears down any current playback before re-pointing.
     await selectStation({ url: target.base, name: target.name });
-    router.replace('/');
+    if (addMode) {
+      // Came here from the stations modal ([index, stations, onboarding]) —
+      // unwind to the existing root player. replace() would stack a second
+      // player screen inside the modal (overlapping screens).
+      router.dismissTo('/');
+    } else {
+      // First run: onboarding IS the root — swap it for the player.
+      router.replace('/');
+    }
   };
 
   const backToEntry = () => {

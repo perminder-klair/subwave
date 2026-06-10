@@ -1,13 +1,15 @@
 // Station switcher, styled after the web mock: the tuned-in station as an accent
-// card, recents as live-dot rows, and a dashed "Add a station". Switching tears
-// down playback before re-pointing the app. Long-press a recent to forget it.
+// card, recents as live-dot rows, and a dashed "Add a station". Switching goes
+// through selectStation (which tears down playback before re-pointing the app);
+// navigation returns to the EXISTING root player via dismissTo — replace() here
+// would stack a second player screen on top of the modal (overlapping screens,
+// duplicate polling). Long-press a recent to forget it.
 
 import { router } from 'expo-router';
 import { ChevronRight, X } from 'lucide-react-native';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import LiveDot from '@/components/LiveDot';
-import { teardown } from '@/audio/player';
 import { useStation } from '@/config/StationContext';
 import { normalizeBase } from '@/lib/api';
 import type { StationRef } from '@/lib/station';
@@ -33,14 +35,16 @@ export default function Stations() {
 
   const switchTo = async (ref: StationRef) => {
     if (normalizeBase(ref.url) !== base) {
-      await teardown();
       await selectStation(ref);
     }
-    router.replace('/');
+    router.dismissTo('/');
   };
 
   const currentUrl = base;
-  const currentName = name || featured.name;
+  // `name` comes from the recents lookup; if the active station was forgotten
+  // (long-press) fall back to its host, not the featured station's name.
+  const currentName =
+    name || (currentUrl === featured.url ? featured.name : stripProto(currentUrl ?? ''));
   const others: StationRef[] = [featured, ...recents].filter(
     (r) => normalizeBase(r.url) !== currentUrl,
   );
