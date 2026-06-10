@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.13.0](https://github.com/perminder-klair/subwave/compare/v0.12.0...v0.13.0) (2026-06-10)
+
+
+### Features
+
+* **app:** native iOS/Android player app (Expo + React Native) ([#331](https://github.com/perminder-klair/subwave/issues/331)) ([e7e2db8](https://github.com/perminder-klair/subwave/commit/e7e2db84a327fae80eda83f8561224a2c33f9bd4))
+* **picker:** add OpenSubsonic sonicSimilarity as an optional track source ([#332](https://github.com/perminder-klair/subwave/issues/332)) ([483116b](https://github.com/perminder-klair/subwave/commit/483116b24ddbdce46b540d3ff813e19fdd39932a))
+
+
+### Bug Fixes
+
+* **controller:** keep show brief in picker prompts + drop no-op KNN callback in tagger ([#338](https://github.com/perminder-klair/subwave/issues/338)) ([ef11882](https://github.com/perminder-klair/subwave/commit/ef1188251acb17f37bbc7df261fed992d7ff4047))
+
+
+### Performance
+
+* reduce re-renders, cache hot paths, trim stream overhead ([#339](https://github.com/perminder-klair/subwave/issues/339)) ([36aacc0](https://github.com/perminder-klair/subwave/commit/36aacc0972b4336f217bcf049ac526049b52b5ab))
+
 ## [0.12.0](https://github.com/perminder-klair/subwave/compare/v0.11.0...v0.12.0) (2026-06-08)
 
 
