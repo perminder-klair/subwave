@@ -5,6 +5,7 @@
 
 import { router } from 'expo-router';
 import { Palette } from 'lucide-react-native';
+import { useMemo } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DiscMark from '@/components/DiscMark';
@@ -31,7 +32,9 @@ export default function TopBar({
 }: TopBarProps) {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
-  const tagline = buildTagline(context);
+  // context is reference-stable between polls (useStationFeed), so this only
+  // recomputes when the tagline inputs actually change.
+  const tagline = useMemo(() => buildTagline(context), [context]);
   const showName = activeShow?.name || null;
   const onAirName = activeShow?.persona?.name || djName;
 

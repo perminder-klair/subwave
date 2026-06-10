@@ -57,8 +57,29 @@ export function normalizeBase(raw: string): string {
   return s.replace(/\/+$/, '');
 }
 
+// Every call carries a hard timeout: a hung origin must not stall the 5s
+// feed poll (or leave a request spinner up forever) — fail fast, retry on
+// the next tick. Composed by hand with any caller-supplied signal because
+// RN's fetch polyfill doesn't ship AbortSignal.timeout/any.
+const FETCH_TIMEOUT_MS = 8000;
+
+function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  const outer = init?.signal;
+  const onAbort = () => ctrl.abort();
+  if (outer) {
+    if (outer.aborted) ctrl.abort();
+    else outer.addEventListener('abort', onAbort);
+  }
+  return fetch(url, { ...init, signal: ctrl.signal }).finally(() => {
+    clearTimeout(timer);
+    outer?.removeEventListener('abort', onAbort);
+  });
+}
+
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, { signal });
+  const res = await fetchWithTimeout(url, { signal });
   if (!res.ok) throw new Error(`${res.status} ${url}`);
   return (await res.json()) as T;
 }
@@ -75,17 +96,17 @@ export function createApi(rawBase: string): StationApi {
     dj: (signal) => getJson<DjPublic>(api('/dj'), signal),
     themes: (signal) => getJson<ThemesPayload>(api('/themes'), signal),
     health: async (signal) => {
-      const res = await fetch(api('/health'), { cache: 'no-store', signal });
+      const res = await fetchWithTimeout(api('/health'), { cache: 'no-store', signal });
       return res.ok;
     },
     postRequest: (body) =>
-      fetch(api('/request'), {
+      fetchWithTimeout(api('/request'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       }).then((r) => r.json() as Promise<RequestResult>),
     pollRequest: async (id) => {
-      const res = await fetch(api(`/request/${encodeURIComponent(id)}`));
+      const res = await fetchWithTimeout(api(`/request/${encodeURIComponent(id)}`));
       if (res.status === 404) return { success: false, status: 'unknown' };
       return (await res.json()) as RequestResult;
     },

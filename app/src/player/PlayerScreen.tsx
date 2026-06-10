@@ -5,15 +5,22 @@
 // Shows / Timeline / LIVE / Booth / Request, with LIVE dead-centre as home.
 // Swipe (or tap a band stop) to tune across sections; the needle tracks the
 // scroll. Themes open in a bottom sheet from the palette icon, off-band.
+//
+// Render-path notes: the pager's scroll drives the FreqBand needle through a
+// native-driver Animated.Value (no per-frame React state), and the four
+// non-LIVE pages are memo'd so the 1s elapsed tick and 5s feed poll only
+// re-render the pages whose data actually changed (useStationFeed keeps
+// unchanged payloads reference-stable for exactly this reason).
 
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Animated,
   type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
-  ScrollView,
+  type ScrollView,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -24,6 +31,14 @@ import { useNowPlayingInfo } from '@/hooks/useNowPlayingInfo';
 import { usePlayer } from '@/hooks/usePlayer';
 import { useSignal } from '@/hooks/useSignal';
 import { useStationFeed } from '@/hooks/useStationFeed';
+import type { StationApi } from '@/lib/api';
+import type {
+  ActiveShow,
+  NowPlayingTrack,
+  SessionPayload,
+  StationContext,
+  StationState,
+} from '@/lib/types';
 import { useTheme } from '@/theme/ThemeContext';
 import CenterStage from './CenterStage';
 import FreqBand, { type BandStop } from './FreqBand';
@@ -46,11 +61,73 @@ const PAGES: readonly BandStop[] = [
   { id: 'request', label: 'Request', abbr: 'REQ' },
 ];
 const HOME_INDEX = PAGES.findIndex((p) => p.id === 'now');
-const indexOf = (id: string) => PAGES.findIndex((p) => p.id === id);
+const BOOTH_INDEX = PAGES.findIndex((p) => p.id === 'booth');
+const TIMELINE_INDEX = PAGES.findIndex((p) => p.id === 'timeline');
+
+// Memo'd page bodies — props are reference-stable between polls (see
+// useStationFeed), so off-screen pages skip render on feed ticks entirely.
+
+const SchedulePage = memo(function SchedulePage({
+  api,
+  activeShow,
+  context,
+}: {
+  api: StationApi;
+  activeShow: ActiveShow | null;
+  context: StationContext | null;
+}) {
+  return (
+    <PagePanel title="Shows" sub="weekly schedule">
+      <ScheduleDrawer api={api} activeShow={activeShow} context={context} />
+    </PagePanel>
+  );
+});
+
+const TimelinePage = memo(function TimelinePage({
+  upcoming,
+  history,
+}: {
+  upcoming: StationState['upcoming'];
+  history: StationState['history'];
+}) {
+  return (
+    <PagePanel title="Timeline" sub="the dial, in order">
+      <TimelineDrawer upcoming={upcoming} history={history} />
+    </PagePanel>
+  );
+});
+
+const BoothPage = memo(function BoothPage({ items }: { items: SessionPayload['messages'] }) {
+  return (
+    <PagePanel title="The booth" sub="DJ on the mic">
+      <BoothDrawer items={items} />
+    </PagePanel>
+  );
+});
+
+const RequestPage = memo(function RequestPage({
+  api,
+  nowPlaying,
+  context,
+  onClose,
+}: {
+  api: StationApi;
+  nowPlaying: NowPlayingTrack | null;
+  context: StationContext | null;
+  onClose: () => void;
+}) {
+  return (
+    <PagePanel title="Make a request" sub="to the booth">
+      <RequestDrawer api={api} nowPlaying={nowPlaying} context={context} onClose={onClose} />
+    </PagePanel>
+  );
+});
 
 export default function PlayerScreen() {
   const { api } = useStation();
   const { colors } = useTheme();
+
+  const { tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = usePlayer(api);
 
   const {
     nowPlaying,
@@ -63,10 +140,11 @@ export default function PlayerScreen() {
     session,
     elapsed,
     progress,
-  } = useStationFeed(api);
+    // While tuned in, keep a slow background poll alive so the lock screen
+    // (useNowPlayingInfo) tracks the broadcast; idle + backgrounded polls
+    // nothing at all.
+  } = useStationFeed(api, { backgroundPoll: tunedIn });
   const boothFeed = session.messages;
-
-  const { tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = usePlayer(api);
 
   const offline = streamOnline === false;
   const signal = useSignal({ api, tunedIn, status, offline });
@@ -92,10 +170,13 @@ export default function PlayerScreen() {
   }, [offline, tunedIn, stop]);
 
   // --- swipe pager -------------------------------------------------------
+  // Animated.ScrollView forwards its ref to the inner ScrollView (RN ≥0.62),
+  // so scrollTo is available directly.
   const pagerRef = useRef<ScrollView>(null);
   const [pagerW, setPagerW] = useState(0);
   const [active, setActive] = useState(HOME_INDEX);
-  const [needle, setNeedle] = useState(HOME_INDEX / (PAGES.length - 1));
+  const activeRef = useRef(HOME_INDEX);
+  const scrollX = useRef(new Animated.Value(0)).current;
   const didInit = useRef(false);
 
   const onPagerLayout = (e: LayoutChangeEvent) => {
@@ -108,19 +189,30 @@ export default function PlayerScreen() {
   useEffect(() => {
     if (pagerW > 0 && !didInit.current) {
       didInit.current = true;
+      scrollX.setValue(HOME_INDEX * pagerW);
       requestAnimationFrame(() => pagerRef.current?.scrollTo({ x: HOME_INDEX * pagerW, animated: false }));
     }
-  }, [pagerW]);
+  }, [pagerW, scrollX]);
 
-  const onPagerScroll = useCallback(
-    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      if (pagerW <= 0) return;
-      const x = e.nativeEvent.contentOffset.x;
-      const max = pagerW * (PAGES.length - 1);
-      setNeedle(max > 0 ? Math.min(1, Math.max(0, x / max)) : 0);
-      setActive(Math.round(x / pagerW));
-    },
-    [pagerW],
+  // The needle rides scrollX on the native driver; React state only changes
+  // when the snapped-to page does (one update per page change, not per frame).
+  const onPagerScroll = useMemo(
+    () =>
+      Animated.event([{ nativeEvent: { contentOffset: { x: scrollX } } }], {
+        useNativeDriver: true,
+        listener: (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+          if (pagerW <= 0) return;
+          const idx = Math.max(
+            0,
+            Math.min(PAGES.length - 1, Math.round(e.nativeEvent.contentOffset.x / pagerW)),
+          );
+          if (idx !== activeRef.current) {
+            activeRef.current = idx;
+            setActive(idx);
+          }
+        },
+      }),
+    [scrollX, pagerW],
   );
 
   const goToPage = useCallback(
@@ -128,81 +220,19 @@ export default function PlayerScreen() {
       if (pagerW <= 0) return;
       Haptics.selectionAsync().catch(() => {});
       pagerRef.current?.scrollTo({ x: i * pagerW, animated: true });
+      activeRef.current = i;
       setActive(i);
     },
     [pagerW],
   );
 
+  const openBooth = useCallback(() => goToPage(BOOTH_INDEX), [goToPage]);
+  const openTimeline = useCallback(() => goToPage(TIMELINE_INDEX), [goToPage]);
+  const goHome = useCallback(() => goToPage(HOME_INDEX), [goToPage]);
+
   const [themesOpen, setThemesOpen] = useState(false);
 
   const tint = coverColors.vibrant;
-
-  const renderPage = (id: string) => {
-    if (id === 'now') {
-      return (
-        <View style={{ flex: 1 }}>
-          <CenterStage
-            nowPlaying={nowPlaying}
-            coverSrc={coverSrc}
-            elapsed={elapsed}
-            feed={boothFeed}
-            djLineOn
-            live={tunedIn}
-            onOpenBooth={() => goToPage(indexOf('booth'))}
-            onOpenTimeline={() => goToPage(indexOf('timeline'))}
-          />
-          <Waveform tunedIn={tunedIn} progress={progress} />
-          <TransportBar
-            tunedIn={tunedIn}
-            status={status}
-            onTune={tune}
-            offline={offline}
-            volume={volume}
-            setVolume={setVolume}
-            muted={muted}
-            onToggleMute={toggleMute}
-            latencyMs={signal.latencyMs}
-            signalQuality={signal.quality}
-            listeners={listenerCount}
-          />
-        </View>
-      );
-    }
-    if (id === 'schedule') {
-      return api ? (
-        <PagePanel title="Shows" sub="weekly schedule">
-          <ScheduleDrawer api={api} activeShow={activeShow} context={context} />
-        </PagePanel>
-      ) : null;
-    }
-    if (id === 'timeline') {
-      return (
-        <PagePanel title="Timeline" sub="the dial, in order">
-          <TimelineDrawer upcoming={state.upcoming} history={state.history} />
-        </PagePanel>
-      );
-    }
-    if (id === 'booth') {
-      return (
-        <PagePanel title="The booth" sub="DJ on the mic">
-          <BoothDrawer items={boothFeed} />
-        </PagePanel>
-      );
-    }
-    if (id === 'request') {
-      return api ? (
-        <PagePanel title="Make a request" sub="to the booth">
-          <RequestDrawer
-            api={api}
-            nowPlaying={nowPlaying}
-            context={context}
-            onClose={() => goToPage(HOME_INDEX)}
-          />
-        </PagePanel>
-      ) : null;
-    }
-    return null;
-  };
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -227,11 +257,17 @@ export default function PlayerScreen() {
           onOpenThemes={() => setThemesOpen(true)}
         />
 
-        <FreqBand pages={PAGES} active={active} needle={needle} onPick={goToPage} />
+        <FreqBand
+          pages={PAGES}
+          active={active}
+          scrollX={scrollX}
+          maxScroll={pagerW * (PAGES.length - 1)}
+          onPick={goToPage}
+        />
 
         <View style={{ flex: 1 }} onLayout={onPagerLayout}>
           {pagerW > 0 ? (
-            <ScrollView
+            <Animated.ScrollView
               ref={pagerRef}
               horizontal
               pagingEnabled
@@ -241,12 +277,49 @@ export default function PlayerScreen() {
               contentOffset={{ x: HOME_INDEX * pagerW, y: 0 }}
               keyboardShouldPersistTaps="handled"
             >
-              {PAGES.map((p) => (
-                <View key={p.id} style={{ width: pagerW }}>
-                  {renderPage(p.id)}
+              <View style={{ width: pagerW }}>
+                {api ? <SchedulePage api={api} activeShow={activeShow} context={context} /> : null}
+              </View>
+              <View style={{ width: pagerW }}>
+                <TimelinePage upcoming={state.upcoming} history={state.history} />
+              </View>
+              <View style={{ width: pagerW }}>
+                <View style={{ flex: 1 }}>
+                  <CenterStage
+                    nowPlaying={nowPlaying}
+                    coverSrc={coverSrc}
+                    elapsed={elapsed}
+                    feed={boothFeed}
+                    djLineOn
+                    live={tunedIn}
+                    onOpenBooth={openBooth}
+                    onOpenTimeline={openTimeline}
+                  />
+                  <Waveform tunedIn={tunedIn} progress={progress} visible={active === HOME_INDEX} />
+                  <TransportBar
+                    tunedIn={tunedIn}
+                    status={status}
+                    onTune={tune}
+                    offline={offline}
+                    volume={volume}
+                    setVolume={setVolume}
+                    muted={muted}
+                    onToggleMute={toggleMute}
+                    latencyMs={signal.latencyMs}
+                    signalQuality={signal.quality}
+                    listeners={listenerCount}
+                  />
                 </View>
-              ))}
-            </ScrollView>
+              </View>
+              <View style={{ width: pagerW }}>
+                <BoothPage items={boothFeed} />
+              </View>
+              <View style={{ width: pagerW }}>
+                {api ? (
+                  <RequestPage api={api} nowPlaying={nowPlaying} context={context} onClose={goHome} />
+                ) : null}
+              </View>
+            </Animated.ScrollView>
           ) : null}
         </View>
       </SafeAreaView>

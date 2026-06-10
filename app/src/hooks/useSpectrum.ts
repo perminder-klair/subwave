@@ -16,18 +16,26 @@
 //   * asymmetric attack/decay (fast rise, slow fall) like an AnalyserNode's
 //     smoothingTimeConstant.
 //
-// `active` (tuned in) drives full motion; idle it settles to a calm low shimmer.
-// The simulation is time-accumulated, so its groove is independent of the React
-// re-render cadence (`speed`). Values in [0, 1].
+// `active` (tuned in) drives full motion; idle it settles to a calm low shimmer
+// (ticked at a relaxed rate — the shimmer doesn't need 20Hz). `visible` lets the
+// owner pause the whole simulation when the bars are off-screen, and the app
+// being backgrounded pauses it too. The simulation is time-accumulated, so its
+// groove is independent of the React re-render cadence (`speed`) and it resumes
+// cleanly from any pause. Values in [0, 1].
 
 import { useEffect, useRef, useState } from 'react';
+import { useAppActive } from '@/hooks/useAppActive';
 
 // Low-resolution random curve, linearly interpolated across all bins — this is
 // what correlates neighbouring bars instead of letting each flicker on its own.
 const CONTROL_POINTS = 18;
 
-export function useSpectrum(bins = 120, active = true, speed = 50): number[] {
+const IDLE_TICK_MS = 150;
+
+export function useSpectrum(bins = 120, active = true, speed = 50, visible = true): number[] {
   const [arr, setArr] = useState<number[]>(() => Array(bins).fill(0.06));
+  const appActive = useAppActive();
+  const running = appActive && visible;
 
   // Simulation state kept in refs so ticking it never triggers a re-render on
   // its own — only the final setArr does.
@@ -47,7 +55,8 @@ export function useSpectrum(bins = 120, active = true, speed = 50): number[] {
   }, [active]);
 
   useEffect(() => {
-    const dt = speed;
+    if (!running) return;
+    const dt = active ? speed : Math.max(speed, IDLE_TICK_MS);
     const id = setInterval(() => {
       const on = activeRef.current;
       tRef.current += dt;
@@ -112,7 +121,7 @@ export function useSpectrum(bins = 120, active = true, speed = 50): number[] {
       setArr(next.slice());
     }, dt);
     return () => clearInterval(id);
-  }, [bins, speed]);
+  }, [bins, speed, active, running]);
 
   return arr;
 }

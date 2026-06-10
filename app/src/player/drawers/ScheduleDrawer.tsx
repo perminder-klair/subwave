@@ -4,6 +4,7 @@
 import { Image } from 'expo-image';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
+import { useAppActive } from '@/hooks/useAppActive';
 import type { StationApi } from '@/lib/api';
 import type {
   ActiveShow,
@@ -56,6 +57,7 @@ export interface ScheduleDrawerProps {
 
 export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDrawerProps) {
   const { colors } = useTheme();
+  const appActive = useAppActive();
   const [data, setData] = useState<SchedulePayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const today = useMemo(() => new Date().getDay(), []);
@@ -65,9 +67,11 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
   const location = context?.weather?.location ?? null;
 
   useEffect(() => {
+    if (!appActive) return;
+    setNow(new Date()); // catch up immediately on foreground
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [appActive]);
 
   useEffect(() => {
     let alive = true;

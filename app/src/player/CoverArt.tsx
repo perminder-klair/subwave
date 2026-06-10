@@ -10,6 +10,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Pressable, View } from 'react-native';
+import { useAppActive } from '@/hooks/useAppActive';
 import { useTheme } from '@/theme/ThemeContext';
 
 export interface CoverArtProps {
@@ -81,6 +82,7 @@ function Tick({ corner, color, opacity }: { corner: 'tl' | 'tr' | 'bl' | 'br'; c
 
 export default function CoverArt({ uri, live, burst = false, size = 160, onPress }: CoverArtProps) {
   const { colors } = useTheme();
+  const appActive = useAppActive();
   const scan = useRef(new Animated.Value(0)).current;
   const ripples = [useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current];
   // Corner ticks fade in on burst (track change / DJ thinking), mirroring the
@@ -88,7 +90,9 @@ export default function CoverArt({ uri, live, burst = false, size = 160, onPress
   const tick = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    if (!live) return;
+    // Loops pause while backgrounded — native-driver or not, they keep the
+    // bridge scheduling work the listener can't see.
+    if (!live || !appActive) return;
     const s = Animated.loop(Animated.timing(scan, { toValue: 1, duration: 5500, easing: Easing.linear, useNativeDriver: true }));
     s.start();
     const loops = ripples.map((r, i) =>
@@ -107,7 +111,7 @@ export default function CoverArt({ uri, live, burst = false, size = 160, onPress
       ripples.forEach((r) => r.setValue(0));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live]);
+  }, [live, appActive]);
 
   useEffect(() => {
     Animated.timing(tick, { toValue: burst ? 1 : 0, duration: 200, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();

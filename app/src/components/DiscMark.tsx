@@ -6,6 +6,7 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Easing } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
+import { useAppActive } from '@/hooks/useAppActive';
 import { useTheme } from '@/theme/ThemeContext';
 
 const SPOKES = Array.from({ length: 20 }, (_, i) => {
@@ -25,10 +26,11 @@ export interface DiscMarkProps {
 
 export default function DiscMark({ size = 18, spinning = false }: DiscMarkProps) {
   const { colors } = useTheme();
+  const appActive = useAppActive();
   const spin = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    if (!spinning) {
+    if (!spinning || !appActive) {
       spin.stopAnimation();
       spin.setValue(0);
       return;
@@ -38,7 +40,7 @@ export default function DiscMark({ size = 18, spinning = false }: DiscMarkProps)
     );
     loop.start();
     return () => loop.stop();
-  }, [spinning, spin]);
+  }, [spinning, appActive, spin]);
 
   const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
