@@ -200,6 +200,33 @@ export function tracksLikeThis(seed: string, k: number): any[] {
   return out;
 }
 
+// Audio KNN — finds tracks whose CLAP audio embedding (timbre / instrumentation
+// / production / energy, derived from the waveform itself) is closest to the
+// seed's. The sonic counterpart to tracksLikeThis: text catches "same scene /
+// era / lyrical theme", audio catches "same sound". Same title-fallback shape
+// (the agent often passes a title rather than an id). Returns [] when the seed
+// has no audio vector — un-analysed library, or analysis backend without CLAP —
+// so callers fall through to the other sources exactly like the text path.
+export function tracksLikeThisAudio(seed: string, k: number): any[] {
+  if (!loaded || !seed) return [];
+  let hits = db.knnAudioById(seed, k);
+  if (hits.length === 0) {
+    // Treat `seed` as a title — find the best matching track that HAS an audio
+    // vector and KNN from it.
+    for (const row of db.filter({ q: seed, limit: 8 }).rows) {
+      if (row.id === seed) continue;            // already tried as an id above
+      hits = db.knnAudioById(row.id, k);
+      if (hits.length) break;
+    }
+  }
+  const out: any[] = [];
+  for (const hit of hits) {
+    const t = db.getTrack(hit.id);
+    if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
+  }
+  return out;
+}
+
 // KNN against an externally-computed query vector. The lyric-search tool
 // embeds a free-text query and calls this to find tracks semantically close
 // to the query — including ones whose lyrics don't literally contain those
@@ -228,6 +255,7 @@ export function stats() {
     byGenre: s.byGenre,
     bySource: s.bySource,
     withEmbedding: s.withEmbedding,
+    withAudioEmbedding: s.withAudioEmbedding,
     updatedAt: s.updatedAt,
   };
 }

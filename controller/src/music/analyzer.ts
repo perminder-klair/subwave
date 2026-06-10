@@ -23,6 +23,24 @@ export interface AnalysisResult {
   musicalKey: string | null;
   introMs: number | null;
   confidence: number | null;
+  // CLAP audio embedding (512 floats) when the backend has the model loaded
+  // (ANALYZE_AUDIO_EMBEDDING=1 + CLAP weights). null otherwise — every consumer
+  // treats null as "no audio vector this pass", so a backend without CLAP is
+  // byte-for-byte today's behaviour.
+  audioEmbedding: number[] | null;
+}
+
+// Coerce the worker's audio_embedding field to a clean number[] or null. The
+// worker omits it entirely when CLAP isn't loaded; defend against a malformed
+// or wrong-length array rather than letting it reach upsertTrackAudioVector.
+function parseAudioEmbedding(v: unknown): number[] | null {
+  if (!Array.isArray(v) || v.length === 0) return null;
+  const out: number[] = [];
+  for (const x of v) {
+    if (typeof x !== 'number' || !Number.isFinite(x)) return null;
+    out.push(x);
+  }
+  return out;
 }
 
 // Cap the download so we don't pull whole albums of bytes for a short
@@ -112,6 +130,7 @@ function localRequest(req: { url: string } | { path: string }): Promise<Analysis
           musicalKey: msg.key ?? null,
           introMs: msg.intro_ms ?? null,
           confidence: msg.confidence ?? null,
+          audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
         }),
       reject,
       timer,
@@ -166,7 +185,13 @@ async function sidecarRequest(body: { url: string } | { path: string }): Promise
     if (!res.ok) throw new Error(`tts-heavy /analyze ${res.status}: ${await res.text().catch(() => '')}`);
     const resBody = (await res.json()) as any;
     if (!resBody.ok) throw new Error(resBody.error || 'analysis failed');
-    return { bpm: resBody.bpm ?? null, musicalKey: resBody.key ?? null, introMs: resBody.intro_ms ?? null, confidence: resBody.confidence ?? null };
+    return {
+      bpm: resBody.bpm ?? null,
+      musicalKey: resBody.key ?? null,
+      introMs: resBody.intro_ms ?? null,
+      confidence: resBody.confidence ?? null,
+      audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
+    };
   } finally {
     clearTimeout(t);
   }
