@@ -746,6 +746,19 @@ export function hasAudioVector(id: string): boolean {
   return !!requireDb().prepare(`SELECT 1 FROM track_audio_vectors WHERE id = ?`).get(id);
 }
 
+// The raw CLAP vector for a track (a copy, not a view into the DB buffer), or
+// null when the track has no audio vector. Used by the journey builder to
+// resolve start/destination points in the audio space. vec0 stores the
+// embedding as a packed float32 blob.
+export function getAudioVector(id: string): Float32Array | null {
+  const row = requireDb()
+    .prepare(`SELECT embedding FROM track_audio_vectors WHERE id = ?`)
+    .get(id) as { embedding: Buffer } | undefined;
+  if (!row) return null;
+  const b = row.embedding;
+  return new Float32Array(b.buffer, b.byteOffset, Math.floor(b.byteLength / 4)).slice();
+}
+
 export function audioVectorCount(): number {
   return (requireDb().prepare('SELECT COUNT(*) AS n FROM track_audio_vectors').get() as {
     n: number;

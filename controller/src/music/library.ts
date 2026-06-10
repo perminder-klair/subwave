@@ -242,6 +242,21 @@ export function tracksByVector(vec: number[] | Float32Array, k: number): any[] {
   return out;
 }
 
+// Audio KNN against an externally-computed query vector — the sonic-journey
+// counterpart to tracksByVector. Used by the picker when a journey waypoint is
+// the audio anchor instead of the current track. Returns [] on an empty audio
+// index, so the picker falls through to its other sources.
+export function tracksByAudioVector(vec: number[] | Float32Array, k: number): any[] {
+  if (!loaded) return [];
+  const hits = db.knnByAudioVector(vec, k);
+  const out: any[] = [];
+  for (const hit of hits) {
+    const t = db.getTrack(hit.id);
+    if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
+  }
+  return out;
+}
+
 export function stats() {
   if (!loaded) {
     return { total: 0, distinctArtists: 0, byMood: {}, byEnergy: {}, byGenre: {}, updatedAt: null };

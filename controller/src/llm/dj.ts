@@ -443,6 +443,7 @@ Each candidate carries a "source" tag — a hint about where it came from:
 - similar / similar-artist: flows from what's playing now
 - embedding-similar: closest in mood / lyric / metadata space to what's playing
 - audio-similar: SOUNDS closest to what's playing (timbre, instrumentation, production)
+- audio-journey: SOUNDS like where the set is heading — the next step of a deliberate drift toward a destination vibe, not necessarily the current track
 - recent: newly added to the library
 - frequent / starred / playlist: an established favourite
 - mood-library: matches the room's mood

@@ -98,7 +98,7 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any, rankTarget: { bpm: number | null; key: string | null } | null = null) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null) {
   await library.load();
   const pool: any[] = [];
   const sources: Record<string, number> = {};
@@ -131,14 +131,23 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     } catch {}
   }
 
-  // 1c. Audio-KNN (CLAP) from current track — "sounds like this" over the
-  // waveform itself (timbre / instrumentation / production / energy), blind to
-  // metadata. Complements embedding-similar: text catches same scene/era/theme,
-  // audio catches same sound — especially for thin-metadata or non-Western
-  // tracks where Last.fm + lyric coverage is sparse. Returns [] when the seed
-  // has no audio vector (CLAP disabled / un-analysed), so it silently no-ops on
-  // a library without audio embeddings — behaviour is identical to today's.
-  if (currentTrack?.id) {
+  // 1c. Audio-KNN (CLAP) — "sounds like this" over the waveform itself (timbre
+  // / instrumentation / production / energy), blind to metadata. Complements
+  // embedding-similar: text catches same scene/era/theme, audio catches same
+  // sound — especially for thin-metadata or non-Western tracks where Last.fm +
+  // lyric coverage is sparse. Returns [] when the anchor has no audio vector
+  // (CLAP disabled / un-analysed), so it silently no-ops on a library without
+  // audio embeddings — behaviour is identical to today's.
+  //
+  // When a sonic journey (Phase 2, broadcast/dj-agent.ts) is active, the anchor
+  // is the journey's WAYPOINT vector rather than the current track — so the pool
+  // drifts toward the destination vibe instead of hugging the current sound.
+  if (audioWaypoint && audioWaypoint.length) {
+    try {
+      const knn = library.tracksByAudioVector(audioWaypoint, 15);
+      add('audio-journey', sampleWithRecentFallback(knn, recentIds, CAP_AUDIO_SIMILAR));
+    } catch {}
+  } else if (currentTrack?.id) {
     try {
       const knn = library.tracksLikeThisAudio(currentTrack.id, 15);
       add('audio-similar', sampleWithRecentFallback(knn, recentIds, CAP_AUDIO_SIMILAR));
@@ -283,13 +292,13 @@ function summariseRecent(queue: any) {
 // { song, reason, source } or null. Used by broadcast/dj-agent.js.
 // ---------------------------------------------------------------------------
 
-export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null) {
+export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null) {
   await library.load();
   const windows = recencyWindowsForLibrary(library.stats().distinctArtists);
   const recentIds = queue.recentlyPlayedIds(windows.trackHours);
   const recentArtists = queue.recentArtistsSince(windows.artistHours);
   const currentTrack = queue.current?.track || null;
-  const { candidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget);
+  const { candidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint);
 
   if (candidates.length === 0) {
     queue.log('picker', 'no candidates available, skipping LLM pick');

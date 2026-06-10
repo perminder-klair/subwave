@@ -17,6 +17,7 @@ import * as session from './session.js';
 import * as picker from '../music/picker.js';
 import * as library from '../music/library.js';
 import * as mix from '../music/mix.js';
+import * as journey from '../music/journey.js';
 import * as dj from '../llm/dj.js';
 import { energyForDaypart } from '../context.js';
 import { defineAgent } from '../llm/agent.js';
@@ -31,7 +32,71 @@ import { recencyWindowsForLibrary } from '../music/recency.js';
 // current track), and the link patter acknowledges the run. State is module-
 // level — one station, one run at a time. Cleared when it runs out or when the
 // active persona isn't in DJ mode.
-let runState: { bpm: number | null; key: string | null; remaining: number } | null = null;
+//
+// Phase 2 overlay — a SONIC JOURNEY. When the audio (CLAP) index is populated,
+// a run can also carry a sequence of waypoint vectors through the audio space
+// toward a destination vibe; each pick consumes one waypoint, handed to the
+// picker as the audio-KNN anchor so the pool drifts toward the destination
+// while the tempo/key re-rank still applies. `waypoints`/`step` are absent on a
+// plain tempo/key run (no audio index, or the journey couldn't be built), in
+// which case the run behaves exactly as it did before.
+interface RunState {
+  bpm: number | null;
+  key: string | null;
+  remaining: number;
+  waypoints?: number[][];
+  step?: number;
+}
+let runState: RunState | null = null;
+
+// What advanceRun hands back per pick: the tempo/key re-rank target (feature 4)
+// and, when a sonic journey is active, the current waypoint vector for the
+// picker's audio anchor. Either may be null independently.
+interface RunStep {
+  rankTarget: { bpm: number | null; key: string | null } | null;
+  audioWaypoint: number[] | null;
+}
+
+// How many candidate tracks to average for a destination-vibe centroid. Capped
+// so a big energy bucket doesn't turn the centroid into one getAudioVector read
+// per track in the library on every run start.
+const JOURNEY_DEST_SAMPLE = 60;
+
+// Consume the next waypoint from a run (clamped to the last one), advancing the
+// step cursor. null when the run carries no journey.
+function takeWaypoint(rs: RunState): number[] | null {
+  if (!rs.waypoints || rs.waypoints.length === 0) return null;
+  const idx = Math.min(rs.step ?? 0, rs.waypoints.length - 1);
+  rs.step = idx + 1;
+  return rs.waypoints[idx];
+}
+
+// Try to overlay a sonic journey on a freshly-started run. Destination is a
+// daypart-appropriate energy bucket's centroid (brisker daypart → toward the
+// high-energy sound, mellower → toward the low-energy sound), so the run drifts
+// in the same direction the tempo/key target already nudges. No-op (leaves the
+// run a plain tempo/key run) when the current track or the destination has no
+// audio coverage. `totalSteps` is the number of picks the run will influence.
+function maybeAttachJourney(rs: RunState, current: any, totalSteps: number): void {
+  const startId = current?.id;
+  if (!startId) return;
+  try {
+    const destEnergy = energyForDaypart().speed >= 1 ? 'high' : 'low';
+    const destIds = shuffle(library.songsByEnergy(destEnergy).map((s: any) => s.id))
+      .slice(0, JOURNEY_DEST_SAMPLE);
+    if (destIds.length === 0) return;
+    const j = journey.buildJourney({ startId, endIds: destIds, steps: totalSteps });
+    if (!j) return;
+    rs.waypoints = j.waypoints;
+    rs.step = 0;
+  } catch {
+    // Journey is a best-effort enhancement — never let it break a pick.
+  }
+}
+
+function shuffle<T>(arr: T[]): T[] {
+  return [...arr].sort(() => Math.random() - 0.5);
+}
 
 // Resolve {bpm, key} for a track via the library DB (queued/agent picks carry
 // only id/title/artist).
@@ -61,23 +126,36 @@ function runStartProbability(): number {
   return 0;
 }
 
-// Advance the mini-run state for this pick and return the re-rank target to use
-// (or null for "anchor to the current track as usual"). Only does anything in
-// DJ mode with an analysed current track.
-function advanceRun(djMode: boolean, current: any): { bpm: number | null; key: string | null } | null {
-  if (!djMode) { runState = null; return null; }
+// Advance the mini-run state for this pick and return the re-rank target +
+// (optional) sonic-journey waypoint to use. rankTarget null means "anchor the
+// tempo/key re-rank to the current track as usual"; audioWaypoint null means
+// "no journey — the audio source anchors to the current track". Only does
+// anything in DJ mode with an analysed current track.
+const NO_RUN: RunStep = { rankTarget: null, audioWaypoint: null };
+
+function advanceRun(djMode: boolean, current: any): RunStep {
+  if (!djMode) { runState = null; return NO_RUN; }
   if (runState && runState.remaining > 0) {
     runState.remaining--;
-    if (runState.remaining <= 0) { const t = { bpm: runState.bpm, key: runState.key }; runState = null; return t; }
-    return { bpm: runState.bpm, key: runState.key };
+    const waypoint = takeWaypoint(runState);
+    if (runState.remaining <= 0) {
+      const rankTarget = { bpm: runState.bpm, key: runState.key };
+      runState = null;
+      return { rankTarget, audioWaypoint: waypoint };
+    }
+    return { rankTarget: { bpm: runState.bpm, key: runState.key }, audioWaypoint: waypoint };
   }
   // No active run — maybe start one off the current track.
   const cur = analysisOf(current);
-  if ((cur.bpm == null && cur.key == null) || Math.random() >= runStartProbability()) return null;
+  if ((cur.bpm == null && cur.key == null) || Math.random() >= runStartProbability()) return NO_RUN;
   const target = mix.pickRunTarget(cur, energyForDaypart());
-  if (!target) return null;
-  runState = { bpm: target.bpm, key: target.key, remaining: 1 + Math.floor(Math.random() * 2) }; // 1-2 more after this
-  return target;
+  if (!target) return NO_RUN;
+  const extra = 1 + Math.floor(Math.random() * 2); // 1-2 more picks after this
+  runState = { bpm: target.bpm, key: target.key, remaining: extra };
+  // Overlay a sonic journey if the audio index can support one (this pick + the
+  // `extra` that follow → extra + 1 total waypoints). No-op otherwise.
+  maybeAttachJourney(runState, current, extra + 1);
+  return { rankTarget: target, audioWaypoint: takeWaypoint(runState) };
 }
 
 export function runActive(): boolean {
@@ -240,10 +318,12 @@ async function pickViaAgent(queue, { wantLink }) {
   });
 }
 
-async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm: number | null; key: string | null } | null = null) {
+async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null) {
   // A DJ-mode mini-run (feature 4) anchors the pool re-rank to the run's
   // tempo/key target instead of the current track. null → today's behaviour.
-  const result = await picker.pickViaPool(queue, ctx, rankTarget);
+  // A sonic journey (Phase 2) additionally anchors the audio-KNN source to the
+  // run's current waypoint vector, drifting the pool toward the destination.
+  const result = await picker.pickViaPool(queue, ctx, rankTarget, audioWaypoint);
   if (!result) {
     queue.log('picker', 'pool produced no pick');
     return;
@@ -292,8 +372,10 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     const previous = queue.history[0]?.track || null;
     const djMode = !!settings.getEffectivePersona()?.djMode;
 
-    // Feature 4 — advance/maybe-start a mini-run and get the re-rank target.
-    const rankTarget = advanceRun(djMode, current);
+    // Feature 4 + Phase 2 — advance/maybe-start a mini-run; get the tempo/key
+    // re-rank target and (when the audio index supports it) a sonic-journey
+    // waypoint for the pool's audio anchor.
+    const { rankTarget, audioWaypoint } = advanceRun(djMode, current);
     const inRun = runActive();
 
     // The link clause differs in DJ mode: a working DJ doesn't just ease into
@@ -328,7 +410,7 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
         queue.log('error', `DJ agent pick failed: ${err.message} — falling back to pool`);
       }
     }
-    await pickViaPool(queue, ctx, { wantLink, current }, rankTarget);
+    await pickViaPool(queue, ctx, { wantLink, current }, rankTarget, audioWaypoint);
   });
 }
 
