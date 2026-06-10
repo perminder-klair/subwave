@@ -81,8 +81,8 @@ export default function Clients() {
         </p>
         <p className="text-muted">
           The apps are in public beta while they work through the stores. On iOS, join over
-          TestFlight (install the TestFlight app first); on Android, grab the current build
-          from the beta thread:
+          TestFlight (install the TestFlight app first); on Android, tap the link to install
+          the APK directly &mdash; no account, no Play Store:
         </p>
         <table className="bs-doc-table">
           <thead>
@@ -109,14 +109,14 @@ export default function Clients() {
               <td><strong>Android</strong></td>
               <td>
                 <a
-                  href="https://github.com/perminder-klair/subwave/discussions/289"
+                  href="https://expo.dev/accounts/pinku1/projects/subwave/builds/8bc3116d-c9b0-4a32-87b9-747640270b23"
                   className="bs-link"
                   target="_blank"
                   rel="noreferrer"
                 >
-                  the beta thread ↗
+                  Install APK ↗
                 </a>{' '}
-                has the latest install link
+                (approve the one-time &ldquo;unknown sources&rdquo; prompt)
               </td>
             </tr>
           </tbody>
