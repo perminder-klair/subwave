@@ -284,7 +284,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const activeShow = settings.resolveActiveShow();
   const { maxDurationSec, excludePatterns } = settings.getPickerConfig(activeShow);
   const filtered = rawCandidates.filter(c =>
-    (!c.duration || c.duration <= maxDurationSec) && isRadioPickable(c.title ?? '', c.album, excludePatterns));
+    (!c.duration || c.duration <= maxDurationSec) && isRadioPickable(c.title ?? '', c.album, excludePatterns, c.genre));
   const candidates = filtered.length > 0 ? filtered : rawCandidates;
   if (filtered.length < rawCandidates.length) {
     queue.log('picker', `dropped ${rawCandidates.length - filtered.length} track(s) over ${maxDurationSec / 60}min or matching exclude patterns`);

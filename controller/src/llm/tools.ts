@@ -31,12 +31,16 @@ function buildExcludeRegexes(patterns: string[]): RegExp[] {
 // `patterns` is the effective list from settings.getPickerConfig() — pass it
 // explicitly so callers can resolve the correct station/show context once and
 // reuse across a whole candidate list rather than hitting settings N times.
-export function isRadioPickable(title: string, album: string | null | undefined, patterns: string[]): boolean {
+// Also matches against `genre` — lets a per-show excludePatterns entry (e.g.
+// "Hip-Hop") hard-block a genre regardless of how the LLM interprets the show
+// brief, instead of relying entirely on prompt-level enforcement.
+export function isRadioPickable(title: string, album: string | null | undefined, patterns: string[], genre: string | null | undefined = null): boolean {
   if (!patterns.length) return true;
   const regexes = buildExcludeRegexes(patterns);
   const t = title ?? '';
   const a = album ?? '';
-  return !regexes.some(re => re.test(t) || re.test(a));
+  const g = genre ?? '';
+  return !regexes.some(re => re.test(t) || re.test(a) || re.test(g));
 }
 
 function slim(s: any) {
@@ -116,7 +120,7 @@ export function buildPickerTools({
   // each tool call regardless.
   const collect = (list: any, cap = 8) => {
     const withinLength = (list || []).filter((s: any) =>
-      (!s.duration || s.duration <= maxDurationSec) && isRadioPickable(s.title ?? '', s.album, excludePatterns));
+      (!s.duration || s.duration <= maxDurationSec) && isRadioPickable(s.title ?? '', s.album, excludePatterns, s.genre));
     const accepted = filterPickerCandidates(shuffle(withinLength as any[]), {
       recentIds,
       recentKeys,

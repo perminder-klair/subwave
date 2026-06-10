@@ -29,6 +29,20 @@ export function artistKey(song: CandidateLike): string {
   return (song.artist || '').toLowerCase().trim();
 }
 
+// Splits off a collaborator/backing-band suffix so "Prince" and "Prince and
+// The Revolution" (or "John Lennon" / "John Lennon / Yoko Ono") resolve to the
+// same key. Without this, alternating between credit variants of the same
+// headline artist defeats the consecutive-artist check entirely — each pick
+// looks "new" relative to the immediately-previous track's exact credit string.
+const COLLAB_SPLIT_RE = /\s+(?:and the|&|feat\.?|ft\.?|featuring|with|\/|vs\.?)\s+/i;
+
+export function coreArtistKey(song: CandidateLike): string {
+  const full = artistKey(song);
+  const m = full.match(COLLAB_SPLIT_RE);
+  if (!m || m.index == null) return full;
+  return full.slice(0, m.index).trim();
+}
+
 export function trackKey(song: CandidateLike): string {
   return `${(song.title || '').toLowerCase().trim()}|${artistKey(song)}`;
 }
@@ -85,11 +99,16 @@ export function filterPickerCandidates<T extends CandidateLike>(
       if (mode.recentTracks && recentKeys.has(trackKey(song))) continue;
 
       const key = artistKey(song);
-      if (mode.recentArtists && key && recentArtists.has(key)) continue;
-      if (key) {
-        const count = nextArtistCounts.get(key) || 0;
+      const coreKey = coreArtistKey(song);
+      if (mode.recentArtists && (
+        (key && recentArtists.has(key)) ||
+        (coreKey && coreKey !== key && recentArtists.has(coreKey))
+      )) continue;
+      const countKey = coreKey || key;
+      if (countKey) {
+        const count = nextArtistCounts.get(countKey) || 0;
         if (count >= maxPerArtist) continue;
-        nextArtistCounts.set(key, count + 1);
+        nextArtistCounts.set(countKey, count + 1);
       }
 
       nextSeen.add(song.id);

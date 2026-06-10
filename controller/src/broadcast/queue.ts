@@ -19,6 +19,7 @@ import { logEvent } from '../observability/events.js';
 import { djCallsAllowed } from './listeners.js';
 import * as webhooks from './webhooks.js';
 import * as scrobble from './scrobble.js';
+import { coreArtistKey } from '../music/recency.js';
 
 // Random gap between DJ links on auto-played tracks. The frequency setting
 // scales how chatty the DJ is:
@@ -686,20 +687,29 @@ class Queue {
   recentArtistsSince(hours = 2) {
     const cutoff = Date.now() - hours * 3_600_000;
     const out = new Set<string>();
+    // Add both the exact credit string and its "core" form (stripping " and
+    // The Revolution" / " feat. X" / " / Yoko Ono" style collaborator
+    // suffixes) so alternating between credit variants of the same headline
+    // artist still gets blocked — see recency.coreArtistKey.
+    const addArtist = (name: string | null | undefined) => {
+      const k = (name || '').toLowerCase().trim();
+      if (!k) return;
+      out.add(k);
+      const core = coreArtistKey({ artist: name });
+      if (core && core !== k) out.add(core);
+    };
     if (this.current?.track?.artist) {
-      out.add(this.current.track.artist.toLowerCase().trim());
+      addArtist(this.current.track.artist);
     }
     // Include artists already queued but not yet played — prevents the same
     // artist from appearing multiple times in the upcoming queue when the
     // picker is called mid-queue (e.g. 4× same artist before any play back).
     for (const item of this.upcoming) {
-      const k = (item.track?.artist || '').toLowerCase().trim();
-      if (k) out.add(k);
+      addArtist(item.track?.artist);
     }
     for (const p of this._recentPlays) {
       if (new Date(p.endedAt).getTime() < cutoff) break;
-      const k = (p.artist || '').toLowerCase().trim();
-      if (k) out.add(k);
+      addArtist(p.artist);
     }
     return out;
   }
