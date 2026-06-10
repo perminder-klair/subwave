@@ -394,10 +394,16 @@ async def analyze(req: AnalyzeRequest):
     msg = await analyzer_worker.request(payload)
     if not msg.get("ok"):
         raise HTTPException(500, msg.get("error") or "analyze failed")
-    return {
+    out = {
         "ok": True,
         "bpm": msg.get("bpm"),
         "key": msg.get("key"),
         "intro_ms": msg.get("intro_ms"),
         "confidence": msg.get("confidence"),
     }
+    # Optional CLAP audio embedding — present only when the worker has the model
+    # loaded (ANALYZE_AUDIO_EMBEDDING + CLAP weights). Pass it straight through;
+    # omitted otherwise so the controller's analyzer client maps it to null.
+    if "audio_embedding" in msg:
+        out["audio_embedding"] = msg["audio_embedding"]
+    return out
