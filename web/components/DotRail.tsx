@@ -1,6 +1,6 @@
 'use client';
 
-import { isValidElement, type ReactNode } from 'react';
+import { isValidElement, memo, type ReactNode } from 'react';
 import { m } from 'motion/react';
 import { cn } from '@/lib/cn';
 import OdometerNumber from './OdometerNumber';
@@ -25,7 +25,7 @@ export interface DotRailProps {
   onSelect: (id: PlayerDrawer | null) => void;
 }
 
-export default function DotRail({ counts, active, onSelect }: DotRailProps) {
+export default memo(function DotRail({ counts, active, onSelect }: DotRailProps) {
   return (
     <div
       className="absolute top-20 right-0 bottom-20 z-20 flex w-24 flex-col items-center justify-center gap-1"
@@ -81,4 +81,4 @@ export default function DotRail({ counts, active, onSelect }: DotRailProps) {
       })}
     </div>
   );
-}
+});

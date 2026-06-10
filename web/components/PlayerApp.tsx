@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { CalendarClock, History, Mic } from 'lucide-react';
@@ -37,12 +37,18 @@ const DRAWER_TITLES: Record<PlayerDrawer, string> = {
   schedule: 'Schedule',
 };
 
+// Hoisted so the DotRail counts memo below keeps stable element references —
+// recreating these per render would defeat DotRail's React.memo.
+const TIMELINE_ICON = <History size={18} strokeWidth={1.5} />;
+const BOOTH_ICON = <Mic size={18} strokeWidth={1.5} />;
+const SCHEDULE_ICON = <CalendarClock size={18} strokeWidth={1.5} />;
+
 export interface PlayerAppProps {
   contained?: boolean;
 }
 
 export default function PlayerApp({ contained = false }: PlayerAppProps) {
-  const { nowPlaying, context, dj, activeShow, listeners, streamOnline, state, session, elapsed, progress } = useStationFeed();
+  const { nowPlaying, context, dj, activeShow, listeners, streamOnline, state, session, trackStartedAt } = useStationFeed();
   const boothFeed = session.messages;
   const { audioRef, tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = usePlayer();
 
@@ -116,6 +122,21 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
   const [requesterName, setRequesterName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [drawer, setDrawer] = useState<PlayerDrawer | null>(null);
+
+  // Stable handlers + counts for the memoized layout components, so a feed
+  // update that doesn't touch them costs no re-render.
+  const openSchedule = useCallback(() => setDrawer('schedule'), []);
+  const openBooth = useCallback(() => setDrawer('booth'), []);
+  const openTimeline = useCallback(() => setDrawer('timeline'), []);
+  const upcomingCount = state.upcoming?.length ?? 0;
+  const dotRailCounts = useMemo(
+    () => ({
+      timeline: upcomingCount || TIMELINE_ICON,
+      booth: BOOTH_ICON,
+      schedule: SCHEDULE_ICON,
+    }),
+    [upcomingCount],
+  );
   const [tickerOn, setTickerOn] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -241,31 +262,26 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
         stationName={typeof dj?.station === 'string' ? dj.station : undefined}
         djName={typeof dj?.name === 'string' ? dj.name : undefined}
         activeShow={activeShow}
-        onOpenSchedule={() => setDrawer('schedule')}
+        onOpenSchedule={openSchedule}
       />
 
       <CenterStage
         nowPlaying={nowPlaying}
-        elapsed={elapsed}
+        trackStartedAt={trackStartedAt}
         feed={boothFeed}
         djLineOn={tickerOn}
-        onOpenBooth={() => setDrawer('booth')}
-        onOpenTimeline={() => setDrawer('timeline')}
+        onOpenBooth={openBooth}
+        onOpenTimeline={openTimeline}
       />
 
-      <Waveform audioRef={audioRef} tunedIn={tunedIn} progress={progress} />
-
-      <DotRail
-        counts={{
-          timeline: state.upcoming?.length
-            ? state.upcoming.length
-            : <History size={18} strokeWidth={1.5} />,
-          booth: <Mic size={18} strokeWidth={1.5} />,
-          schedule: <CalendarClock size={18} strokeWidth={1.5} />,
-        }}
-        active={drawer}
-        onSelect={setDrawer}
+      <Waveform
+        audioRef={audioRef}
+        tunedIn={tunedIn}
+        trackStartedAt={trackStartedAt}
+        duration={nowPlaying?.duration ?? 0}
       />
+
+      <DotRail counts={dotRailCounts} active={drawer} onSelect={setDrawer} />
 
       <TransportBar
         tunedIn={tunedIn}
@@ -281,7 +297,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
         signalQuality={signal.quality}
         listeners={listenerCount}
         nowPlaying={nowPlaying}
-        elapsed={elapsed}
+        trackStartedAt={trackStartedAt}
       />
 
       <Sheet

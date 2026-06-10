@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { animate as motionAnimate, m, useAnimate } from 'motion/react';
 import { ChevronDown, ChevronUp, Volume2 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { Slider } from './ui/slider';
 import { useIsIOS } from '@/lib/hooks';
+import { useElapsed } from '@/hooks/useElapsed';
 import { SCALE_MAX, type SignalQuality } from '@/hooks/useSignal';
 import type { NowPlayingTrack } from '@/lib/types';
 import type { PlayerStatus } from '@/hooks/usePlayer';
@@ -27,7 +28,8 @@ export interface TransportBarProps {
   /** Current station listener count — shown as text in the signal readout. */
   listeners: number | null;
   nowPlaying: NowPlayingTrack | null;
-  elapsed: number;
+  /** Epoch ms when the current track started (from useStationFeed). */
+  trackStartedAt: number | null;
 }
 
 const SCALE_NUMS = [0, 50, 100, 150, 200, 250];
@@ -50,7 +52,7 @@ function prefersReducedMotion(): boolean {
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
-export default function TransportBar({
+export default memo(function TransportBar({
   tunedIn,
   status = 'idle',
   onTune,
@@ -64,8 +66,11 @@ export default function TransportBar({
   signalQuality,
   listeners,
   nowPlaying,
-  elapsed,
+  trackStartedAt,
 }: TransportBarProps) {
+  // 1s elapsed tick scoped to this component (see useElapsed) — it drives the
+  // hairline progress along the deck's top edge.
+  const elapsed = useElapsed(trackStartedAt);
   // iOS Safari makes HTMLMediaElement.volume read-only and ignores a Web Audio
   // GainNode inside an installed PWA, so the on-screen knob can't actually
   // attenuate there. Swap it for a hardware-volume hint instead of shipping a
@@ -279,4 +284,4 @@ export default function TransportBar({
       </div>
     </div>
   );
-}
+});
