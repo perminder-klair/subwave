@@ -178,9 +178,18 @@ class ClapEmbedder:
         import numpy as np
 
         return_tensors = "np" if self.mode == "onnx" else "pt"
-        inputs = self.processor(
-            audios=y48, sampling_rate=sr, return_tensors=return_tensors
-        )
+        # transformers renamed the ClapProcessor audio kwarg `audios` → `audio`
+        # and turned the old name into a hard error (not just a warning) in
+        # recent releases. Try the new name, fall back to the old one so this
+        # works against whatever transformers the analyzer venv resolved.
+        try:
+            inputs = self.processor(
+                audio=y48, sampling_rate=sr, return_tensors=return_tensors
+            )
+        except (TypeError, ValueError):
+            inputs = self.processor(
+                audios=y48, sampling_rate=sr, return_tensors=return_tensors
+            )
         feats = inputs["input_features"]
 
         if self.mode == "onnx":
@@ -192,6 +201,12 @@ class ClapEmbedder:
 
             with torch.no_grad():
                 emb = self.model.get_audio_features(input_features=feats)
+            # transformers ≤4.x returns the projected 512-d audio-features
+            # tensor directly; 5.x returns a BaseModelOutputWithPooling whose
+            # .pooler_output is that same projected embedding. Unwrap the new
+            # shape so this works against whatever the analyzer venv resolved.
+            if hasattr(emb, "pooler_output"):
+                emb = emb.pooler_output
             vec = emb.cpu().numpy().reshape(-1)
 
         if vec.shape[0] != CLAP_EMBED_DIM:
