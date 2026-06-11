@@ -227,9 +227,13 @@ _embedder = None
 _embed_failed = False
 
 
-def get_embedder():
+def get_embedder(force=False):
     global _embedder, _embed_failed
-    if not EMBED_ENABLED or _embed_failed:
+    # `force` is the per-request opt-in (the controller's admin toggle sends
+    # "embed": true) — it lazy-loads CLAP even when ANALYZE_AUDIO_EMBEDDING
+    # isn't in this process's env. A previous load failure still wins: one bad
+    # model can't make every subsequent track retry the load.
+    if _embed_failed or not (EMBED_ENABLED or force):
         return None
     if _embedder is None:
         try:
@@ -264,7 +268,7 @@ def fetch_audio(url):
     return path
 
 
-def analyze(librosa, url=None, path=None):
+def analyze(librosa, url=None, path=None, embed=None):
     import numpy as np
 
     # A controller-provided path is pre-fetched onto the shared volume and
@@ -280,7 +284,10 @@ def analyze(librosa, url=None, path=None):
         # SAME file (still present here, before the finally removes owned temps).
         # A model/feature failure on one track never fails the whole analyze:
         # we log and emit bpm/key without the embedding.
-        embedder = get_embedder()
+        # Per-request `embed` wins over the env default in the ON direction
+        # only: True forces a (lazy) CLAP load, None/absent keeps the env-driven
+        # behaviour. False is never sent by the controller today.
+        embedder = None if embed is False else get_embedder(force=embed is True)
         if embedder is not None:
             try:
                 y48, _sr48 = librosa.load(
@@ -368,7 +375,7 @@ def main():
         try:
             import librosa
 
-            result = analyze(librosa, url=url, path=path)
+            result = analyze(librosa, url=url, path=path, embed=req.get("embed"))
             emit({"id": rid, "ok": True, **result})
         except Exception as e:
             emit({"id": rid, "ok": False, "error": str(e)})

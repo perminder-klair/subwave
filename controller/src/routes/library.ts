@@ -14,6 +14,7 @@ import { tagBatch, TAGGER_BATCH_SYSTEM } from '../music/tagger-core.js';
 import { promptVocabHash } from '../music/embeddings.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
+import { tagger, startAnalyzer } from '../broadcast/tagger.js';
 
 export const router = express.Router();
 
@@ -169,6 +170,21 @@ router.get('/library/coverage', requireAdmin, async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ---------------------------------------------------------------------------
+// POST /library/analyze — kick off the standalone analysis pass as a
+// background child (the admin "Analyze audio" button). Runs bpm/key/intro for
+// un-analysed tracks and — when audio embeddings are enabled via the settings
+// toggle or ANALYZE_AUDIO_EMBEDDING — backfills CLAP vectors for tracks that
+// lack one (--audio). Shares the tagger's single-flight state: poll /settings
+// (tagger.running / tagger.mode) for progress, stop via /tag-library/stop.
+// ---------------------------------------------------------------------------
+router.post('/library/analyze', requireAdmin, (req, res) => {
+  if (tagger.running) return res.status(409).json({ error: 'a tagger/analyzer run is already active', tagger });
+  const limit = parseIntSafe(req.body?.limit, null);
+  startAnalyzer({ limit: limit ?? undefined, audio: true });
+  res.json({ ok: true, tagger });
 });
 
 // ---------------------------------------------------------------------------

@@ -385,6 +385,10 @@ class AnalyzeRequest(BaseModel):
     # the sidecar's single-threaded compute; `url` stays as the fallback.
     url: str | None = None
     path: str | None = None
+    # Per-request CLAP opt-in (the controller's admin toggle). True makes the
+    # worker lazy-load CLAP even without ANALYZE_AUDIO_EMBEDDING in its env;
+    # None keeps the worker's env-driven default.
+    embed: bool | None = None
 
 
 @app.post("/analyze")
@@ -395,6 +399,8 @@ async def analyze(req: AnalyzeRequest):
         payload = {"id": "1", "url": req.url}
     else:
         raise HTTPException(400, "missing 'url' or 'path'")
+    if req.embed is not None:
+        payload["embed"] = req.embed
     msg = await analyzer_worker.request(payload)
     if not msg.get("ok"):
         raise HTTPException(500, msg.get("error") or "analyze failed")

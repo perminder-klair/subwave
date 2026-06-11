@@ -501,6 +501,16 @@ const DEFAULTS = {
   skills: {
     enabled: {},
   },
+  // Audio (CLAP) "sounds-like" embeddings — drive the audio-similar picker
+  // source, the tracksThatSoundLikeThis tool and sonic journeys. When on, the
+  // analysis pass asks the backend for an embedding per track; the backend
+  // needs the CLAP stack (tts-heavy built with WITH_CLAP=1, or a local venv
+  // with torch+transformers) — without it the request is a clean no-op and
+  // the pass still fills bpm/key. ANALYZE_AUDIO_EMBEDDING=1 in the env also
+  // enables it regardless of this toggle (env wins on, never off).
+  audio: {
+    embeddings: false,
+  },
   // Sound-effects library. When disabled, the segment-director agent is never
   // shown the effect catalogue, so it stops garnishing spoken breaks with
   // stingers. The library files themselves stay on disk either way.
@@ -959,6 +969,9 @@ export async function load() {
           // existing `random-facts: false` carries forward as `curiosity: false`.
           .map(([k, v]) => [SKILL_RENAMES[k] || k, v]),
       ),
+    },
+    audio: {
+      embeddings: typeof stored.audio?.embeddings === 'boolean' ? stored.audio.embeddings : DEFAULTS.audio.embeddings,
     },
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
@@ -1712,6 +1725,12 @@ export async function update(patch) {
         }
         next.skills.enabled[name] = on;
       }
+    }
+  }
+  if ('audio' in patch) {
+    const au = patch.audio || {};
+    if (au.embeddings !== undefined) {
+      next.audio.embeddings = !!au.embeddings;
     }
   }
   if ('sfx' in patch) {

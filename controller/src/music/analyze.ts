@@ -12,6 +12,7 @@
 import { rm } from 'node:fs/promises';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
+import * as settings from '../settings.js';
 import { config } from '../config.js';
 
 export interface AnalyzeOptions {
@@ -23,9 +24,18 @@ export interface AnalyzeOptions {
   audioBackfill?: boolean;
 }
 
+// Audio embeddings are on when EITHER the env says so (env wins on, never
+// off) or the operator flipped the admin toggle (settings.audio.embeddings —
+// the discoverable path; see /admin/library). Both entry points (server-spawned
+// runs and the standalone CLIs) call settings.load() before this runs.
 function audioBackfillDefault(): boolean {
   const v = (process.env.ANALYZE_AUDIO_EMBEDDING || '').toLowerCase();
-  return v === '1' || v === 'true' || v === 'yes';
+  if (v === '1' || v === 'true' || v === 'yes') return true;
+  try {
+    return settings.get()?.audio?.embeddings === true;
+  } catch {
+    return false;
+  }
 }
 
 export interface AnalyzeStats {
@@ -113,7 +123,13 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         console.error(`[analyze] ${id} prefetch failed (${err?.message || err}); using url path`);
         localPath = null;
       }
-      const a = localPath ? await analyzer.analyzePath(localPath) : await analyzer.analyze(id);
+      // embed:true makes the backend lazy-load CLAP even when its own env
+      // doesn't have ANALYZE_AUDIO_EMBEDDING (the admin-toggle path); omitted
+      // when audio is off so the backend keeps its env-driven default.
+      const embed = audioBackfill ? true : undefined;
+      const a = localPath
+        ? await analyzer.analyzePath(localPath, { embed })
+        : await analyzer.analyze(id, { embed });
       db.upsertTrackAnalysis(id, {
         bpm: a.bpm,
         musicalKey: a.musicalKey,
