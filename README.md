@@ -13,8 +13,10 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 
 - **Project site** — [getsubwave.com](https://www.getsubwave.com/)
 - **Demo player** — [getsubwave.com/listen](https://www.getsubwave.com/listen)
+- **Mobile apps (beta)** — native iOS & Android players — [join the beta](https://github.com/perminder-klair/subwave/discussions/289)
 - **Setup walkthrough** — [getsubwave.com/setup](https://www.getsubwave.com/setup)
 - **Operator manual** — [getsubwave.com/manual](https://www.getsubwave.com/manual)
+- **Community** — [join the Discord](https://discord.gg/vjVbVKnMBa)
 
 ## Screenshots
 
@@ -44,8 +46,8 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 - **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy.
 - **Five TTS engines.** Piper and Kokoro in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) is also available. Pick a different engine per kind of speech.
 - **Multiple DJ personas.** Up to 10 souls in rotation, each with its own voice and writing style.
-- **Dual-codec broadcast.** MP3 192 kbps for Sonos, hardware radios, and cars; Ogg-Opus 96 kbps for modern browsers. The web player picks automatically.
-- **PWA + terminal player.** Installable on phone and desktop with lock-screen controls, plus a TUI for the command line.
+- **Dual-codec broadcast.** MP3 128 kbps for Sonos, hardware radios, and cars; Ogg-Opus 96 kbps for modern browsers. The web player picks automatically.
+- **Native apps, PWA, and TUI.** Native iOS and Android players (in beta — background audio, lock-screen / CarPlay / Android Auto controls, multi-station), an installable PWA on phone and desktop, and a TUI for the command line.
 - **Scheduled shows.** A 24×7 grid; each slot has its own persona, mood, and skills.
 - **Pluggable skills.** The DJ's between-track segments — weather, news, traffic, and your own — are skills. The built-ins are scaffolded as editable files under `state/skills/<kind>/` on first boot, so you can rewrite a brief or change the news feed (BBC → your own RSS) right from the admin console — no code, no redeploy. Add your own by dropping a `SKILL.md` (plus optional data-fetching code) into `state/skills/`, hitting Rescan, and enabling it. See [`docs/custom-skills.md`](docs/custom-skills.md).
 - **Mood-aware rotation.** Time of day, weather, and festival days bias what gets played and how the DJ talks.
@@ -217,6 +219,15 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle, play
   call goes through the Vercel AI SDK.
 - **There is no `/skip` for listeners.** Track-end is the only natural
   transition; operators have an admin-only skip endpoint.
+- **Navidrome ≥0.62 is recommended.** It ships several security hardening
+  fixes (internet-radio management now admin-gated, transcode-config
+  disclosure restricted to admins, concurrent-transcode DoS limits) and the
+  OpenSubsonic `sonicSimilarity` extension. SUB/WAVE streams with `format=raw`
+  so the transcode limits never throttle the radio, and when `sonicSimilarity`
+  is enabled the picker automatically folds Navidrome's audio-based neighbours
+  in as an extra track-selection source — no config, capability-probed, and a
+  silent no-op when the extension is absent. Any reasonably recent Navidrome
+  still works.
 - Several areas (queue/playback path, `radio.liq`, the crossfade, voice
   ducking, the LLM layer) have **non-obvious constraints** that are easy to
   regress. Read the relevant note in **[`CLAUDE.md`](CLAUDE.md)** before

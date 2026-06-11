@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { isIOSDevice } from './platform';
 
 // SSR-safe iOS flag. Returns false on the server and the first client render
@@ -21,25 +21,6 @@ export function useClock(): Date | null {
     return () => clearInterval(id);
   }, []);
   return t;
-}
-
-// Pseudo-random animated spectrum used as a fallback when the real analyser
-// can't attach — notably iOS Safari, where createMediaElementSource on a live
-// HTTP MP3 stream returns silence (WebKit limitation with no app-level
-// workaround short of shipping a WASM MP3 decoder). Values in [0, 1].
-export function useSpectrum(bins = 120, active = true, speed = 60): number[] {
-  const [arr, setArr] = useState<number[]>(() => Array(bins).fill(0.1));
-  useEffect(() => {
-    if (!active) return;
-    const id = setInterval(() => {
-      setArr(prev => prev.map((v, i) => {
-        const target = Math.pow(Math.random(), 1.4) * (1 - i / (bins * 2.2));
-        return v + (target - v) * 0.45;
-      }));
-    }, speed);
-    return () => clearInterval(id);
-  }, [active, bins, speed]);
-  return arr;
 }
 
 export interface Analyser {
@@ -73,7 +54,15 @@ export function useAnalyser(
   const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const binsRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const probedRef = useRef(false);
-  const [ready, setReady] = useState(false);
+  const [ready, setReadyState] = useState(false);
+  // Mirror of `ready` read by the stable `read` callback below — keeping it in
+  // a ref means `read`'s identity never changes, so the caller's rAF effect
+  // doesn't tear down and restart on every render.
+  const readyRef = useRef(false);
+  const setReady = useCallback((v: boolean) => {
+    readyRef.current = v;
+    setReadyState(v);
+  }, []);
 
   useEffect(() => {
     if (!active || !audioRef?.current) return;
@@ -152,13 +141,13 @@ export function useAnalyser(
       if (probeInterval) clearInterval(probeInterval);
       if (onPlaying && audioEl) audioEl.removeEventListener('playing', onPlaying);
     };
-  }, [active, audioRef]);
+  }, [active, audioRef, setReady]);
 
-  const read = (): Uint8Array<ArrayBuffer> | null => {
-    if (!ready || !analyserRef.current || !binsRef.current) return null;
+  const read = useCallback((): Uint8Array<ArrayBuffer> | null => {
+    if (!readyRef.current || !analyserRef.current || !binsRef.current) return null;
     analyserRef.current.getByteFrequencyData(binsRef.current);
     return binsRef.current;
-  };
+  }, []);
 
   return { ready, read };
 }

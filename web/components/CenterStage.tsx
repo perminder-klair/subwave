@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { cn } from '@/lib/cn';
 import { fmtTime } from '@/lib/format';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
+import { useElapsed } from '@/hooks/useElapsed';
 import DjThinkingLine from './DjThinkingLine';
 import { Ripple } from './ui/ripple';
 import { isDjTurn } from '@/lib/sessionFeed';
@@ -14,14 +15,18 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 export interface CenterStageProps {
   nowPlaying: NowPlayingTrack | null;
-  elapsed: number;
+  /** Epoch ms when the current track started (from useStationFeed). */
+  trackStartedAt: number | null;
   feed: SessionTurn[];
   djLineOn: boolean;
   onOpenBooth: () => void;
   onOpenTimeline: () => void;
 }
 
-export default function CenterStage({ nowPlaying, elapsed, feed, djLineOn, onOpenBooth, onOpenTimeline }: CenterStageProps) {
+export default memo(function CenterStage({ nowPlaying, trackStartedAt, feed, djLineOn, onOpenBooth, onOpenTimeline }: CenterStageProps) {
+  // The 1s elapsed tick lives here, in the component that displays it, so it
+  // only re-renders this subtree — not the whole player (see useElapsed).
+  const elapsed = useElapsed(trackStartedAt);
   const has = !!nowPlaying?.title;
   const duration = nowPlaying?.duration ?? 0;
   const subsonicId = nowPlaying?.subsonic_id ?? null;
@@ -155,4 +160,4 @@ export default function CenterStage({ nowPlaying, elapsed, feed, djLineOn, onOpe
       )}
     </div>
   );
-}
+});

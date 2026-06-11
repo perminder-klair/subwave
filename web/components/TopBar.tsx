@@ -1,5 +1,6 @@
 'use client';
 
+import { memo } from 'react';
 import { buildTagline } from '@/lib/tagline';
 import ThemeSwitcher from './ThemeSwitcher';
 import type { ActiveShow, StationContext } from '@/lib/types';
@@ -15,7 +16,7 @@ export interface TopBarProps {
   onOpenSchedule?: () => void;
 }
 
-export default function TopBar({
+export default memo(function TopBar({
   tunedIn,
   context,
   stationName,
@@ -105,4 +106,4 @@ export default function TopBar({
       )}
     </div>
   );
-}
+});

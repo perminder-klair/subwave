@@ -4,7 +4,7 @@ import { pageMeta } from '@/lib/seo';
 export const metadata = pageMeta({
   title: 'SUB/WAVE — Manual · Listen With',
   description:
-    'Listen to SUB/WAVE anywhere — browsers, phones, Sonos, car receivers, and any player that speaks Icecast MP3.',
+    'Listen to SUB/WAVE anywhere — native iOS & Android apps, browsers, Sonos, car receivers, and any player that speaks Icecast MP3.',
   path: '/manual/clients',
 });
 

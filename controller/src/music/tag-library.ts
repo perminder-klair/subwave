@@ -250,17 +250,12 @@ async function main() {
     // to seedCount tracks from outside the window. Bulk runs (no --limit)
     // pass undefined to keep the full library in play.
     untaggedPool: limited ? new Set(targetUntagged) : undefined,
-    embeddingForId: (id) => {
-      // For k-means clustering, hand a Float32Array if we have it (we may
-      // not in the very first run; that's fine — the selector falls back
-      // to random sampling within the unembedded pool).
-      const hits = db.knnById(id, 1);
-      if (hits.length === 0) return null;
-      // We don't have a direct vector-read API on library-db today; in v1
-      // the k-means fallback is good enough and we can add one later. For
-      // now: returning null routes seed-selector to its non-k-means path.
-      return null;
-    },
+    // NOTE: no embeddingForId here. library-db has no direct vector-read API
+    // (only knnById, a full vector scan per call), so passing any function —
+    // even one that always returns null — makes the seed selector run one
+    // KNN scan per candidate before falling back anyway. On a large library
+    // that's hours of wasted scans. Omitting it routes the selector straight
+    // to its random-shuffle path, until a cheap bulk vector read exists.
   });
   console.log(
     `[tag] seeds: ${seedSelection.seeds.length} new ` +

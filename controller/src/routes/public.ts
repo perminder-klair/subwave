@@ -4,12 +4,12 @@
 import express from 'express';
 import { stat, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
 import * as settings from '../settings.js';
 import { getFullContext } from '../context.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
+import { getStreamStatus } from '../broadcast/listeners.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
 import { listThemes, DEFAULT_THEME_ID } from '../themes.js';
 
@@ -38,58 +38,54 @@ function avatarUrlFor(personaId?: string | null): string {
   return personaId ? `/persona-avatar/${encodeURIComponent(personaId)}` : '';
 }
 
-// Icecast stream status + listener count — used by /now-playing. Cheap local
-// fetch with a hard 1.5s timeout so a slow Icecast can never wedge the
-// every-5s poll the UI does. `online` is false when neither broadcast mount
-// (/stream.mp3, /stream.opus) has a source attached (admin took the station
-// off air, or Liquidsoap is down) or when Icecast itself is unreachable.
-// Listener count and peak sum both mounts so the UI shows total reach
-// regardless of which codec each listener picked. Returns offline + 0/0 on
-// any failure.
-async function getStreamStatus() {
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 1500);
-    const r = await fetch(config.icecast.statusUrl, { signal: ctrl.signal });
-    clearTimeout(timer);
-    const ic = ((await r.json()) as any)?.icestats;
-    const sources = Array.isArray(ic?.source) ? ic.source : ic?.source ? [ic.source] : [];
-    const broadcastMounts = ['/stream.mp3', '/stream.opus'];
-    const broadcastSources = sources.filter((s: any) =>
-      broadcastMounts.some(m => String(s?.listenurl || '').includes(m))
-    );
-    const current = broadcastSources.reduce((sum: number, s: any) => sum + Number(s.listeners || 0), 0);
-    const peak    = broadcastSources.reduce((sum: number, s: any) => sum + Number(s.listener_peak || 0), 0);
-    return {
-      online: broadcastSources.length > 0,
-      listeners: { current, peak },
-    };
-  } catch {
-    return { online: false, listeners: { current: 0, peak: 0 } };
-  }
-}
-
 // ---------------------------------------------------------------------------
 // GET /cover/:id — proxy Subsonic cover art so listener browsers can use it
 // as MediaSession artwork (lock screen / CarPlay / Bluetooth display) without
 // the Subsonic credentials leaking into the page. Cached aggressively at the
-// edge — cover art for a given song id never changes meaningfully.
+// edge — cover art for a given song id never changes meaningfully — and in a
+// small in-process LRU, because the bundled Caddy doesn't cache: without it,
+// every listener's first view of each track is a separate round trip to
+// Navidrome (possibly Cloudflare-fronted and slow).
 // ---------------------------------------------------------------------------
+const COVER_CACHE_MAX = 20;
+const coverCache = new Map<string, { buf: Buffer; contentType: string }>();
+
 router.get('/cover/:id', async (req, res) => {
   const { id } = req.params;
   // Subsonic ids are short alphanumerics (Navidrome uses base32 hashes).
   // Reject anything else to keep this from being a generic SSRF surface.
   if (!/^[\w-]{1,64}$/.test(id)) return res.status(400).end();
+
+  const sendCover = (entry: { buf: Buffer; contentType: string }) => {
+    res.setHeader('Content-Type', entry.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    res.send(entry.buf);
+  };
+
+  const hit = coverCache.get(id);
+  if (hit) {
+    // Refresh recency — Map iteration order is insertion order, so
+    // delete+set keeps the oldest entry first for eviction.
+    coverCache.delete(id);
+    coverCache.set(id, hit);
+    return sendCover(hit);
+  }
+
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 5000);
     const r = await fetch(subsonic.getCoverArtUrl(id, 512), { signal: ctrl.signal });
     clearTimeout(timer);
     if (!r.ok) return res.status(502).end();
-    res.setHeader('Content-Type', r.headers.get('content-type') || 'image/jpeg');
-    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
-    const buf = Buffer.from(await r.arrayBuffer());
-    res.send(buf);
+    const entry = {
+      buf: Buffer.from(await r.arrayBuffer()),
+      contentType: r.headers.get('content-type') || 'image/jpeg',
+    };
+    coverCache.set(id, entry);
+    if (coverCache.size > COVER_CACHE_MAX) {
+      coverCache.delete(coverCache.keys().next().value!);
+    }
+    sendCover(entry);
   } catch {
     res.status(502).end();
   }
@@ -142,11 +138,12 @@ router.get('/persona-avatar/:id', async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/now-playing', async (req, res) => {
   try {
-    const [nowPlaying, ctx, stream] = await Promise.all([
+    const [nowPlaying, ctx] = await Promise.all([
       queue.getNowPlaying(),
       getFullContext(),
-      getStreamStatus(),
     ]);
+    // Served from the 15s listener-monitor cache — no per-request Icecast hit.
+    const stream = getStreamStatus();
     const persona = settings.getEffectivePersona();
     // activeShow is { name, persona:{ id, name, avatar } } | null — the
     // persona block is reshaped here to include the public avatar URL so the

@@ -107,7 +107,7 @@ Pipeline in order:
 6. `rotate(weights=[1, jingle_ratio], [jingles, radio])` — one jingle per N tracks.
 7. `fallback(track_sensitive=false, [radio, emergency])` → `blank.skip(max_blank=5s)`.
 8. **Broadcast bus** — brick-wall limiter (20:1 at −1 dBFS) only. Normaliser/widener/bus-compressor were all removed (they reshaped the masters). The limiter is a safety net for MP3 inter-sample peaks; typically 0 dB of reduction on catalogue audio.
-9. **Parallel Icecast outputs** (`make_stream_outputs()`, wrapped in one `stream_on`/`stream_off`): `%mp3(192)` → `/stream.mp3` (**always served** — universal floor) and, when enabled, `%opus(96, 48kHz)` → `/stream.opus`. Opus is gated on `opus_enabled` from `liquidsoap_opus_enabled.txt` (**off by default**; opt in via admin → Settings → Opus stream, mirroring the `archive_enabled` pattern — only an explicit `"true"` enables it). When off, no Opus output is created (no encoder, no resample). Both mounts share the same `radio` bus. Plus `output.file(%mp3(128), reopen_when={0m0s}, "/var/sub-wave/archive/%Y-%m-%d/%H-00.mp3")` for MP3-only hourly archives.
+9. **Parallel Icecast outputs** (`make_stream_outputs()`, wrapped in one `stream_on`/`stream_off`): `%mp3(128)` → `/stream.mp3` (**always served** — universal floor) and, when enabled, `%opus(96, 48kHz)` → `/stream.opus`. Opus is gated on `opus_enabled` from `liquidsoap_opus_enabled.txt` (**off by default**; opt in via admin → Settings → Opus stream, mirroring the `archive_enabled` pattern — only an explicit `"true"` enables it). When off, no Opus output is created (no encoder, no resample). Both mounts share the same `radio` bus. Plus `output.file(%mp3(128), reopen_when={0m0s}, "/var/sub-wave/archive/%Y-%m-%d/%H-00.mp3")` for MP3-only hourly archives.
 
 Also: a custom `subhttp:` protocol shells out to `curl` (Liquidsoap's `http.get.stream` returns spurious 522s on the Cloudflare-fronted Navidrome origin). Telnet server on port 1234 (reachable as `broadcast:1234`) exposes the custom `restart` command.
 
@@ -122,6 +122,17 @@ Next.js 15 App Router + Tailwind. Routes:
 PWA-installable (`app/manifest.js`, `app/icon.js`, dynamic icon/screenshot routes via `next/og` ImageResponse — mind Satori's constraints). `useMediaSession` wires OS lock-screen / headphone / car controls; **skip is intentionally omitted** on the listener side so a stray AirPods double-tap doesn't skip for everyone.
 
 Stream URL + API base default to same-origin (`/api`, `/stream.mp3`) for the prod image; dev overrides via `web/.env.local` (`NEXT_PUBLIC_API_URL=http://localhost:7701`, `NEXT_PUBLIC_STREAM_URL=http://localhost:7702/stream.mp3`).
+
+### Native app (`app/`)
+
+A separate **Expo SDK 56 / React Native** project (own `package.json`, `node_modules`, `eas.json`) — the native iOS + Android player. It ports the web player's hooks/UI to RN + NativeWind, with the same listener experience (now-playing, booth, timeline, requests, schedule, themes, a Skia visualiser). Background audio + lock-screen / CarPlay / Android Auto controls come from **`react-native-track-player`** (wrapped in `src/audio/player.ts` so it's swappable). Like the web player, it's a player for *any* station: the base URL is fully runtime (`StationContext` → `createApi(baseUrl)`), defaulting to the public station, and listeners can add stations by address. Stream is MP3-only (`/stream.mp3`); `service.ts` wires remote Play/Pause/Stop but **not skip** (shared live stream).
+
+Architecture-critical and easy to break — read [`app/docs/TESTING.md`](app/docs/TESTING.md) before touching native config:
+
+- **New Architecture is mandatory** (RN 0.85 ignores `newArchEnabled=false`). Reanimated 4 requires it. RNTP 4.1.2 isn't natively new-arch-compatible, so `app/patches/react-native-track-player+4.1.2.patch` carries the fix (2 source files); without it Android crashes on the first playback event.
+- **`ios/` and `android/` are gitignored** (Continuous Native Generation) — regenerated from `app.json` + `assets/` by `expo prebuild` / EAS. The source of truth for icons/splash is `assets/` (disc-mark branding) + `app.json`.
+
+Distribution is **EAS cloud builds** → iOS TestFlight + Android internal-distribution link (project `@pinku1/subwave`, bundle `com.getsubwave.app`). The repeat-release workflow lives in the `subwave-app-ios-release` and `subwave-app-android-release` skills; getting it onto a physical Android phone over USB is `subwave-app-android`. See `app/README.md`.
 
 ### Docker layout
 

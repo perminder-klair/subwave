@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { pollWhileVisible } from '@/lib/poll';
 import type { PlayerStatus } from '@/hooks/usePlayer';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -70,11 +71,12 @@ export function useSignal({ tunedIn, status, offline }: UseSignalOptions): Signa
       }
     };
 
-    probe();
-    const id = setInterval(probe, PROBE_INTERVAL_MS);
+    // Probes pause while the tab is hidden — a backgrounded player doesn't
+    // need a live needle — and fire again immediately on return.
+    const stopPolling = pollWhileVisible(() => { void probe(); }, PROBE_INTERVAL_MS);
     return () => {
       cancelled = true;
-      clearInterval(id);
+      stopPolling();
     };
   }, [tunedIn, offline]);
 

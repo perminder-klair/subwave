@@ -9,6 +9,7 @@
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as dj from '../llm/dj.js';
+import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
 
@@ -23,6 +24,7 @@ const CAP_RECENT = 4;
 const CAP_FREQUENT = 4;
 const CAP_SIMILAR_ARTIST = 4;
 const CAP_EMBEDDING_SIMILAR = 4;
+const CAP_SONIC_SIMILAR = 4;
 const CAP_AUDIO_SIMILAR = 4;
 
 // TTL cache for sources that don't change between picks. Without this, every
@@ -131,7 +133,22 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     } catch {}
   }
 
-  // 1c. Audio-KNN (CLAP) — "sounds like this" over the waveform itself (timbre
+  // 1c. Sonic-similarity from current track — Navidrome's own audio-based
+  // neighbours (OpenSubsonic `sonicSimilarity` extension, Navidrome ≥0.62 with
+  // the plugin enabled). A third, acoustically-grounded signal alongside the
+  // Last.fm graph (1) and the embedding-KNN (1b). The support probe is cached
+  // 30 min in subsonic.ts, so this costs one extra call per pick only when the
+  // extension is actually present; otherwise it's a silent no-op.
+  if (currentTrack?.id) {
+    try {
+      if (await subsonic.supportsSonicSimilarity()) {
+        const sonic = await subsonic.getSonicSimilarTracks(currentTrack.id, { count: 20 });
+        add('sonic-similar', sampleWithRecentFallback(sonic, recentIds, CAP_SONIC_SIMILAR));
+      }
+    } catch {}
+  }
+
+  // 1d. Audio-KNN (CLAP) — "sounds like this" over the waveform itself (timbre
   // / instrumentation / production / energy), blind to metadata. Complements
   // embedding-similar: text catches same scene/era/theme, audio catches same
   // sound — especially for thin-metadata or non-Western tracks where Last.fm +
@@ -316,7 +333,11 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
 
   let pickRaw;
   try {
+    // Same show-brief plumbing as the agent picker (dj-agent.pickSystem) —
+    // this is its fallback, so it must honour the brief too.
+    const activeShow = settings.resolveActiveShow();
     pickRaw = await dj.pickNextTrack({
+      show: activeShow ? { name: activeShow.name, topic: activeShow.topic } : null,
       candidates: candidates.map(c => {
         const a = analysisFor(c);
         return {

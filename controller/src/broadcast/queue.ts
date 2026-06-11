@@ -4,7 +4,7 @@
 
 import { writeFile, readFile } from 'node:fs/promises';
 import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { stat, rename } from 'node:fs/promises';
 import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
 import * as mix from '../music/mix.js';
@@ -781,7 +781,12 @@ async function writeHandoff(path: string, contents: string, { maxWaitMs = 1500 }
       // meantime, or this is the first write of the session), this returns
       // immediately.
       if (existsSync(path)) await waitForConsumed(path, maxWaitMs);
-      await writeFile(path, contents);
+      // Write-to-temp + rename so liquidsoap's poll never observes a
+      // half-written (or truncated-but-empty) file — its poll handlers read,
+      // DELETE, then check non-empty, so a poll landing mid-write would drop
+      // this handoff silently. rename(2) is atomic on the same volume.
+      await writeFile(`${path}.tmp`, contents);
+      await rename(`${path}.tmp`, path);
     });
   // Hold the slot until liquidsoap consumes THIS write too, so the next
   // queued writer waits for the audio to land, not just for the write call to

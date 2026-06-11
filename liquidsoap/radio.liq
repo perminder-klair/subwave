@@ -110,7 +110,7 @@ dj_queue = request.queue(id="dj_queue")
 # Periodically drain the queue file into request.queue
 def poll_queue() =
   if file.exists("/var/sub-wave/next.txt") then
-    contents = file.contents("/var/sub-wave/next.txt")
+    contents = string.trim(file.contents("/var/sub-wave/next.txt"))
     file.remove("/var/sub-wave/next.txt")
     if contents != "" then
       log("Queueing: #{contents}")
@@ -239,7 +239,7 @@ end
 
 def poll_voice() =
   if file.exists("/var/sub-wave/say.txt") then
-    contents = file.contents("/var/sub-wave/say.txt")
+    contents = string.trim(file.contents("/var/sub-wave/say.txt"))
     file.remove("/var/sub-wave/say.txt")
     if contents != "" then
       log("DJ says: #{contents}")
@@ -254,7 +254,7 @@ thread.run(every=0.5, poll_voice)
 
 def poll_intro() =
   if file.exists("/var/sub-wave/intro.txt") then
-    contents = file.contents("/var/sub-wave/intro.txt")
+    contents = string.trim(file.contents("/var/sub-wave/intro.txt"))
     file.remove("/var/sub-wave/intro.txt")
     if contents != "" then
       log("DJ talk-over: #{contents}")
@@ -269,7 +269,7 @@ thread.run(every=0.5, poll_intro)
 
 def poll_sfx() =
   if file.exists("/var/sub-wave/sfx.txt") then
-    contents = file.contents("/var/sub-wave/sfx.txt")
+    contents = string.trim(file.contents("/var/sub-wave/sfx.txt"))
     file.remove("/var/sub-wave/sfx.txt")
     if contents != "" then
       log("DJ sound effect: #{contents}")
@@ -541,8 +541,10 @@ music_meta.on_metadata(on_meta)
 # controller. It is NOT persisted: a mixer restart always comes back on air.
 #
 # Two mounts in parallel:
-#   /stream.mp3  — MP3 192 kbps, the universal compatibility floor
+#   /stream.mp3  — MP3 128 kbps, the universal compatibility floor
 #                  (Sonos, hardware radios, car receivers, pre-iOS-17 Safari).
+#                  128 over 192 cuts ~33% per-listener bandwidth at a quality
+#                  difference that's inaudible for a personal station.
 #   /stream.opus — Ogg-Opus 96 kbps, ~equal-or-better quality at half the
 #                  bandwidth for modern browsers (the web player auto-prefers
 #                  it via canPlayType). Browsers / VLC / cliamp on a recent
@@ -552,7 +554,7 @@ settings.init.force_start := true
 
 def make_stream_outputs() =
   mp3_out = output.icecast(
-    %mp3(bitrate=192, samplerate=44100, stereo=true),
+    %mp3(bitrate=128, samplerate=44100, stereo=true),
     id="stream_mp3",
     fallible=true,
     host=environment.get(default="icecast", "ICECAST_HOST"),

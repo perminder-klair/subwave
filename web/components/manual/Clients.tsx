@@ -64,6 +64,75 @@ export default function Clients() {
       </section>
 
       <section className="bs-section">
+        <p className="bs-eyebrow">iOS &amp; ANDROID</p>
+        <h2>The app on your phone.</h2>
+        <p>
+          SUB/WAVE has native players for iOS and Android. Like the TUI, they mirror the
+          browser player rather than just carrying the audio &mdash; now-playing with cover
+          art and a live visualiser, the booth feed, the timeline, a request form, the
+          schedule, and station themes that recolour the whole app. Playback keeps going in
+          the background, with controls on the lock screen, your headphones, CarPlay, and
+          Android Auto.
+        </p>
+        <p>
+          They open on the public station, and you can add any other SUB/WAVE station by its
+          address &mdash; the same <code className="bs-code-inline">/stream.mp3</code> domain
+          the apps below use, typed in once and saved.
+        </p>
+        <p className="text-muted">
+          The apps are in public beta while they work through the stores. On iOS, join over
+          TestFlight (install the TestFlight app first); on Android, tap the link to install
+          the APK directly &mdash; no account, no Play Store:
+        </p>
+        <table className="bs-doc-table">
+          <thead>
+            <tr>
+              <th>Platform</th>
+              <th>How to get it</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>iOS</strong></td>
+              <td>
+                <a
+                  href="https://testflight.apple.com/join/Xrx5TUmb"
+                  className="bs-link"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  TestFlight ↗
+                </a>
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Android</strong></td>
+              <td>
+                <a
+                  href="https://expo.dev/accounts/pinku1/projects/subwave/builds/8bc3116d-c9b0-4a32-87b9-747640270b23"
+                  className="bs-link"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Install APK ↗
+                </a>{' '}
+                (approve the one-time &ldquo;unknown sources&rdquo; prompt)
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">APP STORE &amp; PLAY STORE</div>
+          <p>
+            Coming once the betas settle. Until then the links above are the way in &mdash;
+            the Android build installs straight from the link (you&rsquo;ll approve a
+            one-time &ldquo;install from unknown sources&rdquo; prompt), and iOS goes through
+            TestFlight.
+          </p>
+        </div>
+      </section>
+
+      <section className="bs-section">
         <p className="bs-eyebrow">THE ONE THING YOU NEED</p>
         <h2>The stream URL.</h2>
         <p>
