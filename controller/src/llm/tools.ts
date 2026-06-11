@@ -139,6 +139,19 @@ export function buildPickerTools({
       },
     }),
 
+    songsByGenre: tool({
+      description: 'Songs from a library genre tag, fuzzy-matched ("turkish" finds "Turkish Pop"). Use for language/country/style asks — "play something Turkish" — that searchLibrary cannot reach: genre lives in tags, not titles.',
+      inputSchema: z.object({ genre: z.string().describe('a genre, language, or country word, e.g. "jazz", "turkish", "punjabi"') }),
+      execute: async ({ genre }) => {
+        try {
+          const name = await subsonic.resolveGenreName(genre);
+          if (!name) return { error: `no library genre matching "${genre}"` };
+          return collect(await subsonic.getSongsByGenre(name, { count: 50 }));
+        }
+        catch (err) { return { error: err.message }; }
+      },
+    }),
+
     tracksByMood: tool({
       description: 'Songs tagged with a mood: energetic, calm, reflective, celebratory, romantic, spiritual, focus, workout, driving, cooking, rainy, sunny, night, morning, evening, festival, cultural. Optionally constrain by energy level (low|medium|high).',
       inputSchema: z.object({

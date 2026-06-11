@@ -81,20 +81,8 @@ async function pickByArtistAndSort({ artistName, sort, scope: _scope, recentIds 
 // match and can't query the genre tag, so genre requests must go through
 // getSongsByGenre with an exact genre name. Returns the matched name or null.
 async function resolveGenre(name) {
-  if (!name) return null;
-  const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
-  const target = norm(name);
-  if (!target) return null;
   try {
-    const genres = await subsonic.getGenres();
-    let hit = genres.find(g => norm(g.value) === target);
-    if (!hit) {
-      hit = genres.find(g => {
-        const gv = norm(g.value);
-        return gv && (gv.includes(target) || target.includes(gv));
-      });
-    }
-    return hit?.value || null;
+    return await subsonic.resolveGenreName(name);
   } catch (err) {
     queue.log('error', `resolveGenre failed: ${err.message}`);
     return null;
@@ -220,6 +208,7 @@ async function resolveRequest(entry) {
     scope: matched.scope,
     sort: matched.sort,
     artist: matched.artist,
+    language: matched.language,
     searchTerms: matched.search_terms,
   });
 
@@ -274,15 +263,43 @@ async function resolveRequest(entry) {
     }
   }
 
+  // 2b-bis. Language path — "play something Turkish" (issue #349). Language
+  // isn't a Subsonic field, so try it as a genre tag first (highest
+  // precision: "turkish" → "Turkish Pop"), then as a plain search term in
+  // case the word shows up in artist/album/title. Misses fall through to the
+  // remaining pick sources like every other step.
+  if (!pick && matched.language) {
+    const genre = await resolveGenre(matched.language);
+    if (genre) {
+      try {
+        const songs = await subsonic.getSongsByGenre(genre, { count: 100 });
+        pick = randomFresh(songs);
+        if (pick) pickSource = `language-genre:${genre}`;
+      } catch (err) {
+        queue.log('error', `language genre pick failed: ${err.message}`);
+      }
+    }
+    if (!pick) {
+      try {
+        const r = await subsonic.search(matched.language, { songCount: 25 });
+        pick = randomFresh(r);
+        if (pick) pickSource = `language-search:${matched.language}`;
+      } catch (err) {
+        queue.log('error', `language search pick failed: ${err.message}`);
+      }
+    }
+  }
+
   // 2c. Search by terms — artist names / song titles only (the system prompt
   // routes genres and vibes elsewhere; defensively drop a term that equals
-  // the mood or genre string). A random page offset means repeated requests
-  // for the same artist don't always cycle the same top-25 search3 hits.
+  // the mood, genre, or language string). A random page offset means repeated
+  // requests for the same artist don't always cycle the same top-25 search3 hits.
   if (!pick) {
     const terms = (matched.search_terms || []).filter((t: string) => {
       if (!t || typeof t !== 'string') return false;
       if (matched.mood && t.toLowerCase() === matched.mood.toLowerCase()) return false;
       if (matched.genre && t.toLowerCase() === matched.genre.toLowerCase()) return false;
+      if (matched.language && t.toLowerCase() === matched.language.toLowerCase()) return false;
       return true;
     });
     if (terms.length > 0) {
