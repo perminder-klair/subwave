@@ -16,6 +16,7 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 - **Mobile apps (beta)** — native iOS & Android players — [join the beta](https://github.com/perminder-klair/subwave/discussions/289)
 - **Setup walkthrough** — [getsubwave.com/setup](https://www.getsubwave.com/setup)
 - **Operator manual** — [getsubwave.com/manual](https://www.getsubwave.com/manual)
+- **Community** — [join the Discord](https://discord.gg/vjVbVKnMBa)
 
 ## Screenshots
 

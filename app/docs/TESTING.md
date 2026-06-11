@@ -206,9 +206,13 @@ eas build --profile production --platform ios     # needs Apple Developer
 eas submit --profile production --platform ios     # uploads to App Store Connect
 ```
 
-> **Note:** there is no `expo-updates` dependency installed, so OTA / EAS Update
-> is not wired up. Every JS change requires a new build (or local Metro). Add
-> `expo-updates` + a `channel` per profile if you want OTA later.
+> **OTA is wired up.** `expo-updates` is installed, `app.json` has the `updates`
+> block + `runtimeVersion.policy = "fingerprint"`, and `eas.json` gives `preview`
+> and `production` a `channel`. JS-only changes ship over-the-air with
+> `eas update --channel <channel>` — no new build. Native changes (deps,
+> `patches/`, config plugins, `app.json` native sections) still need a store
+> build; the fingerprint runtime version guarantees an OTA can't land on a binary
+> with mismatched native code. Full decision table + commands: [`RELEASE.md`](./RELEASE.md).
 
 ---
 

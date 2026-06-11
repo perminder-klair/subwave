@@ -28,6 +28,17 @@ npm start                        # expo start --dev-client
 
 `npm run typecheck` mirrors the repo lint gate (`tsc --noEmit`). `npx expo-doctor` runs 21 project-health checks.
 
+## Release & updates
+
+Two ways to ship, decided by what a change touches:
+
+- **JS/TS only** (components, hooks, styles, copy, logic) → **OTA** via `expo-updates`: `eas update --channel <preview|production>`. No store round-trip.
+- **Native** (a dep add/upgrade, `patches/`, a config plugin, `app.json` native sections) → **new store build**: `eas build --profile production --platform <ios|android>` then `eas submit`.
+
+`runtimeVersion.policy = "fingerprint"` hashes the native inputs (incl. `patches/`), so an OTA can only ever reach a binary with matching native code — editing the RNTP patch automatically rolls the runtime version. `fallbackToCacheTimeout: 0` keeps OTA off the launch critical path (it applies on the next cold start), which matters for a radio app opened in dead zones.
+
+Channels map to build profiles in `eas.json` (`preview` / `production`). Store-submit configs live there too (iOS `ascAppId`; Android `secrets/play-service-account.json`, gitignored). Full runbook + the OTA-vs-binary table: [`docs/RELEASE.md`](docs/RELEASE.md). The manual pre-release device gate: [`docs/QA-CHECKLIST.md`](docs/QA-CHECKLIST.md). Step-by-step store flows are the `subwave-app-ios-release` / `subwave-app-android-release` skills.
+
 ## Configure the featured station
 
 The default/featured station is one line in `app.json`:

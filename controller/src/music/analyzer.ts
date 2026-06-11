@@ -23,6 +23,24 @@ export interface AnalysisResult {
   musicalKey: string | null;
   introMs: number | null;
   confidence: number | null;
+  // CLAP audio embedding (512 floats) when the backend has the model loaded
+  // (ANALYZE_AUDIO_EMBEDDING=1 + CLAP weights). null otherwise — every consumer
+  // treats null as "no audio vector this pass", so a backend without CLAP is
+  // byte-for-byte today's behaviour.
+  audioEmbedding: number[] | null;
+}
+
+// Coerce the worker's audio_embedding field to a clean number[] or null. The
+// worker omits it entirely when CLAP isn't loaded; defend against a malformed
+// or wrong-length array rather than letting it reach upsertTrackAudioVector.
+function parseAudioEmbedding(v: unknown): number[] | null {
+  if (!Array.isArray(v) || v.length === 0) return null;
+  const out: number[] = [];
+  for (const x of v) {
+    if (typeof x !== 'number' || !Number.isFinite(x)) return null;
+    out.push(x);
+  }
+  return out;
 }
 
 // Cap the download so we don't pull whole albums of bytes for a short
@@ -96,9 +114,16 @@ function startWorker(): Promise<void> {
   return booting;
 }
 
+// Per-request analysis options. `embed: true` asks the backend to (lazy-load
+// and) run CLAP for this track even when the backend's own env doesn't enable
+// it — the admin-toggle path. Omitted → the backend's env-driven default.
+export interface AnalyzeRequestOpts {
+  embed?: boolean;
+}
+
 // Write a request to the local stdio worker and resolve its response. The
 // request carries either `url` (worker downloads) or `path` (already-local).
-function localRequest(req: { url: string } | { path: string }): Promise<AnalysisResult> {
+function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequestOpts): Promise<AnalysisResult> {
   const id = `a${++reqSeq}`;
   return new Promise<AnalysisResult>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -112,6 +137,7 @@ function localRequest(req: { url: string } | { path: string }): Promise<Analysis
           musicalKey: msg.key ?? null,
           introMs: msg.intro_ms ?? null,
           confidence: msg.confidence ?? null,
+          audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
         }),
       reject,
       timer,
@@ -120,14 +146,14 @@ function localRequest(req: { url: string } | { path: string }): Promise<Analysis
   });
 }
 
-async function analyzeViaLocal(url: string): Promise<AnalysisResult> {
+async function analyzeViaLocal(url: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {
   if (!ready) await startWorker();
-  return localRequest({ url });
+  return localRequest({ url, ...opts });
 }
 
-async function analyzeViaLocalPath(path: string): Promise<AnalysisResult> {
+async function analyzeViaLocalPath(path: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {
   if (!ready) await startWorker();
-  return localRequest({ path });
+  return localRequest({ path, ...opts });
 }
 
 // ---------------------------------------------------------------------------
@@ -152,7 +178,7 @@ async function sidecarReachable(): Promise<boolean> {
 
 // POST the sidecar a request body of either {url} (it downloads) or {path}
 // (a file on the shared volume the controller pre-fetched).
-async function sidecarRequest(body: { url: string } | { path: string }): Promise<AnalysisResult> {
+async function sidecarRequest(body: ({ url: string } | { path: string }) & AnalyzeRequestOpts): Promise<AnalysisResult> {
   const base = config.ttsHeavy.url;
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), config.analyzer.requestTimeoutMs);
@@ -166,18 +192,24 @@ async function sidecarRequest(body: { url: string } | { path: string }): Promise
     if (!res.ok) throw new Error(`tts-heavy /analyze ${res.status}: ${await res.text().catch(() => '')}`);
     const resBody = (await res.json()) as any;
     if (!resBody.ok) throw new Error(resBody.error || 'analysis failed');
-    return { bpm: resBody.bpm ?? null, musicalKey: resBody.key ?? null, introMs: resBody.intro_ms ?? null, confidence: resBody.confidence ?? null };
+    return {
+      bpm: resBody.bpm ?? null,
+      musicalKey: resBody.key ?? null,
+      introMs: resBody.intro_ms ?? null,
+      confidence: resBody.confidence ?? null,
+      audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
+    };
   } finally {
     clearTimeout(t);
   }
 }
 
-function analyzeViaSidecar(url: string): Promise<AnalysisResult> {
-  return sidecarRequest({ url });
+function analyzeViaSidecar(url: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {
+  return sidecarRequest({ url, ...opts });
 }
 
-function analyzeViaSidecarPath(path: string): Promise<AnalysisResult> {
-  return sidecarRequest({ path });
+function analyzeViaSidecarPath(path: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {
+  return sidecarRequest({ path, ...opts });
 }
 
 // ---------------------------------------------------------------------------
@@ -207,11 +239,11 @@ export function backendLabel(): string {
 // and moves on, leaving the row NULL so it's retried on the next run. This is
 // the URL path: the backend fetches the audio itself. Kept as the fallback
 // for the prefetch pipeline (see analyzePath / downloadCapped below).
-export async function analyze(songId: string): Promise<AnalysisResult> {
+export async function analyze(songId: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
   const url = subsonic.getRawStreamUrl(songId);
-  return backend === 'sidecar' ? analyzeViaSidecar(url) : analyzeViaLocal(url);
+  return backend === 'sidecar' ? analyzeViaSidecar(url, opts) : analyzeViaLocal(url, opts);
 }
 
 // Download a track's audio to a capped temp file on the shared state volume
@@ -263,10 +295,10 @@ export async function downloadCapped(songId: string): Promise<string> {
 // Analyse a track from an already-local file on the shared volume (produced
 // by downloadCapped). Same backend resolution as analyze(), but hands the
 // path over instead of a url so the backend skips its own fetch.
-export async function analyzePath(localPath: string): Promise<AnalysisResult> {
+export async function analyzePath(localPath: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
-  return backend === 'sidecar' ? analyzeViaSidecarPath(localPath) : analyzeViaLocalPath(localPath);
+  return backend === 'sidecar' ? analyzeViaSidecarPath(localPath, opts) : analyzeViaLocalPath(localPath, opts);
 }
 
 export function shutdown(): void {

@@ -298,6 +298,7 @@ export const SEED_PERSONAS = [
     frequency: 'moderate',
     scriptLength: 'concise',
     soul: DJ_SOULS[0],
+    language: '',
     avatar: '',
     tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_george' },
   },
@@ -308,6 +309,7 @@ export const SEED_PERSONAS = [
     frequency: 'quiet',
     scriptLength: 'concise',
     soul: DJ_SOULS[1],
+    language: '',
     avatar: '',
     tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_alice' },
   },
@@ -318,6 +320,7 @@ export const SEED_PERSONAS = [
     frequency: 'moderate',
     scriptLength: 'concise',
     soul: DJ_SOULS[3],
+    language: '',
     avatar: '',
     tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_daniel' },
   },
@@ -498,6 +501,16 @@ const DEFAULTS = {
   skills: {
     enabled: {},
   },
+  // Audio (CLAP) "sounds-like" embeddings — drive the audio-similar picker
+  // source, the tracksThatSoundLikeThis tool and sonic journeys. When on, the
+  // analysis pass asks the backend for an embedding per track; the backend
+  // needs the CLAP stack (tts-heavy built with WITH_CLAP=1, or a local venv
+  // with torch+transformers) — without it the request is a clean no-op and
+  // the pass still fills bpm/key. ANALYZE_AUDIO_EMBEDDING=1 in the env also
+  // enables it regardless of this toggle (env wins on, never off).
+  audio: {
+    embeddings: false,
+  },
   // Sound-effects library. When disabled, the segment-director agent is never
   // shown the effect catalogue, so it stops garnishing spoken breaks with
   // stingers. The library files themselves stay on disk either way.
@@ -621,6 +634,7 @@ function normalizePersona(raw: any) {
     scriptLength: SCRIPT_LENGTHS.includes(raw.scriptLength) ? raw.scriptLength : 'concise',
     djMode: raw.djMode === true,
     soul,
+    language: typeof raw.language === 'string' ? raw.language.trim().slice(0, 60) : '',
     avatar,
     tts: normalizeTts(raw.tts),
     skills: normalizeSkills(raw.skills),
@@ -956,6 +970,9 @@ export async function load() {
           .map(([k, v]) => [SKILL_RENAMES[k] || k, v]),
       ),
     },
+    audio: {
+      embeddings: typeof stored.audio?.embeddings === 'boolean' ? stored.audio.embeddings : DEFAULTS.audio.embeddings,
+    },
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
     },
@@ -1139,6 +1156,16 @@ function validatePersonasStrict(raw) {
       throw new Error(`personas[${i}].soul must be 1-400 chars`);
     const tagline = String(item.tagline ?? '').trim();
     if (tagline.length > 80) throw new Error(`personas[${i}].tagline must be 0-80 chars`);
+    // language — optional free text ("Turkish", "Türkçe", …). Absent/empty →
+    // '' (English, no directive injected — the historical behaviour).
+    let language = '';
+    if (item.language !== undefined && item.language !== null) {
+      if (typeof item.language !== 'string') {
+        throw new Error(`personas[${i}].language must be a string`);
+      }
+      language = item.language.trim();
+      if (language.length > 60) throw new Error(`personas[${i}].language must be 0-60 chars`);
+    }
     if (!FREQUENCIES.includes(item.frequency)) {
       throw new Error(`personas[${i}].frequency must be one of: ${FREQUENCIES.join(', ')}`);
     }
@@ -1213,6 +1240,7 @@ function validatePersonasStrict(raw) {
       scriptLength,
       djMode,
       soul,
+      language,
       avatar,
       tts,
       skills,
@@ -1699,6 +1727,12 @@ export async function update(patch) {
       }
     }
   }
+  if ('audio' in patch) {
+    const au = patch.audio || {};
+    if (au.embeddings !== undefined) {
+      next.audio.embeddings = !!au.embeddings;
+    }
+  }
   if ('sfx' in patch) {
     const sx = patch.sfx || {};
     if (sx.enabled !== undefined) {
@@ -1844,9 +1878,22 @@ export function getEffectivePersona(date: Date = new Date()) {
   return getActivePersona();
 }
 
+// The persona's on-air language as a blunt system-prompt directive. Empty
+// language (the default) returns '' so prompts stay byte-identical to the
+// pre-language behaviour. The proper-nouns clause stops a Turkish host from
+// translating "Bohemian Rhapsody" or the station name (issue #349).
+export function languageDirective(persona: any) {
+  const lang = String(persona?.language || '').trim();
+  if (!lang) return '';
+  return `\n\nIMPORTANT: You speak and write exclusively in ${lang}. Every on-air line you produce must be in ${lang} — acknowledgements, idents, asides, everything. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them.`;
+}
+
 // Render the DJ system prompt by substituting {name}, {soul}, {station},
-// {location}. {name}/{soul} come from the supplied persona; the template is
-// the global djPrompt (falling back to DEFAULT_DJ_PROMPT_TEMPLATE).
+// {location}, {language}. {name}/{soul} come from the supplied persona; the
+// template is the global djPrompt (falling back to DEFAULT_DJ_PROMPT_TEMPLATE).
+// A custom template with a {language} placeholder owns the wording (the
+// language NAME is substituted, defaulting to English); otherwise a non-empty
+// persona language appends the stock directive.
 export function renderDjPrompt(persona: any, ctx: any = {}) {
   const station = ctx.station || cache?.station || DEFAULTS.station;
   const location = ctx.location || (cache?.weather?.locationName ?? DEFAULTS.weather.locationName);
@@ -1857,7 +1904,11 @@ export function renderDjPrompt(persona: any, ctx: any = {}) {
     .replaceAll('{soul}', persona?.soul || DJ_SOULS[0])
     .replaceAll('{station}', station)
     .replaceAll('{location}', location);
-  return `${rendered}`;
+  if (tpl.includes('{language}')) {
+    const lang = String(persona?.language || '').trim();
+    return rendered.replaceAll('{language}', lang || 'English');
+  }
+  return rendered + languageDirective(persona);
 }
 
 // Persona prelude shared by every tool-loop agent system prompt — the picker
@@ -1881,7 +1932,7 @@ export function agentPersonaPreamble(persona, { rules = true } = {}) {
   const name = persona?.name || 'the DJ';
   const soul = persona?.soul || '';
   const station = cache?.station || DEFAULTS.station;
-  const opener = `You are ${name}, the on-air DJ for ${station}, a personal internet radio station. ${soul}`;
+  const opener = `You are ${name}, the on-air DJ for ${station}, a personal internet radio station. ${soul}${languageDirective(persona)}`;
   return rules ? `${opener}` : opener;
 }
 

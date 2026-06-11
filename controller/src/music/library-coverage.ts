@@ -90,17 +90,22 @@ export async function get() {
   else if (analysisAvailStale() && !analysisProbeInflight) refreshAnalysisAvail();
   const tagged = library.allTaggedIds().length;
   const analysed = db.analysedCount();
+  const audioEmbedded = db.audioVectorCount();
   const total = cache.scannedAt ? cache.total : null;
   const percent =
     total != null && total > 0 ? Math.round((tagged / total) * 100) : null;
   const analysedPercent =
     total != null && total > 0 ? Math.round((analysed / total) * 100) : null;
+  const audioEmbeddedPercent =
+    total != null && total > 0 ? Math.round((audioEmbedded / total) * 100) : null;
   return {
     tagged,
     analysed,
+    audioEmbedded,
     total,
     percent,
     analysedPercent,
+    audioEmbeddedPercent,
     scannedAt: cache.scannedAt,
     scanning: cache.scanning,
     // Whether an acoustic-analysis backend (tts-heavy sidecar / local librosa

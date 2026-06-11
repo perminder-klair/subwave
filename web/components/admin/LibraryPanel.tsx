@@ -71,9 +71,13 @@ interface UntaggedResponse { rows: Track[]; nextCursor: string | null }
 interface Coverage {
   tagged: number;
   analysed: number;
+  // Tracks with a CLAP audio (sounds-like) embedding. Same analysis backend,
+  // gated on ANALYZE_AUDIO_EMBEDDING — 0 when that's off even if bpm/key runs.
+  audioEmbedded?: number;
   total: number | null;
   percent: number | null;
   analysedPercent: number | null;
+  audioEmbeddedPercent?: number | null;
   scannedAt: string | null;
   scanning: boolean;
   // null = still probing; false = no analysis backend (sidecar/librosa) running.
@@ -86,6 +90,9 @@ interface TaggerState {
   pid?: number;
   startedAt?: string;
   lastLog?: string[];
+  // 'tag' (tag-library) or 'analyze' (the acoustic/audio-embedding pass) —
+  // both run through the same single-flight child slot.
+  mode?: 'tag' | 'analyze' | null;
 }
 
 // libraryStats rides along on /settings — gives moods-in-use, last-tag time,
@@ -100,7 +107,12 @@ interface LibraryStatsLite {
   updatedAt: string | null;
 }
 
-interface SettingsResponse { tagger?: TaggerState; libraryStats?: LibraryStatsLite }
+interface SettingsResponse {
+  tagger?: TaggerState;
+  libraryStats?: LibraryStatsLite;
+  // Only the slice this panel needs from the full settings payload.
+  values?: { audio?: { embeddings?: boolean } };
+}
 
 type Tab = 'recent' | 'browse' | 'search' | 'untagged';
 type Sort = 'artist' | 'title' | 'year' | 'taggedAt';
@@ -168,6 +180,8 @@ export default function LibraryPanel() {
   const [libStats, setLibStats] = useState<LibraryStatsLite | null>(null);
   const [batch, setBatch] = useState<Batch>('500');
   const [taggerBusy, setTaggerBusy] = useState(false);
+  // settings.audio.embeddings — null until the first /settings poll lands.
+  const [audioEnabled, setAudioEnabled] = useState<boolean | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [queuing, setQueuing] = useState<string | null>(null);
   const [retagging, setRetagging] = useState<string | null>(null);
@@ -226,6 +240,7 @@ export default function LibraryPanel() {
       const j = (await r.json()) as SettingsResponse;
       setTagger(j.tagger || null);
       if (j.libraryStats) setLibStats(j.libraryStats);
+      if (j.values?.audio) setAudioEnabled(!!j.values.audio.embeddings);
     } catch { /* transient */ }
   }, [adminFetch, ready]);
 
@@ -495,6 +510,51 @@ export default function LibraryPanel() {
     }
   };
 
+  // Flip settings.audio.embeddings — the "sounds-like" (CLAP) opt-in. The
+  // toggle only persists the setting; vectors appear after an analysis run.
+  const toggleAudio = async () => {
+    if (audioEnabled == null) return;
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio: { embeddings: !audioEnabled } }),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
+      setAudioEnabled(!audioEnabled);
+      notify.ok(!audioEnabled ? 'sounds-like analysis enabled' : 'sounds-like analysis disabled');
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
+  // Run the analysis pass (bpm/key + audio fingerprints) as a background
+  // child — same single-flight state as the tagger, so the running view and
+  // stop button below cover it too.
+  const analyzeAudio = async () => {
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/library/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `analysis start failed (${r.status})`);
+      notify.ok('audio analysis started');
+      setLogOpen(true);
+      await loadTagger();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
   // -----------------------------------------------------------------------
   // derived
   // -----------------------------------------------------------------------
@@ -543,6 +603,9 @@ export default function LibraryPanel() {
         onStart={startTagger}
         onStop={stopTagger}
         onRescan={rescanTagger}
+        audioEnabled={audioEnabled}
+        onToggleAudio={toggleAudio}
+        onAnalyzeAudio={analyzeAudio}
       />
 
       <Tabs tab={tab} setTab={setTab} counts={counts} />
@@ -691,6 +754,10 @@ interface TaggingPanelProps {
   onStart: () => void;
   onStop: () => void;
   onRescan: (opts: RescanOpts) => void;
+  // sounds-like (CLAP) controls — null until the first settings poll lands.
+  audioEnabled: boolean | null;
+  onToggleAudio: () => void;
+  onAnalyzeAudio: () => void;
 }
 
 function TaggingPanel(p: TaggingPanelProps) {
@@ -700,13 +767,19 @@ function TaggingPanel(p: TaggingPanelProps) {
   const logRef = useRef<HTMLPreElement>(null);
   const moodFillRef = useRef<HTMLSpanElement>(null);
   const acousticFillRef = useRef<HTMLSpanElement>(null);
+  const audioFillRef = useRef<HTMLSpanElement>(null);
   const runFillRef = useRef<HTMLSpanElement>(null);
 
   const tagged = p.coverage?.tagged ?? p.libStats?.total ?? null;
   const total = p.coverage?.total ?? null;
   const analysed = p.coverage?.analysed ?? null;
+  const audioEmbedded = p.coverage?.audioEmbedded ?? null;
   const pct = p.coverage?.percent ?? null;
   const apct = p.coverage?.analysedPercent ?? null;
+  const audpct = p.coverage?.audioEmbeddedPercent ?? null;
+  // Audio embeddings only exist once at least one is written; until then the
+  // row reads "not enabled" rather than a misleading 0% (CLAP is opt-in).
+  const audioOn = (audioEmbedded ?? 0) > 0;
   const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
   const running = !!p.tagger?.running;
   const analysisOff = p.coverage?.analysisAvailable === false;
@@ -724,6 +797,7 @@ function TaggingPanel(p: TaggingPanelProps) {
 
   useDynamicStyle(moodFillRef, { width: pct != null ? `${Math.min(100, pct)}%` : '0%' });
   useDynamicStyle(acousticFillRef, { width: !analysisOff && apct != null ? `${Math.min(100, apct)}%` : '0%' });
+  useDynamicStyle(audioFillRef, { width: audioOn && audpct != null ? `${Math.min(100, audpct)}%` : '0%' });
   useDynamicStyle(runFillRef, { width: runPct != null ? `${runPct}%` : null });
 
   useEffect(() => {
@@ -795,6 +869,41 @@ function TaggingPanel(p: TaggingPanelProps) {
               : 'Improves beat-matching between tracks. Tagging works fine without it.'}
           </span>
         </div>
+        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong px-6 py-3.5">
+          <span className="caption flex items-center gap-2">
+            <Activity size={13} /> Audio fingerprint · sounds-like
+          </span>
+          <span className="lib-opt-tag">optional</span>
+          <span className="lib-minibar"><span ref={audioFillRef} /></span>
+          <span className="caption mono-num !tracking-[0.04em]">
+            {analysisOff
+              ? 'engine off'
+              : audioOn
+                ? <>{num(audioEmbedded)} / {num(total)} · {audpct != null ? `${audpct}%` : '…'}</>
+                : p.audioEnabled ? 'enabled — not yet analysed' : 'off'}
+          </span>
+          {!analysisOff && p.audioEnabled != null && (
+            <span className="flex items-center gap-2">
+              {p.audioEnabled && (
+                <Btn sm tone="accent" onClick={p.onAnalyzeAudio} disabled={running || p.busy}>
+                  <Play size={12} /> {audioOn ? 'Analyze new tracks' : 'Analyze library'}
+                </Btn>
+              )}
+              <Btn sm onClick={p.onToggleAudio} disabled={running || p.busy}>
+                {p.audioEnabled ? 'Disable' : 'Enable'}
+              </Btn>
+            </span>
+          )}
+          <span className="caption basis-full !tracking-[0.04em] !normal-case">
+            {analysisOff
+              ? 'Needs the analysis engine above.'
+              : audioOn
+                ? 'CLAP audio embeddings power “sounds-like” picks and sonic journeys — they catch sonic neighbours that metadata misses.'
+                : p.audioEnabled
+                  ? 'Run the analysis to fingerprint your tracks. The engine needs the CLAP model — if the bar stays at 0 after a run, rebuild the tts-heavy sidecar with WITH_CLAP=1.'
+                  : 'Listens to each track and fingerprints how it actually sounds, enabling “sounds-like” picks and sonic journeys. Adds a one-off analysis pass over your library.'}
+          </span>
+        </div>
       </div>
 
       {/* action zone — idle vs running */}
@@ -825,7 +934,7 @@ function TaggingPanel(p: TaggingPanelProps) {
         <div className="flex flex-col gap-3 p-6">
           <div className="flex flex-wrap items-center justify-between gap-3.5">
             <span className="flex items-center gap-2.5 text-[13px] font-bold">
-              <span className="lib-livedot" /> Tagging in progress…
+              <span className="lib-livedot" /> {p.tagger?.mode === 'analyze' ? 'Audio analysis in progress…' : 'Tagging in progress…'}
             </span>
             <span className="caption mono-num !tracking-[0.04em]">
               {processed != null && <>{num(processed)}{p.runInfo?.target ? ` / ${num(p.runInfo.target)}` : ''} this run · </>}
@@ -838,8 +947,9 @@ function TaggingPanel(p: TaggingPanelProps) {
             <div className="lib-bar !h-1.5"><span ref={runFillRef} /></div>
           )}
           <div className="caption !tracking-[0.04em] !normal-case">
-            The DJ is listening to each new track and deciding its mood &amp; energy. You can keep
-            browsing — this runs in the background.
+            {p.tagger?.mode === 'analyze'
+              ? <>The analysis engine is listening to each track — measuring tempo and key, and fingerprinting how it sounds. You can keep browsing — this runs in the background.</>
+              : <>The DJ is listening to each new track and deciding its mood &amp; energy. You can keep browsing — this runs in the background.</>}
           </div>
         </div>
       )}

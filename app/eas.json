@@ -17,11 +17,13 @@
     },
     "preview": {
       "distribution": "internal",
+      "channel": "preview",
       "ios": { "simulator": false },
       "android": { "buildType": "apk" }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "channel": "production"
     }
   },
   "submit": {
@@ -29,6 +31,11 @@
       "ios": {
         "ascAppId": "6778786696",
         "appleTeamId": "BU9RD766GN"
+      },
+      "android": {
+        "serviceAccountKeyPath": "./secrets/play-service-account.json",
+        "track": "internal",
+        "releaseStatus": "draft"
       }
     }
   }

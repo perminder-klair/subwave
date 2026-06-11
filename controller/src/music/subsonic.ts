@@ -175,6 +175,26 @@ export async function getGenres() {
   return r.genres?.genre || [];
 }
 
+// Fuzzy-match free text ("hip hop", "turkish") against the library's real
+// genre tags ("Hip-Hop", "Turkish Pop"). Exact normalised match wins, then
+// substring either way. Returns the exact tag value or null. getGenres
+// failures propagate — callers decide whether to log or fall through.
+export async function resolveGenreName(name) {
+  if (!name) return null;
+  const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const target = norm(name);
+  if (!target) return null;
+  const genres = await getGenres();
+  let hit = genres.find(g => norm(g.value) === target);
+  if (!hit) {
+    hit = genres.find(g => {
+      const gv = norm(g.value);
+      return gv && (gv.includes(target) || target.includes(gv));
+    });
+  }
+  return hit?.value || null;
+}
+
 export async function getSimilarSongs(id, { count = 20 } = {}) {
   const r = await call('getSimilarSongs2', { id, count });
   return rejectArchive(r.similarSongs2?.song || []);

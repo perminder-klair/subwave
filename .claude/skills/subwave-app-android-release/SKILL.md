@@ -1,6 +1,6 @@
 ---
 name: subwave-app-android-release
-description: Cut a NEW Android build of the SUB/WAVE app (the Expo project in `app/`) in the cloud with EAS and get it to testers — the remote, no-cable counterpart to the iOS TestFlight skill. Use this skill whenever the user wants to "build android for testing", "release the android app", "send the android build to testers", "get a shareable install link for android", "make an apk for the testers", "submit android for testing", "ship the android app", "build a new android version", "distribute the android app", or "put android on testers' phones" — anything aimed at producing a fresh Android build and handing it out. Trigger it even when the user doesn't say "EAS" by name. The default path needs nothing from the user: EAS builds an APK and returns an install link + QR that testers tap to install directly (no Play Store). Do NOT use this skill for putting the app on a LOCAL phone over USB/adb with hot reload — that's `subwave-app-android`. Do NOT use it for the iOS app — that's `subwave-app-ios-release`. The Google Play Store track is a heavier, optional variant documented below (not set up yet).
+description: Cut a NEW Android build of the SUB/WAVE app (the Expo project in `app/`) in the cloud with EAS and get it to testers — the remote, no-cable counterpart to the iOS TestFlight skill. Use this skill whenever the user wants to "build android for testing", "release the android app", "send the android build to testers", "get a shareable install link for android", "make an apk for the testers", "submit android for testing", "ship the android app", "build a new android version", "distribute the android app", or "put android on testers' phones" — anything aimed at producing a fresh Android build and handing it out. Trigger it even when the user doesn't say "EAS" by name. The default path needs nothing from the user: EAS builds an APK and returns an install link + QR that testers tap to install directly (no Play Store). Do NOT use this skill for putting the app on a LOCAL phone over USB/adb with hot reload — that's `subwave-app-android`. Do NOT use it for the iOS app — that's `subwave-app-ios-release`. The Google Play Store track is a heavier, optional variant documented below (eas.json submit config is wired; the Play Console account setup is still pending).
 
 ---
 
@@ -16,6 +16,32 @@ For testers across the room or across the world, this beats the local
 `subwave-app-android` skill (which is USB/adb to a phone you can physically plug
 in). Reach for that one only when you want live hot-reload on your own device.
 
+## First: does this even need a new build? (OTA)
+
+The app ships **expo-updates** (OTA). If the change is **JS/TS only** —
+components, hooks, styles, copy, logic, Metro-bundled assets — you do **not** need
+a new APK/AAB. Push it over-the-air to the binaries already installed:
+
+```bash
+cd "$APP"
+eas update --channel preview --message "fix: …"      # tester (internal-APK) builds
+eas update --channel production --message "fix: …"    # Play builds
+```
+
+It reaches every installed build whose **runtime version (fingerprint)** matches.
+Testers see it on the **next cold start** (it fetches in the background;
+`fallbackToCacheTimeout: 0` keeps launch instant, so kill + relaunch twice to
+confirm it applied).
+
+A **new build is only required when native inputs changed**: a dependency
+add/upgrade, anything under `app/patches/`, a config plugin, or `app.json`'s
+`android`/`plugins` sections. The fingerprint policy guarantees an OTA can't land
+on a binary with mismatched native code. Rule of thumb: **ran `npx expo install`
+or touched `patches/`? → build. Otherwise → OTA.** Full decision table:
+`app/docs/RELEASE.md`.
+
+The rest of this skill is the **build** path (native change, or a store release).
+
 ## Fixed facts about this app
 
 Derive the repo root once; don't hardcode it. The Expo project and `eas.json`
@@ -30,8 +56,10 @@ APP="$REPO/app"   # eas.json lives here — cd into it before any eas command
 |---|---|
 | EAS project | `@pinku1/subwave` (Expo account `pinku1`) |
 | Android package | `com.getsubwave.app` |
-| Internal-test profile | `preview` (`distribution: internal`, `buildType: apk`) |
-| Play Store profile | `production` (builds an `.aab` App Bundle, `autoIncrement` on) |
+| Internal-test profile | `preview` (`distribution: internal`, `buildType: apk`, channel `preview`) |
+| Play Store profile | `production` (builds an `.aab` App Bundle, `autoIncrement` on, channel `production`) |
+| OTA channels | `preview` / `production` — JS-only updates via `eas update` (see OTA section) |
+| Runtime version | `fingerprint` policy — hashes native deps + `patches/` so OTAs only reach matching binaries |
 | Signing keystore | EAS-managed (auto-generated in the cloud, stored on EAS) |
 
 ## Preflight (10 seconds)
@@ -104,35 +132,39 @@ on EAS; you don't need to rebuild to re-share.
 You don't hand-edit `versionCode` — the `production` profile's `autoIncrement`
 owns it (it only matters for the Play Store path; internal APKs don't care).
 
-## Optional: Google Play Store testing track (heavier, not set up yet)
+## Optional: Google Play Store testing track (config wired; account setup pending)
 
 If you want testers to install through the **Play Store** (the true TestFlight
-parallel) instead of a link, that's a different pipeline and needs setup that
-only the operator can do:
+parallel) instead of a link, the **`eas.json` side is already done**:
+`submit.production.android` points at `./secrets/play-service-account.json`
+(gitignored) with `track: internal`, `releaseStatus: draft`. The data-safety
+form answers are pre-drafted in `app/docs/store/PLAY-DATA-SAFETY.md`.
 
-1. A **Google Play Console** developer account ($25 one-time).
-2. **Manually create the app** in Play Console — Google has no API to create the
-   app record (unlike App Store Connect, which EAS can create).
-3. A **Google service-account JSON key** with Play Developer API access, kept
-   **outside the repo**.
-4. The very first `.aab` often must be uploaded **manually** through the Console
-   for a brand-new app; later releases can go via the API.
+What's **still needed** is the operator-only account setup (see
+`app/docs/PRODUCTION-READINESS.md` Phase D for the full ordered checklist):
+
+1. A **Google Play Console** developer account ($25 one-time; identity
+   verification can take days — start it first).
+2. **Manually create the app** `com.getsubwave.app` in Play Console — Google has
+   no API to create the app record (unlike App Store Connect, which EAS can
+   create). Enroll in Play App Signing.
+3. A **Google service-account JSON key** with Play Developer API access, dropped
+   at `app/secrets/play-service-account.json` (the path `eas.json` already
+   expects — kept out of git by the `secrets/` ignore).
+4. The very first `.aab` must be uploaded **manually** through the Console for a
+   brand-new app; the API submit only works afterwards.
+5. Personal developer accounts need a **closed test** (≈12 testers / 14 days)
+   before production access — verify the current policy in the Console.
 
 Once those exist, build the bundle and submit to the internal track:
 
 ```bash
 cd "$APP"
 eas build  --platform android --profile production --non-interactive   # builds .aab
-eas submit --platform android --profile production --non-interactive    # to Play
+eas submit --platform android --profile production --non-interactive    # uses eas.json
 ```
 
-…with `eas.json` → `submit.production.android` set to:
-
-```json
-{ "serviceAccountKeyPath": "/path/to/play-service-account.json", "track": "internal" }
-```
-
-Until that's configured, stick with the internal-distribution link above.
+Until the account side is done, stick with the internal-distribution link above.
 
 ## Things that bite
 
@@ -154,6 +186,7 @@ Until that's configured, stick with the internal-distribution link above.
 
 | Want | Do |
 |---|---|
+| Ship a **JS-only** change (no new build) | `cd "$APP" && eas update --channel preview --message "…"` (or `production`) |
 | Build + shareable install link for testers | `cd "$APP" && eas build -p android --profile preview --non-interactive` |
 | New app version first | edit `expo.version` in `app/app.json`, commit, then build |
 | Queue without waiting | add `--no-wait`, then `eas build:view <id>` |

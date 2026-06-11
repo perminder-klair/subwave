@@ -122,17 +122,33 @@ RUN python3 -m venv /opt/server/venv && \
     /opt/server/venv/bin/pip install --no-cache-dir \
       fastapi "uvicorn[standard]" pydantic
 
-# --- Analyzer venv (librosa — bpm/key/intro; no torch) ---------------------
+# --- Analyzer venv (librosa — bpm/key/intro; optional CLAP audio embeddings) -
 # Acoustic analysis for the controller's analyze pass. librosa/numba ship as
 # wheels (no g++ needed); ffmpeg + libsndfile1 give it broad codec coverage for
 # the Navidrome stream formats (opus/m4a/mp3). These two are runtime deps and
 # survive the build-essential purge below.
+#
+# CLAP audio embeddings ("sounds-like" similarity) are opt-in via
+# `--build-arg WITH_CLAP=1` — same pattern as the other heavy engines. They pull
+# CPU torch + transformers (+ onnxruntime for an exported encoder), ~1.5GB, so
+# the default image stays lean. At runtime they only activate when
+# ANALYZE_AUDIO_EMBEDDING=1 is also set; without the build arg that env is a
+# no-op (the model import fails and the worker cleanly emits bpm/key only).
+# CPU-only torch via the download.pytorch.org index, mirroring the venvs above.
+ARG WITH_CLAP=0
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ffmpeg libsndfile1 && \
     rm -rf /var/lib/apt/lists/* && \
     python3 -m venv /opt/analyzer/venv && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir librosa soundfile && \
+    if [ "$WITH_CLAP" = "1" ]; then \
+      /opt/analyzer/venv/bin/pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --extra-index-url https://pypi.org/simple \
+        torch transformers onnxruntime && \
+      /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
+    fi && \
     find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
 
 # Strip the build toolchain now that pkuseg + any other source dists have

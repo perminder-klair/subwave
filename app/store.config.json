@@ -1,0 +1,20 @@
+{
+  "configVersion": 0,
+  "apple": {
+    "info": {
+      "en-US": {
+        "title": "SUB/WAVE",
+        "subtitle": "Self-hosted internet radio",
+        "description": "SUB/WAVE is a player for personal internet radio stations. One stream, one broadcast — everyone tuned in hears the same thing at the same time, with an AI DJ picking the music and talking between tracks.\n\nThe app is a client for any SUB/WAVE station. It opens on the public demo station out of the box, and you can point it at your own self-hosted station by address — no account, no sign-up.\n\n- Live now-playing with cover art and a running timeline\n- The booth: read what the DJ is saying on the mic\n- Weekly show schedule\n- Send a request to the station\n- Background audio with lock-screen, CarPlay, and headphone controls\n- Switchable colour themes\n\nNo account. No analytics. No trackers. The app stores only the list of stations you've tuned to, on your device.",
+        "keywords": "radio,internet radio,stream,AI DJ,music,icecast,self-hosted,broadcast,live,player",
+        "marketingUrl": "https://www.getsubwave.com",
+        "privacyPolicyUrl": "https://www.getsubwave.com/privacy"
+      }
+    },
+    "categories": ["MUSIC"],
+    "review": {
+      "demoRequired": false,
+      "notes": "SUB/WAVE is a listener client for self-hosted SUB/WAVE internet-radio stations (open-source project). No login is required. To review live: the app opens on the public demo station at https://www.getsubwave.com — tap the power ring to tune in and you'll hear the live broadcast. UIBackgroundModes: audio is required because this is a radio player — playback continues in the background and is controllable from the lock screen / CarPlay (Play, Pause, Stop only; there is no Skip on a shared live stream). The app collects no data."
+    }
+  }
+}

@@ -118,6 +118,9 @@ services:
       args:
         # Optional — bake the gated PocketTTS cloning weights in at build time.
         HF_TOKEN: ${HF_TOKEN:-}
+        # Optional — CLAP audio-embedding stack for the analyzer (~1.5GB);
+        # pair with ANALYZE_AUDIO_EMBEDDING=1 below.
+        WITH_CLAP: ${WITH_CLAP:-0}
     platform: linux/amd64
     container_name: sub-wave-tts-heavy
     restart: unless-stopped
@@ -129,6 +132,11 @@ services:
       # are gated; accept terms at huggingface.co/kyutai/pocket-tts and set
       # HF_TOKEN in your .env. Built-in voices need no token.
       - HF_TOKEN=${HF_TOKEN:-}
+      # Optional — CLAP audio embeddings in the analyze pass (needs an image
+      # built with WITH_CLAP=1 above; clean no-op otherwise).
+      - ANALYZE_AUDIO_EMBEDDING=${ANALYZE_AUDIO_EMBEDDING:-}
+      - CLAP_MODEL=${CLAP_MODEL:-}
+      - CLAP_MODEL_PATH=${CLAP_MODEL_PATH:-}
     volumes:
       - *state-mount
       # Persist the per-engine Hugging Face caches across container recreates.
@@ -137,7 +145,11 @@ services:
       # recreate. With them it happens once.
       - tts-heavy-chatterbox-cache:/opt/chatterbox/hf-cache
       - tts-heavy-pocket-cache:/opt/pocket-tts/hf-cache
+      # CLAP weights for the analyzer (only populated when audio embeddings
+      # are enabled and no local CLAP_MODEL_PATH is given).
+      - tts-heavy-analyzer-cache:/opt/analyzer/hf-cache
 
 volumes:
   tts-heavy-chatterbox-cache:
   tts-heavy-pocket-cache:
+  tts-heavy-analyzer-cache:
