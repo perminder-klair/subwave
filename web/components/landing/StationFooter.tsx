@@ -22,6 +22,14 @@ export default function StationFooter({ djName }: { djName?: string }) {
             className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
           >
             GitHub
+          </AnimatedLink>{' '}
+          ·{' '}
+          <AnimatedLink
+            href="https://discord.gg/vjVbVKnMBa"
+            variant="arrow"
+            className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
+          >
+            Discord
           </AnimatedLink>
         </span>
       </div>
