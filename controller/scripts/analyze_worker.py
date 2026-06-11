@@ -143,12 +143,15 @@ class ClapEmbedder:
     def load(self):
         from transformers import ClapProcessor
 
+        # Empty strings count as unset — the compose files pass these through
+        # as `${CLAP_MODEL:-}` etc., which exports "" when the operator hasn't
+        # set them in the root .env.
         onnx_path = os.environ.get("CLAP_MODEL_PATH", "").strip()
-        hf_id = os.environ.get("CLAP_MODEL", "laion/clap-htsat-unfused").strip()
+        hf_id = os.environ.get("CLAP_MODEL", "").strip() or "laion/clap-htsat-unfused"
         # The processor (feature extraction) is keyed to a HF model; default to
         # the same id as the encoder, override with CLAP_FEATURE_MODEL when the
         # .onnx was exported from a differently-named checkpoint.
-        feat_id = os.environ.get("CLAP_FEATURE_MODEL", hf_id).strip()
+        feat_id = os.environ.get("CLAP_FEATURE_MODEL", "").strip() or hf_id
 
         if onnx_path and os.path.exists(onnx_path):
             import onnxruntime as ort

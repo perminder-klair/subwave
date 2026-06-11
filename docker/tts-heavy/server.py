@@ -55,6 +55,10 @@ POCKET_TTS_DEFAULT_VOICE = os.environ.get("POCKET_TTS_VOICE", "alba")
 # worker's env via env_extra below).
 CHATTERBOX_HF_HOME = os.environ.get("CHATTERBOX_HF_HOME", "/opt/chatterbox/hf-cache")
 POCKET_HF_HOME = os.environ.get("POCKET_HF_HOME", "/opt/pocket-tts/hf-cache")
+# The analyzer only touches HF when CLAP embeddings are enabled
+# (ANALYZE_AUDIO_EMBEDDING=1 with a WITH_CLAP=1 image) and no local
+# CLAP_MODEL_PATH is given — transformers then pulls the CLAP weights here.
+ANALYZER_HF_HOME = os.environ.get("ANALYZER_HF_HOME", "/opt/analyzer/hf-cache")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -256,7 +260,7 @@ analyzer_worker = TtsWorker(
     name="analyze",
     python=ANALYZE_PYTHON,
     script=ANALYZE_WORKER,
-    env_extra={"ANALYZE_SECONDS": ANALYZE_SECONDS},
+    env_extra={"ANALYZE_SECONDS": ANALYZE_SECONDS, "HF_HOME": ANALYZER_HF_HOME},
 )
 
 
