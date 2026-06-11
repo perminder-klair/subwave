@@ -26,6 +26,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Sheet } from '@/components/ui/Sheet';
 import { useStation } from '@/config/StationContext';
+import { useConnectivity } from '@/hooks/useConnectivity';
 import { useCoverColors } from '@/hooks/useCoverColors';
 import { useNowPlayingInfo } from '@/hooks/useNowPlayingInfo';
 import { usePlayer } from '@/hooks/usePlayer';
@@ -41,6 +42,7 @@ import type {
 } from '@/lib/types';
 import { useTheme } from '@/theme/ThemeContext';
 import CenterStage from './CenterStage';
+import ConnectionBanner from './ConnectionBanner';
 import FreqBand, { type BandStop } from './FreqBand';
 import PagePanel from './PagePanel';
 import TopBar from './TopBar';
@@ -127,7 +129,12 @@ export default function PlayerScreen() {
   const { api } = useStation();
   const { colors } = useTheme();
 
-  const { tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = usePlayer(api);
+  const { isConnected } = useConnectivity();
+  const { tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = usePlayer(
+    api,
+    1,
+    isConnected,
+  );
 
   const {
     nowPlaying,
@@ -255,6 +262,13 @@ export default function PlayerScreen() {
           djName={djName}
           activeShow={activeShow}
           onOpenThemes={() => setThemesOpen(true)}
+        />
+
+        <ConnectionBanner
+          isConnected={isConnected}
+          streamOnline={streamOnline}
+          tunedIn={tunedIn}
+          status={status}
         />
 
         <FreqBand

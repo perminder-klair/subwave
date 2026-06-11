@@ -57,6 +57,17 @@ export interface LiveTrackMeta {
   artwork?: string;
 }
 
+// The last stream meta we loaded, remembered so the headless playback service
+// (service.ts) can re-load at the live edge on a lock-screen RemotePlay rather
+// than resuming the stale paused buffer. Module-level because the service runs
+// in a separate JS context from the React tree with no access to hook state.
+let lastLiveMeta: LiveTrackMeta | null = null;
+
+/** The meta of the currently-loaded live stream, or null when torn down. */
+export function getLastLiveMeta(): LiveTrackMeta | null {
+  return lastLiveMeta;
+}
+
 /** Load (or reload) the live stream onto the queue and start it. A cache-buster
  *  is appended so a reconnect doesn't replay a dead buffered segment (mirrors
  *  the web watchdog's `?t=`). */
@@ -73,10 +84,12 @@ export async function loadAndPlay(meta: LiveTrackMeta): Promise<void> {
     artwork: meta.artwork,
     isLiveStream: true,
   });
+  lastLiveMeta = meta;
   await TrackPlayer.play();
 }
 
 export async function teardown(): Promise<void> {
+  lastLiveMeta = null;
   try {
     await TrackPlayer.reset();
   } catch {
