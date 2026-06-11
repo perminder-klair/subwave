@@ -18,6 +18,32 @@ certificate, registering the App Store Connect app). That's finished. EAS stores
 the credentials server-side and `app/eas.json` pins the submit target, so repeat
 builds run **non-interactively** — no Xcode, no Apple login prompts, no TTY.
 
+## First: does this even need a new build? (OTA)
+
+The app ships **expo-updates** (OTA). If the change is **JS/TS only** —
+components, hooks, styles, copy, logic, Metro-bundled assets — you do **not** need
+a TestFlight build at all. Push it over-the-air to the binaries already out there:
+
+```bash
+cd "$APP"
+eas update --channel production --message "fix: …"   # testers first: --channel preview
+```
+
+It reaches every installed build whose **runtime version (fingerprint)** matches —
+i.e. any build with the same native code. Testers see it on the **next cold
+start** (it fetches in the background; `fallbackToCacheTimeout: 0` keeps launch
+instant, so killing + relaunching twice is how you confirm it applied).
+
+A **new binary is only required when native inputs changed**: a dependency
+add/upgrade, anything under `app/patches/`, a config plugin, or `app.json`'s
+`ios`/`infoPlist`/`plugins` sections. The fingerprint policy guarantees an OTA
+can't land on a binary with mismatched native code, so you can't break a build
+this way. Rule of thumb: **ran `npx expo install` or touched `patches/`? → build a
+binary. Otherwise → OTA.** Full decision table + fingerprint debugging:
+`app/docs/RELEASE.md`.
+
+The rest of this skill is the **binary** path (native change, or a store release).
+
 ## Fixed facts about this app
 
 Derive the repo root once; don't hardcode it. The Expo project and `eas.json`
@@ -35,6 +61,8 @@ APP="$REPO/app"   # eas.json lives here — cd into it before any eas command
 | App Store Connect App ID | `6778786696` |
 | Apple Team | `BU9RD766GN` (Individual) |
 | Build profile | `production` (store distribution, `autoIncrement` on) |
+| OTA channel | `production` — JS-only updates via `eas update` (see OTA section above) |
+| Runtime version | `fingerprint` policy — hashes native deps + `patches/` so OTAs only reach matching binaries |
 | Version source | `remote` — EAS owns the **build number**; never bump it by hand |
 | TestFlight page | https://appstoreconnect.apple.com/apps/6778786696/testflight/ios |
 
@@ -160,6 +188,7 @@ cert/profile prompts (Yes), then it proceeds.
 
 | Want | Do |
 |---|---|
+| Ship a **JS-only** change (no new build) | `cd "$APP" && eas update --channel production --message "…"` |
 | Ship a new build to TestFlight | `cd "$APP" && eas build -p ios --profile production --auto-submit --non-interactive` |
 | New app version first | edit `expo.version` in `app/app.json`, commit, then ship |
 | Queue without waiting | add `--no-wait`, then `eas submit -p ios --profile production --id <id>` |
