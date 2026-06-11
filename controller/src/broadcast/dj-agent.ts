@@ -135,13 +135,48 @@ function requestSystem() {
 The messages above are the live session — the last user turn is a listener request.`;
 }
 
+// --- Agent circuit breaker ---------------------------------------------------
+// A model that can't drive the done-tool harness — ignores toolChoice and
+// burns its whole output budget thinking instead of emitting the tool call
+// (minimax-m2.7:cloud is the canonical case) — fails EVERY agent run, and
+// each failure costs the full agent deadline before the stateless fallback
+// takes over. Rather than paying that stall on every track, consecutive agent
+// failures open the breaker: picks and request matching go straight to their
+// stateless fallbacks for a cooldown, then the agent gets another try. Any
+// agent success closes it. Module-level — one station, one model config at a
+// time; the trip is logged to the DJ log + events so the operator can see
+// WHY the session-aware picker went quiet and switch model.
+const BREAKER_FAILURES = 3;
+const BREAKER_COOLDOWN_MS = 10 * 60_000;
+let breakerFails = 0;
+let breakerOpenUntil = 0;
+
+function breakerOpen(): boolean {
+  return Date.now() < breakerOpenUntil;
+}
+
+function breakerSuccess() {
+  breakerFails = 0;
+}
+
+function breakerFailure(queue: any) {
+  breakerFails++;
+  if (breakerFails < BREAKER_FAILURES) return;
+  breakerFails = 0;
+  breakerOpenUntil = Date.now() + BREAKER_COOLDOWN_MS;
+  queue.log('picker', `agent picks failed ${BREAKER_FAILURES}× in a row — using the stateless fallbacks for ${Math.round(BREAKER_COOLDOWN_MS / 60_000)} min (the configured model may not handle tool calls; see /admin/debug and consider switching model)`);
+  logEvent('pick.breaker', { failures: BREAKER_FAILURES, cooldownMs: BREAKER_COOLDOWN_MS });
+}
+
 // Named agents — the picker and request-handler specs in one declarable block
 // each. `buildSystem` and `buildTools` resolve persona / per-call filters at
 // run time; everything else (schema, step cap, hard timeout, log kind) is
 // fixed here so the spec lives in one place. picker-test.mjs reads
 // `pickerAgent.maxSteps` / `pickerAgent.timeoutMs` so test runs match prod
 // without drifting. The hard timeout is what fails fast into the stateless
-// fallback below instead of dragging on a flaky cloud call.
+// fallback below instead of dragging on a pathological model call — enforced
+// by withDeadline in llm/sdk.ts (main + recovery runs each get the full
+// budget, so worst case per agent call is ~2× this).
 export const pickerAgent = defineAgent({
   kind: 'djAgentPick',
   schema: PICK_SCHEMA,
@@ -328,12 +363,14 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
       + runClause;
     session.appendTurn({ role: 'event', kind: 'pick', text: eventText });
 
-    if (settings.get().llm?.pickerAgent) {
+    if (settings.get().llm?.pickerAgent && !breakerOpen()) {
       try {
         await pickViaAgent(queue, { wantLink });
+        breakerSuccess();
         return;
       } catch (err) {
         queue.log('error', `DJ agent pick failed: ${err.message} — falling back to pool`);
+        breakerFailure(queue);
       }
     }
     await pickViaPool(queue, ctx, { wantLink, current }, rankTarget);
@@ -345,13 +382,27 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
 // ---------------------------------------------------------------------------
 
 // Returns { ack, track } on success, or null when the conversational agent is
-// disabled (the caller then runs its own stateless matcher cascade). Throws if
-// the agent runs but fails — the caller catches and falls back the same way.
+// disabled or the breaker is open (the caller then runs its own stateless
+// matcher cascade). Throws if the agent runs but fails — the caller catches
+// and falls back the same way. Agent outcomes here feed the shared breaker:
+// the request agent runs the same model through the same done-tool harness,
+// so its failures are the same symptom.
 // The caller (routes/request.js) owns the request `event` turn — it posts one
 // for every request path, so the agent only appends its own `dj` reply here.
 export async function runRequest(queue: any, ctx: any, { requester, text: _text }: { requester: string; text: string }) {
-  if (!settings.get().llm?.pickerAgent) return null;
+  if (!settings.get().llm?.pickerAgent || breakerOpen()) return null;
 
+  try {
+    const out = await runRequestViaAgent(queue, { requester });
+    breakerSuccess();
+    return out;
+  } catch (err) {
+    breakerFailure(queue);
+    throw err;
+  }
+}
+
+async function runRequestViaAgent(queue: any, { requester }: { requester: string }) {
   return withTrace({ kind: 'request', requester }, async () => {
     // Requests stay near-unfiltered — listeners must be able to re-request a
     // song from earlier in the day. 2h covers the "don't repeat the song still
