@@ -38,8 +38,9 @@ const RECONNECT_MAX_MS = 60_000;
 // mount forever, counting as a listener and keeping the DJ's pause-when-empty
 // gate open 24/7. After this long with zero listener activity (no pointer,
 // no key, no tab focus) we tune out; the consumer surfaces a one-tap resume
-// via `idleStopped`.
-const IDLE_TUNE_OUT_MS = 4 * 60 * 60 * 1000;
+// via `idleStopped`. 8h clears a full untouched workday of listening while
+// still catching an abandoned tab on its first evening.
+const IDLE_TUNE_OUT_MS = 8 * 60 * 60 * 1000;
 const IDLE_CHECK_INTERVAL_MS = 60_000;
 
 export type PlayerStatus = 'idle' | 'connecting' | 'playing';

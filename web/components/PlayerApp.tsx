@@ -170,7 +170,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
   useEffect(() => {
     if (!idleStopped) return;
     setShowTuneIn(true);
-    toast('Tuned out after a few hours without activity — tap to keep listening.');
+    toast('Tuned out while you were away — tap to keep listening.');
   }, [idleStopped]);
 
   // Whenever playback is actually running, the gate has done its job — drop
