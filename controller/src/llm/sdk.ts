@@ -305,6 +305,39 @@ async function withTransientRetry<T>(kind: string, fn: () => Promise<T>): Promis
   throw lastErr;
 }
 
+// Hard wall-clock ceiling on a single agent generation (including its
+// transient retries). The `timeout` option on agent.generate() is NOT
+// honoured by every transport — ai-sdk-ollama ignores it, so a
+// reasoning-locked cloud model that never reaches the tool call just runs
+// until its output budget is spent (observed at 60s+ per pick on
+// minimax-m2.7:cloud while the caller believed it was capped at 22s). The
+// race here is the guarantee; the AbortSignal is passed through as well so
+// transports that DO support cancellation stop the request server-side
+// instead of leaving it burning an inference slot.
+//
+// The deadline error deliberately does NOT look host-unreachable (its name
+// matches neither isUnreachable's name checks nor its message regex): a model
+// that overthinks past the deadline is not a host that's down, so the call
+// must fall back to the caller's stateless path, not fail over to the backup
+// leg on a different model.
+function withDeadline<T>(ms: number | undefined, label: string, fn: (signal?: AbortSignal) => Promise<T>): Promise<T> {
+  if (!ms) return fn();
+  const controller = new AbortController();
+  let timer: any;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      const err: any = new Error(`${label} exceeded ${ms}ms deadline`);
+      err.name = 'AgentDeadlineError';
+      reject(err);
+    }, ms);
+  });
+  // Promise.race attaches a reaction to every contender, so a late rejection
+  // from `fn` after the deadline fires is observed (and ignored), never an
+  // unhandledRejection.
+  return Promise.race([fn(controller.signal), deadline]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
 // Host-unreachable: the primary box is DOWN, not merely busy. A strict subset
 // of isTransient — connection refused / DNS failure / connect timeout / socket
 // hang-up. Deliberately EXCLUDES 408/425/429 and 5xx: a host that answers with
@@ -574,14 +607,14 @@ export async function djObject({
 //   openrouter:claude-haiku-4.5  Output.object 0/n  "No output generated" (#300)
 // (An earlier table here recorded these models passing 5/5 on Output.object;
 // that no longer reproduces on ai@6 — an SDK-version drift, per #300.)
-// The Ollama latency p95s exceed the picker's 22s `timeoutMs` ceiling, but
-// agent.generate({ timeout }) is not honoured by the ai-sdk-ollama transport
-// — runs that exceed the cap simply run long. Callers (dj-agent.js) still
-// fall back to the stateless pool picker on throw; a slow run blocks only the
-// next pick decision, never the broadcast (Liquidsoap keeps playing the
-// auto.m3u fallback). If a hard ceiling becomes load-bearing again, wrap the
-// agent call in an explicit Promise.race here rather than relying on the
-// option.
+// The Ollama latency p95s exceed the picker's 22s `timeoutMs` ceiling;
+// agent.generate({ timeout }) is not honoured by the ai-sdk-ollama transport,
+// so the ceiling is enforced here via withDeadline (Promise.race + abort
+// signal) around each generation — main run and recovery run each get the
+// full `timeoutMs`, so worst case is ~2× timeoutMs, not unbounded. On
+// deadline the call throws and the caller (dj-agent.js) falls back to its
+// stateless path; a slow run blocks only the next pick decision, never the
+// broadcast (Liquidsoap keeps playing the auto.m3u fallback).
 export async function djAgent({
   system,
   messages,
@@ -678,10 +711,12 @@ export async function djAgent({
       // timeoutMs (when set by a caller) is a hard ceiling — a slow/looping run
       // throws, flows through the catch below, and the caller falls back to its
       // stateless path rather than blocking on a pathological model call.
-      let result = await withTransientRetry(kind, () => agent.generate({
-        messages,
-        ...(timeoutMs ? { timeout: timeoutMs } : {}),
-      }));
+      // Enforced by withDeadline, not the generate option (see its comment).
+      let result = await withDeadline(timeoutMs, `${kind} agent run`, (signal) =>
+        withTransientRetry(kind, () => agent.generate({
+          messages,
+          ...(signal ? { abortSignal: signal } : {}),
+        })));
       let steps = result.steps?.length ?? 0;
 
       // Recovery for the "agent did not call the done tool" failure mode (issue
@@ -718,10 +753,11 @@ export async function djAgent({
           toolChoice: 'required',
           prepareStep: async () => ({ activeTools: ['done'], toolChoice: 'required' }),
         } as any);
-        result = await withTransientRetry(kind, () => recoveryAgent.generate({
-          messages: recoveryMessages,
-          ...(timeoutMs ? { timeout: timeoutMs } : {}),
-        }));
+        result = await withDeadline(timeoutMs, `${kind} agent recovery`, (signal) =>
+          withTransientRetry(kind, () => recoveryAgent.generate({
+            messages: recoveryMessages,
+            ...(signal ? { abortSignal: signal } : {}),
+          })));
         steps = result.steps?.length ?? 0;
       }
 
