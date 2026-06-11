@@ -50,7 +50,7 @@ export interface PlayerAppProps {
 export default function PlayerApp({ contained = false }: PlayerAppProps) {
   const { nowPlaying, context, dj, activeShow, listeners, streamOnline, state, session, trackStartedAt } = useStationFeed();
   const boothFeed = session.messages;
-  const { audioRef, tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = usePlayer();
+  const { audioRef, tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted, idleStopped } = usePlayer();
 
   // streamOnline is null until the first poll resolves — only treat an
   // explicit false as offline so the player never flashes "offline" on load.
@@ -163,6 +163,22 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
     setShowTuneIn(false);
     tune();
   };
+
+  // Idle cutoff fired (usePlayer tuned the abandoned tab out, issue #343):
+  // bring the tune-in gate back as the one-tap resume and say why playback
+  // stopped. Lock-screen Play also resumes, via useMediaSession's onTune.
+  useEffect(() => {
+    if (!idleStopped) return;
+    setShowTuneIn(true);
+    toast('Tuned out after a few hours without activity — tap to keep listening.');
+  }, [idleStopped]);
+
+  // Whenever playback is actually running, the gate has done its job — drop
+  // it. Covers resume paths that bypass the overlay tap (lock-screen Play
+  // after an idle cutoff goes straight through tune()).
+  useEffect(() => {
+    if (tunedIn) setShowTuneIn(false);
+  }, [tunedIn]);
 
   // Hydrate ticker preference from localStorage (avoids SSR hydration mismatch).
   useEffect(() => {
