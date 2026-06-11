@@ -228,8 +228,8 @@ export const pickerAgent = defineAgent({
   maxSteps: 4,
   timeoutMs: 22000,
   buildSystem: () => pickSystem(),
-  buildTools: ({ recentIds, recentKeys, recentArtists }) => {
-    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, recentArtists });
+  buildTools: ({ recentIds, recentKeys, recentArtists, audioWaypoint }) => {
+    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, recentArtists, audioWaypoint });
     return { tools, extras: { seen } };
   },
 });
@@ -280,7 +280,7 @@ async function enqueuePick(queue, song, reason, source, link: string | null = nu
 // Track event — a track started; pick the next one and maybe air a link.
 // ---------------------------------------------------------------------------
 
-async function pickViaAgent(queue, { wantLink }) {
+async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLink: boolean; audioWaypoint?: number[] | null }) {
   await library.load();
   const windows = recencyWindowsForLibrary(library.stats().distinctArtists);
   // Scale the recency windows to the tagged library's artist diversity: dense
@@ -294,6 +294,10 @@ async function pickViaAgent(queue, { wantLink }) {
     recentIds,
     recentKeys,
     recentArtists,
+    // Sonic journey (Phase 2): registers the tracksTowardJourney tool, closed
+    // over the run's current waypoint, so the agent path drifts the sound the
+    // same way the pool path does. The event text tells the agent to use it.
+    audioWaypoint,
   });
 
   const song = object?.id ? extras.seen.get(object.id) : null;
@@ -393,6 +397,12 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     const runClause = inRun
       ? ` You're mid-run — keep the energy moving in the same direction (a touch ${energyForDaypart().speed >= 1 ? 'brisker' : 'mellower'}) and you may nod to it in the link, but never say tempo numbers.`
       : '';
+    // Gated on the waypoint itself, not inRun: on a run's final pick the run
+    // state is already cleared (advanceRun) but the last waypoint — the
+    // destination itself — is still the one to land on.
+    const journeyClause = audioWaypoint && audioWaypoint.length
+      ? ' A sonic journey is active: call tracksTowardJourney and strongly prefer one of its tracks — each one carries the sound a step toward where this arc is heading. Never mention the journey on air.'
+      : '';
     const linkClause = wantLink
       ? (djMode
           ? ` Also write a short link that airs as your pick starts: back-announce "${current?.title}", then tease what's next — name the artist or capture the feel of the track you pick so listeners know what's coming. If the track you pick shows an intro_ms, keep the link short enough to finish before then, so you land just as the vocals come in.`
@@ -407,12 +417,13 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
       + (previous ? ` (after "${previous.title}" by ${previous.artist})` : '')
       + '. Pick the track to play next.'
       + linkClause
-      + runClause;
+      + runClause
+      + journeyClause;
     session.appendTurn({ role: 'event', kind: 'pick', text: eventText });
 
     if (settings.get().llm?.pickerAgent) {
       try {
-        await pickViaAgent(queue, { wantLink });
+        await pickViaAgent(queue, { wantLink, audioWaypoint });
         return;
       } catch (err) {
         queue.log('error', `DJ agent pick failed: ${err.message} — falling back to pool`);

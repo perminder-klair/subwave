@@ -64,10 +64,15 @@ export function buildPickerTools({
   recentIds = new Set<string>(),
   recentKeys = new Set<string>(),
   recentArtists = new Set<string>(),
+  audioWaypoint = null,
 }: {
   recentIds?: Set<string>;
   recentKeys?: Set<string>;        // lowercased "title|artist" — backfilled entries lack ids
   recentArtists?: Set<string>;
+  // The active sonic journey's current waypoint vector (broadcast/dj-agent.ts).
+  // When present, the tracksTowardJourney tool below is registered, closing
+  // over it — the agent never sees the raw vector, only the tracks near it.
+  audioWaypoint?: number[] | null;
 } = {}) {
   const seen = new Map<string, any>(); // id → slim song, accumulated across all tool calls
   const artistCounts = new Map<string, number>(); // artist key → songs already accepted into `seen`
@@ -253,6 +258,21 @@ export function buildPickerTools({
         catch (err) { return { error: err.message }; }
       },
     }),
+
+    // Only registered while a sonic journey is active (the event message tells
+    // the agent when that is). Closes over the journey's current waypoint, so
+    // calling it returns the tracks that carry the sound one step along the
+    // arc toward the destination vibe.
+    ...(audioWaypoint && audioWaypoint.length ? {
+      tracksTowardJourney: tool({
+        description: 'Tracks nearest the active sonic journey\'s CURRENT waypoint — the station is mid-arc, drifting its sound toward a destination vibe over the next few picks. When the event says a journey is active, call this and strongly prefer one of its tracks: each one moves the sound a step along the arc. Takes no input.',
+        inputSchema: z.object({}),
+        execute: async () => {
+          try { await library.load(); return collect(library.tracksByAudioVector(audioWaypoint, 20)); }
+          catch (err) { return { error: err.message }; }
+        },
+      }),
+    } : {}),
   };
 
   return { tools, seen };
