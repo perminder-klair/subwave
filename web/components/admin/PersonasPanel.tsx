@@ -48,6 +48,7 @@ const POCKET_TTS_VOICE_RE = /^[a-z][a-z0-9_-]{0,39}$/;
 const NAME_MAX = 40;
 const TAGLINE_MAX = 80;
 const SOUL_MAX = 400;
+const LANGUAGE_MAX = 60;
 const PROMPT_MIN = 50;
 const PROMPT_MAX = 4000;
 const PERSONA_MAX = 12;
@@ -70,6 +71,9 @@ interface Persona {
   // the historical tasteful-narrator behaviour.
   djMode: boolean;
   soul: string;
+  // Free-text on-air language ("Turkish", "Türkçe"). Empty = English (no
+  // directive injected server-side).
+  language: string;
   // Stored basename like `p_abc123.png` — empty when no avatar is uploaded.
   // The actual image is served via /api/persona-avatar/<id>; we keep the
   // basename in state only so the form round-trips it on save.
@@ -280,6 +284,7 @@ function personaValid(p: Persona): boolean {
   if (p.name.trim().length < 1 || p.name.trim().length > NAME_MAX) return false;
   if (p.tagline.trim().length > TAGLINE_MAX) return false;
   if (p.soul.trim().length < 1 || p.soul.trim().length > SOUL_MAX) return false;
+  if (p.language.trim().length > LANGUAGE_MAX) return false;
   const e = p.tts.engine;
   if (e === 'kokoro') return KOKORO_RE.test(p.tts.voice.trim());
   if (e === 'chatterbox') {
@@ -392,6 +397,7 @@ export default function PersonasPanel() {
             scriptLength: p.scriptLength ?? 'concise',
             djMode: p.djMode === true,
             soul: p.soul ?? '',
+            language: typeof p.language === 'string' ? p.language : '',
             avatar: typeof p.avatar === 'string' ? p.avatar : '',
             tts: {
               engine: p.tts?.engine ?? 'piper',
@@ -424,6 +430,7 @@ export default function PersonasPanel() {
         personas: [...f.personas, {
           id: clientMintId(), name: 'New persona', tagline: '',
           frequency: 'moderate', scriptLength: 'concise', djMode: false, soul: '',
+          language: '',
           avatar: '',
           tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella' },
           skills: (data?.skills?.catalog || []).map(s => s.name),
@@ -558,6 +565,7 @@ export default function PersonasPanel() {
             scriptLength: p.scriptLength,
             djMode: p.djMode,
             soul: p.soul.trim(),
+            language: p.language.trim(),
             avatar: p.avatar || '',
             tts: {
               engine: p.tts.engine,
@@ -692,7 +700,8 @@ export default function PersonasPanel() {
           <p className="mb-2.5 text-[12px] leading-[1.6] text-muted">
             One template wrapped around every DJ generation, shared by all personas.
             Placeholders: <code>{'{name}'}</code> · <code>{'{soul}'}</code> ·{' '}
-            <code>{'{station}'}</code> · <code>{'{location}'}</code>. Most stations never touch this.
+            <code>{'{station}'}</code> · <code>{'{location}'}</code> · <code>{'{language}'}</code>.
+            Most stations never touch this.
           </p>
           <Seg
             value={form.useCustomPrompt ? 'custom' : 'default'}
@@ -879,6 +888,22 @@ export default function PersonasPanel() {
                 <span className={cn('ml-2', focusedSoulOver ? 'text-[var(--danger)]' : 'text-muted')}>
                   {focusedSoulLen} / {SOUL_MAX}
                 </span>
+              </div>
+            </div>
+
+            <div className="rule-label">language</div>
+
+            <div className="field">
+              <Input
+                value={focused.language}
+                maxLength={LANGUAGE_MAX}
+                placeholder="English (default)"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setPersona(safeIdx, { language: e.target.value })}
+              />
+              <div className="field-hint">
+                The DJ speaks every on-air line in this language. Leave empty for English.
+                Pick a voice that can actually speak it.
+                <span className="ml-2 text-muted">{focused.language.trim().length} / {LANGUAGE_MAX}</span>
               </div>
             </div>
 
