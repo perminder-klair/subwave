@@ -48,12 +48,16 @@ router.get('/settings', requireAdmin, async (req, res) => {
       libraryStats: library.stats(),
       tagger: { ...tagger, lastLog: tagger.lastLog.slice(-30) },
       ollama: { url: config.ollama.url, model: config.ollama.model },
+      // What the configured zone resolves to when timezone is '' (Auto) —
+      // lets the UI label the Auto option with the actual server zone.
+      serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       values: {
         jingleRatio: s.jingleRatio,
         crossfadeDuration: s.crossfadeDuration,
         archive: s.archive,
         stream: s.stream,
         station: s.station,
+        timezone: s.timezone,
         theme: s.theme,
         weather: s.weather,
         djPrompt: s.djPrompt,

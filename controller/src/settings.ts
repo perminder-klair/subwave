@@ -8,6 +8,7 @@ import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { STATE_DIR } from './config.js';
 import { DEFAULT_THEME_ID, isValidThemeId, listThemes } from './themes.js';
+import { isValidTimezone, setStationTimezone, zonedParts } from './time.js';
 
 // Where uploaded persona avatars live. One file per persona, basename =
 // `<personaId>.<ext>`. The dedicated upload route is the only writer; the
@@ -352,6 +353,11 @@ const DEFAULTS = {
   // still called SUB/WAVE — this is what the operator's station running on it
   // is called (e.g. "Frequency 88", "Late Shift Radio").
   station: 'SUB/WAVE',
+  // Station clock — IANA zone driving everything with local-time semantics
+  // (time-of-day moods, schedule slots, hourly time checks, festival dates).
+  // Empty = Auto: the container's own TZ, so existing installs are untouched.
+  // Applied live via time.ts setStationTimezone(); no restart.
+  timezone: '',
   // Station-wide visual theme — every listener and the admin UI render with
   // this palette. The id resolves through controller/src/themes.ts, which
   // ships the built-ins and reads optional user JSONs from
@@ -793,6 +799,12 @@ export async function load() {
       typeof stored.station === 'string' && stored.station.trim()
         ? stored.station.trim().slice(0, 80)
         : DEFAULTS.station,
+    // Invalid stored zone (hand-edited file) falls back to Auto — the
+    // station must never crash on a bad zone.
+    timezone:
+      typeof stored.timezone === 'string' && isValidTimezone(stored.timezone.trim())
+        ? stored.timezone.trim()
+        : DEFAULTS.timezone,
     theme: {
       // We only validate the *shape* here. The active id might reference a
       // theme file that's since been removed; the public /themes endpoint
@@ -1016,6 +1028,10 @@ export async function load() {
       },
     },
   };
+  if (typeof stored.timezone === 'string' && stored.timezone.trim() && !cache.timezone) {
+    console.warn(`[settings] ignoring invalid timezone "${stored.timezone.trim()}" — using Auto (container TZ)`);
+  }
+  setStationTimezone(cache.timezone);
   return cache;
 }
 
@@ -1456,6 +1472,15 @@ export async function update(patch) {
     }
     next.station = resolved;
   }
+  if ('timezone' in patch) {
+    const v = String(patch.timezone ?? '').trim();
+    // '' = back to Auto (container TZ). Anything else must be a zone ICU
+    // knows — aliases like Europe/Kiev validate, not just canonical names.
+    if (v !== '' && !isValidTimezone(v)) {
+      throw new Error(`invalid timezone "${v}" — use an IANA name like Europe/Athens`);
+    }
+    next.timezone = v;
+  }
   if ('theme' in patch) {
     const t = patch.theme || {};
     if (t.active !== undefined) {
@@ -1814,6 +1839,9 @@ export async function update(patch) {
   }
 
   cache = next;
+  // Applied-on-save, same pattern as the liquidsoap_*.txt files below —
+  // minus the restart: the next zonedParts() call picks it up.
+  setStationTimezone(next.timezone);
   // shows + schedule are persisted to their own file (schedule.json); strip
   // them from the settings.json payload so legacy installs migrate forward
   // on the first write. The in-memory `cache` keeps the full shape so
@@ -1844,8 +1872,9 @@ export function resolvePersonaById(id) {
 // The show scheduled for `date`'s day-of-week + hour, or null. Self-contained
 // (touches only settings data) so context.js can import it without a cycle.
 export function resolveActiveShow(date = new Date(), s = get()) {
-  const day = date.getDay();
-  const hour = date.getHours();
+  // Station-zone wall clock, not process-local — schedule slots fire at the
+  // hours the operator painted them in (issue #353).
+  const { dow: day, hour } = zonedParts(date);
   const showId = s?.schedule?.[day]?.[hour] ?? null;
   if (!showId) return null;
   const show = s.shows?.find(x => x.id === showId);

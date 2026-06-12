@@ -11,6 +11,7 @@ import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
+import { getStationTimezone } from '../time.js';
 import { listThemes, DEFAULT_THEME_ID } from '../themes.js';
 
 export const router = express.Router();
@@ -231,11 +232,12 @@ router.get('/schedule', async (req, res) => {
       personas,
       shows,
       schedule: s.schedule,
-      // The grid is interpreted in the controller's local timezone — the
-      // browser's local DOW/hour may not match, so pass back the offset the
-      // schedule was painted in. The UI can show a small "Times shown in
-      // station local time" hint where needed.
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null,
+      // The grid is interpreted in the station's timezone (settings.timezone,
+      // falling back to the container TZ) — the browser's local DOW/hour may
+      // not match, so pass back the zone the schedule is painted in. The UI
+      // can show a small "Times shown in station local time" hint where
+      // needed.
+      timezone: getStationTimezone(),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

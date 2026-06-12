@@ -11,6 +11,7 @@
 // frequency floor. Lives outside scheduler.js to keep that file lean.
 
 import * as settings from '../settings.js';
+import { zonedParts } from '../time.js';
 
 export function shouldFire(kind, now = new Date()) {
   // effectiveFrequency bumps a DJ-mode persona one rung up the ladder, so it
@@ -29,7 +30,10 @@ export function shouldFire(kind, now = new Date()) {
   }
 
   if (kind === 'hourly') {
-    if (f === 'quiet') return now.getHours() % 2 === 0;
+    // Station-zone hour — the every-other-hour cadence follows the operator's
+    // clock. The minute slots above stay on process time on purpose: they
+    // must align with when the crons actually fire.
+    if (f === 'quiet') return zonedParts(now).hour % 2 === 0;
     return true;
   }
 
