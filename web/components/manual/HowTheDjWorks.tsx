@@ -26,7 +26,7 @@ export default function HowTheDjWorks() {
         <p className="bs-eyebrow">THE VOICES</p>
         <h2>Personas, picked at random.</h2>
         <p>
-          The operator gives the DJ one to ten <em>souls</em> — distinct personas, each
+          The operator gives the DJ one to ten <em>souls</em>: distinct personas, each
           with its own name and character. Before each spoken moment the station picks one
           at random, so the voice on air shifts through the day rather than reading from a
           single script. Each line is generated fresh; the DJ doesn't repeat itself.
@@ -83,14 +83,14 @@ export default function HowTheDjWorks() {
         </ul>
         <p>
           You don't have to commit to one. The operator can assign a different engine{' '}
-          <em>per kind</em> of segment — say a rich cloud voice for station IDs, but a
-          fast local voice for routine time checks — with everything else falling through
+          <em>per kind</em> of segment (a rich cloud voice for station IDs, say, but a
+          fast local voice for routine time checks), with everything else falling through
           to a default engine.
         </p>
         <div className="bs-callout">
           <div className="bs-eyebrow">THE DJ NEVER GOES SILENT</div>
           <p>
-            If a voice ever fails — a cloud outage, a model that isn't installed — the
+            If a voice ever fails (a cloud outage, a model that isn't installed), the
             station drops to a local engine automatically. Piper is always there as the
             last resort, so a spoken segment is never lost to a missing voice.
           </p>
@@ -123,7 +123,7 @@ docker compose up -d`}</CodeBlock>
             PocketTTS), drop a short reference WAV into{' '}
             <code className="bs-code-inline">state/voices/</code>{' '}
             (legacy <code className="bs-code-inline">state/chatterbox-voices/</code> is
-            still read) and pick it on the Personas page — without one, both engines
+            still read) and pick it on the Personas page; without one, both engines
             use their built-in default voice. PocketTTS also exposes a curated set of
             built-in voice ids (<code className="bs-code-inline">alba</code>,{' '}
             <code className="bs-code-inline">anna</code>,{' '}
@@ -136,7 +136,7 @@ docker compose up -d`}</CodeBlock>
             <code className="bs-code-inline">--build-arg WITH_CHATTERBOX=1</code> /{' '}
             <code className="bs-code-inline">WITH_POCKETTTS=1</code> paths in{' '}
             <code className="bs-code-inline">docker/Dockerfile.controller</code> still
-            work — they bundle the engines inside the controller image instead. The
+            work; they bundle the engines inside the controller image instead. The
             sidecar is the recommended path for fresh installs.
           </p>
         </div>
@@ -153,7 +153,7 @@ docker compose up -d`}</CodeBlock>
         </p>
         <p>
           How chatty the station is depends on a <strong>frequency</strong> setting the
-          operator chooses — <em>quiet</em>, <em>moderate</em>, or <em>aggressive</em>. A
+          operator chooses: <em>quiet</em>, <em>moderate</em>, or <em>aggressive</em>. A
           quiet station checks the time every couple of hours and drops the occasional
           ID; an aggressive one gives you full idents and weather updates through the hour.
         </p>
@@ -163,7 +163,7 @@ docker compose up -d`}</CodeBlock>
         <p className="bs-eyebrow">SHOWS &amp; SESSIONS</p>
         <h2>It keeps a thread going.</h2>
         <p>
-          The DJ runs in <em>sessions</em> — a continuous block with a memory of what it's
+          The DJ runs in <em>sessions</em>: a continuous block with a memory of what it's
           already played and said, so its links stay coherent instead of starting cold
           each time. A session can be a scheduled <strong>show</strong> the operator paints
           onto a weekly grid, or an autonomous block keyed to the time of day and the

@@ -6,7 +6,7 @@ export default function ModelsAndTokens() {
     <ManualPage
       eyebrow="MANUAL · 10"
       title="Models & tokens."
-      intro="The AI DJ can run on a small model on your own hardware or a large hosted one — and a handful of settings let you tune the station for whichever you've picked, trading richness against cost."
+      intro="The AI DJ can run on a small model on your own hardware or a large hosted one, and a handful of settings let you tune the station for whichever you've picked, trading richness against cost."
       current="/manual/llm"
     >
       <section className="bs-section">
@@ -15,14 +15,14 @@ export default function ModelsAndTokens() {
         <p>
           Every word the DJ speaks and every track it picks comes from one language
           model, chosen under <strong>Admin &rarr; LLM</strong>. The default is Ollama on
-          your own hardware — no API key, no per-token bill — but you can point the
+          your own hardware (no API key, no per-token bill), but you can point the
           station at a hosted provider (Anthropic, OpenAI, Google and others) instead.
           Switching reroutes every call immediately, with no redeploy.
         </p>
         <p>
           Big hosted models are more capable but cost money per token; small local models
           are free to run but need a lighter workload to stay coherent. The settings
-          below let you match the station to the model — run it <em>lean</em> for a small
+          below let you match the station to the model: run it <em>lean</em> for a small
           or metered model, or <em>rich</em> for a large capable one.
         </p>
       </section>
@@ -37,7 +37,7 @@ export default function ModelsAndTokens() {
         </p>
         <p>
           With these settings in place, a small model runs the whole station
-          comfortably — a 9B-class local model such as{' '}
+          comfortably: a 9B-class local model such as{' '}
           <strong>Qwen3.5 9B</strong> is plenty for picking tracks and writing the DJ's
           lines. The lean profile keeps each request short and well-shaped, which is
           exactly what a smaller model needs to stay reliable.
@@ -88,7 +88,7 @@ export default function ModelsAndTokens() {
         <p className="bs-eyebrow">RUNNING RICH</p>
         <h2>For large, capable models.</h2>
         <p>
-          On a large hosted model the same dials go the other way — spend the capability
+          On a large hosted model the same dials go the other way: spend the capability
           on a station with more personality and a smarter DJ.
         </p>
         <ul className="bs-list">
@@ -118,7 +118,7 @@ export default function ModelsAndTokens() {
         <div className="bs-eyebrow">THE DJ NEVER GOES SILENT</div>
         <p>
           The picker agent has a built-in safety net: if it ever fails or runs too slow,
-          the station quietly falls back to the simple pool picker for that track — the
+          the station quietly falls back to the simple pool picker for that track, the
           same path you'd get with the agent switched off. Turning it off just makes that
           lighter path the default rather than the exception.
         </p>
@@ -128,7 +128,7 @@ export default function ModelsAndTokens() {
         <p className="bs-eyebrow">WHERE TO SET THEM</p>
         <h2>All of this lives in the console.</h2>
         <p>
-          Every setting here is in the admin console and takes effect without a redeploy —
+          Every setting here is in the admin console and takes effect without a redeploy;
           most apply to the next thing the DJ does. The full tour of the console is in{' '}
           <Link href="/manual/admin" className="bs-link">Admin &amp; Settings</Link>; how
           the DJ actually picks and talks is in{' '}

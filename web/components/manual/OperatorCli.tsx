@@ -7,7 +7,7 @@ export default function OperatorCli() {
     <ManualPage
       eyebrow="MANUAL · 09"
       title="The operator console."
-      intro="SUB/WAVE ships a command-line console for running the station. One command opens a menu that boots the stack, checks its health, tails logs, and opens a terminal player — no Docker flags to remember."
+      intro="SUB/WAVE ships a command-line console for running the station. One command opens a menu that boots the stack, checks its health, tails logs, and opens a terminal player, with no Docker flags to remember."
       current="/manual/cli"
     >
       <section className="bs-section">
@@ -21,12 +21,12 @@ export default function OperatorCli() {
         <p className="text-muted">
           First time through? If there&rsquo;s no{' '}
           <code className="bs-code-inline">.env</code> yet, the console drops you
-          straight into the install wizard — the same one the{' '}
+          straight into the install wizard, the same one the{' '}
           <Link href="/setup" className="bs-link">setup guide</Link> walks through.
         </p>
         <p className="text-muted">
           Working from a cloned repo instead of the standalone CLI? Run{' '}
-          <code className="bs-code-inline">npm start</code> — it opens the same console.
+          <code className="bs-code-inline">npm start</code>; it opens the same console.
         </p>
       </section>
 
@@ -54,7 +54,7 @@ export default function OperatorCli() {
           </li>
           <li>
             <strong>restart</strong> — rebuild and recreate a single service. The console
-            knows the controller and Liquidsoap need a rebuild — not a plain restart — for
+            knows the controller and Liquidsoap need a rebuild (not a plain restart) for
             source changes to take.
           </li>
           <li>
@@ -92,7 +92,7 @@ export default function OperatorCli() {
         <p className="bs-eyebrow">PLAYER &amp; CONSOLES</p>
         <h2>Jump straight to the player or the admin.</h2>
         <p>
-          The <strong>play</strong> option launches the SUB/WAVE TUI — now-playing, the
+          The <strong>play</strong> option launches the SUB/WAVE TUI: now-playing, the
           timeline, the live booth feed, and a request form, all in your terminal and pointed
           at your own stack. It&rsquo;s the full station experience without a browser. The{' '}
           <Link href="/manual/clients" className="bs-link">Listen With</Link> page covers the
@@ -100,8 +100,8 @@ export default function OperatorCli() {
         </p>
         <p>
           Prefer the browser? <strong>listen</strong> and <strong>admin</strong> open the web
-          player and the admin console in your default browser, pointed at the same stack — no
-          host or port to remember.
+          player and the admin console in your default browser, pointed at the same stack, with
+          no host or port to remember.
         </p>
       </section>
 
@@ -109,8 +109,8 @@ export default function OperatorCli() {
         <p className="bs-eyebrow">SCRIPTING IT</p>
         <h2>Every action runs without the menu too.</h2>
         <p>
-          The menu is for hands-on operating. To skip it — for a deploy script, a cron job, or
-          just speed — name the action straight after{' '}
+          The menu is for hands-on operating. To skip it (for a deploy script, a cron job, or
+          just speed), name the action straight after{' '}
           <code className="bs-code-inline">subwave</code>:
         </p>
         <CodeBlock>{`subwave status
@@ -118,7 +118,7 @@ subwave doctor
 subwave logs controller
 subwave restart controller`}</CodeBlock>
         <p className="text-muted">
-          Same actions, same output — just without the interactive menu wrapped around them.
+          Same actions, same output, just without the interactive menu wrapped around them.
           From a cloned repo, the same actions run after{' '}
           <code className="bs-code-inline">npm start --</code> (e.g.{' '}
           <code className="bs-code-inline">npm start -- status</code>).

@@ -38,14 +38,14 @@ export default function Clients() {
         <h2>The station&rsquo;s own terminal app.</h2>
         <p>
           Start here: SUB/WAVE ships its own terminal player. Where the other apps below just
-          carry the audio, the TUI mirrors the browser player &mdash; now-playing with track
+          carry the audio, the TUI mirrors the browser player: now-playing with track
           metadata, the timeline of recent and upcoming songs, the live booth feed, and a
           request form.
         </p>
         <p>
           It&rsquo;s built into the operator console, so there&rsquo;s nothing separate to
           install. With the <code className="bs-code-inline">subwave</code> CLI, run{' '}
-          <code className="bs-code-inline">subwave play</code> — the TUI is fetched on first
+          <code className="bs-code-inline">subwave play</code>. The TUI is fetched on first
           run and opens pointed at your stack:
         </p>
         <CodeBlock>{`subwave play`}</CodeBlock>
@@ -54,10 +54,10 @@ export default function Clients() {
           start</code> and choose <strong>play</strong> — same TUI, same stack.
         </p>
         <p className="text-muted">
-          For audio it wants <code className="bs-code-inline">mpv</code> (preferred &mdash; it
-          allows live volume control) or <code className="bs-code-inline">ffplay</code>; with
+          For audio it wants <code className="bs-code-inline">mpv</code> (preferred, for live
+          volume control) or <code className="bs-code-inline">ffplay</code>; with
           neither installed the TUI still runs as a read-only dashboard. The same console also
-          opens the web player and admin in your browser &mdash;{' '}
+          opens the web player and admin in your browser, and{' '}
           <Link href="/manual/cli" className="bs-link">The Operator CLI</Link> covers all of
           it.
         </p>
@@ -68,7 +68,7 @@ export default function Clients() {
         <h2>The app on your phone.</h2>
         <p>
           SUB/WAVE has native players for iOS and Android. Like the TUI, they mirror the
-          browser player rather than just carrying the audio &mdash; now-playing with cover
+          browser player rather than just carrying the audio: now-playing with cover
           art and a live visualiser, the booth feed, the timeline, a request form, the
           schedule, and station themes that recolour the whole app. Playback keeps going in
           the background, with controls on the lock screen, your headphones, CarPlay, and
@@ -76,13 +76,13 @@ export default function Clients() {
         </p>
         <p>
           They open on the public station, and you can add any other SUB/WAVE station by its
-          address &mdash; the same <code className="bs-code-inline">/stream.mp3</code> domain
+          address: the same <code className="bs-code-inline">/stream.mp3</code> domain
           the apps below use, typed in once and saved.
         </p>
         <p className="text-muted">
-          The apps are in public beta while they work through the stores. On iOS, join over
-          TestFlight (install the TestFlight app first); on Android, tap the link to install
-          the APK directly &mdash; no account, no Play Store:
+          Android is live on Google Play: install it like any other app, and it
+          auto-updates from then on. iOS is in public beta over TestFlight while it works
+          through the App Store (install the TestFlight app first):
         </p>
         <table className="bs-doc-table">
           <thead>
@@ -93,6 +93,19 @@ export default function Clients() {
           </thead>
           <tbody>
             <tr>
+              <td><strong>Android</strong></td>
+              <td>
+                <a
+                  href="https://play.google.com/store/apps/details?id=com.getsubwave.app"
+                  className="bs-link"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Google Play ↗
+                </a>
+              </td>
+            </tr>
+            <tr>
               <td><strong>iOS</strong></td>
               <td>
                 <a
@@ -102,32 +115,17 @@ export default function Clients() {
                   rel="noreferrer"
                 >
                   TestFlight ↗
-                </a>
-              </td>
-            </tr>
-            <tr>
-              <td><strong>Android</strong></td>
-              <td>
-                <a
-                  href="https://expo.dev/accounts/pinku1/projects/subwave/builds/8bc3116d-c9b0-4a32-87b9-747640270b23"
-                  className="bs-link"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Install APK ↗
                 </a>{' '}
-                (approve the one-time &ldquo;unknown sources&rdquo; prompt)
+                (public beta)
               </td>
             </tr>
           </tbody>
         </table>
         <div className="bs-callout">
-          <div className="bs-eyebrow">APP STORE &amp; PLAY STORE</div>
+          <div className="bs-eyebrow">APP STORE</div>
           <p>
-            Coming once the betas settle. Until then the links above are the way in &mdash;
-            the Android build installs straight from the link (you&rsquo;ll approve a
-            one-time &ldquo;install from unknown sources&rdquo; prompt), and iOS goes through
-            TestFlight.
+            Android is on Google Play now; the iOS App Store listing follows once the
+            TestFlight beta settles. Until then, TestFlight is the way in on iPhone and iPad.
           </p>
         </div>
       </section>
@@ -138,12 +136,12 @@ export default function Clients() {
         <p>
           Every external player asks for the same thing: the address of the stream. For
           this station it is <code className="bs-code-inline">/stream.mp3</code> on the
-          station&rsquo;s own domain &mdash;
+          station&rsquo;s own domain:
         </p>
         <StreamUrl />
         <p className="text-muted">
           Paste that into any of the apps below. It is a live broadcast, so there is no
-          pause and no seek &mdash; closing the app and reopening it drops you back
+          pause and no seek. Closing the app and reopening it drops you back
           wherever the station is <em>now</em>, not where you left off.
         </p>
         <div className="bs-callout">
@@ -163,10 +161,10 @@ export default function Clients() {
         <p className="bs-eyebrow">VLC</p>
         <h2>VLC, on every screen you own.</h2>
         <p>
-          VLC is the most reliable way to tune in outside the browser &mdash; the safe
-          first choice. It runs on every desktop and mobile platform, opens the stream
-          from a single URL, and buffers generously enough that a shaky connection rarely
-          interrupts the broadcast. It is free and open-source: desktop builds come from{' '}
+          VLC is the steadiest way to tune in outside the browser. It runs on every desktop
+          and mobile platform, opens the stream from a single URL, and buffers generously
+          enough that a shaky connection rarely interrupts the broadcast. It is free and
+          open-source: desktop builds come from{' '}
           <a
             href="https://www.videolan.org/vlc/"
             className="bs-link"
@@ -200,7 +198,7 @@ export default function Clients() {
         </table>
         <p>
           Once it is playing, VLC shows the live track and artist from the stream&rsquo;s
-          metadata &mdash; the same now-playing info the browser player displays. On
+          metadata, the same now-playing info the browser player displays. On
           desktop you can drag the stream into the Playlist and save it as an{' '}
           <code className="bs-code-inline">.m3u</code> for one-click tuning later; on
           mobile it stays in VLC&rsquo;s history under the Network tab.
@@ -222,8 +220,8 @@ export default function Clients() {
         <p className="bs-eyebrow">CLIAMP</p>
         <h2>SUB/WAVE in your terminal.</h2>
         <p>
-          cliamp is a terminal music player with built-in internet-radio support &mdash;
-          point it at the stream URL and the broadcast plays straight in your shell, no
+          cliamp is a terminal music player with built-in internet-radio support. Point it
+          at the stream URL and the broadcast plays straight in your shell, no
           browser and no window. It is an open-source Go program; grab a release binary
           from{' '}
           <a
@@ -238,7 +236,7 @@ export default function Clients() {
         </p>
         <CodeBlock>{`go install github.com/bjarneo/cliamp@latest`}</CodeBlock>
         <p className="text-muted">
-          On Linux you also want the ALSA bridge for your audio server &mdash;{' '}
+          On Linux you also want the ALSA bridge for your audio server:{' '}
           <code className="bs-code-inline">pipewire-alsa</code> or{' '}
           <code className="bs-code-inline">pulseaudio-alsa</code>. The MP3 mount plays
           natively in cliamp with no <code className="bs-code-inline">ffmpeg</code>{' '}
@@ -249,7 +247,7 @@ export default function Clients() {
         <StreamUrl prefix="cliamp " />
         <p>
           cliamp shows <code className="bs-code-inline">● Streaming</code> with a
-          non-interactive seek bar &mdash; expected, since SUB/WAVE is a live broadcast.
+          non-interactive seek bar, which is expected since SUB/WAVE is a live broadcast.
           Press <kbd className="bs-kbd">u</kbd> to load a different stream, or{' '}
           <kbd className="bs-kbd">R</kbd> to browse cliamp&rsquo;s own radio directory.
         </p>
@@ -259,7 +257,7 @@ export default function Clients() {
             Public SUB/WAVE stations sit behind Cloudflare, which serves the stream over
             HTTP/2 in bursts. Browsers and VLC paper over that with deep buffers; a lean
             command-line player like cliamp can underrun between bursts and show{' '}
-            <em>buffering</em>. The stream itself is fine &mdash; ask the station operator
+            <em>buffering</em>. The stream itself is fine. Ask the station operator
             for a direct address that skips Cloudflare (a LAN or Tailscale URL on the
             Caddy port, usually <code className="bs-code-inline">:7700</code>), which
             serves a steady HTTP/1.1 stream.
@@ -280,7 +278,7 @@ export default function Clients() {
         <h2>Any internet-radio player works.</h2>
         <p>
           The SUB/WAVE TUI is the full-featured way in; VLC and cliamp are the walked-through
-          audio-only examples &mdash; but none of them are special. Anything that can open an
+          audio-only examples. But none of them are special: anything that can open an
           internet-radio URL can tune in, and more client guides will be added here over time.
           Running the station yourself rather than listening along? That&rsquo;s covered in{' '}
           <Link href="/setup" className="bs-link">the setup guide</Link>.

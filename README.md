@@ -13,7 +13,7 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 
 - **Project site** — [getsubwave.com](https://www.getsubwave.com/)
 - **Demo player** — [getsubwave.com/listen](https://www.getsubwave.com/listen)
-- **Mobile apps (beta)** — native iOS & Android players — [join the beta](https://github.com/perminder-klair/subwave/discussions/289)
+- **Mobile apps** — native players — [Android on Google Play](https://play.google.com/store/apps/details?id=com.getsubwave.app), [iOS via TestFlight](https://testflight.apple.com/join/Xrx5TUmb)
 - **Setup walkthrough** — [getsubwave.com/setup](https://www.getsubwave.com/setup)
 - **Operator manual** — [getsubwave.com/manual](https://www.getsubwave.com/manual)
 - **Community** — [join the Discord](https://discord.gg/vjVbVKnMBa)
@@ -47,7 +47,7 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 - **Five TTS engines.** Piper and Kokoro in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) is also available. Pick a different engine per kind of speech.
 - **Multiple DJ personas.** Up to 10 souls in rotation, each with its own voice and writing style.
 - **Dual-codec broadcast.** MP3 128 kbps for Sonos, hardware radios, and cars; Ogg-Opus 96 kbps for modern browsers. The web player picks automatically.
-- **Native apps, PWA, and TUI.** Native iOS and Android players (in beta — background audio, lock-screen / CarPlay / Android Auto controls, multi-station), an installable PWA on phone and desktop, and a TUI for the command line.
+- **Native apps, PWA, and TUI.** Native iOS (TestFlight beta) and Android (on Google Play) players — background audio, lock-screen / CarPlay / Android Auto controls, multi-station — an installable PWA on phone and desktop, and a TUI for the command line.
 - **Scheduled shows.** A 24×7 grid; each slot has its own persona, mood, and skills.
 - **Pluggable skills.** The DJ's between-track segments — weather, news, traffic, and your own — are skills. The built-ins are scaffolded as editable files under `state/skills/<kind>/` on first boot, so you can rewrite a brief or change the news feed (BBC → your own RSS) right from the admin console — no code, no redeploy. Add your own by dropping a `SKILL.md` (plus optional data-fetching code) into `state/skills/`, hitting Rescan, and enabling it. See [`docs/custom-skills.md`](docs/custom-skills.md).
 - **Mood-aware rotation.** Time of day, weather, and festival days bias what gets played and how the DJ talks.

@@ -29,8 +29,8 @@ export default function GettingStarted() {
         <p className="bs-eyebrow">THE PLAYER</p>
         <h2>What you're looking at.</h2>
         <p>
-          The player shows the track that's playing right now — title, artist, and cover
-          art — with a waveform for the transport. Three panels slide out for the rest:
+          The player shows the track that's playing right now (title, artist, and cover
+          art) with a waveform for the transport. Three panels slide out for the rest:
         </p>
         <ul className="bs-list">
           <li>
@@ -55,7 +55,7 @@ export default function GettingStarted() {
         <p className="bs-eyebrow">NO SKIP — ON PURPOSE</p>
         <h2>There is no skip button.</h2>
         <p>
-          A track ends when it ends. SUB/WAVE has no <code className="bs-code-inline">/skip</code> —
+          A track ends when it ends. SUB/WAVE has no <code className="bs-code-inline">/skip</code>:
           the only natural transition is track-end, and the mixer controls pacing. Skip is
           deliberately left off the lock-screen and headphone controls too, so a stray
           double-tap on your earbuds can't cut the song short for every other listener.
@@ -69,7 +69,7 @@ export default function GettingStarted() {
           SUB/WAVE is an installable web app. Use your browser's &ldquo;Add to Home
           Screen&rdquo; / &ldquo;Install&rdquo; option and it runs like a native app, with
           its own icon. Once installed, your phone's lock screen, headphone buttons, and
-          car display can all start and stop the stream — with the cover art of whatever
+          car display can all start and stop the stream, with the cover art of whatever
           is currently on the air.
         </p>
       </section>

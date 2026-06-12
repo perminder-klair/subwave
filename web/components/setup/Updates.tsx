@@ -31,7 +31,7 @@ export default function Updates() {
         </table>
 
         <p className="mt-4">
-          Typical manual deploy — pull, rebuild only what changed (here, controller
+          Typical manual deploy: pull, rebuild only what changed (here, controller
           + web), then verify:
         </p>
         <CodeBlock>{`git pull --ff-only
@@ -68,7 +68,7 @@ docker compose up -d --build controller web
 docker compose up -d`}</CodeBlock>
           <p className="text-muted">
             Same flow if you&apos;re on{' '}
-            <code className="bs-code-inline">docker-compose.byo.yml</code> — just
+            <code className="bs-code-inline">docker-compose.byo.yml</code>, just
             swap the file flag.
           </p>
         </div>
@@ -113,8 +113,8 @@ docker compose up -d`}</CodeBlock>
             <strong>Source code</strong> —{' '}
             <a href="https://github.com/perminder-klair/subwave" target="_blank" rel="noreferrer" className="bs-link">
               github.com/perminder-klair/subwave ↗
-            </a>{' '}
-            — file an issue, or read the CLAUDE.md for architecture notes.
+            </a>
+            . File an issue, or read the CLAUDE.md for architecture notes.
           </li>
         </ul>
       </section>
@@ -124,7 +124,7 @@ docker compose up -d`}</CodeBlock>
         <h2>Now shape the DJ.</h2>
         <p>
           Installation is the start. Tuning the personas, scheduling shows, choosing the LLM
-          provider, and managing jingles all happen in the admin console — that's covered in{' '}
+          provider, and managing jingles all happen in the admin console; that's covered in{' '}
           <Link href="/manual/admin" className="bs-link">the manual's Admin &amp; Settings
           page</Link>.
         </p>

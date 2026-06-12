@@ -6,7 +6,7 @@ export default function AdminSettings() {
     <ManualPage
       eyebrow="MANUAL · 07"
       title="Admin & settings."
-      intro="For the operator running the station. The admin console is where you shape the DJ, choose the AI providers, schedule shows, and watch how the station is behaving — all without a redeploy."
+      intro="For the operator running the station. The admin console is where you shape the DJ, choose the AI providers, schedule shows, and watch how the station is behaving, all without a redeploy."
       current="/manual/admin"
     >
       <section className="bs-section">
@@ -46,8 +46,8 @@ export default function AdminSettings() {
         <p className="bs-eyebrow">PROGRAMMING</p>
         <h2>Shaping the station.</h2>
         <p>
-          Everything in this group is saved durably and applies live — no redeploy, most
-          changes landing on the next thing the DJ does.
+          Everything in this group is saved durably and applies live. No redeploy, and most
+          changes land on the next thing the DJ does.
         </p>
         <ul className="bs-list">
           <li>
@@ -63,8 +63,8 @@ export default function AdminSettings() {
           <li>
             <strong>Personas</strong> — the roster of DJ identities, one to ten. Each has
             a name and character, a voice, a script length and a talk frequency, plus the
-            skills it's allowed to use. One persona is active at a time — though a
-            scheduled show can override which — and a single prompt template is shared by
+            skills it's allowed to use. One persona is active at a time (though a
+            scheduled show can override which), and a single prompt template is shared by
             all of them.
           </li>
           <li>
@@ -84,8 +84,8 @@ export default function AdminSettings() {
         <ul className="bs-list">
           <li>
             <strong>TTS voice</strong> — which text-to-speech engine and voice the DJ
-            speaks with, optionally a different one per kind of segment. The engines —
-            local and cloud — are covered in{' '}
+            speaks with, optionally a different one per kind of segment. The engines
+            (local and cloud) are covered in{' '}
             <Link href="/manual/dj" className="bs-link">How the DJ Works</Link>.
           </li>
           <li>
@@ -111,7 +111,7 @@ export default function AdminSettings() {
           <div className="bs-eyebrow">MIX CHANGES NEED A MIXER RESTART</div>
           <p>
             Crossfade and jingle-ratio changes are read by the audio mixer only at
-            startup. The settings page can trigger that restart for you — the stream drops
+            startup. The settings page can trigger that restart for you: the stream drops
             for a few seconds and comes back with the new values applied.
           </p>
         </div>
@@ -121,7 +121,7 @@ export default function AdminSettings() {
         <p className="bs-eyebrow">WHEN SOMETHING'S OFF</p>
         <h2>Stats &amp; debug.</h2>
         <p>
-          <strong>Stats</strong> reports how the station is performing — AI usage and
+          <strong>Stats</strong> reports how the station is performing: AI usage and
           latency, and how often it's had to fall back to a backup engine.{' '}
           <strong>Debug</strong> is a live snapshot for diagnosing trouble: recent AI
           calls, the mixer's status, and the most recent log lines. It's the first place

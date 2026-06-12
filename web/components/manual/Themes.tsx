@@ -54,7 +54,7 @@ export default function Themes() {
         <p>
           A scheduled show can opt into a different theme for its hour. Open a show in
           admin → <strong>Shows</strong>, pick one from the <em>theme override</em>{' '}
-          dropdown, and the player switches to that palette while the show is on air —
+          dropdown, and the player switches to that palette while the show is on air,
           then back to the station default when the next hour starts.
         </p>
         <p>
@@ -73,12 +73,12 @@ export default function Themes() {
           (<code className="bs-code-inline">light</code> or <code className="bs-code-inline">dark</code>),
           and a token map. The controller creates{' '}
           <code className="bs-code-inline">state/themes/</code> on first read and seeds it
-          with a README — drop your JSONs alongside it.
+          with a README; drop your JSONs alongside it.
         </p>
         <CodeBlock>{EXAMPLE_THEME}</CodeBlock>
         <p>
           After saving the file, hit <strong>Refresh themes</strong> in admin → Settings
-          → Theme — that re-scans the directory and the new entry appears in the picker.
+          → Theme. That re-scans the directory, and the new entry appears in the picker.
           No mixer restart, no controller bounce.
         </p>
         <div className="bs-callout">
@@ -112,7 +112,7 @@ export default function Themes() {
           Any CSS colour value works: hex, <code className="bs-code-inline">rgb()</code>,{' '}
           <code className="bs-code-inline">oklch()</code>,{' '}
           <code className="bs-code-inline">color-mix()</code>. <code className="bs-code-inline">mode</code>{' '}
-          tells the rest of the stylesheet whether to treat the theme as light or dark —
+          tells the rest of the stylesheet whether to treat the theme as light or dark;
           it controls the paper-grain blend and the few shadcn rules that still key off{' '}
           <code className="bs-code-inline">data-theme</code>.
         </p>
@@ -124,7 +124,7 @@ export default function Themes() {
         <p>
           On every page load, a tiny pre-paint script reads the last-applied theme from
           the browser's localStorage and writes the seven variables onto{' '}
-          <code className="bs-code-inline">&lt;html&gt;</code> before the first frame — so
+          <code className="bs-code-inline">&lt;html&gt;</code> before the first frame, so
           listeners never see the default palette flash before yours arrives. The
           controller serves the live registry at{' '}
           <code className="bs-code-inline">/api/themes</code>; an app-wide bootstrapper

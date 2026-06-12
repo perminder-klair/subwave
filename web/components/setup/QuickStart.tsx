@@ -26,11 +26,11 @@ export default function QuickStart() {
           <CodeBlock>{`curl -fsSL https://cli.getsubwave.com | sh`}</CodeBlock>
           <CodeBlock>{`subwave setup`}</CodeBlock>
           <p className="text-muted">
-            The installer prompts <em>Run subwave init now?</em> — say yes and{' '}
+            The installer prompts <em>Run subwave init now?</em> Say yes and{' '}
             <code className="bs-code-inline">init</code> asks where to install
             (default <code className="bs-code-inline">~/subwave</code>),
             deployment shape (prod / prod-byo), and admin credentials. It ends
-            with <em>Bring the stack up now?</em> — say yes again and{' '}
+            with <em>Bring the stack up now?</em> Say yes again and{' '}
             <code className="bs-code-inline">subwave start</code> runs silently
             against the env <code className="bs-code-inline">init</code> just
             picked. After that,{' '}
@@ -68,7 +68,7 @@ export default function QuickStart() {
               </li>
               <li>
                 state in <code className="bs-code-inline">./state</code> (or{' '}
-                <code className="bs-code-inline">STATE_DIR</code>) — re-run with sudo
+                <code className="bs-code-inline">STATE_DIR</code>); re-run with sudo
                 if it isn't writable
               </li>
             </ul>
@@ -77,7 +77,7 @@ export default function QuickStart() {
         <div className="bs-callout">
           <div className="bs-eyebrow">SAFE TO RE-RUN</div>
           <p>
-            Existing env values are kept unless you explicitly ask to reconfigure — so the
+            Existing env values are kept unless you explicitly ask to reconfigure, so the
             wizard doubles as a way to bring an existing stack back up.
           </p>
         </div>
@@ -87,7 +87,7 @@ export default function QuickStart() {
         <p className="bs-eyebrow">PATH B · AI CODING AGENT</p>
         <h2>One sentence in your coding agent.</h2>
         <p>
-          The repo ships an agent skill that handles setup, deploy, and update — it pings
+          The repo ships an agent skill that handles setup, deploy, and update: it pings
           Navidrome and Ollama, boots the stack, generates jingles, and verifies the stream is
           on-air. It works with <strong>Claude Code</strong>, <strong>Codex</strong>,{' '}
           <strong>Cursor</strong>, or anything else that reads{' '}
@@ -107,7 +107,7 @@ cd subwave`}</CodeBlock>
             On updates the same skill detects which services actually changed and rebuilds
             only those. Liquidsoap and the Controller <em>COPY</em> their source at build
             time, so a plain <code className="bs-code-inline">docker compose restart</code>{' '}
-            silently runs stale code — the skill won't make that mistake.
+            silently runs stale code; the skill won't make that mistake.
           </p>
         </div>
       </section>
@@ -117,15 +117,15 @@ cd subwave`}</CodeBlock>
         <h2>Run the station from the CLI.</h2>
         <p>
           The setup wizard is one screen of the operator console. Run{' '}
-          <code className="bs-code-inline">npm start</code> from the repo any time to open it
-          — a menu to check the stack, run a diagnostic sweep, tail logs, restart a service,
+          <code className="bs-code-inline">npm start</code> from the repo any time to open it:
+          a menu to check the stack, run a diagnostic sweep, tail logs, restart a service,
           or open the terminal player.
         </p>
         <CodeBlock>{`npm start`}</CodeBlock>
         <div className="bs-callout">
           <div className="bs-eyebrow">LISTEN FROM THE TERMINAL</div>
           <p>
-            The console's <strong>play</strong> option launches the TUI player — now-playing,
+            The console's <strong>play</strong> option launches the TUI player: now-playing,
             the timeline, the live booth feed, and track requests, right in your terminal. It
             needs <code className="bs-code-inline">mpv</code> or{' '}
             <code className="bs-code-inline">ffplay</code> for audio, and runs as a read-only

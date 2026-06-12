@@ -13,7 +13,7 @@ export default function Requests() {
         <h2>Open &ldquo;Make a request.&rdquo;</h2>
         <p>
           In the player, open the <strong>Make a request</strong> panel. Type what you
-          want and, if you like, your name — so the DJ can give you a shout-out. You don't
+          want and, if you like, your name, so the DJ can give you a shout-out. You don't
           have to be precise: a song title, an artist, or a mood all work.
         </p>
         <ul className="bs-list">
@@ -34,7 +34,7 @@ export default function Requests() {
           to play when the current song finishes.
         </p>
         <p>
-          If nothing in the library fits, the DJ won't force it — you may get a different
+          If nothing in the library fits, the DJ won't force it; you may get a different
           take on the mood you asked for instead. The station only plays what's actually
           in its collection.
         </p>
@@ -52,7 +52,7 @@ export default function Requests() {
         <div className="bs-callout">
           <div className="bs-eyebrow">A FEW TIPS</div>
           <p>
-            Be specific when you have a specific song in mind, and loose when you don't —
+            Be specific when you have a specific song in mind, and loose when you don't;
             the DJ handles both. Watch <strong>the booth</strong> panel to catch your
             shout-out, and the <strong>Timeline</strong> to see your track land in the
             queue.

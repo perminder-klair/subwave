@@ -68,14 +68,14 @@ export default function Shortcuts() {
         <h2>One menu for everything.</h2>
         <p>
           Press <kbd className="bs-kbd">⌘K</kbd> (or <kbd className="bs-kbd">Ctrl K</kbd>{' '}
-          on Windows and Linux) to open the <strong>command palette</strong> — a
+          on Windows and Linux) to open the <strong>command palette</strong>, a
           searchable list of every player action. Start typing to filter, use the arrow
           keys to move, and press Enter to run. It's the fastest way to reach something
           when you can't remember its key.
         </p>
         <p className="text-muted">
           The palette chord works even while you're typing in a text field, so you can
-          always summon it — and press it again, or <kbd className="bs-kbd">Esc</kbd>, to
+          always summon it; press it again, or <kbd className="bs-kbd">Esc</kbd>, to
           close it.
         </p>
       </section>
@@ -84,7 +84,7 @@ export default function Shortcuts() {
         <p className="bs-eyebrow">WHEN THEY'RE QUIET</p>
         <h2>Shortcuts step aside while you type.</h2>
         <p>
-          The single-key shortcuts are suppressed whenever a text field is focused — so
+          The single-key shortcuts are suppressed whenever a text field is focused, so
           typing <em>R</em> into the request box writes an <em>R</em> rather than opening
           a panel. They also pause while the command palette or the shortcuts dialog is
           open, since those windows handle the keyboard themselves.

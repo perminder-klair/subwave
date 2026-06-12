@@ -119,7 +119,7 @@ export default function StationMap({ stations }: { stations: Station[] }) {
       </svg>
       {plotted.length === 0 ? (
         <figcaption className="bs-map-caption">
-          No stations plotted yet — add yours below.
+          No stations plotted yet. Add yours below.
         </figcaption>
       ) : null}
     </figure>

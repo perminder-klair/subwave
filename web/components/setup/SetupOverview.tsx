@@ -26,7 +26,7 @@ export default function SetupOverview() {
       eyebrow="SELF-HOSTED · OPEN SOURCE"
       title="Run your own SUB/WAVE."
       meta="≈ 10 min · 4 commands · needs Navidrome + an LLM"
-      intro="SUB/WAVE points at your Navidrome library and your LLM — a local Ollama box by default, or any hosted provider you prefer. Once it's running, the AI DJ broadcasts from your homelab, plays from your music collection, and answers requests from anyone with the URL."
+      intro="SUB/WAVE points at your Navidrome library and your LLM: a local Ollama box by default, or any hosted provider you prefer. Once it's running, the AI DJ broadcasts from your homelab, plays from your music collection, and answers requests from anyone with the URL."
       current="/setup"
       heroAside={
         <div className="bs-dj-glyph" aria-hidden="true">
@@ -48,12 +48,12 @@ export default function SetupOverview() {
           <CodeBlock>{`subwave setup`}</CodeBlock>
           <p className="text-muted">
             The installer drops the <code className="bs-code-inline">subwave</code>{' '}
-            binary, then prompts <em>Run subwave init now?</em> — say yes and it
+            binary, then prompts <em>Run subwave init now?</em> Say yes and it
             walks the install dir (default{' '}
             <code className="bs-code-inline">~/subwave</code>), deployment shape
             (prod / prod-byo), and admin credentials.{' '}
             <code className="bs-code-inline">init</code> ends with{' '}
-            <em>Bring the stack up now?</em> — yes again brings up Docker. Then{' '}
+            <em>Bring the stack up now?</em> Yes again brings up Docker. Then{' '}
             <code className="bs-code-inline">setup</code> prompts for Navidrome
             and your LLM, persists everything, and renders the station jingles.{' '}
             <Link href="/setup/quick-start" className="bs-link">
@@ -63,7 +63,7 @@ export default function SetupOverview() {
           <p className="text-muted">
             After that,{' '}
             <code className="bs-code-inline">subwave status / logs / doctor / restart / update</code>{' '}
-            drive the station from anywhere on your shell — no{' '}
+            drive the station from anywhere on your shell, with no{' '}
             <code className="bs-code-inline">cd</code> into a project dir, no clone
             required. Prefer pure <code className="bs-code-inline">docker compose</code>?{' '}
             <Link href="/setup/manual" className="bs-link">Manual Install</Link>{' '}

@@ -55,11 +55,11 @@ export default function Development() {
         <div className="bs-cmd-list">
           <div className="bs-cmd">
             <CodeBlock>{`npm run setup`}</CodeBlock>
-            <p>Interactive wizard — writes envs, brings the stack up.</p>
+            <p>Interactive wizard: writes envs, brings the stack up.</p>
           </div>
           <div className="bs-cmd">
             <CodeBlock>{`npm run dev`}</CodeBlock>
-            <p>Alias for setup — same wizard.</p>
+            <p>Alias for setup; same wizard.</p>
           </div>
           <div className="bs-cmd">
             <CodeBlock>{`npm run dev:docker`}</CodeBlock>
@@ -137,7 +137,7 @@ export default function Development() {
             <code className="bs-code-inline">controller/src/**</code> restart the
             process inside the container automatically.{' '}
             <code className="bs-code-inline">liquidsoap/radio.liq</code> is bind-mounted
-            too — edits there need{' '}
+            too; edits there need{' '}
             <code className="bs-code-inline">docker compose -f docker-compose.dev.yml restart broadcast</code>{' '}
             but no rebuild.
           </p>
@@ -152,7 +152,7 @@ export default function Development() {
           </p>
           <p className="mt-2 text-muted">
             The web dev server (<code className="bs-code-inline">npm run dev:web</code>) is
-            its own thing — Next.js hot-reloads, so edits to{' '}
+            its own thing: Next.js hot-reloads, so edits to{' '}
             <code className="bs-code-inline">web/**</code> show up instantly without
             touching Docker.
           </p>
