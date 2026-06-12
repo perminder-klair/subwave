@@ -4,7 +4,9 @@
 .env.*.local
 
 # Node
-node_modules/
+# No trailing slash: also catches a stray file/symlink named node_modules
+# (a broken macOS-local symlink slipped past the dir-only pattern in #325).
+node_modules
 
 # Next.js
 .next/
