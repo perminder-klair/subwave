@@ -111,6 +111,15 @@ function clampNumCtx(raw: any, def: number): number {
   return Math.min(131072, Math.max(2048, Math.floor(raw)));
 }
 
+// Coerce a stored agent-deadline value (ms). Clamped to [5s, 180s] and floored
+// to an integer; non-numeric/NaN falls back to `def`. The lower bound keeps a
+// fat-fingered save from making every agent pick fail instantly; the upper
+// bound keeps a stalling model from tying up an inference slot for minutes.
+function clampAgentTimeout(raw: any, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  return Math.min(180_000, Math.max(5_000, Math.floor(raw)));
+}
+
 // Validate + apply the connection fields shared by the primary LLM leg and its
 // optional fallback (provider/model/apiKey/ollamaUrl/baseUrl/reasoning/numCtx).
 // `target` is the live settings sub-object to mutate; `patch` is the incoming
@@ -435,6 +444,13 @@ const DEFAULTS = {
     // dj-agent.js). When off, the stateless pool picker runs instead — still
     // inside a session, still logged, just without the conversational loop.
     pickerAgent: true,
+    // Hard wall-clock ceiling (ms) on a single DJ-agent generation (track
+    // picks and listener requests). Enforced by withDeadline in llm/sdk.ts;
+    // the main and recovery runs each get the full budget, so worst case per
+    // pick is ~2× this before the stateless fallback takes over. Raise it for
+    // slow models (reasoning-heavy cloud models routinely need 20-40s per
+    // pick); lower it if you want snappier fallbacks.
+    agentTimeoutMs: 45000,
     // When on, autonomous DJ LLM work (track picks, links, station IDs,
     // hourly checks, segments) and listener requests pause whenever Icecast
     // reports zero listeners — the stream coasts on the auto playlist — and
@@ -886,6 +902,9 @@ export async function load() {
         typeof stored.llm?.pickerAgent === 'boolean'
           ? stored.llm.pickerAgent
           : DEFAULTS.llm.pickerAgent,
+      // Clamped to [5s, 180s]; settings.json files from before the field
+      // existed pick up the default.
+      agentTimeoutMs: clampAgentTimeout(stored.llm?.agentTimeoutMs, DEFAULTS.llm.agentTimeoutMs),
       pauseWhenEmpty:
         typeof stored.llm?.pauseWhenEmpty === 'boolean'
           ? stored.llm.pauseWhenEmpty
@@ -1606,6 +1625,9 @@ export async function update(patch) {
     applyLlmLegPatch(next.llm, l, 'llm');
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
+    }
+    if (l.agentTimeoutMs !== undefined) {
+      next.llm.agentTimeoutMs = clampAgentTimeout(Number(l.agentTimeoutMs), next.llm.agentTimeoutMs);
     }
     if (l.pauseWhenEmpty !== undefined) {
       next.llm.pauseWhenEmpty = !!l.pauseWhenEmpty;

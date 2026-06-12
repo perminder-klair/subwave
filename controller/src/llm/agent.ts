@@ -27,7 +27,10 @@ export interface AgentDefinition {
   buildSystem: (args: any) => string;
   buildTools?: (args: any) => { tools: any; extras?: any };
   maxSteps?: number;
-  timeoutMs?: number;
+  // A function form is resolved at each run, so the deadline can follow a
+  // live setting (settings.llm.agentTimeoutMs) instead of being frozen at
+  // module load.
+  timeoutMs?: number | (() => number);
   temperature?: number;
   maxOutputTokens?: number;
 }
@@ -49,12 +52,20 @@ export interface DjAgentInstance {
   run(args: { messages: any[] } & Record<string, any>): Promise<AgentRunResult>;
 }
 
+function resolveTimeout(t: number | (() => number) | undefined): number | undefined {
+  return typeof t === 'function' ? t() : t;
+}
+
 export function defineAgent(def: AgentDefinition): DjAgentInstance {
   return {
     kind: def.kind,
     schema: def.schema,
     maxSteps: def.maxSteps,
-    timeoutMs: def.timeoutMs,
+    // Resolved on read so consumers (picker-test.mjs) always see a number
+    // matching what the next run would use.
+    get timeoutMs() {
+      return resolveTimeout(def.timeoutMs);
+    },
     temperature: def.temperature,
     maxOutputTokens: def.maxOutputTokens,
     async run({ messages, ...toolArgs }) {
@@ -66,7 +77,7 @@ export function defineAgent(def: AgentDefinition): DjAgentInstance {
         tools: built.tools,
         schema: def.schema,
         maxSteps: def.maxSteps,
-        timeoutMs: def.timeoutMs,
+        timeoutMs: resolveTimeout(def.timeoutMs),
         temperature: def.temperature,
         maxOutputTokens: def.maxOutputTokens,
         kind: def.kind,

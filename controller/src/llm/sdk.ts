@@ -607,7 +607,8 @@ export async function djObject({
 //   openrouter:claude-haiku-4.5  Output.object 0/n  "No output generated" (#300)
 // (An earlier table here recorded these models passing 5/5 on Output.object;
 // that no longer reproduces on ai@6 — an SDK-version drift, per #300.)
-// The Ollama latency p95s exceed the picker's 22s `timeoutMs` ceiling;
+// The Ollama latency p95s can exceed the picker's `timeoutMs` ceiling
+// (settings.llm.agentTimeoutMs, default 45s);
 // agent.generate({ timeout }) is not honoured by the ai-sdk-ollama transport,
 // so the ceiling is enforced here via withDeadline (Promise.race + abort
 // signal) around each generation — main run and recovery run each get the

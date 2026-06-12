@@ -254,14 +254,22 @@ function breakerFailure(queue: any) {
 // without drifting. The hard timeout is what fails fast into the stateless
 // fallback below instead of dragging on a pathological model call — enforced
 // by withDeadline in llm/sdk.ts (main + recovery runs each get the full
-// budget, so worst case per agent call is ~2× this).
+// budget, so worst case per agent call is ~2× this). It comes from
+// settings.llm.agentTimeoutMs (default 45s, admin-tunable) — slow
+// reasoning-heavy cloud models routinely need 20-40s per pick, and a pick has
+// a whole track length of slack; the deadline exists to contain the unbounded
+// 60s+ stalls (#352), not to demand snappy answers.
+function agentDeadline(): number {
+  return settings.get().llm?.agentTimeoutMs ?? 45000;
+}
+
 export const pickerAgent = defineAgent({
   kind: 'djAgentPick',
   schema: PICK_SCHEMA,
   // The done-tool path ends the loop at step 1 (COMMIT_AFTER_STEPS in sdk.js)
   // on every provider now; maxSteps is just the backstop.
   maxSteps: 4,
-  timeoutMs: 22000,
+  timeoutMs: agentDeadline,
   buildSystem: () => pickSystem(),
   buildTools: ({ recentIds, recentKeys, recentArtists, audioWaypoint }) => {
     const { tools, seen } = buildPickerTools({ recentIds, recentKeys, recentArtists, audioWaypoint });
@@ -273,7 +281,7 @@ export const requestAgent = defineAgent({
   kind: 'djAgentRequest',
   schema: REQUEST_SCHEMA,
   maxSteps: 4,
-  timeoutMs: 22000,
+  timeoutMs: agentDeadline,
   buildSystem: () => requestSystem(),
   // recentArtists deliberately empty — a request for a recently-played artist
   // must still resolve.

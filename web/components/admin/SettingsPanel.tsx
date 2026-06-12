@@ -107,6 +107,7 @@ interface LlmForm {
   baseUrl: string;
   reasoning: boolean;
   pickerAgent: boolean;
+  agentTimeoutMs: number;
   pauseWhenEmpty: boolean;
   fallback: LlmFallbackForm;
 }
@@ -348,6 +349,7 @@ export default function SettingsPanel() {
         baseUrl: v.llm?.baseUrl ?? '',
         reasoning: !!v.llm?.reasoning,
         pickerAgent: !!v.llm?.pickerAgent,
+        agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
         pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
         fallback: {
           enabled: !!v.llm?.fallback?.enabled,
@@ -1496,6 +1498,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
       baseUrl: form.llm.baseUrl,
       reasoning: form.llm.reasoning,
       pickerAgent: form.llm.pickerAgent,
+      agentTimeoutMs: form.llm.agentTimeoutMs,
       pauseWhenEmpty: form.llm.pauseWhenEmpty,
       fallback: {
         enabled: form.llm.fallback.enabled,
@@ -1886,6 +1889,30 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
             onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, pickerAgent: v === 'agent' } }))}
           />
         </div>
+
+        {form.llm.pickerAgent && (
+          <div className="field mt-4">
+            <Label>Agent deadline (seconds)</Label>
+            <Input
+              type="number"
+              min={5}
+              max={180}
+              step={5}
+              value={Math.round(form.llm.agentTimeoutMs / 1000)}
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({ ...f, llm: { ...f.llm, agentTimeoutMs: Number(e.target.value) * 1000 } }))
+              }
+              placeholder="45"
+              className="max-w-[200px]"
+            />
+            <div className="field-hint">
+              How long an agent pick or listener request may run before falling
+              back to the stateless picker. Slow reasoning models often need
+              20&ndash;40s per pick; lower it for snappier fallbacks on a fast
+              model. 5&ndash;180s.
+            </div>
+          </div>
+        )}
       </Card>
 
       <Card title="Idle behaviour" sub="when no one's listening">
