@@ -1435,7 +1435,7 @@ function ManualTagEditor(props: {
         <Eyebrow>moods · up to 3</Eyebrow>
         <div className="flex flex-wrap gap-1.5">
           {vocab.length === 0 && (
-            <span className="text-[11px] italic text-muted">loading moods…</span>
+            <span className="text-[11px] text-muted italic">loading moods…</span>
           )}
           {vocab.map(m => {
             const on = sel.includes(m);
