@@ -28,6 +28,7 @@ into the query string) to a temp file, then only the first ANALYZE_SECONDS are
 decoded — enough for tempo/key and the intro estimate, a fraction of the bytes.
 """
 
+import importlib.util
 import json
 import os
 import sys
@@ -354,8 +355,18 @@ def main():
         log("ANALYZE_AUDIO_EMBEDDING on — loading CLAP model...")
         get_embedder()
 
+    # Tell the controller whether this worker can actually emit "sounds-like"
+    # audio embeddings, so the admin UI can warn *before* a fruitless run rather
+    # than after the fingerprint bar stays at 0. Capable = the CLAP libs are
+    # present (image built WITH_CLAP=1) and we haven't already hit a hard load
+    # failure. find_spec avoids importing torch when embeddings are off.
+    audio_capable = (not _embed_failed) and (
+        _embedder is not None
+        or all(importlib.util.find_spec(m) is not None for m in ("torch", "transformers"))
+    )
+
     log("ready")
-    emit({"id": None, "ready": True})
+    emit({"id": None, "ready": True, "audio_embedding_capable": audio_capable})
 
     for line in sys.stdin:
         line = line.strip()

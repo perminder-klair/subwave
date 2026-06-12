@@ -28,7 +28,9 @@ const cache: CoverageCache = { total: 0, scannedAt: null, scanning: false };
 let inflight: Promise<void> | null = null;
 
 // Last known acoustic-analysis backend state. `null` until first probed.
-let analysisAvail: { available: boolean; backend: string; checkedAt: number } | null = null;
+// `audioCapable` mirrors analyzer.audioEmbeddingAvailable() — whether the
+// backend can emit CLAP "sounds-like" embeddings (null = unknown).
+let analysisAvail: { available: boolean; backend: string; audioCapable: boolean | null; checkedAt: number } | null = null;
 let analysisProbeInflight: Promise<void> | null = null;
 
 function refreshAnalysisAvail() {
@@ -36,9 +38,15 @@ function refreshAnalysisAvail() {
   analysisProbeInflight = (async () => {
     try {
       const available = await analyzer.isAvailable();
-      analysisAvail = { available, backend: analyzer.backendLabel(), checkedAt: Date.now() };
+      await analyzer.refreshCapabilities();
+      analysisAvail = {
+        available,
+        backend: analyzer.backendLabel(),
+        audioCapable: analyzer.audioEmbeddingAvailable(),
+        checkedAt: Date.now(),
+      };
     } catch {
-      analysisAvail = { available: false, backend: 'none', checkedAt: Date.now() };
+      analysisAvail = { available: false, backend: 'none', audioCapable: null, checkedAt: Date.now() };
     } finally {
       analysisProbeInflight = null;
     }
@@ -113,5 +121,9 @@ export async function get() {
     // the UI surfaces this rather than showing a misleading 0%.
     analysisAvailable: analysisAvail ? analysisAvail.available : null,
     analysisBackend: analysisAvail ? analysisAvail.backend : null,
+    // Whether the backend can emit CLAP "sounds-like" embeddings. false here
+    // with sounds-like enabled means the sidecar was built without CLAP — the
+    // UI turns this into a "rebuild with WITH_CLAP=1" warning. null = unknown.
+    audioAnalysisAvailable: analysisAvail ? analysisAvail.audioCapable : null,
   };
 }

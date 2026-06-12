@@ -34,6 +34,10 @@ export interface Coverage {
   // null = still probing; false = no analysis backend (sidecar/librosa) running.
   analysisAvailable?: boolean | null;
   analysisBackend?: string | null;
+  // Whether the backend can emit CLAP "sounds-like" embeddings. false = engine
+  // is up but built without the CLAP stack (sidecar WITH_CLAP=0) — drives the
+  // active "rebuild with WITH_CLAP=1" warning. null = unknown / still probing.
+  audioAnalysisAvailable?: boolean | null;
 }
 
 // Mirrors controller/src/music/tagger-progress.ts — the structured sentinel
@@ -121,7 +125,7 @@ const PHASE_HINT: Record<TaggerProgress['phase'], string> = {
 
 export default function TaggingPanel(p: TaggingPanelProps) {
   const [maintOpen, setMaintOpen] = useState(false);
-  const [confirmFull, setConfirmFull] = useState(false);
+  const [confirmRescan, setConfirmRescan] = useState(false);
   const [passes, setPasses] = useState<RescanOpts>({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false });
   const logRef = useRef<HTMLPreElement>(null);
   const moodFillRef = useRef<HTMLSpanElement>(null);
@@ -142,6 +146,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
   const running = !!p.tagger?.running;
   const analysisOff = p.coverage?.analysisAvailable === false;
+  // Engine is up but built without the CLAP stack — "sounds-like" fingerprints
+  // can't be produced until the sidecar is rebuilt with WITH_CLAP=1. We warn
+  // actively rather than letting a run finish with the bar stuck at 0.
+  const audioIncapable = !analysisOff && p.coverage?.audioAnalysisAvailable === false;
   const moodCount = p.libStats ? Object.keys(p.libStats.byMood || {}).length : 0;
   const lastTag = p.libStats?.updatedAt ? new Date(p.libStats.updatedAt).toLocaleString('en-GB') : '—';
   const anySel = !!(passes.reseed || passes.reEnrich || passes.reAnalyze || passes.upgrade);
@@ -169,6 +177,19 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   }, [p.logOpen, p.tagger?.lastLog?.length]);
 
   const togglePass = (k: keyof RescanOpts) => setPasses(prev => ({ ...prev, [k]: !prev[k] }));
+  const allSelected = !!(passes.reseed && passes.reEnrich && passes.reAnalyze && passes.upgrade);
+  const toggleAll = () => {
+    const on = !allSelected;
+    setPasses({ reseed: on, reEnrich: on, reAnalyze: on, upgrade: on });
+  };
+  const clearPasses = () => setPasses({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false });
+  // Re-embedding re-spends embedding calls — guard those runs behind a confirm;
+  // the lighter passes (re-enrich / re-analyse / re-decide) run straight away.
+  const runRescan = () => {
+    if (passes.reseed) { setConfirmRescan(true); return; }
+    p.onRescan(passes);
+    clearPasses();
+  };
 
   return (
     <section className="card">
@@ -337,14 +358,16 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             <span className="caption mono-num !tracking-[0.04em]">
               {analysisOff
                 ? 'engine off'
-                : audioOn
-                  ? <>{num(audioEmbedded)} / {num(total)} · {audpct != null ? `${audpct}%` : '…'}</>
-                  : p.audioEnabled ? 'enabled — not yet analysed' : 'off'}
+                : audioIncapable
+                  ? 'engine missing CLAP'
+                  : audioOn
+                    ? <>{num(audioEmbedded)} / {num(total)} · {audpct != null ? `${audpct}%` : '…'}</>
+                    : p.audioEnabled ? 'enabled — not yet analysed' : 'off'}
             </span>
             {!analysisOff && p.audioEnabled != null && (
               <span className="flex items-center gap-2">
                 {p.audioEnabled && (
-                  <Btn sm tone="accent" onClick={p.onAnalyzeAudio} disabled={running || p.busy}>
+                  <Btn sm tone="accent" onClick={p.onAnalyzeAudio} disabled={running || p.busy || audioIncapable}>
                     <Play size={12} /> {audioOn ? 'Analyze new tracks' : 'Analyze library'}
                   </Btn>
                 )}
@@ -353,18 +376,35 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 </Btn>
               </span>
             )}
-            <span className="caption basis-full !tracking-[0.04em] !normal-case">
-              {analysisOff
-                ? 'Needs the analysis engine above.'
-                : audioOn || !p.audioEnabled
-                  ? 'Listens to each track and fingerprints how it sounds, enabling “sounds-like” picks and sonic journeys.'
-                  : 'Run the analysis to fingerprint your tracks — if the bar stays at 0 after a run, rebuild the tts-heavy sidecar with WITH_CLAP=1.'}
-            </span>
+            {audioIncapable && p.audioEnabled ? (
+              <span className="basis-full border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
+                <b>Sounds-like is on, but the analysis engine can’t fingerprint audio.</b> The
+                tts-heavy sidecar was built without the CLAP model, so a run would only fill bpm/key
+                and leave this at 0. Rebuild it with the CLAP stack, then run the analysis:
+                <code className="mt-1 block font-mono text-[10.5px] text-muted">WITH_CLAP=1 docker compose build tts-heavy &amp;&amp; docker compose --profile tts-heavy up -d tts-heavy</code>
+              </span>
+            ) : (
+              <span className="caption basis-full !tracking-[0.04em] !normal-case">
+                {analysisOff
+                  ? 'Needs the analysis engine above.'
+                  : 'Listens to each track and fingerprints how it sounds, enabling “sounds-like” picks and sonic journeys.'}
+              </span>
+            )}
           </div>
 
-          <div className="max-w-[64ch] border-t border-dashed border-separator-strong pt-3.5 text-[12px] leading-[1.55] text-muted">
-            Re-scanning rebuilds parts of the index — only needed after changing the LLM, embedding
-            model, or analysis engine. Existing mood tags are kept as seeds.
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1.5 border-t border-dashed border-separator-strong pt-3.5">
+            <span className="max-w-[64ch] text-[12px] leading-[1.55] text-muted">
+              <b className="text-ink">Re-scan</b> — only needed after changing the LLM, embedding model, or analysis
+              engine. Pick the passes to redo (tick all for a full rebuild); existing mood tags are kept as seeds.
+            </span>
+            <button
+              type="button"
+              className="shrink-0 text-[11px] font-bold text-vermilion underline-offset-2 hover:underline disabled:opacity-40"
+              disabled={p.busy || running}
+              onClick={allSelected ? clearPasses : toggleAll}
+            >
+              {allSelected ? 'Clear all' : 'Select all'}
+            </button>
           </div>
           <div className="grid gap-2.5 sm:grid-cols-2">
             <Pass on={!!passes.reseed} onClick={() => togglePass('reseed')} name="Re-embed all tracks"
@@ -372,17 +412,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             <Pass on={!!passes.reEnrich} onClick={() => togglePass('reEnrich')} name="Re-enrich metadata"
               hint="Re-fetch Last.fm tags + lyrics that feed the tagging." />
             <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics"
-              hint="Redo BPM / key detection for every track." />
+              hint="Redo BPM / key for every track — also refreshes sounds-like fingerprints when enabled." />
             <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods"
               hint="Re-tag tracks whose prompt or model is now stale." />
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <Btn sm disabled={p.busy || running} onClick={() => setConfirmFull(true)}>
-              <RefreshCw size={12} /> Full re-scan (everything)
-            </Btn>
-            <Btn sm tone="accent" disabled={!anySel || p.busy || running}
-              onClick={() => { p.onRescan(passes); setPasses({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false }); }}>
-              Run selected passes
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <Btn sm tone="accent" disabled={!anySel || p.busy || running} onClick={runRescan}>
+              <RefreshCw size={12} /> {allSelected ? 'Run full re-scan' : 'Run re-scan'}
             </Btn>
           </div>
         </div>
@@ -396,13 +432,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
       )}
 
       <V3AlertDialog
-        open={confirmFull}
-        onOpenChange={setConfirmFull}
-        title="Full library re-scan"
-        description="Rebuilds the whole library from scratch: re-embeds every track, re-fetches Last.fm tags + lyrics, and redoes acoustic (bpm/key) analysis. Existing mood tags are kept and reused as seeds — moods are not re-decided. This can take several minutes on a large library and re-spends embedding calls. To re-decide moods too, tick 'Re-decide moods' and use 'Run selected passes'."
-        confirmLabel="full re-scan"
+        open={confirmRescan}
+        onOpenChange={setConfirmRescan}
+        title="Re-embed the whole library?"
+        description="This pass drops and rebuilds every similarity vector from scratch, which re-spends embedding calls and can take several minutes on a large library. Existing mood tags are kept and reused as seeds. Only needed after changing the embedding model."
+        confirmLabel="re-scan"
         danger
-        onConfirm={() => p.onRescan({ reseed: true, reEnrich: true, reAnalyze: true })}
+        onConfirm={() => { p.onRescan(passes); clearPasses(); }}
       />
     </section>
   );

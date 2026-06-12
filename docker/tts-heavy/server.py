@@ -330,6 +330,15 @@ async def health():
             pocket_worker.ready_meta.get("voice_cloning") if pocket_worker.ready else None
         ),
         "analyze_loaded": analyzer_worker.ready,
+        # Whether the analyze worker can emit CLAP "sounds-like" audio
+        # embeddings — true only when the image was built WITH_CLAP=1 (the torch
+        # + transformers stack is present). The controller surfaces this so the
+        # admin UI warns to rebuild the sidecar *before* a fruitless run rather
+        # than after the fingerprint bar stays at 0. None until the worker is
+        # ready and has reported its capability.
+        "analyze_audio_capable": (
+            analyzer_worker.ready_meta.get("audio_embedding_capable") if analyzer_worker.ready else None
+        ),
     }
 
 
