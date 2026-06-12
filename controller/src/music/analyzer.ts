@@ -13,7 +13,6 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdirSync, createWriteStream } from 'node:fs';
-import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
@@ -160,6 +159,10 @@ async function analyzeViaLocalPath(path: string, opts: AnalyzeRequestOpts = {}):
 // Sidecar backend
 // ---------------------------------------------------------------------------
 
+// Last sidecar /health read of the CLAP capability. null = unknown (not yet
+// probed, or the field is absent on an old sidecar); true/false once known.
+let _sidecarAudioCapable: boolean | null = null;
+
 async function sidecarReachable(): Promise<boolean> {
   const url = config.ttsHeavy.url;
   if (!url) return false;
@@ -169,8 +172,12 @@ async function sidecarReachable(): Promise<boolean> {
     const res = await fetch(`${url}/health`, { signal: ac.signal });
     clearTimeout(t);
     if (!res.ok) return false;
-    const body = (await res.json()) as { ok?: boolean; engines?: string[] };
-    return !!body.ok && Array.isArray(body.engines) && body.engines.includes('analyze');
+    const body = (await res.json()) as { ok?: boolean; engines?: string[]; analyze_audio_capable?: boolean | null };
+    const reachable = !!body.ok && Array.isArray(body.engines) && body.engines.includes('analyze');
+    if (reachable) {
+      _sidecarAudioCapable = typeof body.analyze_audio_capable === 'boolean' ? body.analyze_audio_capable : null;
+    }
+    return reachable;
   } catch {
     return false;
   }
@@ -235,6 +242,23 @@ export function backendLabel(): string {
   return _backend || 'none';
 }
 
+// Whether the active backend can emit CLAP "sounds-like" audio embeddings right
+// now. null = unknown (local backend — we don't probe its venv; or sidecar not
+// yet reached); false = sidecar reachable but built without the CLAP stack
+// (WITH_CLAP=0) — the signal the admin UI turns into a "rebuild the sidecar"
+// warning. Only meaningful for the sidecar backend.
+export function audioEmbeddingAvailable(): boolean | null {
+  return _backend === 'sidecar' ? _sidecarAudioCapable : null;
+}
+
+// Re-read sidecar /health so capability reflects a sidecar rebuilt under a
+// long-lived controller (resolveBackend caches the backend *choice* forever,
+// but CLAP support flips when the operator rebuilds with WITH_CLAP=1). Cheap;
+// driven on the coverage staleness cadence.
+export async function refreshCapabilities(): Promise<void> {
+  if ((await resolveBackend()) === 'sidecar') await sidecarReachable();
+}
+
 // Analyse one track by id. Throws on failure — the caller (analyze pass) logs
 // and moves on, leaving the row NULL so it's retried on the next run. This is
 // the URL path: the backend fetches the audio itself. Kept as the fallback
@@ -266,25 +290,22 @@ export async function downloadCapped(songId: string): Promise<string> {
     if (!res.ok || !res.body) {
       throw new Error(`download ${res.status}: ${await res.text().catch(() => '')}`);
     }
-    // Stream the body to disk, aborting once we've pulled the byte cap — a few
-    // MB covers the analysis window for any common codec.
+    // Stream the body to disk, stopping once we've pulled the byte cap — a few
+    // MB covers the analysis window for any common codec. A capped async
+    // generator feeds pipeline (which handles backpressure and tears the source
+    // down when we return early). The previous approach — a `data` listener
+    // that called src.destroy() alongside pipeline — deadlocked: attaching the
+    // listener flips the web-backed Readable into flowing mode and races the
+    // pipe, so pipeline() never resolves and every download hangs.
     let read = 0;
-    const out = createWriteStream(dest);
-    const src = Readable.fromWeb(res.body as any);
-    src.on('data', (chunk: Buffer) => {
-      read += chunk.length;
-      if (read >= ANALYZE_MAX_BYTES) {
-        src.destroy();
-        ac.abort();
+    async function* capped() {
+      for await (const chunk of res.body as any) {
+        read += chunk.length;
+        yield chunk;
+        if (read >= ANALYZE_MAX_BYTES) return; // enough audio for the window
       }
-    });
-    try {
-      await pipeline(src, out);
-    } catch (err: any) {
-      // A deliberate cap-abort closes the stream mid-flight; that's not a
-      // failure as long as we wrote some bytes.
-      if (read === 0) throw err;
     }
+    await pipeline(capped(), createWriteStream(dest));
     if (read === 0) throw new Error('downloaded empty audio');
     return dest;
   } finally {
