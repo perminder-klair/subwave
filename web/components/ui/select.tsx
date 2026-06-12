@@ -64,7 +64,7 @@ const SelectContent = React.forwardRef<
     <SelectPrimitive.Content
       ref={ref}
       className={cn(
-        "relative z-50 max-h-[--radix-select-content-available-height] min-w-[8rem] origin-[--radix-select-content-transform-origin] overflow-x-hidden overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-md data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+        "relative z-50 max-h-[var(--radix-select-content-available-height)] min-w-[8rem] origin-[var(--radix-select-content-transform-origin)] overflow-x-hidden overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-md data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
         position === "popper" &&
           "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
         className
@@ -77,10 +77,14 @@ const SelectContent = React.forwardRef<
         template set `h-[var(--radix-select-trigger-height)]` here, which
         pinned the scrollable region to the trigger button's row height and
         made long lists impossible to scroll without zooming the browser
-        out (issue #213). The Content's `max-h-[--radix-select-content-
-        available-height]` + `overflow-y-auto` plus the scroll-up/down
+        out (issue #213). The Content's `max-h-[var(--radix-select-content-
+        available-height)]` + `overflow-y-auto` plus the scroll-up/down
         chevrons handle long lists correctly when the viewport is free to
-        grow.
+        grow. Keep the `var(...)` wrapper: under Tailwind v4 the bare
+        `[--radix-...]` shorthand emits invalid `max-height: --radix-...`
+        (silently dropped), so the clamp vanishes and a long list (e.g. the
+        ~400-entry timezone select) overflows off-screen with no reachable
+        scroll-up.
       */}
       <SelectPrimitive.Viewport
         className={cn("p-1", position === "popper" &&
