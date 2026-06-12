@@ -78,8 +78,8 @@ export default function CenterStage({
   return (
     <View className="flex-1 justify-center px-5">
       {coverSrc ? (
-        <View className="mb-8" style={{ alignItems: 'flex-start' }}>
-          <CoverArt uri={coverSrc} live={live} burst={burst} size={160} onPress={onOpenTimeline} />
+        <View style={{ alignItems: 'flex-start', marginBottom: 14 }}>
+          <CoverArt uri={coverSrc} live={live} burst={burst} size={120} onPress={onOpenTimeline} />
         </View>
       ) : null}
 
@@ -92,7 +92,7 @@ export default function CenterStage({
 
       {has ? (
         <>
-          <Text className="font-display text-ink" style={{ fontSize: 34, lineHeight: 38 }}>
+          <Text className="font-display text-ink" style={{ fontSize: 26, lineHeight: 30 }}>
             {nowPlaying?.title}
           </Text>
           <Text className="font-body-medium mt-3" style={{ fontSize: 15, color: colors.muted }}>
@@ -102,7 +102,7 @@ export default function CenterStage({
           </Text>
         </>
       ) : (
-        <Text className="font-display text-muted" style={{ fontSize: 32, lineHeight: 36 }}>
+        <Text className="font-display text-muted" style={{ fontSize: 26, lineHeight: 30 }}>
           scanning the dial_
         </Text>
       )}

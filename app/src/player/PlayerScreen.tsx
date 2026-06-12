@@ -4,7 +4,9 @@
 // FreqBand tuner above a horizontal pager whose five "stations" are
 // Shows / Timeline / LIVE / Booth / Request, with LIVE dead-centre as home.
 // Swipe (or tap a band stop) to tune across sections; the needle tracks the
-// scroll. Themes open in a bottom sheet from the palette icon, off-band.
+// scroll. The TransportBar is docked below the pager so the player stays
+// visible on every band stop, bottom-nav style. Themes open in a bottom sheet
+// from the palette icon, off-band.
 //
 // Render-path notes: the pager's scroll drives the FreqBand needle through a
 // native-driver Animated.Value (no per-frame React state), and the four
@@ -310,19 +312,6 @@ export default function PlayerScreen() {
                     onOpenTimeline={openTimeline}
                   />
                   <Waveform tunedIn={tunedIn} progress={progress} visible={active === HOME_INDEX} />
-                  <TransportBar
-                    tunedIn={tunedIn}
-                    status={status}
-                    onTune={tune}
-                    offline={offline}
-                    volume={volume}
-                    setVolume={setVolume}
-                    muted={muted}
-                    onToggleMute={toggleMute}
-                    latencyMs={signal.latencyMs}
-                    signalQuality={signal.quality}
-                    listeners={listenerCount}
-                  />
                 </View>
               </View>
               <View style={{ width: pagerW }}>
@@ -336,6 +325,22 @@ export default function PlayerScreen() {
             </Animated.ScrollView>
           ) : null}
         </View>
+
+        {/* Persistent transport — lives below the pager so the player stays
+            docked at the foot of every band stop, like a bottom nav. */}
+        <TransportBar
+          tunedIn={tunedIn}
+          status={status}
+          onTune={tune}
+          offline={offline}
+          volume={volume}
+          setVolume={setVolume}
+          muted={muted}
+          onToggleMute={toggleMute}
+          latencyMs={signal.latencyMs}
+          signalQuality={signal.quality}
+          listeners={listenerCount}
+        />
       </SafeAreaView>
 
       <Sheet open={themesOpen} onClose={() => setThemesOpen(false)} title="Theme">

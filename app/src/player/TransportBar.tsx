@@ -2,7 +2,7 @@
 // three-cell box — Power (hollow ring that lights accent on air), the analog
 // Signal meter (label + listener/latency read, a 26-tick scale with a vermilion
 // grip, and a 0–250 latency ruler), and Volume (rotary knob + dot-grille mute).
-// Sits at the foot of the LIVE page in the FM-dial pager.
+// Docked below the FM-dial pager, so it stays at the foot of every band stop.
 
 import * as Haptics from 'expo-haptics';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
