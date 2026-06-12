@@ -217,6 +217,34 @@ export function activeOllamaUrl() {
   return ollamaBaseUrl(llmCfg());
 }
 
+// Cheap liveness check for a leg's host, used by the dual-LLM tagger to decide
+// whether to spin up a second consumer before committing a long run to it
+// (discussion #320). A self-hosted box that's switched off should fail fast here
+// rather than after a batch of connect timeouts. Any HTTP answer — even 401/404
+// — means the host is up; only a connection/DNS/timeout failure is "down". Cloud
+// providers can't be cheaply probed and are assumed reachable; an outage there
+// surfaces mid-run and the consumer is dropped then.
+export async function probeLegReachable(leg: Leg, timeoutMs = 3000): Promise<boolean> {
+  const cfg = leg?.cfg;
+  if (!cfg) return false;
+  let url: string;
+  if (cfg.provider === 'ollama') {
+    url = `${ollamaBaseUrl(cfg).replace(/\/$/, '')}/api/version`;
+  } else if (cfg.provider === 'openai-compatible') {
+    if (!cfg.baseUrl) return false;
+    url = `${cfg.baseUrl.replace(/\/$/, '')}/models`;
+  } else {
+    // Hosted provider — no cheap local probe; assume up.
+    return true;
+  }
+  try {
+    await fetch(url, { method: 'GET', signal: AbortSignal.timeout(timeoutMs) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Embedding models
 // ---------------------------------------------------------------------------

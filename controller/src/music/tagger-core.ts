@@ -90,7 +90,14 @@ function formatSong(song: TaggableSong): string {
   );
 }
 
-export async function tagOne(song: TaggableSong): Promise<TagResult> {
+// `leg` pins the call to a specific LLM leg ('primary' | 'fallback') with no
+// cross-leg failover — the dual-LLM tagger runs one consumer per leg and manages
+// failover itself (discussion #320). Omitted → normal primary→fallback path.
+export interface TagOpts {
+  leg?: 'primary' | 'fallback';
+}
+
+export async function tagOne(song: TaggableSong, opts: TagOpts = {}): Promise<TagResult> {
   const userPrompt =
     `Title: ${song.title}\n` +
     `Artist: ${song.artist || '?'}\n` +
@@ -104,11 +111,12 @@ export async function tagOne(song: TaggableSong): Promise<TagResult> {
     schema: TagSchema,
     temperature: 0.2,
     kind: 'tag-library',
+    leg: opts.leg,
   });
   return sanitizeTag(parsed);
 }
 
-export async function tagBatch(songs: TaggableSong[]): Promise<TagResult[]> {
+export async function tagBatch(songs: TaggableSong[], opts: TagOpts = {}): Promise<TagResult[]> {
   if (songs.length === 0) return [];
   const lines = songs.map((s, i) => `${i + 1}. ${formatSong(s)}`).join('\n');
   const userPrompt =
@@ -120,6 +128,7 @@ export async function tagBatch(songs: TaggableSong[]): Promise<TagResult[]> {
     schema: BatchTagSchema,
     temperature: 0.2,
     kind: 'tag-library-batch',
+    leg: opts.leg,
   });
   const results = Array.isArray(parsed.results) ? parsed.results : [];
   if (results.length !== songs.length) {
