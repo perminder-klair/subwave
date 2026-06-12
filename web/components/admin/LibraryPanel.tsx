@@ -19,13 +19,11 @@
 // so the page renders correctly under every palette — no hardcoded hex.
 
 import type { ChangeEvent, FormEvent, ReactNode } from 'react';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Search, RotateCcw, Sparkles, Activity, Play, Square, ChevronDown, ChevronRight,
-  Terminal, RefreshCw, ListPlus, X, Pencil,
+  Search, RotateCcw, Sparkles, RefreshCw, ListPlus, X, Pencil,
 } from 'lucide-react';
 import { useAdminAuth, ADMIN_API_URL } from '../../lib/adminAuth';
-import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../lib/notify';
 import { Input } from '../ui/input';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '../ui/input-group';
@@ -34,8 +32,9 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '../ui/select';
 import { Card, Btn, Eyebrow, Pill, Seg } from './ui';
-import { V3AlertDialog } from '../ui/alert-dialog';
 import { cn } from '../../lib/cn';
+import TaggingPanel, { num } from './LibraryTaggingPanel';
+import type { Coverage, TaggerState, LibraryStatsLite, Batch, RescanOpts } from './LibraryTaggingPanel';
 
 // ---------------------------------------------------------------------------
 // types
@@ -69,44 +68,8 @@ interface BrowseResponse {
 
 interface UntaggedResponse { rows: Track[]; nextCursor: string | null }
 
-interface Coverage {
-  tagged: number;
-  analysed: number;
-  // Tracks with a CLAP audio (sounds-like) embedding. Same analysis backend,
-  // gated on ANALYZE_AUDIO_EMBEDDING — 0 when that's off even if bpm/key runs.
-  audioEmbedded?: number;
-  total: number | null;
-  percent: number | null;
-  analysedPercent: number | null;
-  audioEmbeddedPercent?: number | null;
-  scannedAt: string | null;
-  scanning: boolean;
-  // null = still probing; false = no analysis backend (sidecar/librosa) running.
-  analysisAvailable?: boolean | null;
-  analysisBackend?: string | null;
-}
-
-interface TaggerState {
-  running?: boolean;
-  pid?: number;
-  startedAt?: string;
-  lastLog?: string[];
-  // 'tag' (tag-library) or 'analyze' (the acoustic/audio-embedding pass) —
-  // both run through the same single-flight child slot.
-  mode?: 'tag' | 'analyze' | null;
-}
-
-// libraryStats rides along on /settings — gives moods-in-use, last-tag time,
-// and withEmbedding (used to nudge a re-embed after a model swap) without an
-// extra request and regardless of which tab is active.
-interface LibraryStatsLite {
-  total: number;
-  byMood: Record<string, number>;
-  byEnergy: Record<string, number>;
-  byGenre: Record<string, number>;
-  withEmbedding: number;
-  updatedAt: string | null;
-}
+// Coverage / TaggerState / LibraryStatsLite / Batch / RescanOpts live in
+// LibraryTaggingPanel.tsx alongside the panel that renders them.
 
 interface SettingsResponse {
   tagger?: TaggerState;
@@ -118,14 +81,6 @@ interface SettingsResponse {
 type Tab = 'recent' | 'browse' | 'search' | 'untagged';
 type Sort = 'artist' | 'title' | 'year' | 'taggedAt';
 type Energy = 'any' | 'low' | 'medium' | 'high';
-type Batch = '100' | '500' | 'all';
-
-type RescanOpts = {
-  reseed?: boolean;
-  reEnrich?: boolean;
-  reAnalyze?: boolean;
-  upgrade?: boolean;
-};
 
 const PAGE_SIZE = 50;
 
@@ -163,10 +118,6 @@ function Thumb({ track }: { track: Track }) {
   );
 }
 
-function num(n: number | null | undefined): string {
-  return n != null ? n.toLocaleString('en-GB') : '—';
-}
-
 // ---------------------------------------------------------------------------
 // panel
 // ---------------------------------------------------------------------------
@@ -193,10 +144,6 @@ export default function LibraryPanel() {
   // Mood vocab, lifted out of the browse response so the editor has it on any
   // tab (browse is the only call that returns it; lazily fetched otherwise).
   const [vocab, setVocab] = useState<string[]>([]);
-
-  // live-run progress baseline (best-effort: coverage delta vs. a captured
-  // target — the backend has no per-run counter). Set when WE start a run.
-  const [runInfo, setRunInfo] = useState<{ baseline: number; target: number | null } | null>(null);
 
   // browse state
   const [moods, setMoods] = useState<string[]>([]);
@@ -272,11 +219,6 @@ export default function LibraryPanel() {
     const id = setInterval(loadCoverage, 3_000);
     return () => clearInterval(id);
   }, [ready, tagger?.running, loadCoverage]);
-
-  // Clear the run baseline once the tagger stops.
-  useEffect(() => {
-    if (!tagger?.running) setRunInfo(null);
-  }, [tagger?.running]);
 
   // -----------------------------------------------------------------------
   // browse fetch — debounced on filter change
@@ -533,7 +475,6 @@ export default function LibraryPanel() {
     setTaggerBusy(true);
     try {
       const limit = batch === 'all' ? null : parseInt(batch, 10);
-      const target = batch === 'all' ? remaining : limit;
       const r = await adminFetch('/tag-library', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -543,7 +484,6 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `tagger start failed (${r.status})`);
       notify.ok('tagger started');
       setLogOpen(true);
-      setRunInfo({ baseline: coverage?.tagged ?? 0, target: target ?? null });
       await loadTagger();
     } catch (err) {
       notify.err(errorMessage(err));
@@ -679,7 +619,6 @@ export default function LibraryPanel() {
         coverage={coverage}
         libStats={libStats}
         tagger={tagger}
-        runInfo={runInfo}
         batch={batch}
         setBatch={setBatch}
         busy={taggerBusy}
@@ -826,306 +765,6 @@ export default function LibraryPanel() {
         </div>
       )}
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// tagging panel — merged coverage + tagger, framed for humans
-// ---------------------------------------------------------------------------
-interface TaggingPanelProps {
-  coverage: Coverage | null;
-  libStats: LibraryStatsLite | null;
-  tagger: TaggerState | null;
-  runInfo: { baseline: number; target: number | null } | null;
-  batch: Batch;
-  setBatch: (b: Batch) => void;
-  busy: boolean;
-  logOpen: boolean;
-  setLogOpen: (fn: (o: boolean) => boolean) => void;
-  onStart: () => void;
-  onStop: () => void;
-  onRescan: (opts: RescanOpts) => void;
-  // sounds-like (CLAP) controls — null until the first settings poll lands.
-  audioEnabled: boolean | null;
-  onToggleAudio: () => void;
-  onAnalyzeAudio: () => void;
-}
-
-function TaggingPanel(p: TaggingPanelProps) {
-  const [maintOpen, setMaintOpen] = useState(false);
-  const [confirmFull, setConfirmFull] = useState(false);
-  const [passes, setPasses] = useState<RescanOpts>({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false });
-  const logRef = useRef<HTMLPreElement>(null);
-  const moodFillRef = useRef<HTMLSpanElement>(null);
-  const acousticFillRef = useRef<HTMLSpanElement>(null);
-  const audioFillRef = useRef<HTMLSpanElement>(null);
-  const runFillRef = useRef<HTMLSpanElement>(null);
-
-  const tagged = p.coverage?.tagged ?? p.libStats?.total ?? null;
-  const total = p.coverage?.total ?? null;
-  const analysed = p.coverage?.analysed ?? null;
-  const audioEmbedded = p.coverage?.audioEmbedded ?? null;
-  const pct = p.coverage?.percent ?? null;
-  const apct = p.coverage?.analysedPercent ?? null;
-  const audpct = p.coverage?.audioEmbeddedPercent ?? null;
-  // Audio embeddings only exist once at least one is written; until then the
-  // row reads "not enabled" rather than a misleading 0% (CLAP is opt-in).
-  const audioOn = (audioEmbedded ?? 0) > 0;
-  const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
-  const running = !!p.tagger?.running;
-  const analysisOff = p.coverage?.analysisAvailable === false;
-  const moodCount = p.libStats ? Object.keys(p.libStats.byMood || {}).length : 0;
-  const lastTag = p.libStats?.updatedAt ? new Date(p.libStats.updatedAt).toLocaleString('en-GB') : '—';
-  const anySel = !!(passes.reseed || passes.reEnrich || passes.reAnalyze || passes.upgrade);
-
-  // Embeddings present but no vectors → likely a model swap dropped them.
-  const embeddingMissing = (tagged ?? 0) > 0 && p.libStats != null && p.libStats.withEmbedding === 0;
-
-  // live-run progress (best-effort: coverage delta vs. captured target)
-  const processed = p.runInfo && tagged != null ? Math.max(0, tagged - p.runInfo.baseline) : null;
-  const runPct = p.runInfo?.target && processed != null
-    ? Math.min(100, Math.round((processed / p.runInfo.target) * 100)) : null;
-
-  useDynamicStyle(moodFillRef, { width: pct != null ? `${Math.min(100, pct)}%` : '0%' });
-  useDynamicStyle(acousticFillRef, { width: !analysisOff && apct != null ? `${Math.min(100, apct)}%` : '0%' });
-  useDynamicStyle(audioFillRef, { width: audioOn && audpct != null ? `${Math.min(100, audpct)}%` : '0%' });
-  useDynamicStyle(runFillRef, { width: runPct != null ? `${runPct}%` : null });
-
-  useEffect(() => {
-    if (p.logOpen && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [p.logOpen, p.tagger?.lastLog?.length]);
-
-  const togglePass = (k: keyof RescanOpts) => setPasses(prev => ({ ...prev, [k]: !prev[k] }));
-
-  return (
-    <section className="card">
-      {/* headline */}
-      <div className="border-b border-ink p-6">
-        <Eyebrow className="text-vermilion">library · tagging</Eyebrow>
-        <h1 className="lib-hero-title">
-          {pct != null
-            ? <>Your DJ knows <span className="pct mono-num">{pct}%</span> of your library.</>
-            : <>Manage the music your station plays.</>}
-        </h1>
-        <p className="lib-hero-sub">
-          To pick the right track for any moment, the DJ reads the <b>mood</b> and <b>energy</b> of
-          every song. New tracks need tagging before they can go on air — that&rsquo;s what this does.
-        </p>
-      </div>
-
-      {/* coverage — mood primary, acoustic optional */}
-      <div className="border-b border-ink">
-        <div className="p-6">
-          <div className="flex flex-wrap items-baseline justify-between gap-3">
-            <span className="flex items-center gap-2 text-[11px] font-bold tracking-[0.16em] text-ink uppercase">
-              <Sparkles size={14} /> Mood &amp; energy tagged
-            </span>
-            <span className="mono-num text-[13px] font-bold">{pct != null ? `${pct}%` : '—'}</span>
-          </div>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className="lib-cov-big mono-num">{num(tagged)}</span>
-            <span className="text-[13px] text-muted">/ {total != null ? num(total) : (p.coverage?.scanning ? 'scanning…' : '—')} tracks</span>
-          </div>
-          <div className="lib-bar mt-3"><span ref={moodFillRef} /></div>
-          <div className="mt-2.5 text-[11px] text-muted">
-            {remaining != null && remaining > 0
-              ? <><b className="mono-num text-ink">{num(remaining)}</b> tracks still need tags · <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}</>
-              : <>{remaining === 0 ? 'Every track is tagged' : 'Coverage updating…'} · <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}</>}
-          </div>
-          {embeddingMissing && (
-            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] text-ink">
-              <span><b>Embeddings missing.</b> Your embedding model may have changed — re-embed to restore similarity-based picks.</span>
-              <button
-                type="button"
-                className="font-bold text-vermilion underline-offset-2 hover:underline"
-                onClick={() => { setMaintOpen(true); setPasses(s => ({ ...s, reseed: true })); }}
-              >
-                Set up a re-embed →
-              </button>
-            </div>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong px-6 py-3.5">
-          <span className="caption flex items-center gap-2">
-            <Activity size={13} /> Acoustic analysis · bpm / key
-          </span>
-          <span className="lib-opt-tag">optional</span>
-          <span className="lib-minibar"><span ref={acousticFillRef} /></span>
-          <span className="caption mono-num !tracking-[0.04em]">
-            {analysisOff ? 'engine off' : <>{num(analysed)} / {num(total)} · {apct != null ? `${apct}%` : '…'}</>}
-          </span>
-          <span className="caption basis-full !tracking-[0.04em] !normal-case">
-            {analysisOff
-              ? 'No analysis engine running. Start the tts-heavy sidecar (docker compose --profile tts-heavy up -d) or configure a local librosa venv to enable it.'
-              : 'Improves beat-matching between tracks. Tagging works fine without it.'}
-          </span>
-        </div>
-        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong px-6 py-3.5">
-          <span className="caption flex items-center gap-2">
-            <Activity size={13} /> Audio fingerprint · sounds-like
-          </span>
-          <span className="lib-opt-tag">optional</span>
-          <span className="lib-minibar"><span ref={audioFillRef} /></span>
-          <span className="caption mono-num !tracking-[0.04em]">
-            {analysisOff
-              ? 'engine off'
-              : audioOn
-                ? <>{num(audioEmbedded)} / {num(total)} · {audpct != null ? `${audpct}%` : '…'}</>
-                : p.audioEnabled ? 'enabled — not yet analysed' : 'off'}
-          </span>
-          {!analysisOff && p.audioEnabled != null && (
-            <span className="flex items-center gap-2">
-              {p.audioEnabled && (
-                <Btn sm tone="accent" onClick={p.onAnalyzeAudio} disabled={running || p.busy}>
-                  <Play size={12} /> {audioOn ? 'Analyze new tracks' : 'Analyze library'}
-                </Btn>
-              )}
-              <Btn sm onClick={p.onToggleAudio} disabled={running || p.busy}>
-                {p.audioEnabled ? 'Disable' : 'Enable'}
-              </Btn>
-            </span>
-          )}
-          <span className="caption basis-full !tracking-[0.04em] !normal-case">
-            {analysisOff
-              ? 'Needs the analysis engine above.'
-              : audioOn
-                ? 'CLAP audio embeddings power “sounds-like” picks and sonic journeys — they catch sonic neighbours that metadata misses.'
-                : p.audioEnabled
-                  ? 'Run the analysis to fingerprint your tracks. The engine needs the CLAP model — if the bar stays at 0 after a run, rebuild the tts-heavy sidecar with WITH_CLAP=1.'
-                  : 'Listens to each track and fingerprints how it actually sounds, enabling “sounds-like” picks and sonic journeys. Adds a one-off analysis pass over your library.'}
-          </span>
-        </div>
-      </div>
-
-      {/* action zone — idle vs running */}
-      {!running ? (
-        <div className="flex flex-wrap items-center gap-4 p-6">
-          <div className="min-w-[220px] flex-1 text-[13px]">
-            {remaining != null && remaining > 0
-              ? <><b>{num(remaining)}</b> tracks are waiting. Tag them and they become DJ-ready.</>
-              : remaining === 0
-                ? <>Library fully tagged. Run a re-scan below if you&rsquo;ve changed the model.</>
-                : <>Start tagging new tracks so the DJ can play them.</>}
-          </div>
-          <div className="flex flex-wrap items-center gap-2.5">
-            <div className="lib-batch">
-              <label htmlFor="lib-batch">Tag</label>
-              <select id="lib-batch" value={p.batch} onChange={e => p.setBatch(e.target.value as Batch)}>
-                <option value="100">next 100</option>
-                <option value="500">next 500</option>
-                <option value="all">all{remaining != null ? ` ${num(remaining)}` : ''} remaining</option>
-              </select>
-            </div>
-            <Btn lg tone="accent" onClick={p.onStart} disabled={p.busy || remaining === 0}>
-              <Play size={13} /> Start tagging
-            </Btn>
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-3 p-6">
-          <div className="flex flex-wrap items-center justify-between gap-3.5">
-            <span className="flex items-center gap-2.5 text-[13px] font-bold">
-              <span className="lib-livedot" /> {p.tagger?.mode === 'analyze' ? 'Audio analysis in progress…' : 'Tagging in progress…'}
-            </span>
-            <span className="caption mono-num !tracking-[0.04em]">
-              {processed != null && <>{num(processed)}{p.runInfo?.target ? ` / ${num(p.runInfo.target)}` : ''} this run · </>}
-              {p.tagger?.pid ? `pid ${p.tagger.pid}` : ''}
-              {p.tagger?.startedAt ? ` · started ${new Date(p.tagger.startedAt).toLocaleTimeString('en-GB')}` : ''}
-            </span>
-            <Btn sm tone="danger" onClick={p.onStop} disabled={p.busy}><Square size={11} /> Stop</Btn>
-          </div>
-          {runPct != null && (
-            <div className="lib-bar !h-1.5"><span ref={runFillRef} /></div>
-          )}
-          <div className="caption !tracking-[0.04em] !normal-case">
-            {p.tagger?.mode === 'analyze'
-              ? <>The analysis engine is listening to each track — measuring tempo and key, and fingerprinting how it sounds. You can keep browsing — this runs in the background.</>
-              : <>The DJ is listening to each new track and deciding its mood &amp; energy. You can keep browsing — this runs in the background.</>}
-          </div>
-        </div>
-      )}
-
-      {/* footer — progressive disclosure */}
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-dashed border-separator-strong px-6 py-3">
-        <button
-          type="button"
-          className={cn('inline-flex items-center gap-1.5 text-[11px] font-bold', maintOpen ? 'text-ink' : 'text-muted hover:text-ink')}
-          onClick={() => setMaintOpen(o => !o)}
-        >
-          {maintOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Maintenance &amp; re-scan
-        </button>
-        <button
-          type="button"
-          className={cn('inline-flex items-center gap-1.5 text-[11px] font-bold', p.logOpen ? 'text-ink' : 'text-muted hover:text-ink')}
-          onClick={() => p.setLogOpen(o => !o)}
-        >
-          <Terminal size={13} /> {p.logOpen ? 'Hide log' : 'View log'}
-        </button>
-      </div>
-
-      {/* maintenance disclosure */}
-      {maintOpen && (
-        <div className="flex flex-col gap-3.5 border-t border-ink bg-[var(--ink-soft)] p-6">
-          <div className="max-w-[64ch] text-[12px] leading-[1.55] text-muted">
-            Re-scanning rebuilds parts of the index from scratch — only needed after you change the
-            LLM, embedding model, or analysis engine. Your existing mood tags are kept as seeds.
-            Pick what to re-run:
-          </div>
-          <div className="grid gap-2.5 sm:grid-cols-2">
-            <Pass on={!!passes.reseed} onClick={() => togglePass('reseed')} name="Re-embed all tracks"
-              hint="Drop & rebuild every vector. Run after changing the embedding model." />
-            <Pass on={!!passes.reEnrich} onClick={() => togglePass('reEnrich')} name="Re-enrich metadata"
-              hint="Re-fetch Last.fm tags + lyrics that feed the tagging." />
-            <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics"
-              hint="Redo BPM / key detection for every track." />
-            <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods"
-              hint="Re-tag tracks whose prompt or model is now stale." />
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <Btn sm disabled={p.busy || running} onClick={() => setConfirmFull(true)}>
-              <RefreshCw size={12} /> Full re-scan (everything)
-            </Btn>
-            <Btn sm tone="accent" disabled={!anySel || p.busy || running}
-              onClick={() => { p.onRescan(passes); setPasses({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false }); }}>
-              Run selected passes
-            </Btn>
-          </div>
-        </div>
-      )}
-
-      {/* log drawer — reuses the theme-aware .term surface */}
-      {p.logOpen && (
-        <pre ref={logRef} className="term m-0 max-h-56 overflow-y-auto !border-t !border-l-0 border-separator-strong">
-          {(p.tagger?.lastLog || []).join('\n') || '(no log output yet — start a tagging run to see the booth think)'}
-        </pre>
-      )}
-
-      <V3AlertDialog
-        open={confirmFull}
-        onOpenChange={setConfirmFull}
-        title="Full library re-scan"
-        description="Rebuilds the whole library from scratch: re-embeds every track, re-fetches Last.fm tags + lyrics, and redoes acoustic (bpm/key) analysis. Existing mood tags are kept and reused as seeds — moods are not re-decided. This can take several minutes on a large library and re-spends embedding calls. To re-decide moods too, tick 'Re-decide moods' and use 'Run selected passes'."
-        confirmLabel="full re-scan"
-        danger
-        onConfirm={() => p.onRescan({ reseed: true, reEnrich: true, reAnalyze: true })}
-      />
-    </section>
-  );
-}
-
-function Pass({ on, onClick, name, hint }: { on: boolean; onClick: () => void; name: string; hint: string }) {
-  return (
-    <button type="button" className={cn('lib-pass', on && 'on')} onClick={onClick}>
-      <span className="box">
-        <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-          <path d="M2.5 6.2L4.8 8.5L9.5 3.5" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </span>
-      <span>
-        <span className="lib-pass-name">{name}</span>
-        <span className="lib-pass-hint">{hint}</span>
-      </span>
-    </button>
   );
 }
 

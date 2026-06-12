@@ -31,6 +31,7 @@ import { loadSecretsIntoEnv } from '../setup/secrets.js';
 import { loadSetupConfig } from '../setup/config.js';
 import { runAnalysisPass } from './analyze.js';
 import * as analyzer from './analyzer.js';
+import { reportProgress } from './tagger-progress.js';
 
 function parseIntFlag(args: string[], name: string): number | undefined {
   const idx = args.indexOf(name);
@@ -93,6 +94,7 @@ async function main() {
   }
 
   if (shouldWalk) {
+    reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
     let walked = 0;
     const liveIds = new Set<string>();
     for await (const song of subsonic.iterateAllSongs()) {
@@ -106,7 +108,10 @@ async function main() {
       });
       liveIds.add(song.id);
       walked += 1;
-      if (walked % 500 === 0) console.log(`[analyze] walked ${walked} tracks`);
+      if (walked % 500 === 0) {
+        console.log(`[analyze] walked ${walked} tracks`);
+        reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: walked });
+      }
     }
     console.log(`[analyze] walked ${walked} total tracks`);
 

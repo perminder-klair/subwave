@@ -2903,6 +2903,12 @@ body::after {
     background: var(--accent);
     transition: width 0.5s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
+/* indeterminate run progress (e.g. library walk — no total known yet) */
+.admin-root .lib-bar.indet > span {
+    width: 30% !important;
+    animation: lib-bar-slide 1.4s ease-in-out infinite alternate;
+}
+@keyframes lib-bar-slide { 0% { margin-left: 0; } 100% { margin-left: 70%; } }
 .admin-root .lib-minibar {
     flex: 1; min-width: 120px; height: 5px;
     background: var(--field);
@@ -3058,6 +3064,7 @@ body::after {
 }
 @media (prefers-reduced-motion: reduce) {
     .admin-root .lib-livedot::after,
+    .admin-root .lib-bar.indet > span,
     .admin-root .lib-row.flash { animation: none; }
 }
 

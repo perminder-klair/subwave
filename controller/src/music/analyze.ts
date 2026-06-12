@@ -14,6 +14,7 @@ import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
 import * as settings from '../settings.js';
 import { config } from '../config.js';
+import { reportProgress } from './tagger-progress.js';
 
 export interface AnalyzeOptions {
   limit?: number;        // cap tracks this run (default: all that need it)
@@ -90,6 +91,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     return { available: true, backend, analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0 };
   }
   console.log(`[analyze] ${ids.length} tracks to analyse`);
+  reportProgress({ phase: 'analyze', label: 'Analysing audio', done: 0, total: ids.length });
 
   let analyzed = 0;
   let failed = 0;
@@ -164,6 +166,13 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     }
     if ((i + 1) % 25 === 0 || i + 1 === ids.length) {
       console.log(`[analyze] ${i + 1}/${ids.length} (ok=${analyzed} fail=${failed})`);
+      reportProgress({
+        phase: 'analyze',
+        label: 'Analysing audio',
+        done: i + 1,
+        total: ids.length,
+        errors: failed || undefined,
+      });
     }
   }
 

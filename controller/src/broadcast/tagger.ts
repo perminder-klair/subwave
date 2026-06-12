@@ -4,6 +4,7 @@
 // (/tag-library) and the ones that report on it (/settings).
 import { spawn, ChildProcess } from 'node:child_process';
 import { queue } from './queue.js';
+import { PROGRESS_PREFIX, type TaggerProgress } from '../music/tagger-progress.js';
 
 type TaggerState = {
   running: boolean;
@@ -14,9 +15,16 @@ type TaggerState = {
   // acoustic/audio-embedding pass via analyze-library). Single-flight across
   // both — they contend on the same library DB and analysis backend.
   mode: 'tag' | 'analyze' | null;
+  // Latest structured progress sentinel from the child ([progress] lines on
+  // stdout — see music/tagger-progress.ts). Left in place after exit so the
+  // last payload doubles as a what-just-finished summary; the UI gates its
+  // display on `running`.
+  progress: TaggerProgress | null;
 };
 
-export const tagger: TaggerState = { running: false, startedAt: null, pid: null, lastLog: [], mode: null };
+export const tagger: TaggerState = {
+  running: false, startedAt: null, pid: null, lastLog: [], mode: null, progress: null,
+};
 
 // Live handle for stopTagger() — cleared on the exit handler.
 let activeChild: ChildProcess | null = null;
@@ -87,14 +95,33 @@ function spawnChild(mode: 'tag' | 'analyze', args: string[], detail: string) {
   tagger.pid = child.pid ?? null;
   tagger.lastLog = [];
   tagger.mode = mode;
+  tagger.progress = null;
 
-  const capture = (chunk: Buffer) => {
-    const lines = chunk.toString().split('\n').filter((l: string) => l.trim());
-    tagger.lastLog.push(...lines);
-    if (tagger.lastLog.length > 100) tagger.lastLog = tagger.lastLog.slice(-100);
+  // Per-stream line buffering: a `data` chunk can end mid-line, so each stream
+  // keeps its own remainder. [progress] sentinel lines are parsed into
+  // tagger.progress and kept out of lastLog.
+  const makeCapture = () => {
+    let remainder = '';
+    return (chunk: Buffer) => {
+      remainder += chunk.toString();
+      const lines = remainder.split('\n');
+      remainder = lines.pop() ?? '';
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line) continue;
+        if (line.startsWith(PROGRESS_PREFIX)) {
+          try {
+            tagger.progress = JSON.parse(line.slice(PROGRESS_PREFIX.length)) as TaggerProgress;
+          } catch { /* malformed sentinel — drop */ }
+          continue;
+        }
+        tagger.lastLog.push(line);
+      }
+      if (tagger.lastLog.length > 100) tagger.lastLog = tagger.lastLog.slice(-100);
+    };
   };
-  child.stdout.on('data', capture);
-  child.stderr.on('data', capture);
+  child.stdout.on('data', makeCapture());
+  child.stderr.on('data', makeCapture());
   child.on('exit', (code, signal) => {
     tagger.running = false;
     if (activeChild === child) activeChild = null;

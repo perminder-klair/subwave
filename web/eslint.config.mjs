@@ -129,6 +129,7 @@ export default defineConfig([
             '^on$',
             '^box$',
             '^flash$',
+            '^indet$',
             '^pct$',
             '^h-tags$',
             '^h-album$',

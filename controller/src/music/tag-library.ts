@@ -35,6 +35,7 @@ import { activeModelLabel, primaryLeg, fallbackLeg, probeLegReachable } from '..
 import { isUnreachable } from '../llm/sdk.js';
 import { tagBatch, tagOne, TAGGER_BATCH_SYSTEM, type TagResult } from './tagger-core.js';
 import { runAnalysisPass } from './analyze.js';
+import { reportProgress } from './tagger-progress.js';
 
 // ---------------------------------------------------------------------------
 // CLI arg parsing
@@ -188,6 +189,7 @@ async function main() {
   // Cheap; ensures every Navidrome song is in the tracks table so subsequent
   // phases can operate purely off SQL.
   console.log('[tag] walking Navidrome library...');
+  reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
   let walked = 0;
   const liveIds = new Set<string>();
   for await (const song of subsonic.iterateAllSongs()) {
@@ -201,7 +203,10 @@ async function main() {
     });
     liveIds.add(song.id);
     walked += 1;
-    if (walked % 500 === 0) console.log(`[tag] walked ${walked} tracks`);
+    if (walked % 500 === 0) {
+      console.log(`[tag] walked ${walked} tracks`);
+      reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: walked });
+    }
   }
   console.log(`[tag] walked ${walked} total tracks`);
 
@@ -277,7 +282,9 @@ async function main() {
   let llmCalls = 0;
   let llmTagged = 0;
   if (seedSelection.seeds.length > 0) {
-    const tagged = await llmTagInBatches(seedSelection.seeds, flags.batchSize, promptHash, 'llm', tagConsumers);
+    const tagged = await llmTagInBatches(
+      seedSelection.seeds, flags.batchSize, promptHash, 'llm', tagConsumers, { phase: 'seed' },
+    );
     llmCalls += tagged.callCount;
     llmTagged += tagged.tagged;
     mergeByLeg(tagged.byLeg);
@@ -297,8 +304,16 @@ async function main() {
   // settings.embedding above.
   let propagated = 0;
   let uncertain: string[] = [];
+  let scanned = 0;
 
+  reportProgress({ phase: 'propagate', label: 'Propagating tags to neighbours', done: 0, total: targetUntagged.length });
   for (const id of targetUntagged) {
+    scanned += 1;
+    // The loop is synchronous — emit sparsely so a 30k-track scan doesn't
+    // spam stdout.
+    if (scanned % 500 === 0) {
+      reportProgress({ phase: 'propagate', label: 'Propagating tags to neighbours', done: scanned, total: targetUntagged.length });
+    }
     if (db.hasTags(id)) continue;        // already seeded
     if (!db.hasVector(id)) continue;     // no embedding → can't propagate
     const neighbours = db.knnById(id, knnK);
@@ -330,6 +345,7 @@ async function main() {
     }
   }
   console.log(`[tag] phase-3 propagated ${propagated} tracks; ${uncertain.length} uncertain (in scope)`);
+  reportProgress({ phase: 'propagate', label: 'Propagating tags to neighbours', done: targetUntagged.length, total: targetUntagged.length });
 
   // ---- Phase 4: ACTIVE-LEARN --------------------------------------------
   for (let round = 1; round <= maxRounds; round++) {
@@ -341,6 +357,7 @@ async function main() {
       promptHash,
       'uncertain-llm',
       tagConsumers,
+      { phase: 'learn', round },
     );
     llmCalls += tagged.callCount;
     llmTagged += tagged.tagged;
@@ -420,6 +437,12 @@ function finish(startedAt: number, llmCalls: number, llmTagged: number, byLeg: R
   console.log(
     `\n[tag] done in ${elapsed.toFixed(0)}s. llm_calls=${llmCalls} llm_tagged=${llmTagged}`,
   );
+  reportProgress({
+    phase: 'done',
+    label: 'Finished',
+    done: llmTagged,
+    llm: Object.keys(byLeg).length ? { legs: byLeg } : undefined,
+  });
   const legs = Object.entries(byLeg);
   if (legs.length > 1) {
     console.log(`[tag] per-leg: ${legs.map(([m, n]) => `${m}=${n}`).join(' · ')}`);
@@ -440,6 +463,7 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
     console.log('[tag] phase-0 skipped: both lastfmTags and lyrics disabled in settings.embedding.enrichment');
     return;
   }
+  reportProgress({ phase: 'enrich', label: 'Enriching metadata', done: 0, total: ids.length });
   const artistTagCache = new Map<string, string[]>();
   let enrichedTracks = 0;
   let enrichedLyrics = 0;
@@ -489,6 +513,7 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
       console.log(
         `[tag] enriched ${enrichedTracks}/${ids.length} (lastfm: ${enrichedTags}, lyrics: ${enrichedLyrics})`,
       );
+      reportProgress({ phase: 'enrich', label: 'Enriching metadata', done: enrichedTracks, total: ids.length });
     }
   }
   console.log(
@@ -519,6 +544,7 @@ async function phaseEmbed(targetIds: string[], batchSize: number): Promise<void>
     return;
   }
   console.log(`[tag] phase-1 embedding ${unique.length} tracks (batch=${batchSize})`);
+  reportProgress({ phase: 'embed', label: 'Embedding tracks', done: 0, total: unique.length });
 
   const embedBatchSize = Math.max(8, Math.min(64, batchSize * 2));
   for (let i = 0; i < unique.length; i += embedBatchSize) {
@@ -542,6 +568,7 @@ async function phaseEmbed(targetIds: string[], batchSize: number): Promise<void>
     }
     if ((i + batch.length) % 500 === 0 || i + batch.length === unique.length) {
       console.log(`[tag] embedded ${i + batch.length}/${unique.length}`);
+      reportProgress({ phase: 'embed', label: 'Embedding tracks', done: i + batch.length, total: unique.length });
     }
   }
 }
@@ -563,7 +590,17 @@ interface TagState {
   tagged: number;
   callCount: number;
   processed: number;
+  // Tracks that came back null from the LLM (batch entry dropped / per-track
+  // salvage failed) — surfaced in the progress channel.
+  errors: number;
   byLeg: Record<string, number>;
+}
+
+// Which pipeline phase a runConsumer() call is tagging for — only used to
+// stamp the progress channel ('seed' = phase 2, 'learn' = phase 4 rounds).
+interface TagPhaseInfo {
+  phase: 'seed' | 'learn';
+  round?: number;
 }
 
 // Tag one batch with one consumer's leg. Returns the count actually tagged.
@@ -619,7 +656,10 @@ async function processBatch(
   let tagged = 0;
   for (let j = 0; j < songs.length; j++) {
     const result = results[j];
-    if (!result) continue;
+    if (!result) {
+      state.errors += 1;
+      continue;
+    }
     const { moods, energy } = result;
     db.upsertTrackTags(songs[j].id, {
       moods,
@@ -645,6 +685,7 @@ async function runConsumer(
   source: db.TagSource,
   total: number,
   state: TagState,
+  phaseInfo: TagPhaseInfo,
   onDrop: (() => number) | null,
 ): Promise<void> {
   for (;;) {
@@ -667,6 +708,15 @@ async function runConsumer(
     if (state.processed % 4 === 0) {
       console.log(`[tag] LLM-tagged ${state.tagged}/${total}`);
     }
+    reportProgress({
+      phase: phaseInfo.phase,
+      label: 'Tagging with LLM',
+      done: state.tagged,
+      total,
+      round: phaseInfo.round,
+      errors: state.errors || undefined,
+      llm: { legs: state.byLeg },
+    });
   }
 }
 
@@ -678,21 +728,29 @@ async function llmTagInBatches(
   promptHash: string,
   source: db.TagSource,
   consumers: TagConsumer[],
+  phaseInfo: TagPhaseInfo,
 ): Promise<{ tagged: number; callCount: number; byLeg: Record<string, number> }> {
   const batches: string[][] = [];
   for (let i = 0; i < ids.length; i += batchSize) batches.push(ids.slice(i, i + batchSize));
 
-  const state: TagState = { tagged: 0, callCount: 0, processed: 0, byLeg: {} };
+  const state: TagState = { tagged: 0, callCount: 0, processed: 0, errors: 0, byLeg: {} };
+  reportProgress({
+    phase: phaseInfo.phase,
+    label: 'Tagging with LLM',
+    done: 0,
+    total: ids.length,
+    round: phaseInfo.round,
+  });
 
   if (consumers.length <= 1) {
     // Single consumer — no requeue/drop; the unpinned call already fails over
     // internally, so an error means the batch is genuinely unworkable this run.
-    await runConsumer(batches, consumers[0], promptHash, source, ids.length, state, null);
+    await runConsumer(batches, consumers[0], promptHash, source, ids.length, state, phaseInfo, null);
   } else {
     let alive = consumers.length;
     await Promise.all(
       consumers.map(c =>
-        runConsumer(batches, c, promptHash, source, ids.length, state, () => --alive)),
+        runConsumer(batches, c, promptHash, source, ids.length, state, phaseInfo, () => --alive)),
     );
     if (batches.length > 0) {
       const abandoned = batches.reduce((n, b) => n + b.length, 0);
