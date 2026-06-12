@@ -63,7 +63,7 @@ let currentEmbeddingDim: number | null = null;
 // ---------------------------------------------------------------------------
 
 export type EnergyValue = 'low' | 'medium' | 'high' | null;
-export type TagSource = 'llm' | 'propagated' | 'uncertain-llm' | 'legacy-v1';
+export type TagSource = 'llm' | 'propagated' | 'uncertain-llm' | 'legacy-v1' | 'manual';
 
 export interface TrackRecord {
   id: string;
@@ -556,6 +556,26 @@ export function upsertTrackTags(id: string, tags: TagWrite): void {
       new Date().toISOString(),
       id,
     );
+}
+
+// Remove a track's tags entirely (back to the untagged pool). NULLing every
+// tag column — rather than writing moods='[]' — keeps source/tagged_at from
+// going stale on a row that is no longer tagged.
+export function clearTrackTags(id: string): void {
+  requireDb()
+    .prepare(
+      `UPDATE tracks SET
+        moods          = NULL,
+        energy         = NULL,
+        source         = NULL,
+        confidence     = NULL,
+        tagger_version = NULL,
+        prompt_hash    = NULL,
+        model          = NULL,
+        tagged_at      = NULL
+      WHERE id = ?`,
+    )
+    .run(id);
 }
 
 export interface TrackAnalysisWrite {

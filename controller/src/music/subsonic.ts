@@ -277,6 +277,13 @@ export async function getAlbum(id) {
   return rejectArchive(r.album?.song || []);
 }
 
+// Single song lookup — the Child carries albumId, which is how manual album
+// tagging resolves a whole album from one track id (the UI never sees albumIds).
+export async function getSong(id) {
+  const r = await call('getSong', { id });
+  return r.song || null;
+}
+
 // Returns { id, name, albumCount, album: [{ id, name, year, ... }] }
 export async function getArtist(id) {
   const r = await call('getArtist', { id });

@@ -19,10 +19,10 @@
 // so the page renders correctly under every palette — no hardcoded hex.
 
 import type { ChangeEvent, FormEvent, ReactNode } from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search, RotateCcw, Sparkles, Activity, Play, Square, ChevronDown, ChevronRight,
-  Terminal, RefreshCw, ListPlus, X,
+  Terminal, RefreshCw, ListPlus, X, Pencil,
 } from 'lucide-react';
 import { useAdminAuth, ADMIN_API_URL } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
@@ -33,7 +33,7 @@ import { Field, FieldLabel } from '../ui/field';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '../ui/select';
-import { Card, Btn, Eyebrow } from './ui';
+import { Card, Btn, Eyebrow, Pill, Seg } from './ui';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { cn } from '../../lib/cn';
 
@@ -50,6 +50,7 @@ interface Track {
   duration?: number | null;
   moods?: string[];
   energy?: string | null;
+  source?: string | null;
   taggedAt?: string;
 }
 
@@ -186,6 +187,12 @@ export default function LibraryPanel() {
   const [queuing, setQueuing] = useState<string | null>(null);
   const [retagging, setRetagging] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
+  // manual tagging — which row's inline editor is open, and which is saving.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [manualBusy, setManualBusy] = useState<string | null>(null);
+  // Mood vocab, lifted out of the browse response so the editor has it on any
+  // tab (browse is the only call that returns it; lazily fetched otherwise).
+  const [vocab, setVocab] = useState<string[]>([]);
 
   // live-run progress baseline (best-effort: coverage delta vs. a captured
   // target — the backend has no per-run counter). Set when WE start a run.
@@ -436,6 +443,84 @@ export default function LibraryPanel() {
       notify.err(errorMessage(err));
     } finally {
       setRetagging(null);
+    }
+  };
+
+  // Mood vocab only rides along on the browse response. Keep `vocab` synced
+  // from it, and lazily fetch a one-row browse when the editor opens on a tab
+  // that hasn't loaded browse yet — avoids hardcoding SHOW_MOODS in the bundle.
+  useEffect(() => {
+    if (browse?.moodVocab?.length) setVocab(browse.moodVocab);
+  }, [browse]);
+  const ensureVocab = useCallback(async () => {
+    if (vocab.length) return;
+    try {
+      const r = await adminFetch('/library/browse?limit=1');
+      if (!r.ok) return;
+      const j = (await r.json()) as BrowseResponse;
+      if (j.moodVocab?.length) setVocab(j.moodVocab);
+    } catch { /* editor shows a "loading moods…" hint until this lands */ }
+  }, [vocab.length, adminFetch]);
+
+  const onEditTrack = (t: Track) => {
+    if (editingId === t.id) { setEditingId(null); return; }
+    ensureVocab();
+    setEditingId(t.id);
+  };
+
+  // Patch the visible rows after a manual-tag write so search/recent reflect it
+  // without a refetch. Album siblings in view update too when applyToAlbum.
+  const patchRows = (
+    rows: Track[] | null, track: Track,
+    moods: string[], energy: string | null, cleared: boolean, applyToAlbum: boolean,
+  ): Track[] | null => {
+    if (!rows) return rows;
+    return rows.map(r => {
+      const hit = r.id === track.id || (applyToAlbum && !!track.album && r.album === track.album);
+      if (!hit) return r;
+      return cleared
+        ? { ...r, moods: [], energy: null, source: null }
+        : { ...r, moods, energy, source: 'manual' };
+    });
+  };
+
+  const saveManualTag = async (
+    track: Track, moods: string[], energy: string | null, applyToAlbum: boolean,
+  ) => {
+    setManualBusy(track.id);
+    try {
+      const r = await adminFetch('/library/manual-tag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: track.id, moods, energy, applyToAlbum }),
+      });
+      const j = (await r.json().catch(() => ({}))) as
+        { ok?: boolean; updated?: number; cleared?: boolean; error?: string };
+      if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
+      const cleared = !!j.cleared;
+      const n = j.updated ?? 1;
+      const scope = applyToAlbum ? `${n} album track${n === 1 ? '' : 's'}` : 'track';
+      notify.ok(cleared ? `cleared tags · ${scope}` : `tagged ${scope} · ${moods.join(', ') || '—'}`);
+      setEditingId(null);
+      setFlashId(track.id);
+      setTimeout(() => setFlashId(curr => (curr === track.id ? null : curr)), 1100);
+      if (tab === 'browse') runBrowse();
+      else if (tab === 'untagged') {
+        // Newly-tagged tracks leave the untagged list; cleared ones stay put.
+        if (!cleared) {
+          setUntagged(prev => prev.filter(t =>
+            !(t.id === track.id || (applyToAlbum && track.album && t.album === track.album))));
+        }
+      } else if (tab === 'search') {
+        setSearchResults(prev => patchRows(prev, track, moods, energy, cleared, applyToAlbum));
+      } else if (tab === 'recent') {
+        setRecent(prev => patchRows(prev, track, moods, energy, cleared, applyToAlbum));
+      }
+      loadCoverage();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setManualBusy(null);
     }
   };
 
@@ -711,6 +796,12 @@ export default function LibraryPanel() {
           flashId={flashId}
           onQueue={queueTrack}
           onRetag={retagTrack}
+          vocab={vocab}
+          editingId={editingId}
+          manualBusy={manualBusy}
+          onEdit={onEditTrack}
+          onSaveManual={saveManualTag}
+          onCancelEdit={() => setEditingId(null)}
         />
       </Card>
 
@@ -1211,6 +1302,12 @@ interface TrackTableProps {
   flashId: string | null;
   onQueue: (t: Track) => void;
   onRetag: (t: Track) => void;
+  vocab: string[];
+  editingId: string | null;
+  manualBusy: string | null;
+  onEdit: (t: Track) => void;
+  onSaveManual: (t: Track, moods: string[], energy: string | null, applyToAlbum: boolean) => void;
+  onCancelEdit: () => void;
 }
 
 function TrackTable(p: TrackTableProps) {
@@ -1239,8 +1336,10 @@ function TrackTable(p: TrackTableProps) {
       </div>
       {p.rows.map(t => {
         const tagged = !!(t.moods && t.moods.length > 0);
+        const editing = p.editingId === t.id;
         return (
-          <div key={t.id} className={cn('lib-row', p.flashId === t.id && 'flash')}>
+          <Fragment key={t.id}>
+          <div className={cn('lib-row', p.flashId === t.id && 'flash')}>
             <Thumb track={t} />
             <div className="min-w-0">
               <div className="lib-title">{t.title || '—'}</div>
@@ -1251,6 +1350,7 @@ function TrackTable(p: TrackTableProps) {
                 <>
                   {t.moods!.slice(0, 2).map(m => <span key={m} className="lib-mtag">{m}</span>)}
                   {t.energy && <span className="lib-mtag"><EnergyMeter level={t.energy} />{t.energy}</span>}
+                  {t.source === 'manual' && <span className="lib-mtag" title="hand-tagged by an operator">manual</span>}
                 </>
               ) : (
                 <span className="lib-needs">needs tags</span>
@@ -1260,6 +1360,15 @@ function TrackTable(p: TrackTableProps) {
             <div className="flex items-center justify-end gap-1.5">
               <Btn sm onClick={() => p.onQueue(t)} disabled={!!p.queuing}>
                 {p.queuing === t.id ? '…' : <><ListPlus size={12} /> Queue</>}
+              </Btn>
+              <Btn
+                sm
+                tone={editing ? 'accent' : undefined}
+                onClick={() => p.onEdit(t)}
+                disabled={!!p.manualBusy}
+                title="Edit moods manually"
+              >
+                {editing ? <X size={12} /> : <Pencil size={12} />}
               </Btn>
               {(p.tab === 'browse' || p.tab === 'untagged') && (
                 <Btn
@@ -1275,8 +1384,99 @@ function TrackTable(p: TrackTableProps) {
               )}
             </div>
           </div>
+          {editing && (
+            <ManualTagEditor
+              track={t}
+              vocab={p.vocab}
+              busy={p.manualBusy === t.id}
+              onSave={(moods, energy, applyToAlbum) => p.onSaveManual(t, moods, energy, applyToAlbum)}
+              onCancel={p.onCancelEdit}
+            />
+          )}
+          </Fragment>
         );
       })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ManualTagEditor — inline mood/energy editor under a track row. Operator-set
+// tags (source='manual') feed songsByMood() → the picker exactly like the
+// LLM tagger's, and "apply to whole album" tags every track on the album so a
+// folder/album of content can be targeted at once (discussion #336).
+// ---------------------------------------------------------------------------
+const ENERGY_SEG: { id: string; label: string }[] = [
+  { id: 'none', label: 'none' },
+  { id: 'low', label: 'low' },
+  { id: 'medium', label: 'med' },
+  { id: 'high', label: 'high' },
+];
+
+function ManualTagEditor(props: {
+  track: Track;
+  vocab: string[];
+  busy: boolean;
+  onSave: (moods: string[], energy: string | null, applyToAlbum: boolean) => void;
+  onCancel: () => void;
+}) {
+  const { track, vocab, busy } = props;
+  const [sel, setSel] = useState<string[]>((track.moods || []).slice(0, 3));
+  const [energy, setEnergy] = useState<string>(track.energy || 'none');
+  const [applyToAlbum, setApplyToAlbum] = useState(false);
+
+  const toggle = (m: string) =>
+    setSel(cur => cur.includes(m) ? cur.filter(x => x !== m) : (cur.length >= 3 ? cur : [...cur, m]));
+  const energyVal = energy === 'none' ? null : energy;
+
+  return (
+    <div className="grid gap-3 border-b border-ink bg-[var(--ink-softer)] px-4 py-3">
+      <div className="grid gap-1.5">
+        <Eyebrow>moods · up to 3</Eyebrow>
+        <div className="flex flex-wrap gap-1.5">
+          {vocab.length === 0 && (
+            <span className="text-[11px] italic text-muted">loading moods…</span>
+          )}
+          {vocab.map(m => {
+            const on = sel.includes(m);
+            return (
+              <Pill
+                key={m}
+                tone={on ? 'accent' : 'default'}
+                onClick={busy || (!on && sel.length >= 3) ? undefined : () => toggle(m)}
+                className={cn(
+                  (busy || (!on && sel.length >= 3)) && !on && 'opacity-40',
+                  !busy && 'cursor-pointer',
+                )}
+              >
+                {m}
+              </Pill>
+            );
+          })}
+        </div>
+      </div>
+      <div className="grid gap-1.5">
+        <Eyebrow>energy</Eyebrow>
+        <div><Seg value={energy} options={ENERGY_SEG} onChange={setEnergy} /></div>
+      </div>
+      <label className="flex items-center gap-2 text-[12px] text-ink">
+        <input
+          type="checkbox"
+          checked={applyToAlbum}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => setApplyToAlbum(e.target.checked)}
+          disabled={busy}
+        />
+        apply to whole album{track.album ? ` “${track.album}”` : ''}
+      </label>
+      <div className="flex items-center gap-2">
+        <Btn sm tone="accent" onClick={() => props.onSave(sel, energyVal, applyToAlbum)} disabled={busy || sel.length === 0}>
+          {busy ? 'Saving…' : 'Save tags'}
+        </Btn>
+        <Btn sm tone="danger" onClick={() => props.onSave([], null, applyToAlbum)} disabled={busy}>
+          Clear tags
+        </Btn>
+        <Btn sm onClick={props.onCancel} disabled={busy}>Cancel</Btn>
+      </div>
     </div>
   );
 }

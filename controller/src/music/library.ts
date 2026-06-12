@@ -300,6 +300,7 @@ export interface FilteredRow {
   duration?: number | null;
   moods: string[];
   energy: string | null;
+  source?: string | null;
   taggedAt?: string | null;
 }
 
@@ -318,6 +319,7 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRo
       duration: r.durationSec,
       moods: r.moods,
       energy: r.energy,
+      source: r.source,
       taggedAt: r.taggedAt,
     })),
   };

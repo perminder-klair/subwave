@@ -79,6 +79,9 @@ function parseFlags(): CliFlags {
     reseed: args.includes('--reseed'),
     reEnrich: args.includes('--re-enrich'),
     skipEnrich: args.includes('--skip-enrich'),
+    // Not implemented yet. When a stale-re-tag pass is built, its row
+    // selection MUST exclude source='manual' — operator-set tags are ground
+    // truth and never go stale with prompt/model changes.
     upgrade: args.includes('--upgrade'),
     skipAnalyze: args.includes('--skip-analyze'),
     reAnalyze: args.includes('--re-analyze'),
