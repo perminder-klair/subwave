@@ -80,9 +80,9 @@ export default function Clients() {
           the apps below use, typed in once and saved.
         </p>
         <p className="text-muted">
-          Android is live on Google Play: install it like any other app, and it
-          auto-updates from then on. iOS is in public beta over TestFlight while it works
-          through the App Store (install the TestFlight app first):
+          Both are live in their stores: download from the App Store on iPhone and
+          iPad, or Google Play on Android. Install it like any other app, and it
+          auto-updates from then on.
         </p>
         <table className="bs-doc-table">
           <thead>
@@ -109,23 +109,24 @@ export default function Clients() {
               <td><strong>iOS</strong></td>
               <td>
                 <a
-                  href="https://testflight.apple.com/join/Xrx5TUmb"
+                  href="https://apps.apple.com/app/sub-wave/id6778786696"
                   className="bs-link"
                   target="_blank"
                   rel="noreferrer"
                 >
-                  TestFlight ↗
-                </a>{' '}
-                (public beta)
+                  App Store ↗
+                </a>
               </td>
             </tr>
           </tbody>
         </table>
         <div className="bs-callout">
-          <div className="bs-eyebrow">APP STORE</div>
+          <div className="bs-eyebrow">NOT JUST THIS STATION</div>
           <p>
-            Android is on Google Play now; the iOS App Store listing follows once the
-            TestFlight beta settles. Until then, TestFlight is the way in on iPhone and iPad.
+            The apps default to the public station, but they aren&rsquo;t tied to it. Add
+            any other SUB/WAVE instance by its address and switch between saved stations
+            from inside the app &mdash; the same way you&rsquo;d point the audio-only
+            players below at a stream URL.
           </p>
         </div>
       </section>
