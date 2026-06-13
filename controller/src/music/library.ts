@@ -165,6 +165,11 @@ function slimTrack(r: db.TrackRecord) {
     loudnessLufs: r.loudnessLufs,
     structure: r.structure,
     vocalRanges: r.vocalRanges,
+    // Scalar mean pace (0..1) for the picker/LLM — the full curve stays in the
+    // record for UI/future use. null when un-analysed.
+    paceMean: r.pace && r.pace.length
+      ? Math.round((r.pace.reduce((s, p) => s + p.value, 0) / r.pace.length) * 1000) / 1000
+      : null,
   };
 }
 

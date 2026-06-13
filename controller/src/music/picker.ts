@@ -353,6 +353,10 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           // the LLM only sees them when they're real.
           bpm: a.bpm ?? undefined,
           key: a.key ?? undefined,
+          // Perceptual energy 0..1 (mean pace), decoupled from BPM — lets the
+          // pick reason about build/release arcs, not just tempo. Omitted when
+          // un-analysed.
+          pace: c.paceMean ?? undefined,
           source: c._source || null,
           // Cosine similarity to the current track for the KNN sources
           // (embedding-similar / audio-similar). Omitted for the other sources,

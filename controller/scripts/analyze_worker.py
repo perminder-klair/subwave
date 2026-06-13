@@ -375,6 +375,39 @@ class VocalActivityDetector:
         return [r for r in ranges if r["endMs"] - r["startMs"] >= 300]
 
 
+def estimate_pace(y, sr, librosa, window_s=5.0):
+    """Perceptual energy/momentum curve over the decoded window, decoupled from
+    BPM (a high-tempo track can read low pace during a sparse breakdown). Mean
+    onset-strength (spectral-flux) energy per ~window_s window, normalised 0..1
+    by the loudest window. RangedValue shape: [{startMs,endMs,value}]. Best-
+    effort: any failure returns None and the field is omitted."""
+    import numpy as np
+
+    try:
+        hop = 512
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop)
+        if onset_env.size == 0:
+            return None
+        frames_per_win = max(1, int(round(window_s * sr / hop)))
+        peak = float(np.max(onset_env))
+        if peak <= 0:
+            return None
+        curve = []
+        for start in range(0, onset_env.size, frames_per_win):
+            chunk = onset_env[start : start + frames_per_win]
+            if chunk.size == 0:
+                continue
+            value = round(float(np.mean(chunk)) / peak, 3)
+            start_ms = int(round(start * hop / sr * 1000.0))
+            end_ms = int(round(min(start + frames_per_win, onset_env.size) * hop / sr * 1000.0))
+            if end_ms > start_ms:
+                curve.append({"startMs": start_ms, "endMs": end_ms, "value": value})
+        return curve or None
+    except Exception as e:  # noqa: BLE001 — pace is best-effort
+        log(f"pace estimation failed: {e}")
+        return None
+
+
 _vocal_detector = None
 _vocal_failed = False
 
@@ -523,6 +556,9 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None):
     # Reuses the chroma already computed for key estimation.
     sections = estimate_sections(y, sr, librosa, chroma=chroma)
 
+    # Perceptual energy/momentum curve (decoupled from BPM).
+    pace = estimate_pace(y, sr, librosa)
+
     # Perceptual loudness (LUFS) over the decoded window — feeds per-track gain
     # normalisation toward a target on the playback side. None when pyloudnorm
     # is absent or measurement fails.
@@ -547,6 +583,9 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None):
     # Structural sections (omit when segmentation produced nothing).
     if sections:
         result["sections"] = sections
+    # Pace curve (omit when none produced).
+    if pace:
+        result["pace_curve"] = pace
     # Vocal-activity ranges. Emit even when empty ([] = analysed instrumental);
     # omit only when detection didn't run (None), so the controller can tell
     # "no vocals" from "not computed".

@@ -178,6 +178,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         loudnessLufs: a.loudnessLufs,
         peakDb: a.peakDb,
         sections: a.sections,
+        pace: a.paceCurve,
         vocalRanges: a.vocalRanges,
       });
       if (a.vocalRanges != null) vocalAnalyzed += 1;

@@ -26,6 +26,13 @@ export interface Section {
   kind?: string;
 }
 
+// A pace sample: a 0..1 perceptual-energy value over a span (RangedValue).
+export interface PaceSpan {
+  startMs: number;
+  endMs: number;
+  value: number;
+}
+
 export interface AnalysisResult {
   bpm: number | null;
   musicalKey: string | null;
@@ -39,6 +46,9 @@ export interface AnalysisResult {
   // a meaningful value — "analysed, instrumental"; null means not computed (no
   // ANALYZE_VOCAL_ACTIVITY / no demucs). Consumers treat null as "no signal".
   vocalRanges: Section[] | null;
+  // Perceptual energy/momentum curve (decoupled from BPM), 0..1 per span. null
+  // when the backend computed none; consumers treat null as "no signal".
+  paceCurve: PaceSpan[] | null;
   // Integrated loudness (LUFS, BS.1770) + peak (dBFS) over the analysis window,
   // when the backend has pyloudnorm. null otherwise — consumers treat null as
   // "no loudness, play at unity gain", so a backend without pyloudnorm behaves
@@ -85,6 +95,21 @@ function parseSections(v: unknown): Section[] | null {
 function parseVocalRanges(v: unknown): Section[] | null {
   if (!Array.isArray(v)) return null;
   return coerceSpans(v);
+}
+
+// Pace curve: spans carrying a 0..1 value. Drops malformed/zero-length spans;
+// empty collapses to null ("no pace").
+function parsePaceCurve(v: unknown): PaceSpan[] | null {
+  if (!Array.isArray(v)) return null;
+  const out: PaceSpan[] = [];
+  for (const s of v) {
+    const startMs = parseFinite((s as any)?.startMs);
+    const endMs = parseFinite((s as any)?.endMs);
+    const value = parseFinite((s as any)?.value);
+    if (startMs == null || endMs == null || value == null || endMs <= startMs) continue;
+    out.push({ startMs, endMs, value });
+  }
+  return out.length ? out : null;
 }
 
 // Coerce the worker's audio_embedding field to a clean number[] or null. The
@@ -201,6 +226,7 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
           peakDb: parseFinite(msg.peak_db),
           sections: parseSections(msg.sections),
           vocalRanges: parseVocalRanges(msg.vocal_ranges),
+          paceCurve: parsePaceCurve(msg.pace_curve),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
         }),
       reject,
@@ -281,6 +307,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
       peakDb: parseFinite(resBody.peak_db),
       sections: parseSections(resBody.sections),
       vocalRanges: parseVocalRanges(resBody.vocal_ranges),
+      paceCurve: parsePaceCurve(resBody.pace_curve),
       audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
     };
   } finally {

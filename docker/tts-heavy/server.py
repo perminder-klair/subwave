@@ -432,7 +432,7 @@ async def analyze(req: AnalyzeRequest):
     # Optional perceptual loudness + structural sections — present only when the
     # worker computed them. Pass through; omitted otherwise so the client maps
     # them to null (unity gain / no structure).
-    for k in ("loudness_lufs", "peak_db", "sections", "vocal_ranges"):
+    for k in ("loudness_lufs", "peak_db", "sections", "vocal_ranges", "pace_curve"):
         if k in msg:
             out[k] = msg[k]
     # Optional CLAP audio embedding — present only when the worker has the model

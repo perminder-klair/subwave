@@ -33,7 +33,8 @@ export const TAGGER_VERSION = 3;
 // or method changes so `--re-analyze` / staleness checks can target old rows.
 // v2: added integrated loudness (loudness_lufs) + peak (peak_db).
 // v3: added structural sections (structure_json).
-export const ANALYSIS_VERSION = 3;
+// v4: added the pace curve (pace_json).
+export const ANALYSIS_VERSION = 4;
 
 // CLAP audio-embedding dim. Fixed by the model (LAION-CLAP's audio projection
 // is 512-d), so — unlike the text index in track_vectors — there's no per-model
@@ -98,6 +99,7 @@ export interface TrackRecord {
   peakDb: number | null;       // sample peak in dBFS over the analysis window
   structure: TrackSection[] | null; // structural sections over the analysed window
   vocalRanges: TrackSection[] | null; // vocal-presence ranges; [] = instrumental, null = not computed
+  pace: TrackPaceSpan[] | null;     // perceptual energy curve (0..1 per span)
 }
 
 // A structural span over a track, in milliseconds (RangedValue shape). Kept as
@@ -106,6 +108,13 @@ export interface TrackSection {
   startMs: number;
   endMs: number;
   kind?: string;
+}
+
+// A pace span: a 0..1 perceptual-energy value over a time range.
+export interface TrackPaceSpan {
+  startMs: number;
+  endMs: number;
+  value: number;
 }
 
 export interface TrackMeta {
@@ -324,6 +333,13 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     // (needsVocalIds) skip instrumentals instead of re-separating them forever.
     runDdl(d, `ALTER TABLE tracks ADD COLUMN vocal_ranges_json TEXT;`);
     d.pragma('user_version = 6');
+  }
+
+  if (userVersion < 7) {
+    // Pace curve (JSON array of {startMs,endMs,value}) — perceptual energy over
+    // time, 0..1. Nullable; NULL → no pace signal, today's behaviour.
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN pace_json TEXT;`);
+    d.pragma('user_version = 7');
   }
 
   // The vec0 virtual table carries the embedding dim in its schema. If the
@@ -630,6 +646,7 @@ export interface TrackAnalysisWrite {
   // [] is meaningful (analysed instrumental) vs null/undefined (not computed) —
   // only a non-null array is written, so a vocal-off pass leaves the column be.
   vocalRanges?: TrackSection[] | null;
+  pace?: TrackPaceSpan[] | null;
 }
 
 // Write acoustic-analysis results for a track. Stamps ANALYSIS_VERSION so
@@ -646,6 +663,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         loudness_lufs       = ?,
         peak_db             = ?,
         structure_json      = ?,
+        pace_json           = ?,
         -- COALESCE: vocal activity is gated separately (ANALYZE_VOCAL_ACTIVITY),
         -- so a normal bpm/key pass passes null here and must NOT wipe an
         -- existing vocal_ranges_json. A non-null value (incl. "[]" for an
@@ -662,6 +680,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       Number.isFinite(a.loudnessLufs as number) ? (a.loudnessLufs as number) : null,
       Number.isFinite(a.peakDb as number) ? (a.peakDb as number) : null,
       a.sections && a.sections.length ? JSON.stringify(a.sections) : null,
+      a.pace && a.pace.length ? JSON.stringify(a.pace) : null,
       a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
       ANALYSIS_VERSION,
       id,
@@ -684,7 +703,8 @@ export function clearAnalysis(): void {
   d.prepare(
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
       analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
-      structure_json = NULL, vocal_ranges_json = NULL, analysis_version = NULL`,
+      structure_json = NULL, pace_json = NULL, vocal_ranges_json = NULL,
+      analysis_version = NULL`,
   ).run();
   // The audio (CLAP) vectors are written in the same pass, so a --re-analyze
   // that redoes bpm/key drops them too — the next pass re-embeds from scratch.
@@ -1146,7 +1166,27 @@ function rowToTrack(row: any): TrackRecord {
     // Preserve an empty array ("analysed instrumental"); only a SQL NULL column
     // (not computed) maps to null. parseSpans keeps [] intact.
     vocalRanges: row.vocal_ranges_json != null ? parseSpans(row.vocal_ranges_json) : null,
+    pace: row.pace_json ? parsePaceSpans(row.pace_json) : null,
   };
+}
+
+// Parse a pace_json column into TrackPaceSpan[] or null. Empty/malformed → null.
+function parsePaceSpans(s: string): TrackPaceSpan[] | null {
+  try {
+    const v = JSON.parse(s);
+    if (!Array.isArray(v)) return null;
+    const out: TrackPaceSpan[] = [];
+    for (const x of v) {
+      const startMs = Number((x as any)?.startMs);
+      const endMs = Number((x as any)?.endMs);
+      const value = Number((x as any)?.value);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || !Number.isFinite(value) || endMs <= startMs) continue;
+      out.push({ startMs, endMs, value });
+    }
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
 }
 
 // Parse a JSON span column into clean TrackSection[] (possibly empty). Drops
