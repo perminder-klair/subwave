@@ -92,19 +92,64 @@ def _pearson(a, b):
     return num / (da * db)
 
 
-def estimate_key(chroma_mean):
-    """Krumhansl-Schmuckler: correlate the mean chroma against all 24 keys.
-    Returns (camelot_code, separation) where separation (best - 2nd best
-    correlation, 0..1-ish) is a rough confidence in the key call."""
-    scores = []  # (corr, camelot)
+# Enharmonic-preserving spelling isn't recoverable from chroma; use sharps.
+PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+
+def _score_key(chroma_vec):
+    """Krumhansl-Schmuckler over all 24 keys for one chroma vector. Returns
+    (camelot_code, separation, tonic_pc, mode) — separation (best - 2nd best
+    correlation, 0..1-ish) is a rough confidence; mode is 'major'/'minor'."""
+    scores = []  # (corr, camelot, tonic_pc, mode)
     for tonic in range(12):
-        rotated = [chroma_mean[(tonic + i) % 12] for i in range(12)]
-        scores.append((_pearson(MAJOR_PROFILE, rotated), MAJOR_CAMELOT[tonic]))
-        scores.append((_pearson(MINOR_PROFILE, rotated), MINOR_CAMELOT[tonic]))
+        rotated = [chroma_vec[(tonic + i) % 12] for i in range(12)]
+        scores.append((_pearson(MAJOR_PROFILE, rotated), MAJOR_CAMELOT[tonic], tonic, "major"))
+        scores.append((_pearson(MINOR_PROFILE, rotated), MINOR_CAMELOT[tonic], tonic, "minor"))
     scores.sort(reverse=True, key=lambda s: s[0])
-    best_corr, best_code = scores[0]
+    best_corr, best_code, tonic_pc, mode = scores[0]
     separation = max(0.0, min(1.0, best_corr - scores[1][0]))
-    return best_code, separation
+    return best_code, separation, tonic_pc, mode
+
+
+def estimate_key(chroma_mean):
+    """Whole-window key as (camelot_code, separation), for the scalar field."""
+    code, separation, _tonic, _mode = _score_key(chroma_mean)
+    return code, separation
+
+
+def estimate_key_ranges(chroma, sr, librosa, window_s=10.0):
+    """Per-region key (tonic + mode) over time, mirroring Apple's RangedValue
+    KeySignature. Windows the already-computed chroma (~window_s each), scores
+    each, and merges adjacent windows sharing a key. Returns
+    [{startMs,endMs,tonic,mode}] or None. Best-effort: any failure → None."""
+    import numpy as np
+
+    try:
+        hop = 512
+        n_frames = chroma.shape[1]
+        if n_frames < 8:
+            return None
+        frames_per_win = max(1, int(round(window_s * sr / hop)))
+        ranges = []
+        for start in range(0, n_frames, frames_per_win):
+            chunk = chroma[:, start : start + frames_per_win]
+            if chunk.shape[1] == 0:
+                continue
+            vec = [float(x) for x in np.mean(chunk, axis=1)]
+            _code, _sep, tonic_pc, mode = _score_key(vec)
+            tonic = PITCH_NAMES[tonic_pc]
+            start_ms = int(round(start * hop / sr * 1000.0))
+            end_ms = int(round(min(start + frames_per_win, n_frames) * hop / sr * 1000.0))
+            if end_ms <= start_ms:
+                continue
+            if ranges and ranges[-1]["tonic"] == tonic and ranges[-1]["mode"] == mode:
+                ranges[-1]["endMs"] = end_ms  # merge a run of the same key
+            else:
+                ranges.append({"startMs": start_ms, "endMs": end_ms, "tonic": tonic, "mode": mode})
+        return ranges or None
+    except Exception as e:  # noqa: BLE001 — key ranges are best-effort
+        log(f"key-range estimation failed: {e}")
+        return None
 
 
 def estimate_intro_ms(y, sr, librosa):
@@ -557,6 +602,9 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None):
     chroma_mean = [float(x) for x in np.mean(chroma, axis=1)]
     key, key_sep = estimate_key(chroma_mean)
 
+    # Per-region key (tonic + mode) over time — reuses the chroma above.
+    key_ranges = estimate_key_ranges(chroma, sr, librosa)
+
     intro_ms = estimate_intro_ms(y, sr, librosa)
 
     # When vocal activity was measured, the start of the first vocal range is a
@@ -606,6 +654,9 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None):
         result["beats"] = beats_ms
     if bars_ms:
         result["bars"] = bars_ms
+    # Per-region key ranges (omit when none produced).
+    if key_ranges:
+        result["key_ranges"] = key_ranges
     # Vocal-activity ranges. Emit even when empty ([] = analysed instrumental);
     # omit only when detection didn't run (None), so the controller can tell
     # "no vocals" from "not computed".

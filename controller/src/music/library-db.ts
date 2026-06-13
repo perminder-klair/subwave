@@ -35,7 +35,8 @@ export const TAGGER_VERSION = 3;
 // v3: added structural sections (structure_json).
 // v4: added the pace curve (pace_json).
 // v5: added the beat/bar grid (beats_json, bars_json).
-export const ANALYSIS_VERSION = 5;
+// v6: added per-region key ranges (key_ranges_json).
+export const ANALYSIS_VERSION = 6;
 
 // CLAP audio-embedding dim. Fixed by the model (LAION-CLAP's audio projection
 // is 512-d), so — unlike the text index in track_vectors — there's no per-model
@@ -103,6 +104,15 @@ export interface TrackRecord {
   pace: TrackPaceSpan[] | null;     // perceptual energy curve (0..1 per span)
   beats: number[] | null;           // per-beat timestamps (ms)
   bars: number[] | null;            // downbeat (bar) timestamps (ms)
+  keyRanges: TrackKeyRange[] | null; // per-region key (tonic + mode) over time
+}
+
+// A key over a time range: tonic note (sharps) + mode.
+export interface TrackKeyRange {
+  startMs: number;
+  endMs: number;
+  tonic: string;
+  mode: 'major' | 'minor';
 }
 
 // A structural span over a track, in milliseconds (RangedValue shape). Kept as
@@ -353,6 +363,13 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
       ALTER TABLE tracks ADD COLUMN bars_json  TEXT;
     `);
     d.pragma('user_version = 8');
+  }
+
+  if (userVersion < 9) {
+    // Per-region key ranges (JSON array of {startMs,endMs,tonic,mode}). Nullable;
+    // the scalar musical_key stays the back-compat dominant key.
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN key_ranges_json TEXT;`);
+    d.pragma('user_version = 9');
   }
 
   // The vec0 virtual table carries the embedding dim in its schema. If the
@@ -662,6 +679,7 @@ export interface TrackAnalysisWrite {
   pace?: TrackPaceSpan[] | null;
   beats?: number[] | null;
   bars?: number[] | null;
+  keyRanges?: TrackKeyRange[] | null;
 }
 
 // Write acoustic-analysis results for a track. Stamps ANALYSIS_VERSION so
@@ -681,6 +699,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         pace_json           = ?,
         beats_json          = ?,
         bars_json           = ?,
+        key_ranges_json     = ?,
         -- COALESCE: vocal activity is gated separately (ANALYZE_VOCAL_ACTIVITY),
         -- so a normal bpm/key pass passes null here and must NOT wipe an
         -- existing vocal_ranges_json. A non-null value (incl. "[]" for an
@@ -700,6 +719,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       a.pace && a.pace.length ? JSON.stringify(a.pace) : null,
       a.beats && a.beats.length ? JSON.stringify(a.beats) : null,
       a.bars && a.bars.length ? JSON.stringify(a.bars) : null,
+      a.keyRanges && a.keyRanges.length ? JSON.stringify(a.keyRanges) : null,
       a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
       ANALYSIS_VERSION,
       id,
@@ -723,7 +743,7 @@ export function clearAnalysis(): void {
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
       analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
       structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
-      vocal_ranges_json = NULL, analysis_version = NULL`,
+      key_ranges_json = NULL, vocal_ranges_json = NULL, analysis_version = NULL`,
   ).run();
   // The audio (CLAP) vectors are written in the same pass, so a --re-analyze
   // that redoes bpm/key drops them too — the next pass re-embeds from scratch.
@@ -1188,7 +1208,29 @@ function rowToTrack(row: any): TrackRecord {
     pace: row.pace_json ? parsePaceSpans(row.pace_json) : null,
     beats: row.beats_json ? parseMsArray(row.beats_json) : null,
     bars: row.bars_json ? parseMsArray(row.bars_json) : null,
+    keyRanges: row.key_ranges_json ? parseKeyRanges(row.key_ranges_json) : null,
   };
+}
+
+// Parse a key_ranges_json column into TrackKeyRange[] or null. Empty/malformed → null.
+function parseKeyRanges(s: string): TrackKeyRange[] | null {
+  try {
+    const v = JSON.parse(s);
+    if (!Array.isArray(v)) return null;
+    const out: TrackKeyRange[] = [];
+    for (const x of v) {
+      const startMs = Number((x as any)?.startMs);
+      const endMs = Number((x as any)?.endMs);
+      const tonic = (x as any)?.tonic;
+      const mode = (x as any)?.mode;
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+      if (typeof tonic !== 'string' || (mode !== 'major' && mode !== 'minor')) continue;
+      out.push({ startMs, endMs, tonic, mode });
+    }
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
 }
 
 // Parse a JSON array of ms timestamps → finite number[] or null (empty → null).

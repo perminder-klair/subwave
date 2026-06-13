@@ -181,6 +181,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         pace: a.paceCurve,
         beats: a.beats,
         bars: a.bars,
+        keyRanges: a.keyRanges,
         vocalRanges: a.vocalRanges,
       });
       if (a.vocalRanges != null) vocalAnalyzed += 1;

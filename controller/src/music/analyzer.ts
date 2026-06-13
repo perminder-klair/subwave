@@ -33,6 +33,14 @@ export interface PaceSpan {
   value: number;
 }
 
+// A key over a time range: tonic note (sharps) + mode (RangedValue<KeySignature>).
+export interface KeyRange {
+  startMs: number;
+  endMs: number;
+  tonic: string;
+  mode: 'major' | 'minor';
+}
+
 export interface AnalysisResult {
   bpm: number | null;
   musicalKey: string | null;
@@ -53,6 +61,9 @@ export interface AnalysisResult {
   // none; consumers treat null as "no grid" (today's blind crossfade).
   beats: number[] | null;
   bars: number[] | null;
+  // Per-region key (tonic + mode) over time. null when none computed; the
+  // scalar musicalKey stays the back-compat dominant key.
+  keyRanges: KeyRange[] | null;
   // Integrated loudness (LUFS, BS.1770) + peak (dBFS) over the analysis window,
   // when the backend has pyloudnorm. null otherwise — consumers treat null as
   // "no loudness, play at unity gain", so a backend without pyloudnorm behaves
@@ -99,6 +110,22 @@ function parseSections(v: unknown): Section[] | null {
 function parseVocalRanges(v: unknown): Section[] | null {
   if (!Array.isArray(v)) return null;
   return coerceSpans(v);
+}
+
+// Key ranges: spans carrying tonic + mode. Drops malformed spans; empty → null.
+function parseKeyRanges(v: unknown): KeyRange[] | null {
+  if (!Array.isArray(v)) return null;
+  const out: KeyRange[] = [];
+  for (const s of v) {
+    const startMs = parseFinite((s as any)?.startMs);
+    const endMs = parseFinite((s as any)?.endMs);
+    const tonic = (s as any)?.tonic;
+    const mode = (s as any)?.mode;
+    if (startMs == null || endMs == null || endMs <= startMs) continue;
+    if (typeof tonic !== 'string' || (mode !== 'major' && mode !== 'minor')) continue;
+    out.push({ startMs, endMs, tonic, mode });
+  }
+  return out.length ? out : null;
 }
 
 // A list of ms timestamps → sorted finite number[] or null (empty → null).
@@ -241,6 +268,7 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
           paceCurve: parsePaceCurve(msg.pace_curve),
           beats: parseMsList(msg.beats),
           bars: parseMsList(msg.bars),
+          keyRanges: parseKeyRanges(msg.key_ranges),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
         }),
       reject,
@@ -324,6 +352,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
       paceCurve: parsePaceCurve(resBody.pace_curve),
       beats: parseMsList(resBody.beats),
       bars: parseMsList(resBody.bars),
+      keyRanges: parseKeyRanges(resBody.key_ranges),
       audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
     };
   } finally {
