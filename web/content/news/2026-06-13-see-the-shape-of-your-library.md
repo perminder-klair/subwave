@@ -24,7 +24,7 @@ Open admin and click Observatory in the nav, or go straight to:
 
 Click any point to open its dossier: BPM, key, energy, its mood and last.fm tags, and the track's text and audio fingerprints. Under that sits Mix Next, the closest tracks in vector space, with the links drawn back onto the map. Recolour the map by energy, confidence, tag source, or analysis from the left rail, and filter by scene, mood, or tag source.
 
-![A track dossier: BPM, key, energy, mood tags, acoustic meter, and a lyric excerpt](/screenshots/observatory-track.webp)
+![A track dossier: BPM, key, energy, mood tags, acoustic meters, the text and audio embedding fingerprints, and the nearest tracks in vector space](/screenshots/observatory-track.webp)
 
 Big library? Use the MAP SIZE control in the rail. It draws up to 10,000 tracks by default and goes to 50,000. Past that it shows an even sample across genres, so the shape stays honest.
 
