@@ -109,7 +109,15 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // Demucs separation is the expensive part, so this only widens the scope when
   // the operator opted in (env/admin toggle); the `vocal:true` flag below then
   // forces the backend to run it for this pass.
-  const vocalBackfill = opts.vocalBackfill ?? vocalBackfillDefault();
+  // ...but ONLY when the backend can actually produce vocal ranges. A sidecar
+  // built without Demucs (WITH_DEMUCS=0) reports vocalActivityAvailable()===false;
+  // its vocal column then stays NULL forever, so backfilling would re-scan the
+  // WHOLE library on every run for a guaranteed no-op (the churn behind the
+  // "275/7093" report). `false` = definitively not built → skip; `null` (local
+  // backend / not yet probed) keeps today's behaviour. isAvailable() above has
+  // already probed the sidecar, so the capability is current here.
+  const vocalWanted = opts.vocalBackfill ?? vocalBackfillDefault();
+  const vocalBackfill = vocalWanted && analyzer.vocalActivityAvailable() !== false;
   if (vocalBackfill) {
     const seen = new Set(ids);
     const vocalIds = db.needsVocalIds(cap).filter(id => !seen.has(id));
@@ -118,6 +126,8 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     if (ids.length > before) {
       console.log(`[analyze] vocal backfill: +${ids.length - before} tracks missing vocal-activity ranges`);
     }
+  } else if (vocalWanted) {
+    console.log('[analyze] vocal backfill skipped — backend has no Demucs (build tts-heavy WITH_DEMUCS=1 to enable vocal ranges)');
   }
 
   if (ids.length === 0) {

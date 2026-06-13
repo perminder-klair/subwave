@@ -30,7 +30,7 @@ let inflight: Promise<void> | null = null;
 // Last known acoustic-analysis backend state. `null` until first probed.
 // `audioCapable` mirrors analyzer.audioEmbeddingAvailable() — whether the
 // backend can emit CLAP "sounds-like" embeddings (null = unknown).
-let analysisAvail: { available: boolean; backend: string; audioCapable: boolean | null; checkedAt: number } | null = null;
+let analysisAvail: { available: boolean; backend: string; audioCapable: boolean | null; vocalCapable: boolean | null; checkedAt: number } | null = null;
 let analysisProbeInflight: Promise<void> | null = null;
 
 function refreshAnalysisAvail() {
@@ -43,10 +43,11 @@ function refreshAnalysisAvail() {
         available,
         backend: analyzer.backendLabel(),
         audioCapable: analyzer.audioEmbeddingAvailable(),
+        vocalCapable: analyzer.vocalActivityAvailable(),
         checkedAt: Date.now(),
       };
     } catch {
-      analysisAvail = { available: false, backend: 'none', audioCapable: null, checkedAt: Date.now() };
+      analysisAvail = { available: false, backend: 'none', audioCapable: null, vocalCapable: null, checkedAt: Date.now() };
     } finally {
       analysisProbeInflight = null;
     }
@@ -125,5 +126,10 @@ export async function get() {
     // with sounds-like enabled means the sidecar was built without CLAP — the
     // UI turns this into a "rebuild with WITH_CLAP=1" warning. null = unknown.
     audioAnalysisAvailable: analysisAvail ? analysisAvail.audioCapable : null,
+    // Whether the backend can emit Demucs vocal-activity ranges. false here with
+    // vocal activity enabled means the sidecar was built without Demucs — the UI
+    // turns this into a "rebuild with WITH_DEMUCS=1" warning, and the analysis
+    // pass skips vocal backfill so it doesn't churn the whole library. null = unknown.
+    vocalAnalysisAvailable: analysisAvail ? analysisAvail.vocalCapable : null,
   };
 }

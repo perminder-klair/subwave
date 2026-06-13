@@ -75,7 +75,7 @@ interface SettingsResponse {
   tagger?: TaggerState;
   libraryStats?: LibraryStatsLite;
   // Only the slice this panel needs from the full settings payload.
-  values?: { audio?: { embeddings?: boolean } };
+  values?: { audio?: { embeddings?: boolean; vocalActivity?: boolean } };
 }
 
 type Tab = 'recent' | 'browse' | 'search' | 'untagged';
@@ -134,6 +134,8 @@ export default function LibraryPanel() {
   const [taggerBusy, setTaggerBusy] = useState(false);
   // settings.audio.embeddings — null until the first /settings poll lands.
   const [audioEnabled, setAudioEnabled] = useState<boolean | null>(null);
+  // settings.audio.vocalActivity — null until the first /settings poll lands.
+  const [vocalEnabled, setVocalEnabled] = useState<boolean | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [queuing, setQueuing] = useState<string | null>(null);
   const [retagging, setRetagging] = useState<string | null>(null);
@@ -194,7 +196,10 @@ export default function LibraryPanel() {
       const j = (await r.json()) as SettingsResponse;
       setTagger(j.tagger || null);
       if (j.libraryStats) setLibStats(j.libraryStats);
-      if (j.values?.audio) setAudioEnabled(!!j.values.audio.embeddings);
+      if (j.values?.audio) {
+        setAudioEnabled(!!j.values.audio.embeddings);
+        setVocalEnabled(!!j.values.audio.vocalActivity);
+      }
     } catch { /* transient */ }
   }, [adminFetch, ready]);
 
@@ -630,6 +635,7 @@ export default function LibraryPanel() {
         audioEnabled={audioEnabled}
         onToggleAudio={toggleAudio}
         onAnalyzeAudio={analyzeAudio}
+        vocalEnabled={vocalEnabled}
       />
 
       <Tabs tab={tab} setTab={setTab} counts={counts} />

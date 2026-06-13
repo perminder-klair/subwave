@@ -38,6 +38,10 @@ export interface Coverage {
   // is up but built without the CLAP stack (sidecar WITH_CLAP=0) — drives the
   // active "rebuild with WITH_CLAP=1" warning. null = unknown / still probing.
   audioAnalysisAvailable?: boolean | null;
+  // Whether the backend can emit Demucs vocal-activity ranges. false = engine
+  // up but built without the Demucs stack (sidecar WITH_DEMUCS=0) — drives the
+  // "rebuild with WITH_DEMUCS=1" warning when vocal activity is enabled.
+  vocalAnalysisAvailable?: boolean | null;
 }
 
 // Mirrors controller/src/music/tagger-progress.ts — the structured sentinel
@@ -108,6 +112,10 @@ interface TaggingPanelProps {
   audioEnabled: boolean | null;
   onToggleAudio: () => void;
   onAnalyzeAudio: () => void;
+  // Whether vocal-activity (Demucs) analysis is enabled — null until the first
+  // settings poll lands. Drives the "build WITH_DEMUCS=1" warning when on but
+  // the backend can't produce vocal ranges.
+  vocalEnabled: boolean | null;
 }
 
 // One friendly sentence per pipeline phase — shown under the live progress so
@@ -150,6 +158,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // can't be produced until the sidecar is rebuilt with WITH_CLAP=1. We warn
   // actively rather than letting a run finish with the bar stuck at 0.
   const audioIncapable = !analysisOff && p.coverage?.audioAnalysisAvailable === false;
+  // Vocal activity is on but the engine was built without Demucs — the analysis
+  // pass would skip vocal backfill (no-op), so warn rather than silently never
+  // filling vocal ranges. Mirrors the CLAP `audioIncapable` warning above.
+  const vocalIncapable = !analysisOff && p.coverage?.vocalAnalysisAvailable === false;
   const moodCount = p.libStats ? Object.keys(p.libStats.byMood || {}).length : 0;
   const lastTag = p.libStats?.updatedAt ? new Date(p.libStats.updatedAt).toLocaleString('en-GB') : '—';
   const anySel = !!(passes.reseed || passes.reEnrich || passes.reAnalyze || passes.upgrade);
@@ -391,6 +403,15 @@ export default function TaggingPanel(p: TaggingPanelProps) {
               </span>
             )}
           </div>
+
+          {vocalIncapable && p.vocalEnabled ? (
+            <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
+              <b>Vocal-activity is on, but the analysis engine can’t separate vocals.</b> The
+              tts-heavy sidecar was built without the Demucs stack, so the pass skips vocal ranges
+              (it won’t re-scan the whole library chasing them). Rebuild it with Demucs, then run the analysis:
+              <code className="mt-1 block font-mono text-[10.5px] text-muted">WITH_DEMUCS=1 docker compose build tts-heavy &amp;&amp; docker compose --profile tts-heavy up -d tts-heavy</code>
+            </div>
+          ) : null}
 
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1.5 border-t border-dashed border-separator-strong pt-3.5">
             <span className="max-w-[64ch] text-[12px] leading-[1.55] text-muted">
