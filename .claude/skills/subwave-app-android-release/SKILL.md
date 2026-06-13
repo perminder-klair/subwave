@@ -164,8 +164,16 @@ on EAS; you don't need to rebuild to re-share.
 
 - **Another test build of the same version** (the common case): change nothing
   and rebuild — internal APKs install over each other regardless of build number.
-- **New marketing version** (e.g. `1.0.0` → `1.0.1`, what testers see): edit
+- **New marketing version** (e.g. `1.0.0` → `1.1.0`, what users see): edit
   `expo.version` in `app/app.json` first, commit, then rebuild.
+
+Unlike Apple, **Play won't reject a same-`versionName` upload** — it keys
+releases on `versionCode` (which `autoIncrement` always bumps), so you *can*
+upload a new build under an unchanged marketing version. But when you're cutting a
+real public release alongside iOS (which *does* force a bump — see the iOS skill),
+bump `expo.version` here too so both stores show the same version. Don't pin the
+current version/`versionCode` in this doc — read `expo.version` from
+`app/app.json` and `eas build:list` for the live `versionCode`.
 
 You don't hand-edit `versionCode` — the `production` profile's `autoIncrement`
 owns it (it only matters for the Play Store path; internal APKs don't care).
