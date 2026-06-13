@@ -179,6 +179,8 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         peakDb: a.peakDb,
         sections: a.sections,
         pace: a.paceCurve,
+        beats: a.beats,
+        bars: a.bars,
         vocalRanges: a.vocalRanges,
       });
       if (a.vocalRanges != null) vocalAnalyzed += 1;

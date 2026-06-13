@@ -535,8 +535,23 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None):
     if y is None or len(y) == 0:
         raise RuntimeError("decoded empty audio")
 
-    tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
     bpm = float(np.atleast_1d(tempo)[0])
+
+    # Per-beat timestamps (ms) — already computed by beat_track, previously
+    # discarded. Downbeats are a 4/4 heuristic (every 4th beat from the first):
+    # librosa gives no true downbeat, but a bar grid is enough to bar-align a
+    # crossfade. Best-effort: an empty/odd grid simply yields fewer/no bars.
+    beats_ms = []
+    bars_ms = []
+    try:
+        bt = librosa.frames_to_time(beat_frames, sr=sr)
+        beats_ms = [int(round(float(t) * 1000.0)) for t in bt]
+        bars_ms = beats_ms[::4]
+    except Exception as e:  # noqa: BLE001 — beat grid is best-effort
+        log(f"beat grid failed: {e}")
+        beats_ms = []
+        bars_ms = []
 
     chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
     chroma_mean = [float(x) for x in np.mean(chroma, axis=1)]
@@ -586,6 +601,11 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None):
     # Pace curve (omit when none produced).
     if pace:
         result["pace_curve"] = pace
+    # Beat / bar grid (omit when empty).
+    if beats_ms:
+        result["beats"] = beats_ms
+    if bars_ms:
+        result["bars"] = bars_ms
     # Vocal-activity ranges. Emit even when empty ([] = analysed instrumental);
     # omit only when detection didn't run (None), so the controller can tell
     # "no vocals" from "not computed".

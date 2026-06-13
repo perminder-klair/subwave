@@ -49,6 +49,10 @@ export interface AnalysisResult {
   // Perceptual energy/momentum curve (decoupled from BPM), 0..1 per span. null
   // when the backend computed none; consumers treat null as "no signal".
   paceCurve: PaceSpan[] | null;
+  // Beat and downbeat (bar) timestamps in ms. null when the backend computed
+  // none; consumers treat null as "no grid" (today's blind crossfade).
+  beats: number[] | null;
+  bars: number[] | null;
   // Integrated loudness (LUFS, BS.1770) + peak (dBFS) over the analysis window,
   // when the backend has pyloudnorm. null otherwise — consumers treat null as
   // "no loudness, play at unity gain", so a backend without pyloudnorm behaves
@@ -95,6 +99,14 @@ function parseSections(v: unknown): Section[] | null {
 function parseVocalRanges(v: unknown): Section[] | null {
   if (!Array.isArray(v)) return null;
   return coerceSpans(v);
+}
+
+// A list of ms timestamps → sorted finite number[] or null (empty → null).
+function parseMsList(v: unknown): number[] | null {
+  if (!Array.isArray(v)) return null;
+  const out: number[] = [];
+  for (const x of v) if (typeof x === 'number' && Number.isFinite(x)) out.push(x);
+  return out.length ? out : null;
 }
 
 // Pace curve: spans carrying a 0..1 value. Drops malformed/zero-length spans;
@@ -227,6 +239,8 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
           sections: parseSections(msg.sections),
           vocalRanges: parseVocalRanges(msg.vocal_ranges),
           paceCurve: parsePaceCurve(msg.pace_curve),
+          beats: parseMsList(msg.beats),
+          bars: parseMsList(msg.bars),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
         }),
       reject,
@@ -308,6 +322,8 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
       sections: parseSections(resBody.sections),
       vocalRanges: parseVocalRanges(resBody.vocal_ranges),
       paceCurve: parsePaceCurve(resBody.pace_curve),
+      beats: parseMsList(resBody.beats),
+      bars: parseMsList(resBody.bars),
       audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
     };
   } finally {

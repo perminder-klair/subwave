@@ -119,6 +119,19 @@ export function crossSecondsFor(
   const energyDelta = opts.energyDelta ?? 0;
   secs += -energyDelta * 4;
 
+  // Beat-grid snap (feature: beat/bar grid): round the blend to a whole number
+  // of the OUTGOING track's bars (4 beats, 4/4) so the fade.out spans a musical
+  // unit instead of an arbitrary count. Only when the outgoing tempo is known
+  // and the snap stays in range; the intro cap below still wins over it.
+  if (cur.bpm && cur.bpm > 0) {
+    const barSec = (4 * 60) / cur.bpm;
+    if (barSec > 0) {
+      const bars = Math.max(1, Math.round(secs / barSec));
+      const snapped = bars * barSec;
+      if (snapped >= 3 && snapped <= 14) secs = snapped;
+    }
+  }
+
   // Structure-aware cap (feature: song structure): the incoming track plays
   // from t=0 at the start of the cross buffer and its fade.in spans the whole
   // buffer, so a buffer longer than the incoming track's instrumental intro
