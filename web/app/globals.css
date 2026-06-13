@@ -3626,7 +3626,7 @@ body::after {
 .observatory-root .obs-stat { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
 
 /* ---- main grid ---- */
-.observatory-root .obs-main { flex: 1; display: grid; grid-template-columns: 236px minmax(0, 1fr) 372px; min-height: 0; }
+.observatory-root .obs-main { flex: 1; display: grid; grid-template-columns: 236px minmax(0, 1fr) 372px; grid-template-rows: minmax(0, 1fr); min-height: 0; }
 
 /* ---- filter rail ---- */
 .observatory-root .obs-rail { border-right: 1px solid var(--ink); background: var(--bg); padding: 18px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
