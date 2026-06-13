@@ -60,6 +60,7 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 - **Hourly archives.** Every hour saved as MP3 for later replay.
 - **Crossfade + voice ducking.** Tracks blend smoothly; the music ducks under DJ speech and lifts back up.
 - **Admin console.** Live status, queue, booth log, personas, shows, skills, stats, and a debug view of recent LLM calls.
+- **Library Observatory.** A full-screen, data-art map of every tagged track at `/observatory` — placed by genre, lit by energy, with a full dossier per track (BPM, key, mood, embedding fingerprints, and nearest-in-vector-space neighbours). Scales from a few hundred to tens of thousands of tracks.
 - **MCP server.** External agents (Claude Desktop, Cursor, etc.) can request songs and drive the DJ.
 - **Self-hosted.** One `docker compose up -d` on a single Linux host. Optional Cloudflare in front for TLS.
 
