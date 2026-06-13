@@ -93,16 +93,19 @@ function Tooltip({ data }: { data: TipState | null }) {
 
 // Node-cap ladder offered in the MAP SIZE control. Values above ~3k render on
 // the canvas renderer (see CANVAS_THRESHOLD). Clamped to the server's hardMax.
-const MAX_LADDER = [2000, 4000, 8000, 16000, 32000, 50000];
+const MAX_LADDER = [2000, 4000, 8000, 10000, 16000, 32000, 50000];
 const CANVAS_THRESHOLD = 3000; // node count above which the canvas renderer wins
+const DEFAULT_MAX = 10000; // matches the controller's OBSERVATORY_DEFAULT_MAX
 const MAX_STORAGE_KEY = 'subwave_obs_max';
 
 export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch }) {
-  // Persisted node cap (MAP SIZE control). Read once from localStorage.
+  // Persisted node cap (MAP SIZE control). Read once from localStorage; falls
+  // back to DEFAULT_MAX, which mirrors the server default so a fresh browser and
+  // a direct API caller see the same cap.
   const [maxNodes, setMaxNodes] = useState<number>(() => {
-    if (typeof window === 'undefined') return 4000;
+    if (typeof window === 'undefined') return DEFAULT_MAX;
     const stored = Number(window.localStorage.getItem(MAX_STORAGE_KEY));
-    return Number.isFinite(stored) && stored > 0 ? stored : 4000;
+    return Number.isFinite(stored) && stored > 0 ? stored : DEFAULT_MAX;
   });
   const { data: lib, loading, error } = useObservatory(adminFetch, true, maxNodes);
   const { detail, loadingId, fetchDetail } = useTrackDetail(adminFetch);
