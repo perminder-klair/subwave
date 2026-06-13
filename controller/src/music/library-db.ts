@@ -157,10 +157,15 @@ export interface FilterOpts {
   moods?: string[];
   energy?: string | null;
   genre?: string | null;
+  // Acoustic-analysis facet: 'instrumental' = analysed with an empty vocal-ranges
+  // array, 'vocal' = analysed with at least one range. A NULL vocal_ranges_json
+  // (not computed) matches neither, so the facet only ever narrows to tracks the
+  // analyze pass has actually touched.
+  vocal?: 'instrumental' | 'vocal' | null;
   yearFrom?: number | null;
   yearTo?: number | null;
   q?: string | null;
-  sort?: 'artist' | 'title' | 'taggedAt' | 'year';
+  sort?: 'artist' | 'title' | 'taggedAt' | 'year' | 'bpm' | 'loudness' | 'pace';
   limit?: number;
   offset?: number;
 }
@@ -1065,6 +1070,7 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   const moods = (opts.moods || []).filter(Boolean);
   const energy = opts.energy || null;
   const genre = opts.genre || null;
+  const vocal = opts.vocal === 'instrumental' || opts.vocal === 'vocal' ? opts.vocal : null;
   const yearFrom = Number.isFinite(opts.yearFrom as number) ? (opts.yearFrom as number) : null;
   const yearTo = Number.isFinite(opts.yearTo as number) ? (opts.yearTo as number) : null;
   const q = (opts.q || '').trim().toLowerCase();
@@ -1086,6 +1092,11 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   }
   if (energy) { where.push('energy = ?'); params.push(energy); }
   if (genre) { where.push('genre = ?'); params.push(genre); }
+  if (vocal === 'instrumental') {
+    where.push('vocal_ranges_json IS NOT NULL AND json_array_length(vocal_ranges_json) = 0');
+  } else if (vocal === 'vocal') {
+    where.push('vocal_ranges_json IS NOT NULL AND json_array_length(vocal_ranges_json) > 0');
+  }
   if (yearFrom != null) { where.push('year IS NOT NULL AND year >= ?'); params.push(yearFrom); }
   if (yearTo != null) { where.push('year IS NOT NULL AND year <= ?'); params.push(yearTo); }
   if (q) {
@@ -1097,12 +1108,22 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-  const orderSql = {
+  // Mean of the pace curve, computed in SQL so the acoustic sorts page correctly
+  // (a JS sort would only reorder the current window). json_each over a NULL or
+  // empty column yields no rows → AVG is NULL, caught by the IS NULL guard below.
+  const PACE_MEAN_SQL =
+    `(SELECT AVG(json_extract(je.value,'$.value')) FROM json_each(tracks.pace_json) je)`;
+  // Acoustic sorts surface analysed tracks first (NULLs sink to the bottom) and
+  // tie-break by artist for a stable order across un-analysed rows.
+  const orderSql = ({
     artist: `ORDER BY LOWER(COALESCE(artist,'')) , LOWER(COALESCE(album,'')) , LOWER(COALESCE(title,''))`,
     title: `ORDER BY LOWER(COALESCE(title,'')) , LOWER(COALESCE(artist,''))`,
-    year: 'ORDER BY year DESC, LOWER(COALESCE(artist,""))',
+    year: `ORDER BY year DESC, LOWER(COALESCE(artist,''))`,
     taggedAt: 'ORDER BY tagged_at DESC',
-  }[sort];
+    bpm: `ORDER BY (bpm IS NULL), bpm ASC, LOWER(COALESCE(artist,''))`,
+    loudness: `ORDER BY (loudness_lufs IS NULL), loudness_lufs DESC, LOWER(COALESCE(artist,''))`,
+    pace: `ORDER BY (${PACE_MEAN_SQL}) IS NULL, (${PACE_MEAN_SQL}) DESC, LOWER(COALESCE(artist,''))`,
+  } as Record<string, string>)[sort] ?? `ORDER BY LOWER(COALESCE(artist,'')) , LOWER(COALESCE(album,'')) , LOWER(COALESCE(title,''))`;
 
   const d = requireDb();
   const total = (

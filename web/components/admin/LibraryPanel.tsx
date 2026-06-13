@@ -51,6 +51,12 @@ interface Track {
   energy?: string | null;
   source?: string | null;
   taggedAt?: string;
+  // Acoustic-analysis surface — null/undefined until the analyze pass runs.
+  bpm?: number | null;
+  musicalKey?: string | null;
+  loudnessLufs?: number | null;
+  paceMean?: number | null;
+  instrumental?: boolean | null;
 }
 
 interface BrowseResponse {
@@ -79,8 +85,9 @@ interface SettingsResponse {
 }
 
 type Tab = 'recent' | 'browse' | 'search' | 'untagged';
-type Sort = 'artist' | 'title' | 'year' | 'taggedAt';
+type Sort = 'artist' | 'title' | 'year' | 'taggedAt' | 'bpm' | 'loudness' | 'pace';
 type Energy = 'any' | 'low' | 'medium' | 'high';
+type Vocal = 'any' | 'instrumental' | 'vocal';
 
 const PAGE_SIZE = 50;
 
@@ -150,6 +157,7 @@ export default function LibraryPanel() {
   // browse state
   const [moods, setMoods] = useState<string[]>([]);
   const [energy, setEnergy] = useState<Energy>('any');
+  const [vocal, setVocal] = useState<Vocal>('any');
   const [genre, setGenre] = useState<string>('');
   const [yearFrom, setYearFrom] = useState<string>('');
   const [yearTo, setYearTo] = useState<string>('');
@@ -235,6 +243,7 @@ export default function LibraryPanel() {
       const params = new URLSearchParams();
       if (moods.length) params.set('moods', moods.join(','));
       if (energy !== 'any') params.set('energy', energy);
+      if (vocal !== 'any') params.set('vocal', vocal);
       if (genre) params.set('genre', genre);
       if (yearFrom) params.set('yearFrom', yearFrom);
       if (yearTo) params.set('yearTo', yearTo);
@@ -251,7 +260,7 @@ export default function LibraryPanel() {
     } finally {
       setBrowseLoading(false);
     }
-  }, [adminFetch, ready, moods, energy, genre, yearFrom, yearTo, q, sort, page]);
+  }, [adminFetch, ready, moods, energy, vocal, genre, yearFrom, yearTo, q, sort, page]);
 
   useEffect(() => {
     if (!ready || tab !== 'browse') return;
@@ -275,7 +284,7 @@ export default function LibraryPanel() {
   }, [ready, adminFetch, genreList.length]);
 
   // reset to page 0 when any filter (other than page itself) changes
-  useEffect(() => { setPage(0); }, [moods, energy, genre, yearFrom, yearTo, q, sort]);
+  useEffect(() => { setPage(0); }, [moods, energy, vocal, genre, yearFrom, yearTo, q, sort]);
 
   // -----------------------------------------------------------------------
   // search fetch
@@ -594,10 +603,10 @@ export default function LibraryPanel() {
   const energyCounts = stats?.byEnergy || libStats?.byEnergy || {};
   const totalPages = browse ? Math.max(1, Math.ceil(browse.total / PAGE_SIZE)) : 1;
   const filtersActive =
-    moods.length > 0 || energy !== 'any' || !!genre || !!yearFrom || !!yearTo || !!q.trim();
+    moods.length > 0 || energy !== 'any' || vocal !== 'any' || !!genre || !!yearFrom || !!yearTo || !!q.trim();
 
   const clearFilters = () => {
-    setMoods([]); setEnergy('any'); setGenre(''); setYearFrom(''); setYearTo(''); setQ('');
+    setMoods([]); setEnergy('any'); setVocal('any'); setGenre(''); setYearFrom(''); setYearTo(''); setQ('');
     setSort('artist'); setPage(0);
   };
 
@@ -649,6 +658,7 @@ export default function LibraryPanel() {
           genreList={genreList}
           moods={moods} setMoods={setMoods}
           energy={energy} setEnergy={setEnergy}
+          vocal={vocal} setVocal={setVocal}
           genre={genre} setGenre={setGenre}
           yearFrom={yearFrom} setYearFrom={setYearFrom}
           yearTo={yearTo} setYearTo={setYearTo}
@@ -667,6 +677,9 @@ export default function LibraryPanel() {
           ))}
           {energy !== 'any' && (
             <span className="lib-active-chip">{energy} energy<button type="button" onClick={() => setEnergy('any')} aria-label="remove energy">×</button></span>
+          )}
+          {vocal !== 'any' && (
+            <span className="lib-active-chip">{vocal}<button type="button" onClick={() => setVocal('any')} aria-label="remove vocal filter">×</button></span>
           )}
           {genre && (
             <span className="lib-active-chip">{genre}<button type="button" onClick={() => setGenre('')} aria-label="remove genre">×</button></span>
@@ -813,6 +826,7 @@ interface BrowseFiltersProps {
   genreList: { value: string; songCount: number }[];
   moods: string[]; setMoods: (m: string[]) => void;
   energy: Energy; setEnergy: (e: Energy) => void;
+  vocal: Vocal; setVocal: (v: Vocal) => void;
   genre: string; setGenre: (g: string) => void;
   yearFrom: string; setYearFrom: (s: string) => void;
   yearTo: string; setYearTo: (s: string) => void;
@@ -835,6 +849,14 @@ function BrowseFilters(p: BrowseFiltersProps) {
     { id: 'low', label: <><EnergyMeter level="low" /> Low{p.energyCounts.low ? ` · ${p.energyCounts.low}` : ''}</> },
     { id: 'medium', label: <><EnergyMeter level="medium" /> Mid{p.energyCounts.medium ? ` · ${p.energyCounts.medium}` : ''}</> },
     { id: 'high', label: <><EnergyMeter level="high" /> High{p.energyCounts.high ? ` · ${p.energyCounts.high}` : ''}</> },
+  ];
+
+  // Vocal facet rides on the acoustic analysis pass; it only ever narrows to
+  // analysed tracks (un-analysed rows have no vocal ranges to test).
+  const vocalOpts: { id: Vocal; label: string }[] = [
+    { id: 'any', label: 'Any' },
+    { id: 'vocal', label: 'Vocal' },
+    { id: 'instrumental', label: 'Instrumental' },
   ];
 
   return (
@@ -868,55 +890,78 @@ function BrowseFilters(p: BrowseFiltersProps) {
         </div>
       </div>
 
-      {/* energy / genre / year / sort */}
-      <div className="flex flex-wrap items-end gap-x-5 gap-y-4 p-4">
-        <div className="flex flex-col gap-2">
-          <div className="caption">energy</div>
-          <div className="flex flex-wrap border border-ink">
-            {energyOpts.map((o, i) => (
-              <button
-                key={o.id}
-                type="button"
-                onClick={() => p.setEnergy(o.id)}
-                className={cn(
-                  'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
-                  i > 0 && 'border-l border-ink',
-                  p.energy === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
-                )}
-              >
-                {o.label}
-              </button>
-            ))}
+      {/* facet filters on the left, ordering on the right — each side wraps as a
+          unit (justify-between) so the sort control never strands alone on a row */}
+      <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-4 p-4">
+        <div className="flex flex-wrap items-end gap-x-4 gap-y-4">
+          <div className="flex flex-col gap-2">
+            <div className="caption">energy</div>
+            <div className="flex flex-wrap border border-ink">
+              {energyOpts.map((o, i) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  onClick={() => p.setEnergy(o.id)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
+                    i > 0 && 'border-l border-ink',
+                    p.energy === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
+                  )}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <div className="caption">vocal</div>
+            <div className="flex flex-wrap border border-ink">
+              {vocalOpts.map((o, i) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  onClick={() => p.setVocal(o.id)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
+                    i > 0 && 'border-l border-ink',
+                    p.vocal === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
+                  )}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Field>
+              <FieldLabel htmlFor="genre">genre</FieldLabel>
+              <Select value={p.genre || '__any'} onValueChange={v => p.setGenre(v === '__any' ? '' : v)}>
+                <SelectTrigger id="genre" className="min-w-[120px]"><SelectValue placeholder="Any genre" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__any">Any genre</SelectItem>
+                  {p.genreList.slice(0, 80).map(g => (
+                    <SelectItem key={g.value} value={g.value}>
+                      {g.value}{g.songCount ? ` · ${g.songCount}` : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <div className="caption">year</div>
+            <div className="flex items-center gap-2">
+              <Input type="number" inputMode="numeric" placeholder="from" className="w-20" value={p.yearFrom} onChange={e => p.setYearFrom(e.target.value)} />
+              <span className="text-[10px] text-muted">–</span>
+              <Input type="number" inputMode="numeric" placeholder="to" className="w-20" value={p.yearTo} onChange={e => p.setYearTo(e.target.value)} />
+            </div>
           </div>
         </div>
 
         <div className="flex flex-col gap-2">
-          <Field>
-            <FieldLabel htmlFor="genre">genre</FieldLabel>
-            <Select value={p.genre || '__any'} onValueChange={v => p.setGenre(v === '__any' ? '' : v)}>
-              <SelectTrigger id="genre" className="min-w-[150px]"><SelectValue placeholder="Any genre" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__any">Any genre</SelectItem>
-                {p.genreList.slice(0, 80).map(g => (
-                  <SelectItem key={g.value} value={g.value}>
-                    {g.value}{g.songCount ? ` · ${g.songCount}` : ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <div className="caption">year</div>
-          <div className="flex items-center gap-2">
-            <Input type="number" inputMode="numeric" placeholder="from" className="w-20" value={p.yearFrom} onChange={e => p.setYearFrom(e.target.value)} />
-            <span className="text-[10px] text-muted">–</span>
-            <Input type="number" inputMode="numeric" placeholder="to" className="w-20" value={p.yearTo} onChange={e => p.setYearTo(e.target.value)} />
-          </div>
-        </div>
-
-        <div className="ml-auto flex flex-col gap-2">
           <Field>
             <FieldLabel htmlFor="sort">sort</FieldLabel>
             <Select value={p.sort} onValueChange={v => p.setSort(v as Sort)}>
@@ -926,6 +971,9 @@ function BrowseFilters(p: BrowseFiltersProps) {
                 <SelectItem value="title">Title</SelectItem>
                 <SelectItem value="year">Year (newest first)</SelectItem>
                 <SelectItem value="taggedAt">Recently tagged</SelectItem>
+                <SelectItem value="bpm">Tempo (slow → fast)</SelectItem>
+                <SelectItem value="loudness">Loudness (loud → quiet)</SelectItem>
+                <SelectItem value="pace">Pace (intense → calm)</SelectItem>
               </SelectContent>
             </Select>
           </Field>
@@ -1000,6 +1048,12 @@ function TrackTable(p: TrackTableProps) {
               ) : (
                 <span className="lib-needs">needs tags</span>
               )}
+              {/* acoustic-analysis badges — independent of mood tagging, shown
+                  whenever the analyze pass has filled them in */}
+              {t.bpm != null && <span className="lib-mtag lib-atag" title="tempo">{Math.round(t.bpm)} BPM</span>}
+              {t.musicalKey && <span className="lib-mtag lib-atag" title="musical key">{t.musicalKey}</span>}
+              {t.loudnessLufs != null && <span className="lib-mtag lib-atag" title="integrated loudness (LUFS)">{t.loudnessLufs.toFixed(1)} LUFS</span>}
+              {t.instrumental === true && <span className="lib-mtag lib-atag" title="no vocals detected">instrumental</span>}
             </div>
             <span className="lib-album">{t.album || '—'}</span>
             <div className="flex items-center justify-end gap-1.5">

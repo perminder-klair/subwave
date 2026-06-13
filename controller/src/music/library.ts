@@ -302,10 +302,11 @@ export interface FilterOpts {
   moods?: string[];
   energy?: string | null;
   genre?: string | null;
+  vocal?: 'instrumental' | 'vocal' | null;
   yearFrom?: number | null;
   yearTo?: number | null;
   q?: string | null;
-  sort?: 'artist' | 'title' | 'taggedAt' | 'year';
+  sort?: 'artist' | 'title' | 'taggedAt' | 'year' | 'bpm' | 'loudness' | 'pace';
   limit?: number;
   offset?: number;
 }
@@ -322,6 +323,14 @@ export interface FilteredRow {
   energy: string | null;
   source?: string | null;
   taggedAt?: string | null;
+  // Acoustic-analysis surface (null when the analyze pass hasn't touched the
+  // track). `instrumental` is derived: null = not computed, true = analysed with
+  // no vocal ranges, false = analysed with vocals.
+  bpm?: number | null;
+  musicalKey?: string | null;
+  loudnessLufs?: number | null;
+  paceMean?: number | null;
+  instrumental?: boolean | null;
 }
 
 export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRow[] } {
@@ -341,6 +350,11 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRo
       energy: r.energy,
       source: r.source,
       taggedAt: r.taggedAt,
+      bpm: r.bpm,
+      musicalKey: r.musicalKey,
+      loudnessLufs: r.loudnessLufs,
+      paceMean: paceMeanOf(r.pace),
+      instrumental: r.vocalRanges == null ? null : r.vocalRanges.length === 0,
     })),
   };
 }

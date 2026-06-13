@@ -29,7 +29,8 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
     const q = req.query || {};
     const moods = parseList(q.moods);
     const sort = (typeof q.sort === 'string' ? q.sort : 'artist') as
-      | 'artist' | 'title' | 'year' | 'taggedAt';
+      | 'artist' | 'title' | 'year' | 'taggedAt' | 'bpm' | 'loudness' | 'pace';
+    const vocal = q.vocal === 'instrumental' || q.vocal === 'vocal' ? q.vocal : null;
     const limit = parseIntSafe(q.limit, 50);
     const offset = parseIntSafe(q.offset, 0);
     const yearFrom = parseIntSafe(q.yearFrom, null);
@@ -39,6 +40,7 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
       moods,
       energy: typeof q.energy === 'string' && q.energy ? q.energy : null,
       genre: typeof q.genre === 'string' && q.genre ? q.genre : null,
+      vocal,
       yearFrom,
       yearTo,
       q: typeof q.q === 'string' ? q.q : null,

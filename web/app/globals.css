@@ -3047,6 +3047,13 @@ body::after {
     color: var(--muted); padding: 2px 7px; white-space: nowrap;
     display: inline-flex; align-items: center; gap: 6px;
 }
+/* acoustic-analysis badges — tabular figures + a dashed edge so the measured
+   numbers (BPM/key/LUFS) read distinctly from the mood/energy chips. No
+   uppercase transform: it would mangle musical keys (F#m → F#M, Bb → BB). */
+.admin-root .lib-atag {
+    border-style: dashed; font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em; font-size: 9px;
+}
 .admin-root .lib-needs {
     font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700;
     color: var(--accent); border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent);
