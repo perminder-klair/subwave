@@ -176,6 +176,8 @@ export interface LibraryData {
   stats: ObservatoryStats;
   moodVocab: string[];
   truncated: boolean;
+  sampled: boolean; // truncated via a stratified per-genre sample (vs. full)
+  hardMax: number; // ceiling the UI may raise the node cap to
   mock: boolean;
 }
 
@@ -512,6 +514,8 @@ export function buildMockLibrary(count = 400): LibraryData {
     },
     moodVocab: [...new Set(MOCK_SCENES.flatMap((s) => s.moods))],
     truncated: false,
+    sampled: false,
+    hardMax: 50000,
     mock: true,
   };
 }

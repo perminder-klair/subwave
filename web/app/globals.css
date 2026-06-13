@@ -3651,6 +3651,10 @@ body::after {
 .observatory-root .rail-count .ad-muted { font-size: 10px; letter-spacing: 0.16em; }
 .observatory-root .rail-reset { border: 1px solid var(--ink); background: transparent; color: var(--ink); font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 700; padding: 10px; cursor: pointer; }
 .observatory-root .rail-reset:hover { background: var(--ink); color: var(--bg); }
+.observatory-root .obs-maxrow { display: flex; gap: 6px; }
+.observatory-root .obs-maxsel { flex: 1; appearance: none; -webkit-appearance: none; border: 1px solid var(--separator-strong); background: var(--field); color: var(--ink); font-family: inherit; font-size: 11px; letter-spacing: 0.04em; padding: 8px 10px; cursor: pointer; border-radius: 0; }
+.observatory-root .obs-maxsel:hover { border-color: var(--ink); }
+.observatory-root .obs-maxsel:focus { outline: none; border-color: var(--accent); }
 
 /* ---- stage / constellation ---- */
 .observatory-root .obs-stage { display: flex; flex-direction: column; min-width: 0; position: relative; background: var(--bg); }

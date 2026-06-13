@@ -21,15 +21,18 @@ interface ObservatoryResult {
 interface BulkResponse {
   tracks: RawTrack[];
   truncated: boolean;
+  sampled?: boolean;
   max: number;
+  hardMax?: number;
   moodVocab: string[];
   stats: ObservatoryStats;
 }
 
-// Loads the whole tagged library once, lays it out by genre cluster, and falls
-// back to a seeded mock when the library is empty (fresh install) so the view
-// is never blank. `enabled` gates the fetch on admin auth being ready.
-export function useObservatory(adminFetch: AdminFetch, enabled: boolean): ObservatoryResult {
+// Loads the tagged library (up to `max` nodes), lays it out by genre cluster,
+// and falls back to a seeded mock when the library is empty (fresh install) so
+// the view is never blank. `enabled` gates the fetch on admin auth being ready.
+// Changing `max` (the MAP SIZE control) refetches with a higher/lower cap.
+export function useObservatory(adminFetch: AdminFetch, enabled: boolean, max: number): ObservatoryResult {
   const [data, setData] = useState<LibraryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +44,7 @@ export function useObservatory(adminFetch: AdminFetch, enabled: boolean): Observ
       setLoading(true);
       setError(null);
       try {
-        const res = await adminFetch('/library/observatory');
+        const res = await adminFetch(`/library/observatory?max=${encodeURIComponent(max)}`);
         if (!res.ok) throw new Error(`controller error (${res.status})`);
         const body = (await res.json()) as BulkResponse;
         if (cancelled) return;
@@ -56,6 +59,8 @@ export function useObservatory(adminFetch: AdminFetch, enabled: boolean): Observ
             stats: body.stats,
             moodVocab: body.moodVocab || [],
             truncated: !!body.truncated,
+            sampled: !!body.sampled,
+            hardMax: body.hardMax ?? 50000,
             mock: false,
           });
         }
@@ -71,7 +76,7 @@ export function useObservatory(adminFetch: AdminFetch, enabled: boolean): Observ
     return () => {
       cancelled = true;
     };
-  }, [adminFetch, enabled]);
+  }, [adminFetch, enabled, max]);
 
   return { data, loading, error };
 }

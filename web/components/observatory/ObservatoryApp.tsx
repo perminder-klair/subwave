@@ -91,8 +91,20 @@ function Tooltip({ data }: { data: TipState | null }) {
   );
 }
 
+// Node-cap ladder offered in the MAP SIZE control. Values above ~3k render on
+// the canvas renderer (see CANVAS_THRESHOLD). Clamped to the server's hardMax.
+const MAX_LADDER = [2000, 4000, 8000, 16000, 32000, 50000];
+const CANVAS_THRESHOLD = 3000; // node count above which the canvas renderer wins
+const MAX_STORAGE_KEY = 'subwave_obs_max';
+
 export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch }) {
-  const { data: lib, loading, error } = useObservatory(adminFetch, true);
+  // Persisted node cap (MAP SIZE control). Read once from localStorage.
+  const [maxNodes, setMaxNodes] = useState<number>(() => {
+    if (typeof window === 'undefined') return 4000;
+    const stored = Number(window.localStorage.getItem(MAX_STORAGE_KEY));
+    return Number.isFinite(stored) && stored > 0 ? stored : 4000;
+  });
+  const { data: lib, loading, error } = useObservatory(adminFetch, true, maxNodes);
   const { detail, loadingId, fetchDetail } = useTrackDetail(adminFetch);
 
   const [q, setQ] = useState('');
@@ -105,13 +117,24 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const [selected, setSelected] = useState<ObsTrack | null>(null);
   const [tip, setTip] = useState<TipState | null>(null);
 
-  // Renderer spike flag: `?renderer=canvas` swaps the SVG node layer for the
-  // canvas-hybrid renderer (for measuring large libraries). Defaults to SVG.
-  const [renderer] = useState<'svg' | 'canvas'>(() =>
-    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('renderer') === 'canvas'
-      ? 'canvas'
-      : 'svg',
-  );
+  // Renderer override: `?renderer=canvas|svg` forces a renderer; otherwise it
+  // auto-switches to canvas above CANVAS_THRESHOLD nodes (small libraries keep
+  // the animated, accessible SVG path; big ones get the fast canvas one).
+  const [rendererOverride] = useState<'svg' | 'canvas' | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const r = new URLSearchParams(window.location.search).get('renderer');
+    return r === 'canvas' || r === 'svg' ? r : null;
+  });
+
+  const setMax = (n: number) => {
+    setMaxNodes(n);
+    setSelected(null);
+    try {
+      window.localStorage.setItem(MAX_STORAGE_KEY, String(n));
+    } catch {
+      /* ignore quota/availability */
+    }
+  };
 
   const toggleIn =
     (setter: React.Dispatch<React.SetStateAction<Set<string>>>) =>
@@ -195,6 +218,13 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const onSelect = useCallback((t: ObsTrack | null) => setSelected(t), []);
 
   const total = lib?.tracks.length ?? 0;
+  const useCanvas = rendererOverride === 'canvas' || (rendererOverride !== 'svg' && total > CANVAS_THRESHOLD);
+
+  // Cap options: the ladder up to the server's hardMax, plus the current value.
+  const hardMax = lib?.hardMax ?? 50000;
+  const maxOptions = Array.from(new Set([...MAX_LADDER.filter((n) => n <= hardMax), maxNodes])).sort(
+    (a, b) => a - b,
+  );
 
   return (
     <div className="observatory-root">
@@ -229,7 +259,9 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
           {lib?.truncated && (
             <>
               <span className="obs-vsep" />
-              <span className="obs-stat">CAPPED · {lib.stats.total} TAGGED</span>
+              <span className="obs-stat">
+                {lib.sampled ? 'SAMPLED' : 'CAPPED'} · {total.toLocaleString()} / {lib.stats.total.toLocaleString()}
+              </span>
             </>
           )}
         </div>
@@ -318,6 +350,32 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
             </div>
           )}
 
+          {!lib?.mock && (
+            <div className="rail-sec">
+              <div className="rail-label">
+                MAP SIZE
+                {lib?.sampled && <span className="ad-muted"> · SAMPLED OF {lib.stats.total.toLocaleString()}</span>}
+              </div>
+              <div className="obs-maxrow">
+                <select
+                  className="obs-maxsel"
+                  value={maxNodes}
+                  onChange={(e) => setMax(Number(e.target.value))}
+                  aria-label="maximum nodes on the map"
+                >
+                  {maxOptions.map((n) => (
+                    <option key={n} value={n}>
+                      {n.toLocaleString()} nodes
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="ad-muted t-caption">
+                {total > CANVAS_THRESHOLD ? 'CANVAS RENDERER' : 'VECTOR RENDERER'}
+              </div>
+            </div>
+          )}
+
           <div className="rail-foot">
             <div className="rail-count">
               <span className="t-nums acc">{matched.length}</span> <span className="ad-muted">/ {total} IN VIEW</span>
@@ -338,7 +396,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
             <div className="stage-hint t-caption ad-muted">SCROLL TO ZOOM · DRAG TO PAN · CLICK A NODE</div>
           </div>
           {lib ? (
-            renderer === 'canvas' ? (
+            useCanvas ? (
               <ConstellationCanvas
                 lib={lib}
                 matchSet={matchSet}
