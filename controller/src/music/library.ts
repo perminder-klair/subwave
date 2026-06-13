@@ -54,6 +54,11 @@ export function get(songId: string): any {
     bpm: t.bpm,
     musicalKey: t.musicalKey,
     introMs: t.introMs,
+    // Phase 2/4 acoustic surface for the agent picker's Subsonic-fallback path
+    // (slim() in llm/tools.ts). Library-sourced candidates already carry these
+    // via slimTrack; this keeps Subsonic-sourced candidates symmetric.
+    structure: t.structure,
+    paceMean: paceMeanOf(t.pace),
   };
 }
 
@@ -145,6 +150,15 @@ export function songsByMood(mood: string | null | undefined): any[] {
 }
 
 // Slim shape the picker + LLM tools expect — title/artist/album/year/genre
+// Mean of the pace curve (0..1), or null when un-analysed. Shared by slimTrack
+// and get() so the agent picker (Subsonic-fallback path) and the pool picker
+// see the same scalar instead of one path computing it and the other missing it.
+function paceMeanOf(pace: Array<{ value: number }> | null | undefined): number | null {
+  return pace && pace.length
+    ? Math.round((pace.reduce((s, p) => s + p.value, 0) / pace.length) * 1000) / 1000
+    : null;
+}
+
 // plus the two tagger axes. Matches what songsByMood returns above; pulled
 // out so the new embedding-similar helpers can share the same projection.
 function slimTrack(r: db.TrackRecord) {
@@ -167,9 +181,7 @@ function slimTrack(r: db.TrackRecord) {
     vocalRanges: r.vocalRanges,
     // Scalar mean pace (0..1) for the picker/LLM — the full curve stays in the
     // record for UI/future use. null when un-analysed.
-    paceMean: r.pace && r.pace.length
-      ? Math.round((r.pace.reduce((s, p) => s + p.value, 0) / r.pace.length) * 1000) / 1000
-      : null,
+    paceMean: paceMeanOf(r.pace),
   };
 }
 

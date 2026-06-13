@@ -22,9 +22,11 @@ function slim(s: any) {
     year: s.year || null,
     genre: s.genre || null,
   };
-  // Surface measured tempo/key when known — from the song itself (library
-  // sources) or a library lookup (Subsonic sources). Omitted when un-analysed
-  // so the agent only ever sees real values.
+  // Surface measured acoustic facts when known — from the song itself (library
+  // sources, via slimTrack) or a library lookup (Subsonic sources). Each field
+  // is omitted when un-analysed so the agent only ever sees real values.
+  // `pace` (0..1 perceptual energy) and `sections` (structural-part count over
+  // the opening) feed FLOW reasoning per PICKER_CRITERIA in llm/dj.ts.
   const src = (s.bpm != null || s.musicalKey != null || s.introMs != null)
     ? s
     : (s.id ? library.get(s.id) : null);
@@ -34,6 +36,8 @@ function slim(s: any) {
     ...(src.bpm != null ? { bpm: src.bpm } : {}),
     ...(src.musicalKey != null ? { key: src.musicalKey } : {}),
     ...(src.introMs != null ? { intro_ms: src.introMs } : {}),
+    ...(src.paceMean != null ? { pace: src.paceMean } : {}),
+    ...(Array.isArray(src.structure) && src.structure.length ? { sections: src.structure.length } : {}),
   };
 }
 

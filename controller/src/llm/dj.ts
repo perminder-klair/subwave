@@ -439,7 +439,7 @@ export async function generateHourlyTime(time: any, weather: any, { recap = null
 // below) and the conversational agent picker (pickSystem in broadcast/
 // dj-agent.js) so the two strategies can't drift apart on selection rules.
 export const PICKER_CRITERIA = `Selection criteria, in order:
-1. FLOW — does it transition naturally from what just played (energy, mood, tempo)? When a candidate shows a "bpm" and/or Camelot "key", those are MEASURED — prefer a next track whose tempo sits near the current one (or steps it deliberately for the daypart) and whose key is harmonically close. Treat them as a tie-breaker, never a hard rule; many tracks won't have them.
+1. FLOW — does it transition naturally from what just played (energy, mood, tempo)? When a candidate shows a "bpm" and/or Camelot "key", those are MEASURED — prefer a next track whose tempo sits near the current one (or steps it deliberately for the daypart) and whose key is harmonically close. A "pace" value (0–1) is the track's MEASURED perceptual energy, decoupled from tempo — use it to shape build/release arcs: avoid stacking two peaks back-to-back, ease down for wind-down dayparts, lift for workout/drive. A "sections" count hints how much the opening develops (higher = a busier, evolving intro). Treat all of these as tie-breakers, never hard rules; many tracks won't have them.
 2. CONTEXT — does it fit the time of day, weather, and dominant mood?
 3. VARIETY — avoid the same artist back-to-back; don't repeat tracks you've already played today; rotate energy. Variety over cleverness — never pick a track because its title literally matches the time of day, the weather, or anything else literal.
 4. INTEREST — prefer something that creates a moment, not the most generic option.`;
