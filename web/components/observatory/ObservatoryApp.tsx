@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useObservatory, useTrackDetail } from '../../lib/observatory';
 import ConstellationMap from './ConstellationMap';
+import ConstellationCanvas from './ConstellationCanvas';
 import { StatsView, Dossier } from './panels';
 import { nearest, sourceStyle, tally, type ColorBy, type ObsTrack } from './data';
 
@@ -103,6 +104,14 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const [analysedOnly, setAnalysedOnly] = useState(false);
   const [selected, setSelected] = useState<ObsTrack | null>(null);
   const [tip, setTip] = useState<TipState | null>(null);
+
+  // Renderer spike flag: `?renderer=canvas` swaps the SVG node layer for the
+  // canvas-hybrid renderer (for measuring large libraries). Defaults to SVG.
+  const [renderer] = useState<'svg' | 'canvas'>(() =>
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('renderer') === 'canvas'
+      ? 'canvas'
+      : 'svg',
+  );
 
   const toggleIn =
     (setter: React.Dispatch<React.SetStateAction<Set<string>>>) =>
@@ -329,16 +338,29 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
             <div className="stage-hint t-caption ad-muted">SCROLL TO ZOOM · DRAG TO PAN · CLICK A NODE</div>
           </div>
           {lib ? (
-            <ConstellationMap
-              lib={lib}
-              matchSet={matchSet}
-              colorBy={colorBy}
-              selected={selected}
-              neighbours={mixNodes}
-              hovered={tip ? tip.track : null}
-              onHover={onHover}
-              onSelect={onSelect}
-            />
+            renderer === 'canvas' ? (
+              <ConstellationCanvas
+                lib={lib}
+                matchSet={matchSet}
+                colorBy={colorBy}
+                selected={selected}
+                neighbours={mixNodes}
+                hovered={tip ? tip.track : null}
+                onHover={onHover}
+                onSelect={onSelect}
+              />
+            ) : (
+              <ConstellationMap
+                lib={lib}
+                matchSet={matchSet}
+                colorBy={colorBy}
+                selected={selected}
+                neighbours={mixNodes}
+                hovered={tip ? tip.track : null}
+                onHover={onHover}
+                onSelect={onSelect}
+              />
+            )
           ) : (
             <div className="cmap" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <span className="t-caption ad-muted">{loading ? 'mapping the library…' : error || 'no data'}</span>

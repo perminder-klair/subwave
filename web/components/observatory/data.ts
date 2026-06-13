@@ -310,6 +310,60 @@ export function sourceStyle(source: string | null): SourceStyle {
 }
 
 // ---------------------------------------------------------------------------
+// Synapse links — 1 nearest same-genre neighbour per node, found via a uniform
+// spatial grid (O(n)) instead of the O(n²) scan the SVG layer uses. Returns
+// index pairs into `tracks`. Used by the canvas renderer, where n can be large.
+// ---------------------------------------------------------------------------
+export function buildSynapseLinks(tracks: ObsTrack[]): [number, number][] {
+  const CELL = 64; // ~ the gaussian cluster spread in layoutTracks
+  const grid = new Map<string, number[]>();
+  const cellKey = (g: string, x: number, y: number) =>
+    `${g}|${Math.floor(x / CELL)}|${Math.floor(y / CELL)}`;
+  tracks.forEach((t, i) => {
+    const k = cellKey(t.genre || NO_GENRE, t.x, t.y);
+    const bucket = grid.get(k);
+    if (bucket) bucket.push(i);
+    else grid.set(k, [i]);
+  });
+  const out: [number, number][] = [];
+  const seen = new Set<number>();
+  const n = tracks.length;
+  tracks.forEach((t, i) => {
+    const g = t.genre || NO_GENRE;
+    const gx = Math.floor(t.x / CELL);
+    const gy = Math.floor(t.y / CELL);
+    let best = -1;
+    let bd = Infinity;
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const cell = grid.get(`${g}|${gx + dx}|${gy + dy}`);
+        if (!cell) continue;
+        for (const j of cell) {
+          if (j === i) continue;
+          const ddx = t.x - tracks[j]!.x;
+          const ddy = t.y - tracks[j]!.y;
+          const d = ddx * ddx + ddy * ddy;
+          if (d < bd) {
+            bd = d;
+            best = j;
+          }
+        }
+      }
+    }
+    if (best >= 0) {
+      const a = Math.min(i, best);
+      const b = Math.max(i, best);
+      const pk = a * n + b; // unique pair id (safe < 2^53 for n ≤ ~94M)
+      if (!seen.has(pk)) {
+        seen.add(pk);
+        out.push([a, b]);
+      }
+    }
+  });
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Node appearance — shared by the SVG node layer, the hover overlay, and the
 // canvas renderer so all three stay pixel-identical. `colorBy` selects what the
 // ink→vermilion ramp / source palette encodes.
