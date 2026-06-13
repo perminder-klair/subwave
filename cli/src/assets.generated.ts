@@ -649,8 +649,32 @@ SITE_URL=
 # AI_GATEWAY_API_KEY=
 # ELEVENLABS_API_KEY=
 # SEARCH_API_KEY=tvly-...
+
+# ───────── Acoustic analysis (CLAP audio-similarity + Demucs vocals) ─────────
+# The analysis pass (npm run analyze / admin "Analyze audio") computes bpm, key,
+# loudness, structure, pace and a beat grid for every track. Two heavier,
+# opt-in dimensions need extra deps baked into the tts-heavy image at BUILD time
+# and switched on at RUN time.
+#
+# Build args — pass to \`docker compose build tts-heavy\` (env or here):
+# WITH_CLAP=0     # 1 = build the CLAP "sounds-like" audio-embedding backend
+# WITH_DEMUCS=0   # 1 = build the Demucs source-separation (vocal-presence) backend
+#
+# Runtime flags — env wins ON over the admin toggles (settings.audio.*), never
+# off. A flag with no matching backend in the image is a clean no-op.
+# ANALYZE_AUDIO_EMBEDDING=   # 1/true = fill CLAP audio vectors (needs WITH_CLAP)
+# ANALYZE_VOCAL_ACTIVITY=    # 1/true = fill Demucs vocal ranges (needs WITH_DEMUCS)
+#
+# Optional model overrides (sensible defaults shown):
+# CLAP_MODEL=laion-clap
+# DEMUCS_MODEL=htdemucs
+#
+# HuggingFace token — only to download gated model weights at build time
+# (PocketTTS cloning weights; some CLAP/Demucs checkpoints). ARG HF_TOKEN in
+# docker/Dockerfile.tts-heavy.
+# HF_TOKEN=
 `;
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version` and by the TUI release fetch URL).
-export const CLI_VERSION = `0.13.0`;
+export const CLI_VERSION = `0.15.0`;
