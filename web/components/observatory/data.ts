@@ -310,6 +310,27 @@ export function sourceStyle(source: string | null): SourceStyle {
 }
 
 // ---------------------------------------------------------------------------
+// Node appearance — shared by the SVG node layer, the hover overlay, and the
+// canvas renderer so all three stay pixel-identical. `colorBy` selects what the
+// ink→vermilion ramp / source palette encodes.
+// ---------------------------------------------------------------------------
+export type ColorBy = 'energy' | 'confidence' | 'source' | 'analysis';
+
+export function nodeColor(t: ObsTrack, colorBy: ColorBy): string {
+  if (colorBy === 'energy') return heat(t.energyVal);
+  if (colorBy === 'confidence') return heat(0.15 + (t.confidence ?? 0.5) * 0.85);
+  if (colorBy === 'source') return sourceStyle(t.source).color;
+  if (colorBy === 'analysis') return t.analysed ? '#d94b2a' : '#9b948a';
+  return '#4a443d';
+}
+
+export function nodeFilled(t: ObsTrack, colorBy: ColorBy): boolean {
+  if (colorBy === 'source') return sourceStyle(t.source).filled;
+  if (colorBy === 'analysis') return t.analysed;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Mock library — empty-library fallback. A trimmed port of the prototype's
 // seeded generator, emitting the real ObsTrack shape (incl. layout + real
 // source enum) so the UI looks identical with or without a backing library.

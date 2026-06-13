@@ -6,15 +6,14 @@
    ============================================================================ */
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useObservatory, useTrackDetail } from '../../lib/observatory';
 import ConstellationMap from './ConstellationMap';
 import { StatsView, Dossier } from './panels';
-import { nearest, sourceStyle, tally, type ObsTrack } from './data';
+import { nearest, sourceStyle, tally, type ColorBy, type ObsTrack } from './data';
 
 type AdminFetch = (path: string, init?: RequestInit) => Promise<Response>;
-type ColorBy = 'energy' | 'confidence' | 'source' | 'analysis';
 
 // Spinning vinyl disc mark, inline so it follows the theme via currentColor
 // (an <img> SVG can't read the page's light/dark tokens). Faithful to the
@@ -174,13 +173,17 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     setAnalysedOnly(false);
   };
 
-  const onHover = (t: ObsTrack | null, e?: React.MouseEvent) => {
+  // Stable identities so ConstellationMap's memoised node layer survives the
+  // parent re-render that a hover (tip state) triggers — otherwise new callback
+  // refs would invalidate the memo and reconcile every node on each hover.
+  const onHover = useCallback((t: ObsTrack | null, e?: React.MouseEvent) => {
     if (!t || !e) {
       setTip(null);
       return;
     }
     setTip({ track: t, x: e.clientX, y: e.clientY });
-  };
+  }, []);
+  const onSelect = useCallback((t: ObsTrack | null) => setSelected(t), []);
 
   const total = lib?.tracks.length ?? 0;
 
@@ -334,7 +337,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
               neighbours={mixNodes}
               hovered={tip ? tip.track : null}
               onHover={onHover}
-              onSelect={(t) => setSelected(t)}
+              onSelect={onSelect}
             />
           ) : (
             <div className="cmap" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

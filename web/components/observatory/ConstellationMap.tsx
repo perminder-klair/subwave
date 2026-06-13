@@ -14,9 +14,7 @@
 'use client';
 
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
-import { heat, sourceStyle, type ObsTrack, type LibraryData } from './data';
-
-type ColorBy = 'energy' | 'confidence' | 'source' | 'analysis';
+import { nodeColor, nodeFilled, type ColorBy, type ObsTrack, type LibraryData } from './data';
 
 interface Props {
   lib: LibraryData;
@@ -193,33 +191,21 @@ export default function ConstellationMap({
     [links],
   );
 
-  // Node layer — the heavy one. Memoised on data + selection/hover/filter state
-  // but NOT on `view`, so pan/zoom skip it entirely. `dragging` is read from a
-  // ref inside the handlers so it isn't a dependency either.
+  // Node layer — the heavy one. Memoised on data + selection/filter state but
+  // NOT on `view` or `hovered`, so pan/zoom AND hover skip it entirely (hover is
+  // drawn as a single overlay below). `dragging` is read from a ref inside the
+  // handlers so it isn't a dependency either.
   const nodeEls = useMemo(() => {
-    const color = (t: ObsTrack): string => {
-      if (colorBy === 'energy') return heat(t.energyVal);
-      if (colorBy === 'confidence') return heat(0.15 + (t.confidence ?? 0.5) * 0.85);
-      if (colorBy === 'source') return sourceStyle(t.source).color;
-      if (colorBy === 'analysis') return t.analysed ? '#d94b2a' : '#9b948a';
-      return '#4a443d';
-    };
-    const isFilled = (t: ObsTrack): boolean => {
-      if (colorBy === 'source') return sourceStyle(t.source).filled;
-      if (colorBy === 'analysis') return t.analysed;
-      return true;
-    };
     return lib.tracks.map((t) => {
       const matched = matchSet.has(t.idx);
       const isSel = selected != null && selected.idx === t.idx;
       const isNb = neighbourSet.has(t.idx);
-      const isHov = hovered != null && hovered.idx === t.idx;
       const base = 3.4 + (t.confidence ?? 0.5) * 2.2;
-      const r = isSel ? base + 4 : isHov ? base + 2.4 : isNb ? base + 1.6 : base;
+      const r = isSel ? base + 4 : isNb ? base + 1.6 : base;
       let op = matched ? 1 : 0.07;
       if (selected && matched && !isSel && !isNb) op = filtering ? 0.5 : 0.32;
-      const col = isSel ? '#d94b2a' : color(t);
-      const filled = isFilled(t) || isSel || isNb;
+      const col = isSel ? '#d94b2a' : nodeColor(t, colorBy);
+      const filled = nodeFilled(t, colorBy) || isSel || isNb;
       // entrance: spread from centre
       const delay = ready ? 0 : Math.min(620, Math.hypot(t.x - 500, t.y - 500) * 0.9);
       return (
@@ -252,7 +238,36 @@ export default function ConstellationMap({
         />
       );
     });
-  }, [lib.tracks, matchSet, colorBy, selected, neighbourSet, hovered, ready, filtering, onHover, onSelect]);
+  }, [lib.tracks, matchSet, colorBy, selected, neighbourSet, ready, filtering, onHover, onSelect]);
+
+  // Hover highlight — one overlay circle on top of the static node layer, so
+  // hovering doesn't rebuild all N nodes (was the O(N) reconcile path). Purely
+  // decorative (pointer-events: none); the base node underneath keeps the
+  // pointer handlers. Skipped when the hovered node is the selected one (the
+  // selection ripple already marks it).
+  const hoverEl = useMemo(() => {
+    if (!hovered || (selected && selected.idx === hovered.idx)) return null;
+    const t = hovered;
+    const matched = matchSet.has(t.idx);
+    const isNb = neighbourSet.has(t.idx);
+    const base = 3.4 + (t.confidence ?? 0.5) * 2.2;
+    let op = matched ? 1 : 0.07;
+    if (selected && matched && !isNb) op = filtering ? 0.5 : 0.32;
+    const col = nodeColor(t, colorBy);
+    const filled = nodeFilled(t, colorBy) || isNb;
+    return (
+      <circle
+        cx={t.x}
+        cy={t.y}
+        r={base + 2.4}
+        fill={filled ? col : 'var(--bg)'}
+        stroke={col}
+        strokeWidth={(filled ? 0 : 1.4) + (isNb ? 1.2 : 0)}
+        vectorEffect="non-scaling-stroke"
+        style={{ opacity: op, pointerEvents: 'none' }}
+      />
+    );
+  }, [hovered, selected, matchSet, neighbourSet, colorBy, filtering]);
 
   return (
     <div
@@ -294,6 +309,9 @@ export default function ConstellationMap({
 
           {/* nodes */}
           {nodeEls}
+
+          {/* hover highlight (single overlay, not a node-layer rebuild) */}
+          {hoverEl}
 
           {/* selected ripple */}
           {selected && (
