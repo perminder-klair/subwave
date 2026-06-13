@@ -23,6 +23,10 @@ export interface AnalyzeOptions {
   // (analysed before audio embeddings were enabled). Only meaningful when the
   // backend actually emits embeddings; defaults from ANALYZE_AUDIO_EMBEDDING.
   audioBackfill?: boolean;
+  // Widen the scope to tracks with no vocal-activity ranges yet (vocal_ranges_json
+  // NULL). The Demucs pass is expensive and opt-in; defaults from
+  // ANALYZE_VOCAL_ACTIVITY / settings.audio.vocalActivity.
+  vocalBackfill?: boolean;
 }
 
 // Audio embeddings are on when EITHER the env says so (env wins on, never
@@ -39,6 +43,18 @@ function audioBackfillDefault(): boolean {
   }
 }
 
+// Vocal-activity backfill default — same precedence as audio: env wins on,
+// else the admin toggle (settings.audio.vocalActivity).
+function vocalBackfillDefault(): boolean {
+  const v = (process.env.ANALYZE_VOCAL_ACTIVITY || '').toLowerCase();
+  if (v === '1' || v === 'true' || v === 'yes') return true;
+  try {
+    return settings.get()?.audio?.vocalActivity === true;
+  } catch {
+    return false;
+  }
+}
+
 export interface AnalyzeStats {
   available: boolean;
   backend: string;
@@ -48,6 +64,9 @@ export interface AnalyzeStats {
   // How many of the analysed tracks also got a CLAP audio vector this run.
   // 0 when the backend has no CLAP model loaded (ANALYZE_AUDIO_EMBEDDING off).
   audioEmbedded: number;
+  // How many tracks got vocal-activity ranges this run (incl. instrumentals,
+  // stored as []). 0 when vocal activity is off / demucs absent.
+  vocalAnalyzed: number;
 }
 
 // Model label recorded in audio_embedding_meta for provenance. The worker owns
@@ -58,7 +77,7 @@ const AUDIO_MODEL_LABEL = process.env.CLAP_MODEL || 'laion-clap';
 export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<AnalyzeStats> {
   if (!(await analyzer.isAvailable())) {
     console.log('[analyze] no analysis backend (tts-heavy sidecar / local librosa venv) — skipping');
-    return { available: false, backend: 'none', analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0 };
+    return { available: false, backend: 'none', analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0, vocalAnalyzed: 0 };
   }
   const backend = analyzer.backendLabel();
   console.log(`[analyze] backend: ${backend}`);
@@ -86,9 +105,24 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     }
   }
 
+  // Vocal backfill: same idea for tracks missing vocal-activity ranges. The
+  // Demucs separation is the expensive part, so this only widens the scope when
+  // the operator opted in (env/admin toggle); the `vocal:true` flag below then
+  // forces the backend to run it for this pass.
+  const vocalBackfill = opts.vocalBackfill ?? vocalBackfillDefault();
+  if (vocalBackfill) {
+    const seen = new Set(ids);
+    const vocalIds = db.needsVocalIds(cap).filter(id => !seen.has(id));
+    const before = ids.length;
+    ids = cap ? [...ids, ...vocalIds].slice(0, cap) : [...ids, ...vocalIds];
+    if (ids.length > before) {
+      console.log(`[analyze] vocal backfill: +${ids.length - before} tracks missing vocal-activity ranges`);
+    }
+  }
+
   if (ids.length === 0) {
     console.log('[analyze] nothing to analyse — all tracks current');
-    return { available: true, backend, analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0 };
+    return { available: true, backend, analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0, vocalAnalyzed: 0 };
   }
   console.log(`[analyze] ${ids.length} tracks to analyse`);
   reportProgress({ phase: 'analyze', label: 'Analysing audio', done: 0, total: ids.length });
@@ -96,6 +130,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   let analyzed = 0;
   let failed = 0;
   let audioEmbedded = 0;
+  let vocalAnalyzed = 0;
   // Stamp the audio-embedding provenance row once, on the first vector written
   // this run. Cheap idempotent guard so we don't touch the meta table per track.
   let audioMetaStamped = false;
@@ -129,9 +164,12 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       // doesn't have ANALYZE_AUDIO_EMBEDDING (the admin-toggle path); omitted
       // when audio is off so the backend keeps its env-driven default.
       const embed = audioBackfill ? true : undefined;
+      // vocal:true forces the Demucs pass for this track (admin/backfill path),
+      // mirroring embed; omitted when vocal activity is off.
+      const vocal = vocalBackfill ? true : undefined;
       const a = localPath
-        ? await analyzer.analyzePath(localPath, { embed })
-        : await analyzer.analyze(id, { embed });
+        ? await analyzer.analyzePath(localPath, { embed, vocal })
+        : await analyzer.analyze(id, { embed, vocal });
       db.upsertTrackAnalysis(id, {
         bpm: a.bpm,
         musicalKey: a.musicalKey,
@@ -140,7 +178,9 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         loudnessLufs: a.loudnessLufs,
         peakDb: a.peakDb,
         sections: a.sections,
+        vocalRanges: a.vocalRanges,
       });
+      if (a.vocalRanges != null) vocalAnalyzed += 1;
       // Opportunistically store the CLAP audio vector whenever the backend
       // carried one. Independent of the bpm/key write above: a track analysed
       // before CLAP was enabled simply gets its vector on the next pass once
@@ -185,7 +225,8 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
 
   console.log(
     `[analyze] done — analyzed=${analyzed} failed=${failed}` +
-      (audioEmbedded > 0 ? ` audio-embedded=${audioEmbedded}` : ''),
+      (audioEmbedded > 0 ? ` audio-embedded=${audioEmbedded}` : '') +
+      (vocalAnalyzed > 0 ? ` vocal-analyzed=${vocalAnalyzed}` : ''),
   );
-  return { available: true, backend, analyzed, failed, scope: ids.length, audioEmbedded };
+  return { available: true, backend, analyzed, failed, scope: ids.length, audioEmbedded, vocalAnalyzed };
 }

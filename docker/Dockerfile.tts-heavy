@@ -135,7 +135,14 @@ RUN python3 -m venv /opt/server/venv && \
 # ANALYZE_AUDIO_EMBEDDING=1 is also set; without the build arg that env is a
 # no-op (the model import fails and the worker cleanly emits bpm/key only).
 # CPU-only torch via the download.pytorch.org index, mirroring the venvs above.
+#
+# Vocal-activity ranges (Demucs source separation) are a SECOND opt-in via
+# `--build-arg WITH_DEMUCS=1` — pulls CPU torch + torchaudio + demucs, also
+# ~1.5GB. Runtime-gated by ANALYZE_VOCAL_ACTIVITY=1; without the build arg the
+# model import fails and the worker cleanly omits vocal_ranges. The two flags
+# are independent but share the same CPU-torch index.
 ARG WITH_CLAP=0
+ARG WITH_DEMUCS=0
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ffmpeg libsndfile1 && \
     rm -rf /var/lib/apt/lists/* && \
@@ -148,6 +155,13 @@ RUN apt-get update && \
         --extra-index-url https://pypi.org/simple \
         torch transformers onnxruntime && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
+    fi && \
+    if [ "$WITH_DEMUCS" = "1" ]; then \
+      /opt/analyzer/venv/bin/pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --extra-index-url https://pypi.org/simple \
+        torch torchaudio demucs && \
+      /opt/analyzer/venv/bin/python -c "import torch, demucs" ; \
     fi && \
     find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
 

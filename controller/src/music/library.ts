@@ -164,6 +164,7 @@ function slimTrack(r: db.TrackRecord) {
     introMs: r.introMs,
     loudnessLufs: r.loudnessLufs,
     structure: r.structure,
+    vocalRanges: r.vocalRanges,
   };
 }
 

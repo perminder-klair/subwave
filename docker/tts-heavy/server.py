@@ -339,6 +339,11 @@ async def health():
         "analyze_audio_capable": (
             analyzer_worker.ready_meta.get("audio_embedding_capable") if analyzer_worker.ready else None
         ),
+        # Likewise for Demucs vocal-activity ranges — true only when built
+        # WITH_DEMUCS=1. None until the worker is ready.
+        "analyze_vocal_capable": (
+            analyzer_worker.ready_meta.get("vocal_activity_capable") if analyzer_worker.ready else None
+        ),
     }
 
 
@@ -398,6 +403,8 @@ class AnalyzeRequest(BaseModel):
     # worker lazy-load CLAP even without ANALYZE_AUDIO_EMBEDDING in its env;
     # None keeps the worker's env-driven default.
     embed: bool | None = None
+    # Same, for Demucs vocal-activity ranges (ANALYZE_VOCAL_ACTIVITY default).
+    vocal: bool | None = None
 
 
 @app.post("/analyze")
@@ -410,6 +417,8 @@ async def analyze(req: AnalyzeRequest):
         raise HTTPException(400, "missing 'url' or 'path'")
     if req.embed is not None:
         payload["embed"] = req.embed
+    if req.vocal is not None:
+        payload["vocal"] = req.vocal
     msg = await analyzer_worker.request(payload)
     if not msg.get("ok"):
         raise HTTPException(500, msg.get("error") or "analyze failed")
@@ -423,7 +432,7 @@ async def analyze(req: AnalyzeRequest):
     # Optional perceptual loudness + structural sections — present only when the
     # worker computed them. Pass through; omitted otherwise so the client maps
     # them to null (unity gain / no structure).
-    for k in ("loudness_lufs", "peak_db", "sections"):
+    for k in ("loudness_lufs", "peak_db", "sections", "vocal_ranges"):
         if k in msg:
             out[k] = msg[k]
     # Optional CLAP audio embedding — present only when the worker has the model

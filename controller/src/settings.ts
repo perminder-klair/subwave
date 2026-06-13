@@ -532,6 +532,13 @@ const DEFAULTS = {
   // enables it regardless of this toggle (env wins on, never off).
   audio: {
     embeddings: false,
+    // Demucs vocal-activity ranges — drives content-aware talk timing and a
+    // vocal-absence intro detector. When on, the analysis pass asks the backend
+    // for vocal ranges per track; the backend needs the demucs stack (tts-heavy
+    // built WITH_DEMUCS=1, or a local venv with torch+demucs) — without it the
+    // request is a clean no-op. ANALYZE_VOCAL_ACTIVITY=1 also enables it
+    // regardless of this toggle (env wins on, never off). Expensive — opt-in.
+    vocalActivity: false,
   },
   // Sound-effects library. When disabled, the segment-director agent is never
   // shown the effect catalogue, so it stops garnishing spoken breaks with
@@ -1003,6 +1010,7 @@ export async function load() {
     },
     audio: {
       embeddings: typeof stored.audio?.embeddings === 'boolean' ? stored.audio.embeddings : DEFAULTS.audio.embeddings,
+      vocalActivity: typeof stored.audio?.vocalActivity === 'boolean' ? stored.audio.vocalActivity : DEFAULTS.audio.vocalActivity,
     },
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
@@ -1778,6 +1786,9 @@ export async function update(patch) {
     const au = patch.audio || {};
     if (au.embeddings !== undefined) {
       next.audio.embeddings = !!au.embeddings;
+    }
+    if (au.vocalActivity !== undefined) {
+      next.audio.vocalActivity = !!au.vocalActivity;
     }
   }
   if ('sfx' in patch) {

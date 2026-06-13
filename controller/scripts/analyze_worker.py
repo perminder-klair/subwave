@@ -50,6 +50,17 @@ EMBED_ENABLED = os.environ.get("ANALYZE_AUDIO_EMBEDDING", "").strip().lower() in
 CLAP_SR = 48000
 CLAP_EMBED_DIM = 512
 
+# --- Vocal-activity ranges (optional, opt-in) ------------------------------
+# Off unless ANALYZE_VOCAL_ACTIVITY is truthy. Runs Demucs source separation to
+# isolate the vocal stem, then thresholds its energy envelope into present/
+# absent ranges. Heavy (a real torch model) — gated like CLAP. Demucs wants
+# 44.1 kHz stereo.
+VOCAL_ENABLED = os.environ.get("ANALYZE_VOCAL_ACTIVITY", "").strip().lower() in (
+    "1", "true", "yes",
+)
+DEMUCS_SR = 44100
+DEMUCS_MODEL = os.environ.get("DEMUCS_MODEL", "htdemucs")
+
 # Krumhansl-Kessler key profiles (major/minor), indexed from the tonic.
 MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
 MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
@@ -292,6 +303,98 @@ def get_embedder(force=False):
     return _embedder
 
 
+# ---------------------------------------------------------------------------
+# Vocal-activity detector — Demucs source separation → vocal energy envelope →
+# present/absent time ranges. All heavy imports (torch, demucs) are lazy so a
+# worker with vocal activity DISABLED never needs them and the librosa-only venv
+# keeps working. Same degrade-never-crash contract as the CLAP embedder.
+# ---------------------------------------------------------------------------
+class VocalActivityDetector:
+    def __init__(self):
+        self.model = None
+        self.sources = None  # stem order, e.g. ['drums','bass','other','vocals']
+
+    def load(self):
+        from demucs.pretrained import get_model
+
+        self.model = get_model(DEMUCS_MODEL)
+        self.model.eval()
+        self.sources = list(self.model.sources)
+        if "vocals" not in self.sources:
+            raise RuntimeError(f"demucs model {DEMUCS_MODEL} has no 'vocals' stem")
+
+    def detect(self, stereo, sr, librosa):
+        """stereo: float32 array shaped (2, N) at DEMUCS_SR. Returns a list of
+        {startMs,endMs} where the isolated vocal stem is active — possibly empty
+        (an instrumental). Raises on failure; the caller degrades to None."""
+        import numpy as np
+        import torch
+
+        wav = torch.from_numpy(np.ascontiguousarray(stereo, dtype=np.float32))
+        if wav.ndim == 1:
+            wav = wav.unsqueeze(0).repeat(2, 1)
+        from demucs.apply import apply_model
+
+        with torch.no_grad():
+            est = apply_model(self.model, wav.unsqueeze(0), device="cpu")[0]
+        vocals = est[self.sources.index("vocals")].mean(dim=0).cpu().numpy()
+
+        # RMS envelope of the vocal stem, thresholded against its own loud level
+        # (40th-pct of the loud half) — robust to overall mix level. Frames where
+        # vocal energy sustains above threshold become "vocal present" ranges,
+        # merging gaps shorter than ~0.4s so a breath doesn't split a phrase.
+        hop = 512
+        rms = librosa.feature.rms(y=vocals, frame_length=2048, hop_length=hop)[0]
+        if rms.size == 0:
+            return []
+        loud = float(np.percentile(rms, 90))
+        if loud <= 0:
+            return []
+        thr = 0.15 * loud
+        times = librosa.frames_to_time(np.arange(rms.size), sr=sr, hop_length=hop)
+        active = rms >= thr
+        ranges = []
+        merge_gap_ms = 400
+        i = 0
+        n = rms.size
+        while i < n:
+            if not active[i]:
+                i += 1
+                continue
+            j = i
+            while j + 1 < n and active[j + 1]:
+                j += 1
+            start_ms = int(round(float(times[i]) * 1000.0))
+            end_ms = int(round(float(times[min(j + 1, n - 1)]) * 1000.0))
+            if ranges and start_ms - ranges[-1]["endMs"] <= merge_gap_ms:
+                ranges[-1]["endMs"] = end_ms
+            else:
+                ranges.append({"startMs": start_ms, "endMs": end_ms})
+            i = j + 1
+        # Drop sub-300ms blips (separation artefacts, not sung lines).
+        return [r for r in ranges if r["endMs"] - r["startMs"] >= 300]
+
+
+_vocal_detector = None
+_vocal_failed = False
+
+
+def get_vocal_detector(force=False):
+    global _vocal_detector, _vocal_failed
+    if _vocal_failed or not (VOCAL_ENABLED or force):
+        return None
+    if _vocal_detector is None:
+        try:
+            d = VocalActivityDetector()
+            d.load()
+            _vocal_detector = d
+        except Exception as ex:  # noqa: BLE001 — degrade, never crash the worker
+            log(f"Demucs load failed ({ex}); vocal activity disabled for this run")
+            _vocal_failed = True
+            return None
+    return _vocal_detector
+
+
 def fetch_audio(url):
     suffix = ".audio"
     fd, path = tempfile.mkstemp(suffix=suffix, prefix="swanalyze_")
@@ -341,7 +444,7 @@ def measure_loudness(y, sr):
         return None, None
 
 
-def analyze(librosa, url=None, path=None, embed=None):
+def analyze(librosa, url=None, path=None, embed=None, vocal=None):
     import numpy as np
 
     # A controller-provided path is pre-fetched onto the shared volume and
@@ -351,6 +454,7 @@ def analyze(librosa, url=None, path=None, embed=None):
     if owned:
         path = fetch_audio(url)
     audio_embedding = None
+    vocal_ranges = None
     try:
         y, sr = librosa.load(path, sr=ANALYZE_SR, mono=True, duration=ANALYZE_SECONDS)
         # CLAP wants 48 kHz mono — decode a second copy at that rate from the
@@ -371,6 +475,23 @@ def analyze(librosa, url=None, path=None, embed=None):
             except Exception as e:  # noqa: BLE001 — embedding is best-effort
                 log(f"audio embedding failed: {e}")
                 audio_embedding = None
+        # Vocal activity — Demucs wants 44.1 kHz stereo; decode a third copy from
+        # the same file. Gated like CLAP (per-request `vocal` forces the load).
+        # Best-effort: a failure leaves vocal_ranges None (field omitted). A
+        # successful run with no detected vocals emits [] — the distinct "empty"
+        # value tells the controller this track WAS analysed (an instrumental),
+        # so the backfill scope doesn't keep re-targeting it.
+        detector = None if vocal is False else get_vocal_detector(force=vocal is True)
+        if detector is not None:
+            try:
+                ys, _srs = librosa.load(
+                    path, sr=DEMUCS_SR, mono=False, duration=ANALYZE_SECONDS
+                )
+                if ys is not None and np.size(ys) > 0:
+                    vocal_ranges = detector.detect(ys, DEMUCS_SR, librosa)
+            except Exception as e:  # noqa: BLE001 — vocal activity is best-effort
+                log(f"vocal activity failed: {e}")
+                vocal_ranges = None
     finally:
         if owned:
             try:
@@ -389,6 +510,13 @@ def analyze(librosa, url=None, path=None, embed=None):
     key, key_sep = estimate_key(chroma_mean)
 
     intro_ms = estimate_intro_ms(y, sr, librosa)
+
+    # When vocal activity was measured, the start of the first vocal range is a
+    # truer intro than the energy heuristic (an instrumental intro is exactly
+    # the vocal-free leading region). Prefer it; fall back to the heuristic for
+    # instrumentals ([] → keep the energy estimate) and un-run tracks.
+    if vocal_ranges:
+        intro_ms = float(vocal_ranges[0]["startMs"])
 
     # Structural sections over the decoded window (intro/leading sections are
     # the reliable part — the outro of a long track is beyond ANALYZE_SECONDS).
@@ -419,6 +547,11 @@ def analyze(librosa, url=None, path=None, embed=None):
     # Structural sections (omit when segmentation produced nothing).
     if sections:
         result["sections"] = sections
+    # Vocal-activity ranges. Emit even when empty ([] = analysed instrumental);
+    # omit only when detection didn't run (None), so the controller can tell
+    # "no vocals" from "not computed".
+    if vocal_ranges is not None:
+        result["vocal_ranges"] = vocal_ranges
     # Only carry the embedding when we actually produced one — its absence is
     # how every downstream consumer knows to behave as today.
     if audio_embedding is not None:
@@ -445,6 +578,9 @@ def main():
     if EMBED_ENABLED:
         log("ANALYZE_AUDIO_EMBEDDING on — loading CLAP model...")
         get_embedder()
+    if VOCAL_ENABLED:
+        log("ANALYZE_VOCAL_ACTIVITY on — loading Demucs model...")
+        get_vocal_detector()
 
     # Tell the controller whether this worker can actually emit "sounds-like"
     # audio embeddings, so the admin UI can warn *before* a fruitless run rather
@@ -455,9 +591,20 @@ def main():
         _embedder is not None
         or all(importlib.util.find_spec(m) is not None for m in ("torch", "transformers"))
     )
+    # Same probe for vocal activity — the demucs + torch libs present (image
+    # built WITH_DEMUCS=1) and no hard load failure yet.
+    vocal_capable = (not _vocal_failed) and (
+        _vocal_detector is not None
+        or all(importlib.util.find_spec(m) is not None for m in ("torch", "demucs"))
+    )
 
     log("ready")
-    emit({"id": None, "ready": True, "audio_embedding_capable": audio_capable})
+    emit({
+        "id": None,
+        "ready": True,
+        "audio_embedding_capable": audio_capable,
+        "vocal_activity_capable": vocal_capable,
+    })
 
     for line in sys.stdin:
         line = line.strip()
@@ -477,7 +624,10 @@ def main():
         try:
             import librosa
 
-            result = analyze(librosa, url=url, path=path, embed=req.get("embed"))
+            result = analyze(
+                librosa, url=url, path=path,
+                embed=req.get("embed"), vocal=req.get("vocal"),
+            )
             emit({"id": rid, "ok": True, **result})
         except Exception as e:
             emit({"id": rid, "ok": False, "error": str(e)})

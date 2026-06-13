@@ -35,6 +35,10 @@ export interface AnalysisResult {
   // the reliable part — the outro is beyond the decode window). null when the
   // backend computed none; consumers treat null as "no structure".
   sections: Section[] | null;
+  // Vocal-presence ranges (Demucs) over the analysed window. An empty array is
+  // a meaningful value — "analysed, instrumental"; null means not computed (no
+  // ANALYZE_VOCAL_ACTIVITY / no demucs). Consumers treat null as "no signal".
+  vocalRanges: Section[] | null;
   // Integrated loudness (LUFS, BS.1770) + peak (dBFS) over the analysis window,
   // when the backend has pyloudnorm. null otherwise — consumers treat null as
   // "no loudness, play at unity gain", so a backend without pyloudnorm behaves
@@ -54,10 +58,9 @@ function parseFinite(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
-// Coerce the worker's sections field to clean Section[] or null. The worker
-// omits it when segmentation produced nothing; defend against malformed spans.
-function parseSections(v: unknown): Section[] | null {
-  if (!Array.isArray(v) || v.length === 0) return null;
+// Coerce a list of spans to clean Section[]. Drops malformed/zero-length spans.
+function coerceSpans(v: unknown): Section[] {
+  if (!Array.isArray(v)) return [];
   const out: Section[] = [];
   for (const s of v) {
     const startMs = parseFinite((s as any)?.startMs);
@@ -66,7 +69,22 @@ function parseSections(v: unknown): Section[] | null {
     const kind = typeof (s as any)?.kind === 'string' ? (s as any).kind : undefined;
     out.push(kind ? { startMs, endMs, kind } : { startMs, endMs });
   }
+  return out;
+}
+
+// Sections: the worker omits the field when segmentation produced nothing, so
+// empty collapses to null ("no structure").
+function parseSections(v: unknown): Section[] | null {
+  if (!Array.isArray(v)) return null;
+  const out = coerceSpans(v);
   return out.length ? out : null;
+}
+
+// Vocal ranges: an empty array is a MEANINGFUL value (analysed instrumental),
+// distinct from null (not computed). Preserve [] when the field is present.
+function parseVocalRanges(v: unknown): Section[] | null {
+  if (!Array.isArray(v)) return null;
+  return coerceSpans(v);
 }
 
 // Coerce the worker's audio_embedding field to a clean number[] or null. The
@@ -158,6 +176,9 @@ function startWorker(): Promise<void> {
 // it — the admin-toggle path. Omitted → the backend's env-driven default.
 export interface AnalyzeRequestOpts {
   embed?: boolean;
+  // Force a (lazy) Demucs load for vocal-activity ranges even when the backend's
+  // ANALYZE_VOCAL_ACTIVITY env is off — the admin/backfill path, mirroring embed.
+  vocal?: boolean;
 }
 
 // Write a request to the local stdio worker and resolve its response. The
@@ -179,6 +200,7 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
           loudnessLufs: parseFinite(msg.loudness_lufs),
           peakDb: parseFinite(msg.peak_db),
           sections: parseSections(msg.sections),
+          vocalRanges: parseVocalRanges(msg.vocal_ranges),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
         }),
       reject,
@@ -205,6 +227,8 @@ async function analyzeViaLocalPath(path: string, opts: AnalyzeRequestOpts = {}):
 // Last sidecar /health read of the CLAP capability. null = unknown (not yet
 // probed, or the field is absent on an old sidecar); true/false once known.
 let _sidecarAudioCapable: boolean | null = null;
+// Same, for vocal-activity (Demucs) support — null until probed/absent field.
+let _sidecarVocalCapable: boolean | null = null;
 
 async function sidecarReachable(): Promise<boolean> {
   const url = config.ttsHeavy.url;
@@ -215,10 +239,16 @@ async function sidecarReachable(): Promise<boolean> {
     const res = await fetch(`${url}/health`, { signal: ac.signal });
     clearTimeout(t);
     if (!res.ok) return false;
-    const body = (await res.json()) as { ok?: boolean; engines?: string[]; analyze_audio_capable?: boolean | null };
+    const body = (await res.json()) as {
+      ok?: boolean;
+      engines?: string[];
+      analyze_audio_capable?: boolean | null;
+      analyze_vocal_capable?: boolean | null;
+    };
     const reachable = !!body.ok && Array.isArray(body.engines) && body.engines.includes('analyze');
     if (reachable) {
       _sidecarAudioCapable = typeof body.analyze_audio_capable === 'boolean' ? body.analyze_audio_capable : null;
+      _sidecarVocalCapable = typeof body.analyze_vocal_capable === 'boolean' ? body.analyze_vocal_capable : null;
     }
     return reachable;
   } catch {
@@ -250,6 +280,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
       loudnessLufs: parseFinite(resBody.loudness_lufs),
       peakDb: parseFinite(resBody.peak_db),
       sections: parseSections(resBody.sections),
+      vocalRanges: parseVocalRanges(resBody.vocal_ranges),
       audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
     };
   } finally {
@@ -295,6 +326,14 @@ export function backendLabel(): string {
 // warning. Only meaningful for the sidecar backend.
 export function audioEmbeddingAvailable(): boolean | null {
   return _backend === 'sidecar' ? _sidecarAudioCapable : null;
+}
+
+// Whether the active backend can emit Demucs vocal-activity ranges right now.
+// Same semantics as audioEmbeddingAvailable: null = unknown (local, or sidecar
+// not yet reached / old sidecar without the field); false = sidecar built
+// without the demucs stack (WITH_DEMUCS=0). Only meaningful for the sidecar.
+export function vocalActivityAvailable(): boolean | null {
+  return _backend === 'sidecar' ? _sidecarVocalCapable : null;
 }
 
 // Re-read sidecar /health so capability reflects a sidecar rebuilt under a

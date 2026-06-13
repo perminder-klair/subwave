@@ -97,6 +97,7 @@ export interface TrackRecord {
   loudnessLufs: number | null; // integrated LUFS (BS.1770); null → unity gain
   peakDb: number | null;       // sample peak in dBFS over the analysis window
   structure: TrackSection[] | null; // structural sections over the analysed window
+  vocalRanges: TrackSection[] | null; // vocal-presence ranges; [] = instrumental, null = not computed
 }
 
 // A structural span over a track, in milliseconds (RangedValue shape). Kept as
@@ -314,6 +315,15 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     // analysed window. Nullable — NULL → no structure, today's behaviour.
     runDdl(d, `ALTER TABLE tracks ADD COLUMN structure_json TEXT;`);
     d.pragma('user_version = 5');
+  }
+
+  if (userVersion < 6) {
+    // Vocal-presence ranges (Demucs), JSON array of {startMs,endMs}. NULL means
+    // not computed (vocal activity off / no demucs); a stored "[]" means
+    // analysed-and-instrumental. The distinct empty value lets the backfill scan
+    // (needsVocalIds) skip instrumentals instead of re-separating them forever.
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN vocal_ranges_json TEXT;`);
+    d.pragma('user_version = 6');
   }
 
   // The vec0 virtual table carries the embedding dim in its schema. If the
@@ -617,6 +627,9 @@ export interface TrackAnalysisWrite {
   loudnessLufs?: number | null;
   peakDb?: number | null;
   sections?: TrackSection[] | null;
+  // [] is meaningful (analysed instrumental) vs null/undefined (not computed) —
+  // only a non-null array is written, so a vocal-off pass leaves the column be.
+  vocalRanges?: TrackSection[] | null;
 }
 
 // Write acoustic-analysis results for a track. Stamps ANALYSIS_VERSION so
@@ -633,6 +646,11 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         loudness_lufs       = ?,
         peak_db             = ?,
         structure_json      = ?,
+        -- COALESCE: vocal activity is gated separately (ANALYZE_VOCAL_ACTIVITY),
+        -- so a normal bpm/key pass passes null here and must NOT wipe an
+        -- existing vocal_ranges_json. A non-null value (incl. "[]" for an
+        -- analysed instrumental) overwrites; null keeps what's there.
+        vocal_ranges_json   = COALESCE(?, vocal_ranges_json),
         analysis_version    = ?
       WHERE id = ?`,
     )
@@ -644,6 +662,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       Number.isFinite(a.loudnessLufs as number) ? (a.loudnessLufs as number) : null,
       Number.isFinite(a.peakDb as number) ? (a.peakDb as number) : null,
       a.sections && a.sections.length ? JSON.stringify(a.sections) : null,
+      a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
       ANALYSIS_VERSION,
       id,
     );
@@ -665,7 +684,7 @@ export function clearAnalysis(): void {
   d.prepare(
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
       analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
-      structure_json = NULL, analysis_version = NULL`,
+      structure_json = NULL, vocal_ranges_json = NULL, analysis_version = NULL`,
   ).run();
   // The audio (CLAP) vectors are written in the same pass, so a --re-analyze
   // that redoes bpm/key drops them too — the next pass re-embeds from scratch.
@@ -835,6 +854,18 @@ export function unanalysedAudioIds(limit?: number): string[] {
        WHERE v.id IS NULL ORDER BY t.id LIMIT ${Math.floor(limit)}`
     : `SELECT t.id FROM tracks t LEFT JOIN track_audio_vectors v ON v.id = t.id
        WHERE v.id IS NULL ORDER BY t.id`;
+  const rows = requireDb().prepare(q).all() as Array<{ id: string }>;
+  return rows.map(r => r.id);
+}
+
+// Ids with no vocal-activity analysis yet (vocal_ranges_json IS NULL — a stored
+// "[]" instrumental counts as done and is skipped). Independent of the bpm/key
+// scope, like unanalysedAudioIds, so the (expensive, opt-in) Demucs backfill
+// runs on its own cadence. Ordered for stable resumption.
+export function needsVocalIds(limit?: number): string[] {
+  const q =
+    `SELECT id FROM tracks WHERE vocal_ranges_json IS NULL ORDER BY id` +
+    (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
   const rows = requireDb().prepare(q).all() as Array<{ id: string }>;
   return rows.map(r => r.id);
 }
@@ -1112,15 +1143,18 @@ function rowToTrack(row: any): TrackRecord {
     loudnessLufs: row.loudness_lufs ?? null,
     peakDb: row.peak_db ?? null,
     structure: row.structure_json ? safeParseSections(row.structure_json) : null,
+    // Preserve an empty array ("analysed instrumental"); only a SQL NULL column
+    // (not computed) maps to null. parseSpans keeps [] intact.
+    vocalRanges: row.vocal_ranges_json != null ? parseSpans(row.vocal_ranges_json) : null,
   };
 }
 
-// Parse a structure_json column into clean TrackSection[] or null. Tolerates a
-// malformed/empty column the same way safeParseArray does for tag arrays.
-function safeParseSections(s: string): TrackSection[] | null {
+// Parse a JSON span column into clean TrackSection[] (possibly empty). Drops
+// malformed/zero-length spans; returns [] on any parse error.
+function parseSpans(s: string): TrackSection[] {
   try {
     const v = JSON.parse(s);
-    if (!Array.isArray(v)) return null;
+    if (!Array.isArray(v)) return [];
     const out: TrackSection[] = [];
     for (const x of v) {
       const startMs = Number((x as any)?.startMs);
@@ -1129,10 +1163,16 @@ function safeParseSections(s: string): TrackSection[] | null {
       const kind = typeof (x as any)?.kind === 'string' ? (x as any).kind : undefined;
       out.push(kind ? { startMs, endMs, kind } : { startMs, endMs });
     }
-    return out.length ? out : null;
+    return out;
   } catch {
-    return null;
+    return [];
   }
+}
+
+// structure_json: empty collapses to null ("no structure"), unlike vocal ranges.
+function safeParseSections(s: string): TrackSection[] | null {
+  const out = parseSpans(s);
+  return out.length ? out : null;
 }
 
 function safeParseArray(s: string): string[] {
