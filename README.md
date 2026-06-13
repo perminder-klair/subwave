@@ -37,9 +37,11 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 | <img src="web/public/screenshots/admin-stats.webp" alt="Admin — Stats: LLM and TTS usage" width="100%"> | <img src="web/public/screenshots/admin-debug.webp" alt="Admin — Debug: health, logs, LLM calls" width="100%"> |
 | **Stats** — LLM and TTS usage at a glance | **Debug** — health, logs, recent LLM calls |
 
-**The Library Observatory.** A data-art map of every track the DJ has tagged, placed by genre and lit by energy. Click a point for its full record. Open it at `/observatory`.
+**The Library Observatory.** A data-art map of every track the DJ has tagged, placed by genre and lit by energy. Click a point for its full dossier: BPM, key, mood, embeddings, and nearest neighbours. Open it at `/observatory`.
 
-<img src="web/public/screenshots/observatory.webp" alt="Library Observatory — the constellation map of the tagged library, coloured by energy" width="640">
+<img src="web/public/screenshots/observatory.webp" alt="Library Observatory — the full map of the tagged library with stat panels" width="640">
+
+<img src="web/public/screenshots/observatory-track.webp" alt="Library Observatory — a single track dossier" width="280">
 
 ## Features
 
