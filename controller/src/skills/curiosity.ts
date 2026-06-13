@@ -17,6 +17,8 @@
 // to pure generation under `cap.desc`. So this file is "what extra context can
 // we put under the DJ's nose this minute?" — never "must we be silent?".
 
+import { zonedParts, zonedISODate } from '../time.js';
+
 const ON_THIS_DAY_TTL_MS = 12 * 60 * 60 * 1000; // 12h — events for a date are stable
 
 // Wikipedia REST asks API consumers to identify themselves. Anonymous calls
@@ -61,10 +63,12 @@ function looksAllowed(text: string, category?: string) {
 }
 
 function mmdd(d: Date) {
+  // Station-zone date — "on this day" should match the day the DJ announces.
+  const { month, day } = zonedParts(d);
   return {
-    mm: String(d.getMonth() + 1).padStart(2, '0'),
-    dd: String(d.getDate()).padStart(2, '0'),
-    iso: d.toISOString().slice(0, 10),
+    mm: String(month).padStart(2, '0'),
+    dd: String(day).padStart(2, '0'),
+    iso: zonedISODate(d),
   };
 }
 

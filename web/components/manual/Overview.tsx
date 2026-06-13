@@ -69,7 +69,7 @@ export default function Overview() {
     <ManualPage
       eyebrow="SUB/WAVE MANUAL"
       title="How to use SUB/WAVE."
-      intro="SUB/WAVE is a personal internet radio station — one live stream that every listener hears at the same moment, with an AI DJ picking the tracks and talking between them. This manual covers both sides of the dial: tuning in as a listener, and running the station as its operator."
+      intro="SUB/WAVE is a personal internet radio station: one live stream that every listener hears at the same moment, with an AI DJ picking the tracks and talking between them. This manual covers both sides of the dial: tuning in as a listener, and running the station as its operator."
       current="/manual"
     >
       <section className="bs-section">
@@ -96,7 +96,7 @@ export default function Overview() {
         <p className="bs-eyebrow">THE ONE THING TO KNOW</p>
         <h2>It's a broadcast, not a playlist.</h2>
         <p>
-          Streaming apps give everyone a private channel — shuffled for you, paused the
+          Streaming apps give everyone a private channel: shuffled for you, paused the
           second you look away. SUB/WAVE goes the other way. There is one Icecast stream,
           and everyone hears whatever is on the air <em>right now</em>. There is no
           &ldquo;for you,&rdquo; and there is no skip button. You can ask for a song, but

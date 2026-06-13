@@ -54,6 +54,11 @@ export function get(songId: string): any {
     bpm: t.bpm,
     musicalKey: t.musicalKey,
     introMs: t.introMs,
+    // Phase 2/4 acoustic surface for the agent picker's Subsonic-fallback path
+    // (slim() in llm/tools.ts). Library-sourced candidates already carry these
+    // via slimTrack; this keeps Subsonic-sourced candidates symmetric.
+    structure: t.structure,
+    paceMean: paceMeanOf(t.pace),
   };
 }
 
@@ -145,6 +150,15 @@ export function songsByMood(mood: string | null | undefined): any[] {
 }
 
 // Slim shape the picker + LLM tools expect — title/artist/album/year/genre
+// Mean of the pace curve (0..1), or null when un-analysed. Shared by slimTrack
+// and get() so the agent picker (Subsonic-fallback path) and the pool picker
+// see the same scalar instead of one path computing it and the other missing it.
+export function paceMeanOf(pace: Array<{ value: number }> | null | undefined): number | null {
+  return pace && pace.length
+    ? Math.round((pace.reduce((s, p) => s + p.value, 0) / pace.length) * 1000) / 1000
+    : null;
+}
+
 // plus the two tagger axes. Matches what songsByMood returns above; pulled
 // out so the new embedding-similar helpers can share the same projection.
 function slimTrack(r: db.TrackRecord) {
@@ -162,6 +176,12 @@ function slimTrack(r: db.TrackRecord) {
     bpm: r.bpm,
     musicalKey: r.musicalKey,
     introMs: r.introMs,
+    loudnessLufs: r.loudnessLufs,
+    structure: r.structure,
+    vocalRanges: r.vocalRanges,
+    // Scalar mean pace (0..1) for the picker/LLM — the full curve stays in the
+    // record for UI/future use. null when un-analysed.
+    paceMean: paceMeanOf(r.pace),
   };
 }
 
@@ -200,6 +220,33 @@ export function tracksLikeThis(seed: string, k: number): any[] {
   return out;
 }
 
+// Audio KNN — finds tracks whose CLAP audio embedding (timbre / instrumentation
+// / production / energy, derived from the waveform itself) is closest to the
+// seed's. The sonic counterpart to tracksLikeThis: text catches "same scene /
+// era / lyrical theme", audio catches "same sound". Same title-fallback shape
+// (the agent often passes a title rather than an id). Returns [] when the seed
+// has no audio vector — un-analysed library, or analysis backend without CLAP —
+// so callers fall through to the other sources exactly like the text path.
+export function tracksLikeThisAudio(seed: string, k: number): any[] {
+  if (!loaded || !seed) return [];
+  let hits = db.knnAudioById(seed, k);
+  if (hits.length === 0) {
+    // Treat `seed` as a title — find the best matching track that HAS an audio
+    // vector and KNN from it.
+    for (const row of db.filter({ q: seed, limit: 8 }).rows) {
+      if (row.id === seed) continue;            // already tried as an id above
+      hits = db.knnAudioById(row.id, k);
+      if (hits.length) break;
+    }
+  }
+  const out: any[] = [];
+  for (const hit of hits) {
+    const t = db.getTrack(hit.id);
+    if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
+  }
+  return out;
+}
+
 // KNN against an externally-computed query vector. The lyric-search tool
 // embeds a free-text query and calls this to find tracks semantically close
 // to the query — including ones whose lyrics don't literally contain those
@@ -207,6 +254,21 @@ export function tracksLikeThis(seed: string, k: number): any[] {
 export function tracksByVector(vec: number[] | Float32Array, k: number): any[] {
   if (!loaded) return [];
   const hits = db.knnByVector(vec, k);
+  const out: any[] = [];
+  for (const hit of hits) {
+    const t = db.getTrack(hit.id);
+    if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
+  }
+  return out;
+}
+
+// Audio KNN against an externally-computed query vector — the sonic-journey
+// counterpart to tracksByVector. Used by the picker when a journey waypoint is
+// the audio anchor instead of the current track. Returns [] on an empty audio
+// index, so the picker falls through to its other sources.
+export function tracksByAudioVector(vec: number[] | Float32Array, k: number): any[] {
+  if (!loaded) return [];
+  const hits = db.knnByAudioVector(vec, k);
   const out: any[] = [];
   for (const hit of hits) {
     const t = db.getTrack(hit.id);
@@ -228,6 +290,7 @@ export function stats() {
     byGenre: s.byGenre,
     bySource: s.bySource,
     withEmbedding: s.withEmbedding,
+    withAudioEmbedding: s.withAudioEmbedding,
     updatedAt: s.updatedAt,
   };
 }
@@ -239,10 +302,11 @@ export interface FilterOpts {
   moods?: string[];
   energy?: string | null;
   genre?: string | null;
+  vocal?: 'instrumental' | 'vocal' | null;
   yearFrom?: number | null;
   yearTo?: number | null;
   q?: string | null;
-  sort?: 'artist' | 'title' | 'taggedAt' | 'year';
+  sort?: 'artist' | 'title' | 'taggedAt' | 'year' | 'bpm' | 'loudness' | 'pace';
   limit?: number;
   offset?: number;
 }
@@ -257,7 +321,16 @@ export interface FilteredRow {
   duration?: number | null;
   moods: string[];
   energy: string | null;
+  source?: string | null;
   taggedAt?: string | null;
+  // Acoustic-analysis surface (null when the analyze pass hasn't touched the
+  // track). `instrumental` is derived: null = not computed, true = analysed with
+  // no vocal ranges, false = analysed with vocals.
+  bpm?: number | null;
+  musicalKey?: string | null;
+  loudnessLufs?: number | null;
+  paceMean?: number | null;
+  instrumental?: boolean | null;
 }
 
 export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRow[] } {
@@ -275,7 +348,13 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRo
       duration: r.durationSec,
       moods: r.moods,
       energy: r.energy,
+      source: r.source,
       taggedAt: r.taggedAt,
+      bpm: r.bpm,
+      musicalKey: r.musicalKey,
+      loudnessLufs: r.loudnessLufs,
+      paceMean: paceMeanOf(r.pace),
+      instrumental: r.vocalRanges == null ? null : r.vocalRanges.length === 0,
     })),
   };
 }

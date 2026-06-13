@@ -4,15 +4,27 @@
 // (/tag-library) and the ones that report on it (/settings).
 import { spawn, ChildProcess } from 'node:child_process';
 import { queue } from './queue.js';
+import { PROGRESS_PREFIX, type TaggerProgress } from '../music/tagger-progress.js';
 
 type TaggerState = {
   running: boolean;
   startedAt: string | null;
   pid: number | null;
   lastLog: string[];
+  // Which script the live child is: 'tag' (tag-library) or 'analyze' (the
+  // acoustic/audio-embedding pass via analyze-library). Single-flight across
+  // both — they contend on the same library DB and analysis backend.
+  mode: 'tag' | 'analyze' | null;
+  // Latest structured progress sentinel from the child ([progress] lines on
+  // stdout — see music/tagger-progress.ts). Left in place after exit so the
+  // last payload doubles as a what-just-finished summary; the UI gates its
+  // display on `running`.
+  progress: TaggerProgress | null;
 };
 
-export const tagger: TaggerState = { running: false, startedAt: null, pid: null, lastLog: [] };
+export const tagger: TaggerState = {
+  running: false, startedAt: null, pid: null, lastLog: [], mode: null, progress: null,
+};
 
 // Live handle for stopTagger() — cleared on the exit handler.
 let activeChild: ChildProcess | null = null;
@@ -41,26 +53,6 @@ export function startTagger(
   if (reAnalyze) args.push('--re-analyze');
   if (upgrade) args.push('--upgrade');
 
-  const child = spawn('npx', ['tsx', ...args], { cwd: '/app', detached: false });
-  activeChild = child;
-  tagger.running = true;
-  tagger.startedAt = new Date().toISOString();
-  tagger.pid = child.pid ?? null;
-  tagger.lastLog = [];
-
-  const capture = (chunk: Buffer) => {
-    const lines = chunk.toString().split('\n').filter((l: string) => l.trim());
-    tagger.lastLog.push(...lines);
-    if (tagger.lastLog.length > 100) tagger.lastLog = tagger.lastLog.slice(-100);
-  };
-  child.stdout.on('data', capture);
-  child.stderr.on('data', capture);
-  child.on('exit', (code, signal) => {
-    tagger.running = false;
-    if (activeChild === child) activeChild = null;
-    tagger.lastLog.push(`[exit ${signal || code}]`);
-    queue.log('scheduler', `tagger finished (${signal ? `signal ${signal}` : `exit ${code}`})`);
-  });
   const detail = [
     Number.isFinite(limit) && (limit as number) > 0 ? `limit=${limit}` : null,
     reseed ? 'reseed' : null,
@@ -70,7 +62,73 @@ export function startTagger(
   ]
     .filter(Boolean)
     .join(', ');
-  queue.log('scheduler', `tagger started${detail ? ` (${detail})` : ''}`);
+  spawnChild('tag', args, detail);
+}
+
+// Spawn the standalone analysis pass (bpm/key/intro + CLAP audio embeddings
+// when settings.audio.embeddings / ANALYZE_AUDIO_EMBEDDING is on). `audio`
+// forces the --audio backfill scope so already-analysed tracks that lack an
+// audio vector are re-targeted — what the admin "Analyze audio" button wants.
+// Same single-flight state as the tagger; caller rejects when tagger.running.
+export function startAnalyzer(opts: { limit?: number; audio?: boolean } = {}) {
+  // No --skip-walk: the script's default policy (walk Navidrome only when the
+  // catalogue is empty) is the right bootstrap for a first-ever run.
+  const { limit, audio } = opts;
+  const args = ['src/music/analyze-library.ts'];
+  if (Number.isFinite(limit) && (limit as number) > 0) args.push('--limit', String(limit));
+  if (audio) args.push('--audio');
+  const detail = [
+    Number.isFinite(limit) && (limit as number) > 0 ? `limit=${limit}` : null,
+    audio ? 'audio' : null,
+  ]
+    .filter(Boolean)
+    .join(', ');
+  spawnChild('analyze', args, detail);
+}
+
+function spawnChild(mode: 'tag' | 'analyze', args: string[], detail: string) {
+  const label = mode === 'tag' ? 'tagger' : 'analyzer';
+  const child = spawn('npx', ['tsx', ...args], { cwd: '/app', detached: false });
+  activeChild = child;
+  tagger.running = true;
+  tagger.startedAt = new Date().toISOString();
+  tagger.pid = child.pid ?? null;
+  tagger.lastLog = [];
+  tagger.mode = mode;
+  tagger.progress = null;
+
+  // Per-stream line buffering: a `data` chunk can end mid-line, so each stream
+  // keeps its own remainder. [progress] sentinel lines are parsed into
+  // tagger.progress and kept out of lastLog.
+  const makeCapture = () => {
+    let remainder = '';
+    return (chunk: Buffer) => {
+      remainder += chunk.toString();
+      const lines = remainder.split('\n');
+      remainder = lines.pop() ?? '';
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line) continue;
+        if (line.startsWith(PROGRESS_PREFIX)) {
+          try {
+            tagger.progress = JSON.parse(line.slice(PROGRESS_PREFIX.length)) as TaggerProgress;
+          } catch { /* malformed sentinel — drop */ }
+          continue;
+        }
+        tagger.lastLog.push(line);
+      }
+      if (tagger.lastLog.length > 100) tagger.lastLog = tagger.lastLog.slice(-100);
+    };
+  };
+  child.stdout.on('data', makeCapture());
+  child.stderr.on('data', makeCapture());
+  child.on('exit', (code, signal) => {
+    tagger.running = false;
+    if (activeChild === child) activeChild = null;
+    tagger.lastLog.push(`[exit ${signal || code}]`);
+    queue.log('scheduler', `${label} finished (${signal ? `signal ${signal}` : `exit ${code}`})`);
+  });
+  queue.log('scheduler', `${label} started${detail ? ` (${detail})` : ''}`);
 }
 
 // Stop the running tagger by signalling its child. The exit handler above

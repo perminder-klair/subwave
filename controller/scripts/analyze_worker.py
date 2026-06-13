@@ -10,8 +10,15 @@ stdin/stdout, same shape as the Kokoro/PocketTTS workers.
 Request:  {"id": "<song id>", "url": "<http stream url>"}   (worker downloads)
        |  {"id": "<song id>", "path": "<local file path>"}  (caller owns it)
 Response: {"id": "<echoed>", "ok": true, "bpm": 122.0, "key": "8A",
-           "intro_ms": 8200, "confidence": 0.71}
+           "intro_ms": 8200, "confidence": 0.71,
+           "audio_embedding": [/* 512 floats, OPTIONAL */]}
        |  {"id": "<echoed>", "ok": false, "error": "..."}
+
+`audio_embedding` is present ONLY when ANALYZE_AUDIO_EMBEDDING is enabled AND a
+CLAP model loaded — a 512-d, L2-normalised vector of how the track SOUNDS
+(timbre / instrumentation / production), derived from the waveform itself. When
+disabled or the model is absent the field is omitted entirely and the worker
+behaves exactly as it did before (bpm/key/intro only) — never a hard failure.
 
 This deliberately lives OUTSIDE the controller image — librosa pulls in
 numba/scipy/soundfile, which the controller must stay lean of. It runs in the
@@ -21,6 +28,7 @@ into the query string) to a temp file, then only the first ANALYZE_SECONDS are
 decoded — enough for tempo/key and the intro estimate, a fraction of the bytes.
 """
 
+import importlib.util
 import json
 import os
 import sys
@@ -32,6 +40,26 @@ import urllib.request
 ANALYZE_SECONDS = float(os.environ.get("ANALYZE_SECONDS", "60"))
 ANALYZE_SR = int(os.environ.get("ANALYZE_SR", "22050"))
 FETCH_TIMEOUT_S = float(os.environ.get("ANALYZE_FETCH_TIMEOUT_S", "60"))
+
+# --- CLAP audio embedding (optional, opt-in) -------------------------------
+# Off unless ANALYZE_AUDIO_EMBEDDING is truthy. CLAP wants 48 kHz mono; the
+# embedding dim is fixed by the model (LAION-CLAP audio projection = 512).
+EMBED_ENABLED = os.environ.get("ANALYZE_AUDIO_EMBEDDING", "").strip().lower() in (
+    "1", "true", "yes",
+)
+CLAP_SR = 48000
+CLAP_EMBED_DIM = 512
+
+# --- Vocal-activity ranges (optional, opt-in) ------------------------------
+# Off unless ANALYZE_VOCAL_ACTIVITY is truthy. Runs Demucs source separation to
+# isolate the vocal stem, then thresholds its energy envelope into present/
+# absent ranges. Heavy (a real torch model) — gated like CLAP. Demucs wants
+# 44.1 kHz stereo.
+VOCAL_ENABLED = os.environ.get("ANALYZE_VOCAL_ACTIVITY", "").strip().lower() in (
+    "1", "true", "yes",
+)
+DEMUCS_SR = 44100
+DEMUCS_MODEL = os.environ.get("DEMUCS_MODEL", "htdemucs")
 
 # Krumhansl-Kessler key profiles (major/minor), indexed from the tonic.
 MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
@@ -64,19 +92,64 @@ def _pearson(a, b):
     return num / (da * db)
 
 
-def estimate_key(chroma_mean):
-    """Krumhansl-Schmuckler: correlate the mean chroma against all 24 keys.
-    Returns (camelot_code, separation) where separation (best - 2nd best
-    correlation, 0..1-ish) is a rough confidence in the key call."""
-    scores = []  # (corr, camelot)
+# Enharmonic-preserving spelling isn't recoverable from chroma; use sharps.
+PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+
+def _score_key(chroma_vec):
+    """Krumhansl-Schmuckler over all 24 keys for one chroma vector. Returns
+    (camelot_code, separation, tonic_pc, mode) — separation (best - 2nd best
+    correlation, 0..1-ish) is a rough confidence; mode is 'major'/'minor'."""
+    scores = []  # (corr, camelot, tonic_pc, mode)
     for tonic in range(12):
-        rotated = [chroma_mean[(tonic + i) % 12] for i in range(12)]
-        scores.append((_pearson(MAJOR_PROFILE, rotated), MAJOR_CAMELOT[tonic]))
-        scores.append((_pearson(MINOR_PROFILE, rotated), MINOR_CAMELOT[tonic]))
+        rotated = [chroma_vec[(tonic + i) % 12] for i in range(12)]
+        scores.append((_pearson(MAJOR_PROFILE, rotated), MAJOR_CAMELOT[tonic], tonic, "major"))
+        scores.append((_pearson(MINOR_PROFILE, rotated), MINOR_CAMELOT[tonic], tonic, "minor"))
     scores.sort(reverse=True, key=lambda s: s[0])
-    best_corr, best_code = scores[0]
+    best_corr, best_code, tonic_pc, mode = scores[0]
     separation = max(0.0, min(1.0, best_corr - scores[1][0]))
-    return best_code, separation
+    return best_code, separation, tonic_pc, mode
+
+
+def estimate_key(chroma_mean):
+    """Whole-window key as (camelot_code, separation), for the scalar field."""
+    code, separation, _tonic, _mode = _score_key(chroma_mean)
+    return code, separation
+
+
+def estimate_key_ranges(chroma, sr, librosa, window_s=10.0):
+    """Per-region key (tonic + mode) over time. Windows the already-computed
+    chroma (~window_s each), scores
+    each, and merges adjacent windows sharing a key. Returns
+    [{startMs,endMs,tonic,mode}] or None. Best-effort: any failure → None."""
+    import numpy as np
+
+    try:
+        hop = 512
+        n_frames = chroma.shape[1]
+        if n_frames < 8:
+            return None
+        frames_per_win = max(1, int(round(window_s * sr / hop)))
+        ranges = []
+        for start in range(0, n_frames, frames_per_win):
+            chunk = chroma[:, start : start + frames_per_win]
+            if chunk.shape[1] == 0:
+                continue
+            vec = [float(x) for x in np.mean(chunk, axis=1)]
+            _code, _sep, tonic_pc, mode = _score_key(vec)
+            tonic = PITCH_NAMES[tonic_pc]
+            start_ms = int(round(start * hop / sr * 1000.0))
+            end_ms = int(round(min(start + frames_per_win, n_frames) * hop / sr * 1000.0))
+            if end_ms <= start_ms:
+                continue
+            if ranges and ranges[-1]["tonic"] == tonic and ranges[-1]["mode"] == mode:
+                ranges[-1]["endMs"] = end_ms  # merge a run of the same key
+            else:
+                ranges.append({"startMs": start_ms, "endMs": end_ms, "tonic": tonic, "mode": mode})
+        return ranges or None
+    except Exception as e:  # noqa: BLE001 — key ranges are best-effort
+        log(f"key-range estimation failed: {e}")
+        return None
 
 
 def estimate_intro_ms(y, sr, librosa):
@@ -104,6 +177,302 @@ def estimate_intro_ms(y, sr, librosa):
     return 0.0
 
 
+def estimate_sections(y, sr, librosa, chroma=None):
+    """Coarse structural segmentation over the DECODED window (the first
+    ANALYZE_SECONDS only — so this is reliable for the intro / leading sections,
+    not a full-song outro). librosa agglomerative clustering on a chroma+MFCC
+    feature stack → a handful of contiguous {startMs,endMs} spans. Best-effort:
+    any failure returns None and the field is omitted, so a
+    consumer treats absence as 'no structure, behave as today'. `chroma` may be
+    passed in to avoid recomputing the (expensive) CQT done in analyze()."""
+    import numpy as np
+
+    try:
+        hop = 512  # librosa default for chroma_cqt / mfcc; ties frames→time
+        if chroma is None:
+            chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=hop)
+        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, hop_length=hop)
+        # Trim to a common frame count (CQT vs mel framing can differ by one).
+        n_frames = min(chroma.shape[1], mfcc.shape[1])
+        if n_frames < 8:
+            return None
+        feat = np.vstack([
+            librosa.util.normalize(chroma[:, :n_frames], axis=0),
+            librosa.util.normalize(mfcc[:, :n_frames], axis=0),
+        ])
+        dur_s = n_frames * hop / sr
+        # ~1 section per 15s of decoded audio, clamped to a sane 2..8.
+        k = int(max(2, min(8, round(dur_s / 15.0))))
+        if k >= n_frames:
+            return None
+        # Left-boundary frames of each segment; always includes 0.
+        bounds = librosa.segment.agglomerative(feat, k)
+        times = librosa.frames_to_time(bounds, sr=sr, hop_length=hop)
+        edges = [float(t) for t in times] + [dur_s]
+        sections = []
+        for i in range(len(edges) - 1):
+            start_ms = int(round(edges[i] * 1000.0))
+            end_ms = int(round(edges[i + 1] * 1000.0))
+            if end_ms > start_ms:
+                sections.append({"startMs": start_ms, "endMs": end_ms})
+        return sections or None
+    except Exception as e:  # noqa: BLE001 — structure is best-effort
+        log(f"structure segmentation failed: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# CLAP embedder — two backends, decided at load time:
+#   * ONNX (lean): CLAP_MODEL_PATH points at an exported audio-encoder .onnx;
+#     run via onnxruntime. Feature extraction still goes through transformers'
+#     ClapProcessor so the mel preprocessing is exactly what CLAP expects (the
+#     genuinely fiddly part), regardless of how the encoder runs.
+#   * transformers (fallback): no .onnx → load the full ClapModel from a HF id
+#     (CLAP_MODEL, default laion/clap-htsat-unfused) and call get_audio_features.
+# Both produce the same 512-d L2-normalised vector. All heavy imports are lazy
+# so a worker with embeddings DISABLED never needs torch/transformers/onnx and
+# the librosa-only venv keeps working.
+# ---------------------------------------------------------------------------
+class ClapEmbedder:
+    def __init__(self):
+        self.mode = None
+        self.processor = None
+        self.session = None   # onnx
+        self.input_name = None
+        self.model = None     # transformers
+
+    def load(self):
+        from transformers import ClapProcessor
+
+        # Empty strings count as unset — the compose files pass these through
+        # as `${CLAP_MODEL:-}` etc., which exports "" when the operator hasn't
+        # set them in the root .env.
+        onnx_path = os.environ.get("CLAP_MODEL_PATH", "").strip()
+        hf_id = os.environ.get("CLAP_MODEL", "").strip() or "laion/clap-htsat-unfused"
+        # The processor (feature extraction) is keyed to a HF model; default to
+        # the same id as the encoder, override with CLAP_FEATURE_MODEL when the
+        # .onnx was exported from a differently-named checkpoint.
+        feat_id = os.environ.get("CLAP_FEATURE_MODEL", "").strip() or hf_id
+
+        if onnx_path and os.path.exists(onnx_path):
+            import onnxruntime as ort
+
+            self.processor = ClapProcessor.from_pretrained(feat_id)
+            self.session = ort.InferenceSession(
+                onnx_path, providers=["CPUExecutionProvider"]
+            )
+            self.input_name = self.session.get_inputs()[0].name
+            self.mode = "onnx"
+            log(f"CLAP onnx encoder loaded: {onnx_path} (features: {feat_id})")
+        else:
+            if onnx_path:
+                log(f"CLAP_MODEL_PATH set but missing ({onnx_path}); using transformers")
+            from transformers import ClapModel
+
+            self.model = ClapModel.from_pretrained(hf_id)
+            self.model.eval()
+            self.processor = ClapProcessor.from_pretrained(hf_id)
+            self.mode = "transformers"
+            log(f"CLAP transformers model loaded: {hf_id}")
+
+    def embed(self, y48, sr):
+        import numpy as np
+
+        return_tensors = "np" if self.mode == "onnx" else "pt"
+        # transformers renamed the ClapProcessor audio kwarg `audios` → `audio`
+        # and turned the old name into a hard error (not just a warning) in
+        # recent releases. Try the new name, fall back to the old one so this
+        # works against whatever transformers the analyzer venv resolved.
+        try:
+            inputs = self.processor(
+                audio=y48, sampling_rate=sr, return_tensors=return_tensors
+            )
+        except (TypeError, ValueError):
+            inputs = self.processor(
+                audios=y48, sampling_rate=sr, return_tensors=return_tensors
+            )
+        feats = inputs["input_features"]
+
+        if self.mode == "onnx":
+            feats_np = np.asarray(feats, dtype=np.float32)
+            out = self.session.run(None, {self.input_name: feats_np})
+            vec = np.asarray(out[0]).reshape(-1)
+        else:
+            import torch
+
+            with torch.no_grad():
+                emb = self.model.get_audio_features(input_features=feats)
+            # transformers ≤4.x returns the projected 512-d audio-features
+            # tensor directly; 5.x returns a BaseModelOutputWithPooling whose
+            # .pooler_output is that same projected embedding. Unwrap the new
+            # shape so this works against whatever the analyzer venv resolved.
+            if hasattr(emb, "pooler_output"):
+                emb = emb.pooler_output
+            vec = emb.cpu().numpy().reshape(-1)
+
+        if vec.shape[0] != CLAP_EMBED_DIM:
+            raise RuntimeError(
+                f"unexpected CLAP embedding dim {vec.shape[0]} (want {CLAP_EMBED_DIM})"
+            )
+        # L2-normalise so the vec0 table's cosine distance is well-conditioned.
+        norm = float(np.linalg.norm(vec))
+        if norm > 0:
+            vec = vec / norm
+        return [float(x) for x in vec]
+
+
+# Lazily loaded, at most once. None means "no embeddings this run" — either
+# disabled or a load failure (which we log once and then never retry, so one bad
+# model can't make every track fail).
+_embedder = None
+_embed_failed = False
+
+
+def get_embedder(force=False):
+    global _embedder, _embed_failed
+    # `force` is the per-request opt-in (the controller's admin toggle sends
+    # "embed": true) — it lazy-loads CLAP even when ANALYZE_AUDIO_EMBEDDING
+    # isn't in this process's env. A previous load failure still wins: one bad
+    # model can't make every subsequent track retry the load.
+    if _embed_failed or not (EMBED_ENABLED or force):
+        return None
+    if _embedder is None:
+        try:
+            e = ClapEmbedder()
+            e.load()
+            _embedder = e
+        except Exception as ex:  # noqa: BLE001 — degrade, never crash the worker
+            log(f"CLAP load failed ({ex}); audio embeddings disabled for this run")
+            _embed_failed = True
+            return None
+    return _embedder
+
+
+# ---------------------------------------------------------------------------
+# Vocal-activity detector — Demucs source separation → vocal energy envelope →
+# present/absent time ranges. All heavy imports (torch, demucs) are lazy so a
+# worker with vocal activity DISABLED never needs them and the librosa-only venv
+# keeps working. Same degrade-never-crash contract as the CLAP embedder.
+# ---------------------------------------------------------------------------
+class VocalActivityDetector:
+    def __init__(self):
+        self.model = None
+        self.sources = None  # stem order, e.g. ['drums','bass','other','vocals']
+
+    def load(self):
+        from demucs.pretrained import get_model
+
+        self.model = get_model(DEMUCS_MODEL)
+        self.model.eval()
+        self.sources = list(self.model.sources)
+        if "vocals" not in self.sources:
+            raise RuntimeError(f"demucs model {DEMUCS_MODEL} has no 'vocals' stem")
+
+    def detect(self, stereo, sr, librosa):
+        """stereo: float32 array shaped (2, N) at DEMUCS_SR. Returns a list of
+        {startMs,endMs} where the isolated vocal stem is active — possibly empty
+        (an instrumental). Raises on failure; the caller degrades to None."""
+        import numpy as np
+        import torch
+
+        wav = torch.from_numpy(np.ascontiguousarray(stereo, dtype=np.float32))
+        if wav.ndim == 1:
+            wav = wav.unsqueeze(0).repeat(2, 1)
+        from demucs.apply import apply_model
+
+        with torch.no_grad():
+            est = apply_model(self.model, wav.unsqueeze(0), device="cpu")[0]
+        vocals = est[self.sources.index("vocals")].mean(dim=0).cpu().numpy()
+
+        # RMS envelope of the vocal stem, thresholded against its own loud level
+        # (40th-pct of the loud half) — robust to overall mix level. Frames where
+        # vocal energy sustains above threshold become "vocal present" ranges,
+        # merging gaps shorter than ~0.4s so a breath doesn't split a phrase.
+        hop = 512
+        rms = librosa.feature.rms(y=vocals, frame_length=2048, hop_length=hop)[0]
+        if rms.size == 0:
+            return []
+        loud = float(np.percentile(rms, 90))
+        if loud <= 0:
+            return []
+        thr = 0.15 * loud
+        times = librosa.frames_to_time(np.arange(rms.size), sr=sr, hop_length=hop)
+        active = rms >= thr
+        ranges = []
+        merge_gap_ms = 400
+        i = 0
+        n = rms.size
+        while i < n:
+            if not active[i]:
+                i += 1
+                continue
+            j = i
+            while j + 1 < n and active[j + 1]:
+                j += 1
+            start_ms = int(round(float(times[i]) * 1000.0))
+            end_ms = int(round(float(times[min(j + 1, n - 1)]) * 1000.0))
+            if ranges and start_ms - ranges[-1]["endMs"] <= merge_gap_ms:
+                ranges[-1]["endMs"] = end_ms
+            else:
+                ranges.append({"startMs": start_ms, "endMs": end_ms})
+            i = j + 1
+        # Drop sub-300ms blips (separation artefacts, not sung lines).
+        return [r for r in ranges if r["endMs"] - r["startMs"] >= 300]
+
+
+def estimate_pace(y, sr, librosa, window_s=5.0):
+    """Perceptual energy/momentum curve over the decoded window, decoupled from
+    BPM (a high-tempo track can read low pace during a sparse breakdown). Mean
+    onset-strength (spectral-flux) energy per ~window_s window, normalised 0..1
+    by the loudest window. Span shape: [{startMs,endMs,value}]. Best-
+    effort: any failure returns None and the field is omitted."""
+    import numpy as np
+
+    try:
+        hop = 512
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop)
+        if onset_env.size == 0:
+            return None
+        frames_per_win = max(1, int(round(window_s * sr / hop)))
+        peak = float(np.max(onset_env))
+        if peak <= 0:
+            return None
+        curve = []
+        for start in range(0, onset_env.size, frames_per_win):
+            chunk = onset_env[start : start + frames_per_win]
+            if chunk.size == 0:
+                continue
+            value = round(float(np.mean(chunk)) / peak, 3)
+            start_ms = int(round(start * hop / sr * 1000.0))
+            end_ms = int(round(min(start + frames_per_win, onset_env.size) * hop / sr * 1000.0))
+            if end_ms > start_ms:
+                curve.append({"startMs": start_ms, "endMs": end_ms, "value": value})
+        return curve or None
+    except Exception as e:  # noqa: BLE001 — pace is best-effort
+        log(f"pace estimation failed: {e}")
+        return None
+
+
+_vocal_detector = None
+_vocal_failed = False
+
+
+def get_vocal_detector(force=False):
+    global _vocal_detector, _vocal_failed
+    if _vocal_failed or not (VOCAL_ENABLED or force):
+        return None
+    if _vocal_detector is None:
+        try:
+            d = VocalActivityDetector()
+            d.load()
+            _vocal_detector = d
+        except Exception as ex:  # noqa: BLE001 — degrade, never crash the worker
+            log(f"Demucs load failed ({ex}); vocal activity disabled for this run")
+            _vocal_failed = True
+            return None
+    return _vocal_detector
+
+
 def fetch_audio(url):
     suffix = ".audio"
     fd, path = tempfile.mkstemp(suffix=suffix, prefix="swanalyze_")
@@ -125,7 +494,35 @@ def fetch_audio(url):
     return path
 
 
-def analyze(librosa, url=None, path=None):
+def measure_loudness(y, sr):
+    """Integrated loudness (LUFS, ITU-R BS.1770 / EBU R128) + true-ish peak in
+    dBFS over the decoded window. Best-effort: pyloudnorm is an optional dep, so
+    a missing import or any failure returns (None, None) and the caller simply
+    omits the fields — every consumer treats NULL as "no loudness, behave as
+    today" (same contract as the CLAP embedding)."""
+    import numpy as np
+
+    try:
+        import pyloudnorm as pyln
+    except Exception as e:  # noqa: BLE001 — optional dependency
+        log(f"pyloudnorm unavailable, skipping loudness: {e}")
+        return None, None
+
+    try:
+        meter = pyln.Meter(sr)  # BS.1770 meter at the decode sample rate
+        lufs = float(meter.integrated_loudness(y))
+        peak = float(np.max(np.abs(y))) if len(y) else 0.0
+        peak_db = 20.0 * float(np.log10(peak)) if peak > 0 else None
+        # integrated_loudness returns -inf for digital silence; treat as no signal.
+        if not np.isfinite(lufs):
+            return None, peak_db
+        return round(lufs, 2), (round(peak_db, 2) if peak_db is not None else None)
+    except Exception as e:  # noqa: BLE001 — loudness is best-effort
+        log(f"loudness measurement failed: {e}")
+        return None, None
+
+
+def analyze(librosa, url=None, path=None, embed=None, vocal=None):
     import numpy as np
 
     # A controller-provided path is pre-fetched onto the shared volume and
@@ -134,8 +531,45 @@ def analyze(librosa, url=None, path=None):
     owned = path is None
     if owned:
         path = fetch_audio(url)
+    audio_embedding = None
+    vocal_ranges = None
     try:
         y, sr = librosa.load(path, sr=ANALYZE_SR, mono=True, duration=ANALYZE_SECONDS)
+        # CLAP wants 48 kHz mono — decode a second copy at that rate from the
+        # SAME file (still present here, before the finally removes owned temps).
+        # A model/feature failure on one track never fails the whole analyze:
+        # we log and emit bpm/key without the embedding.
+        # Per-request `embed` wins over the env default in the ON direction
+        # only: True forces a (lazy) CLAP load, None/absent keeps the env-driven
+        # behaviour. False is never sent by the controller today.
+        embedder = None if embed is False else get_embedder(force=embed is True)
+        if embedder is not None:
+            try:
+                y48, _sr48 = librosa.load(
+                    path, sr=CLAP_SR, mono=True, duration=ANALYZE_SECONDS
+                )
+                if y48 is not None and len(y48) > 0:
+                    audio_embedding = embedder.embed(y48, CLAP_SR)
+            except Exception as e:  # noqa: BLE001 — embedding is best-effort
+                log(f"audio embedding failed: {e}")
+                audio_embedding = None
+        # Vocal activity — Demucs wants 44.1 kHz stereo; decode a third copy from
+        # the same file. Gated like CLAP (per-request `vocal` forces the load).
+        # Best-effort: a failure leaves vocal_ranges None (field omitted). A
+        # successful run with no detected vocals emits [] — the distinct "empty"
+        # value tells the controller this track WAS analysed (an instrumental),
+        # so the backfill scope doesn't keep re-targeting it.
+        detector = None if vocal is False else get_vocal_detector(force=vocal is True)
+        if detector is not None:
+            try:
+                ys, _srs = librosa.load(
+                    path, sr=DEMUCS_SR, mono=False, duration=ANALYZE_SECONDS
+                )
+                if ys is not None and np.size(ys) > 0:
+                    vocal_ranges = detector.detect(ys, DEMUCS_SR, librosa)
+            except Exception as e:  # noqa: BLE001 — vocal activity is best-effort
+                log(f"vocal activity failed: {e}")
+                vocal_ranges = None
     finally:
         if owned:
             try:
@@ -146,25 +580,93 @@ def analyze(librosa, url=None, path=None):
     if y is None or len(y) == 0:
         raise RuntimeError("decoded empty audio")
 
-    tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
     bpm = float(np.atleast_1d(tempo)[0])
+
+    # Per-beat timestamps (ms) — already computed by beat_track, previously
+    # discarded. Downbeats are a 4/4 heuristic (every 4th beat from the first):
+    # librosa gives no true downbeat, but a bar grid is enough to bar-align a
+    # crossfade. Best-effort: an empty/odd grid simply yields fewer/no bars.
+    beats_ms = []
+    bars_ms = []
+    try:
+        bt = librosa.frames_to_time(beat_frames, sr=sr)
+        beats_ms = [int(round(float(t) * 1000.0)) for t in bt]
+        bars_ms = beats_ms[::4]
+    except Exception as e:  # noqa: BLE001 — beat grid is best-effort
+        log(f"beat grid failed: {e}")
+        beats_ms = []
+        bars_ms = []
 
     chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
     chroma_mean = [float(x) for x in np.mean(chroma, axis=1)]
     key, key_sep = estimate_key(chroma_mean)
 
+    # Per-region key (tonic + mode) over time — reuses the chroma above.
+    key_ranges = estimate_key_ranges(chroma, sr, librosa)
+
     intro_ms = estimate_intro_ms(y, sr, librosa)
+
+    # When vocal activity was measured, the start of the first vocal range is a
+    # truer intro than the energy heuristic (an instrumental intro is exactly
+    # the vocal-free leading region). Prefer it; fall back to the heuristic for
+    # instrumentals ([] → keep the energy estimate) and un-run tracks.
+    if vocal_ranges:
+        intro_ms = float(vocal_ranges[0]["startMs"])
+
+    # Structural sections over the decoded window (intro/leading sections are
+    # the reliable part — the outro of a long track is beyond ANALYZE_SECONDS).
+    # Reuses the chroma already computed for key estimation.
+    sections = estimate_sections(y, sr, librosa, chroma=chroma)
+
+    # Perceptual energy/momentum curve (decoupled from BPM).
+    pace = estimate_pace(y, sr, librosa)
+
+    # Perceptual loudness (LUFS) over the decoded window — feeds per-track gain
+    # normalisation toward a target on the playback side. None when pyloudnorm
+    # is absent or measurement fails.
+    loudness_lufs, peak_db = measure_loudness(y, sr)
 
     # Overall confidence: dominated by how cleanly the key resolved, nudged by
     # whether we got a plausible tempo. Kept conservative on purpose.
     confidence = round(0.5 * key_sep + (0.5 if 40 <= bpm <= 220 else 0.0), 3)
 
-    return {
+    result = {
         "bpm": round(bpm, 1),
         "key": key,
         "intro_ms": int(intro_ms) if intro_ms is not None else None,
         "confidence": confidence,
     }
+    # Only carry loudness fields when measured — absence signals "no loudness
+    # this pass", so a worker without pyloudnorm is byte-for-byte today.
+    if loudness_lufs is not None:
+        result["loudness_lufs"] = loudness_lufs
+    if peak_db is not None:
+        result["peak_db"] = peak_db
+    # Structural sections (omit when segmentation produced nothing).
+    if sections:
+        result["sections"] = sections
+    # Pace curve (omit when none produced).
+    if pace:
+        result["pace_curve"] = pace
+    # Beat / bar grid (omit when empty).
+    if beats_ms:
+        result["beats"] = beats_ms
+    if bars_ms:
+        result["bars"] = bars_ms
+    # Per-region key ranges (omit when none produced).
+    if key_ranges:
+        result["key_ranges"] = key_ranges
+    # Vocal-activity ranges. Emit even when empty ([] = analysed instrumental);
+    # omit only when detection didn't run (None), so the controller can tell
+    # "no vocals" from "not computed".
+    if vocal_ranges is not None:
+        result["vocal_ranges"] = vocal_ranges
+    # Only carry the embedding when we actually produced one — its absence is
+    # how every downstream consumer knows to behave as today.
+    if audio_embedding is not None:
+        result["audio_embedding"] = audio_embedding
+    return result
 
 
 def main():
@@ -175,8 +677,44 @@ def main():
         emit({"id": None, "ok": False, "fatal": True, "error": f"import failed: {e}"})
         sys.exit(1)
 
+    # Pre-warm the CLAP model (when enabled) BEFORE announcing ready, so the
+    # one-time model download / load is paid during boot rather than on the
+    # first /analyze — which would otherwise risk the request timeout and a
+    # cascade while later requests queue behind a still-loading worker. A load
+    # failure here just disables embeddings (get_embedder caught it); the worker
+    # still boots and analyses bpm/key. The sidecar imposes no ready timeout; a
+    # local-venv boot that exceeds its ready window simply restarts and finds
+    # the weights cached the second time.
+    if EMBED_ENABLED:
+        log("ANALYZE_AUDIO_EMBEDDING on — loading CLAP model...")
+        get_embedder()
+    if VOCAL_ENABLED:
+        log("ANALYZE_VOCAL_ACTIVITY on — loading Demucs model...")
+        get_vocal_detector()
+
+    # Tell the controller whether this worker can actually emit "sounds-like"
+    # audio embeddings, so the admin UI can warn *before* a fruitless run rather
+    # than after the fingerprint bar stays at 0. Capable = the CLAP libs are
+    # present (image built WITH_CLAP=1) and we haven't already hit a hard load
+    # failure. find_spec avoids importing torch when embeddings are off.
+    audio_capable = (not _embed_failed) and (
+        _embedder is not None
+        or all(importlib.util.find_spec(m) is not None for m in ("torch", "transformers"))
+    )
+    # Same probe for vocal activity — the demucs + torch libs present (image
+    # built WITH_DEMUCS=1) and no hard load failure yet.
+    vocal_capable = (not _vocal_failed) and (
+        _vocal_detector is not None
+        or all(importlib.util.find_spec(m) is not None for m in ("torch", "demucs"))
+    )
+
     log("ready")
-    emit({"id": None, "ready": True})
+    emit({
+        "id": None,
+        "ready": True,
+        "audio_embedding_capable": audio_capable,
+        "vocal_activity_capable": vocal_capable,
+    })
 
     for line in sys.stdin:
         line = line.strip()
@@ -196,7 +734,10 @@ def main():
         try:
             import librosa
 
-            result = analyze(librosa, url=url, path=path)
+            result = analyze(
+                librosa, url=url, path=path,
+                embed=req.get("embed"), vocal=req.get("vocal"),
+            )
             emit({"id": rid, "ok": True, **result})
         except Exception as e:
             emit({"id": rid, "ok": False, "error": str(e)})

@@ -1,6 +1,6 @@
 ---
 name: subwave-app-ios-release
-description: Cut a NEW iOS build of the SUB/WAVE app (the Expo project in `app/`) and ship it to TestFlight via EAS — the repeat-release path now that first-time setup is done. Use this skill whenever the user wants to "submit a build", "release iOS again", "push a new TestFlight build", "ship the iOS app", "cut an iOS release", "build and submit for iOS", "send a new build to testers", "deploy the iOS app", "bump the iOS build", or any equivalent phrasing aimed at getting a fresh iOS build into TestFlight/App Store Connect. Trigger it even when the user doesn't say "EAS" or "TestFlight" by name — if they want a new iOS build out to testers, this is the path. The one-time pieces (EAS project link, signing certs, App Store Connect app record, eas.json) already exist, so a release is essentially one command. Do NOT use this for the Android app (that's `subwave-app-android`), for running on a simulator/dev (`expo run:ios`), or for first-time EAS/Apple account setup.
+description: Cut a NEW iOS build of the SUB/WAVE app (the Expo project in `app/`) and ship it via EAS — to TestFlight, and on to the live App Store. The app is LIVE in production on the App Store, so a release is build+submit (one command) then a manual "promote to production" step in App Store Connect. Use this skill whenever the user wants to "submit a build", "release iOS again", "push a new TestFlight build", "ship the iOS app", "release to the App Store", "cut an iOS release", "build and submit for iOS", "send a new build to testers", "deploy the iOS app", "bump the iOS build", or any equivalent phrasing aimed at getting a fresh iOS build out. Trigger it even when the user doesn't say "EAS" or "TestFlight" by name — if they want a new iOS build out, this is the path. The one-time pieces (EAS project link, signing certs, App Store Connect app record, eas.json) already exist, so the build is essentially one command. Do NOT use this for the Android app (that's `subwave-app-android`), for running on a simulator/dev (`expo run:ios`), or for first-time EAS/Apple account setup.
 ---
 
 # SUB/WAVE iOS release → TestFlight
@@ -17,6 +17,32 @@ The first release required interactive setup (creating a distribution
 certificate, registering the App Store Connect app). That's finished. EAS stores
 the credentials server-side and `app/eas.json` pins the submit target, so repeat
 builds run **non-interactively** — no Xcode, no Apple login prompts, no TTY.
+
+## First: does this even need a new build? (OTA)
+
+The app ships **expo-updates** (OTA). If the change is **JS/TS only** —
+components, hooks, styles, copy, logic, Metro-bundled assets — you do **not** need
+a TestFlight build at all. Push it over-the-air to the binaries already out there:
+
+```bash
+cd "$APP"
+eas update --channel production --message "fix: …"   # testers first: --channel preview
+```
+
+It reaches every installed build whose **runtime version (fingerprint)** matches —
+i.e. any build with the same native code. Testers see it on the **next cold
+start** (it fetches in the background; `fallbackToCacheTimeout: 0` keeps launch
+instant, so killing + relaunching twice is how you confirm it applied).
+
+A **new binary is only required when native inputs changed**: a dependency
+add/upgrade, anything under `app/patches/`, a config plugin, or `app.json`'s
+`ios`/`infoPlist`/`plugins` sections. The fingerprint policy guarantees an OTA
+can't land on a binary with mismatched native code, so you can't break a build
+this way. Rule of thumb: **ran `npx expo install` or touched `patches/`? → build a
+binary. Otherwise → OTA.** Full decision table + fingerprint debugging:
+`app/docs/RELEASE.md`.
+
+The rest of this skill is the **binary** path (native change, or a store release).
 
 ## Fixed facts about this app
 
@@ -35,6 +61,8 @@ APP="$REPO/app"   # eas.json lives here — cd into it before any eas command
 | App Store Connect App ID | `6778786696` |
 | Apple Team | `BU9RD766GN` (Individual) |
 | Build profile | `production` (store distribution, `autoIncrement` on) |
+| OTA channel | `production` — JS-only updates via `eas update` (see OTA section above) |
+| Runtime version | `fingerprint` policy — hashes native deps + `patches/` so OTAs only reach matching binaries |
 | Version source | `remote` — EAS owns the **build number**; never bump it by hand |
 | TestFlight page | https://appstoreconnect.apple.com/apps/6778786696/testflight/ios |
 
@@ -102,6 +130,31 @@ as soon as it clears; external testers need Beta App Review first.
 Confirm/track at the TestFlight page above, or
 `https://expo.dev/accounts/pinku1/projects/subwave/builds`.
 
+**`--auto-submit` lands the build in TestFlight, NOT on the public App Store.**
+That's the right default — the build burns in with testers first. Releasing to
+the public store is a deliberate, manual step (next section), so don't tell the
+user the App Store is updated just because the build submitted.
+
+## Promoting to the public App Store (live app)
+
+SUB/WAVE is **live in production on the App Store**. EAS only gets the binary into
+App Store Connect; pushing it to real users is a manual App Store Connect step —
+EAS doesn't do App Store *release* (only TestFlight delivery). Once the processed
+build appears under TestFlight:
+
+1. App Store Connect → SUB/WAVE → **Distribution / App Store** tab.
+2. **Create a new version** if this is a new marketing version (e.g. `1.0.1`) —
+   the number must match `expo.version` in `app.json`. For a same-version
+   resubmission, edit the existing version.
+3. Under **Build**, attach the processed build (the one EAS just submitted).
+4. Fill "What's New", then **Add for Review → Submit**. Apple review for an
+   update is typically hours-to-a-day.
+5. Choose phased release or immediate; it goes live when Apple approves.
+
+So a full public release = run the build command below, wait for processing, then
+do this promotion. A TestFlight-only push (testers only, no store change) stops
+after the build submits.
+
 ## Bumping the version vs. just the build number
 
 Decide which kind of release this is:
@@ -160,7 +213,9 @@ cert/profile prompts (Yes), then it proceeds.
 
 | Want | Do |
 |---|---|
+| Ship a **JS-only** change (no new build) | `cd "$APP" && eas update --channel production --message "…"` |
 | Ship a new build to TestFlight | `cd "$APP" && eas build -p ios --profile production --auto-submit --non-interactive` |
+| **Release to the public App Store** | build+submit (above), wait for processing, then promote the build in App Store Connect (manual) |
 | New app version first | edit `expo.version` in `app/app.json`, commit, then ship |
 | Queue without waiting | add `--no-wait`, then `eas submit -p ios --profile production --id <id>` |
 | Check a build | `eas build:view <id>` / list: `eas build:list` |

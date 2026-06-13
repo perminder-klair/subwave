@@ -14,6 +14,25 @@ export interface Analysis {
   key: string | null;
 }
 
+// --- Loudness normalisation ------------------------------------------------
+// Target integrated loudness; streaming-standard −14 LUFS (Spotify, YouTube).
+// Gain is clamped to ±LOUDNESS_GAIN_CLAMP_DB so a mis-measured
+// outlier can't blow up the mix — Liquidsoap's brick-wall limiter still backs
+// us up, but the clamp keeps us well clear of it on normal catalogue audio.
+export const LOUDNESS_TARGET_LUFS = -14;
+export const LOUDNESS_GAIN_CLAMP_DB = 6;
+
+// dB gain to bring a track measured at `lufs` toward the target, clamped.
+// Returns null when the track has no loudness measurement (→ unity gain on the
+// playback side, i.e. today's behaviour). Result is rounded to 0.1 dB — finer
+// is inaudible and just bloats the annotate string.
+export function gainForLoudness(lufs: number | null | undefined): number | null {
+  if (typeof lufs !== 'number' || !Number.isFinite(lufs)) return null;
+  const raw = LOUDNESS_TARGET_LUFS - lufs;
+  const clamped = Math.max(-LOUDNESS_GAIN_CLAMP_DB, Math.min(LOUDNESS_GAIN_CLAMP_DB, raw));
+  return Math.round(clamped * 10) / 10;
+}
+
 // True when a track carries at least one measured value. An un-analysed track
 // (both null) makes every consumer below a no-op, so an un-analysed library
 // behaves exactly as before.
@@ -79,7 +98,7 @@ export function mixCompat(cur: Analysis, next: Analysis): number {
 export function crossSecondsFor(
   cur: Analysis,
   next: Analysis,
-  opts: { energyDelta?: number } = {},
+  opts: { energyDelta?: number; nextIntroMs?: number | null } = {},
 ): number | null {
   if (!analysed(cur) || !analysed(next)) return null;
 
@@ -99,6 +118,30 @@ export function crossSecondsFor(
   // Daypart nudge: lower energy → longer, brisker → shorter. Subtle (±~0.5s).
   const energyDelta = opts.energyDelta ?? 0;
   secs += -energyDelta * 4;
+
+  // Beat-grid snap (feature: beat/bar grid): round the blend to a whole number
+  // of the OUTGOING track's bars (4 beats, 4/4) so the fade.out spans a musical
+  // unit instead of an arbitrary count. Only when the outgoing tempo is known
+  // and the snap stays in range; the intro cap below still wins over it.
+  if (cur.bpm && cur.bpm > 0) {
+    const barSec = (4 * 60) / cur.bpm;
+    if (barSec > 0) {
+      const bars = Math.max(1, Math.round(secs / barSec));
+      const snapped = bars * barSec;
+      if (snapped >= 3 && snapped <= 14) secs = snapped;
+    }
+  }
+
+  // Structure-aware cap (feature: song structure): the incoming track plays
+  // from t=0 at the start of the cross buffer and its fade.in spans the whole
+  // buffer, so a buffer longer than the incoming track's instrumental intro
+  // would fade up over the first vocals. Cap the blend to the intro length so
+  // the fade-in completes before the song proper. Absent intro → no cap, i.e.
+  // today's behaviour. Floor at 3s so a near-zero intro still gets a real blend.
+  const introSec = typeof opts.nextIntroMs === 'number' && opts.nextIntroMs > 0
+    ? opts.nextIntroMs / 1000
+    : null;
+  if (introSec != null) secs = Math.min(secs, Math.max(3, introSec));
 
   // Clamp to a sane broadcast range and quantise to 0.1s.
   secs = Math.max(3, Math.min(14, secs));

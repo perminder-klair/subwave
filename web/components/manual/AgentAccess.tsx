@@ -5,15 +5,15 @@ import ManualPage from './ManualPage';
 const TOOLS = [
   { name: 'subwave_now_playing', summary: 'The current track, station context, and live listener count.', auth: '—' },
   { name: 'subwave_station_state', summary: 'The upcoming queue, recent history, and the DJ booth log.', auth: '—' },
-  { name: 'subwave_request_song', summary: 'Queues a track from a natural-language request — a song, an artist, or a vibe.', auth: '—' },
+  { name: 'subwave_request_song', summary: 'Queues a track from a natural-language request: a song, an artist, or a vibe.', auth: '—' },
   { name: 'subwave_dj_announce', summary: 'Puts a spoken update on air, rewritten in persona or read verbatim.', auth: 'Admin' },
-  { name: 'subwave_dj_segment', summary: 'Fires a scripted segment on demand — station ID, the hour, or a link.', auth: 'Admin' },
+  { name: 'subwave_dj_segment', summary: 'Fires a scripted segment on demand: station ID, the hour, or a link.', auth: 'Admin' },
 ];
 
 export default function AgentAccess() {
   return (
     <ManualPage
-      eyebrow="MANUAL · 11"
+      eyebrow="MANUAL · 12"
       title="Agent access."
       intro="SUB/WAVE isn't only for human listeners. An AI agent can read what's on air and put songs and DJ segments onto the broadcast through the station's MCP server."
       current="/manual/mcp"
@@ -37,7 +37,7 @@ export default function AgentAccess() {
           browser, an agent calls a tool, and the same controller does the work.
         </p>
         <p className="text-muted">
-          The server holds no logic of its own — each tool is a typed wrapper over one
+          The server holds no logic of its own; each tool is a typed wrapper over one
           controller endpoint. The agent never sees a URL or an auth header, only the
           five intent-shaped tools below.
         </p>
@@ -66,7 +66,7 @@ export default function AgentAccess() {
         </table>
         <p className="text-muted">
           Like the human request path, <code className="bs-code-inline">subwave_request_song</code>{' '}
-          queues a track — it never interrupts the song that's playing — and it's
+          queues a track (it never interrupts the song that's playing) and it's
           rate-limited. The two DJ-control tools speak immediately.
         </p>
       </section>
@@ -75,13 +75,13 @@ export default function AgentAccess() {
         <p className="bs-eyebrow">PUBLIC vs ADMIN</p>
         <h2>Reading and requesting are open.</h2>
         <p>
-          The three read-and-request tools need no credentials — they map to the same
+          The three read-and-request tools need no credentials: they map to the same
           public, rate-limited endpoints a browser uses. The two DJ-control tools, which
           put a voice on air, are gated: the server sends the station's{' '}
           <code className="bs-code-inline">ADMIN_USER</code> /{' '}
           <code className="bs-code-inline">ADMIN_PASS</code> as a Basic auth header, read
           from its own environment. Without them, an agent can still see what's on air
-          and request songs — it just can't drive the DJ.
+          and request songs; it just can't drive the DJ.
         </p>
       </section>
 
@@ -91,7 +91,7 @@ export default function AgentAccess() {
         <p>
           The server lives in the repo at <code className="bs-code-inline">mcp-subwave/</code>.
           Build it once with <code className="bs-code-inline">npm install &amp;&amp; npm run build</code>,
-          then point any MCP client — Claude Code, Claude Desktop, or another — at the
+          then point any MCP client (Claude Code, Claude Desktop, or another) at the
           built <code className="bs-code-inline">dist/index.js</code>, passing the
           controller URL and, optionally, the admin credentials as environment variables.
           The station must be running first.

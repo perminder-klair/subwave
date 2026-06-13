@@ -10,6 +10,9 @@
 //   --re-analyze   drop existing analysis and redo everything
 //   --walk         force a Navidrome metadata refresh before analysing
 //   --skip-walk    never walk Navidrome, even on an empty catalogue
+//   --audio        also re-target already-analysed tracks that lack a CLAP
+//                  audio vector (backfill embeddings without a full re-analyze).
+//                  Implied when ANALYZE_AUDIO_EMBEDDING is set.
 //
 // Walk policy: by default the metadata walk runs ONLY when the catalogue is
 // empty (first-run bootstrap) — the ~11.5 min walk over a populated DB is the
@@ -28,6 +31,7 @@ import { loadSecretsIntoEnv } from '../setup/secrets.js';
 import { loadSetupConfig } from '../setup/config.js';
 import { runAnalysisPass } from './analyze.js';
 import * as analyzer from './analyzer.js';
+import { reportProgress } from './tagger-progress.js';
 
 function parseIntFlag(args: string[], name: string): number | undefined {
   const idx = args.indexOf(name);
@@ -61,6 +65,8 @@ async function main() {
   const reAnalyze = args.includes('--re-analyze');
   const forceWalk = args.includes('--walk');
   const skipWalk = args.includes('--skip-walk');
+  // undefined → runAnalysisPass falls back to the ANALYZE_AUDIO_EMBEDDING env.
+  const audioBackfill = args.includes('--audio') ? true : undefined;
 
   await applyWizardOverlay();
   await settings.load();
@@ -88,6 +94,7 @@ async function main() {
   }
 
   if (shouldWalk) {
+    reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
     let walked = 0;
     const liveIds = new Set<string>();
     for await (const song of subsonic.iterateAllSongs()) {
@@ -101,7 +108,10 @@ async function main() {
       });
       liveIds.add(song.id);
       walked += 1;
-      if (walked % 500 === 0) console.log(`[analyze] walked ${walked} tracks`);
+      if (walked % 500 === 0) {
+        console.log(`[analyze] walked ${walked} tracks`);
+        reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: walked });
+      }
     }
     console.log(`[analyze] walked ${walked} total tracks`);
 
@@ -116,7 +126,7 @@ async function main() {
     }
   }
 
-  const stats = await runAnalysisPass({ limit, reAnalyze });
+  const stats = await runAnalysisPass({ limit, reAnalyze, audioBackfill });
   analyzer.shutdown();
   console.log('[analyze] stats:', JSON.stringify(stats));
   process.exit(stats.available ? 0 : 0);

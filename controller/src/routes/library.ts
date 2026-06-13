@@ -14,6 +14,7 @@ import { tagBatch, TAGGER_BATCH_SYSTEM } from '../music/tagger-core.js';
 import { promptVocabHash } from '../music/embeddings.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
+import { tagger, startAnalyzer } from '../broadcast/tagger.js';
 
 export const router = express.Router();
 
@@ -28,7 +29,8 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
     const q = req.query || {};
     const moods = parseList(q.moods);
     const sort = (typeof q.sort === 'string' ? q.sort : 'artist') as
-      | 'artist' | 'title' | 'year' | 'taggedAt';
+      | 'artist' | 'title' | 'year' | 'taggedAt' | 'bpm' | 'loudness' | 'pace';
+    const vocal = q.vocal === 'instrumental' || q.vocal === 'vocal' ? q.vocal : null;
     const limit = parseIntSafe(q.limit, 50);
     const offset = parseIntSafe(q.offset, 0);
     const yearFrom = parseIntSafe(q.yearFrom, null);
@@ -38,6 +40,7 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
       moods,
       energy: typeof q.energy === 'string' && q.energy ? q.energy : null,
       genre: typeof q.genre === 'string' && q.genre ? q.genre : null,
+      vocal,
       yearFrom,
       yearTo,
       q: typeof q.q === 'string' ? q.q : null,
@@ -89,6 +92,161 @@ router.get('/library/genres', requireAdmin, async (req, res) => {
       .map(([value, songCount]) => ({ value, songCount }))
       .sort((a, b) => b.songCount - a.songCount);
     res.json({ genres: list });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /library/observatory — the bulk dataset behind the Library Observatory
+// (web/app/observatory). Returns every *tagged* track in one shot so the
+// constellation can place all nodes at once. Projected to just what the map /
+// tooltip / filters / stat panels need — lastfm tags, lyric excerpts and
+// embeddings are deliberately omitted here (they'd bloat a multi-thousand-row
+// payload) and loaded lazily per selected track by the /track/:id endpoint.
+// Capped at `max` (default OBSERVATORY_DEFAULT_MAX, raisable per-request via
+// ?max= up to OBSERVATORY_HARD_MAX); above the cap a stratified per-genre sample
+// is returned with `sampled`/`truncated` flags. Station-archive rows are dropped
+// (issue #273).
+// ---------------------------------------------------------------------------
+// Default node cap (env-overridable) and the hard ceiling the client may raise
+// it to from the UI (?max=). 10000 covers most personal libraries in full while
+// keeping the payload sane; above it the observatory's MAP SIZE control dials up
+// to OBSERVATORY_HARD_MAX. Above the cap we return a stratified sample. The web
+// client mirrors this default (ObservatoryApp DEFAULT_MAX) so a fresh browser
+// and a direct API caller agree. (Libraries above ~3k render on the canvas
+// renderer; only small ones keep the animated SVG path.)
+const OBSERVATORY_DEFAULT_MAX = Math.max(500, Number(process.env.OBSERVATORY_MAX) || 10000);
+const OBSERVATORY_HARD_MAX = Math.max(OBSERVATORY_DEFAULT_MAX, Number(process.env.OBSERVATORY_HARD_MAX) || 50000);
+router.get('/library/observatory', requireAdmin, async (req, res) => {
+  try {
+    await library.load();
+    const stats = library.stats();
+    const total = stats.total;
+    const requested = Number(req.query.max);
+    const max = Math.min(
+      OBSERVATORY_HARD_MAX,
+      Math.max(500, Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : OBSERVATORY_DEFAULT_MAX),
+    );
+    const sampled = total > max;
+    const all = sampled ? db.allTaggedSampled(max, total) : db.allTagged();
+    const truncated = sampled;
+    const tracks = all
+      .filter((t) => !subsonic.isStationArchive(t))
+      .slice(0, max)
+      .map((t) => ({
+        id: t.id,
+        title: t.title,
+        artist: t.artist,
+        album: t.album,
+        year: t.year,
+        genre: t.genre,
+        durationSec: t.durationSec,
+        moods: t.moods,
+        energy: t.energy,
+        source: t.source,
+        confidence: t.confidence,
+        bpm: t.bpm,
+        musicalKey: t.musicalKey,
+        analysisConfidence: t.analysisConfidence,
+        // Cheap acoustic scalars for the Observatory's colour-by + aggregate
+        // panels. The full curves/ranges stay on the per-track dossier endpoint.
+        loudnessLufs: t.loudnessLufs,
+        paceMean: library.paceMeanOf(t.pace),
+        // Tri-state: 'vocal' | 'instrumental' | null (not analysed for vocals).
+        vocal: t.vocalRanges == null ? null : t.vocalRanges.length ? 'vocal' : 'instrumental',
+      }));
+    res.json({
+      tracks,
+      truncated,
+      sampled,
+      max,
+      hardMax: OBSERVATORY_HARD_MAX,
+      moodVocab: settings.SHOW_MOODS,
+      stats: {
+        total: stats.total,
+        distinctArtists: stats.distinctArtists,
+        byMood: stats.byMood,
+        byEnergy: stats.byEnergy,
+        byGenre: stats.byGenre,
+        bySource: stats.bySource,
+        withEmbedding: stats.withEmbedding,
+        withAudioEmbedding: stats.withAudioEmbedding,
+        updatedAt: stats.updatedAt,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /library/observatory/track/:id — the dossier detail for one node. The
+// full record plus the lazily-loaded heavy bits the bulk endpoint skips:
+// last.fm tags, lyric excerpt, the real text + audio embedding vectors (for
+// the heatmap fingerprints), and `mixNext` — the nearest neighbours in text
+// embedding space (real KNN, what the DJ would actually mix toward). All
+// null-safe: missing analysis/embeddings/enrichment simply return null and the
+// UI hides those sections.
+// ---------------------------------------------------------------------------
+router.get('/library/observatory/track/:id', requireAdmin, async (req, res) => {
+  try {
+    await library.load();
+    const id = req.params.id;
+    const t = db.getTrack(id);
+    if (!t) return res.status(404).json({ error: 'track not found' });
+
+    const textVec = db.getVector(id);
+    const audioVec = db.getAudioVector(id);
+    const mixNext = library
+      .tracksLikeThis(id, 8)
+      .map((n: any) => ({
+        id: n.id,
+        title: n.title,
+        artist: n.artist,
+        bpm: n.bpm ?? null,
+        musicalKey: n.musicalKey ?? null,
+        energy: n.energy ?? null,
+        similarity: n._similarity ?? null,
+      }));
+
+    res.json({
+      track: {
+        id: t.id,
+        title: t.title,
+        artist: t.artist,
+        album: t.album,
+        year: t.year,
+        genre: t.genre,
+        durationSec: t.durationSec,
+        moods: t.moods,
+        energy: t.energy,
+        source: t.source,
+        confidence: t.confidence,
+        taggerVersion: t.taggerVersion,
+        model: t.model,
+        taggedAt: t.taggedAt,
+        lastfmTags: t.lastfmTags,
+        lyricExcerpt: t.lyricExcerpt,
+        bpm: t.bpm,
+        musicalKey: t.musicalKey,
+        introMs: t.introMs,
+        analysisConfidence: t.analysisConfidence,
+        analysisVersion: t.analysisVersion,
+        // Acoustic detail — the curves/ranges the dossier's SONG SHAPE timeline
+        // draws. All null-safe; the UI hides what isn't computed. (beats/bars
+        // are deliberately omitted — too granular/heavy for the payload.)
+        loudnessLufs: t.loudnessLufs,
+        peakDb: t.peakDb,
+        structure: t.structure,
+        vocalRanges: t.vocalRanges,
+        pace: t.pace,
+        keyRanges: t.keyRanges,
+      },
+      textEmbedding: textVec ? Array.from(textVec) : null,
+      audioEmbedding: audioVec ? Array.from(audioVec) : null,
+      mixNext,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -169,6 +327,21 @@ router.get('/library/coverage', requireAdmin, async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ---------------------------------------------------------------------------
+// POST /library/analyze — kick off the standalone analysis pass as a
+// background child (the admin "Analyze audio" button). Runs bpm/key/intro for
+// un-analysed tracks and — when audio embeddings are enabled via the settings
+// toggle or ANALYZE_AUDIO_EMBEDDING — backfills CLAP vectors for tracks that
+// lack one (--audio). Shares the tagger's single-flight state: poll /settings
+// (tagger.running / tagger.mode) for progress, stop via /tag-library/stop.
+// ---------------------------------------------------------------------------
+router.post('/library/analyze', requireAdmin, (req, res) => {
+  if (tagger.running) return res.status(409).json({ error: 'a tagger/analyzer run is already active', tagger });
+  const limit = parseIntSafe(req.body?.limit, null);
+  startAnalyzer({ limit: limit ?? undefined, audio: true });
+  res.json({ ok: true, tagger });
 });
 
 // ---------------------------------------------------------------------------
@@ -284,6 +457,105 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     res.json({ id, moods, energy, taggedAt: tagged?.taggedAt });
   } catch (err: any) {
     queue.log('error', `/library/retag failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /library/manual-tag — operator-set tags, no LLM involved.
+// Body: { id, moods: string[], energy?: 'low'|'medium'|'high'|null,
+//         applyToAlbum?: boolean }
+//
+// `moods: []` clears the tags entirely (track returns to the untagged pool).
+// `applyToAlbum` resolves the whole album server-side from the track id
+// (subsonic.getSong → albumId → getAlbum) and applies the same tags to every
+// track — this is the "tag an album/folder for targeted queuing" path
+// (discussion #336). Moods are restricted to settings.SHOW_MOODS so manual
+// rows feed songsByMood()/MOOD_NEIGHBOURS exactly like LLM-tagged ones.
+// ---------------------------------------------------------------------------
+router.post('/library/manual-tag', requireAdmin, async (req, res) => {
+  const id = req.body?.id;
+  if (!id || typeof id !== 'string') return res.status(400).json({ error: 'id is required' });
+  const moods = req.body?.moods;
+  if (!Array.isArray(moods) || moods.some((m: any) => typeof m !== 'string')) {
+    return res.status(400).json({ error: 'moods must be an array of strings' });
+  }
+  if (moods.length > 3) return res.status(400).json({ error: 'at most 3 moods per track' });
+  const unknown = moods.filter((m: string) => !settings.SHOW_MOODS.includes(m));
+  if (unknown.length) {
+    return res.status(400).json({ error: `unknown mood(s): ${unknown.join(', ')}` });
+  }
+  const energy = req.body?.energy ?? null;
+  if (energy !== null && !['low', 'medium', 'high'].includes(energy)) {
+    return res.status(400).json({ error: "energy must be 'low', 'medium', 'high' or null" });
+  }
+  const applyToAlbum = req.body?.applyToAlbum === true;
+  const clearing = moods.length === 0;
+
+  try {
+    await library.load();
+
+    // Resolve the seed track — Subsonic first (carries albumId), library-db
+    // row as fallback so already-indexed tracks work even if Navidrome misses.
+    let song: any = null;
+    try { song = await subsonic.getSong(id); } catch {}
+    if (!song) {
+      const row = db.getTrack(id);
+      if (row) song = { id: row.id, title: row.title, artist: row.artist, album: row.album, year: row.year, genre: row.genre, duration: row.durationSec };
+    }
+    if (!song) return res.status(404).json({ error: 'track not found' });
+
+    let targets: any[] = [song];
+    if (applyToAlbum) {
+      if (!song.albumId) return res.status(404).json({ error: 'album not resolvable for this track' });
+      targets = await subsonic.getAlbum(song.albumId);
+      if (!targets.length) return res.status(404).json({ error: 'album has no tracks' });
+    }
+
+    for (const t of targets) {
+      // Album siblings may be brand-new to library-db — make sure a row exists
+      // before tagging it.
+      db.upsertTrackMeta(t.id, {
+        title: t.title,
+        artist: t.artist,
+        album: t.album,
+        year: t.year ?? null,
+        genre: t.genre ?? null,
+        duration: t.duration ?? null,
+      });
+      if (clearing) {
+        db.clearTrackTags(t.id);
+      } else {
+        db.upsertTrackTags(t.id, {
+          moods,
+          energy,
+          source: 'manual',
+          confidence: 1,
+        });
+      }
+    }
+    await library.save();
+
+    const scope = applyToAlbum ? `album "${song.album}" (${targets.length} tracks)` : `"${song.title}"`;
+    queue.log('info', clearing
+      ? `manual-tag: cleared tags on ${scope}`
+      : `manual-tag: ${scope} → [${moods.join(', ')}] energy=${energy ?? '—'}`);
+
+    res.json({
+      ok: true,
+      updated: targets.length,
+      cleared: clearing,
+      album: applyToAlbum ? (song.album ?? null) : null,
+      tracks: targets.map(t => ({
+        id: t.id,
+        title: t.title,
+        artist: t.artist,
+        moods: clearing ? [] : moods,
+        energy: clearing ? null : energy,
+      })),
+    });
+  } catch (err: any) {
+    queue.log('error', `/library/manual-tag failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

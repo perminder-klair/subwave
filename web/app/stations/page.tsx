@@ -30,7 +30,7 @@ export default function StationsIndex() {
         <p className="bs-eyebrow">THE NETWORK</p>
         <h1>Stations.</h1>
         <p>
-          SUB/WAVE is self-hosted &mdash; anyone can run their own. Here&rsquo;s who&rsquo;s on
+          SUB/WAVE is self-hosted; anyone can run their own. Here&rsquo;s who&rsquo;s on
           the air around the world. Tune in, or add your own station with a pull request.
         </p>
       </header>
@@ -74,7 +74,7 @@ export default function StationsIndex() {
         </ul>
       ) : (
         <p className="bs-news-empty">
-          No stations on the directory yet. Be the first &mdash; add yours above.
+          No stations on the directory yet. Be the first to add yours above.
         </p>
       )}
     </article>

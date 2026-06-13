@@ -175,6 +175,26 @@ export async function getGenres() {
   return r.genres?.genre || [];
 }
 
+// Fuzzy-match free text ("hip hop", "turkish") against the library's real
+// genre tags ("Hip-Hop", "Turkish Pop"). Exact normalised match wins, then
+// substring either way. Returns the exact tag value or null. getGenres
+// failures propagate — callers decide whether to log or fall through.
+export async function resolveGenreName(name) {
+  if (!name) return null;
+  const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const target = norm(name);
+  if (!target) return null;
+  const genres = await getGenres();
+  let hit = genres.find(g => norm(g.value) === target);
+  if (!hit) {
+    hit = genres.find(g => {
+      const gv = norm(g.value);
+      return gv && (gv.includes(target) || target.includes(gv));
+    });
+  }
+  return hit?.value || null;
+}
+
 export async function getSimilarSongs(id, { count = 20 } = {}) {
   const r = await call('getSimilarSongs2', { id, count });
   return rejectArchive(r.similarSongs2?.song || []);
@@ -255,6 +275,13 @@ export async function getTopSongs(artistName, { count = 10 } = {}) {
 export async function getAlbum(id) {
   const r = await call('getAlbum', { id });
   return rejectArchive(r.album?.song || []);
+}
+
+// Single song lookup — the Child carries albumId, which is how manual album
+// tagging resolves a whole album from one track id (the UI never sees albumIds).
+export async function getSong(id) {
+  const r = await call('getSong', { id });
+  return r.song || null;
 }
 
 // Returns { id, name, albumCount, album: [{ id, name, year, ... }] }
@@ -409,5 +436,13 @@ export function getAnnotatedUri(song) {
   // its fades, keeping fade == buffer). Absent → Liquidsoap uses its startup
   // crossfade_duration(), i.e. today's behaviour.
   if (song.crossSec != null) fields.push(`liq_cross_duration="${escAnnotate(song.crossSec)}"`);
+  // Loudness normalisation: the queue stashes a per-track gain offset (dB,
+  // clamped) toward the loudness target when the track has a measured LUFS.
+  // Emitted in the "<n> dB" form Liquidsoap's amplify override parses natively
+  // (the same shape as replaygain_track_gain). radio.liq applies it via
+  // amplify(override="liq_amplify") before the ducking layers so quiet and loud
+  // tracks play at even perceived volume — masters untouched, no bus
+  // normaliser. Absent → no gain applied, i.e. unity / today's behaviour.
+  if (song.gainDb != null) fields.push(`liq_amplify="${escAnnotate(song.gainDb)} dB"`);
   return `annotate:${fields.join(',')}:${getPlayableUri(song)}`;
 }

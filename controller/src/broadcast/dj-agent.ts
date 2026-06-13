@@ -17,6 +17,7 @@ import * as session from './session.js';
 import * as picker from '../music/picker.js';
 import * as library from '../music/library.js';
 import * as mix from '../music/mix.js';
+import * as journey from '../music/journey.js';
 import * as dj from '../llm/dj.js';
 import { energyForDaypart } from '../context.js';
 import { defineAgent } from '../llm/agent.js';
@@ -31,7 +32,71 @@ import { recencyWindowsForLibrary } from '../music/recency.js';
 // current track), and the link patter acknowledges the run. State is module-
 // level — one station, one run at a time. Cleared when it runs out or when the
 // active persona isn't in DJ mode.
-let runState: { bpm: number | null; key: string | null; remaining: number } | null = null;
+//
+// Phase 2 overlay — a SONIC JOURNEY. When the audio (CLAP) index is populated,
+// a run can also carry a sequence of waypoint vectors through the audio space
+// toward a destination vibe; each pick consumes one waypoint, handed to the
+// picker as the audio-KNN anchor so the pool drifts toward the destination
+// while the tempo/key re-rank still applies. `waypoints`/`step` are absent on a
+// plain tempo/key run (no audio index, or the journey couldn't be built), in
+// which case the run behaves exactly as it did before.
+interface RunState {
+  bpm: number | null;
+  key: string | null;
+  remaining: number;
+  waypoints?: number[][];
+  step?: number;
+}
+let runState: RunState | null = null;
+
+// What advanceRun hands back per pick: the tempo/key re-rank target (feature 4)
+// and, when a sonic journey is active, the current waypoint vector for the
+// picker's audio anchor. Either may be null independently.
+interface RunStep {
+  rankTarget: { bpm: number | null; key: string | null } | null;
+  audioWaypoint: number[] | null;
+}
+
+// How many candidate tracks to average for a destination-vibe centroid. Capped
+// so a big energy bucket doesn't turn the centroid into one getAudioVector read
+// per track in the library on every run start.
+const JOURNEY_DEST_SAMPLE = 60;
+
+// Consume the next waypoint from a run (clamped to the last one), advancing the
+// step cursor. null when the run carries no journey.
+function takeWaypoint(rs: RunState): number[] | null {
+  if (!rs.waypoints || rs.waypoints.length === 0) return null;
+  const idx = Math.min(rs.step ?? 0, rs.waypoints.length - 1);
+  rs.step = idx + 1;
+  return rs.waypoints[idx];
+}
+
+// Try to overlay a sonic journey on a freshly-started run. Destination is a
+// daypart-appropriate energy bucket's centroid (brisker daypart → toward the
+// high-energy sound, mellower → toward the low-energy sound), so the run drifts
+// in the same direction the tempo/key target already nudges. No-op (leaves the
+// run a plain tempo/key run) when the current track or the destination has no
+// audio coverage. `totalSteps` is the number of picks the run will influence.
+function maybeAttachJourney(rs: RunState, current: any, totalSteps: number): void {
+  const startId = current?.id;
+  if (!startId) return;
+  try {
+    const destEnergy = energyForDaypart().speed >= 1 ? 'high' : 'low';
+    const destIds = shuffle(library.songsByEnergy(destEnergy).map((s: any) => s.id))
+      .slice(0, JOURNEY_DEST_SAMPLE);
+    if (destIds.length === 0) return;
+    const j = journey.buildJourney({ startId, endIds: destIds, steps: totalSteps });
+    if (!j) return;
+    rs.waypoints = j.waypoints;
+    rs.step = 0;
+  } catch {
+    // Journey is a best-effort enhancement — never let it break a pick.
+  }
+}
+
+function shuffle<T>(arr: T[]): T[] {
+  return [...arr].sort(() => Math.random() - 0.5);
+}
 
 // Resolve {bpm, key} for a track via the library DB (queued/agent picks carry
 // only id/title/artist).
@@ -61,23 +126,36 @@ function runStartProbability(): number {
   return 0;
 }
 
-// Advance the mini-run state for this pick and return the re-rank target to use
-// (or null for "anchor to the current track as usual"). Only does anything in
-// DJ mode with an analysed current track.
-function advanceRun(djMode: boolean, current: any): { bpm: number | null; key: string | null } | null {
-  if (!djMode) { runState = null; return null; }
+// Advance the mini-run state for this pick and return the re-rank target +
+// (optional) sonic-journey waypoint to use. rankTarget null means "anchor the
+// tempo/key re-rank to the current track as usual"; audioWaypoint null means
+// "no journey — the audio source anchors to the current track". Only does
+// anything in DJ mode with an analysed current track.
+const NO_RUN: RunStep = { rankTarget: null, audioWaypoint: null };
+
+function advanceRun(djMode: boolean, current: any): RunStep {
+  if (!djMode) { runState = null; return NO_RUN; }
   if (runState && runState.remaining > 0) {
     runState.remaining--;
-    if (runState.remaining <= 0) { const t = { bpm: runState.bpm, key: runState.key }; runState = null; return t; }
-    return { bpm: runState.bpm, key: runState.key };
+    const waypoint = takeWaypoint(runState);
+    if (runState.remaining <= 0) {
+      const rankTarget = { bpm: runState.bpm, key: runState.key };
+      runState = null;
+      return { rankTarget, audioWaypoint: waypoint };
+    }
+    return { rankTarget: { bpm: runState.bpm, key: runState.key }, audioWaypoint: waypoint };
   }
   // No active run — maybe start one off the current track.
   const cur = analysisOf(current);
-  if ((cur.bpm == null && cur.key == null) || Math.random() >= runStartProbability()) return null;
+  if ((cur.bpm == null && cur.key == null) || Math.random() >= runStartProbability()) return NO_RUN;
   const target = mix.pickRunTarget(cur, energyForDaypart());
-  if (!target) return null;
-  runState = { bpm: target.bpm, key: target.key, remaining: 1 + Math.floor(Math.random() * 2) }; // 1-2 more after this
-  return target;
+  if (!target) return NO_RUN;
+  const extra = 1 + Math.floor(Math.random() * 2); // 1-2 more picks after this
+  runState = { bpm: target.bpm, key: target.key, remaining: extra };
+  // Overlay a sonic journey if the audio index can support one (this pick + the
+  // `extra` that follow → extra + 1 total waypoints). No-op otherwise.
+  maybeAttachJourney(runState, current, extra + 1);
+  return { rankTarget: target, audioWaypoint: takeWaypoint(runState) };
 }
 
 export function runActive(): boolean {
@@ -135,23 +213,66 @@ function requestSystem() {
 The messages above are the live session — the last user turn is a listener request.`;
 }
 
+// --- Agent circuit breaker ---------------------------------------------------
+// A model that can't drive the done-tool harness — ignores toolChoice and
+// burns its whole output budget thinking instead of emitting the tool call
+// (minimax-m2.7:cloud is the canonical case) — fails EVERY agent run, and
+// each failure costs the full agent deadline before the stateless fallback
+// takes over. Rather than paying that stall on every track, consecutive agent
+// failures open the breaker: picks and request matching go straight to their
+// stateless fallbacks for a cooldown, then the agent gets another try. Any
+// agent success closes it. Module-level — one station, one model config at a
+// time; the trip is logged to the DJ log + events so the operator can see
+// WHY the session-aware picker went quiet and switch model.
+const BREAKER_FAILURES = 3;
+const BREAKER_COOLDOWN_MS = 10 * 60_000;
+let breakerFails = 0;
+let breakerOpenUntil = 0;
+
+function breakerOpen(): boolean {
+  return Date.now() < breakerOpenUntil;
+}
+
+function breakerSuccess() {
+  breakerFails = 0;
+}
+
+function breakerFailure(queue: any) {
+  breakerFails++;
+  if (breakerFails < BREAKER_FAILURES) return;
+  breakerFails = 0;
+  breakerOpenUntil = Date.now() + BREAKER_COOLDOWN_MS;
+  queue.log('picker', `agent picks failed ${BREAKER_FAILURES}× in a row — using the stateless fallbacks for ${Math.round(BREAKER_COOLDOWN_MS / 60_000)} min (the configured model may not handle tool calls; see /admin/debug and consider switching model)`);
+  logEvent('pick.breaker', { failures: BREAKER_FAILURES, cooldownMs: BREAKER_COOLDOWN_MS });
+}
+
 // Named agents — the picker and request-handler specs in one declarable block
 // each. `buildSystem` and `buildTools` resolve persona / per-call filters at
 // run time; everything else (schema, step cap, hard timeout, log kind) is
 // fixed here so the spec lives in one place. picker-test.mjs reads
 // `pickerAgent.maxSteps` / `pickerAgent.timeoutMs` so test runs match prod
 // without drifting. The hard timeout is what fails fast into the stateless
-// fallback below instead of dragging on a flaky cloud call.
+// fallback below instead of dragging on a pathological model call — enforced
+// by withDeadline in llm/sdk.ts (main + recovery runs each get the full
+// budget, so worst case per agent call is ~2× this). It comes from
+// settings.llm.agentTimeoutMs (default 45s, admin-tunable) — slow
+// reasoning-heavy cloud models routinely need 20-40s per pick, and a pick has
+// a whole track length of slack; the deadline exists to contain the unbounded
+// 60s+ stalls (#352), not to demand snappy answers.
+function agentDeadline(): number {
+  return settings.get().llm?.agentTimeoutMs ?? 45000;
+}
+
 export const pickerAgent = defineAgent({
   kind: 'djAgentPick',
   schema: PICK_SCHEMA,
   // The done-tool path ends the loop at step 1 (COMMIT_AFTER_STEPS in sdk.js)
   // on every provider now; maxSteps is just the backstop.
   maxSteps: 4,
-  timeoutMs: 22000,
+  timeoutMs: agentDeadline,
   buildSystem: () => pickSystem(),
-  buildTools: ({ recentIds, recentKeys, recentArtists }) => {
-    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, recentArtists });
+  buildTools: ({ recentIds, recentKeys, recentArtists, audioWaypoint }) => {
+    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, recentArtists, audioWaypoint });
     return { tools, extras: { seen } };
   },
 });
@@ -160,7 +281,7 @@ export const requestAgent = defineAgent({
   kind: 'djAgentRequest',
   schema: REQUEST_SCHEMA,
   maxSteps: 4,
-  timeoutMs: 22000,
+  timeoutMs: agentDeadline,
   buildSystem: () => requestSystem(),
   // recentArtists deliberately empty — a request for a recently-played artist
   // must still resolve.
@@ -202,7 +323,7 @@ async function enqueuePick(queue, song, reason, source, link: string | null = nu
 // Track event — a track started; pick the next one and maybe air a link.
 // ---------------------------------------------------------------------------
 
-async function pickViaAgent(queue, { wantLink }) {
+async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLink: boolean; audioWaypoint?: number[] | null }) {
   await library.load();
   const windows = recencyWindowsForLibrary(library.stats().distinctArtists);
   // Scale the recency windows to the tagged library's artist diversity: dense
@@ -216,6 +337,10 @@ async function pickViaAgent(queue, { wantLink }) {
     recentIds,
     recentKeys,
     recentArtists,
+    // Sonic journey (Phase 2): registers the tracksTowardJourney tool, closed
+    // over the run's current waypoint, so the agent path drifts the sound the
+    // same way the pool path does. The event text tells the agent to use it.
+    audioWaypoint,
   });
 
   const song = object?.id ? extras.seen.get(object.id) : null;
@@ -248,10 +373,12 @@ async function pickViaAgent(queue, { wantLink }) {
   });
 }
 
-async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm: number | null; key: string | null } | null = null) {
+async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null) {
   // A DJ-mode mini-run (feature 4) anchors the pool re-rank to the run's
   // tempo/key target instead of the current track. null → today's behaviour.
-  const result = await picker.pickViaPool(queue, ctx, rankTarget);
+  // A sonic journey (Phase 2) additionally anchors the audio-KNN source to the
+  // run's current waypoint vector, drifting the pool toward the destination.
+  const result = await picker.pickViaPool(queue, ctx, rankTarget, audioWaypoint);
   if (!result) {
     queue.log('picker', 'pool produced no pick');
     return;
@@ -300,8 +427,10 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     const previous = queue.history[0]?.track || null;
     const djMode = !!settings.getEffectivePersona()?.djMode;
 
-    // Feature 4 — advance/maybe-start a mini-run and get the re-rank target.
-    const rankTarget = advanceRun(djMode, current);
+    // Feature 4 + Phase 2 — advance/maybe-start a mini-run; get the tempo/key
+    // re-rank target and (when the audio index supports it) a sonic-journey
+    // waypoint for the pool's audio anchor.
+    const { rankTarget, audioWaypoint } = advanceRun(djMode, current);
     const inRun = runActive();
 
     // The link clause differs in DJ mode: a working DJ doesn't just ease into
@@ -310,6 +439,12 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     // it writes `say`, so this costs nothing extra.
     const runClause = inRun
       ? ` You're mid-run — keep the energy moving in the same direction (a touch ${energyForDaypart().speed >= 1 ? 'brisker' : 'mellower'}) and you may nod to it in the link, but never say tempo numbers.`
+      : '';
+    // Gated on the waypoint itself, not inRun: on a run's final pick the run
+    // state is already cleared (advanceRun) but the last waypoint — the
+    // destination itself — is still the one to land on.
+    const journeyClause = audioWaypoint && audioWaypoint.length
+      ? ' A sonic journey is active: call tracksTowardJourney and strongly prefer one of its tracks — each one carries the sound a step toward where this arc is heading. Never mention the journey on air.'
       : '';
     const linkClause = wantLink
       ? (djMode
@@ -325,18 +460,21 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
       + (previous ? ` (after "${previous.title}" by ${previous.artist})` : '')
       + '. Pick the track to play next.'
       + linkClause
-      + runClause;
+      + runClause
+      + journeyClause;
     session.appendTurn({ role: 'event', kind: 'pick', text: eventText });
 
-    if (settings.get().llm?.pickerAgent) {
+    if (settings.get().llm?.pickerAgent && !breakerOpen()) {
       try {
-        await pickViaAgent(queue, { wantLink });
+        await pickViaAgent(queue, { wantLink, audioWaypoint });
+        breakerSuccess();
         return;
       } catch (err) {
         queue.log('error', `DJ agent pick failed: ${err.message} — falling back to pool`);
+        breakerFailure(queue);
       }
     }
-    await pickViaPool(queue, ctx, { wantLink, current }, rankTarget);
+    await pickViaPool(queue, ctx, { wantLink, current }, rankTarget, audioWaypoint);
   });
 }
 
@@ -345,13 +483,27 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
 // ---------------------------------------------------------------------------
 
 // Returns { ack, track } on success, or null when the conversational agent is
-// disabled (the caller then runs its own stateless matcher cascade). Throws if
-// the agent runs but fails — the caller catches and falls back the same way.
+// disabled or the breaker is open (the caller then runs its own stateless
+// matcher cascade). Throws if the agent runs but fails — the caller catches
+// and falls back the same way. Agent outcomes here feed the shared breaker:
+// the request agent runs the same model through the same done-tool harness,
+// so its failures are the same symptom.
 // The caller (routes/request.js) owns the request `event` turn — it posts one
 // for every request path, so the agent only appends its own `dj` reply here.
 export async function runRequest(queue: any, ctx: any, { requester, text: _text }: { requester: string; text: string }) {
-  if (!settings.get().llm?.pickerAgent) return null;
+  if (!settings.get().llm?.pickerAgent || breakerOpen()) return null;
 
+  try {
+    const out = await runRequestViaAgent(queue, { requester });
+    breakerSuccess();
+    return out;
+  } catch (err) {
+    breakerFailure(queue);
+    throw err;
+  }
+}
+
+async function runRequestViaAgent(queue: any, { requester }: { requester: string }) {
   return withTrace({ kind: 'request', requester }, async () => {
     // Requests stay near-unfiltered — listeners must be able to re-request a
     // song from earlier in the day. 2h covers the "don't repeat the song still

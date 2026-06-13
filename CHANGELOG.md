@@ -1,5 +1,63 @@
 # Changelog
 
+## [0.15.0](https://github.com/perminder-klair/subwave/compare/v0.14.0...v0.15.0) (2026-06-12)
+
+
+### Features
+
+* **app:** dock player bar across all screens + slim live now-playing ([#366](https://github.com/perminder-klair/subwave/issues/366)) ([f330155](https://github.com/perminder-klair/subwave/commit/f3301554f36b153e6e0d9c4435531848145dc92c))
+* **library:** CLAP capability warning + fix analyzer download hang ([#367](https://github.com/perminder-klair/subwave/issues/367)) ([7afdf95](https://github.com/perminder-klair/subwave/commit/7afdf95dfb5d10a38db97a1205190db1b336f3f0))
+* **library:** simplify tagging panel + structured live tagger progress ([#363](https://github.com/perminder-klair/subwave/issues/363)) ([8decd10](https://github.com/perminder-klair/subwave/commit/8decd10214fdd6876e8e66777b509e316934c9e0))
+
+
+### Documentation
+
+* **web:** announce mobile apps live + copy cleanup ([#364](https://github.com/perminder-klair/subwave/issues/364)) ([60ddd5a](https://github.com/perminder-klair/subwave/commit/60ddd5afeea83f7a0a71138d40089f72bc88aa7e))
+
+## [0.14.0](https://github.com/perminder-klair/subwave/compare/v0.13.0...v0.14.0) (2026-06-12)
+
+
+### Features
+
+* **admin:** station timezone setting driving the DJ clock ([#357](https://github.com/perminder-klair/subwave/issues/357)) ([dcabaf0](https://github.com/perminder-klair/subwave/commit/dcabaf0a1cf47ede174a9220c7e2de09fffd889e)), closes [#353](https://github.com/perminder-klair/subwave/issues/353)
+* **app:** production-readiness — resilience UX, OTA, store config + docs ([#345](https://github.com/perminder-klair/subwave/issues/345)) ([3622940](https://github.com/perminder-klair/subwave/commit/3622940e024c43e935870806cc48d2935793c3cc))
+* **controller:** operator-configurable DJ-agent deadline (default 45s) ([#354](https://github.com/perminder-klair/subwave/issues/354)) ([3ee80b8](https://github.com/perminder-klair/subwave/commit/3ee80b83b3978ed5ceb4501685af4b33f9bee5da))
+* **dj:** per-persona on-air language + language-aware requests ([#350](https://github.com/perminder-klair/subwave/issues/350)) ([81cc896](https://github.com/perminder-klair/subwave/commit/81cc8965b1aac0744aa893bd5d2bc54cd99f4f3b))
+* journey-steered agent picks + admin toggle for sounds-like analysis ([#351](https://github.com/perminder-klair/subwave/issues/351)) ([da779c1](https://github.com/perminder-klair/subwave/commit/da779c1e1def5be27574217ffac07f76f18795bd))
+* **library:** manual mood/energy tagging for tracks and albums ([#336](https://github.com/perminder-klair/subwave/issues/336)) ([#355](https://github.com/perminder-klair/subwave/issues/355)) ([d5b10ac](https://github.com/perminder-klair/subwave/commit/d5b10ac64de6377c216d702450c131e45b434c53))
+* parallel dual-LLM library tagging + num_ctx debug visibility ([#356](https://github.com/perminder-klair/subwave/issues/356)) ([64bb56f](https://github.com/perminder-klair/subwave/commit/64bb56fc1daa8ab0755436cab46650791fe236f7))
+* true-audio (CLAP) embeddings + sonic journeys ([#337](https://github.com/perminder-klair/subwave/issues/337)) ([6b427f8](https://github.com/perminder-klair/subwave/commit/6b427f8251aac5fa0c0f7ee211c91034d51fad8c))
+
+
+### Bug Fixes
+
+* **controller:** enforce agent deadline + circuit-break failing agent picks ([#352](https://github.com/perminder-klair/subwave/issues/352)) ([5553606](https://github.com/perminder-klair/subwave/commit/5553606d9c0fa7d285a3c52a4e2c625ed0756e2a))
+* **web:** restore Select dropdown height clamp under Tailwind v4 ([#360](https://github.com/perminder-klair/subwave/issues/360)) ([c4a9255](https://github.com/perminder-klair/subwave/commit/c4a92557161b340f1e5ece824eaad5637db8f1d9))
+* **web:** tune out abandoned player tabs + back off reconnects ([#348](https://github.com/perminder-klair/subwave/issues/348)) ([f848fe3](https://github.com/perminder-klair/subwave/commit/f848fe367fd849da8ff09ef2c97167999dd40afb))
+
+
+### Documentation
+
+* add Discord invite to README and landing footer ([#347](https://github.com/perminder-klair/subwave/issues/347)) ([44a5796](https://github.com/perminder-klair/subwave/commit/44a5796e3c24f979aa3420a789339df3e9881d83))
+
+## [0.13.0](https://github.com/perminder-klair/subwave/compare/v0.12.0...v0.13.0) (2026-06-10)
+
+
+### Features
+
+* **app:** native iOS/Android player app (Expo + React Native) ([#331](https://github.com/perminder-klair/subwave/issues/331)) ([e7e2db8](https://github.com/perminder-klair/subwave/commit/e7e2db84a327fae80eda83f8561224a2c33f9bd4))
+* **picker:** add OpenSubsonic sonicSimilarity as an optional track source ([#332](https://github.com/perminder-klair/subwave/issues/332)) ([483116b](https://github.com/perminder-klair/subwave/commit/483116b24ddbdce46b540d3ff813e19fdd39932a))
+
+
+### Bug Fixes
+
+* **controller:** keep show brief in picker prompts + drop no-op KNN callback in tagger ([#338](https://github.com/perminder-klair/subwave/issues/338)) ([ef11882](https://github.com/perminder-klair/subwave/commit/ef1188251acb17f37bbc7df261fed992d7ff4047))
+
+
+### Performance
+
+* reduce re-renders, cache hot paths, trim stream overhead ([#339](https://github.com/perminder-klair/subwave/issues/339)) ([36aacc0](https://github.com/perminder-klair/subwave/commit/36aacc0972b4336f217bcf049ac526049b52b5ab))
+
 ## [0.12.0](https://github.com/perminder-klair/subwave/compare/v0.11.0...v0.12.0) (2026-06-08)
 
 

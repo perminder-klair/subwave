@@ -197,6 +197,16 @@ end
 # one song behind until the next crossfade.
 music_meta = music
 
+# Per-track loudness normalisation. The controller stamps `liq_amplify` (in the
+# "<n> dB" form, via subsonic.getAnnotatedUri) on any track with a measured LUFS;
+# `amplify` reads it per track — exactly the ReplayGain mechanism. Base factor
+# 1.0 = unity, so a track without the metadata (un-analysed library, or no
+# pyloudnorm) plays untouched. Applied BEFORE the cross so each track carries its
+# own gain into the crossfade, and AFTER the music_meta capture so the
+# on_metadata hook still sees clean pre-cross metadata. No master-bus normaliser
+# is involved — the broadcast bus stays the brick-wall limiter only.
+music = amplify(override="liq_amplify", 1., music)
+
 music = cross(
   duration=crossfade_duration(),
   dj_transition,

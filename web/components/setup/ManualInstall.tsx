@@ -16,7 +16,7 @@ export default function ManualInstall() {
     <SetupPage
       eyebrow="SETUP · 03"
       title="Run the commands yourself."
-      intro="The no-CLI alternative — same outcome, no `subwave` binary on your host. Useful if you'd rather not run an installer, are scripting the deploy, want a non-standard layout, or just prefer running each command by hand. These four steps land at a public-facing single-host deploy — Caddy on the edge, Cloudflare in front, internal-only Icecast, Controller, and Web."
+      intro="The no-CLI alternative: same outcome, no `subwave` binary on your host. Useful if you'd rather not run an installer, are scripting the deploy, want a non-standard layout, or just prefer running each command by hand. These four steps land at a public-facing single-host deploy: Caddy on the edge, Cloudflare in front, internal-only Icecast, Controller, and Web."
       current="/setup/manual"
     >
       <section className="bs-section">
@@ -29,7 +29,7 @@ export default function ManualInstall() {
             <code className="bs-code-inline">init</code> and{' '}
             <code className="bs-code-inline">start</code> behind two Enter
             prompts) followed by{' '}
-            <code className="bs-code-inline">subwave setup</code> — see{' '}
+            <code className="bs-code-inline">subwave setup</code>; see{' '}
             <Link href="/setup/quick-start">Quick Start</Link>. It uses the
             same compose images and writes to the same{' '}
             <code className="bs-code-inline">state/</code> layout; nothing is
@@ -60,7 +60,7 @@ $EDITOR .env`}</CodeBlock>
               <div className="bs-eyebrow">PREFER A CLONE?</div>
               <p>
                 Clone the repo and run{' '}
-                <code className="bs-code-inline">./scripts/setup.sh</code> — it scaffolds
+                <code className="bs-code-inline">./scripts/setup.sh</code>; it scaffolds
                 the same <code className="bs-code-inline">.env</code> + sets state-dir
                 perms. Or run <code className="bs-code-inline">npm run setup</code> for
                 an interactive terminal wizard that does the equivalent of the browser
@@ -110,7 +110,7 @@ $EDITOR .env`}</CodeBlock>
               <div className="bs-eyebrow">ALREADY RUNNING TRAEFIK OR NGINX?</div>
               <p>
                 Swap the compose file for{' '}
-                <code className="bs-code-inline">docker-compose.byo.yml</code> —
+                <code className="bs-code-inline">docker-compose.byo.yml</code>:
                 same stack minus the bundled Caddy, with web / controller / broadcast bound to{' '}
                 <code className="bs-code-inline">:7700</code> /{' '}
                 <code className="bs-code-inline">:7701</code> /{' '}
@@ -133,7 +133,7 @@ $EDITOR .env`}</CodeBlock>
               <p>
                 If you need separate hostnames per surface, rebuild the web image
                 with <code className="bs-code-inline">NEXT_PUBLIC_API_URL</code> and{' '}
-                <code className="bs-code-inline">NEXT_PUBLIC_STREAM_URL</code> set —
+                <code className="bs-code-inline">NEXT_PUBLIC_STREAM_URL</code> set;
                 those are baked at build time, not runtime.
               </p>
             </div>
@@ -167,7 +167,7 @@ $EDITOR .env`}</CodeBlock>
               <li><strong>TTS engine</strong> — Piper (default) and Kokoro both run inside
               the controller image. Cloud (OpenAI / ElevenLabs) just needs an API key.
               Chatterbox (voice cloning) and PocketTTS (multilingual) live in the optional{' '}
-              <code className="bs-code-inline">tts-heavy</code> sidecar — tick the
+              <code className="bs-code-inline">tts-heavy</code> sidecar: tick the
               &ldquo;Enable Chatterbox + PocketTTS&rdquo; box in the wizard, then start it
               with <code className="bs-code-inline">docker compose --profile tts-heavy up -d</code>{' '}
               (or set <code className="bs-code-inline">COMPOSE_PROFILES=tts-heavy</code> in{' '}
@@ -208,8 +208,8 @@ $EDITOR .env`}</CodeBlock>
             <div className="bs-callout">
               <div className="bs-eyebrow">DAY-TO-DAY OPERATOR CONSOLE</div>
               <p>
-                <code className="bs-code-inline">npm start</code> opens the operator console
-                — a menu for stack status, a diagnostic sweep, logs, restart, and the terminal
+                <code className="bs-code-inline">npm start</code> opens the operator console:
+                a menu for stack status, a diagnostic sweep, logs, restart, and the terminal
                 player. The everyday way to run the station once it's installed.
               </p>
             </div>

@@ -54,9 +54,11 @@ function FreqBand({ pages, active, scrollX, maxScroll, onPick }: FreqBandProps) 
   return (
     <View
       style={{
-        backgroundColor: colors.bg,
+        // Transparent so the frosted header glass shows through; the softened
+        // ink baseline reads as the bottom glass edge of the masthead overlay.
+        backgroundColor: 'transparent',
         borderBottomWidth: 1,
-        borderBottomColor: colors.ink,
+        borderBottomColor: `${colors.ink}59`,
         paddingHorizontal: 14,
         paddingTop: 9,
         paddingBottom: 7,

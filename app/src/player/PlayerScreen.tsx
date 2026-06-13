@@ -4,7 +4,9 @@
 // FreqBand tuner above a horizontal pager whose five "stations" are
 // Shows / Timeline / LIVE / Booth / Request, with LIVE dead-centre as home.
 // Swipe (or tap a band stop) to tune across sections; the needle tracks the
-// scroll. Themes open in a bottom sheet from the palette icon, off-band.
+// scroll. The TransportBar is docked below the pager so the player stays
+// visible on every band stop, bottom-nav style. Themes open in a bottom sheet
+// from the palette icon, off-band.
 //
 // Render-path notes: the pager's scroll drives the FreqBand needle through a
 // native-driver Animated.Value (no per-frame React state), and the four
@@ -12,6 +14,7 @@
 // re-render the pages whose data actually changed (useStationFeed keeps
 // unchanged payloads reference-stable for exactly this reason).
 
+import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -21,11 +24,13 @@ import {
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   type ScrollView,
+  StyleSheet,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Sheet } from '@/components/ui/Sheet';
 import { useStation } from '@/config/StationContext';
+import { useConnectivity } from '@/hooks/useConnectivity';
 import { useCoverColors } from '@/hooks/useCoverColors';
 import { useNowPlayingInfo } from '@/hooks/useNowPlayingInfo';
 import { usePlayer } from '@/hooks/usePlayer';
@@ -41,6 +46,7 @@ import type {
 } from '@/lib/types';
 import { useTheme } from '@/theme/ThemeContext';
 import CenterStage from './CenterStage';
+import ConnectionBanner from './ConnectionBanner';
 import FreqBand, { type BandStop } from './FreqBand';
 import PagePanel from './PagePanel';
 import TopBar from './TopBar';
@@ -71,13 +77,17 @@ const SchedulePage = memo(function SchedulePage({
   api,
   activeShow,
   context,
+  topInset,
+  bottomInset,
 }: {
   api: StationApi;
   activeShow: ActiveShow | null;
   context: StationContext | null;
+  topInset: number;
+  bottomInset: number;
 }) {
   return (
-    <PagePanel title="Shows" sub="weekly schedule">
+    <PagePanel title="Shows" sub="weekly schedule" topInset={topInset} bottomInset={bottomInset}>
       <ScheduleDrawer api={api} activeShow={activeShow} context={context} />
     </PagePanel>
   );
@@ -86,20 +96,37 @@ const SchedulePage = memo(function SchedulePage({
 const TimelinePage = memo(function TimelinePage({
   upcoming,
   history,
+  topInset,
+  bottomInset,
 }: {
   upcoming: StationState['upcoming'];
   history: StationState['history'];
+  topInset: number;
+  bottomInset: number;
 }) {
   return (
-    <PagePanel title="Timeline" sub="the dial, in order">
+    <PagePanel
+      title="Timeline"
+      sub="the dial, in order"
+      topInset={topInset}
+      bottomInset={bottomInset}
+    >
       <TimelineDrawer upcoming={upcoming} history={history} />
     </PagePanel>
   );
 });
 
-const BoothPage = memo(function BoothPage({ items }: { items: SessionPayload['messages'] }) {
+const BoothPage = memo(function BoothPage({
+  items,
+  topInset,
+  bottomInset,
+}: {
+  items: SessionPayload['messages'];
+  topInset: number;
+  bottomInset: number;
+}) {
   return (
-    <PagePanel title="The booth" sub="DJ on the mic">
+    <PagePanel title="The booth" sub="DJ on the mic" topInset={topInset} bottomInset={bottomInset}>
       <BoothDrawer items={items} />
     </PagePanel>
   );
@@ -110,14 +137,23 @@ const RequestPage = memo(function RequestPage({
   nowPlaying,
   context,
   onClose,
+  topInset,
+  bottomInset,
 }: {
   api: StationApi;
   nowPlaying: NowPlayingTrack | null;
   context: StationContext | null;
   onClose: () => void;
+  topInset: number;
+  bottomInset: number;
 }) {
   return (
-    <PagePanel title="Make a request" sub="to the booth">
+    <PagePanel
+      title="Make a request"
+      sub="to the booth"
+      topInset={topInset}
+      bottomInset={bottomInset}
+    >
       <RequestDrawer api={api} nowPlaying={nowPlaying} context={context} onClose={onClose} />
     </PagePanel>
   );
@@ -125,9 +161,14 @@ const RequestPage = memo(function RequestPage({
 
 export default function PlayerScreen() {
   const { api } = useStation();
-  const { colors } = useTheme();
+  const { colors, mode } = useTheme();
 
-  const { tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = usePlayer(api);
+  const { isConnected } = useConnectivity();
+  const { tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = usePlayer(
+    api,
+    1,
+    isConnected,
+  );
 
   const {
     nowPlaying,
@@ -232,6 +273,26 @@ export default function PlayerScreen() {
 
   const [themesOpen, setThemesOpen] = useState(false);
 
+  // Footprints of the two frosted overlays (masthead/dial header at the top,
+  // transport bar at the bottom). The pager fills the full height behind both,
+  // and each page pads its scroll top/bottom by these so content reads as
+  // flowing under the frosted glass yet still scrolls fully clear.
+  const [barInset, setBarInset] = useState(120);
+  const onBarLayout = useCallback((e: LayoutChangeEvent) => {
+    const h = e.nativeEvent.layout.height;
+    if (h > 0) setBarInset((prev) => (Math.abs(prev - h) > 0.5 ? h : prev));
+  }, []);
+
+  const [headerInset, setHeaderInset] = useState(150);
+  const onHeaderLayout = useCallback((e: LayoutChangeEvent) => {
+    const h = e.nativeEvent.layout.height;
+    if (h > 0) setHeaderInset((prev) => (Math.abs(prev - h) > 0.5 ? h : prev));
+  }, []);
+
+  // Frosted-glass film shared by both overlays — soft white in light themes, a
+  // faint ink wash in dark — matching the transport bar's glass treatment.
+  const glassFilm = mode === 'light' ? 'rgba(255,255,255,0.22)' : `${colors.ink}12`;
+
   const tint = coverColors.vibrant;
 
   return (
@@ -248,23 +309,9 @@ export default function PlayerScreen() {
       ) : null}
 
       <SafeAreaView style={{ flex: 1 }} edges={['left', 'right']}>
-        <TopBar
-          tunedIn={tunedIn}
-          context={context}
-          stationName={stationName}
-          djName={djName}
-          activeShow={activeShow}
-          onOpenThemes={() => setThemesOpen(true)}
-        />
-
-        <FreqBand
-          pages={PAGES}
-          active={active}
-          scrollX={scrollX}
-          maxScroll={pagerW * (PAGES.length - 1)}
-          onPick={goToPage}
-        />
-
+        {/* The pager fills the full height; the masthead/dial header and the
+            transport bar float over it as frosted overlays (below), so content
+            scrolls under the glass at both ends. */}
         <View style={{ flex: 1 }} onLayout={onPagerLayout}>
           {pagerW > 0 ? (
             <Animated.ScrollView
@@ -278,13 +325,26 @@ export default function PlayerScreen() {
               keyboardShouldPersistTaps="handled"
             >
               <View style={{ width: pagerW }}>
-                {api ? <SchedulePage api={api} activeShow={activeShow} context={context} /> : null}
+                {api ? (
+                  <SchedulePage
+                    api={api}
+                    activeShow={activeShow}
+                    context={context}
+                    topInset={headerInset}
+                    bottomInset={barInset}
+                  />
+                ) : null}
               </View>
               <View style={{ width: pagerW }}>
-                <TimelinePage upcoming={state.upcoming} history={state.history} />
+                <TimelinePage
+                  upcoming={state.upcoming}
+                  history={state.history}
+                  topInset={headerInset}
+                  bottomInset={barInset}
+                />
               </View>
               <View style={{ width: pagerW }}>
-                <View style={{ flex: 1 }}>
+                <View style={{ flex: 1, paddingTop: headerInset, paddingBottom: barInset }}>
                   <CenterStage
                     nowPlaying={nowPlaying}
                     coverSrc={coverSrc}
@@ -296,31 +356,83 @@ export default function PlayerScreen() {
                     onOpenTimeline={openTimeline}
                   />
                   <Waveform tunedIn={tunedIn} progress={progress} visible={active === HOME_INDEX} />
-                  <TransportBar
-                    tunedIn={tunedIn}
-                    status={status}
-                    onTune={tune}
-                    offline={offline}
-                    volume={volume}
-                    setVolume={setVolume}
-                    muted={muted}
-                    onToggleMute={toggleMute}
-                    latencyMs={signal.latencyMs}
-                    signalQuality={signal.quality}
-                    listeners={listenerCount}
-                  />
                 </View>
               </View>
               <View style={{ width: pagerW }}>
-                <BoothPage items={boothFeed} />
+                <BoothPage items={boothFeed} topInset={headerInset} bottomInset={barInset} />
               </View>
               <View style={{ width: pagerW }}>
                 {api ? (
-                  <RequestPage api={api} nowPlaying={nowPlaying} context={context} onClose={goHome} />
+                  <RequestPage
+                    api={api}
+                    nowPlaying={nowPlaying}
+                    context={context}
+                    onClose={goHome}
+                    topInset={headerInset}
+                    bottomInset={barInset}
+                  />
                 ) : null}
               </View>
             </Animated.ScrollView>
           ) : null}
+        </View>
+
+        {/* Frosted masthead + FM dial — floated as an absolute overlay at the
+            head of every band stop so page content scrolls under the glass,
+            mirroring the transport bar. The BlurView picks up the cover-art
+            ambient wash + scrolling content behind it; a thin mode-aware film
+            keeps the wordmark and dial legible. */}
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0 }} onLayout={onHeaderLayout}>
+          <BlurView
+            intensity={mode === 'light' ? 40 : 26}
+            tint={mode === 'light' ? 'light' : 'dark'}
+            blurMethod="dimezisBlurView"
+            style={StyleSheet.absoluteFill}
+          />
+          <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: glassFilm }]} />
+          <TopBar
+            tunedIn={tunedIn}
+            context={context}
+            stationName={stationName}
+            djName={djName}
+            activeShow={activeShow}
+            onOpenThemes={() => setThemesOpen(true)}
+          />
+          <ConnectionBanner
+            isConnected={isConnected}
+            streamOnline={streamOnline}
+            tunedIn={tunedIn}
+            status={status}
+          />
+          <FreqBand
+            pages={PAGES}
+            active={active}
+            scrollX={scrollX}
+            maxScroll={pagerW * (PAGES.length - 1)}
+            onPick={goToPage}
+          />
+        </View>
+
+        {/* Persistent transport — floated as an absolute overlay at the foot of
+            every band stop (bottom-nav style) so the pager fills the full height
+            behind it and content scrolls under the frosted glass. */}
+        <View
+          style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}
+          onLayout={onBarLayout}
+        >
+          <TransportBar
+            tunedIn={tunedIn}
+            status={status}
+            onTune={tune}
+            offline={offline}
+            volume={volume}
+            setVolume={setVolume}
+            muted={muted}
+            onToggleMute={toggleMute}
+            latencyMs={signal.latencyMs}
+            signalQuality={signal.quality}
+            listeners={listenerCount}
+          />
         </View>
       </SafeAreaView>
 

@@ -29,7 +29,13 @@ export interface Player {
 
 const WATCHDOG_MS = 6000;
 
-export function usePlayer(api: StationApi | null, initialVolume = 1): Player {
+export function usePlayer(
+  api: StationApi | null,
+  initialVolume = 1,
+  // Device-level reachability (from useConnectivity), threaded in so a regained
+  // link triggers an immediate reconnect rather than waiting for the watchdog.
+  isConnected: boolean | null = null,
+): Player {
   const [tunedIn, setTunedIn] = useState(false);
   const [status, setStatus] = useState<PlayerStatus>('idle');
   const [volume, setVolumeState] = useState(initialVolume);
@@ -101,6 +107,20 @@ export function usePlayer(api: StationApi | null, initialVolume = 1): Player {
       if (tunedInRef.current) armWatchdog(500);
     }
   });
+
+  // Proactive reconnect: when the device link returns (false → true) while
+  // we're tuned in but not already playing, reconnect immediately instead of
+  // waiting up to WATCHDOG_MS for the stall watchdog. The watchdog still covers
+  // stream-side deaths where the link never dropped. Keyed on the connectivity
+  // transition, so a steady-state `true` never fires it.
+  const prevConnectedRef = useRef(isConnected);
+  useEffect(() => {
+    const prev = prevConnectedRef.current;
+    prevConnectedRef.current = isConnected;
+    if (prev === false && isConnected === true && tunedInRef.current && status !== 'playing') {
+      reconnect();
+    }
+  }, [isConnected, status, reconnect]);
 
   const stop = useCallback(() => {
     clearWatchdog();

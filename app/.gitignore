@@ -33,6 +33,9 @@ yarn-error.*
 # local env files
 .env*.local
 
+# store submission secrets (Play service-account JSON, App Store keys)
+secrets/
+
 # typescript
 *.tsbuildinfo
 

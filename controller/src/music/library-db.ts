@@ -31,7 +31,24 @@ export const TAGGER_VERSION = 3;
 // writes (music/analyze-library.ts). Independent of TAGGER_VERSION — mood
 // tagging and acoustic analysis run separately. Bump when the analysis shape
 // or method changes so `--re-analyze` / staleness checks can target old rows.
-export const ANALYSIS_VERSION = 1;
+// v2: added integrated loudness (loudness_lufs) + peak (peak_db).
+// v3: added structural sections (structure_json).
+// v4: added the pace curve (pace_json).
+// v5: added the beat/bar grid (beats_json, bars_json).
+// v6: added per-region key ranges (key_ranges_json).
+export const ANALYSIS_VERSION = 6;
+
+// CLAP audio-embedding dim. Fixed by the model (LAION-CLAP's audio projection
+// is 512-d), so — unlike the text index in track_vectors — there's no per-model
+// dim negotiation. Audio vectors are a DIFFERENT space (waveform-derived, not
+// metadata/lyric-derived) and live in their own vec0 table.
+export const AUDIO_EMBEDDING_DIM = 512;
+
+// Audio-embedding model+method version. Independent of ANALYSIS_VERSION
+// (bpm/key/intro) so a CLAP model swap can re-target audio vectors without
+// forcing a full bpm/key re-analysis, and vice-versa. Bump when the CLAP model
+// or its preprocessing changes.
+export const AUDIO_EMBEDDING_VERSION = 1;
 
 // A track counts as "tagged" only when it carries at least one mood. An empty
 // array ('[]') is written by the legacy moods.json migration and by the tagger
@@ -51,7 +68,7 @@ let currentEmbeddingDim: number | null = null;
 // ---------------------------------------------------------------------------
 
 export type EnergyValue = 'low' | 'medium' | 'high' | null;
-export type TagSource = 'llm' | 'propagated' | 'uncertain-llm' | 'legacy-v1';
+export type TagSource = 'llm' | 'propagated' | 'uncertain-llm' | 'legacy-v1' | 'manual';
 
 export interface TrackRecord {
   id: string;
@@ -80,6 +97,37 @@ export interface TrackRecord {
   introMs: number | null;
   analysisConfidence: number | null;
   analysisVersion: number | null;
+  loudnessLufs: number | null; // integrated LUFS (BS.1770); null → unity gain
+  peakDb: number | null;       // sample peak in dBFS over the analysis window
+  structure: TrackSection[] | null; // structural sections over the analysed window
+  vocalRanges: TrackSection[] | null; // vocal-presence ranges; [] = instrumental, null = not computed
+  pace: TrackPaceSpan[] | null;     // perceptual energy curve (0..1 per span)
+  beats: number[] | null;           // per-beat timestamps (ms)
+  bars: number[] | null;            // downbeat (bar) timestamps (ms)
+  keyRanges: TrackKeyRange[] | null; // per-region key (tonic + mode) over time
+}
+
+// A key over a time range: tonic note (sharps) + mode.
+export interface TrackKeyRange {
+  startMs: number;
+  endMs: number;
+  tonic: string;
+  mode: 'major' | 'minor';
+}
+
+// A structural span over a track, in milliseconds (span shape). Kept as
+// a local shape so library-db stays free of higher-layer imports.
+export interface TrackSection {
+  startMs: number;
+  endMs: number;
+  kind?: string;
+}
+
+// A pace span: a 0..1 perceptual-energy value over a time range.
+export interface TrackPaceSpan {
+  startMs: number;
+  endMs: number;
+  value: number;
 }
 
 export interface TrackMeta {
@@ -109,10 +157,15 @@ export interface FilterOpts {
   moods?: string[];
   energy?: string | null;
   genre?: string | null;
+  // Acoustic-analysis facet: 'instrumental' = analysed with an empty vocal-ranges
+  // array, 'vocal' = analysed with at least one range. A NULL vocal_ranges_json
+  // (not computed) matches neither, so the facet only ever narrows to tracks the
+  // analyze pass has actually touched.
+  vocal?: 'instrumental' | 'vocal' | null;
   yearFrom?: number | null;
   yearTo?: number | null;
   q?: string | null;
-  sort?: 'artist' | 'title' | 'taggedAt' | 'year';
+  sort?: 'artist' | 'title' | 'taggedAt' | 'year' | 'bpm' | 'loudness' | 'pace';
   limit?: number;
   offset?: number;
 }
@@ -125,6 +178,7 @@ export interface LibraryStats {
   byGenre: Record<string, number>;
   bySource: Record<string, number>;
   withEmbedding: number;
+  withAudioEmbedding: number;
   updatedAt: string | null;
 }
 
@@ -254,6 +308,75 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     d.pragma('user_version = 2');
   }
 
+  if (userVersion < 3) {
+    // Audio (CLAP) embeddings — a SECOND vector space alongside track_vectors.
+    // Only the provenance/meta table is created here; the vec0 table itself is
+    // created (and can be reseeded) below, mirroring the text-vector pattern.
+    // The dim is fixed at AUDIO_EMBEDDING_DIM so there's no dim-negotiation
+    // dance — but the meta row still records model+dim+timestamp so a future
+    // model swap has provenance to reason about.
+    runDdl(d, `
+      CREATE TABLE IF NOT EXISTS audio_embedding_meta (
+        pk      INTEGER PRIMARY KEY CHECK (pk = 1),
+        model   TEXT NOT NULL,
+        dim     INTEGER NOT NULL,
+        set_at  TEXT NOT NULL
+      );
+    `);
+    d.pragma('user_version = 3');
+  }
+
+  if (userVersion < 4) {
+    // Perceptual loudness — nullable, back-filled by the analyze pass. LUFS
+    // (integrated, BS.1770) drives per-track gain normalisation on playback;
+    // peak_db is informational. NULL → unity gain, i.e. today's behaviour.
+    runDdl(d, `
+      ALTER TABLE tracks ADD COLUMN loudness_lufs REAL;
+      ALTER TABLE tracks ADD COLUMN peak_db       REAL;
+    `);
+    d.pragma('user_version = 4');
+  }
+
+  if (userVersion < 5) {
+    // Structural sections (JSON array of {startMs,endMs[,kind]}) over the
+    // analysed window. Nullable — NULL → no structure, today's behaviour.
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN structure_json TEXT;`);
+    d.pragma('user_version = 5');
+  }
+
+  if (userVersion < 6) {
+    // Vocal-presence ranges (Demucs), JSON array of {startMs,endMs}. NULL means
+    // not computed (vocal activity off / no demucs); a stored "[]" means
+    // analysed-and-instrumental. The distinct empty value lets the backfill scan
+    // (needsVocalIds) skip instrumentals instead of re-separating them forever.
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN vocal_ranges_json TEXT;`);
+    d.pragma('user_version = 6');
+  }
+
+  if (userVersion < 7) {
+    // Pace curve (JSON array of {startMs,endMs,value}) — perceptual energy over
+    // time, 0..1. Nullable; NULL → no pace signal, today's behaviour.
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN pace_json TEXT;`);
+    d.pragma('user_version = 7');
+  }
+
+  if (userVersion < 8) {
+    // Beat / bar grid (JSON arrays of ms timestamps). Nullable; NULL → no grid,
+    // today's blind crossfade.
+    runDdl(d, `
+      ALTER TABLE tracks ADD COLUMN beats_json TEXT;
+      ALTER TABLE tracks ADD COLUMN bars_json  TEXT;
+    `);
+    d.pragma('user_version = 8');
+  }
+
+  if (userVersion < 9) {
+    // Per-region key ranges (JSON array of {startMs,endMs,tonic,mode}). Nullable;
+    // the scalar musical_key stays the back-compat dominant key.
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN key_ranges_json TEXT;`);
+    d.pragma('user_version = 9');
+  }
+
   // The vec0 virtual table carries the embedding dim in its schema. If the
   // stored dim doesn't match the requested one, the caller asked for a model
   // swap — that's a --reseed operation, not an auto-migration.
@@ -301,6 +424,20 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     runDdl(d,
       `CREATE VIRTUAL TABLE track_vectors USING vec0(` +
         `id TEXT PRIMARY KEY, embedding FLOAT[${effectiveDim}] distance_metric=cosine)`,
+    );
+  }
+
+  // Audio-vector table — a parallel vec0 index at the fixed CLAP dim. Created
+  // on demand and self-heals if a future audio reseed (dropAudioVectors) drops
+  // it, exactly like track_vectors above. It needs no dim negotiation because
+  // AUDIO_EMBEDDING_DIM is constant, so it lives outside the reseed branch.
+  const hasAudioVecTable = d
+    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='track_audio_vectors'`)
+    .get();
+  if (!hasAudioVecTable) {
+    runDdl(d,
+      `CREATE VIRTUAL TABLE track_audio_vectors USING vec0(` +
+        `id TEXT PRIMARY KEY, embedding FLOAT[${AUDIO_EMBEDDING_DIM}] distance_metric=cosine)`,
     );
   }
   return effectiveDim;
@@ -405,6 +542,25 @@ export function setEmbeddingMeta(model: string, dim: number): void {
     .run(model, dim, new Date().toISOString());
 }
 
+// Audio-embedding provenance — which CLAP model wrote the current audio
+// vectors. Distinct table from embedding_meta (text); the two spaces are
+// independent. Null until the first audio vector is written.
+export function getAudioEmbeddingMeta(): { model: string; dim: number } | null {
+  const row = requireDb()
+    .prepare('SELECT model, dim FROM audio_embedding_meta WHERE pk = 1')
+    .get() as { model: string; dim: number } | undefined;
+  return row || null;
+}
+
+export function setAudioEmbeddingMeta(model: string, dim: number): void {
+  requireDb()
+    .prepare(
+      `INSERT INTO audio_embedding_meta (pk, model, dim, set_at) VALUES (1, ?, ?, ?)
+       ON CONFLICT(pk) DO UPDATE SET model = excluded.model, dim = excluded.dim, set_at = excluded.set_at`,
+    )
+    .run(model, dim, new Date().toISOString());
+}
+
 // ---------------------------------------------------------------------------
 // Track CRUD
 // ---------------------------------------------------------------------------
@@ -494,11 +650,41 @@ export function upsertTrackTags(id: string, tags: TagWrite): void {
     );
 }
 
+// Remove a track's tags entirely (back to the untagged pool). NULLing every
+// tag column — rather than writing moods='[]' — keeps source/tagged_at from
+// going stale on a row that is no longer tagged.
+export function clearTrackTags(id: string): void {
+  requireDb()
+    .prepare(
+      `UPDATE tracks SET
+        moods          = NULL,
+        energy         = NULL,
+        source         = NULL,
+        confidence     = NULL,
+        tagger_version = NULL,
+        prompt_hash    = NULL,
+        model          = NULL,
+        tagged_at      = NULL
+      WHERE id = ?`,
+    )
+    .run(id);
+}
+
 export interface TrackAnalysisWrite {
   bpm?: number | null;
   musicalKey?: string | null;
   introMs?: number | null;
   confidence?: number | null;
+  loudnessLufs?: number | null;
+  peakDb?: number | null;
+  sections?: TrackSection[] | null;
+  // [] is meaningful (analysed instrumental) vs null/undefined (not computed) —
+  // only a non-null array is written, so a vocal-off pass leaves the column be.
+  vocalRanges?: TrackSection[] | null;
+  pace?: TrackPaceSpan[] | null;
+  beats?: number[] | null;
+  bars?: number[] | null;
+  keyRanges?: TrackKeyRange[] | null;
 }
 
 // Write acoustic-analysis results for a track. Stamps ANALYSIS_VERSION so
@@ -512,6 +698,18 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         musical_key         = ?,
         intro_ms            = ?,
         analysis_confidence = ?,
+        loudness_lufs       = ?,
+        peak_db             = ?,
+        structure_json      = ?,
+        pace_json           = ?,
+        beats_json          = ?,
+        bars_json           = ?,
+        key_ranges_json     = ?,
+        -- COALESCE: vocal activity is gated separately (ANALYZE_VOCAL_ACTIVITY),
+        -- so a normal bpm/key pass passes null here and must NOT wipe an
+        -- existing vocal_ranges_json. A non-null value (incl. "[]" for an
+        -- analysed instrumental) overwrites; null keeps what's there.
+        vocal_ranges_json   = COALESCE(?, vocal_ranges_json),
         analysis_version    = ?
       WHERE id = ?`,
     )
@@ -520,6 +718,14 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       a.musicalKey ?? null,
       Number.isFinite(a.introMs as number) ? Math.round(a.introMs as number) : null,
       Number.isFinite(a.confidence as number) ? (a.confidence as number) : null,
+      Number.isFinite(a.loudnessLufs as number) ? (a.loudnessLufs as number) : null,
+      Number.isFinite(a.peakDb as number) ? (a.peakDb as number) : null,
+      a.sections && a.sections.length ? JSON.stringify(a.sections) : null,
+      a.pace && a.pace.length ? JSON.stringify(a.pace) : null,
+      a.beats && a.beats.length ? JSON.stringify(a.beats) : null,
+      a.bars && a.bars.length ? JSON.stringify(a.bars) : null,
+      a.keyRanges && a.keyRanges.length ? JSON.stringify(a.keyRanges) : null,
+      a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
       ANALYSIS_VERSION,
       id,
     );
@@ -537,12 +743,16 @@ export function needsAnalysisIds(limit?: number): string[] {
 }
 
 export function clearAnalysis(): void {
-  requireDb()
-    .prepare(
-      `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
-        analysis_confidence = NULL, analysis_version = NULL`,
-    )
-    .run();
+  const d = requireDb();
+  d.prepare(
+    `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
+      analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
+      structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
+      key_ranges_json = NULL, vocal_ranges_json = NULL, analysis_version = NULL`,
+  ).run();
+  // The audio (CLAP) vectors are written in the same pass, so a --re-analyze
+  // that redoes bpm/key drops them too — the next pass re-embeds from scratch.
+  d.prepare('DELETE FROM track_audio_vectors').run();
 }
 
 export function upsertTrackVector(id: string, vector: number[] | Float32Array): void {
@@ -574,6 +784,35 @@ export function dropVectors(): void {
   );
 }
 
+// Write a CLAP audio embedding for a track. Independent of currentEmbeddingDim
+// (that's the TEXT index's dim) — the audio space is fixed at
+// AUDIO_EMBEDDING_DIM. Same delete+insert upsert pattern vec0 requires.
+export function upsertTrackAudioVector(id: string, vector: number[] | Float32Array): void {
+  if (vector.length !== AUDIO_EMBEDDING_DIM) {
+    throw new Error(
+      `audio vector dim ${vector.length} != ${AUDIO_EMBEDDING_DIM} (CLAP); ` +
+        `check CLAP_MODEL / the analyzer's audio_embedding output`,
+    );
+  }
+  const buf = Buffer.from(
+    vector instanceof Float32Array ? vector.buffer : new Float32Array(vector).buffer,
+  );
+  const d = requireDb();
+  d.prepare(`DELETE FROM track_audio_vectors WHERE id = ?`).run(id);
+  d.prepare(`INSERT INTO track_audio_vectors (id, embedding) VALUES (?, ?)`).run(id, buf);
+}
+
+// Drop + recreate the audio vec0 table at the fixed CLAP dim — the audio
+// counterpart to dropVectors(), for an AUDIO_EMBEDDING_VERSION / model swap.
+export function dropAudioVectors(): void {
+  const d = requireDb();
+  runDdl(d, 'DROP TABLE IF EXISTS track_audio_vectors');
+  runDdl(d,
+    `CREATE VIRTUAL TABLE track_audio_vectors USING vec0(` +
+      `id TEXT PRIMARY KEY, embedding FLOAT[${AUDIO_EMBEDDING_DIM}] distance_metric=cosine)`,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Vector queries
 // ---------------------------------------------------------------------------
@@ -589,21 +828,47 @@ export function knnById(id: string, k: number): KnnHit[] {
     | { embedding: Buffer }
     | undefined;
   if (!row) return [];
-  return knnByBuffer(row.embedding, k, id);
+  return knnByBuffer(row.embedding, k, id, 'track_vectors');
 }
 
 export function knnByVector(vec: number[] | Float32Array, k: number): KnnHit[] {
   const buf = Buffer.from(
     vec instanceof Float32Array ? vec.buffer : new Float32Array(vec).buffer,
   );
-  return knnByBuffer(buf, k, null);
+  return knnByBuffer(buf, k, null, 'track_vectors');
 }
 
-function knnByBuffer(buf: Buffer, k: number, excludeId: string | null): KnnHit[] {
+// Audio (CLAP) KNN — same logic as the text path, against track_audio_vectors.
+// Returns [] when the seed has no audio vector, so callers fall through exactly
+// like the text path does on an un-embedded seed.
+export function knnAudioById(id: string, k: number): KnnHit[] {
+  const d = requireDb();
+  const row = d.prepare(`SELECT embedding FROM track_audio_vectors WHERE id = ?`).get(id) as
+    | { embedding: Buffer }
+    | undefined;
+  if (!row) return [];
+  return knnByBuffer(row.embedding, k, id, 'track_audio_vectors');
+}
+
+export function knnByAudioVector(vec: number[] | Float32Array, k: number): KnnHit[] {
+  const buf = Buffer.from(
+    vec instanceof Float32Array ? vec.buffer : new Float32Array(vec).buffer,
+  );
+  return knnByBuffer(buf, k, null, 'track_audio_vectors');
+}
+
+// `table` is always a hardcoded vec0 table name from our own code (never user
+// input), so interpolating it is safe — the MATCH buffer is still bound.
+function knnByBuffer(
+  buf: Buffer,
+  k: number,
+  excludeId: string | null,
+  table: 'track_vectors' | 'track_audio_vectors',
+): KnnHit[] {
   const limit = excludeId ? k + 1 : k;
   const rows = requireDb()
     .prepare(
-      `SELECT id, distance FROM track_vectors WHERE embedding MATCH ? ORDER BY distance LIMIT ?`,
+      `SELECT id, distance FROM ${table} WHERE embedding MATCH ? ORDER BY distance LIMIT ?`,
     )
     .all(buf, limit) as Array<{ id: string; distance: number }>;
   const hits: KnnHit[] = [];
@@ -619,6 +884,68 @@ export function vectorCount(): number {
   return (requireDb().prepare('SELECT COUNT(*) AS n FROM track_vectors').get() as {
     n: number;
   }).n;
+}
+
+export function hasAudioVector(id: string): boolean {
+  return !!requireDb().prepare(`SELECT 1 FROM track_audio_vectors WHERE id = ?`).get(id);
+}
+
+// The raw TEXT embedding vector for a track (a copy, not a view into the DB
+// buffer), or null when the track has no text vector. The text-space twin of
+// getAudioVector() — used by the Library Observatory dossier to render the
+// learned vector as a heatmap fingerprint. vec0 stores the embedding as a
+// packed float32 blob.
+export function getVector(id: string): Float32Array | null {
+  const row = requireDb()
+    .prepare(`SELECT embedding FROM track_vectors WHERE id = ?`)
+    .get(id) as { embedding: Buffer } | undefined;
+  if (!row) return null;
+  const b = row.embedding;
+  return new Float32Array(b.buffer, b.byteOffset, Math.floor(b.byteLength / 4)).slice();
+}
+
+// The raw CLAP vector for a track (a copy, not a view into the DB buffer), or
+// null when the track has no audio vector. Used by the journey builder to
+// resolve start/destination points in the audio space. vec0 stores the
+// embedding as a packed float32 blob.
+export function getAudioVector(id: string): Float32Array | null {
+  const row = requireDb()
+    .prepare(`SELECT embedding FROM track_audio_vectors WHERE id = ?`)
+    .get(id) as { embedding: Buffer } | undefined;
+  if (!row) return null;
+  const b = row.embedding;
+  return new Float32Array(b.buffer, b.byteOffset, Math.floor(b.byteLength / 4)).slice();
+}
+
+export function audioVectorCount(): number {
+  return (requireDb().prepare('SELECT COUNT(*) AS n FROM track_audio_vectors').get() as {
+    n: number;
+  }).n;
+}
+
+// Ids that have no audio vector yet (never embedded). Resumable, ordered for
+// stable resumption, independent of the bpm/key analysis scope so the audio
+// backfill can run on its own cadence. LEFT JOIN where the vector row is absent.
+export function unanalysedAudioIds(limit?: number): string[] {
+  const q = limit && limit > 0
+    ? `SELECT t.id FROM tracks t LEFT JOIN track_audio_vectors v ON v.id = t.id
+       WHERE v.id IS NULL ORDER BY t.id LIMIT ${Math.floor(limit)}`
+    : `SELECT t.id FROM tracks t LEFT JOIN track_audio_vectors v ON v.id = t.id
+       WHERE v.id IS NULL ORDER BY t.id`;
+  const rows = requireDb().prepare(q).all() as Array<{ id: string }>;
+  return rows.map(r => r.id);
+}
+
+// Ids with no vocal-activity analysis yet (vocal_ranges_json IS NULL — a stored
+// "[]" instrumental counts as done and is skipped). Independent of the bpm/key
+// scope, like unanalysedAudioIds, so the (expensive, opt-in) Demucs backfill
+// runs on its own cadence. Ordered for stable resumption.
+export function needsVocalIds(limit?: number): string[] {
+  const q =
+    `SELECT id FROM tracks WHERE vocal_ranges_json IS NULL ORDER BY id` +
+    (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
+  const rows = requireDb().prepare(q).all() as Array<{ id: string }>;
+  return rows.map(r => r.id);
 }
 
 // Total tracks known to the catalogue. Used by the analyze CLI to decide
@@ -647,10 +974,12 @@ export function pruneMissingTracks(liveIds: ReadonlySet<string>): number {
   if (orphans.length === 0) return 0;
   const delTrack = d.prepare('DELETE FROM tracks WHERE id = ?');
   const delVec = d.prepare('DELETE FROM track_vectors WHERE id = ?');
+  const delAudioVec = d.prepare('DELETE FROM track_audio_vectors WHERE id = ?');
   const runPrune = d.transaction((ids: string[]) => {
     for (const id of ids) {
       delTrack.run(id);
       delVec.run(id);
+      delAudioVec.run(id);
     }
   });
   runPrune(orphans);
@@ -741,6 +1070,7 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   const moods = (opts.moods || []).filter(Boolean);
   const energy = opts.energy || null;
   const genre = opts.genre || null;
+  const vocal = opts.vocal === 'instrumental' || opts.vocal === 'vocal' ? opts.vocal : null;
   const yearFrom = Number.isFinite(opts.yearFrom as number) ? (opts.yearFrom as number) : null;
   const yearTo = Number.isFinite(opts.yearTo as number) ? (opts.yearTo as number) : null;
   const q = (opts.q || '').trim().toLowerCase();
@@ -762,6 +1092,11 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   }
   if (energy) { where.push('energy = ?'); params.push(energy); }
   if (genre) { where.push('genre = ?'); params.push(genre); }
+  if (vocal === 'instrumental') {
+    where.push('vocal_ranges_json IS NOT NULL AND json_array_length(vocal_ranges_json) = 0');
+  } else if (vocal === 'vocal') {
+    where.push('vocal_ranges_json IS NOT NULL AND json_array_length(vocal_ranges_json) > 0');
+  }
   if (yearFrom != null) { where.push('year IS NOT NULL AND year >= ?'); params.push(yearFrom); }
   if (yearTo != null) { where.push('year IS NOT NULL AND year <= ?'); params.push(yearTo); }
   if (q) {
@@ -773,12 +1108,22 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-  const orderSql = {
+  // Mean of the pace curve, computed in SQL so the acoustic sorts page correctly
+  // (a JS sort would only reorder the current window). json_each over a NULL or
+  // empty column yields no rows → AVG is NULL, caught by the IS NULL guard below.
+  const PACE_MEAN_SQL =
+    `(SELECT AVG(json_extract(je.value,'$.value')) FROM json_each(tracks.pace_json) je)`;
+  // Acoustic sorts surface analysed tracks first (NULLs sink to the bottom) and
+  // tie-break by artist for a stable order across un-analysed rows.
+  const orderSql = ({
     artist: `ORDER BY LOWER(COALESCE(artist,'')) , LOWER(COALESCE(album,'')) , LOWER(COALESCE(title,''))`,
     title: `ORDER BY LOWER(COALESCE(title,'')) , LOWER(COALESCE(artist,''))`,
-    year: 'ORDER BY year DESC, LOWER(COALESCE(artist,""))',
+    year: `ORDER BY year DESC, LOWER(COALESCE(artist,''))`,
     taggedAt: 'ORDER BY tagged_at DESC',
-  }[sort];
+    bpm: `ORDER BY (bpm IS NULL), bpm ASC, LOWER(COALESCE(artist,''))`,
+    loudness: `ORDER BY (loudness_lufs IS NULL), loudness_lufs DESC, LOWER(COALESCE(artist,''))`,
+    pace: `ORDER BY (${PACE_MEAN_SQL}) IS NULL, (${PACE_MEAN_SQL}) DESC, LOWER(COALESCE(artist,''))`,
+  } as Record<string, string>)[sort] ?? `ORDER BY LOWER(COALESCE(artist,'')) , LOWER(COALESCE(album,'')) , LOWER(COALESCE(title,''))`;
 
   const d = requireDb();
   const total = (
@@ -788,6 +1133,45 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
     .prepare(`SELECT * FROM tracks ${whereSql} ${orderSql} LIMIT ? OFFSET ?`)
     .all(...params, limit, offset) as any[];
   return { total, rows: rows.map(rowToTrack) };
+}
+
+// Every tagged track, full record, in one read — the bulk source for the
+// Library Observatory map (which needs all nodes at once, not a paged window
+// like filter()). Ordered by id for a stable layout seed across loads. `limit`
+// caps a pathologically large library; the route stamps a `truncated` flag when
+// it's hit. Deliberately separate from filter() so the observatory's "load
+// everything" contract can't be confused with the admin browse pager's 200 cap.
+export function allTagged(limit?: number): TrackRecord[] {
+  const sql =
+    `SELECT * FROM tracks WHERE ${SQL_HAS_MOODS} ORDER BY id` +
+    (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
+  return (requireDb().prepare(sql).all() as any[]).map(rowToTrack);
+}
+
+// A *stratified* sample of the tagged library, ~`max` rows, proportional per
+// genre — so the Library Observatory shows the real shape of a huge library
+// instead of the first-N tracks by id (which over-represents whichever genres
+// happen to sort first). Each genre (NULL included as its own partition) gets a
+// quota of round(genreCount / totalTagged · max), min 1, and the first `quota`
+// rows of that genre by id are taken. Stable across loads (ordered by id), so
+// the map layout doesn't reshuffle on refresh. The +1-min-per-genre means the
+// total can drift a little over `max`; the caller slices to `max`.
+export function allTaggedSampled(max: number, totalTagged: number): TrackRecord[] {
+  const m = Math.floor(max);
+  const total = Math.floor(totalTagged);
+  if (m <= 0 || total <= 0) return [];
+  const sql = `
+    SELECT * FROM (
+      SELECT t.*,
+        ROW_NUMBER() OVER (PARTITION BY genre ORDER BY id) AS __rn,
+        COUNT(*)     OVER (PARTITION BY genre)             AS __gc
+      FROM tracks t
+      WHERE ${SQL_HAS_MOODS}
+    )
+    WHERE __rn <= MAX(1, CAST(ROUND(__gc * 1.0 * ? / ?) AS INTEGER))
+    ORDER BY id
+  `;
+  return (requireDb().prepare(sql).all(m, total) as any[]).map(rowToTrack);
 }
 
 // ---------------------------------------------------------------------------
@@ -848,10 +1232,16 @@ export function stats(): LibraryStats {
   const withEmbedding = (d.prepare('SELECT COUNT(*) AS n FROM track_vectors').get() as {
     n: number;
   }).n;
+  const withAudioEmbedding = (
+    d.prepare('SELECT COUNT(*) AS n FROM track_audio_vectors').get() as { n: number }
+  ).n;
   const updatedAt =
     ((d.prepare('SELECT MAX(tagged_at) AS t FROM tracks').get() as { t: string | null }).t) ||
     null;
-  return { total, distinctArtists, byMood, byEnergy, byGenre, bySource, withEmbedding, updatedAt };
+  return {
+    total, distinctArtists, byMood, byEnergy, byGenre, bySource,
+    withEmbedding, withAudioEmbedding, updatedAt,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -883,7 +1273,95 @@ function rowToTrack(row: any): TrackRecord {
     introMs: row.intro_ms ?? null,
     analysisConfidence: row.analysis_confidence ?? null,
     analysisVersion: row.analysis_version ?? null,
+    loudnessLufs: row.loudness_lufs ?? null,
+    peakDb: row.peak_db ?? null,
+    structure: row.structure_json ? safeParseSections(row.structure_json) : null,
+    // Preserve an empty array ("analysed instrumental"); only a SQL NULL column
+    // (not computed) maps to null. parseSpans keeps [] intact.
+    vocalRanges: row.vocal_ranges_json != null ? parseSpans(row.vocal_ranges_json) : null,
+    pace: row.pace_json ? parsePaceSpans(row.pace_json) : null,
+    beats: row.beats_json ? parseMsArray(row.beats_json) : null,
+    bars: row.bars_json ? parseMsArray(row.bars_json) : null,
+    keyRanges: row.key_ranges_json ? parseKeyRanges(row.key_ranges_json) : null,
   };
+}
+
+// Parse a key_ranges_json column into TrackKeyRange[] or null. Empty/malformed → null.
+function parseKeyRanges(s: string): TrackKeyRange[] | null {
+  try {
+    const v = JSON.parse(s);
+    if (!Array.isArray(v)) return null;
+    const out: TrackKeyRange[] = [];
+    for (const x of v) {
+      const startMs = Number((x as any)?.startMs);
+      const endMs = Number((x as any)?.endMs);
+      const tonic = (x as any)?.tonic;
+      const mode = (x as any)?.mode;
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+      if (typeof tonic !== 'string' || (mode !== 'major' && mode !== 'minor')) continue;
+      out.push({ startMs, endMs, tonic, mode });
+    }
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+// Parse a JSON array of ms timestamps → finite number[] or null (empty → null).
+function parseMsArray(s: string): number[] | null {
+  try {
+    const v = JSON.parse(s);
+    if (!Array.isArray(v)) return null;
+    const out = v.filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+// Parse a pace_json column into TrackPaceSpan[] or null. Empty/malformed → null.
+function parsePaceSpans(s: string): TrackPaceSpan[] | null {
+  try {
+    const v = JSON.parse(s);
+    if (!Array.isArray(v)) return null;
+    const out: TrackPaceSpan[] = [];
+    for (const x of v) {
+      const startMs = Number((x as any)?.startMs);
+      const endMs = Number((x as any)?.endMs);
+      const value = Number((x as any)?.value);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || !Number.isFinite(value) || endMs <= startMs) continue;
+      out.push({ startMs, endMs, value });
+    }
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+// Parse a JSON span column into clean TrackSection[] (possibly empty). Drops
+// malformed/zero-length spans; returns [] on any parse error.
+function parseSpans(s: string): TrackSection[] {
+  try {
+    const v = JSON.parse(s);
+    if (!Array.isArray(v)) return [];
+    const out: TrackSection[] = [];
+    for (const x of v) {
+      const startMs = Number((x as any)?.startMs);
+      const endMs = Number((x as any)?.endMs);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+      const kind = typeof (x as any)?.kind === 'string' ? (x as any).kind : undefined;
+      out.push(kind ? { startMs, endMs, kind } : { startMs, endMs });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+// structure_json: empty collapses to null ("no structure"), unlike vocal ranges.
+function safeParseSections(s: string): TrackSection[] | null {
+  const out = parseSpans(s);
+  return out.length ? out : null;
 }
 
 function safeParseArray(s: string): string[] {

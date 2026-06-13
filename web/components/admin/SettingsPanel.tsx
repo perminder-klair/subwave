@@ -20,7 +20,7 @@ import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
 import { cn } from '../../lib/cn';
 
 const SECTIONS = [
-  { id: 'station',  label: 'Station', hint: 'name · location' },
+  { id: 'station',  label: 'Station', hint: 'name · location · timezone' },
   { id: 'theme',    label: 'Theme', hint: 'station-wide palette' },
   { id: 'tts',      label: 'TTS voice', hint: 'default engine' },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing' },
@@ -107,6 +107,7 @@ interface LlmForm {
   baseUrl: string;
   reasoning: boolean;
   pickerAgent: boolean;
+  agentTimeoutMs: number;
   pauseWhenEmpty: boolean;
   fallback: LlmFallbackForm;
 }
@@ -171,6 +172,7 @@ interface FormState {
   archive: ArchiveForm;
   stream: StreamForm;
   station: string;
+  timezone: string;
   weather: WeatherCfg;
   tts: TtsForm;
   llm: LlmForm;
@@ -207,6 +209,7 @@ interface SettingsData {
     archive?: { enabled?: boolean; bitrate?: number };
     stream?: { opusEnabled?: boolean };
     station?: string;
+    timezone?: string;
     theme?: { active?: string };
     weather?: { lat?: number; lng?: number; locationName?: string; units?: 'metric' | 'imperial' };
     tts?: {
@@ -262,6 +265,8 @@ interface SettingsData {
   libraryStats?: { total?: number };
   env?: Record<string, unknown>;
   streamOnAir?: boolean;
+  // What timezone '' (Auto) resolves to — the controller's own zone.
+  serverTimezone?: string;
 }
 
 interface SfxForm {
@@ -321,6 +326,7 @@ export default function SettingsPanel() {
         opusEnabled: v.stream?.opusEnabled ?? true,
       },
       station: v.station ?? '',
+      timezone: v.timezone ?? '',
       weather: {
         lat: String(v.weather?.lat ?? ''),
         lng: String(v.weather?.lng ?? ''),
@@ -348,6 +354,7 @@ export default function SettingsPanel() {
         baseUrl: v.llm?.baseUrl ?? '',
         reasoning: !!v.llm?.reasoning,
         pickerAgent: !!v.llm?.pickerAgent,
+        agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
         pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
         fallback: {
           enabled: !!v.llm?.fallback?.enabled,
@@ -1496,6 +1503,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
       baseUrl: form.llm.baseUrl,
       reasoning: form.llm.reasoning,
       pickerAgent: form.llm.pickerAgent,
+      agentTimeoutMs: form.llm.agentTimeoutMs,
       pauseWhenEmpty: form.llm.pauseWhenEmpty,
       fallback: {
         enabled: form.llm.fallback.enabled,
@@ -1886,6 +1894,30 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
             onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, pickerAgent: v === 'agent' } }))}
           />
         </div>
+
+        {form.llm.pickerAgent && (
+          <div className="field mt-4">
+            <Label>Agent deadline (seconds)</Label>
+            <Input
+              type="number"
+              min={5}
+              max={180}
+              step={5}
+              value={Math.round(form.llm.agentTimeoutMs / 1000)}
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({ ...f, llm: { ...f.llm, agentTimeoutMs: Number(e.target.value) * 1000 } }))
+              }
+              placeholder="45"
+              className="max-w-[200px]"
+            />
+            <div className="field-hint">
+              How long an agent pick or listener request may run before falling
+              back to the stateless picker. Slow reasoning models often need
+              20&ndash;40s per pick; lower it for snappier fallbacks on a fast
+              model. 5&ndash;180s.
+            </div>
+          </div>
+        )}
       </Card>
 
       <Card title="Idle behaviour" sub="when no one's listening">
@@ -2370,9 +2402,36 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
 
 /* ── Station ─────────────────────────────────────────────────────────── */
 
+// IANA zones grouped by region prefix for the timezone select. Built once —
+// Intl.supportedValuesOf exists in every runtime this UI supports, but the
+// guard keeps an exotic browser from crashing the whole settings page.
+const TZ_GROUPS: Array<{ region: string; zones: string[] }> = (() => {
+  let zones: string[] = [];
+  try { zones = Intl.supportedValuesOf('timeZone'); } catch { /* select offers Auto only */ }
+  const byRegion = new Map<string, string[]>();
+  for (const z of zones) {
+    const region = z.includes('/') ? z.slice(0, z.indexOf('/')) : 'Other';
+    if (!byRegion.has(region)) byRegion.set(region, []);
+    byRegion.get(region)!.push(z);
+  }
+  return [...byRegion.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([region, zs]) => ({ region, zones: zs }));
+})();
+
+// Wall-clock preview for a zone, or '' when the zone can't be formatted.
+function clockPreview(timeZone: string) {
+  try {
+    return new Date().toLocaleTimeString('en-GB', { timeZone: timeZone || undefined, hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
 function StationSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const save = () => saveSettings({
     station: form.station,
+    timezone: form.timezone,
     weather: {
       lat: parseFloat(form.weather.lat),
       lng: parseFloat(form.weather.lng),
@@ -2381,12 +2440,25 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
     },
   });
 
+  // Re-render every 30s so the station-clock preview keeps walking — it's
+  // the operator's sanity check that the selected zone matches their watch.
+  const [, setClockTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setClockTick(t => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const serverTz = data.serverTimezone || 'server timezone';
+  // '' = Auto → preview the server's zone, which is what the station runs on.
+  const previewTz = form.timezone || data.serverTimezone || '';
+  const preview = clockPreview(previewTz);
+
   return (
     <>
       <SectionHeader
         eyebrow="station"
         title="How the DJ identifies this radio on air."
-        sub="The station name is substituted into the DJ prompt as {station}. The location sets where the DJ thinks it broadcasts from and drives the Open-Meteo weather it reads on air. Both apply live — no mixer restart."
+        sub="The station name is substituted into the DJ prompt as {station}. The location sets where the DJ thinks it broadcasts from and drives the Open-Meteo weather it reads on air. The timezone sets the clock the DJ lives on. All apply live — no mixer restart."
         metrics={[
           { n: data.values?.station || 'SUB/WAVE', l: 'station', accent: true },
         ]}
@@ -2474,8 +2546,46 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
         </div>
       </Card>
 
+      <Card title="Timezone" sub="The station clock the DJ lives on">
+        <div className="field">
+          <Label>Station timezone</Label>
+          <Select
+            // Radix forbids empty-string item values, so Auto rides a sentinel.
+            value={form.timezone || 'auto'}
+            onValueChange={val =>
+              setForm(f => ({ ...f, timezone: val === 'auto' ? '' : val }))
+            }
+          >
+            <SelectTrigger className="w-[300px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="auto">Auto — server timezone ({serverTz})</SelectItem>
+              </SelectGroup>
+              {TZ_GROUPS.map(g => (
+                <SelectGroup key={g.region}>
+                  <SelectLabel>{g.region}</SelectLabel>
+                  {g.zones.map(z => (
+                    <SelectItem key={z} value={z}>{z}</SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
+            </SelectContent>
+          </Select>
+          {preview && (
+            <div className="field-hint">
+              Station clock: <span className="mono-num">{preview}</span> — if that doesn’t match your watch, pick your zone above.
+            </div>
+          )}
+          <div className="field-hint">
+            Drives everything the DJ derives from the clock — time-of-day moods, schedule slots,
+            hourly time checks, festival dates. Applies live. Hourly archive filenames still follow
+            the server’s TZ.
+          </div>
+        </div>
+      </Card>
+
       <SaveBar
-        note="Station name and location apply live."
+        note="Station name, location, and timezone apply live."
         busy={busy}
         onSave={save}
         saveLabel="Save station settings"

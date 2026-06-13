@@ -310,6 +310,18 @@ class Queue {
     return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
   }
 
+  // Resolve a track's integrated loudness (track object first, else a library
+  // lookup) and stash a clamped gain offset toward the loudness target on the
+  // track as `gainDb`. Null measurement → leaves gainDb undefined, so
+  // getAnnotatedUri emits no liq_amplify and the track plays at unity gain.
+  applyLoudnessGain(track: any) {
+    if (!track) return;
+    let lufs = track.loudnessLufs;
+    if (lufs == null && track.id) lufs = library.get(track.id)?.loudnessLufs ?? null;
+    const gain = mix.gainForLoudness(lufs);
+    if (gain != null) track.gainDb = gain;
+  }
+
   // How many transitions must pass between DJ-mode transition-FX, keyed off the
   // chattiness ladder. Infinity for quiet personas → no transition FX at all.
   sfxTransitionGap(): number {
@@ -335,10 +347,14 @@ class Queue {
     const cur = this.mixAnalysisFor(prevTrack);
     const next = this.mixAnalysisFor(item.track);
 
-    // Feature 1 — adaptive blend length, with a subtle daypart nudge.
+    // Feature 1 — adaptive blend length, with a subtle daypart nudge and a
+    // structure-aware cap so the incoming fade-in finishes before the song's
+    // vocals (the incoming track's instrumental intro, resolved like analysis).
     let energyDelta = 0;
     try { energyDelta = energyForDaypart().speed - 1; } catch {}
-    const secs = mix.crossSecondsFor(cur, next, { energyDelta });
+    let nextIntroMs = item.track.introMs;
+    if (nextIntroMs == null && item.track.id) nextIntroMs = library.get(item.track.id)?.introMs ?? null;
+    const secs = mix.crossSecondsFor(cur, next, { energyDelta, nextIntroMs });
     if (secs != null) {
       item.track.crossSec = secs;
       this.log('mix', `blend ${secs}s → ${item.track.title}`);
@@ -385,6 +401,13 @@ class Queue {
         // tracks being analysed — a no-op otherwise, so non-DJ stations and
         // un-analysed libraries behave exactly as before.
         this.applyMixTransition(item);
+
+        // Loudness normalisation (feature: LUFS gain) — applies to EVERY track,
+        // not just DJ mode. Resolve the track's integrated loudness (from the
+        // item or a library lookup) and stash a clamped gain offset toward the
+        // target; subsonic.getAnnotatedUri folds it into liq_amplify. Un-measured
+        // tracks resolve to null → no liq_amplify → unity gain, i.e. today.
+        this.applyLoudnessGain(item.track);
 
         const uri = subsonic.getAnnotatedUri(item.track);
         await writeHandoff(config.liquidsoap.queueFile, uri);

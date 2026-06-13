@@ -19,13 +19,11 @@
 // so the page renders correctly under every palette — no hardcoded hex.
 
 import type { ChangeEvent, FormEvent, ReactNode } from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Search, RotateCcw, Sparkles, Activity, Play, Square, ChevronDown, ChevronRight,
-  Terminal, RefreshCw, ListPlus, X,
+  Search, RotateCcw, Sparkles, RefreshCw, ListPlus, X, Pencil,
 } from 'lucide-react';
 import { useAdminAuth, ADMIN_API_URL } from '../../lib/adminAuth';
-import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../lib/notify';
 import { Input } from '../ui/input';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '../ui/input-group';
@@ -33,9 +31,10 @@ import { Field, FieldLabel } from '../ui/field';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '../ui/select';
-import { Card, Btn, Eyebrow } from './ui';
-import { V3AlertDialog } from '../ui/alert-dialog';
+import { Card, Btn, Eyebrow, Pill, Seg } from './ui';
 import { cn } from '../../lib/cn';
+import TaggingPanel, { num } from './LibraryTaggingPanel';
+import type { Coverage, TaggerState, LibraryStatsLite, Batch, RescanOpts } from './LibraryTaggingPanel';
 
 // ---------------------------------------------------------------------------
 // types
@@ -50,7 +49,14 @@ interface Track {
   duration?: number | null;
   moods?: string[];
   energy?: string | null;
+  source?: string | null;
   taggedAt?: string;
+  // Acoustic-analysis surface — null/undefined until the analyze pass runs.
+  bpm?: number | null;
+  musicalKey?: string | null;
+  loudnessLufs?: number | null;
+  paceMean?: number | null;
+  instrumental?: boolean | null;
 }
 
 interface BrowseResponse {
@@ -68,51 +74,20 @@ interface BrowseResponse {
 
 interface UntaggedResponse { rows: Track[]; nextCursor: string | null }
 
-interface Coverage {
-  tagged: number;
-  analysed: number;
-  total: number | null;
-  percent: number | null;
-  analysedPercent: number | null;
-  scannedAt: string | null;
-  scanning: boolean;
-  // null = still probing; false = no analysis backend (sidecar/librosa) running.
-  analysisAvailable?: boolean | null;
-  analysisBackend?: string | null;
-}
+// Coverage / TaggerState / LibraryStatsLite / Batch / RescanOpts live in
+// LibraryTaggingPanel.tsx alongside the panel that renders them.
 
-interface TaggerState {
-  running?: boolean;
-  pid?: number;
-  startedAt?: string;
-  lastLog?: string[];
+interface SettingsResponse {
+  tagger?: TaggerState;
+  libraryStats?: LibraryStatsLite;
+  // Only the slice this panel needs from the full settings payload.
+  values?: { audio?: { embeddings?: boolean; vocalActivity?: boolean } };
 }
-
-// libraryStats rides along on /settings — gives moods-in-use, last-tag time,
-// and withEmbedding (used to nudge a re-embed after a model swap) without an
-// extra request and regardless of which tab is active.
-interface LibraryStatsLite {
-  total: number;
-  byMood: Record<string, number>;
-  byEnergy: Record<string, number>;
-  byGenre: Record<string, number>;
-  withEmbedding: number;
-  updatedAt: string | null;
-}
-
-interface SettingsResponse { tagger?: TaggerState; libraryStats?: LibraryStatsLite }
 
 type Tab = 'recent' | 'browse' | 'search' | 'untagged';
-type Sort = 'artist' | 'title' | 'year' | 'taggedAt';
+type Sort = 'artist' | 'title' | 'year' | 'taggedAt' | 'bpm' | 'loudness' | 'pace';
 type Energy = 'any' | 'low' | 'medium' | 'high';
-type Batch = '100' | '500' | 'all';
-
-type RescanOpts = {
-  reseed?: boolean;
-  reEnrich?: boolean;
-  reAnalyze?: boolean;
-  upgrade?: boolean;
-};
+type Vocal = 'any' | 'instrumental' | 'vocal';
 
 const PAGE_SIZE = 50;
 
@@ -150,10 +125,6 @@ function Thumb({ track }: { track: Track }) {
   );
 }
 
-function num(n: number | null | undefined): string {
-  return n != null ? n.toLocaleString('en-GB') : '—';
-}
-
 // ---------------------------------------------------------------------------
 // panel
 // ---------------------------------------------------------------------------
@@ -168,18 +139,25 @@ export default function LibraryPanel() {
   const [libStats, setLibStats] = useState<LibraryStatsLite | null>(null);
   const [batch, setBatch] = useState<Batch>('500');
   const [taggerBusy, setTaggerBusy] = useState(false);
+  // settings.audio.embeddings — null until the first /settings poll lands.
+  const [audioEnabled, setAudioEnabled] = useState<boolean | null>(null);
+  // settings.audio.vocalActivity — null until the first /settings poll lands.
+  const [vocalEnabled, setVocalEnabled] = useState<boolean | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [queuing, setQueuing] = useState<string | null>(null);
   const [retagging, setRetagging] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
-
-  // live-run progress baseline (best-effort: coverage delta vs. a captured
-  // target — the backend has no per-run counter). Set when WE start a run.
-  const [runInfo, setRunInfo] = useState<{ baseline: number; target: number | null } | null>(null);
+  // manual tagging — which row's inline editor is open, and which is saving.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [manualBusy, setManualBusy] = useState<string | null>(null);
+  // Mood vocab, lifted out of the browse response so the editor has it on any
+  // tab (browse is the only call that returns it; lazily fetched otherwise).
+  const [vocab, setVocab] = useState<string[]>([]);
 
   // browse state
   const [moods, setMoods] = useState<string[]>([]);
   const [energy, setEnergy] = useState<Energy>('any');
+  const [vocal, setVocal] = useState<Vocal>('any');
   const [genre, setGenre] = useState<string>('');
   const [yearFrom, setYearFrom] = useState<string>('');
   const [yearTo, setYearTo] = useState<string>('');
@@ -226,6 +204,10 @@ export default function LibraryPanel() {
       const j = (await r.json()) as SettingsResponse;
       setTagger(j.tagger || null);
       if (j.libraryStats) setLibStats(j.libraryStats);
+      if (j.values?.audio) {
+        setAudioEnabled(!!j.values.audio.embeddings);
+        setVocalEnabled(!!j.values.audio.vocalActivity);
+      }
     } catch { /* transient */ }
   }, [adminFetch, ready]);
 
@@ -251,11 +233,6 @@ export default function LibraryPanel() {
     return () => clearInterval(id);
   }, [ready, tagger?.running, loadCoverage]);
 
-  // Clear the run baseline once the tagger stops.
-  useEffect(() => {
-    if (!tagger?.running) setRunInfo(null);
-  }, [tagger?.running]);
-
   // -----------------------------------------------------------------------
   // browse fetch — debounced on filter change
   // -----------------------------------------------------------------------
@@ -266,6 +243,7 @@ export default function LibraryPanel() {
       const params = new URLSearchParams();
       if (moods.length) params.set('moods', moods.join(','));
       if (energy !== 'any') params.set('energy', energy);
+      if (vocal !== 'any') params.set('vocal', vocal);
       if (genre) params.set('genre', genre);
       if (yearFrom) params.set('yearFrom', yearFrom);
       if (yearTo) params.set('yearTo', yearTo);
@@ -282,7 +260,7 @@ export default function LibraryPanel() {
     } finally {
       setBrowseLoading(false);
     }
-  }, [adminFetch, ready, moods, energy, genre, yearFrom, yearTo, q, sort, page]);
+  }, [adminFetch, ready, moods, energy, vocal, genre, yearFrom, yearTo, q, sort, page]);
 
   useEffect(() => {
     if (!ready || tab !== 'browse') return;
@@ -306,7 +284,7 @@ export default function LibraryPanel() {
   }, [ready, adminFetch, genreList.length]);
 
   // reset to page 0 when any filter (other than page itself) changes
-  useEffect(() => { setPage(0); }, [moods, energy, genre, yearFrom, yearTo, q, sort]);
+  useEffect(() => { setPage(0); }, [moods, energy, vocal, genre, yearFrom, yearTo, q, sort]);
 
   // -----------------------------------------------------------------------
   // search fetch
@@ -424,6 +402,84 @@ export default function LibraryPanel() {
     }
   };
 
+  // Mood vocab only rides along on the browse response. Keep `vocab` synced
+  // from it, and lazily fetch a one-row browse when the editor opens on a tab
+  // that hasn't loaded browse yet — avoids hardcoding SHOW_MOODS in the bundle.
+  useEffect(() => {
+    if (browse?.moodVocab?.length) setVocab(browse.moodVocab);
+  }, [browse]);
+  const ensureVocab = useCallback(async () => {
+    if (vocab.length) return;
+    try {
+      const r = await adminFetch('/library/browse?limit=1');
+      if (!r.ok) return;
+      const j = (await r.json()) as BrowseResponse;
+      if (j.moodVocab?.length) setVocab(j.moodVocab);
+    } catch { /* editor shows a "loading moods…" hint until this lands */ }
+  }, [vocab.length, adminFetch]);
+
+  const onEditTrack = (t: Track) => {
+    if (editingId === t.id) { setEditingId(null); return; }
+    ensureVocab();
+    setEditingId(t.id);
+  };
+
+  // Patch the visible rows after a manual-tag write so search/recent reflect it
+  // without a refetch. Album siblings in view update too when applyToAlbum.
+  const patchRows = (
+    rows: Track[] | null, track: Track,
+    moods: string[], energy: string | null, cleared: boolean, applyToAlbum: boolean,
+  ): Track[] | null => {
+    if (!rows) return rows;
+    return rows.map(r => {
+      const hit = r.id === track.id || (applyToAlbum && !!track.album && r.album === track.album);
+      if (!hit) return r;
+      return cleared
+        ? { ...r, moods: [], energy: null, source: null }
+        : { ...r, moods, energy, source: 'manual' };
+    });
+  };
+
+  const saveManualTag = async (
+    track: Track, moods: string[], energy: string | null, applyToAlbum: boolean,
+  ) => {
+    setManualBusy(track.id);
+    try {
+      const r = await adminFetch('/library/manual-tag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: track.id, moods, energy, applyToAlbum }),
+      });
+      const j = (await r.json().catch(() => ({}))) as
+        { ok?: boolean; updated?: number; cleared?: boolean; error?: string };
+      if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
+      const cleared = !!j.cleared;
+      const n = j.updated ?? 1;
+      const scope = applyToAlbum ? `${n} album track${n === 1 ? '' : 's'}` : 'track';
+      notify.ok(cleared ? `cleared tags · ${scope}` : `tagged ${scope} · ${moods.join(', ') || '—'}`);
+      setEditingId(null);
+      setFlashId(track.id);
+      setTimeout(() => setFlashId(curr => (curr === track.id ? null : curr)), 1100);
+      if (tab === 'browse') runBrowse();
+      else if (tab === 'untagged') {
+        // Newly-tagged tracks leave the untagged list; cleared ones stay put.
+        if (!cleared) {
+          setUntagged(prev => prev.filter(t =>
+            !(t.id === track.id || (applyToAlbum && track.album && t.album === track.album))));
+        }
+      } else if (tab === 'search') {
+        setSearchResults(prev => patchRows(prev, track, moods, energy, cleared, applyToAlbum));
+      } else if (tab === 'recent') {
+        setRecent(prev => patchRows(prev, track, moods, energy, cleared, applyToAlbum));
+      }
+      loadCoverage();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setManualBusy(null);
+    }
+  };
+
   // -----------------------------------------------------------------------
   // tagger controls
   // -----------------------------------------------------------------------
@@ -433,7 +489,6 @@ export default function LibraryPanel() {
     setTaggerBusy(true);
     try {
       const limit = batch === 'all' ? null : parseInt(batch, 10);
-      const target = batch === 'all' ? remaining : limit;
       const r = await adminFetch('/tag-library', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -443,7 +498,6 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `tagger start failed (${r.status})`);
       notify.ok('tagger started');
       setLogOpen(true);
-      setRunInfo({ baseline: coverage?.tagged ?? 0, target: target ?? null });
       await loadTagger();
     } catch (err) {
       notify.err(errorMessage(err));
@@ -495,6 +549,51 @@ export default function LibraryPanel() {
     }
   };
 
+  // Flip settings.audio.embeddings — the "sounds-like" (CLAP) opt-in. The
+  // toggle only persists the setting; vectors appear after an analysis run.
+  const toggleAudio = async () => {
+    if (audioEnabled == null) return;
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio: { embeddings: !audioEnabled } }),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
+      setAudioEnabled(!audioEnabled);
+      notify.ok(!audioEnabled ? 'sounds-like analysis enabled' : 'sounds-like analysis disabled');
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
+  // Run the analysis pass (bpm/key + audio fingerprints) as a background
+  // child — same single-flight state as the tagger, so the running view and
+  // stop button below cover it too.
+  const analyzeAudio = async () => {
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/library/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `analysis start failed (${r.status})`);
+      notify.ok('audio analysis started');
+      setLogOpen(true);
+      await loadTagger();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
   // -----------------------------------------------------------------------
   // derived
   // -----------------------------------------------------------------------
@@ -504,10 +603,10 @@ export default function LibraryPanel() {
   const energyCounts = stats?.byEnergy || libStats?.byEnergy || {};
   const totalPages = browse ? Math.max(1, Math.ceil(browse.total / PAGE_SIZE)) : 1;
   const filtersActive =
-    moods.length > 0 || energy !== 'any' || !!genre || !!yearFrom || !!yearTo || !!q.trim();
+    moods.length > 0 || energy !== 'any' || vocal !== 'any' || !!genre || !!yearFrom || !!yearTo || !!q.trim();
 
   const clearFilters = () => {
-    setMoods([]); setEnergy('any'); setGenre(''); setYearFrom(''); setYearTo(''); setQ('');
+    setMoods([]); setEnergy('any'); setVocal('any'); setGenre(''); setYearFrom(''); setYearTo(''); setQ('');
     setSort('artist'); setPage(0);
   };
 
@@ -534,7 +633,6 @@ export default function LibraryPanel() {
         coverage={coverage}
         libStats={libStats}
         tagger={tagger}
-        runInfo={runInfo}
         batch={batch}
         setBatch={setBatch}
         busy={taggerBusy}
@@ -543,6 +641,10 @@ export default function LibraryPanel() {
         onStart={startTagger}
         onStop={stopTagger}
         onRescan={rescanTagger}
+        audioEnabled={audioEnabled}
+        onToggleAudio={toggleAudio}
+        onAnalyzeAudio={analyzeAudio}
+        vocalEnabled={vocalEnabled}
       />
 
       <Tabs tab={tab} setTab={setTab} counts={counts} />
@@ -556,6 +658,7 @@ export default function LibraryPanel() {
           genreList={genreList}
           moods={moods} setMoods={setMoods}
           energy={energy} setEnergy={setEnergy}
+          vocal={vocal} setVocal={setVocal}
           genre={genre} setGenre={setGenre}
           yearFrom={yearFrom} setYearFrom={setYearFrom}
           yearTo={yearTo} setYearTo={setYearTo}
@@ -574,6 +677,9 @@ export default function LibraryPanel() {
           ))}
           {energy !== 'any' && (
             <span className="lib-active-chip">{energy} energy<button type="button" onClick={() => setEnergy('any')} aria-label="remove energy">×</button></span>
+          )}
+          {vocal !== 'any' && (
+            <span className="lib-active-chip">{vocal}<button type="button" onClick={() => setVocal('any')} aria-label="remove vocal filter">×</button></span>
           )}
           {genre && (
             <span className="lib-active-chip">{genre}<button type="button" onClick={() => setGenre('')} aria-label="remove genre">×</button></span>
@@ -648,6 +754,12 @@ export default function LibraryPanel() {
           flashId={flashId}
           onQueue={queueTrack}
           onRetag={retagTrack}
+          vocab={vocab}
+          editingId={editingId}
+          manualBusy={manualBusy}
+          onEdit={onEditTrack}
+          onSaveManual={saveManualTag}
+          onCancelEdit={() => setEditingId(null)}
         />
       </Card>
 
@@ -672,259 +784,6 @@ export default function LibraryPanel() {
         </div>
       )}
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// tagging panel — merged coverage + tagger, framed for humans
-// ---------------------------------------------------------------------------
-interface TaggingPanelProps {
-  coverage: Coverage | null;
-  libStats: LibraryStatsLite | null;
-  tagger: TaggerState | null;
-  runInfo: { baseline: number; target: number | null } | null;
-  batch: Batch;
-  setBatch: (b: Batch) => void;
-  busy: boolean;
-  logOpen: boolean;
-  setLogOpen: (fn: (o: boolean) => boolean) => void;
-  onStart: () => void;
-  onStop: () => void;
-  onRescan: (opts: RescanOpts) => void;
-}
-
-function TaggingPanel(p: TaggingPanelProps) {
-  const [maintOpen, setMaintOpen] = useState(false);
-  const [confirmFull, setConfirmFull] = useState(false);
-  const [passes, setPasses] = useState<RescanOpts>({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false });
-  const logRef = useRef<HTMLPreElement>(null);
-  const moodFillRef = useRef<HTMLSpanElement>(null);
-  const acousticFillRef = useRef<HTMLSpanElement>(null);
-  const runFillRef = useRef<HTMLSpanElement>(null);
-
-  const tagged = p.coverage?.tagged ?? p.libStats?.total ?? null;
-  const total = p.coverage?.total ?? null;
-  const analysed = p.coverage?.analysed ?? null;
-  const pct = p.coverage?.percent ?? null;
-  const apct = p.coverage?.analysedPercent ?? null;
-  const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
-  const running = !!p.tagger?.running;
-  const analysisOff = p.coverage?.analysisAvailable === false;
-  const moodCount = p.libStats ? Object.keys(p.libStats.byMood || {}).length : 0;
-  const lastTag = p.libStats?.updatedAt ? new Date(p.libStats.updatedAt).toLocaleString('en-GB') : '—';
-  const anySel = !!(passes.reseed || passes.reEnrich || passes.reAnalyze || passes.upgrade);
-
-  // Embeddings present but no vectors → likely a model swap dropped them.
-  const embeddingMissing = (tagged ?? 0) > 0 && p.libStats != null && p.libStats.withEmbedding === 0;
-
-  // live-run progress (best-effort: coverage delta vs. captured target)
-  const processed = p.runInfo && tagged != null ? Math.max(0, tagged - p.runInfo.baseline) : null;
-  const runPct = p.runInfo?.target && processed != null
-    ? Math.min(100, Math.round((processed / p.runInfo.target) * 100)) : null;
-
-  useDynamicStyle(moodFillRef, { width: pct != null ? `${Math.min(100, pct)}%` : '0%' });
-  useDynamicStyle(acousticFillRef, { width: !analysisOff && apct != null ? `${Math.min(100, apct)}%` : '0%' });
-  useDynamicStyle(runFillRef, { width: runPct != null ? `${runPct}%` : null });
-
-  useEffect(() => {
-    if (p.logOpen && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [p.logOpen, p.tagger?.lastLog?.length]);
-
-  const togglePass = (k: keyof RescanOpts) => setPasses(prev => ({ ...prev, [k]: !prev[k] }));
-
-  return (
-    <section className="card">
-      {/* headline */}
-      <div className="border-b border-ink p-6">
-        <Eyebrow className="text-vermilion">library · tagging</Eyebrow>
-        <h1 className="lib-hero-title">
-          {pct != null
-            ? <>Your DJ knows <span className="pct mono-num">{pct}%</span> of your library.</>
-            : <>Manage the music your station plays.</>}
-        </h1>
-        <p className="lib-hero-sub">
-          To pick the right track for any moment, the DJ reads the <b>mood</b> and <b>energy</b> of
-          every song. New tracks need tagging before they can go on air — that&rsquo;s what this does.
-        </p>
-      </div>
-
-      {/* coverage — mood primary, acoustic optional */}
-      <div className="border-b border-ink">
-        <div className="p-6">
-          <div className="flex flex-wrap items-baseline justify-between gap-3">
-            <span className="flex items-center gap-2 text-[11px] font-bold tracking-[0.16em] text-ink uppercase">
-              <Sparkles size={14} /> Mood &amp; energy tagged
-            </span>
-            <span className="mono-num text-[13px] font-bold">{pct != null ? `${pct}%` : '—'}</span>
-          </div>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className="lib-cov-big mono-num">{num(tagged)}</span>
-            <span className="text-[13px] text-muted">/ {total != null ? num(total) : (p.coverage?.scanning ? 'scanning…' : '—')} tracks</span>
-          </div>
-          <div className="lib-bar mt-3"><span ref={moodFillRef} /></div>
-          <div className="mt-2.5 text-[11px] text-muted">
-            {remaining != null && remaining > 0
-              ? <><b className="mono-num text-ink">{num(remaining)}</b> tracks still need tags · <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}</>
-              : <>{remaining === 0 ? 'Every track is tagged' : 'Coverage updating…'} · <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}</>}
-          </div>
-          {embeddingMissing && (
-            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] text-ink">
-              <span><b>Embeddings missing.</b> Your embedding model may have changed — re-embed to restore similarity-based picks.</span>
-              <button
-                type="button"
-                className="font-bold text-vermilion underline-offset-2 hover:underline"
-                onClick={() => { setMaintOpen(true); setPasses(s => ({ ...s, reseed: true })); }}
-              >
-                Set up a re-embed →
-              </button>
-            </div>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong px-6 py-3.5">
-          <span className="caption flex items-center gap-2">
-            <Activity size={13} /> Acoustic analysis · bpm / key
-          </span>
-          <span className="lib-opt-tag">optional</span>
-          <span className="lib-minibar"><span ref={acousticFillRef} /></span>
-          <span className="caption mono-num !tracking-[0.04em]">
-            {analysisOff ? 'engine off' : <>{num(analysed)} / {num(total)} · {apct != null ? `${apct}%` : '…'}</>}
-          </span>
-          <span className="caption basis-full !tracking-[0.04em] !normal-case">
-            {analysisOff
-              ? 'No analysis engine running. Start the tts-heavy sidecar (docker compose --profile tts-heavy up -d) or configure a local librosa venv to enable it.'
-              : 'Improves beat-matching between tracks. Tagging works fine without it.'}
-          </span>
-        </div>
-      </div>
-
-      {/* action zone — idle vs running */}
-      {!running ? (
-        <div className="flex flex-wrap items-center gap-4 p-6">
-          <div className="min-w-[220px] flex-1 text-[13px]">
-            {remaining != null && remaining > 0
-              ? <><b>{num(remaining)}</b> tracks are waiting. Tag them and they become DJ-ready.</>
-              : remaining === 0
-                ? <>Library fully tagged. Run a re-scan below if you&rsquo;ve changed the model.</>
-                : <>Start tagging new tracks so the DJ can play them.</>}
-          </div>
-          <div className="flex flex-wrap items-center gap-2.5">
-            <div className="lib-batch">
-              <label htmlFor="lib-batch">Tag</label>
-              <select id="lib-batch" value={p.batch} onChange={e => p.setBatch(e.target.value as Batch)}>
-                <option value="100">next 100</option>
-                <option value="500">next 500</option>
-                <option value="all">all{remaining != null ? ` ${num(remaining)}` : ''} remaining</option>
-              </select>
-            </div>
-            <Btn lg tone="accent" onClick={p.onStart} disabled={p.busy || remaining === 0}>
-              <Play size={13} /> Start tagging
-            </Btn>
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-3 p-6">
-          <div className="flex flex-wrap items-center justify-between gap-3.5">
-            <span className="flex items-center gap-2.5 text-[13px] font-bold">
-              <span className="lib-livedot" /> Tagging in progress…
-            </span>
-            <span className="caption mono-num !tracking-[0.04em]">
-              {processed != null && <>{num(processed)}{p.runInfo?.target ? ` / ${num(p.runInfo.target)}` : ''} this run · </>}
-              {p.tagger?.pid ? `pid ${p.tagger.pid}` : ''}
-              {p.tagger?.startedAt ? ` · started ${new Date(p.tagger.startedAt).toLocaleTimeString('en-GB')}` : ''}
-            </span>
-            <Btn sm tone="danger" onClick={p.onStop} disabled={p.busy}><Square size={11} /> Stop</Btn>
-          </div>
-          {runPct != null && (
-            <div className="lib-bar !h-1.5"><span ref={runFillRef} /></div>
-          )}
-          <div className="caption !tracking-[0.04em] !normal-case">
-            The DJ is listening to each new track and deciding its mood &amp; energy. You can keep
-            browsing — this runs in the background.
-          </div>
-        </div>
-      )}
-
-      {/* footer — progressive disclosure */}
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-dashed border-separator-strong px-6 py-3">
-        <button
-          type="button"
-          className={cn('inline-flex items-center gap-1.5 text-[11px] font-bold', maintOpen ? 'text-ink' : 'text-muted hover:text-ink')}
-          onClick={() => setMaintOpen(o => !o)}
-        >
-          {maintOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Maintenance &amp; re-scan
-        </button>
-        <button
-          type="button"
-          className={cn('inline-flex items-center gap-1.5 text-[11px] font-bold', p.logOpen ? 'text-ink' : 'text-muted hover:text-ink')}
-          onClick={() => p.setLogOpen(o => !o)}
-        >
-          <Terminal size={13} /> {p.logOpen ? 'Hide log' : 'View log'}
-        </button>
-      </div>
-
-      {/* maintenance disclosure */}
-      {maintOpen && (
-        <div className="flex flex-col gap-3.5 border-t border-ink bg-[var(--ink-soft)] p-6">
-          <div className="max-w-[64ch] text-[12px] leading-[1.55] text-muted">
-            Re-scanning rebuilds parts of the index from scratch — only needed after you change the
-            LLM, embedding model, or analysis engine. Your existing mood tags are kept as seeds.
-            Pick what to re-run:
-          </div>
-          <div className="grid gap-2.5 sm:grid-cols-2">
-            <Pass on={!!passes.reseed} onClick={() => togglePass('reseed')} name="Re-embed all tracks"
-              hint="Drop & rebuild every vector. Run after changing the embedding model." />
-            <Pass on={!!passes.reEnrich} onClick={() => togglePass('reEnrich')} name="Re-enrich metadata"
-              hint="Re-fetch Last.fm tags + lyrics that feed the tagging." />
-            <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics"
-              hint="Redo BPM / key detection for every track." />
-            <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods"
-              hint="Re-tag tracks whose prompt or model is now stale." />
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <Btn sm disabled={p.busy || running} onClick={() => setConfirmFull(true)}>
-              <RefreshCw size={12} /> Full re-scan (everything)
-            </Btn>
-            <Btn sm tone="accent" disabled={!anySel || p.busy || running}
-              onClick={() => { p.onRescan(passes); setPasses({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false }); }}>
-              Run selected passes
-            </Btn>
-          </div>
-        </div>
-      )}
-
-      {/* log drawer — reuses the theme-aware .term surface */}
-      {p.logOpen && (
-        <pre ref={logRef} className="term m-0 max-h-56 overflow-y-auto !border-t !border-l-0 border-separator-strong">
-          {(p.tagger?.lastLog || []).join('\n') || '(no log output yet — start a tagging run to see the booth think)'}
-        </pre>
-      )}
-
-      <V3AlertDialog
-        open={confirmFull}
-        onOpenChange={setConfirmFull}
-        title="Full library re-scan"
-        description="Rebuilds the whole library from scratch: re-embeds every track, re-fetches Last.fm tags + lyrics, and redoes acoustic (bpm/key) analysis. Existing mood tags are kept and reused as seeds — moods are not re-decided. This can take several minutes on a large library and re-spends embedding calls. To re-decide moods too, tick 'Re-decide moods' and use 'Run selected passes'."
-        confirmLabel="full re-scan"
-        danger
-        onConfirm={() => p.onRescan({ reseed: true, reEnrich: true, reAnalyze: true })}
-      />
-    </section>
-  );
-}
-
-function Pass({ on, onClick, name, hint }: { on: boolean; onClick: () => void; name: string; hint: string }) {
-  return (
-    <button type="button" className={cn('lib-pass', on && 'on')} onClick={onClick}>
-      <span className="box">
-        <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-          <path d="M2.5 6.2L4.8 8.5L9.5 3.5" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </span>
-      <span>
-        <span className="lib-pass-name">{name}</span>
-        <span className="lib-pass-hint">{hint}</span>
-      </span>
-    </button>
   );
 }
 
@@ -967,6 +826,7 @@ interface BrowseFiltersProps {
   genreList: { value: string; songCount: number }[];
   moods: string[]; setMoods: (m: string[]) => void;
   energy: Energy; setEnergy: (e: Energy) => void;
+  vocal: Vocal; setVocal: (v: Vocal) => void;
   genre: string; setGenre: (g: string) => void;
   yearFrom: string; setYearFrom: (s: string) => void;
   yearTo: string; setYearTo: (s: string) => void;
@@ -989,6 +849,14 @@ function BrowseFilters(p: BrowseFiltersProps) {
     { id: 'low', label: <><EnergyMeter level="low" /> Low{p.energyCounts.low ? ` · ${p.energyCounts.low}` : ''}</> },
     { id: 'medium', label: <><EnergyMeter level="medium" /> Mid{p.energyCounts.medium ? ` · ${p.energyCounts.medium}` : ''}</> },
     { id: 'high', label: <><EnergyMeter level="high" /> High{p.energyCounts.high ? ` · ${p.energyCounts.high}` : ''}</> },
+  ];
+
+  // Vocal facet rides on the acoustic analysis pass; it only ever narrows to
+  // analysed tracks (un-analysed rows have no vocal ranges to test).
+  const vocalOpts: { id: Vocal; label: string }[] = [
+    { id: 'any', label: 'Any' },
+    { id: 'vocal', label: 'Vocal' },
+    { id: 'instrumental', label: 'Instrumental' },
   ];
 
   return (
@@ -1022,55 +890,78 @@ function BrowseFilters(p: BrowseFiltersProps) {
         </div>
       </div>
 
-      {/* energy / genre / year / sort */}
-      <div className="flex flex-wrap items-end gap-x-5 gap-y-4 p-4">
-        <div className="flex flex-col gap-2">
-          <div className="caption">energy</div>
-          <div className="flex flex-wrap border border-ink">
-            {energyOpts.map((o, i) => (
-              <button
-                key={o.id}
-                type="button"
-                onClick={() => p.setEnergy(o.id)}
-                className={cn(
-                  'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
-                  i > 0 && 'border-l border-ink',
-                  p.energy === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
-                )}
-              >
-                {o.label}
-              </button>
-            ))}
+      {/* facet filters on the left, ordering on the right — each side wraps as a
+          unit (justify-between) so the sort control never strands alone on a row */}
+      <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-4 p-4">
+        <div className="flex flex-wrap items-end gap-x-4 gap-y-4">
+          <div className="flex flex-col gap-2">
+            <div className="caption">energy</div>
+            <div className="flex flex-wrap border border-ink">
+              {energyOpts.map((o, i) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  onClick={() => p.setEnergy(o.id)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
+                    i > 0 && 'border-l border-ink',
+                    p.energy === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
+                  )}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <div className="caption">vocal</div>
+            <div className="flex flex-wrap border border-ink">
+              {vocalOpts.map((o, i) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  onClick={() => p.setVocal(o.id)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
+                    i > 0 && 'border-l border-ink',
+                    p.vocal === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
+                  )}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Field>
+              <FieldLabel htmlFor="genre">genre</FieldLabel>
+              <Select value={p.genre || '__any'} onValueChange={v => p.setGenre(v === '__any' ? '' : v)}>
+                <SelectTrigger id="genre" className="min-w-[120px]"><SelectValue placeholder="Any genre" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__any">Any genre</SelectItem>
+                  {p.genreList.slice(0, 80).map(g => (
+                    <SelectItem key={g.value} value={g.value}>
+                      {g.value}{g.songCount ? ` · ${g.songCount}` : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <div className="caption">year</div>
+            <div className="flex items-center gap-2">
+              <Input type="number" inputMode="numeric" placeholder="from" className="w-20" value={p.yearFrom} onChange={e => p.setYearFrom(e.target.value)} />
+              <span className="text-[10px] text-muted">–</span>
+              <Input type="number" inputMode="numeric" placeholder="to" className="w-20" value={p.yearTo} onChange={e => p.setYearTo(e.target.value)} />
+            </div>
           </div>
         </div>
 
         <div className="flex flex-col gap-2">
-          <Field>
-            <FieldLabel htmlFor="genre">genre</FieldLabel>
-            <Select value={p.genre || '__any'} onValueChange={v => p.setGenre(v === '__any' ? '' : v)}>
-              <SelectTrigger id="genre" className="min-w-[150px]"><SelectValue placeholder="Any genre" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__any">Any genre</SelectItem>
-                {p.genreList.slice(0, 80).map(g => (
-                  <SelectItem key={g.value} value={g.value}>
-                    {g.value}{g.songCount ? ` · ${g.songCount}` : ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <div className="caption">year</div>
-          <div className="flex items-center gap-2">
-            <Input type="number" inputMode="numeric" placeholder="from" className="w-20" value={p.yearFrom} onChange={e => p.setYearFrom(e.target.value)} />
-            <span className="text-[10px] text-muted">–</span>
-            <Input type="number" inputMode="numeric" placeholder="to" className="w-20" value={p.yearTo} onChange={e => p.setYearTo(e.target.value)} />
-          </div>
-        </div>
-
-        <div className="ml-auto flex flex-col gap-2">
           <Field>
             <FieldLabel htmlFor="sort">sort</FieldLabel>
             <Select value={p.sort} onValueChange={v => p.setSort(v as Sort)}>
@@ -1080,6 +971,9 @@ function BrowseFilters(p: BrowseFiltersProps) {
                 <SelectItem value="title">Title</SelectItem>
                 <SelectItem value="year">Year (newest first)</SelectItem>
                 <SelectItem value="taggedAt">Recently tagged</SelectItem>
+                <SelectItem value="bpm">Tempo (slow → fast)</SelectItem>
+                <SelectItem value="loudness">Loudness (loud → quiet)</SelectItem>
+                <SelectItem value="pace">Pace (intense → calm)</SelectItem>
               </SelectContent>
             </Select>
           </Field>
@@ -1101,6 +995,12 @@ interface TrackTableProps {
   flashId: string | null;
   onQueue: (t: Track) => void;
   onRetag: (t: Track) => void;
+  vocab: string[];
+  editingId: string | null;
+  manualBusy: string | null;
+  onEdit: (t: Track) => void;
+  onSaveManual: (t: Track, moods: string[], energy: string | null, applyToAlbum: boolean) => void;
+  onCancelEdit: () => void;
 }
 
 function TrackTable(p: TrackTableProps) {
@@ -1129,8 +1029,10 @@ function TrackTable(p: TrackTableProps) {
       </div>
       {p.rows.map(t => {
         const tagged = !!(t.moods && t.moods.length > 0);
+        const editing = p.editingId === t.id;
         return (
-          <div key={t.id} className={cn('lib-row', p.flashId === t.id && 'flash')}>
+          <Fragment key={t.id}>
+          <div className={cn('lib-row', p.flashId === t.id && 'flash')}>
             <Thumb track={t} />
             <div className="min-w-0">
               <div className="lib-title">{t.title || '—'}</div>
@@ -1141,15 +1043,31 @@ function TrackTable(p: TrackTableProps) {
                 <>
                   {t.moods!.slice(0, 2).map(m => <span key={m} className="lib-mtag">{m}</span>)}
                   {t.energy && <span className="lib-mtag"><EnergyMeter level={t.energy} />{t.energy}</span>}
+                  {t.source === 'manual' && <span className="lib-mtag" title="hand-tagged by an operator">manual</span>}
                 </>
               ) : (
                 <span className="lib-needs">needs tags</span>
               )}
+              {/* acoustic-analysis badges — independent of mood tagging, shown
+                  whenever the analyze pass has filled them in */}
+              {t.bpm != null && <span className="lib-mtag lib-atag" title="tempo">{Math.round(t.bpm)} BPM</span>}
+              {t.musicalKey && <span className="lib-mtag lib-atag" title="musical key">{t.musicalKey}</span>}
+              {t.loudnessLufs != null && <span className="lib-mtag lib-atag" title="integrated loudness (LUFS)">{t.loudnessLufs.toFixed(1)} LUFS</span>}
+              {t.instrumental === true && <span className="lib-mtag lib-atag" title="no vocals detected">instrumental</span>}
             </div>
             <span className="lib-album">{t.album || '—'}</span>
             <div className="flex items-center justify-end gap-1.5">
               <Btn sm onClick={() => p.onQueue(t)} disabled={!!p.queuing}>
                 {p.queuing === t.id ? '…' : <><ListPlus size={12} /> Queue</>}
+              </Btn>
+              <Btn
+                sm
+                tone={editing ? 'accent' : undefined}
+                onClick={() => p.onEdit(t)}
+                disabled={!!p.manualBusy}
+                title="Edit moods manually"
+              >
+                {editing ? <X size={12} /> : <Pencil size={12} />}
               </Btn>
               {(p.tab === 'browse' || p.tab === 'untagged') && (
                 <Btn
@@ -1165,8 +1083,99 @@ function TrackTable(p: TrackTableProps) {
               )}
             </div>
           </div>
+          {editing && (
+            <ManualTagEditor
+              track={t}
+              vocab={p.vocab}
+              busy={p.manualBusy === t.id}
+              onSave={(moods, energy, applyToAlbum) => p.onSaveManual(t, moods, energy, applyToAlbum)}
+              onCancel={p.onCancelEdit}
+            />
+          )}
+          </Fragment>
         );
       })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ManualTagEditor — inline mood/energy editor under a track row. Operator-set
+// tags (source='manual') feed songsByMood() → the picker exactly like the
+// LLM tagger's, and "apply to whole album" tags every track on the album so a
+// folder/album of content can be targeted at once (discussion #336).
+// ---------------------------------------------------------------------------
+const ENERGY_SEG: { id: string; label: string }[] = [
+  { id: 'none', label: 'none' },
+  { id: 'low', label: 'low' },
+  { id: 'medium', label: 'med' },
+  { id: 'high', label: 'high' },
+];
+
+function ManualTagEditor(props: {
+  track: Track;
+  vocab: string[];
+  busy: boolean;
+  onSave: (moods: string[], energy: string | null, applyToAlbum: boolean) => void;
+  onCancel: () => void;
+}) {
+  const { track, vocab, busy } = props;
+  const [sel, setSel] = useState<string[]>((track.moods || []).slice(0, 3));
+  const [energy, setEnergy] = useState<string>(track.energy || 'none');
+  const [applyToAlbum, setApplyToAlbum] = useState(false);
+
+  const toggle = (m: string) =>
+    setSel(cur => cur.includes(m) ? cur.filter(x => x !== m) : (cur.length >= 3 ? cur : [...cur, m]));
+  const energyVal = energy === 'none' ? null : energy;
+
+  return (
+    <div className="grid gap-3 border-b border-ink bg-[var(--ink-softer)] px-4 py-3">
+      <div className="grid gap-1.5">
+        <Eyebrow>moods · up to 3</Eyebrow>
+        <div className="flex flex-wrap gap-1.5">
+          {vocab.length === 0 && (
+            <span className="text-[11px] text-muted italic">loading moods…</span>
+          )}
+          {vocab.map(m => {
+            const on = sel.includes(m);
+            return (
+              <Pill
+                key={m}
+                tone={on ? 'accent' : 'default'}
+                onClick={busy || (!on && sel.length >= 3) ? undefined : () => toggle(m)}
+                className={cn(
+                  (busy || (!on && sel.length >= 3)) && !on && 'opacity-40',
+                  !busy && 'cursor-pointer',
+                )}
+              >
+                {m}
+              </Pill>
+            );
+          })}
+        </div>
+      </div>
+      <div className="grid gap-1.5">
+        <Eyebrow>energy</Eyebrow>
+        <div><Seg value={energy} options={ENERGY_SEG} onChange={setEnergy} /></div>
+      </div>
+      <label className="flex items-center gap-2 text-[12px] text-ink">
+        <input
+          type="checkbox"
+          checked={applyToAlbum}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => setApplyToAlbum(e.target.checked)}
+          disabled={busy}
+        />
+        apply to whole album{track.album ? ` “${track.album}”` : ''}
+      </label>
+      <div className="flex items-center gap-2">
+        <Btn sm tone="accent" onClick={() => props.onSave(sel, energyVal, applyToAlbum)} disabled={busy || sel.length === 0}>
+          {busy ? 'Saving…' : 'Save tags'}
+        </Btn>
+        <Btn sm tone="danger" onClick={() => props.onSave([], null, applyToAlbum)} disabled={busy}>
+          Clear tags
+        </Btn>
+        <Btn sm onClick={props.onCancel} disabled={busy}>Cancel</Btn>
+      </div>
     </div>
   );
 }

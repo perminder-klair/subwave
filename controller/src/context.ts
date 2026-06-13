@@ -4,9 +4,10 @@
 import { config } from './config.js';
 import { resolveActiveShow } from './settings.js';
 import { getListenerCount } from './broadcast/listeners.js';
+import { zonedParts, zonedISODate } from './time.js';
 
 export function getTimeContext(date = new Date()) {
-  const h = date.getHours();
+  const h = zonedParts(date).hour;
   if (h >= 5 && h < 9) return { period: 'early-morning', mood: 'morning', vibe: 'gentle waking', show: 'breakfast' };
   if (h >= 9 && h < 12) return { period: 'morning', mood: 'morning', vibe: 'productive', show: 'morning' };
   if (h >= 12 && h < 14) return { period: 'midday', mood: 'energetic', vibe: 'lunch hour', show: 'midday' };
@@ -38,8 +39,7 @@ const FESTIVALS = [
 ];
 
 export function getFestivalContext(date = new Date()) {
-  const m = date.getMonth() + 1;
-  const d = date.getDate();
+  const { month: m, day: d } = zonedParts(date);
   for (const f of FESTIVALS) {
     const window = f.windowDays || 0;
     if (f.month === m && Math.abs(f.day - d) <= window) {
@@ -126,23 +126,22 @@ function seasonFor(month /* 1-12 */) {
 }
 
 export function getDateContext(date = new Date()) {
-  const dow = date.getDay();
-  const month = date.getMonth() + 1;
+  const { dow, month, day } = zonedParts(date);
   return {
-    iso: date.toISOString().slice(0, 10),
+    // Station-zone date, not UTC — toISOString() was a day off near midnight
+    // for any zone with an offset, even before timezone became configurable.
+    iso: zonedISODate(date),
     dayOfWeek: dow,
     dayLabel: DAY_LABELS[dow],
     monthLabel: MONTH_LABELS[month - 1],
-    dayOfMonth: date.getDate(),
+    dayOfMonth: day,
     season: seasonFor(month),
   };
 }
 
 export function getClockContext(date = new Date()) {
-  const h = date.getHours();
-  const m = date.getMinutes();
+  const { hour: h, minute: m, dow } = zonedParts(date);
   const minutesOfDay = h * 60 + m;
-  const dow = date.getDay();
   return {
     hhmm: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
     isWeekend: dow === 0 || dow === 6,

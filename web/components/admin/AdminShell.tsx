@@ -17,6 +17,7 @@ import {
   Terminal,
   Archive,
   Webhook,
+  Telescope,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -55,6 +56,7 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'Programming',
     items: [
       { href: '/admin/library', id: 'library', label: 'Library', icon: Disc3 },
+      { href: '/observatory', id: 'observatory', label: 'Observatory', icon: Telescope },
       { href: '/admin/shows', id: 'shows', label: 'Shows', icon: CalendarClock },
       { href: '/admin/personas', id: 'personas', label: 'Personas', icon: Drama },
       { href: '/admin/skills', id: 'skills', label: 'Skills', icon: Sparkles },

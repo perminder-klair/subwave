@@ -125,6 +125,35 @@ function usageOf(result) {
 // - DeepSeek / OpenRouter / Gateway: no first-class knob. DeepSeek picks
 //   reasoning by model variant (deepseek-reasoner vs -chat); OpenRouter and
 //   Gateway pass through to the underlying provider's defaults.
+// The num_ctx that will actually be sent for this leg, or null when none is.
+// num_ctx is for LOCAL Ollama only: Ollama's default window is 4096, but the DJ
+// agent feeds ~8k+ per turn (40-turn session window + tool schemas + discovery
+// results); the default truncates the front of the prompt — dropping the system
+// instructions and tool defs — so the model never calls `done` (issue #291).
+// `:cloud` models run on Ollama's servers and manage their own context, so skip
+// them. 0 → don't send it (use Ollama's default). One source of truth so the
+// value sent (providerOpts) and the value recorded (samplingWithNumCtx) can't
+// drift — a per-leg report, so a primary→fallback switch is attributed honestly
+// (discussion #320).
+function appliedNumCtx(cfg: any): number | null {
+  const llm = cfg || {};
+  const model = llm.model || '';
+  const numCtx = Number(llm.numCtx);
+  if (llm.provider === 'ollama' && !/:cloud$/i.test(model) && Number.isFinite(numCtx) && numCtx > 0) {
+    return numCtx;
+  }
+  return null;
+}
+
+// Add the leg's effective num_ctx to a sampling record when one was sent, so
+// /admin/debug shows the context window each call actually ran with. Mirrors how
+// repeat_penalty is conditionally recorded.
+function samplingWithNumCtx(cfg: any, sampling: any): any {
+  const n = appliedNumCtx(cfg);
+  if (n != null) sampling.num_ctx = n;
+  return sampling;
+}
+
 function providerOpts(cfg: any, { repeatPenalty = null }: { repeatPenalty?: number | null } = {}) {
   const llm = cfg || {};
   const reasoning = llm.reasoning === true;
@@ -134,16 +163,8 @@ function providerOpts(cfg: any, { repeatPenalty = null }: { repeatPenalty?: numb
   const ollama: any = { think: reasoning };
   const ollamaOptions: any = {};
   if (repeatPenalty != null) ollamaOptions.repeat_penalty = repeatPenalty;
-  // num_ctx for LOCAL Ollama only. Ollama's default window is 4096, but the DJ
-  // agent feeds ~8k+ per turn (40-turn session window + tool schemas + discovery
-  // results); the default truncates the front of the prompt — dropping the
-  // system instructions and tool defs — so the model never calls `done` (issue
-  // #291). `:cloud` models run on Ollama's servers and manage their own context,
-  // so skip them. 0 → don't send it (use Ollama's default).
-  const numCtx = Number(llm.numCtx);
-  if (llm.provider === 'ollama' && !/:cloud$/i.test(model) && Number.isFinite(numCtx) && numCtx > 0) {
-    ollamaOptions.num_ctx = numCtx;
-  }
+  const numCtx = appliedNumCtx(llm);
+  if (numCtx != null) ollamaOptions.num_ctx = numCtx;
   if (Object.keys(ollamaOptions).length > 0) ollama.options = ollamaOptions;
   opts.ollama = ollama;
 
@@ -305,6 +326,39 @@ async function withTransientRetry<T>(kind: string, fn: () => Promise<T>): Promis
   throw lastErr;
 }
 
+// Hard wall-clock ceiling on a single agent generation (including its
+// transient retries). The `timeout` option on agent.generate() is NOT
+// honoured by every transport — ai-sdk-ollama ignores it, so a
+// reasoning-locked cloud model that never reaches the tool call just runs
+// until its output budget is spent (observed at 60s+ per pick on
+// minimax-m2.7:cloud while the caller believed it was capped at 22s). The
+// race here is the guarantee; the AbortSignal is passed through as well so
+// transports that DO support cancellation stop the request server-side
+// instead of leaving it burning an inference slot.
+//
+// The deadline error deliberately does NOT look host-unreachable (its name
+// matches neither isUnreachable's name checks nor its message regex): a model
+// that overthinks past the deadline is not a host that's down, so the call
+// must fall back to the caller's stateless path, not fail over to the backup
+// leg on a different model.
+function withDeadline<T>(ms: number | undefined, label: string, fn: (signal?: AbortSignal) => Promise<T>): Promise<T> {
+  if (!ms) return fn();
+  const controller = new AbortController();
+  let timer: any;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      const err: any = new Error(`${label} exceeded ${ms}ms deadline`);
+      err.name = 'AgentDeadlineError';
+      reject(err);
+    }, ms);
+  });
+  // Promise.race attaches a reaction to every contender, so a late rejection
+  // from `fn` after the deadline fires is observed (and ignored), never an
+  // unhandledRejection.
+  return Promise.race([fn(controller.signal), deadline]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
 // Host-unreachable: the primary box is DOWN, not merely busy. A strict subset
 // of isTransient — connection refused / DNS failure / connect timeout / socket
 // hang-up. Deliberately EXCLUDES 408/425/429 and 5xx: a host that answers with
@@ -314,7 +368,7 @@ async function withTransientRetry<T>(kind: string, fn: () => Promise<T>): Promis
 const UNREACHABLE_CODE = new Set([
   'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT',
 ]);
-function isUnreachable(err: any): boolean {
+export function isUnreachable(err: any): boolean {
   if (!err) return false;
   const code = err.code ?? err.cause?.code;
   if (typeof code === 'string' && UNREACHABLE_CODE.has(code)) return true;
@@ -337,11 +391,32 @@ function isUnreachable(err: any): boolean {
 // written exactly once per primitive with the leg that actually ran. On a
 // failover the primary's failure is also recorded (via `…:failover→<backup>`)
 // so /debug shows the switch happened.
+// `pin` overrides leg selection: instead of trying the primary and failing over,
+// the call runs exactly once against the named leg with NO cross-leg failover —
+// any error propagates so the caller can manage its own leg (the library tagger
+// pins one consumer per leg, discussion #320). Records carry a `…:pinned` via
+// suffix so /stats' exact-match buckets stay untouched. Unpinned calls are the
+// untouched primary→fallback path.
 async function withFailover<T>(
   kind: string,
   failExtra: (err: any) => any,
   attempt: (leg: any) => Promise<{ value: T; via: string; sampling?: any; usage?: any; extra?: any }>,
+  pin?: 'primary' | 'fallback',
 ): Promise<T> {
+  if (pin) {
+    const leg = pin === 'fallback' ? fallbackLeg() : primaryLeg();
+    if (!leg) throw new Error(`withFailover: pinned leg "${pin}" is not configured`);
+    const started = Date.now();
+    try {
+      const r = await attempt(leg);
+      recordSuccess({ kind, started, via: `${r.via}:pinned`, model: leg.label, sampling: r.sampling, usage: r.usage, extra: r.extra });
+      return r.value;
+    } catch (err: any) {
+      logFailurePreview(kind, err);
+      recordFailure({ kind, started, via: `${err?.__via || 'ai-sdk'}:pinned`, model: leg.label, error: err?.message, extra: failExtra(err) });
+      throw err;
+    }
+  }
   const primary = primaryLeg();
   const primaryStarted = Date.now();
   try {
@@ -429,6 +504,7 @@ export async function djText({
       // repeatPenaltyApplies() and providerOptions handling above.
       const sampling: any = { temperature, top_p: topP, seed };
       if (repeatPenaltyApplies(leg.cfg)) sampling.repeat_penalty = repeatPenalty;
+      samplingWithNumCtx(leg.cfg, sampling);
       return {
         value: out,
         via: 'ai-sdk',
@@ -461,11 +537,12 @@ export async function djObject({
   temperature = 0.4,
   maxOutputTokens = MAX_TOKENS_OBJECT,
   kind = 'sdk.djObject',
+  leg = undefined,
 }: any) {
   return withFailover(
     kind,
     (err) => ({ user: prompt, ...failureDiagnostics(err) }),
-    async (leg) => {
+    async (l) => {
       let lastErr;
       // Track the strategy actually attempted so a failure record attributes to
       // the right sub-path — bucketing every failure as 'ai-sdk' hides which
@@ -475,32 +552,32 @@ export async function djObject({
         try {
           let object;
           let usage;
-          if (attempt === 1 && needsToolCallObject(leg.cfg)) {
+          if (attempt === 1 && needsToolCallObject(l.cfg)) {
             lastVia = 'ai-sdk:tool';
             ({ object, usage } = await withTransientRetry(kind,
-              () => objectViaToolCall(leg, { system, prompt, schema, temperature, maxOutputTokens })));
+              () => objectViaToolCall(l, { system, prompt, schema, temperature, maxOutputTokens })));
           } else if (attempt === 1) {
             lastVia = 'ai-sdk';
             const result = await withTransientRetry(kind, () => generateText({
-              model: leg.model,
+              model: l.model,
               system,
               prompt,
               temperature,
               maxOutputTokens,
               output: Output.object({ schema }),
-              providerOptions: providerOpts(leg.cfg),
+              providerOptions: providerOpts(l.cfg),
             }));
             object = result.output;
             usage = usageOf(result);
           } else {
             lastVia = 'ai-sdk:recovery';
             const result = await withTransientRetry(kind, () => generateText({
-              model: leg.model,
+              model: l.model,
               system,
               prompt: `${prompt}\n\nRespond with a single JSON object only — no prose, no markdown fences.`,
               temperature,
               maxOutputTokens,
-              providerOptions: providerOpts(leg.cfg),
+              providerOptions: providerOpts(l.cfg),
             }));
             object = schema.parse(JSON.parse(extractJson(stripThinking(result.text))));
             usage = usageOf(result);
@@ -508,7 +585,7 @@ export async function djObject({
           return {
             value: object,
             via: lastVia,
-            sampling: { temperature },
+            sampling: samplingWithNumCtx(l.cfg, { temperature }),
             usage,
             // Full, untruncated — the /debug surface shows the whole system prompt.
             extra: { system, user: prompt, response: JSON.stringify(object).slice(0, 500) },
@@ -523,6 +600,7 @@ export async function djObject({
       (lastErr as any).__via = lastVia;
       throw lastErr;
     },
+    leg,
   );
 }
 
@@ -574,14 +652,15 @@ export async function djObject({
 //   openrouter:claude-haiku-4.5  Output.object 0/n  "No output generated" (#300)
 // (An earlier table here recorded these models passing 5/5 on Output.object;
 // that no longer reproduces on ai@6 — an SDK-version drift, per #300.)
-// The Ollama latency p95s exceed the picker's 22s `timeoutMs` ceiling, but
-// agent.generate({ timeout }) is not honoured by the ai-sdk-ollama transport
-// — runs that exceed the cap simply run long. Callers (dj-agent.js) still
-// fall back to the stateless pool picker on throw; a slow run blocks only the
-// next pick decision, never the broadcast (Liquidsoap keeps playing the
-// auto.m3u fallback). If a hard ceiling becomes load-bearing again, wrap the
-// agent call in an explicit Promise.race here rather than relying on the
-// option.
+// The Ollama latency p95s can exceed the picker's `timeoutMs` ceiling
+// (settings.llm.agentTimeoutMs, default 45s);
+// agent.generate({ timeout }) is not honoured by the ai-sdk-ollama transport,
+// so the ceiling is enforced here via withDeadline (Promise.race + abort
+// signal) around each generation — main run and recovery run each get the
+// full `timeoutMs`, so worst case is ~2× timeoutMs, not unbounded. On
+// deadline the call throws and the caller (dj-agent.js) falls back to its
+// stateless path; a slow run blocks only the next pick decision, never the
+// broadcast (Liquidsoap keeps playing the auto.m3u fallback).
 export async function djAgent({
   system,
   messages,
@@ -612,7 +691,7 @@ export async function djAgent({
         return {
           value: { object, steps: 0, toolCalls: [] },
           via: lastVia,
-          sampling: { temperature },
+          sampling: samplingWithNumCtx(leg.cfg, { temperature }),
           usage,
           extra: { system, messages, toolCalls: [], steps: 0, response: JSON.stringify(object, null, 2) },
         };
@@ -678,10 +757,12 @@ export async function djAgent({
       // timeoutMs (when set by a caller) is a hard ceiling — a slow/looping run
       // throws, flows through the catch below, and the caller falls back to its
       // stateless path rather than blocking on a pathological model call.
-      let result = await withTransientRetry(kind, () => agent.generate({
-        messages,
-        ...(timeoutMs ? { timeout: timeoutMs } : {}),
-      }));
+      // Enforced by withDeadline, not the generate option (see its comment).
+      let result = await withDeadline(timeoutMs, `${kind} agent run`, (signal) =>
+        withTransientRetry(kind, () => agent.generate({
+          messages,
+          ...(signal ? { abortSignal: signal } : {}),
+        })));
       let steps = result.steps?.length ?? 0;
 
       // Recovery for the "agent did not call the done tool" failure mode (issue
@@ -718,10 +799,11 @@ export async function djAgent({
           toolChoice: 'required',
           prepareStep: async () => ({ activeTools: ['done'], toolChoice: 'required' }),
         } as any);
-        result = await withTransientRetry(kind, () => recoveryAgent.generate({
-          messages: recoveryMessages,
-          ...(timeoutMs ? { timeout: timeoutMs } : {}),
-        }));
+        result = await withDeadline(timeoutMs, `${kind} agent recovery`, (signal) =>
+          withTransientRetry(kind, () => recoveryAgent.generate({
+            messages: recoveryMessages,
+            ...(signal ? { abortSignal: signal } : {}),
+          })));
         steps = result.steps?.length ?? 0;
       }
 
@@ -753,7 +835,7 @@ export async function djAgent({
       return {
         value: { object, steps, toolCalls },
         via: lastVia,
-        sampling: { temperature },
+        sampling: samplingWithNumCtx(leg.cfg, { temperature }),
         usage: usageOf(result),
         // Full, untruncated — the agent's entire input and trail.
         extra: {

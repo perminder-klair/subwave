@@ -6,7 +6,7 @@ export default function CustomSkills() {
     <ManualPage
       eyebrow="MANUAL · 06"
       title="Custom skills."
-      intro="The things the DJ does between tracks — a weather check, a headline, a traffic gag — are skills. Seven ship built in, and you can edit any of them or add your own by dropping a folder into state/skills, no code changes to the station."
+      intro="The things the DJ does between tracks (a weather check, a headline, a traffic gag) are skills. Seven ship built in, and you can edit any of them or add your own by dropping a folder into state/skills, no code changes to the station."
       current="/manual/skills"
     >
       <section className="bs-section">
@@ -19,8 +19,8 @@ export default function CustomSkills() {
           <a href="https://github.com/anthropics/skills" target="_blank" rel="noreferrer">
             Anthropic&rsquo;s skills
           </a>{' '}
-          — a <code className="bs-code-inline">SKILL.md</code> with YAML frontmatter and a
-          markdown body, plus optional code — but the meaning is narrower. These don&rsquo;t
+          (a <code className="bs-code-inline">SKILL.md</code> with YAML frontmatter and a
+          markdown body, plus optional code), but the meaning is narrower. These don&rsquo;t
           process documents or run tasks; they decide what the DJ says next.
         </p>
       </section>
@@ -51,7 +51,7 @@ export default function CustomSkills() {
         <h2>Frontmatter, then the brief.</h2>
         <p>
           The frontmatter sets the skill&rsquo;s metadata; the markdown body <em>is</em> the
-          brief the DJ follows — what to say, in what tone, and when to stay silent. Only a
+          brief the DJ follows: what to say, in what tone, and when to stay silent. Only a
           non-empty body is required; every key has a sensible default.
         </p>
         <CodeBlock>{`---
@@ -66,9 +66,9 @@ line, the way a late-night presenter might glance out the window. Skip it when
 the phase is unremarkable.`}</CodeBlock>
         <p className="text-muted">
           For a <em>new</em> skill the <code className="bs-code-inline">name</code> must be a
-          lowercase slug that isn&rsquo;t a built-in kind — naming a folder after a built-in
-          <em>edits</em> that one instead (see below). Bad frontmatter is logged and skipped
-          — it never crashes the station.
+          lowercase slug that isn&rsquo;t a built-in kind; naming a folder after a built-in
+          <em>edits</em> that one instead (see below). Bad frontmatter is logged and
+          skipped, and never crashes the station.
         </p>
       </section>
 
@@ -82,14 +82,14 @@ the phase is unremarkable.`}</CodeBlock>
           time the station boots. Editing one (on the admin <strong>Skills</strong> page, or
           the file directly) overrides its brief, cooldown, or label in place. A built-in
           file may leave the body empty to keep the default wording, and never loads a{' '}
-          <code className="bs-code-inline">tool.mjs</code> — the built-ins already have their
+          <code className="bs-code-inline">tool.mjs</code>; the built-ins already have their
           data wired in.
         </p>
         <p>
           The big one: <strong>News reads the BBC by default</strong>. Hit{' '}
-          <strong>Edit</strong> on the News skill, paste your own RSS feed (any RSS 2.0 feed
-          — Atom isn&rsquo;t supported yet) and rewrite the brief in your station&rsquo;s
-          voice, then Save — it&rsquo;s live on the next break, no restart.
+          <strong>Edit</strong> on the News skill, paste your own RSS feed (any RSS 2.0 feed,
+          though not Atom yet) and rewrite the brief in your station&rsquo;s
+          voice, then Save. It&rsquo;s live on the next break, no restart.
         </p>
         <CodeBlock>{`---
 name: news
@@ -112,7 +112,7 @@ not a newsreader's. Skip anything dull or stale; silence is fine.`}</CodeBlock>
         <h2>Let the DJ look before it speaks.</h2>
         <p>
           With a <code className="bs-code-inline">tool.mjs</code>, the DJ can fetch live data
-          before deciding whether to air the line — the same mechanism the built-in weather
+          before deciding whether to air the line, the same mechanism the built-in weather
           and news skills use. Export a default function; return any JSON, and use{' '}
           <code className="bs-code-inline">{`{ available: false }`}</code> to tell the DJ
           there&rsquo;s nothing worth airing.
@@ -124,14 +124,14 @@ not a newsreader's. Skip anything dull or stale; silence is fine.`}</CodeBlock>
 }`}</CodeBlock>
         <p>
           The call is timeout-guarded and any error degrades cleanly to &ldquo;no
-          data&rdquo; — a slow or broken skill can never hang the station. With no{' '}
+          data&rdquo;; a slow or broken skill can never hang the station. With no{' '}
           <code className="bs-code-inline">tool.mjs</code>, the skill writes from its brief
           alone (like the built-in traffic gag).
         </p>
         <div className="bs-callout">
           <div className="bs-eyebrow">IT RUNS YOUR CODE</div>
           <p>
-            <code className="bs-code-inline">tool.mjs</code> executes inside the controller —
+            <code className="bs-code-inline">tool.mjs</code> executes inside the controller,
             the same trust model as installing a local tool. Only drop in code you&rsquo;ve
             read and trust.
           </p>
@@ -143,12 +143,12 @@ not a newsreader's. Skip anything dull or stale; silence is fine.`}</CodeBlock>
         <h2>Discovered, then enabled by you.</h2>
         <p>
           A freshly dropped skill appears on the admin <strong>Skills</strong> page toggled{' '}
-          <strong>off</strong>. It can&rsquo;t air — by itself or via the DJ — until you
+          <strong>off</strong>. It can&rsquo;t air (by itself or via the DJ) until you
           enable it there. Dropping a folder never puts unreviewed content (or code) on air.
         </p>
         <p>
           Skills load at boot, and on demand via the <strong>Rescan state/skills</strong>{' '}
-          button on that page — which picks up new folders and edits to{' '}
+          button on that page, which picks up new folders and edits to{' '}
           <code className="bs-code-inline">SKILL.md</code> /{' '}
           <code className="bs-code-inline">tool.mjs</code> without a restart. Like the
           built-ins, a custom skill only fires autonomously when it&rsquo;s enabled{' '}

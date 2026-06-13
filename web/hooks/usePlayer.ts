@@ -13,6 +13,22 @@ import { useStationOrigin } from '@/lib/stationOrigin';
 // mirrors the URLs into a ref so the long-lived watchdog listeners read
 // fresh values either way.
 
+// Reconnect backoff for the watchdog's error path. The first retry stays
+// quick (a blip mid-broadcast should recover in half a second), but repeated
+// failures double the delay up to a minute — an abandoned tab pointed at a
+// downed station must not hammer reconnects twice a second all night.
+const RECONNECT_BASE_MS = 500;
+const RECONNECT_MAX_MS = 60_000;
+
+// Idle cutoff (issue #343). A forgotten tab/PWA stays connected to the live
+// mount forever, counting as a listener and keeping the DJ's pause-when-empty
+// gate open 24/7. After this long with zero listener activity (no pointer,
+// no key, no tab focus) we tune out; the consumer surfaces a one-tap resume
+// via `idleStopped`. 8h clears a full untouched workday of listening while
+// still catching an abandoned tab on its first evening.
+const IDLE_TUNE_OUT_MS = 8 * 60 * 60 * 1000;
+const IDLE_CHECK_INTERVAL_MS = 60_000;
+
 export type PlayerStatus = 'idle' | 'connecting' | 'playing';
 
 export interface Player {
@@ -25,6 +41,10 @@ export interface Player {
   stop: () => void;
   toggleMute: () => void;
   muted: boolean;
+  // True when the idle cutoff (not the listener) tore playback down — the
+  // consumer should explain why and offer a one-tap resume. Cleared on the
+  // next tune().
+  idleStopped: boolean;
 }
 
 export interface UsePlayerOptions {
@@ -47,6 +67,7 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
   // surfaced in the UI so the player doesn't claim to be playing while silent.
   const [status, setStatus] = useState<PlayerStatus>('idle');
   const [volume, setVolume] = useState(initialVolume);
+  const [idleStopped, setIdleStopped] = useState(false);
   const preMuteVolume = useRef(initialVolume || 1);
 
   // play() resolves asynchronously; pausing before it settles rejects the
@@ -64,6 +85,16 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
   const streamsRef = useRef(streams);
   const volumeRef = useRef(volume);
   const watchdogTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Consecutive failed reconnects since the last successful 'playing' —
+  // drives the exponential backoff in onError.
+  const retryCount = useRef(0);
+  // Last listener activity (pointer/key/tab-focus/tune), read by the idle
+  // sweep. Seeded by the sweep effect at mount (not here — render must stay
+  // pure) so a fresh tab gets the full idle window.
+  const lastActivityAt = useRef(0);
+  // The idle sweep mounts once but must call the latest stop() (defined
+  // below, recreated per render) — bridge with a ref.
+  const stopRef = useRef<() => void>(() => {});
   // Set once if the optional Opus mount fails to load — pins us to MP3 so the
   // watchdog stops retrying a dead Opus URL (e.g. an operator who disabled the
   // server-side Opus encoder, so /stream.opus 404s).
@@ -111,7 +142,8 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
   // recovers from, because nothing in here was forcing the dead element back
   // onto the live mount). 'playing' clears the watchdog; 'waiting'/'stalled'
   // arm a 5s timer that re-sets src if 'playing' hasn't fired by then;
-  // 'error' bypasses the timer and reconnects after 500 ms.
+  // 'error' reconnects with exponential backoff (500 ms doubling to a 60 s
+  // ceiling, reset on the next successful 'playing').
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
@@ -149,6 +181,7 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
 
     const onPlaying = () => {
       clearWatchdog();
+      retryCount.current = 0;
       setStatus('playing');
     };
     const onWaiting = () => {
@@ -166,7 +199,9 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
         streamUrlRef.current = mp3;
         setStreamUrl(mp3);
       }
-      armWatchdog(500);
+      const delay = Math.min(RECONNECT_BASE_MS * 2 ** retryCount.current, RECONNECT_MAX_MS);
+      retryCount.current += 1;
+      armWatchdog(delay);
     };
     el.addEventListener('playing', onPlaying);
     el.addEventListener('waiting', onWaiting);
@@ -178,6 +213,36 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
       el.removeEventListener('waiting', onWaiting);
       el.removeEventListener('stalled', onWaiting);
       el.removeEventListener('error', onError);
+    };
+  }, []);
+
+  // Idle cutoff (issue #343): a tab left tuned in with no listener activity
+  // for IDLE_TUNE_OUT_MS gets tuned out, so an abandoned browser doesn't sit
+  // on the mount as a phantom listener (keeping pause-when-empty's DJ gate
+  // open around the clock). Activity = pointer, key, or the tab becoming
+  // visible; the listener-driven entry points (tune, the consumer's controls)
+  // all arrive as pointer/key events anyway. The sweep runs once a minute —
+  // hour-scale cutoff, minute-scale precision is plenty.
+  useEffect(() => {
+    const markActivity = () => { lastActivityAt.current = Date.now(); };
+    markActivity(); // seed: mount counts as the start of the idle window
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') markActivity();
+    };
+    window.addEventListener('pointerdown', markActivity);
+    window.addEventListener('keydown', markActivity);
+    document.addEventListener('visibilitychange', onVisibility);
+    const sweep = setInterval(() => {
+      if (!tunedInRef.current) return;
+      if (Date.now() - lastActivityAt.current < IDLE_TUNE_OUT_MS) return;
+      setIdleStopped(true);
+      stopRef.current();
+    }, IDLE_CHECK_INTERVAL_MS);
+    return () => {
+      clearInterval(sweep);
+      window.removeEventListener('pointerdown', markActivity);
+      window.removeEventListener('keydown', markActivity);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
 
@@ -204,6 +269,7 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
         el.src = '';
       });
   };
+  stopRef.current = stop;
 
   const tune = () => {
     if (!audioRef.current) return;
@@ -213,6 +279,11 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
     }
     const el = audioRef.current;
     const myGen = ++gen.current;
+    // A fresh tune-in is listener activity: restart the idle window, clear
+    // any pending idle prompt, and let the reconnect backoff start small.
+    lastActivityAt.current = Date.now();
+    setIdleStopped(false);
+    retryCount.current = 0;
     el.src = `${streamUrl}?t=${Date.now()}`;
     el.volume = volume;
     setTunedIn(true);
@@ -239,5 +310,5 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
     }
   };
 
-  return { audioRef, tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted: volume === 0 };
+  return { audioRef, tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted: volume === 0, idleStopped };
 }

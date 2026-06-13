@@ -6,7 +6,7 @@ export default function Prerequisites() {
     <SetupPage
       eyebrow="SETUP · 01"
       title="Have these ready."
-      intro="SUB/WAVE doesn't ship Navidrome or Ollama — it talks to yours. Get them running first if they aren't already, and note the URLs and credentials. The install wizard will ask for them."
+      intro="SUB/WAVE doesn't ship Navidrome or Ollama; it talks to yours. Get them running first if they aren't already, and note the URLs and credentials. The install wizard will ask for them."
       current="/setup/prerequisites"
     >
       <section className="bs-section">
@@ -17,16 +17,16 @@ export default function Prerequisites() {
             <strong>Docker on the host.</strong>
             <p>
               Docker Compose runs the stack (two containers in dev, four in
-              production — icecast and liquidsoap live together in a single{' '}
+              production; icecast and liquidsoap live together in a single{' '}
               <code className="bs-code-inline">broadcast</code> container). The
               standalone <code className="bs-code-inline">subwave</code> CLI is a
-              single Bun-compiled binary with no runtime dependency — no Node
+              single Bun-compiled binary with no runtime dependency; no Node
               needed unless you&apos;re hacking on the source (
               <Link href="/setup/development" className="bs-link">Development</Link>).
             </p>
           </li>
           <li>
-            <strong>Navidrome — or any Subsonic-API server.</strong>
+            <strong>Navidrome, or any Subsonic-API server.</strong>
             <p>
               SUB/WAVE plays from your library, reachable from wherever the stack
               runs. Note the URL, username, and password. The wizard asks for all

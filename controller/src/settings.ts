@@ -8,6 +8,7 @@ import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { STATE_DIR } from './config.js';
 import { DEFAULT_THEME_ID, isValidThemeId, listThemes } from './themes.js';
+import { isValidTimezone, setStationTimezone, zonedParts } from './time.js';
 
 // Where uploaded persona avatars live. One file per persona, basename =
 // `<personaId>.<ext>`. The dedicated upload route is the only writer; the
@@ -109,6 +110,15 @@ function clampNumCtx(raw: any, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   if (raw <= 0) return 0;
   return Math.min(131072, Math.max(2048, Math.floor(raw)));
+}
+
+// Coerce a stored agent-deadline value (ms). Clamped to [5s, 180s] and floored
+// to an integer; non-numeric/NaN falls back to `def`. The lower bound keeps a
+// fat-fingered save from making every agent pick fail instantly; the upper
+// bound keeps a stalling model from tying up an inference slot for minutes.
+function clampAgentTimeout(raw: any, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  return Math.min(180_000, Math.max(5_000, Math.floor(raw)));
 }
 
 // Validate + apply the connection fields shared by the primary LLM leg and its
@@ -298,6 +308,7 @@ export const SEED_PERSONAS = [
     frequency: 'moderate',
     scriptLength: 'concise',
     soul: DJ_SOULS[0],
+    language: '',
     avatar: '',
     tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_george' },
   },
@@ -308,6 +319,7 @@ export const SEED_PERSONAS = [
     frequency: 'quiet',
     scriptLength: 'concise',
     soul: DJ_SOULS[1],
+    language: '',
     avatar: '',
     tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_alice' },
   },
@@ -318,6 +330,7 @@ export const SEED_PERSONAS = [
     frequency: 'moderate',
     scriptLength: 'concise',
     soul: DJ_SOULS[3],
+    language: '',
     avatar: '',
     tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_daniel' },
   },
@@ -349,6 +362,11 @@ const DEFAULTS = {
   // still called SUB/WAVE — this is what the operator's station running on it
   // is called (e.g. "Frequency 88", "Late Shift Radio").
   station: 'SUB/WAVE',
+  // Station clock — IANA zone driving everything with local-time semantics
+  // (time-of-day moods, schedule slots, hourly time checks, festival dates).
+  // Empty = Auto: the container's own TZ, so existing installs are untouched.
+  // Applied live via time.ts setStationTimezone(); no restart.
+  timezone: '',
   // Station-wide visual theme — every listener and the admin UI render with
   // this palette. The id resolves through controller/src/themes.ts, which
   // ships the built-ins and reads optional user JSONs from
@@ -432,6 +450,13 @@ const DEFAULTS = {
     // dj-agent.js). When off, the stateless pool picker runs instead — still
     // inside a session, still logged, just without the conversational loop.
     pickerAgent: true,
+    // Hard wall-clock ceiling (ms) on a single DJ-agent generation (track
+    // picks and listener requests). Enforced by withDeadline in llm/sdk.ts;
+    // the main and recovery runs each get the full budget, so worst case per
+    // pick is ~2× this before the stateless fallback takes over. Raise it for
+    // slow models (reasoning-heavy cloud models routinely need 20-40s per
+    // pick); lower it if you want snappier fallbacks.
+    agentTimeoutMs: 45000,
     // When on, autonomous DJ LLM work (track picks, links, station IDs,
     // hourly checks, segments) and listener requests pause whenever Icecast
     // reports zero listeners — the stream coasts on the auto playlist — and
@@ -497,6 +522,23 @@ const DEFAULTS = {
   },
   skills: {
     enabled: {},
+  },
+  // Audio (CLAP) "sounds-like" embeddings — drive the audio-similar picker
+  // source, the tracksThatSoundLikeThis tool and sonic journeys. When on, the
+  // analysis pass asks the backend for an embedding per track; the backend
+  // needs the CLAP stack (tts-heavy built with WITH_CLAP=1, or a local venv
+  // with torch+transformers) — without it the request is a clean no-op and
+  // the pass still fills bpm/key. ANALYZE_AUDIO_EMBEDDING=1 in the env also
+  // enables it regardless of this toggle (env wins on, never off).
+  audio: {
+    embeddings: false,
+    // Demucs vocal-activity ranges — drives content-aware talk timing and a
+    // vocal-absence intro detector. When on, the analysis pass asks the backend
+    // for vocal ranges per track; the backend needs the demucs stack (tts-heavy
+    // built WITH_DEMUCS=1, or a local venv with torch+demucs) — without it the
+    // request is a clean no-op. ANALYZE_VOCAL_ACTIVITY=1 also enables it
+    // regardless of this toggle (env wins on, never off). Expensive — opt-in.
+    vocalActivity: false,
   },
   // Sound-effects library. When disabled, the segment-director agent is never
   // shown the effect catalogue, so it stops garnishing spoken breaks with
@@ -621,6 +663,7 @@ function normalizePersona(raw: any) {
     scriptLength: SCRIPT_LENGTHS.includes(raw.scriptLength) ? raw.scriptLength : 'concise',
     djMode: raw.djMode === true,
     soul,
+    language: typeof raw.language === 'string' ? raw.language.trim().slice(0, 60) : '',
     avatar,
     tts: normalizeTts(raw.tts),
     skills: normalizeSkills(raw.skills),
@@ -779,6 +822,12 @@ export async function load() {
       typeof stored.station === 'string' && stored.station.trim()
         ? stored.station.trim().slice(0, 80)
         : DEFAULTS.station,
+    // Invalid stored zone (hand-edited file) falls back to Auto — the
+    // station must never crash on a bad zone.
+    timezone:
+      typeof stored.timezone === 'string' && isValidTimezone(stored.timezone.trim())
+        ? stored.timezone.trim()
+        : DEFAULTS.timezone,
     theme: {
       // We only validate the *shape* here. The active id might reference a
       // theme file that's since been removed; the public /themes endpoint
@@ -872,6 +921,9 @@ export async function load() {
         typeof stored.llm?.pickerAgent === 'boolean'
           ? stored.llm.pickerAgent
           : DEFAULTS.llm.pickerAgent,
+      // Clamped to [5s, 180s]; settings.json files from before the field
+      // existed pick up the default.
+      agentTimeoutMs: clampAgentTimeout(stored.llm?.agentTimeoutMs, DEFAULTS.llm.agentTimeoutMs),
       pauseWhenEmpty:
         typeof stored.llm?.pauseWhenEmpty === 'boolean'
           ? stored.llm.pauseWhenEmpty
@@ -956,6 +1008,10 @@ export async function load() {
           .map(([k, v]) => [SKILL_RENAMES[k] || k, v]),
       ),
     },
+    audio: {
+      embeddings: typeof stored.audio?.embeddings === 'boolean' ? stored.audio.embeddings : DEFAULTS.audio.embeddings,
+      vocalActivity: typeof stored.audio?.vocalActivity === 'boolean' ? stored.audio.vocalActivity : DEFAULTS.audio.vocalActivity,
+    },
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
     },
@@ -999,6 +1055,10 @@ export async function load() {
       },
     },
   };
+  if (typeof stored.timezone === 'string' && stored.timezone.trim() && !cache.timezone) {
+    console.warn(`[settings] ignoring invalid timezone "${stored.timezone.trim()}" — using Auto (container TZ)`);
+  }
+  setStationTimezone(cache.timezone);
   return cache;
 }
 
@@ -1139,6 +1199,16 @@ function validatePersonasStrict(raw) {
       throw new Error(`personas[${i}].soul must be 1-400 chars`);
     const tagline = String(item.tagline ?? '').trim();
     if (tagline.length > 80) throw new Error(`personas[${i}].tagline must be 0-80 chars`);
+    // language — optional free text ("Turkish", "Türkçe", …). Absent/empty →
+    // '' (English, no directive injected — the historical behaviour).
+    let language = '';
+    if (item.language !== undefined && item.language !== null) {
+      if (typeof item.language !== 'string') {
+        throw new Error(`personas[${i}].language must be a string`);
+      }
+      language = item.language.trim();
+      if (language.length > 60) throw new Error(`personas[${i}].language must be 0-60 chars`);
+    }
     if (!FREQUENCIES.includes(item.frequency)) {
       throw new Error(`personas[${i}].frequency must be one of: ${FREQUENCIES.join(', ')}`);
     }
@@ -1213,6 +1283,7 @@ function validatePersonasStrict(raw) {
       scriptLength,
       djMode,
       soul,
+      language,
       avatar,
       tts,
       skills,
@@ -1428,6 +1499,15 @@ export async function update(patch) {
     }
     next.station = resolved;
   }
+  if ('timezone' in patch) {
+    const v = String(patch.timezone ?? '').trim();
+    // '' = back to Auto (container TZ). Anything else must be a zone ICU
+    // knows — aliases like Europe/Kiev validate, not just canonical names.
+    if (v !== '' && !isValidTimezone(v)) {
+      throw new Error(`invalid timezone "${v}" — use an IANA name like Europe/Athens`);
+    }
+    next.timezone = v;
+  }
   if ('theme' in patch) {
     const t = patch.theme || {};
     if (t.active !== undefined) {
@@ -1579,6 +1659,9 @@ export async function update(patch) {
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
     }
+    if (l.agentTimeoutMs !== undefined) {
+      next.llm.agentTimeoutMs = clampAgentTimeout(Number(l.agentTimeoutMs), next.llm.agentTimeoutMs);
+    }
     if (l.pauseWhenEmpty !== undefined) {
       next.llm.pauseWhenEmpty = !!l.pauseWhenEmpty;
     }
@@ -1699,6 +1782,15 @@ export async function update(patch) {
       }
     }
   }
+  if ('audio' in patch) {
+    const au = patch.audio || {};
+    if (au.embeddings !== undefined) {
+      next.audio.embeddings = !!au.embeddings;
+    }
+    if (au.vocalActivity !== undefined) {
+      next.audio.vocalActivity = !!au.vocalActivity;
+    }
+  }
   if ('sfx' in patch) {
     const sx = patch.sfx || {};
     if (sx.enabled !== undefined) {
@@ -1780,6 +1872,9 @@ export async function update(patch) {
   }
 
   cache = next;
+  // Applied-on-save, same pattern as the liquidsoap_*.txt files below —
+  // minus the restart: the next zonedParts() call picks it up.
+  setStationTimezone(next.timezone);
   // shows + schedule are persisted to their own file (schedule.json); strip
   // them from the settings.json payload so legacy installs migrate forward
   // on the first write. The in-memory `cache` keeps the full shape so
@@ -1810,8 +1905,9 @@ export function resolvePersonaById(id) {
 // The show scheduled for `date`'s day-of-week + hour, or null. Self-contained
 // (touches only settings data) so context.js can import it without a cycle.
 export function resolveActiveShow(date = new Date(), s = get()) {
-  const day = date.getDay();
-  const hour = date.getHours();
+  // Station-zone wall clock, not process-local — schedule slots fire at the
+  // hours the operator painted them in (issue #353).
+  const { dow: day, hour } = zonedParts(date);
   const showId = s?.schedule?.[day]?.[hour] ?? null;
   if (!showId) return null;
   const show = s.shows?.find(x => x.id === showId);
@@ -1844,9 +1940,22 @@ export function getEffectivePersona(date: Date = new Date()) {
   return getActivePersona();
 }
 
+// The persona's on-air language as a blunt system-prompt directive. Empty
+// language (the default) returns '' so prompts stay byte-identical to the
+// pre-language behaviour. The proper-nouns clause stops a Turkish host from
+// translating "Bohemian Rhapsody" or the station name (issue #349).
+export function languageDirective(persona: any) {
+  const lang = String(persona?.language || '').trim();
+  if (!lang) return '';
+  return `\n\nIMPORTANT: You speak and write exclusively in ${lang}. Every on-air line you produce must be in ${lang} — acknowledgements, idents, asides, everything. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them.`;
+}
+
 // Render the DJ system prompt by substituting {name}, {soul}, {station},
-// {location}. {name}/{soul} come from the supplied persona; the template is
-// the global djPrompt (falling back to DEFAULT_DJ_PROMPT_TEMPLATE).
+// {location}, {language}. {name}/{soul} come from the supplied persona; the
+// template is the global djPrompt (falling back to DEFAULT_DJ_PROMPT_TEMPLATE).
+// A custom template with a {language} placeholder owns the wording (the
+// language NAME is substituted, defaulting to English); otherwise a non-empty
+// persona language appends the stock directive.
 export function renderDjPrompt(persona: any, ctx: any = {}) {
   const station = ctx.station || cache?.station || DEFAULTS.station;
   const location = ctx.location || (cache?.weather?.locationName ?? DEFAULTS.weather.locationName);
@@ -1857,7 +1966,11 @@ export function renderDjPrompt(persona: any, ctx: any = {}) {
     .replaceAll('{soul}', persona?.soul || DJ_SOULS[0])
     .replaceAll('{station}', station)
     .replaceAll('{location}', location);
-  return `${rendered}`;
+  if (tpl.includes('{language}')) {
+    const lang = String(persona?.language || '').trim();
+    return rendered.replaceAll('{language}', lang || 'English');
+  }
+  return rendered + languageDirective(persona);
 }
 
 // Persona prelude shared by every tool-loop agent system prompt — the picker
@@ -1881,7 +1994,7 @@ export function agentPersonaPreamble(persona, { rules = true } = {}) {
   const name = persona?.name || 'the DJ';
   const soul = persona?.soul || '';
   const station = cache?.station || DEFAULTS.station;
-  const opener = `You are ${name}, the on-air DJ for ${station}, a personal internet radio station. ${soul}`;
+  const opener = `You are ${name}, the on-air DJ for ${station}, a personal internet radio station. ${soul}${languageDirective(persona)}`;
   return rules ? `${opener}` : opener;
 }
 
