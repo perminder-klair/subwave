@@ -4,6 +4,12 @@
    cluster (see data.ts layoutTracks). Monochrome ink→vermilion ramp encodes
    energy; faint synapse links wire intra-cluster neighbours; vermilion dashed
    wiring marks the mix-next set on selection. Zoom, pan, hover, select.
+
+   Scale note: the node + link layers are memoised on everything *except* the
+   pan/zoom `view`, and all strokes use `vector-effect="non-scaling-stroke"`,
+   so a pan or zoom only patches the parent <g transform> — React skips the
+   (potentially thousands of) memoised children rather than reconciling them
+   each frame. Pan state updates are coalesced to one per animation frame.
    ============================================================================ */
 'use client';
 
@@ -41,8 +47,15 @@ export default function ConstellationMap({
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View>({ k: 1, tx: 0, ty: 0 });
+  // Live mirror of the committed view, so gesture math can read the latest
+  // value without adding `view` to handler deps.
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const [ready, setReady] = useState(false);
   const drag = useRef<{ sx: number; sy: number; tx: number; ty: number } | null>(null);
+  const pending = useRef<View | null>(null);
+  const rafId = useRef<number | null>(null);
+  const draggingRef = useRef(false);
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
@@ -101,19 +114,36 @@ export default function ConstellationMap({
   }, []);
   const onPointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).dataset?.node) return; // let node clicks through
-    drag.current = { sx: e.clientX, sy: e.clientY, tx: view.tx, ty: view.ty };
+    const v = viewRef.current;
+    drag.current = { sx: e.clientX, sy: e.clientY, tx: v.tx, ty: v.ty };
+    draggingRef.current = true;
     setDragging(true);
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: React.PointerEvent) => {
-    if (!drag.current) return;
+    const d = drag.current;
+    if (!d) return;
     const r = wrapRef.current!.getBoundingClientRect();
-    const dx = ((e.clientX - drag.current.sx) / r.width) * 1000;
-    const dy = ((e.clientY - drag.current.sy) / r.height) * 1000;
-    setView((v) => ({ ...v, tx: drag.current!.tx + dx, ty: drag.current!.ty + dy }));
+    const dx = ((e.clientX - d.sx) / r.width) * 1000;
+    const dy = ((e.clientY - d.sy) / r.height) * 1000;
+    pending.current = { k: viewRef.current.k, tx: d.tx + dx, ty: d.ty + dy };
+    // Coalesce: at most one state commit per frame regardless of pointer rate.
+    if (rafId.current == null) {
+      rafId.current = requestAnimationFrame(() => {
+        rafId.current = null;
+        if (pending.current) setView(pending.current);
+      });
+    }
   };
   const endDrag = () => {
+    if (rafId.current != null) {
+      cancelAnimationFrame(rafId.current);
+      rafId.current = null;
+    }
+    if (drag.current && pending.current) setView(pending.current);
     drag.current = null;
+    pending.current = null;
+    draggingRef.current = false;
     setDragging(false);
   };
 
@@ -123,6 +153,13 @@ export default function ConstellationMap({
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
   }, [onWheel]);
+  // Clean up a dangling pan frame on unmount.
+  useEffect(
+    () => () => {
+      if (rafId.current != null) cancelAnimationFrame(rafId.current);
+    },
+    [],
+  );
 
   const reset = () => setView({ k: 1, tx: 0, ty: 0 });
   const zoom = (f: number) =>
@@ -135,21 +172,87 @@ export default function ConstellationMap({
 
   const filtering = matchSet.size < lib.tracks.length;
 
-  function nodeColor(t: ObsTrack): string {
-    if (colorBy === 'energy') return heat(t.energyVal);
-    if (colorBy === 'confidence') return heat(0.15 + (t.confidence ?? 0.5) * 0.85);
-    if (colorBy === 'source') return sourceStyle(t.source).color;
-    if (colorBy === 'analysis') return t.analysed ? '#d94b2a' : '#9b948a';
-    return '#4a443d';
-  }
-  function nodeFilled(t: ObsTrack): boolean {
-    if (colorBy === 'source') return sourceStyle(t.source).filled;
-    if (colorBy === 'analysis') return t.analysed;
-    return true;
-  }
-
   const transform = `translate(${view.tx} ${view.ty}) scale(${view.k})`;
-  const strokeScale = 1 / view.k;
+
+  // Synapse links — memoised on the link set alone. Stroke width is screen-space
+  // (non-scaling-stroke), so zoom never recomputes these.
+  const linkEls = useMemo(
+    () =>
+      links.map(([a, b], i) => (
+        <line
+          key={i}
+          x1={a.x}
+          y1={a.y}
+          x2={b.x}
+          y2={b.y}
+          stroke="var(--ink)"
+          strokeWidth={0.5}
+          vectorEffect="non-scaling-stroke"
+        />
+      )),
+    [links],
+  );
+
+  // Node layer — the heavy one. Memoised on data + selection/hover/filter state
+  // but NOT on `view`, so pan/zoom skip it entirely. `dragging` is read from a
+  // ref inside the handlers so it isn't a dependency either.
+  const nodeEls = useMemo(() => {
+    const color = (t: ObsTrack): string => {
+      if (colorBy === 'energy') return heat(t.energyVal);
+      if (colorBy === 'confidence') return heat(0.15 + (t.confidence ?? 0.5) * 0.85);
+      if (colorBy === 'source') return sourceStyle(t.source).color;
+      if (colorBy === 'analysis') return t.analysed ? '#d94b2a' : '#9b948a';
+      return '#4a443d';
+    };
+    const isFilled = (t: ObsTrack): boolean => {
+      if (colorBy === 'source') return sourceStyle(t.source).filled;
+      if (colorBy === 'analysis') return t.analysed;
+      return true;
+    };
+    return lib.tracks.map((t) => {
+      const matched = matchSet.has(t.idx);
+      const isSel = selected != null && selected.idx === t.idx;
+      const isNb = neighbourSet.has(t.idx);
+      const isHov = hovered != null && hovered.idx === t.idx;
+      const base = 3.4 + (t.confidence ?? 0.5) * 2.2;
+      const r = isSel ? base + 4 : isHov ? base + 2.4 : isNb ? base + 1.6 : base;
+      let op = matched ? 1 : 0.07;
+      if (selected && matched && !isSel && !isNb) op = filtering ? 0.5 : 0.32;
+      const col = isSel ? '#d94b2a' : color(t);
+      const filled = isFilled(t) || isSel || isNb;
+      // entrance: spread from centre
+      const delay = ready ? 0 : Math.min(620, Math.hypot(t.x - 500, t.y - 500) * 0.9);
+      return (
+        <circle
+          key={t.idx}
+          data-node="1"
+          cx={t.x}
+          cy={t.y}
+          r={ready ? r : 0}
+          fill={filled ? col : 'var(--bg)'}
+          stroke={col}
+          strokeWidth={(filled ? 0 : 1.4) + (isSel || isNb ? 1.2 : 0)}
+          vectorEffect="non-scaling-stroke"
+          style={{
+            opacity: ready ? op : 0,
+            transition: `r .22s cubic-bezier(.2,.7,.2,1), opacity .45s ease ${delay}ms, fill .25s, stroke-width .2s`,
+            cursor: 'pointer',
+          }}
+          onMouseEnter={(e) => {
+            if (!draggingRef.current) onHover(t, e);
+          }}
+          onMouseMove={(e) => {
+            if (!draggingRef.current) onHover(t, e);
+          }}
+          onMouseLeave={() => onHover(null)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect(isSel ? null : t);
+          }}
+        />
+      );
+    });
+  }, [lib.tracks, matchSet, colorBy, selected, neighbourSet, hovered, ready, filtering, onHover, onSelect]);
 
   return (
     <div
@@ -165,9 +268,7 @@ export default function ConstellationMap({
         <g transform={transform}>
           {/* synapse links */}
           <g className="cmap-links" style={{ opacity: filtering ? 0.18 : 0.4 }}>
-            {links.map(([a, b], i) => (
-              <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="var(--ink)" strokeWidth={0.5 * strokeScale} />
-            ))}
+            {linkEls}
           </g>
 
           {/* selection wiring → mix-next */}
@@ -181,8 +282,9 @@ export default function ConstellationMap({
                   x2={n.x}
                   y2={n.y}
                   stroke="var(--accent)"
-                  strokeWidth={1.1 * strokeScale}
-                  strokeDasharray={`${3 * strokeScale} ${2.5 * strokeScale}`}
+                  strokeWidth={1.1}
+                  vectorEffect="non-scaling-stroke"
+                  strokeDasharray="3 2.5"
                   className="wire-line"
                   style={{ animationDelay: i * 60 + 'ms' }}
                 />
@@ -191,44 +293,7 @@ export default function ConstellationMap({
           )}
 
           {/* nodes */}
-          {lib.tracks.map((t) => {
-            const matched = matchSet.has(t.idx);
-            const isSel = selected && selected.idx === t.idx;
-            const isNb = neighbourSet.has(t.idx);
-            const isHov = hovered && hovered.idx === t.idx;
-            const base = 3.4 + (t.confidence ?? 0.5) * 2.2;
-            const r = isSel ? base + 4 : isHov ? base + 2.4 : isNb ? base + 1.6 : base;
-            let op = matched ? 1 : 0.07;
-            if (selected && matched && !isSel && !isNb) op = filtering ? 0.5 : 0.32;
-            const col = isSel ? '#d94b2a' : nodeColor(t);
-            const filled = nodeFilled(t) || !!isSel || isNb;
-            // entrance: spread from centre
-            const delay = ready ? 0 : Math.min(620, Math.hypot(t.x - 500, t.y - 500) * 0.9);
-            return (
-              <circle
-                key={t.idx}
-                data-node="1"
-                cx={t.x}
-                cy={t.y}
-                r={ready ? r : 0}
-                fill={filled ? col : 'var(--bg)'}
-                stroke={col}
-                strokeWidth={(filled ? 0 : 1.4) * strokeScale + (isSel || isNb ? 1.2 * strokeScale : 0)}
-                style={{
-                  opacity: ready ? op : 0,
-                  transition: `r .22s cubic-bezier(.2,.7,.2,1), opacity .45s ease ${delay}ms, fill .25s, stroke-width .2s`,
-                  cursor: 'pointer',
-                }}
-                onMouseEnter={(e) => !dragging && onHover(t, e)}
-                onMouseMove={(e) => !dragging && onHover(t, e)}
-                onMouseLeave={() => onHover(null)}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelect(isSel ? null : t);
-                }}
-              />
-            );
-          })}
+          {nodeEls}
 
           {/* selected ripple */}
           {selected && (
@@ -238,7 +303,8 @@ export default function ConstellationMap({
               r={14}
               fill="none"
               stroke="var(--accent)"
-              strokeWidth={1.4 * strokeScale}
+              strokeWidth={1.4}
+              vectorEffect="non-scaling-stroke"
               className="cmap-ripple"
             />
           )}
