@@ -374,7 +374,7 @@ music_bus =
 #
 #   voice_queue (say.txt)  → HEAVY duck. Request intros, station IDs, hourly
 #                            time checks, weather. The voice is the focus;
-#                            music drops well underneath to ~10%.
+#                            music drops well underneath to ~22%.
 #   intro_queue (intro.txt) → LIGHT duck. Between-track auto-DJ links. The
 #                            song that just started should still be audible
 #                            under the voice, so we only dip to ~40%.
@@ -396,7 +396,7 @@ ducked = smooth_add(
                     # clip pushed ahead of the speech (see poll_voice /
                     # poll_intro) so this dip completes BEFORE the DJ starts
                     # talking, and ramps back up after.
-  p={0.15},         # music drops to 15% (~-16 dB) while voice plays
+  p={0.22},         # music drops to 22% (~-13 dB) while voice plays
   normal=music_bus,
   special=voice
 )
