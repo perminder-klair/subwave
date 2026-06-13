@@ -1,4 +1,4 @@
-# Plan: richer acoustic analysis, modelled on Apple's Music Understanding
+# Plan: richer acoustic analysis
 
 ## Why
 
@@ -10,46 +10,42 @@ and feed the picker's re-rank and the `slimTrack` projection
 (enrich → embed → seed → propagate → active-learn, `tag-library.ts`) and are
 likewise coarse: a handful of mood strings plus a `low/medium/high` energy band.
 
-Apple shipped a framework at WWDC26 —
-[Music Understanding](https://developer.apple.com/documentation/musicunderstanding)
-— that does on-device music analysis, and its **data model** is the opposite of
-ours in exactly the way that matters for a radio station: analysis is
-**time-ranged, not whole-track**. Music changes within a song; collapsing a
+The limitation that matters for a radio station: our analysis is
+**whole-track, not time-ranged**. Music changes within a song; collapsing a
 track to a single BPM or key or energy band throws away precisely the signal a
-DJ uses to mix, talk, and sequence.
+DJ uses to mix, talk, and sequence. The richer model is to analyse **over time
+ranges** — key, pace, structure, and instrument activity that vary across the
+song — and store those alongside the existing scalars. This doc captures that
+plan so development can start later.
 
-We can't *call* the framework — it's Swift-only, Apple-platforms-only, OS 27+,
-and our analyzer is a Linux Python sidecar. But its feature set and schema are a
-ready-made blueprint for what to compute in `analyze_worker.py` and how to store
-it. This doc captures that blueprint so development can start later.
+### The analysis dimensions
 
-### What Music Understanding models (the reference)
-
-One actor, `MusicUnderstandingSession`, analyses an audio source and returns six
-result types — as a single aggregate **or** as a livestream of partial results:
+Six candidate result types, each computed on-device in our Linux Python sidecar
+and storable as a nullable column:
 
 | Analysis | Shape | What it carries |
 |---|---|---|
-| **Rhythm** | `beats: [CMTime]`, `bars: [CMTime]`, `beatsPerMinute: Float?` | per-beat + per-bar timestamps, plus tempo |
-| **Key** | `[RangedValue<KeySignature>]` | tonic (enharmonic-preserving) + mode (major/minor) **over time ranges** |
-| **Loudness** | integrated / momentary[] / shortTerm[] / peak, all `TimedValue<Float>` | perceptual LUFS, ITU-R BS.1770 |
-| **Pace** | `[RangedValue<Double>]` | perceptual energy/momentum, events-per-minute, **decoupled from BPM** |
-| **Structure** | `sections` / `segments` / `phrases`, each `[CMTimeRange]` | intro/verse/chorus-style boundaries, hierarchical |
-| **Instrument activity** | `[Instrument: [TimedValue<Float>]]` + `[Instrument: [CMTimeRange]]` | vocal / drum / bass / other, 0–1 activity + detected ranges |
+| **Rhythm** | `beats: [ms]`, `bars: [ms]`, `bpm: float?` | per-beat + per-bar timestamps, plus tempo |
+| **Key** | `[{startMs, endMs, tonic, mode}]` | tonic (enharmonic-preserving) + mode (major/minor) **over time ranges** |
+| **Loudness** | integrated + optional peak | perceptual LUFS, ITU-R BS.1770 |
+| **Pace** | `[{startMs, endMs, value}]` | perceptual energy/momentum, **decoupled from BPM** |
+| **Structure** | `sections: [{startMs, endMs}]` | intro/verse/chorus-style boundaries |
+| **Instrument activity** | `[{startMs, endMs}]` per stem | vocal / drum / bass / other activity ranges |
 
-Two schema primitives are worth stealing verbatim: **`TimedValue`** (a value at
-an instant) vs **`RangedValue`** (a value over a span). Instantaneous things
-(loudness samples, beat hits) are timed; things that hold over a region (key,
-pace, a structural section) are ranged. Both are `Codable`. If we add any of the
-below, mirror that split rather than inventing ad-hoc array shapes — and version
-it with the existing `ANALYSIS_VERSION` discipline.
+Two JSON shapes carry these: an **instant sample** (`{ms, value}` — a value at a
+point, e.g. loudness samples, beat hits) and a **span value**
+(`{startMs, endMs, value}` — a value that holds over a region, e.g. key, pace, a
+structural section). Instantaneous things are timed; things that hold over a
+region are ranged. If we add any of the below, adopt that split rather than
+inventing ad-hoc array shapes — and version it with the existing
+`ANALYSIS_VERSION` discipline.
 
 ## Scope
 
 Six candidate features, each independently shippable and each degrading cleanly
 to today's behaviour when its column is NULL (un-analysed library, or a backend
-that doesn't compute it). Ordered by ROI **for radio**, not by closeness to the
-Apple API. Phases 1–3 are the recommended near-term set; 4–6 are follow-ups.
+that doesn't compute it). Ordered by ROI **for radio**. Phases 1–3 are the
+recommended near-term set; 4–6 are follow-ups.
 
 Everything is computed in the existing heavy-DSP path. `analyze.ts` /
 `analyzer.ts` already give us a resumable, batched, two-backend (tts-heavy
@@ -86,16 +82,16 @@ is still just the limiter.
 
 ## Phase 2 — Song structure (intro / outro / section boundaries)
 
-We only have `introMs` today. Apple models full structural time-ranges; for
-radio this is the highest-value addition after loudness because it makes two
-existing systems *musical* instead of fixed.
+We only have `introMs` today. Full structural time-ranges are, for radio, the
+highest-value addition after loudness because they make two existing systems
+*musical* instead of fixed.
 
 - **Worker**: segment the decoded audio into structural boundaries with
   `librosa` (recurrence-matrix / spectral-clustering segmentation) or `msaf`.
   Emit at least `sections: [{startMs, endMs}]`; the leading and trailing
   sections give a far better intro/outro than the current single `introMs`.
-- **Storage**: a `structure_json` column (typed, mirroring `RangedValue` — an
-  array of `{startMs, endMs, kind?}`), versioned.
+- **Storage**: a `structure_json` column (typed — an array of
+  `{startMs, endMs, kind?}` spans), versioned.
 - **Crossfade** (`radio.liq`): the cross is currently a **fixed buffer**
   (CLAUDE.md step 3). Knowing where the final section/outro begins lets the
   controller pick a cross length and start point that land on a real boundary
@@ -109,9 +105,8 @@ section boundaries.
 
 ## Phase 3 — Instrument activity (vocal presence)
 
-Apple's `InstrumentActivityResult` splits audio into vocal / drum / bass / other
-activity over time. The single most useful slice for us is **vocal-presence
-ranges**.
+Source separation splits audio into vocal / drum / bass / other activity over
+time. The single most useful slice for us is **vocal-presence ranges**.
 
 - **Worker**: run a source-separation model — **Demucs** (htdemucs) is the
   standard — and derive per-stem activity envelopes; at minimum a boolean/0–1
@@ -131,12 +126,12 @@ from vocal absence rather than a heuristic.
 ## Phase 4 — Pace (tempo-independent energy curve)
 
 `energy` today is a coarse whole-track `low/medium/high` LLM tag
-(`tag-library.ts`). Apple's Pace is a **continuous** perceptual energy curve,
-explicitly decoupled from BPM (their example: a high-BPM track reads *low* pace
-during a sparse breakdown).
+(`tag-library.ts`). Pace is a **continuous** perceptual energy curve, explicitly
+decoupled from BPM (e.g. a high-BPM track reads *low* pace during a sparse
+breakdown).
 
 - **Worker**: approximate via onset-rate / spectral-flux energy over windows;
-  emit `pace_curve: [{startMs, endMs, value}]` (RangedValue-shaped).
+  emit `pace_curve: [{startMs, endMs, value}]` (span-shaped).
 - **Storage**: `pace_json`, versioned.
 - **Payoff**: energy-aware sequencing in `music/picker.ts` — build/release arcs,
   avoid stacking two peaks, match transitions on energy not just genre/mood.
@@ -145,8 +140,8 @@ during a sparse breakdown).
 
 ## Phase 5 — Beat / bar grid (beatmatched crossfades)
 
-Apple exposes per-beat and per-bar timestamps, not just BPM — and `librosa.beat`
-already gives us these; we currently **discard** them and keep only the scalar.
+Per-beat and per-bar timestamps, not just BPM — `librosa.beat` already gives us
+these; we currently **discard** them and keep only the scalar.
 
 - **Worker**: emit `beats: [ms]` and `bars: [ms]` (or downbeat positions)
   alongside the existing `bpm`.
@@ -157,8 +152,8 @@ already gives us these; we currently **discard** them and keep only the scalar.
 
 ## Phase 6 — Structured key (tonic + mode) over time
 
-`musicalKey` is one string today. Apple keeps **tonic** (enharmonic-preserving)
-and **mode** (major/minor) as separate structured fields, *over ranges*.
+`musicalKey` is one string today. Keep **tonic** (enharmonic-preserving) and
+**mode** (major/minor) as separate structured fields, *over ranges*.
 
 - **Worker**: chroma over windows → key per region; emit `key_ranges:
   [{startMs, endMs, tonic, mode}]`.
@@ -180,12 +175,11 @@ and **mode** (major/minor) as separate structured fields, *over ranges*.
   that doesn't compute a field simply omits it, the column stays NULL, and every
   consumer treats NULL as "no signal" — byte-for-byte today's behaviour. No new
   feature may make the analysis pass a hard failure.
-- **TimedValue vs RangedValue.** Adopt the two shapes as the convention for all
+- **Instant vs span shapes.** Adopt the two shapes as the convention for all
   time-aware columns: `{ms, value}` for instants, `{startMs, endMs, value}` for
   spans. Keeps the JSON columns self-describing and consistent.
-- **What this is *not*.** We are not porting Apple's API or trying to match it
-  symbol-for-symbol; we're borrowing its model. The deliverables live entirely
-  in `analyze_worker.py`, `library-db.ts`, `subsonic.ts`, and `radio.liq`.
+- **What this is.** The deliverables live entirely in `analyze_worker.py`,
+  `library-db.ts`, `subsonic.ts`, and `radio.liq`.
 
 ## Suggested order
 

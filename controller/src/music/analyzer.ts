@@ -17,7 +17,7 @@ import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
 
-// A structural span over the track, in milliseconds (RangedValue shape). Spans
+// A structural span over the track, in milliseconds (span shape). Spans
 // are contiguous and cover the analysed window; the first is the intro/leading
 // section. `kind` is reserved for a future labelled segmenter.
 export interface Section {
@@ -26,14 +26,14 @@ export interface Section {
   kind?: string;
 }
 
-// A pace sample: a 0..1 perceptual-energy value over a span (RangedValue).
+// A pace sample: a 0..1 perceptual-energy value over a span.
 export interface PaceSpan {
   startMs: number;
   endMs: number;
   value: number;
 }
 
-// A key over a time range: tonic note (sharps) + mode (RangedValue<KeySignature>).
+// A key over a time range: tonic note (sharps) + mode, as a span value.
 export interface KeyRange {
   startMs: number;
   endMs: number;

@@ -15,8 +15,8 @@ export interface Analysis {
 }
 
 // --- Loudness normalisation ------------------------------------------------
-// Target integrated loudness; streaming-standard −14 LUFS (Spotify/YouTube/
-// Apple Music). Gain is clamped to ±LOUDNESS_GAIN_CLAMP_DB so a mis-measured
+// Target integrated loudness; streaming-standard −14 LUFS (Spotify, YouTube).
+// Gain is clamped to ±LOUDNESS_GAIN_CLAMP_DB so a mis-measured
 // outlier can't blow up the mix — Liquidsoap's brick-wall limiter still backs
 // us up, but the clamp keeps us well clear of it on normal catalogue audio.
 export const LOUDNESS_TARGET_LUFS = -14;

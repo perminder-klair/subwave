@@ -115,7 +115,7 @@ export interface TrackKeyRange {
   mode: 'major' | 'minor';
 }
 
-// A structural span over a track, in milliseconds (RangedValue shape). Kept as
+// A structural span over a track, in milliseconds (span shape). Kept as
 // a local shape so library-db stays free of higher-layer imports.
 export interface TrackSection {
   startMs: number;

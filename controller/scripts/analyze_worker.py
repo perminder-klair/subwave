@@ -118,8 +118,8 @@ def estimate_key(chroma_mean):
 
 
 def estimate_key_ranges(chroma, sr, librosa, window_s=10.0):
-    """Per-region key (tonic + mode) over time, mirroring Apple's RangedValue
-    KeySignature. Windows the already-computed chroma (~window_s each), scores
+    """Per-region key (tonic + mode) over time. Windows the already-computed
+    chroma (~window_s each), scores
     each, and merges adjacent windows sharing a key. Returns
     [{startMs,endMs,tonic,mode}] or None. Best-effort: any failure → None."""
     import numpy as np
@@ -181,8 +181,8 @@ def estimate_sections(y, sr, librosa, chroma=None):
     """Coarse structural segmentation over the DECODED window (the first
     ANALYZE_SECONDS only — so this is reliable for the intro / leading sections,
     not a full-song outro). librosa agglomerative clustering on a chroma+MFCC
-    feature stack → a handful of contiguous {startMs,endMs} spans (RangedValue
-    shape). Best-effort: any failure returns None and the field is omitted, so a
+    feature stack → a handful of contiguous {startMs,endMs} spans. Best-effort:
+    any failure returns None and the field is omitted, so a
     consumer treats absence as 'no structure, behave as today'. `chroma` may be
     passed in to avoid recomputing the (expensive) CQT done in analyze()."""
     import numpy as np
@@ -424,7 +424,7 @@ def estimate_pace(y, sr, librosa, window_s=5.0):
     """Perceptual energy/momentum curve over the decoded window, decoupled from
     BPM (a high-tempo track can read low pace during a sparse breakdown). Mean
     onset-strength (spectral-flux) energy per ~window_s window, normalised 0..1
-    by the loudest window. RangedValue shape: [{startMs,endMs,value}]. Best-
+    by the loudest window. Span shape: [{startMs,endMs,value}]. Best-
     effort: any failure returns None and the field is omitted."""
     import numpy as np
 
