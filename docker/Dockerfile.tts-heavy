@@ -122,7 +122,7 @@ RUN python3 -m venv /opt/server/venv && \
     /opt/server/venv/bin/pip install --no-cache-dir \
       fastapi "uvicorn[standard]" pydantic
 
-# --- Analyzer venv (librosa — bpm/key/intro; optional CLAP audio embeddings) -
+# --- Analyzer venv (librosa — bpm/key/intro/loudness; optional CLAP embeddings) -
 # Acoustic analysis for the controller's analyze pass. librosa/numba ship as
 # wheels (no g++ needed); ffmpeg + libsndfile1 give it broad codec coverage for
 # the Navidrome stream formats (opus/m4a/mp3). These two are runtime deps and
@@ -141,7 +141,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     python3 -m venv /opt/analyzer/venv && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
-    /opt/analyzer/venv/bin/pip install --no-cache-dir librosa soundfile && \
+    /opt/analyzer/venv/bin/pip install --no-cache-dir librosa soundfile pyloudnorm && \
     if [ "$WITH_CLAP" = "1" ]; then \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \

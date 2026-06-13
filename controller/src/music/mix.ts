@@ -14,6 +14,25 @@ export interface Analysis {
   key: string | null;
 }
 
+// --- Loudness normalisation ------------------------------------------------
+// Target integrated loudness; streaming-standard −14 LUFS (Spotify/YouTube/
+// Apple Music). Gain is clamped to ±LOUDNESS_GAIN_CLAMP_DB so a mis-measured
+// outlier can't blow up the mix — Liquidsoap's brick-wall limiter still backs
+// us up, but the clamp keeps us well clear of it on normal catalogue audio.
+export const LOUDNESS_TARGET_LUFS = -14;
+export const LOUDNESS_GAIN_CLAMP_DB = 6;
+
+// dB gain to bring a track measured at `lufs` toward the target, clamped.
+// Returns null when the track has no loudness measurement (→ unity gain on the
+// playback side, i.e. today's behaviour). Result is rounded to 0.1 dB — finer
+// is inaudible and just bloats the annotate string.
+export function gainForLoudness(lufs: number | null | undefined): number | null {
+  if (typeof lufs !== 'number' || !Number.isFinite(lufs)) return null;
+  const raw = LOUDNESS_TARGET_LUFS - lufs;
+  const clamped = Math.max(-LOUDNESS_GAIN_CLAMP_DB, Math.min(LOUDNESS_GAIN_CLAMP_DB, raw));
+  return Math.round(clamped * 10) / 10;
+}
+
 // True when a track carries at least one measured value. An un-analysed track
 // (both null) makes every consumer below a no-op, so an un-analysed library
 // behaves exactly as before.

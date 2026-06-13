@@ -22,11 +22,23 @@ export interface AnalysisResult {
   musicalKey: string | null;
   introMs: number | null;
   confidence: number | null;
+  // Integrated loudness (LUFS, BS.1770) + peak (dBFS) over the analysis window,
+  // when the backend has pyloudnorm. null otherwise — consumers treat null as
+  // "no loudness, play at unity gain", so a backend without pyloudnorm behaves
+  // exactly as today. loudnessLufs feeds per-track gain normalisation.
+  loudnessLufs: number | null;
+  peakDb: number | null;
   // CLAP audio embedding (512 floats) when the backend has the model loaded
   // (ANALYZE_AUDIO_EMBEDDING=1 + CLAP weights). null otherwise — every consumer
   // treats null as "no audio vector this pass", so a backend without CLAP is
   // byte-for-byte today's behaviour.
   audioEmbedding: number[] | null;
+}
+
+// Coerce a worker numeric field to a finite number or null. The worker omits
+// loudness/peak entirely when pyloudnorm is absent or measurement failed.
+function parseFinite(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
 // Coerce the worker's audio_embedding field to a clean number[] or null. The
@@ -136,6 +148,8 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
           musicalKey: msg.key ?? null,
           introMs: msg.intro_ms ?? null,
           confidence: msg.confidence ?? null,
+          loudnessLufs: parseFinite(msg.loudness_lufs),
+          peakDb: parseFinite(msg.peak_db),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
         }),
       reject,
@@ -204,6 +218,8 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
       musicalKey: resBody.key ?? null,
       introMs: resBody.intro_ms ?? null,
       confidence: resBody.confidence ?? null,
+      loudnessLufs: parseFinite(resBody.loudness_lufs),
+      peakDb: parseFinite(resBody.peak_db),
       audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
     };
   } finally {

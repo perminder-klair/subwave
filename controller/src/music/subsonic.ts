@@ -436,5 +436,13 @@ export function getAnnotatedUri(song) {
   // its fades, keeping fade == buffer). Absent → Liquidsoap uses its startup
   // crossfade_duration(), i.e. today's behaviour.
   if (song.crossSec != null) fields.push(`liq_cross_duration="${escAnnotate(song.crossSec)}"`);
+  // Loudness normalisation: the queue stashes a per-track gain offset (dB,
+  // clamped) toward the loudness target when the track has a measured LUFS.
+  // Emitted in the "<n> dB" form Liquidsoap's amplify override parses natively
+  // (the same shape as replaygain_track_gain). radio.liq applies it via
+  // amplify(override="liq_amplify") before the ducking layers so quiet and loud
+  // tracks play at even perceived volume — masters untouched, no bus
+  // normaliser. Absent → no gain applied, i.e. unity / today's behaviour.
+  if (song.gainDb != null) fields.push(`liq_amplify="${escAnnotate(song.gainDb)} dB"`);
   return `annotate:${fields.join(',')}:${getPlayableUri(song)}`;
 }

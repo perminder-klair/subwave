@@ -162,6 +162,7 @@ function slimTrack(r: db.TrackRecord) {
     bpm: r.bpm,
     musicalKey: r.musicalKey,
     introMs: r.introMs,
+    loudnessLufs: r.loudnessLufs,
   };
 }
 

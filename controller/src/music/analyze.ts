@@ -137,6 +137,8 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         musicalKey: a.musicalKey,
         introMs: a.introMs,
         confidence: a.confidence,
+        loudnessLufs: a.loudnessLufs,
+        peakDb: a.peakDb,
       });
       // Opportunistically store the CLAP audio vector whenever the backend
       // carried one. Independent of the bpm/key write above: a track analysed

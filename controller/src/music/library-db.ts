@@ -31,7 +31,8 @@ export const TAGGER_VERSION = 3;
 // writes (music/analyze-library.ts). Independent of TAGGER_VERSION — mood
 // tagging and acoustic analysis run separately. Bump when the analysis shape
 // or method changes so `--re-analyze` / staleness checks can target old rows.
-export const ANALYSIS_VERSION = 1;
+// v2: added integrated loudness (loudness_lufs) + peak (peak_db).
+export const ANALYSIS_VERSION = 2;
 
 // CLAP audio-embedding dim. Fixed by the model (LAION-CLAP's audio projection
 // is 512-d), so — unlike the text index in track_vectors — there's no per-model
@@ -92,6 +93,8 @@ export interface TrackRecord {
   introMs: number | null;
   analysisConfidence: number | null;
   analysisVersion: number | null;
+  loudnessLufs: number | null; // integrated LUFS (BS.1770); null → unity gain
+  peakDb: number | null;       // sample peak in dBFS over the analysis window
 }
 
 export interface TrackMeta {
@@ -283,6 +286,17 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
       );
     `);
     d.pragma('user_version = 3');
+  }
+
+  if (userVersion < 4) {
+    // Perceptual loudness — nullable, back-filled by the analyze pass. LUFS
+    // (integrated, BS.1770) drives per-track gain normalisation on playback;
+    // peak_db is informational. NULL → unity gain, i.e. today's behaviour.
+    runDdl(d, `
+      ALTER TABLE tracks ADD COLUMN loudness_lufs REAL;
+      ALTER TABLE tracks ADD COLUMN peak_db       REAL;
+    `);
+    d.pragma('user_version = 4');
   }
 
   // The vec0 virtual table carries the embedding dim in its schema. If the
@@ -583,6 +597,8 @@ export interface TrackAnalysisWrite {
   musicalKey?: string | null;
   introMs?: number | null;
   confidence?: number | null;
+  loudnessLufs?: number | null;
+  peakDb?: number | null;
 }
 
 // Write acoustic-analysis results for a track. Stamps ANALYSIS_VERSION so
@@ -596,6 +612,8 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         musical_key         = ?,
         intro_ms            = ?,
         analysis_confidence = ?,
+        loudness_lufs       = ?,
+        peak_db             = ?,
         analysis_version    = ?
       WHERE id = ?`,
     )
@@ -604,6 +622,8 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       a.musicalKey ?? null,
       Number.isFinite(a.introMs as number) ? Math.round(a.introMs as number) : null,
       Number.isFinite(a.confidence as number) ? (a.confidence as number) : null,
+      Number.isFinite(a.loudnessLufs as number) ? (a.loudnessLufs as number) : null,
+      Number.isFinite(a.peakDb as number) ? (a.peakDb as number) : null,
       ANALYSIS_VERSION,
       id,
     );
@@ -624,7 +644,8 @@ export function clearAnalysis(): void {
   const d = requireDb();
   d.prepare(
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
-      analysis_confidence = NULL, analysis_version = NULL`,
+      analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
+      analysis_version = NULL`,
   ).run();
   // The audio (CLAP) vectors are written in the same pass, so a --re-analyze
   // that redoes bpm/key drops them too — the next pass re-embeds from scratch.
@@ -1068,6 +1089,8 @@ function rowToTrack(row: any): TrackRecord {
     introMs: row.intro_ms ?? null,
     analysisConfidence: row.analysis_confidence ?? null,
     analysisVersion: row.analysis_version ?? null,
+    loudnessLufs: row.loudness_lufs ?? null,
+    peakDb: row.peak_db ?? null,
   };
 }
 

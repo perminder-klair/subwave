@@ -269,6 +269,34 @@ def fetch_audio(url):
     return path
 
 
+def measure_loudness(y, sr):
+    """Integrated loudness (LUFS, ITU-R BS.1770 / EBU R128) + true-ish peak in
+    dBFS over the decoded window. Best-effort: pyloudnorm is an optional dep, so
+    a missing import or any failure returns (None, None) and the caller simply
+    omits the fields — every consumer treats NULL as "no loudness, behave as
+    today" (same contract as the CLAP embedding)."""
+    import numpy as np
+
+    try:
+        import pyloudnorm as pyln
+    except Exception as e:  # noqa: BLE001 — optional dependency
+        log(f"pyloudnorm unavailable, skipping loudness: {e}")
+        return None, None
+
+    try:
+        meter = pyln.Meter(sr)  # BS.1770 meter at the decode sample rate
+        lufs = float(meter.integrated_loudness(y))
+        peak = float(np.max(np.abs(y))) if len(y) else 0.0
+        peak_db = 20.0 * float(np.log10(peak)) if peak > 0 else None
+        # integrated_loudness returns -inf for digital silence; treat as no signal.
+        if not np.isfinite(lufs):
+            return None, peak_db
+        return round(lufs, 2), (round(peak_db, 2) if peak_db is not None else None)
+    except Exception as e:  # noqa: BLE001 — loudness is best-effort
+        log(f"loudness measurement failed: {e}")
+        return None, None
+
+
 def analyze(librosa, url=None, path=None, embed=None):
     import numpy as np
 
@@ -318,6 +346,11 @@ def analyze(librosa, url=None, path=None, embed=None):
 
     intro_ms = estimate_intro_ms(y, sr, librosa)
 
+    # Perceptual loudness (LUFS) over the decoded window — feeds per-track gain
+    # normalisation toward a target on the playback side. None when pyloudnorm
+    # is absent or measurement fails.
+    loudness_lufs, peak_db = measure_loudness(y, sr)
+
     # Overall confidence: dominated by how cleanly the key resolved, nudged by
     # whether we got a plausible tempo. Kept conservative on purpose.
     confidence = round(0.5 * key_sep + (0.5 if 40 <= bpm <= 220 else 0.0), 3)
@@ -328,6 +361,12 @@ def analyze(librosa, url=None, path=None, embed=None):
         "intro_ms": int(intro_ms) if intro_ms is not None else None,
         "confidence": confidence,
     }
+    # Only carry loudness fields when measured — absence signals "no loudness
+    # this pass", so a worker without pyloudnorm is byte-for-byte today.
+    if loudness_lufs is not None:
+        result["loudness_lufs"] = loudness_lufs
+    if peak_db is not None:
+        result["peak_db"] = peak_db
     # Only carry the embedding when we actually produced one — its absence is
     # how every downstream consumer knows to behave as today.
     if audio_embedding is not None:

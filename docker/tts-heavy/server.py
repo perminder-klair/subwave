@@ -420,6 +420,11 @@ async def analyze(req: AnalyzeRequest):
         "intro_ms": msg.get("intro_ms"),
         "confidence": msg.get("confidence"),
     }
+    # Optional perceptual loudness — present only when the worker has pyloudnorm.
+    # Pass through; omitted otherwise so the client maps it to null (unity gain).
+    for k in ("loudness_lufs", "peak_db"):
+        if k in msg:
+            out[k] = msg[k]
     # Optional CLAP audio embedding — present only when the worker has the model
     # loaded (ANALYZE_AUDIO_EMBEDDING + CLAP weights). Pass it straight through;
     # omitted otherwise so the controller's analyzer client maps it to null.
