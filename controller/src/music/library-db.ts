@@ -766,6 +766,20 @@ export function hasAudioVector(id: string): boolean {
   return !!requireDb().prepare(`SELECT 1 FROM track_audio_vectors WHERE id = ?`).get(id);
 }
 
+// The raw TEXT embedding vector for a track (a copy, not a view into the DB
+// buffer), or null when the track has no text vector. The text-space twin of
+// getAudioVector() — used by the Library Observatory dossier to render the
+// learned vector as a heatmap fingerprint. vec0 stores the embedding as a
+// packed float32 blob.
+export function getVector(id: string): Float32Array | null {
+  const row = requireDb()
+    .prepare(`SELECT embedding FROM track_vectors WHERE id = ?`)
+    .get(id) as { embedding: Buffer } | undefined;
+  if (!row) return null;
+  const b = row.embedding;
+  return new Float32Array(b.buffer, b.byteOffset, Math.floor(b.byteLength / 4)).slice();
+}
+
 // The raw CLAP vector for a track (a copy, not a view into the DB buffer), or
 // null when the track has no audio vector. Used by the journey builder to
 // resolve start/destination points in the audio space. vec0 stores the
@@ -967,6 +981,19 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
     .prepare(`SELECT * FROM tracks ${whereSql} ${orderSql} LIMIT ? OFFSET ?`)
     .all(...params, limit, offset) as any[];
   return { total, rows: rows.map(rowToTrack) };
+}
+
+// Every tagged track, full record, in one read — the bulk source for the
+// Library Observatory map (which needs all nodes at once, not a paged window
+// like filter()). Ordered by id for a stable layout seed across loads. `limit`
+// caps a pathologically large library; the route stamps a `truncated` flag when
+// it's hit. Deliberately separate from filter() so the observatory's "load
+// everything" contract can't be confused with the admin browse pager's 200 cap.
+export function allTagged(limit?: number): TrackRecord[] {
+  const sql =
+    `SELECT * FROM tracks WHERE ${SQL_HAS_MOODS} ORDER BY id` +
+    (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
+  return (requireDb().prepare(sql).all() as any[]).map(rowToTrack);
 }
 
 // ---------------------------------------------------------------------------

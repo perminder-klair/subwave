@@ -96,6 +96,126 @@ router.get('/library/genres', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /library/observatory — the bulk dataset behind the Library Observatory
+// (web/app/observatory). Returns every *tagged* track in one shot so the
+// constellation can place all nodes at once. Projected to just what the map /
+// tooltip / filters / stat panels need — lastfm tags, lyric excerpts and
+// embeddings are deliberately omitted here (they'd bloat a multi-thousand-row
+// payload) and loaded lazily per selected track by the /track/:id endpoint.
+// Capped at OBSERVATORY_MAX with a `truncated` flag; station-archive rows are
+// dropped (issue #273).
+// ---------------------------------------------------------------------------
+const OBSERVATORY_MAX = 4000;
+router.get('/library/observatory', requireAdmin, async (_req, res) => {
+  try {
+    await library.load();
+    const all = db.allTagged(OBSERVATORY_MAX + 1);
+    const truncated = all.length > OBSERVATORY_MAX;
+    const tracks = all
+      .filter((t) => !subsonic.isStationArchive(t))
+      .slice(0, OBSERVATORY_MAX)
+      .map((t) => ({
+        id: t.id,
+        title: t.title,
+        artist: t.artist,
+        album: t.album,
+        year: t.year,
+        genre: t.genre,
+        durationSec: t.durationSec,
+        moods: t.moods,
+        energy: t.energy,
+        source: t.source,
+        confidence: t.confidence,
+        bpm: t.bpm,
+        musicalKey: t.musicalKey,
+        analysisConfidence: t.analysisConfidence,
+      }));
+    const stats = library.stats();
+    res.json({
+      tracks,
+      truncated,
+      max: OBSERVATORY_MAX,
+      moodVocab: settings.SHOW_MOODS,
+      stats: {
+        total: stats.total,
+        distinctArtists: stats.distinctArtists,
+        byMood: stats.byMood,
+        byEnergy: stats.byEnergy,
+        byGenre: stats.byGenre,
+        bySource: stats.bySource,
+        withEmbedding: stats.withEmbedding,
+        withAudioEmbedding: stats.withAudioEmbedding,
+        updatedAt: stats.updatedAt,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /library/observatory/track/:id — the dossier detail for one node. The
+// full record plus the lazily-loaded heavy bits the bulk endpoint skips:
+// last.fm tags, lyric excerpt, the real text + audio embedding vectors (for
+// the heatmap fingerprints), and `mixNext` — the nearest neighbours in text
+// embedding space (real KNN, what the DJ would actually mix toward). All
+// null-safe: missing analysis/embeddings/enrichment simply return null and the
+// UI hides those sections.
+// ---------------------------------------------------------------------------
+router.get('/library/observatory/track/:id', requireAdmin, async (req, res) => {
+  try {
+    await library.load();
+    const id = req.params.id;
+    const t = db.getTrack(id);
+    if (!t) return res.status(404).json({ error: 'track not found' });
+
+    const textVec = db.getVector(id);
+    const audioVec = db.getAudioVector(id);
+    const mixNext = library
+      .tracksLikeThis(id, 8)
+      .map((n: any) => ({
+        id: n.id,
+        title: n.title,
+        artist: n.artist,
+        bpm: n.bpm ?? null,
+        musicalKey: n.musicalKey ?? null,
+        energy: n.energy ?? null,
+        similarity: n._similarity ?? null,
+      }));
+
+    res.json({
+      track: {
+        id: t.id,
+        title: t.title,
+        artist: t.artist,
+        album: t.album,
+        year: t.year,
+        genre: t.genre,
+        durationSec: t.durationSec,
+        moods: t.moods,
+        energy: t.energy,
+        source: t.source,
+        confidence: t.confidence,
+        taggerVersion: t.taggerVersion,
+        model: t.model,
+        taggedAt: t.taggedAt,
+        lastfmTags: t.lastfmTags,
+        lyricExcerpt: t.lyricExcerpt,
+        bpm: t.bpm,
+        musicalKey: t.musicalKey,
+        introMs: t.introMs,
+        analysisConfidence: t.analysisConfidence,
+      },
+      textEmbedding: textVec ? Array.from(textVec) : null,
+      audioEmbedding: audioVec ? Array.from(audioVec) : null,
+      mixNext,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /library/untagged?limit=&cursor=
 // Cursor is an opaque base64 of `albumOffset:songIndexInAlbum` so the next
 // request resumes where the last one stopped. Returns up to `limit` untagged
