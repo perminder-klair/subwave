@@ -3287,6 +3287,15 @@ body::after {
 .bs-prose p {
     margin: 0 0 1.2em;
 }
+/* Figures / screenshots: full column width, thin ink frame, paper grain. */
+.bs-prose img {
+    display: block;
+    width: 100%;
+    height: auto;
+    margin: 1.6em 0;
+    border: 1px solid var(--ink);
+    background: var(--bg);
+}
 /* Drop cap on the opening paragraph — vermilion, three lines tall. */
 .bs-prose > p:first-of-type::first-letter {
     font-size: 3.4em;
@@ -3579,4 +3588,211 @@ body::after {
     font-size: 14px;
     line-height: 1.55;
     color: var(--muted);
+}
+
+/* ============================================================================
+   LIBRARY OBSERVATORY — full-bleed data-art view (web/app/observatory).
+   Ported from the Claude Design prototype. Scoped under .observatory-root and
+   built entirely on the existing newsprint tokens (--bg/--ink/--muted/--accent
+   /--field/--separator-*), so it auto-flips light/dark and inherits the global
+   paper grain. The prototype's own :root tokens, font import and body grain are
+   intentionally dropped — the app supplies all three.
+   ============================================================================ */
+.observatory-root {
+    --obs-page: color-mix(in oklab, var(--bg) 96%, var(--ink));
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--obs-page);
+    font-family: var(--font-mono);
+    color: var(--ink);
+    font-feature-settings: 'calt' 1, 'ss01' 1;
+    overflow: hidden;
+}
+.observatory-root button { font-family: inherit; }
+.observatory-root .acc { color: var(--accent); }
+.observatory-root .ad-muted { color: var(--muted); }
+.observatory-root .t-nums { font-variant-numeric: tabular-nums; }
+.observatory-root .t-caption { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 500; }
+.observatory-root .t-eyebrow { font-size: 11px; letter-spacing: 0.25em; text-transform: uppercase; font-weight: 700; }
+.observatory-root .t-eyebrow.accent { color: var(--accent); }
+
+/* ---- top bar ---- */
+.observatory-root .obs-top { display: flex; align-items: center; gap: 14px; padding: 13px 22px; border-bottom: 1px solid var(--ink); background: var(--bg); flex: none; z-index: 5; }
+.observatory-root .obs-top-l { display: flex; align-items: center; gap: 13px; }
+.observatory-root .obs-back { border: 1px solid var(--ink); background: transparent; color: var(--ink); font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700; padding: 7px 10px; cursor: pointer; text-decoration: none; transition: background 0.12s, color 0.12s; }
+.observatory-root .obs-back:hover { background: var(--ink); color: var(--bg); }
+.observatory-root .obs-disc { width: 22px; height: 22px; animation: obs-spin 6s linear infinite; }
+@keyframes obs-spin { to { transform: rotate(360deg); } }
+.observatory-root .obs-wordmark { font-size: 15px; letter-spacing: 0.26em; font-weight: 800; text-transform: uppercase; }
+.observatory-root .obs-crumb { font-size: 10px; letter-spacing: 0.28em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+.observatory-root .obs-vsep { width: 1px; height: 16px; background: var(--separator-strong); }
+.observatory-root .obs-top-r { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+.observatory-root .obs-live { display: flex; align-items: center; gap: 7px; font-size: 10px; letter-spacing: 0.24em; text-transform: uppercase; font-weight: 700; }
+.observatory-root .obs-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); position: relative; }
+.observatory-root .obs-live-dot::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: var(--accent); animation: obs-ring 1.6s ease-out infinite; }
+@keyframes obs-ring { 0% { transform: scale(1); opacity: 0.6; } 100% { transform: scale(3.4); opacity: 0; } }
+.observatory-root .obs-stat { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+
+/* ---- main grid ---- */
+.observatory-root .obs-main { flex: 1; display: grid; grid-template-columns: 236px minmax(0, 1fr) 372px; grid-template-rows: minmax(0, 1fr); min-height: 0; }
+
+/* ---- filter rail ---- */
+.observatory-root .obs-rail { border-right: 1px solid var(--ink); background: var(--bg); padding: 18px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
+.observatory-root .rail-search { display: flex; align-items: center; gap: 8px; border: 1px solid var(--ink); background: var(--field); padding: 0 10px; }
+.observatory-root .rail-search-ico { color: var(--accent); font-size: 13px; }
+.observatory-root .rail-search input { flex: 1; background: transparent; border: 0; outline: none; font-family: inherit; font-size: 12px; color: var(--ink); padding: 10px 0; }
+.observatory-root .rail-search input::placeholder { color: var(--muted); text-transform: lowercase; letter-spacing: 0.02em; }
+.observatory-root .rail-sec { display: flex; flex-direction: column; gap: 8px; }
+.observatory-root .rail-label { font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+.observatory-root .flt-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.observatory-root .flt-grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+.observatory-root .flt-tog { border: 1px solid var(--separator-strong); background: transparent; color: var(--ink); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; padding: 8px 4px; cursor: pointer; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.observatory-root .flt-tog:hover { background: var(--ink-soft); border-color: var(--ink); }
+.observatory-root .flt-tog.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.observatory-root .flt-tog.wide { width: 100%; }
+.observatory-root .flt-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.observatory-root .flt-chip { border: 1px solid var(--separator-strong); background: transparent; color: var(--ink); font-size: 10px; letter-spacing: 0.04em; text-transform: lowercase; font-weight: 500; padding: 5px 9px; cursor: pointer; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+.observatory-root .flt-chip:hover { background: var(--ink-soft); border-color: var(--ink); }
+.observatory-root .flt-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.observatory-root .rail-foot { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--separator-strong); display: flex; flex-direction: column; gap: 10px; }
+.observatory-root .rail-count { font-size: 13px; font-weight: 700; letter-spacing: 0.02em; }
+.observatory-root .rail-count .ad-muted { font-size: 10px; letter-spacing: 0.16em; }
+.observatory-root .rail-reset { border: 1px solid var(--ink); background: transparent; color: var(--ink); font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 700; padding: 10px; cursor: pointer; }
+.observatory-root .rail-reset:hover { background: var(--ink); color: var(--bg); }
+.observatory-root .obs-maxrow { display: flex; gap: 6px; }
+.observatory-root .obs-maxsel { flex: 1; appearance: none; -webkit-appearance: none; border: 1px solid var(--separator-strong); background: var(--field); color: var(--ink); font-family: inherit; font-size: 11px; letter-spacing: 0.04em; padding: 8px 10px; cursor: pointer; border-radius: 0; }
+.observatory-root .obs-maxsel:hover { border-color: var(--ink); }
+.observatory-root .obs-maxsel:focus { outline: none; border-color: var(--accent); }
+
+/* ---- stage / constellation ---- */
+.observatory-root .obs-stage { display: flex; flex-direction: column; min-width: 0; position: relative; background: var(--bg); }
+.observatory-root .stage-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 16px 22px 12px; border-bottom: 1px solid var(--separator-strong); flex: none; }
+.observatory-root .stage-head > div:first-child { flex: 1; min-width: 0; }
+.observatory-root .stage-title { font-size: clamp(15px, 1.5vw, 21px); font-weight: 800; letter-spacing: -0.01em; line-height: 1.12; max-width: 34ch; margin-top: 5px; text-wrap: balance; }
+.observatory-root .stage-hint { flex: none; text-align: right; line-height: 1.8; padding-top: 4px; max-width: 130px; }
+.observatory-root .cmap { flex: 1; position: relative; min-height: 0; overflow: hidden; touch-action: none; }
+.observatory-root .cmap-svg { width: 100%; height: 100%; display: block; }
+.observatory-root .wire-line { stroke-dashoffset: 0; animation: obs-wirein 0.5s ease both; }
+@keyframes obs-wirein { from { opacity: 0; } to { opacity: 0.85; } }
+.observatory-root .cmap-ripple { animation: obs-rippleanim 1.8s ease-out infinite; }
+@keyframes obs-rippleanim { 0% { r: 10px; opacity: 0.7; } 100% { r: 46px; opacity: 0; } }
+.observatory-root .cmap-zoom { position: absolute; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; }
+.observatory-root .cmap-zoom button { width: 34px; height: 34px; border: 1px solid var(--ink); background: var(--bg); color: var(--ink); font-size: 17px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; line-height: 1; }
+.observatory-root .cmap-zoom button:hover { background: var(--ink); color: var(--bg); }
+.observatory-root .cmap-zoom .cmap-reset { height: auto; width: 34px; font-size: 7px; letter-spacing: 0.1em; padding: 6px 0; writing-mode: vertical-rl; }
+.observatory-root .cmap-legend { position: absolute; left: 16px; bottom: 16px; border: 1px solid var(--ink); background: var(--bg); padding: 9px 12px; display: flex; flex-direction: column; gap: 7px; min-width: 208px; }
+.observatory-root .legend-ramp { display: flex; align-items: center; gap: 8px; }
+.observatory-root .lr-bar { flex: 1; height: 8px; background: linear-gradient(90deg, #4a443d, #d94b2a); }
+.observatory-root .legend-keys { display: flex; flex-direction: column; gap: 5px; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+.observatory-root .legend-keys span { display: flex; align-items: center; gap: 7px; }
+.observatory-root .lk { width: 9px; height: 9px; display: inline-block; }
+.observatory-root .lk.hollow { background: transparent !important; border: 1.4px solid; }
+
+/* ---- side panel ---- */
+.observatory-root .obs-side { border-left: 1px solid var(--ink); background: var(--obs-page); overflow-y: auto; min-width: 0; }
+.observatory-root .obs-stack { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
+.observatory-root .obs-card { background: var(--bg); }
+.observatory-root .ad-card { border: 1px solid var(--ink); }
+.observatory-root .ad-card-head { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-bottom: 1px solid var(--ink); flex-wrap: wrap; }
+.observatory-root .ad-card-title { font-size: 10px; letter-spacing: 0.24em; text-transform: uppercase; font-weight: 700; }
+.observatory-root .ad-card-sub { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+.observatory-root .ad-card-right { margin-left: auto; }
+.observatory-root .ad-card-body { padding: 12px; }
+.observatory-root .ad-card-body.flush { padding: 0; }
+.observatory-root .ad-strip { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--ink); }
+.observatory-root .ad-strip-cell { padding: 11px 10px; border-left: 1px solid var(--separator-strong); display: flex; flex-direction: column; gap: 5px; }
+.observatory-root .ad-strip-cell:first-child { border-left: 0; }
+.observatory-root .ad-strip-v { font-size: 17px; font-weight: 800; line-height: 1; }
+.observatory-root .ad-strip-v.acc { color: var(--accent); }
+.observatory-root .obs-strip { background: var(--bg); }
+
+/* bars */
+.observatory-root .obs-bar { display: flex; align-items: center; gap: 9px; padding: 3px 0; }
+.observatory-root .obs-bar-l { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; width: 84px; flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.observatory-root .obs-bar-track { flex: 1; height: 7px; background: var(--field); position: relative; }
+.observatory-root .obs-bar-fill { position: absolute; left: 0; top: 0; bottom: 0; transition: width 0.4s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.observatory-root .obs-bar-n { font-size: 11px; width: 30px; text-align: right; flex: none; color: var(--muted); }
+
+/* key wheel */
+.observatory-root .keywheel-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.observatory-root .keywheel { width: 230px; height: 230px; }
+.observatory-root .kw-num { font-size: 8px; fill: var(--muted); font-weight: 700; }
+.observatory-root .kw-c1 { font-size: 15px; fill: var(--ink); font-weight: 800; font-family: var(--font-mono); }
+.observatory-root .kw-c2 { font-size: 7px; fill: var(--muted); font-weight: 700; letter-spacing: 0.1em; }
+.observatory-root .kw-legend { text-align: center; }
+
+/* tempo */
+.observatory-root .tr-bars { display: flex; align-items: flex-end; gap: 4px; height: 84px; }
+.observatory-root .tr-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 5px; }
+.observatory-root .tr-bar { width: 100%; background: var(--ink); min-height: 2px; transition: height 0.4s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.observatory-root .tr-col:hover .tr-bar { background: var(--accent); }
+.observatory-root .tr-x { font-size: 8px; color: var(--muted); }
+
+/* fingerprint */
+.observatory-root .fp-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 7px; }
+.observatory-root .fp-grid { display: grid; gap: 1px; }
+.observatory-root .fp-cell { aspect-ratio: 1; width: 100%; }
+
+/* meter */
+.observatory-root .meter-row { display: flex; align-items: center; gap: 9px; padding: 3px 0; }
+.observatory-root .meter-l { width: 62px; flex: none; }
+.observatory-root .meter-cells { flex: 1; display: flex; gap: 2px; }
+.observatory-root .meter-cell { flex: 1; height: 11px; background: var(--field); }
+.observatory-root .meter-cell.on { background: var(--accent); }
+.observatory-root .meter-v { font-size: 11px; width: 34px; text-align: right; color: var(--muted); }
+
+/* pills */
+.observatory-root .pill-row { display: flex; flex-wrap: wrap; gap: 5px; }
+.observatory-root .ad-pill { font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 700; padding: 4px 8px; border: 1px solid var(--separator-strong); color: var(--muted); }
+.observatory-root .ad-pill.acc { border-color: var(--accent); color: var(--accent); }
+
+/* dossier */
+.observatory-root .dossier-head { display: flex; align-items: center; justify-content: space-between; }
+.observatory-root .dossier-back { border: 1px solid var(--ink); background: transparent; color: var(--ink); font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700; padding: 7px 11px; cursor: pointer; }
+.observatory-root .dossier-back:hover { background: var(--ink); color: var(--bg); }
+.observatory-root .dossier-title-block { border-bottom: 1px solid var(--separator-strong); padding-bottom: 14px; }
+.observatory-root .dossier-title { font-size: clamp(24px, 2.6vw, 34px); font-weight: 800; letter-spacing: -0.02em; line-height: 1; margin: 6px 0 4px; text-wrap: balance; }
+.observatory-root .dossier-artist { font-size: 14px; font-weight: 500; color: var(--muted); }
+.observatory-root .dossier-strip { background: var(--bg); }
+.observatory-root .dossier-lyric { font-size: 13px; line-height: 1.6; font-weight: 400; color: var(--ink); font-style: normal; border-left: 2px solid var(--accent); padding-left: 12px; }
+.observatory-root .mixlist { display: flex; flex-direction: column; }
+.observatory-root .mix-row { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-bottom: 1px dashed var(--separator-strong); background: transparent; border-left: 0; border-right: 0; border-top: 0; cursor: pointer; text-align: left; width: 100%; transition: background 0.12s; }
+.observatory-root .mix-row:last-child { border-bottom: 0; }
+.observatory-root .mix-row:hover { background: var(--ink-soft); }
+.observatory-root .mix-dot { width: 9px; height: 9px; flex: none; }
+.observatory-root .mix-tt { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.observatory-root .mix-title { font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.observatory-root .mix-artist { font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.observatory-root .mix-meta { font-size: 10px; color: var(--muted); flex: none; }
+.observatory-root .dossier-foot { display: flex; flex-direction: column; gap: 4px; line-height: 1.6; padding-top: 4px; }
+
+/* tooltip */
+.obs-tip { position: fixed; z-index: 400; pointer-events: none; border: 1px solid var(--ink); background: var(--bg); padding: 9px 11px; min-width: 170px; max-width: 240px; box-shadow: 4px 4px 0 var(--separator-strong); font-family: var(--font-mono); color: var(--ink); }
+.obs-tip .tip-genre { margin-bottom: 3px; }
+.obs-tip .tip-title { font-size: 14px; font-weight: 800; line-height: 1.05; }
+.obs-tip .tip-artist { font-size: 11px; color: var(--muted); margin-bottom: 7px; }
+.obs-tip .tip-meta { display: flex; gap: 10px; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; font-variant-numeric: tabular-nums; padding-top: 7px; border-top: 1px solid var(--separator-strong); }
+.obs-tip .tip-meta .acc { color: var(--accent); }
+.obs-tip .tip-moods { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.obs-tip .tip-moods span { font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; color: var(--muted); border: 1px solid var(--separator-strong); padding: 2px 5px; }
+.obs-tip .t-caption { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 500; }
+.obs-tip .ad-muted { color: var(--muted); }
+
+/* scrollbars */
+.observatory-root .obs-rail::-webkit-scrollbar,
+.observatory-root .obs-side::-webkit-scrollbar { width: 8px; }
+.observatory-root .obs-rail::-webkit-scrollbar-thumb,
+.observatory-root .obs-side::-webkit-scrollbar-thumb { background: var(--scrollbar); }
+.observatory-root .obs-rail::-webkit-scrollbar-thumb:hover,
+.observatory-root .obs-side::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
+
+@media (max-width: 1180px) {
+    .observatory-root .obs-main { grid-template-columns: 210px minmax(0, 1fr) 330px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .observatory-root .obs-disc,
+    .observatory-root .obs-live-dot::after,
+    .observatory-root .cmap-ripple,
+    .observatory-root .wire-line { animation: none !important; }
 }

@@ -12,16 +12,27 @@ export interface PagePanelProps {
   title: string;
   sub?: string;
   children: ReactNode;
+  /** Footprint of the overlaid masthead/dial header, so content starts clear of
+      it but scrolls under the frosted glass. Falls back to the safe area top. */
+  topInset?: number;
+  /** Footprint of the overlaid transport bar, so content can scroll clear of
+      it (and read as flowing under the frosted glass). Falls back to the safe
+      area when the bar hasn't measured yet. */
+  bottomInset?: number;
 }
 
-export default function PagePanel({ title, sub, children }: PagePanelProps) {
+export default function PagePanel({ title, sub, children, topInset, bottomInset }: PagePanelProps) {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
 
   return (
     <ScrollView
       style={{ flex: 1 }}
-      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 18, paddingBottom: insets.bottom + 18 }}
+      contentContainerStyle={{
+        paddingHorizontal: 16,
+        paddingTop: (topInset || insets.top) + 18,
+        paddingBottom: (bottomInset || insets.bottom) + 18,
+      }}
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
     >

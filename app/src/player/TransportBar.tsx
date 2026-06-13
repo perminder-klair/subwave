@@ -4,8 +4,9 @@
 // grip, and a 0–250 latency ruler), and Volume (rotary knob + dot-grille mute).
 // Docked below the FM-dial pager, so it stays at the foot of every band stop.
 
+import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import RotaryKnob from './RotaryKnob';
 import { SCALE_MAX, type SignalQuality } from '@/hooks/useSignal';
@@ -52,7 +53,7 @@ export default function TransportBar({
   listeners,
 }: TransportBarProps) {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, mode } = useTheme();
   const connecting = status === 'connecting';
 
   const gripPct =
@@ -84,10 +85,25 @@ export default function TransportBar({
 
   return (
     <View style={{ marginHorizontal: 16, marginBottom: insets.bottom + 12 }}>
-      <View
-        className="flex-row"
-        style={{ borderWidth: 1, borderColor: colors.ink, backgroundColor: `${colors.ink}0a` }}
-      >
+      {/* Frosted-glass console: a real backdrop blur picks up the cover-art
+          ambient wash behind the bar, with a thin translucent film over it and
+          a softened glass edge — so the deck reads as transparent glass rather
+          than a flat panel. The controls render on top, unblurred. */}
+      <View style={{ borderWidth: 1, borderColor: `${colors.ink}59`, overflow: 'hidden' }}>
+        <BlurView
+          intensity={mode === 'light' ? 40 : 26}
+          tint={mode === 'light' ? 'light' : 'dark'}
+          blurMethod="dimezisBlurView"
+          style={StyleSheet.absoluteFill}
+        />
+        <View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: mode === 'light' ? 'rgba(255,255,255,0.22)' : `${colors.ink}12` },
+          ]}
+        />
+        <View className="flex-row">
         {/* Power */}
         <View style={{ alignItems: 'center', justifyContent: 'center', paddingHorizontal: 11, paddingVertical: 13 }}>
           <Pressable
@@ -200,6 +216,7 @@ export default function TransportBar({
           >
             <DotGrille color={muted ? colors.accent : colors.muted} />
           </Pressable>
+        </View>
         </View>
       </View>
     </View>

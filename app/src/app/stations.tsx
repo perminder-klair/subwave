@@ -7,11 +7,14 @@
 
 import { router } from 'expo-router';
 import { ChevronRight, X } from 'lucide-react-native';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import LiveDot from '@/components/LiveDot';
+import StationLiveStatus from '@/components/StationLiveStatus';
 import { useStation } from '@/config/StationContext';
 import { normalizeBase } from '@/lib/api';
+import { fetchDirectory, type DirectoryStation } from '@/lib/directory';
 import type { StationRef } from '@/lib/station';
 import { useTheme } from '@/theme/ThemeContext';
 
@@ -32,6 +35,13 @@ function Divider({ children }: { children: string }) {
 export default function Stations() {
   const { recents, featured, base, name, selectStation, forgetStation } = useStation();
   const { colors } = useTheme();
+  const [directory, setDirectory] = useState<DirectoryStation[]>([]);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetchDirectory(ctrl.signal).then((list) => setDirectory(list));
+    return () => ctrl.abort();
+  }, []);
 
   const switchTo = async (ref: StationRef) => {
     if (normalizeBase(ref.url) !== base) {
@@ -39,6 +49,11 @@ export default function Stations() {
     }
     router.dismissTo('/');
   };
+
+  // Tapping a directory station deep-links into onboarding's health-check so a
+  // dead/asleep station fails gracefully before we tune in (see onboarding.tsx).
+  const discover = (st: DirectoryStation) =>
+    router.push({ pathname: '/onboarding', params: { url: st.url, name: st.name } });
 
   const currentUrl = base;
   // `name` comes from the recents lookup; if the active station was forgotten
@@ -52,6 +67,16 @@ export default function Stations() {
   const seen = new Set<string>();
   const recentRows = others.filter((r) => {
     const k = normalizeBase(r.url);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+
+  // Discover = the community directory minus anything already shown above
+  // (tuned-in, featured, or a recent) and minus directory dupes.
+  if (currentUrl) seen.add(normalizeBase(currentUrl));
+  const discoverRows = directory.filter((st) => {
+    const k = normalizeBase(st.url);
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
@@ -115,6 +140,34 @@ export default function Stations() {
             <ChevronRight size={15} color={colors.muted} />
           </Pressable>
         ))}
+
+        {discoverRows.length ? <Divider>Discover</Divider> : null}
+        {discoverRows.map((st) => {
+          const sub = [st.location, st.genre].filter(Boolean).join(' · ');
+          return (
+            <Pressable
+              key={st.slug || st.url}
+              onPress={() => discover(st)}
+              accessibilityRole="button"
+              accessibilityLabel={`Tune in to ${st.name}`}
+              className="flex-row items-center"
+              style={{ gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.softBorder }}
+            >
+              <View className="flex-1">
+                <Text className="font-body-semibold text-ink" style={{ fontSize: 14 }} numberOfLines={1}>
+                  {st.name}
+                </Text>
+                <Text className="font-mono text-muted" style={{ fontSize: 11 }} numberOfLines={1}>
+                  {sub || stripProto(st.url)}
+                </Text>
+                <View style={{ marginTop: 4 }}>
+                  <StationLiveStatus url={st.url} />
+                </View>
+              </View>
+              <ChevronRight size={15} color={colors.muted} />
+            </Pressable>
+          );
+        })}
 
         <Pressable
           onPress={() => router.push('/onboarding')}

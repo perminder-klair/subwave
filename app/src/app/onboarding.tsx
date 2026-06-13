@@ -5,8 +5,8 @@
 // stepper is cosmetic scaffolding around the real probe — api.health() is the
 // gate; api.dj() best-effort fills the station name.
 
-import { router } from 'expo-router';
-import { useRef, useState } from 'react';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -42,6 +42,10 @@ export default function Onboarding() {
   const { featured, recents, selectStation, base } = useStation();
   const { colors } = useTheme();
   const addMode = !!base;
+  // Deep-link from the Stations "Discover" list: prefill + jump straight to the
+  // health-check instead of the entry form.
+  const params = useLocalSearchParams<{ url?: string; name?: string }>();
+  const autoRan = useRef(false);
 
   const [host, setHost] = useState(stripProto(featured.url));
   const [phase, setPhase] = useState<'entry' | 'check'>('entry');
@@ -139,6 +143,14 @@ export default function Onboarding() {
     runId.current++;
     setPhase('entry');
   };
+
+  // Auto-run the probe once when arriving with a prefilled station (Discover).
+  useEffect(() => {
+    if (autoRan.current || !params.url) return;
+    autoRan.current = true;
+    runCheck(params.url, params.name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.url, params.name]);
 
   return (
     <SafeAreaView className="flex-1 bg-bg">

@@ -13,7 +13,7 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 
 - **Project site** — [getsubwave.com](https://www.getsubwave.com/)
 - **Demo player** — [getsubwave.com/listen](https://www.getsubwave.com/listen)
-- **Mobile apps** — native players — [Android on Google Play](https://play.google.com/store/apps/details?id=com.getsubwave.app), [iOS via TestFlight](https://testflight.apple.com/join/Xrx5TUmb)
+- **Mobile apps** — native players — [iOS on the App Store](https://apps.apple.com/app/sub-wave/id6778786696), [Android on Google Play](https://play.google.com/store/apps/details?id=com.getsubwave.app)
 - **Setup walkthrough** — [getsubwave.com/setup](https://www.getsubwave.com/setup)
 - **Operator manual** — [getsubwave.com/manual](https://www.getsubwave.com/manual)
 - **Community** — [join the Discord](https://discord.gg/vjVbVKnMBa)
@@ -37,6 +37,12 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 | <img src="web/public/screenshots/admin-stats.webp" alt="Admin — Stats: LLM and TTS usage" width="100%"> | <img src="web/public/screenshots/admin-debug.webp" alt="Admin — Debug: health, logs, LLM calls" width="100%"> |
 | **Stats** — LLM and TTS usage at a glance | **Debug** — health, logs, recent LLM calls |
 
+**The Library Observatory.** A data-art map of every track the DJ has tagged, placed by genre and lit by energy. Click a point for its full dossier: BPM, key, mood, embeddings, and nearest neighbours. Open it at `/observatory`.
+
+<img src="web/public/screenshots/observatory.webp" alt="Library Observatory — the full map of the tagged library with stat panels" width="640">
+
+<img src="web/public/screenshots/observatory-track.webp" alt="Library Observatory — a single track dossier" width="280">
+
 ## Features
 
 - **One shared Icecast stream.** Every listener hears the same broadcast at the same time.
@@ -47,13 +53,14 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 - **Five TTS engines.** Piper and Kokoro in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) is also available. Pick a different engine per kind of speech.
 - **Multiple DJ personas.** Up to 10 souls in rotation, each with its own voice and writing style.
 - **Dual-codec broadcast.** MP3 128 kbps for Sonos, hardware radios, and cars; Ogg-Opus 96 kbps for modern browsers. The web player picks automatically.
-- **Native apps, PWA, and TUI.** Native iOS (TestFlight beta) and Android (on Google Play) players — background audio, lock-screen / CarPlay / Android Auto controls, multi-station — an installable PWA on phone and desktop, and a TUI for the command line.
+- **Native apps, PWA, and TUI.** Native iOS (on the App Store) and Android (on Google Play) players — background audio, lock-screen / CarPlay / Android Auto controls, multi-station — an installable PWA on phone and desktop, and a TUI for the command line.
 - **Scheduled shows.** A 24×7 grid; each slot has its own persona, mood, and skills.
 - **Pluggable skills.** The DJ's between-track segments — weather, news, traffic, and your own — are skills. The built-ins are scaffolded as editable files under `state/skills/<kind>/` on first boot, so you can rewrite a brief or change the news feed (BBC → your own RSS) right from the admin console — no code, no redeploy. Add your own by dropping a `SKILL.md` (plus optional data-fetching code) into `state/skills/`, hitting Rescan, and enabling it. See [`docs/custom-skills.md`](docs/custom-skills.md).
 - **Mood-aware rotation.** Time of day, weather, and festival days bias what gets played and how the DJ talks.
 - **Hourly archives.** Every hour saved as MP3 for later replay.
 - **Crossfade + voice ducking.** Tracks blend smoothly; the music ducks under DJ speech and lifts back up.
 - **Admin console.** Live status, queue, booth log, personas, shows, skills, stats, and a debug view of recent LLM calls.
+- **Library Observatory.** A full-screen, data-art map of every tagged track at `/observatory` — placed by genre, lit by energy, with a full dossier per track (BPM, key, mood, embedding fingerprints, and nearest-in-vector-space neighbours). Scales from a few hundred to tens of thousands of tracks.
 - **MCP server.** External agents (Claude Desktop, Cursor, etc.) can request songs and drive the DJ.
 - **Self-hosted.** One `docker compose up -d` on a single Linux host. Optional Cloudflare in front for TLS.
 
