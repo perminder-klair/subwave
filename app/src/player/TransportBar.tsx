@@ -93,7 +93,7 @@ export default function TransportBar({
         <BlurView
           intensity={mode === 'light' ? 40 : 26}
           tint={mode === 'light' ? 'light' : 'dark'}
-          experimentalBlurMethod="dimezisBlurView"
+          blurMethod="dimezisBlurView"
           style={StyleSheet.absoluteFill}
         />
         <View
