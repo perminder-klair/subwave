@@ -37,6 +37,10 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 | <img src="web/public/screenshots/admin-stats.webp" alt="Admin — Stats: LLM and TTS usage" width="100%"> | <img src="web/public/screenshots/admin-debug.webp" alt="Admin — Debug: health, logs, LLM calls" width="100%"> |
 | **Stats** — LLM and TTS usage at a glance | **Debug** — health, logs, recent LLM calls |
 
+**The Library Observatory.** A data-art map of every track the DJ has tagged, placed by genre and lit by energy. Click a point for its full record. Open it at `/observatory`.
+
+<img src="web/public/screenshots/observatory.webp" alt="Library Observatory — the constellation map of the tagged library, coloured by energy" width="640">
+
 ## Features
 
 - **One shared Icecast stream.** Every listener hears the same broadcast at the same time.

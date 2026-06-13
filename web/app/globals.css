@@ -3287,6 +3287,15 @@ body::after {
 .bs-prose p {
     margin: 0 0 1.2em;
 }
+/* Figures / screenshots: full column width, thin ink frame, paper grain. */
+.bs-prose img {
+    display: block;
+    width: 100%;
+    height: auto;
+    margin: 1.6em 0;
+    border: 1px solid var(--ink);
+    background: var(--bg);
+}
 /* Drop cap on the opening paragraph — vermilion, three lines tall. */
 .bs-prose > p:first-of-type::first-letter {
     font-size: 3.4em;
