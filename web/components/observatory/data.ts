@@ -117,6 +117,19 @@ export function normaliseFingerprint(vec: number[]): number[] {
   return vec.map((v) => Math.max(-1, Math.min(1, v / max)));
 }
 
+// Chromatic tonic → hue for the SONG SHAPE key bands. Major reads lighter/
+// warmer, minor darker/cooler, so a section's colour conveys both at a glance.
+const TONIC_ORDER = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const FLAT_TO_SHARP: Record<string, string> = {
+  Db: 'C#', Eb: 'D#', Gb: 'F#', Ab: 'G#', Bb: 'A#',
+};
+export function keyRangeColor(tonic: string, mode: 'major' | 'minor'): string {
+  const t = FLAT_TO_SHARP[tonic] ?? tonic;
+  const idx = TONIC_ORDER.indexOf(t);
+  const hue = idx < 0 ? 0 : Math.round((idx / 12) * 360);
+  return mode === 'major' ? `hsl(${hue} 62% 56%)` : `hsl(${hue} 40% 40%)`;
+}
+
 export const CAMELOT_KEYS: string[] = [];
 for (let n = 1; n <= 12; n++) {
   CAMELOT_KEYS.push(n + 'A');
@@ -128,6 +141,26 @@ for (let n = 1; n <= 12; n++) {
 // ---------------------------------------------------------------------------
 
 export type Energy = 'low' | 'medium' | 'high' | null;
+export type Vocal = 'vocal' | 'instrumental' | null;
+
+// Acoustic timeline spans, mirrored from the controller's library-db types
+// (TrackSection / TrackPaceSpan / TrackKeyRange). Times in milliseconds.
+export interface Section {
+  startMs: number;
+  endMs: number;
+  kind?: string;
+}
+export interface PaceSpan {
+  startMs: number;
+  endMs: number;
+  value: number; // 0..1 perceptual energy
+}
+export interface KeyRange {
+  startMs: number;
+  endMs: number;
+  tonic: string; // sharps, e.g. 'C', 'C#'
+  mode: 'major' | 'minor';
+}
 
 // Raw track row as it arrives from GET /library/observatory.
 export interface RawTrack {
@@ -145,6 +178,10 @@ export interface RawTrack {
   bpm: number | null;
   musicalKey: string | null;
   analysisConfidence: number | null;
+  // Cheap acoustic scalars for colour-by + aggregate panels.
+  loudnessLufs: number | null;
+  paceMean: number | null;
+  vocal: Vocal;
 }
 
 // A track after layout — what the map / panels / tooltip consume.
@@ -204,6 +241,14 @@ export interface TrackDetail {
     musicalKey: string | null;
     introMs: number | null;
     analysisConfidence: number | null;
+    analysisVersion: number | null;
+    // Acoustic detail for the SONG SHAPE timeline — all null-safe.
+    loudnessLufs: number | null;
+    peakDb: number | null;
+    structure: Section[] | null;
+    vocalRanges: Section[] | null;
+    pace: PaceSpan[] | null;
+    keyRanges: KeyRange[] | null;
   };
   textEmbedding: number[] | null;
   audioEmbedding: number[] | null;
@@ -370,19 +415,40 @@ export function buildSynapseLinks(tracks: ObsTrack[]): [number, number][] {
 // canvas renderer so all three stay pixel-identical. `colorBy` selects what the
 // ink→vermilion ramp / source palette encodes.
 // ---------------------------------------------------------------------------
-export type ColorBy = 'energy' | 'confidence' | 'source' | 'analysis';
+export type ColorBy = 'energy' | 'confidence' | 'source' | 'analysis' | 'loudness' | 'pace' | 'vocal';
+
+// Integrated loudness (LUFS, typically −30…0) → 0..1 for the heat ramp. Louder
+// reads hotter. null → mid-faint, like the unknown-energy case.
+export function loudnessToVal(lufs: number | null): number {
+  if (lufs == null) return 0.5;
+  return Math.max(0, Math.min(1, (lufs + 30) / 30));
+}
+
+// Vocal vs instrumental palette (reuses the source filled/hollow convention):
+// vocal = filled vermilion, instrumental = filled ink, unknown = hollow gray.
+export function vocalStyle(v: Vocal): SourceStyle {
+  if (v === 'vocal') return { color: '#d94b2a', filled: true, label: 'VOCAL' };
+  if (v === 'instrumental') return { color: '#4a443d', filled: true, label: 'INSTRUMENTAL' };
+  return { color: '#9b948a', filled: false, label: 'UNKNOWN' };
+}
 
 export function nodeColor(t: ObsTrack, colorBy: ColorBy): string {
   if (colorBy === 'energy') return heat(t.energyVal);
   if (colorBy === 'confidence') return heat(0.15 + (t.confidence ?? 0.5) * 0.85);
   if (colorBy === 'source') return sourceStyle(t.source).color;
   if (colorBy === 'analysis') return t.analysed ? '#d94b2a' : '#9b948a';
+  if (colorBy === 'loudness') return t.loudnessLufs == null ? '#9b948a' : heat(loudnessToVal(t.loudnessLufs));
+  if (colorBy === 'pace') return t.paceMean == null ? '#9b948a' : heat(0.1 + t.paceMean * 0.9);
+  if (colorBy === 'vocal') return vocalStyle(t.vocal).color;
   return '#4a443d';
 }
 
 export function nodeFilled(t: ObsTrack, colorBy: ColorBy): boolean {
   if (colorBy === 'source') return sourceStyle(t.source).filled;
   if (colorBy === 'analysis') return t.analysed;
+  if (colorBy === 'loudness') return t.loudnessLufs != null;
+  if (colorBy === 'pace') return t.paceMean != null;
+  if (colorBy === 'vocal') return vocalStyle(t.vocal).filled;
   return true;
 }
 
@@ -489,6 +555,11 @@ export function buildMockLibrary(count = 400): LibraryData {
       bpm,
       musicalKey: analysed ? (CAMELOT_KEYS[Math.floor(rng() * 24)] ?? null) : null,
       analysisConfidence: analysed ? Math.round((0.55 + rng() * 0.43) * 100) / 100 : null,
+      // Acoustic scalars track the energy band so the new colour-by modes look
+      // plausible on the sample library too.
+      loudnessLufs: analysed ? Math.round((-22 + ev * 16 + (rng() - 0.5) * 3) * 10) / 10 : null,
+      paceMean: analysed ? Math.max(0.02, Math.min(0.98, Math.round((ev + (rng() - 0.5) * 0.2) * 100) / 100)) : null,
+      vocal: analysed ? (rng() < 0.7 ? 'vocal' : 'instrumental') : null,
       energyVal: Math.round(ev * 100) / 100,
       analysed,
       x,

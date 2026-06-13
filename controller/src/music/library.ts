@@ -153,7 +153,7 @@ export function songsByMood(mood: string | null | undefined): any[] {
 // Mean of the pace curve (0..1), or null when un-analysed. Shared by slimTrack
 // and get() so the agent picker (Subsonic-fallback path) and the pool picker
 // see the same scalar instead of one path computing it and the other missing it.
-function paceMeanOf(pace: Array<{ value: number }> | null | undefined): number | null {
+export function paceMeanOf(pace: Array<{ value: number }> | null | undefined): number | null {
   return pace && pace.length
     ? Math.round((pace.reduce((s, p) => s + p.value, 0) / pace.length) * 1000) / 1000
     : null;

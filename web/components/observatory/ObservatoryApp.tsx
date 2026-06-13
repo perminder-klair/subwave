@@ -287,6 +287,9 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
                   ['confidence', 'CONF'],
                   ['source', 'SOURCE'],
                   ['analysis', 'ANALYSIS'],
+                  ['loudness', 'LOUDNESS'],
+                  ['pace', 'PACE'],
+                  ['vocal', 'VOICE'],
                 ] as [ColorBy, string][]
               ).map(([k, l]) => (
                 <button key={k} className={'flt-tog' + (colorBy === k ? ' on' : '')} onClick={() => setColorBy(k)}>

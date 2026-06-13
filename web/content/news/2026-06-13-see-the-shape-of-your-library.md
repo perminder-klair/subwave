@@ -10,7 +10,7 @@ The DJ holds a lot in its head: every track's mood, energy, tempo, key, and a pa
 
 ## What's new
 
-It's a full-screen map of every track you've tagged. Each one is a point, sitting near others in its genre, lit on an ink-to-vermilion ramp by how energetic it is. Faint lines wire close neighbours together. Pan around, scroll to zoom. The panels down the right keep a running count: energy split, mood field, a tempo histogram, a Camelot key wheel.
+It's a full-screen map of every track you've tagged. Each one is a point, sitting near others in its genre, lit on an ink-to-vermilion ramp by how energetic it is. Faint lines wire close neighbours together. Pan around, scroll to zoom. The panels down the right keep a running count: energy split, mood field, a tempo histogram, a loudness histogram, a Camelot key wheel, and the major/minor and vocal/instrumental balance.
 
 ![The Library Observatory: every tagged track placed by genre, lit by energy, with stat panels alongside](/screenshots/observatory.webp)
 
@@ -22,7 +22,7 @@ Open admin and click Observatory in the nav, or go straight to:
 /observatory
 ```
 
-Click any point to open its dossier: BPM, key, energy, its mood and last.fm tags, and the track's text and audio fingerprints. Under that sits Mix Next, the closest tracks in vector space, with the links drawn back onto the map. Recolour the map by energy, confidence, tag source, or analysis from the left rail, and filter by scene, mood, or tag source.
+Click any point to open its dossier: BPM, key, energy, loudness, its mood and last.fm tags, and the track's text and audio fingerprints. There's a song-shape timeline too, charting the track end to end: its pace curve, where the intro ends, the sections, the vocal passages, and how the key moves over time. Under that sits Mix Next, the closest tracks in vector space, with the links drawn back onto the map. Recolour the map by energy, confidence, tag source, analysis, loudness, pace, or voice from the left rail, and filter by scene, mood, or tag source.
 
 ![A track dossier: BPM, key, energy, mood tags, acoustic meters, the text and audio embedding fingerprints, and the nearest tracks in vector space](/screenshots/observatory-track.webp)
 

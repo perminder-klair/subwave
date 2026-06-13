@@ -147,6 +147,12 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
         bpm: t.bpm,
         musicalKey: t.musicalKey,
         analysisConfidence: t.analysisConfidence,
+        // Cheap acoustic scalars for the Observatory's colour-by + aggregate
+        // panels. The full curves/ranges stay on the per-track dossier endpoint.
+        loudnessLufs: t.loudnessLufs,
+        paceMean: library.paceMeanOf(t.pace),
+        // Tri-state: 'vocal' | 'instrumental' | null (not analysed for vocals).
+        vocal: t.vocalRanges == null ? null : t.vocalRanges.length ? 'vocal' : 'instrumental',
       }));
     res.json({
       tracks,
@@ -224,6 +230,16 @@ router.get('/library/observatory/track/:id', requireAdmin, async (req, res) => {
         musicalKey: t.musicalKey,
         introMs: t.introMs,
         analysisConfidence: t.analysisConfidence,
+        analysisVersion: t.analysisVersion,
+        // Acoustic detail — the curves/ranges the dossier's SONG SHAPE timeline
+        // draws. All null-safe; the UI hides what isn't computed. (beats/bars
+        // are deliberately omitted — too granular/heavy for the payload.)
+        loudnessLufs: t.loudnessLufs,
+        peakDb: t.peakDb,
+        structure: t.structure,
+        vocalRanges: t.vocalRanges,
+        pace: t.pace,
+        keyRanges: t.keyRanges,
       },
       textEmbedding: textVec ? Array.from(textVec) : null,
       audioEmbedding: audioVec ? Array.from(audioVec) : null,

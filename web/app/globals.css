@@ -3729,6 +3729,24 @@ body::after {
 .observatory-root .tr-col:hover .tr-bar { background: var(--accent); }
 .observatory-root .tr-x { font-size: 8px; color: var(--muted); }
 
+/* song shape (per-track acoustic timeline) */
+.observatory-root .songshape { display: flex; flex-direction: column; gap: 7px; }
+.observatory-root .ss-row { display: flex; align-items: center; gap: 9px; }
+.observatory-root .ss-label { font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); width: 40px; flex: none; font-weight: 700; }
+.observatory-root .ss-lane { position: relative; flex: 1; background: var(--field); overflow: hidden; }
+.observatory-root .ss-lane-pace { height: 44px; }
+.observatory-root .ss-lane-thin { height: 12px; }
+.observatory-root .ss-pace-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.observatory-root .ss-pace { fill: var(--accent); fill-opacity: 0.22; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.observatory-root .ss-sect { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ink); opacity: 0.35; }
+.observatory-root .ss-intro { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--accent); }
+.observatory-root .ss-vox { position: absolute; top: 2px; bottom: 2px; background: var(--accent); opacity: 0.8; }
+.observatory-root .ss-key { position: absolute; top: 0; bottom: 0; }
+.observatory-root .ss-note { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.observatory-root .ss-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; padding-left: 49px; }
+.observatory-root .ss-legend-item { display: inline-flex; align-items: center; gap: 4px; font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.observatory-root .ss-swatch { width: 9px; height: 9px; flex: none; }
+
 /* fingerprint */
 .observatory-root .fp-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 7px; }
 .observatory-root .fp-grid { display: grid; gap: 1px; }

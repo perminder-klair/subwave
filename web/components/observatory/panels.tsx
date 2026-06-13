@@ -15,6 +15,8 @@ import {
   arcPath,
   embeddingVector,
   normaliseFingerprint,
+  keyRangeColor,
+  loudnessToVal,
   CAMELOT_KEYS,
   type ObsTrack,
   type ObservatoryStats,
@@ -162,6 +164,146 @@ function TempoRiver({ list }: { list: ObsTrack[] }) {
   );
 }
 
+// ---- Loudness histogram (integrated LUFS) ----------------------------------
+function LoudnessRiver({ list }: { list: ObsTrack[] }) {
+  const bins = useMemo(() => {
+    // Lower edges, in LUFS. Quieter masters on the left, hotter on the right.
+    const edges = [-Infinity, -24, -18, -14, -10, -6, Infinity];
+    const labels = ['≤−24', '−24', '−18', '−14', '−10', '−6'];
+    const b = edges.slice(0, -1).map((lo, i) => ({ lo, hi: edges[i + 1] ?? Infinity, label: labels[i] ?? '', n: 0 }));
+    list.forEach((t) => {
+      if (t.loudnessLufs == null) return;
+      for (const bin of b)
+        if (t.loudnessLufs >= bin.lo && t.loudnessLufs < bin.hi) {
+          bin.n++;
+          break;
+        }
+    });
+    return b;
+  }, [list]);
+  const max = Math.max(1, ...bins.map((b) => b.n));
+  return (
+    <div className="tempo-river">
+      <div className="tr-bars">
+        {bins.map((b, i) => (
+          <div key={i} className="tr-col" title={`${b.label} LUFS · ${b.n}`}>
+            <div className="tr-bar" style={{ height: Math.round((b.n / max) * 100) + '%' }} />
+            <span className="tr-x t-nums">{b.label}</span>
+          </div>
+        ))}
+      </div>
+      <div className="t-caption ad-muted" style={{ marginTop: 6 }}>
+        INTEGRATED LOUDNESS (LUFS) →
+      </div>
+    </div>
+  );
+}
+
+// ---- Song shape — per-track acoustic timeline ------------------------------
+// One shared time axis (0…duration) across three lanes: the pace curve (with
+// structural section boundaries + the intro marker), the vocal-presence lane,
+// and the key bands. Positions are percent-based HTML so they stay crisp at any
+// panel width; only the pace curve itself is SVG.
+function SongShape({ detail, durationSec }: { detail: TrackDetail; durationSec: number | null }) {
+  const d = detail.track;
+  const pace = d.pace ?? [];
+  const structure = d.structure ?? [];
+  const vocal = d.vocalRanges; // null = not analysed, [] = instrumental
+  const keys = d.keyRanges ?? [];
+
+  // Total span: prefer real duration, else the furthest analysed endMs.
+  const spans = [...pace, ...structure, ...(vocal ?? []), ...keys];
+  const total = Math.max(1, durationSec != null ? durationSec * 1000 : 0, ...spans.map((s) => s.endMs));
+  const pct = (ms: number) => Math.max(0, Math.min(100, (ms / total) * 100));
+
+  if (!pace.length && !structure.length && vocal == null && !keys.length) {
+    return <span className="t-caption ad-muted">no acoustic analysis</span>;
+  }
+
+  // Pace area path in a 0..100 × 0..100 viewBox (stretched to the lane).
+  let pacePath = '';
+  if (pace.length) {
+    const pts = pace.map((p) => {
+      const mx = pct((p.startMs + p.endMs) / 2);
+      const my = 96 - Math.max(0, Math.min(1, p.value)) * 88;
+      return [mx, my] as const;
+    });
+    pacePath = `M${pts[0]![0]} 96 ` + pts.map(([px, py]) => `L${px} ${py}`).join(' ') + ` L${pts[pts.length - 1]![0]} 96 Z`;
+  }
+
+  const introPct = d.introMs != null ? pct(d.introMs) : null;
+  const keyLegend = Array.from(new Map(keys.map((k) => [`${k.tonic} ${k.mode}`, k])).values()).slice(0, 6);
+
+  return (
+    <div className="songshape">
+      <div className="ss-row">
+        <span className="ss-label">PACE</span>
+        <div className="ss-lane ss-lane-pace">
+          {pacePath && (
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="ss-pace-svg">
+              <path d={pacePath} className="ss-pace" />
+            </svg>
+          )}
+          {structure.map((s, i) => (i === 0 ? null : <span key={i} className="ss-sect" style={{ left: pct(s.startMs) + '%' }} />))}
+          {introPct != null && <span className="ss-intro" style={{ left: introPct + '%' }} title="intro ends" />}
+        </div>
+      </div>
+
+      <div className="ss-row">
+        <span className="ss-label">VOICE</span>
+        <div className="ss-lane ss-lane-thin">
+          {vocal == null ? (
+            <span className="ss-note">not analysed</span>
+          ) : vocal.length === 0 ? (
+            <span className="ss-note">instrumental</span>
+          ) : (
+            vocal.map((v, i) => (
+              <span
+                key={i}
+                className="ss-vox"
+                style={{ left: pct(v.startMs) + '%', width: Math.max(0.5, pct(v.endMs) - pct(v.startMs)) + '%' }}
+              />
+            ))
+          )}
+        </div>
+      </div>
+
+      <div className="ss-row">
+        <span className="ss-label">KEY</span>
+        <div className="ss-lane ss-lane-thin">
+          {keys.length ? (
+            keys.map((k, i) => (
+              <span
+                key={i}
+                className="ss-key"
+                style={{
+                  left: pct(k.startMs) + '%',
+                  width: Math.max(0.5, pct(k.endMs) - pct(k.startMs)) + '%',
+                  background: keyRangeColor(k.tonic, k.mode),
+                }}
+                title={`${k.tonic} ${k.mode}`}
+              />
+            ))
+          ) : (
+            <span className="ss-note">—</span>
+          )}
+        </div>
+      </div>
+
+      {keyLegend.length > 0 && (
+        <div className="ss-legend">
+          {keyLegend.map((k) => (
+            <span key={`${k.tonic}-${k.mode}`} className="ss-legend-item">
+              <span className="ss-swatch" style={{ background: keyRangeColor(k.tonic, k.mode) }} />
+              {k.tonic} {k.mode === 'major' ? 'maj' : 'min'}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---- Embedding fingerprint -------------------------------------------------
 function Fingerprint({
   vector,
@@ -204,7 +346,7 @@ function Fingerprint({
 }
 
 // ---- Meter -----------------------------------------------------------------
-function Meter({ value, label, cells = 20 }: { value: number; label: string; cells?: number }) {
+function Meter({ value, label, cells = 20, display }: { value: number; label: string; cells?: number; display?: string }) {
   const on = Math.round(value * cells);
   return (
     <div className="meter-row">
@@ -214,7 +356,7 @@ function Meter({ value, label, cells = 20 }: { value: number; label: string; cel
           <span key={i} className={'meter-cell' + (i < on ? ' on' : '')} />
         ))}
       </span>
-      <span className="meter-v t-nums">{value.toFixed(2)}</span>
+      <span className="meter-v t-nums">{display ?? value.toFixed(2)}</span>
     </div>
   );
 }
@@ -235,6 +377,27 @@ export function StatsView({ stats, list, filtered }: { stats: ObservatoryStats; 
   }, [list]);
   const artists = useMemo(() => new Set(list.map((t) => (t.artist || '').trim().toLowerCase()).filter(Boolean)).size, [list]);
   const analysed = list.filter((t) => t.analysed).length;
+  const loudnessCount = useMemo(() => list.filter((t) => t.loudnessLufs != null).length, [list]);
+  const voice = useMemo(() => {
+    const o = { vocal: 0, instrumental: 0, unknown: 0 };
+    list.forEach((t) => {
+      if (t.vocal === 'vocal') o.vocal++;
+      else if (t.vocal === 'instrumental') o.instrumental++;
+      else o.unknown++;
+    });
+    return o;
+  }, [list]);
+  const mode = useMemo(() => {
+    const o = { major: 0, minor: 0 };
+    list.forEach((t) => {
+      if (!t.musicalKey) return;
+      if (t.musicalKey.endsWith('B')) o.major++;
+      else if (t.musicalKey.endsWith('A')) o.minor++;
+    });
+    return o;
+  }, [list]);
+  const voiceMax = Math.max(1, voice.vocal, voice.instrumental, voice.unknown);
+  const modeMax = Math.max(1, mode.major, mode.minor);
   const moodMax = Math.max(1, ...moods.map((m) => m[1]));
   const genreMax = Math.max(1, ...genres.map((g) => g[1]));
   const eMax = Math.max(1, energy.low, energy.medium, energy.high);
@@ -280,8 +443,23 @@ export function StatsView({ stats, list, filtered }: { stats: ObservatoryStats; 
         <TempoRiver list={list} />
       </Card>
 
+      <Card title="LOUDNESS" sub={`${pct(loudnessCount)}% MEASURED`}>
+        <LoudnessRiver list={list} />
+      </Card>
+
       <Card title="HARMONIC WHEEL" sub="CAMELOT">
         <KeyWheel list={list} />
+      </Card>
+
+      <Card title="MODE" sub="MAJOR · MINOR">
+        <Bar label="MAJOR" value={mode.major} max={modeMax} accent />
+        <Bar label="MINOR" value={mode.minor} max={modeMax} />
+      </Card>
+
+      <Card title="VOICE" sub="VOCAL · INSTRUMENTAL">
+        <Bar label="VOCAL" value={voice.vocal} max={voiceMax} accent />
+        <Bar label="INSTRUMENTAL" value={voice.instrumental} max={voiceMax} />
+        {voice.unknown > 0 && <Bar label="UNANALYSED" value={voice.unknown} max={voiceMax} />}
       </Card>
 
       <Card title="SCENES" sub={`${genres.length} GENRES`}>
@@ -393,8 +571,17 @@ export function Dossier({
           <Meter value={track.energyVal} label="ENERGY" />
           {track.confidence != null && <Meter value={track.confidence} label="TAG CONF" />}
           {track.analysisConfidence != null && <Meter value={track.analysisConfidence} label="ACOUSTIC" />}
+          {d?.loudnessLufs != null && (
+            <Meter value={loudnessToVal(d.loudnessLufs)} label="LOUDNESS" display={`${d.loudnessLufs.toFixed(1)} LUFS`} />
+          )}
         </div>
       </Card>
+
+      {detail && (
+        <Card title="SONG SHAPE" sub="ACOUSTIC TIMELINE">
+          <SongShape detail={detail} durationSec={track.durationSec} />
+        </Card>
+      )}
 
       {lyric && (
         <Card title="LYRIC" sub="EXCERPT">
@@ -454,7 +641,12 @@ export function Dossier({
           {d?.taggerVersion ? ` · v${d.taggerVersion}` : ''}
           {d?.model ? ` · ${d.model}` : ''}
         </div>
-        {d?.introMs != null && <div>INTRO {(d.introMs / 1000).toFixed(1)}s · ANALYSIS v1</div>}
+        {d?.introMs != null && (
+          <div>
+            INTRO {(d.introMs / 1000).toFixed(1)}s
+            {d?.analysisVersion != null ? ` · ANALYSIS v${d.analysisVersion}` : ''}
+          </div>
+        )}
       </div>
     </div>
   );
