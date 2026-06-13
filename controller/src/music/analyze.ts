@@ -141,24 +141,39 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // The backend stays single-threaded — we only hide fetch latency. Each
   // download resolves to a temp path on the shared volume; on download failure
   // we fall back to the url path for that one id so it still gets analysed.
-  type Prefetch = Promise<string>;
-  let inflight: Prefetch | null = ids.length > 0 ? analyzer.downloadCapped(ids[0]) : null;
+  // One-ahead prefetch, eagerly reduced to a SETTLED result so a rejection can
+  // never float as an unhandled rejection in the window between kicking the
+  // download off and awaiting it next iteration. downloadCapped now rejects on
+  // every stale library entry (file missing on disk) — common — and Node's
+  // default --unhandled-rejections=throw crashed the whole pass when a one-ahead
+  // prefetch rejected during the previous track's compute window. The .then(_,_)
+  // attaches handlers immediately, so the rejection is always owned.
+  type Prefetch = Promise<{ path: string } | { err: any }>;
+  const prefetch = (songId: string): Prefetch =>
+    analyzer.downloadCapped(songId).then((path) => ({ path }), (err) => ({ err }));
+  let inflight: Prefetch | null = ids.length > 0 ? prefetch(ids[0]) : null;
 
   for (let i = 0; i < ids.length; i++) {
     const id = ids[i];
     const downloadPromise = inflight;
     // Kick off the NEXT download before awaiting this one's analysis so the
     // fetch overlaps the compute.
-    inflight = i + 1 < ids.length ? analyzer.downloadCapped(ids[i + 1]) : null;
+    inflight = i + 1 < ids.length ? prefetch(ids[i + 1]) : null;
 
     let localPath: string | null = null;
     try {
-      try {
-        localPath = downloadPromise ? await downloadPromise : null;
-      } catch (err: any) {
-        // Prefetch failed — fall back to the url path for this one track.
+      const settled = downloadPromise ? await downloadPromise : null;
+      if (settled && 'err' in settled) {
+        const err: any = settled.err;
+        // A non-audio response (stale library entry — file missing on disk) is
+        // not retryable via the url path, so don't mask it behind the sidecar's
+        // url fetch; let the per-track handler record the real reason.
+        if (err instanceof analyzer.NonAudioResponseError) throw err;
+        // Otherwise a transient fetch failure — fall back to the url path.
         console.error(`[analyze] ${id} prefetch failed (${err?.message || err}); using url path`);
         localPath = null;
+      } else {
+        localPath = settled?.path ?? null;
       }
       // embed:true makes the backend lazy-load CLAP even when its own env
       // doesn't have ANALYZE_AUDIO_EMBEDDING (the admin-toggle path); omitted

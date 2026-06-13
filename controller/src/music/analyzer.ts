@@ -12,7 +12,7 @@
 // analysis column stays NULL, and consumers behave exactly as today.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, mkdirSync, createWriteStream } from 'node:fs';
+import { existsSync, mkdirSync, createWriteStream, readFileSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
@@ -427,6 +427,33 @@ export async function analyze(songId: string, opts: AnalyzeRequestOpts = {}): Pr
   return backend === 'sidecar' ? analyzeViaSidecar(url, opts) : analyzeViaLocal(url, opts);
 }
 
+// A stream response that wasn't audio — Navidrome answers a request for a file
+// that's missing on disk (a stale library entry still in its DB) with an HTTP
+// 200 Subsonic error envelope, not audio bytes. Typed so the analysis loop can
+// tell this APART from a transient network failure: there's no point retrying
+// it via the url path (the file is simply gone), so the caller records it as a
+// clean failure instead of masking it behind the url-fallback's decode error.
+export class NonAudioResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NonAudioResponseError';
+  }
+}
+
+// Pull the human-readable message out of a Subsonic error envelope (JSON or the
+// XML attribute form), falling back to a trimmed snippet when it isn't a
+// recognisable envelope.
+function subsonicErrorMessage(body: string): string {
+  if (!body) return 'empty response';
+  try {
+    const j = JSON.parse(body);
+    const msg = j?.['subsonic-response']?.error?.message;
+    if (msg) return String(msg);
+  } catch { /* not JSON — try the XML attribute form below */ }
+  const m = body.match(/message="([^"]+)"/);
+  return m ? m[1] : body.slice(0, 200).replace(/\s+/g, ' ').trim();
+}
+
 // Download a track's audio to a capped temp file on the shared state volume
 // and return the absolute path. The controller does this AHEAD of the
 // backend's compute so network fetch (controller) overlaps DSP (backend) —
@@ -447,6 +474,18 @@ export async function downloadCapped(songId: string): Promise<string> {
     if (!res.ok || !res.body) {
       throw new Error(`download ${res.status}: ${await res.text().catch(() => '')}`);
     }
+    // Navidrome returns Subsonic API errors (e.g. a file that's gone from disk
+    // but still indexed — a stale library entry) as HTTP 200 with a JSON/XML
+    // body, NOT audio. Without this guard we'd stream that envelope to disk as
+    // `.audio` and the decoder would fail opaquely ("analyze failed"). Catch it
+    // on the content type and surface the real reason.
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
+    if (contentType.includes('json') || contentType.includes('xml') || contentType.startsWith('text/')) {
+      const body = await res.text().catch(() => '');
+      throw new NonAudioResponseError(
+        `navidrome returned ${contentType || 'a non-audio response'}, not audio: ${subsonicErrorMessage(body)}`,
+      );
+    }
     // Stream the body to disk, stopping once we've pulled the byte cap — a few
     // MB covers the analysis window for any common codec. A capped async
     // generator feeds pipeline (which handles backpressure and tears the source
@@ -464,6 +503,18 @@ export async function downloadCapped(songId: string): Promise<string> {
     }
     await pipeline(capped(), createWriteStream(dest));
     if (read === 0) throw new Error('downloaded empty audio');
+    // Backstop for the content-type guard: an error envelope that slipped past
+    // the headers is tiny and starts with '{' (JSON) or '<' (XML); real audio
+    // never does (m4a 'ftyp' box, mp3 ID3 / 0xFF frame sync). Only re-read
+    // suspiciously small files so we never touch real audio.
+    if (read < 1024) {
+      const head = readFileSync(dest);
+      if (head[0] === 0x7b /* { */ || head[0] === 0x3c /* < */) {
+        throw new NonAudioResponseError(
+          `navidrome returned a ${read}-byte non-audio response: ${subsonicErrorMessage(head.toString('utf8'))}`,
+        );
+      }
+    }
     return dest;
   } finally {
     clearTimeout(t);
