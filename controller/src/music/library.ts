@@ -163,6 +163,7 @@ function slimTrack(r: db.TrackRecord) {
     musicalKey: r.musicalKey,
     introMs: r.introMs,
     loudnessLufs: r.loudnessLufs,
+    structure: r.structure,
   };
 }
 

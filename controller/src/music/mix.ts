@@ -98,7 +98,7 @@ export function mixCompat(cur: Analysis, next: Analysis): number {
 export function crossSecondsFor(
   cur: Analysis,
   next: Analysis,
-  opts: { energyDelta?: number } = {},
+  opts: { energyDelta?: number; nextIntroMs?: number | null } = {},
 ): number | null {
   if (!analysed(cur) || !analysed(next)) return null;
 
@@ -118,6 +118,17 @@ export function crossSecondsFor(
   // Daypart nudge: lower energy → longer, brisker → shorter. Subtle (±~0.5s).
   const energyDelta = opts.energyDelta ?? 0;
   secs += -energyDelta * 4;
+
+  // Structure-aware cap (feature: song structure): the incoming track plays
+  // from t=0 at the start of the cross buffer and its fade.in spans the whole
+  // buffer, so a buffer longer than the incoming track's instrumental intro
+  // would fade up over the first vocals. Cap the blend to the intro length so
+  // the fade-in completes before the song proper. Absent intro → no cap, i.e.
+  // today's behaviour. Floor at 3s so a near-zero intro still gets a real blend.
+  const introSec = typeof opts.nextIntroMs === 'number' && opts.nextIntroMs > 0
+    ? opts.nextIntroMs / 1000
+    : null;
+  if (introSec != null) secs = Math.min(secs, Math.max(3, introSec));
 
   // Clamp to a sane broadcast range and quantise to 0.1s.
   secs = Math.max(3, Math.min(14, secs));

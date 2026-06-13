@@ -121,6 +121,50 @@ def estimate_intro_ms(y, sr, librosa):
     return 0.0
 
 
+def estimate_sections(y, sr, librosa, chroma=None):
+    """Coarse structural segmentation over the DECODED window (the first
+    ANALYZE_SECONDS only — so this is reliable for the intro / leading sections,
+    not a full-song outro). librosa agglomerative clustering on a chroma+MFCC
+    feature stack → a handful of contiguous {startMs,endMs} spans (RangedValue
+    shape). Best-effort: any failure returns None and the field is omitted, so a
+    consumer treats absence as 'no structure, behave as today'. `chroma` may be
+    passed in to avoid recomputing the (expensive) CQT done in analyze()."""
+    import numpy as np
+
+    try:
+        hop = 512  # librosa default for chroma_cqt / mfcc; ties frames→time
+        if chroma is None:
+            chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=hop)
+        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, hop_length=hop)
+        # Trim to a common frame count (CQT vs mel framing can differ by one).
+        n_frames = min(chroma.shape[1], mfcc.shape[1])
+        if n_frames < 8:
+            return None
+        feat = np.vstack([
+            librosa.util.normalize(chroma[:, :n_frames], axis=0),
+            librosa.util.normalize(mfcc[:, :n_frames], axis=0),
+        ])
+        dur_s = n_frames * hop / sr
+        # ~1 section per 15s of decoded audio, clamped to a sane 2..8.
+        k = int(max(2, min(8, round(dur_s / 15.0))))
+        if k >= n_frames:
+            return None
+        # Left-boundary frames of each segment; always includes 0.
+        bounds = librosa.segment.agglomerative(feat, k)
+        times = librosa.frames_to_time(bounds, sr=sr, hop_length=hop)
+        edges = [float(t) for t in times] + [dur_s]
+        sections = []
+        for i in range(len(edges) - 1):
+            start_ms = int(round(edges[i] * 1000.0))
+            end_ms = int(round(edges[i + 1] * 1000.0))
+            if end_ms > start_ms:
+                sections.append({"startMs": start_ms, "endMs": end_ms})
+        return sections or None
+    except Exception as e:  # noqa: BLE001 — structure is best-effort
+        log(f"structure segmentation failed: {e}")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # CLAP embedder — two backends, decided at load time:
 #   * ONNX (lean): CLAP_MODEL_PATH points at an exported audio-encoder .onnx;
@@ -346,6 +390,11 @@ def analyze(librosa, url=None, path=None, embed=None):
 
     intro_ms = estimate_intro_ms(y, sr, librosa)
 
+    # Structural sections over the decoded window (intro/leading sections are
+    # the reliable part — the outro of a long track is beyond ANALYZE_SECONDS).
+    # Reuses the chroma already computed for key estimation.
+    sections = estimate_sections(y, sr, librosa, chroma=chroma)
+
     # Perceptual loudness (LUFS) over the decoded window — feeds per-track gain
     # normalisation toward a target on the playback side. None when pyloudnorm
     # is absent or measurement fails.
@@ -367,6 +416,9 @@ def analyze(librosa, url=None, path=None, embed=None):
         result["loudness_lufs"] = loudness_lufs
     if peak_db is not None:
         result["peak_db"] = peak_db
+    # Structural sections (omit when segmentation produced nothing).
+    if sections:
+        result["sections"] = sections
     # Only carry the embedding when we actually produced one — its absence is
     # how every downstream consumer knows to behave as today.
     if audio_embedding is not None:

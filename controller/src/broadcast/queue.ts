@@ -347,10 +347,14 @@ class Queue {
     const cur = this.mixAnalysisFor(prevTrack);
     const next = this.mixAnalysisFor(item.track);
 
-    // Feature 1 — adaptive blend length, with a subtle daypart nudge.
+    // Feature 1 — adaptive blend length, with a subtle daypart nudge and a
+    // structure-aware cap so the incoming fade-in finishes before the song's
+    // vocals (the incoming track's instrumental intro, resolved like analysis).
     let energyDelta = 0;
     try { energyDelta = energyForDaypart().speed - 1; } catch {}
-    const secs = mix.crossSecondsFor(cur, next, { energyDelta });
+    let nextIntroMs = item.track.introMs;
+    if (nextIntroMs == null && item.track.id) nextIntroMs = library.get(item.track.id)?.introMs ?? null;
+    const secs = mix.crossSecondsFor(cur, next, { energyDelta, nextIntroMs });
     if (secs != null) {
       item.track.crossSec = secs;
       this.log('mix', `blend ${secs}s → ${item.track.title}`);

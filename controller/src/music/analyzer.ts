@@ -17,11 +17,24 @@ import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
 
+// A structural span over the track, in milliseconds (RangedValue shape). Spans
+// are contiguous and cover the analysed window; the first is the intro/leading
+// section. `kind` is reserved for a future labelled segmenter.
+export interface Section {
+  startMs: number;
+  endMs: number;
+  kind?: string;
+}
+
 export interface AnalysisResult {
   bpm: number | null;
   musicalKey: string | null;
   introMs: number | null;
   confidence: number | null;
+  // Structural sections over the analysed window (intro/leading sections are
+  // the reliable part — the outro is beyond the decode window). null when the
+  // backend computed none; consumers treat null as "no structure".
+  sections: Section[] | null;
   // Integrated loudness (LUFS, BS.1770) + peak (dBFS) over the analysis window,
   // when the backend has pyloudnorm. null otherwise — consumers treat null as
   // "no loudness, play at unity gain", so a backend without pyloudnorm behaves
@@ -39,6 +52,21 @@ export interface AnalysisResult {
 // loudness/peak entirely when pyloudnorm is absent or measurement failed.
 function parseFinite(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+// Coerce the worker's sections field to clean Section[] or null. The worker
+// omits it when segmentation produced nothing; defend against malformed spans.
+function parseSections(v: unknown): Section[] | null {
+  if (!Array.isArray(v) || v.length === 0) return null;
+  const out: Section[] = [];
+  for (const s of v) {
+    const startMs = parseFinite((s as any)?.startMs);
+    const endMs = parseFinite((s as any)?.endMs);
+    if (startMs == null || endMs == null || endMs <= startMs) continue;
+    const kind = typeof (s as any)?.kind === 'string' ? (s as any).kind : undefined;
+    out.push(kind ? { startMs, endMs, kind } : { startMs, endMs });
+  }
+  return out.length ? out : null;
 }
 
 // Coerce the worker's audio_embedding field to a clean number[] or null. The
@@ -150,6 +178,7 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
           confidence: msg.confidence ?? null,
           loudnessLufs: parseFinite(msg.loudness_lufs),
           peakDb: parseFinite(msg.peak_db),
+          sections: parseSections(msg.sections),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
         }),
       reject,
@@ -220,6 +249,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
       confidence: resBody.confidence ?? null,
       loudnessLufs: parseFinite(resBody.loudness_lufs),
       peakDb: parseFinite(resBody.peak_db),
+      sections: parseSections(resBody.sections),
       audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
     };
   } finally {

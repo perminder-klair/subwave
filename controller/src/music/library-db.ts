@@ -32,7 +32,8 @@ export const TAGGER_VERSION = 3;
 // tagging and acoustic analysis run separately. Bump when the analysis shape
 // or method changes so `--re-analyze` / staleness checks can target old rows.
 // v2: added integrated loudness (loudness_lufs) + peak (peak_db).
-export const ANALYSIS_VERSION = 2;
+// v3: added structural sections (structure_json).
+export const ANALYSIS_VERSION = 3;
 
 // CLAP audio-embedding dim. Fixed by the model (LAION-CLAP's audio projection
 // is 512-d), so — unlike the text index in track_vectors — there's no per-model
@@ -95,6 +96,15 @@ export interface TrackRecord {
   analysisVersion: number | null;
   loudnessLufs: number | null; // integrated LUFS (BS.1770); null → unity gain
   peakDb: number | null;       // sample peak in dBFS over the analysis window
+  structure: TrackSection[] | null; // structural sections over the analysed window
+}
+
+// A structural span over a track, in milliseconds (RangedValue shape). Kept as
+// a local shape so library-db stays free of higher-layer imports.
+export interface TrackSection {
+  startMs: number;
+  endMs: number;
+  kind?: string;
 }
 
 export interface TrackMeta {
@@ -297,6 +307,13 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
       ALTER TABLE tracks ADD COLUMN peak_db       REAL;
     `);
     d.pragma('user_version = 4');
+  }
+
+  if (userVersion < 5) {
+    // Structural sections (JSON array of {startMs,endMs[,kind]}) over the
+    // analysed window. Nullable — NULL → no structure, today's behaviour.
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN structure_json TEXT;`);
+    d.pragma('user_version = 5');
   }
 
   // The vec0 virtual table carries the embedding dim in its schema. If the
@@ -599,6 +616,7 @@ export interface TrackAnalysisWrite {
   confidence?: number | null;
   loudnessLufs?: number | null;
   peakDb?: number | null;
+  sections?: TrackSection[] | null;
 }
 
 // Write acoustic-analysis results for a track. Stamps ANALYSIS_VERSION so
@@ -614,6 +632,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         analysis_confidence = ?,
         loudness_lufs       = ?,
         peak_db             = ?,
+        structure_json      = ?,
         analysis_version    = ?
       WHERE id = ?`,
     )
@@ -624,6 +643,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       Number.isFinite(a.confidence as number) ? (a.confidence as number) : null,
       Number.isFinite(a.loudnessLufs as number) ? (a.loudnessLufs as number) : null,
       Number.isFinite(a.peakDb as number) ? (a.peakDb as number) : null,
+      a.sections && a.sections.length ? JSON.stringify(a.sections) : null,
       ANALYSIS_VERSION,
       id,
     );
@@ -645,7 +665,7 @@ export function clearAnalysis(): void {
   d.prepare(
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
       analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
-      analysis_version = NULL`,
+      structure_json = NULL, analysis_version = NULL`,
   ).run();
   // The audio (CLAP) vectors are written in the same pass, so a --re-analyze
   // that redoes bpm/key drops them too — the next pass re-embeds from scratch.
@@ -1091,7 +1111,28 @@ function rowToTrack(row: any): TrackRecord {
     analysisVersion: row.analysis_version ?? null,
     loudnessLufs: row.loudness_lufs ?? null,
     peakDb: row.peak_db ?? null,
+    structure: row.structure_json ? safeParseSections(row.structure_json) : null,
   };
+}
+
+// Parse a structure_json column into clean TrackSection[] or null. Tolerates a
+// malformed/empty column the same way safeParseArray does for tag arrays.
+function safeParseSections(s: string): TrackSection[] | null {
+  try {
+    const v = JSON.parse(s);
+    if (!Array.isArray(v)) return null;
+    const out: TrackSection[] = [];
+    for (const x of v) {
+      const startMs = Number((x as any)?.startMs);
+      const endMs = Number((x as any)?.endMs);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+      const kind = typeof (x as any)?.kind === 'string' ? (x as any).kind : undefined;
+      out.push(kind ? { startMs, endMs, kind } : { startMs, endMs });
+    }
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
 }
 
 function safeParseArray(s: string): string[] {

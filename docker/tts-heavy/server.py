@@ -420,9 +420,10 @@ async def analyze(req: AnalyzeRequest):
         "intro_ms": msg.get("intro_ms"),
         "confidence": msg.get("confidence"),
     }
-    # Optional perceptual loudness — present only when the worker has pyloudnorm.
-    # Pass through; omitted otherwise so the client maps it to null (unity gain).
-    for k in ("loudness_lufs", "peak_db"):
+    # Optional perceptual loudness + structural sections — present only when the
+    # worker computed them. Pass through; omitted otherwise so the client maps
+    # them to null (unity gain / no structure).
+    for k in ("loudness_lufs", "peak_db", "sections"):
         if k in msg:
             out[k] = msg[k]
     # Optional CLAP audio embedding — present only when the worker has the model
