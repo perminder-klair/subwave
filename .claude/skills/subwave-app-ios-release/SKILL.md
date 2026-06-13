@@ -159,16 +159,33 @@ after the build submits.
 
 Decide which kind of release this is:
 
-- **New TestFlight build of the same app version** (the common case — a fix, a
-  tweak): change nothing. `autoIncrement` gives it a fresh build number. Just run
-  the release command.
-- **New marketing version** (e.g. `1.0.0` → `1.0.1`, what testers see as the
-  version): edit `expo.version` in `app/app.json` first, commit it, then release.
-  The build number still auto-increments under it.
+- **Another TestFlight build of a version Apple hasn't released yet** (a fix, a
+  tweak still in beta): change nothing. `autoIncrement` gives it a fresh build
+  number under the same `expo.version`. Just run the release command.
+- **A new public App Store release** (the live-app case): you **must** bump
+  `expo.version` in `app/app.json` first (e.g. `1.0.0` → `1.1.0`), commit, then
+  release. The build number still auto-increments under it.
+
+**Live-app gotcha — once a marketing version is released on the App Store, you
+can't ship to the public store again under that same version.** `--auto-submit`
+(or `eas submit`) will fail at the submission step with:
+
+```
+You've already submitted this version of the app.
+Versions are identified by CFBundleShortVersionString (expo.version)…
+```
+
+The **build still succeeds** — only the submit is rejected — so the fix is: bump
+`expo.version`, commit, rebuild. SUB/WAVE is **live on the App Store**, so treat a
+version bump as **mandatory for every public release**, not optional. (TestFlight
+alone would take another build under the same version; the public store will
+not.) Don't query/guess the current version — read `expo.version` from
+`app/app.json` and the released version from App Store Connect.
 
 You only hand-edit `app.json`'s `version`. You never set `buildNumber` —
 `appVersionSource: "remote"` means EAS is the source of truth for it, and setting
-it locally would fight EAS.
+it locally would fight EAS. The current build number isn't worth recording here
+either — it auto-increments every build; check `eas build:list` for the live value.
 
 ## When something needs Apple auth again (rare)
 
