@@ -102,18 +102,34 @@ router.get('/library/genres', requireAdmin, async (req, res) => {
 // tooltip / filters / stat panels need — lastfm tags, lyric excerpts and
 // embeddings are deliberately omitted here (they'd bloat a multi-thousand-row
 // payload) and loaded lazily per selected track by the /track/:id endpoint.
-// Capped at OBSERVATORY_MAX with a `truncated` flag; station-archive rows are
-// dropped (issue #273).
+// Capped at `max` (default OBSERVATORY_DEFAULT_MAX, raisable per-request via
+// ?max= up to OBSERVATORY_HARD_MAX); above the cap a stratified per-genre sample
+// is returned with `sampled`/`truncated` flags. Station-archive rows are dropped
+// (issue #273).
 // ---------------------------------------------------------------------------
-const OBSERVATORY_MAX = 4000;
-router.get('/library/observatory', requireAdmin, async (_req, res) => {
+// Default node cap (env-overridable) and the hard ceiling the client may raise
+// it to from the UI (?max=). The default stays modest so the first load is light
+// and small libraries render on the animated SVG path; operators with big
+// libraries dial it up in the observatory's MAP SIZE control, which switches the
+// client to the canvas renderer. Above the cap we return a stratified sample.
+const OBSERVATORY_DEFAULT_MAX = Math.max(500, Number(process.env.OBSERVATORY_MAX) || 4000);
+const OBSERVATORY_HARD_MAX = Math.max(OBSERVATORY_DEFAULT_MAX, Number(process.env.OBSERVATORY_HARD_MAX) || 50000);
+router.get('/library/observatory', requireAdmin, async (req, res) => {
   try {
     await library.load();
-    const all = db.allTagged(OBSERVATORY_MAX + 1);
-    const truncated = all.length > OBSERVATORY_MAX;
+    const stats = library.stats();
+    const total = stats.total;
+    const requested = Number(req.query.max);
+    const max = Math.min(
+      OBSERVATORY_HARD_MAX,
+      Math.max(500, Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : OBSERVATORY_DEFAULT_MAX),
+    );
+    const sampled = total > max;
+    const all = sampled ? db.allTaggedSampled(max, total) : db.allTagged();
+    const truncated = sampled;
     const tracks = all
       .filter((t) => !subsonic.isStationArchive(t))
-      .slice(0, OBSERVATORY_MAX)
+      .slice(0, max)
       .map((t) => ({
         id: t.id,
         title: t.title,
@@ -130,11 +146,12 @@ router.get('/library/observatory', requireAdmin, async (_req, res) => {
         musicalKey: t.musicalKey,
         analysisConfidence: t.analysisConfidence,
       }));
-    const stats = library.stats();
     res.json({
       tracks,
       truncated,
-      max: OBSERVATORY_MAX,
+      sampled,
+      max,
+      hardMax: OBSERVATORY_HARD_MAX,
       moodVocab: settings.SHOW_MOODS,
       stats: {
         total: stats.total,

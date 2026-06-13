@@ -996,6 +996,32 @@ export function allTagged(limit?: number): TrackRecord[] {
   return (requireDb().prepare(sql).all() as any[]).map(rowToTrack);
 }
 
+// A *stratified* sample of the tagged library, ~`max` rows, proportional per
+// genre — so the Library Observatory shows the real shape of a huge library
+// instead of the first-N tracks by id (which over-represents whichever genres
+// happen to sort first). Each genre (NULL included as its own partition) gets a
+// quota of round(genreCount / totalTagged · max), min 1, and the first `quota`
+// rows of that genre by id are taken. Stable across loads (ordered by id), so
+// the map layout doesn't reshuffle on refresh. The +1-min-per-genre means the
+// total can drift a little over `max`; the caller slices to `max`.
+export function allTaggedSampled(max: number, totalTagged: number): TrackRecord[] {
+  const m = Math.floor(max);
+  const total = Math.floor(totalTagged);
+  if (m <= 0 || total <= 0) return [];
+  const sql = `
+    SELECT * FROM (
+      SELECT t.*,
+        ROW_NUMBER() OVER (PARTITION BY genre ORDER BY id) AS __rn,
+        COUNT(*)     OVER (PARTITION BY genre)             AS __gc
+      FROM tracks t
+      WHERE ${SQL_HAS_MOODS}
+    )
+    WHERE __rn <= MAX(1, CAST(ROUND(__gc * 1.0 * ? / ?) AS INTEGER))
+    ORDER BY id
+  `;
+  return (requireDb().prepare(sql).all(m, total) as any[]).map(rowToTrack);
+}
+
 // ---------------------------------------------------------------------------
 // Stats
 // ---------------------------------------------------------------------------
