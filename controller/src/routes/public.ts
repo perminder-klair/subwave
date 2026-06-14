@@ -5,6 +5,7 @@ import express from 'express';
 import { stat, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import * as subsonic from '../music/subsonic.js';
+import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { getFullContext } from '../context.js';
 import { queue } from '../broadcast/queue.js';
@@ -143,6 +144,22 @@ router.get('/now-playing', async (req, res) => {
       queue.getNowPlaying(),
       getFullContext(),
     ]);
+    // Enrich the live track with the analysis/tag data the player surfaces in
+    // its minimal metadata strip (genre · BPM · key · mood). All of it lives
+    // in the library DB keyed by subsonic_id; getNowPlaying() stays a pure
+    // reader of now-playing.json. A not-yet-tagged track (or unloaded DB)
+    // yields null here and the fields are simply omitted.
+    if (nowPlaying?.subsonic_id) {
+      const rec = library.get(nowPlaying.subsonic_id);
+      if (rec) {
+        nowPlaying.genre = rec.genre ?? null;
+        nowPlaying.bpm = rec.bpm ?? null;
+        nowPlaying.musicalKey = rec.musicalKey ?? null;
+        nowPlaying.moods = Array.isArray(rec.moods) ? rec.moods : [];
+        nowPlaying.energy = rec.energy ?? null;
+        if (nowPlaying.year == null && rec.year != null) nowPlaying.year = rec.year;
+      }
+    }
     // Served from the 15s listener-monitor cache — no per-request Icecast hit.
     const stream = getStreamStatus();
     const persona = settings.getEffectivePersona();
