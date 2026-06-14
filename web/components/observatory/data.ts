@@ -590,3 +590,102 @@ export function buildMockLibrary(count = 400): LibraryData {
     mock: true,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Mock track dossier — synthesises the rich per-track detail (the lazy
+// /track/:id payload) for a sample-library node, so the landing-page showcase
+// can open a full dossier (embeddings + song-shape timeline + enrichment)
+// without a backend. Deterministic off the track's seed, like buildMockLibrary.
+// ---------------------------------------------------------------------------
+const MOCK_SECTION_KINDS = ['intro', 'verse', 'chorus', 'verse', 'chorus', 'bridge', 'outro'];
+const MOCK_TONICS = ['C', 'D', 'E', 'F', 'G', 'A', 'B', 'C#', 'F#', 'G#'];
+
+export function buildMockDetail(track: ObsTrack): TrackDetail {
+  const seed = track._eseed >>> 0;
+  const rng = mulberry32(seed ^ 0x0d05);
+  const durSec = track.durationSec ?? 210;
+  const totalMs = durSec * 1000;
+
+  // Structural sections across the full span, with small per-boundary jitter.
+  const nSec = 5 + Math.floor(rng() * 3); // 5–7
+  const bounds = [0];
+  for (let i = 1; i < nSec; i++) {
+    bounds.push(Math.max(0, Math.round((totalMs * i) / nSec + (rng() - 0.5) * totalMs * 0.06)));
+  }
+  bounds.push(totalMs);
+  const structure: Section[] = [];
+  for (let i = 0; i < nSec; i++) {
+    structure.push({ startMs: bounds[i]!, endMs: bounds[i + 1]!, kind: MOCK_SECTION_KINDS[i % MOCK_SECTION_KINDS.length] });
+  }
+  const introMs = structure[0]!.endMs;
+
+  // Pace curve — rides the track's energy with a build-to-chorus hump + jitter.
+  const base = track.energyVal;
+  const nPace = 14;
+  const pace: PaceSpan[] = [];
+  for (let i = 0; i < nPace; i++) {
+    const phase = i / nPace;
+    const hump = 0.5 - 0.5 * Math.cos(phase * Math.PI * 2);
+    const v = Math.max(0.05, Math.min(0.98, base * 0.55 + hump * 0.5 + (rng() - 0.5) * 0.12));
+    pace.push({
+      startMs: Math.round((totalMs * i) / nPace),
+      endMs: Math.round((totalMs * (i + 1)) / nPace),
+      value: Math.round(v * 100) / 100,
+    });
+  }
+
+  // Two key ranges; mode follows the Camelot suffix (A = minor, B = major).
+  const mode: 'major' | 'minor' = track.musicalKey?.endsWith('B') ? 'major' : 'minor';
+  const keyRanges: KeyRange[] = [
+    { startMs: 0, endMs: Math.round(totalMs * 0.62), tonic: MOCK_TONICS[seed % MOCK_TONICS.length]!, mode },
+    {
+      startMs: Math.round(totalMs * 0.62),
+      endMs: totalMs,
+      tonic: MOCK_TONICS[(seed + 5) % MOCK_TONICS.length]!,
+      mode: mode === 'major' ? 'minor' : 'major',
+    },
+  ];
+
+  // Vocal presence on the sung sections (empty array = instrumental).
+  const vocalRanges: Section[] | null =
+    track.vocal === 'instrumental'
+      ? []
+      : structure.filter((s) => s.kind === 'verse' || s.kind === 'chorus').map((s) => ({ startMs: s.startMs, endMs: s.endMs }));
+
+  const lastfmTags = [track.genre?.toLowerCase(), ...track.moods].filter(Boolean).slice(0, 4) as string[];
+
+  return {
+    track: {
+      id: track.id,
+      title: track.title,
+      artist: track.artist,
+      album: track.album,
+      year: track.year,
+      genre: track.genre,
+      durationSec: track.durationSec,
+      moods: track.moods,
+      energy: track.energy,
+      source: track.source,
+      confidence: track.confidence,
+      taggerVersion: 3,
+      model: 'ollama:glm-5.1:cloud',
+      taggedAt: null,
+      lastfmTags,
+      lyricExcerpt: null,
+      bpm: track.bpm,
+      musicalKey: track.musicalKey,
+      introMs,
+      analysisConfidence: track.analysisConfidence,
+      analysisVersion: 1,
+      loudnessLufs: track.loudnessLufs,
+      peakDb: track.loudnessLufs != null ? Math.round((track.loudnessLufs + 3) * 10) / 10 : null,
+      structure,
+      vocalRanges,
+      pace,
+      keyRanges,
+    },
+    textEmbedding: embeddingVector(seed, 768),
+    audioEmbedding: track.analysed ? embeddingVector(seed ^ 0x9e37, 512) : null,
+    mixNext: [],
+  };
+}

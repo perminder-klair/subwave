@@ -3671,6 +3671,58 @@ body::after {
     overflow: hidden;
 }
 .observatory-root button { font-family: inherit; }
+
+/* Landing-page embed — the Observatory dropped into the DJ section as a plain
+   bordered figure (no browser-window chrome). The box owns the aspect ratio;
+   the observatory-root fills it as two columns: the constellation (.cmap flexes
+   to fill the stage) and the right rail (.obs-side) showing the open track's
+   dossier / the library stats. On phones the two stack. */
+.obs-embed-box {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    border: 1px solid var(--ink);
+    background: var(--bg);
+    overflow: hidden;
+}
+@media (max-width: 720px) {
+    .obs-embed-box { aspect-ratio: auto; height: 760px; }
+}
+.observatory-root.obs-embed {
+    height: 100%;
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    grid-template-rows: minmax(0, 1fr);
+}
+.obs-embed-stage {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+.obs-embed-badge {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 3;
+    padding: 5px 9px;
+    border: 1px solid var(--separator-strong);
+    background: var(--bg);
+    color: var(--muted);
+    pointer-events: none;
+}
+.obs-embed-side { min-height: 0; }
+@media (max-width: 720px) {
+    .observatory-root.obs-embed {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(280px, 1fr) minmax(0, 380px);
+    }
+    .obs-embed-stage { border-bottom: 1px solid var(--ink); }
+    .obs-embed-side { border-left: 0; }
+}
+
 .observatory-root .acc { color: var(--accent); }
 .observatory-root .ad-muted { color: var(--muted); }
 .observatory-root .t-nums { font-variant-numeric: tabular-nums; }
