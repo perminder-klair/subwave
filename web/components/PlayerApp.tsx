@@ -7,6 +7,7 @@ import { CalendarClock, History, Mic } from 'lucide-react';
 import TopBar from './TopBar';
 import CenterStage from './CenterStage';
 import Waveform from './Waveform';
+import TrackShape, { hasTrackShape } from './TrackShape';
 import TransportBar from './TransportBar';
 import TuneInOverlay from './TuneInOverlay';
 import DotRail from './DotRail';
@@ -291,12 +292,24 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
         onOpenTimeline={openTimeline}
       />
 
-      <Waveform
-        audioRef={audioRef}
-        tunedIn={tunedIn}
-        trackStartedAt={trackStartedAt}
-        duration={nowPlaying?.duration ?? 0}
-      />
+      {/* The song's real analysis becomes the ambient band when available;
+          otherwise the reactive waveform. The waveform still owns the audio
+          analyser, so it stays the fallback for un-analysed tracks + jingles. */}
+      {hasTrackShape(nowPlaying?.analysis) ? (
+        <TrackShape
+          analysis={nowPlaying!.analysis!}
+          tunedIn={tunedIn}
+          trackStartedAt={trackStartedAt}
+          duration={nowPlaying?.duration ?? 0}
+        />
+      ) : (
+        <Waveform
+          audioRef={audioRef}
+          tunedIn={tunedIn}
+          trackStartedAt={trackStartedAt}
+          duration={nowPlaying?.duration ?? 0}
+        />
+      )}
 
       <DotRail counts={dotRailCounts} active={drawer} onSelect={setDrawer} />
 

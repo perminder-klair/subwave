@@ -83,6 +83,30 @@ export default memo(function TransportBar({
   const duration = nowPlaying?.duration ?? 0;
   const progress = duration > 0 ? Math.min(1, elapsed / duration) : 0;
 
+  // Footer song-timeline (#7): when tuned in and the airing track has structural
+  // analysis, the analog signal scale re-skins into the song itself — section
+  // boundaries + labels, a vocal-presence lane, and the needle as the playhead.
+  // Otherwise the latency meter stays. The signal stays readable either way:
+  // listeners + latency live in the right-hand readout regardless.
+  const analysis = nowPlaying?.analysis ?? null;
+  const sections = analysis?.structure ?? [];
+  const showTimeline = tunedIn && sections.length > 0;
+  // Position scale: largest endMs across spans, else the track duration.
+  const songDurMs = (() => {
+    if (!showTimeline) return 0;
+    let m = duration > 0 ? duration * 1000 : 0;
+    for (const s of sections) m = Math.max(m, s.endMs);
+    for (const v of analysis?.vocals ?? []) m = Math.max(m, v.endMs);
+    return m || 1;
+  })();
+  const elapsedMs = elapsed * 1000;
+  const curSection = showTimeline
+    ? (sections.find((s) => elapsedMs >= s.startMs && elapsedMs < s.endMs) ?? sections[sections.length - 1])
+    : null;
+  // The needle rides real progress; reuse the same 0–100% position the latency
+  // needle uses, but driven by the playhead instead of round-trip latency.
+  const songNeedlePct = songDurMs > 0 ? Math.min(100, (elapsedMs / songDurMs) * 100) : 0;
+
   // Knob pointer sweeps the conic tick scale: -135° (silent) → +135° (full),
   // matching the scale's `from -135deg` origin in globals.css.
   const angle = -135 + volume * 270;
@@ -200,7 +224,11 @@ export default memo(function TransportBar({
           <div className="flex w-full flex-col justify-center gap-1 font-mono lg:gap-1.5">
             <div className="flex items-baseline justify-between gap-2 lg:gap-4">
               <span className="text-[11px] font-semibold tracking-[0.04em] whitespace-nowrap text-ink lg:text-[12px]">
-                Signal · <b className={cn('font-bold', qualityTone)}>{qualityLabel}</b>
+                {showTimeline ? (
+                  <>On air · <b className="font-bold text-vermilion">{curSection?.kind ?? 'Live'}</b></>
+                ) : (
+                  <>Signal · <b className={cn('font-bold', qualityTone)}>{qualityLabel}</b></>
+                )}
               </span>
               <span
                 className="v3-tab-num text-[11px] tracking-[0.06em] whitespace-nowrap text-muted lg:text-[12px] lg:tracking-[0.08em]"
@@ -210,20 +238,65 @@ export default memo(function TransportBar({
                 {listeners != null ? `${listeners} ♪ · ${latencyText}` : latencyText}
               </span>
             </div>
-            <div className="fz-scale h-8 lg:h-[42px]" aria-hidden="true">
-              <div className="fz-ticks" />
-              <div
-                className="fz-needle"
-                ref={(el) => { if (el) el.style.setProperty('--fz-needle-pos', `${needlePct}%`); }}
-              >
-                <div className="fz-grip" />
-              </div>
-              <div className="fz-nums">
-                {SCALE_NUMS.map((n) => (
-                  <span key={n}>{n}</span>
+            {showTimeline ? (
+              <div className="fz-scale fz-song h-8 lg:h-[42px]" aria-hidden="true">
+                <div className="fz-ticks" />
+                {sections.map((s, i) => (
+                  <span key={`b${i}`}>
+                    {i > 0 && (
+                      <span
+                        className="fz-song-bound"
+                        ref={(el) => { if (el) el.style.setProperty('left', `${(s.startMs / songDurMs) * 100}%`); }}
+                      />
+                    )}
+                    {s.kind && (
+                      <span
+                        className="fz-song-lbl"
+                        data-on={s === curSection ? 'true' : undefined}
+                        ref={(el) => { if (el) el.style.setProperty('left', `${((s.startMs + s.endMs) / 2 / songDurMs) * 100}%`); }}
+                      >
+                        {s.kind}
+                      </span>
+                    )}
+                  </span>
                 ))}
+                {analysis?.vocals && analysis.vocals.length > 0 && (
+                  <div className="fz-song-vox">
+                    {analysis.vocals.map((v, i) => (
+                      <span
+                        key={`fv${i}`}
+                        ref={(el) => {
+                          if (!el) return;
+                          el.style.setProperty('left', `${(v.startMs / songDurMs) * 100}%`);
+                          el.style.setProperty('width', `${((v.endMs - v.startMs) / songDurMs) * 100}%`);
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+                <div
+                  className="fz-needle"
+                  ref={(el) => { if (el) el.style.setProperty('--fz-needle-pos', `${songNeedlePct}%`); }}
+                >
+                  <div className="fz-grip" />
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="fz-scale h-8 lg:h-[42px]" aria-hidden="true">
+                <div className="fz-ticks" />
+                <div
+                  className="fz-needle"
+                  ref={(el) => { if (el) el.style.setProperty('--fz-needle-pos', `${needlePct}%`); }}
+                >
+                  <div className="fz-grip" />
+                </div>
+                <div className="fz-nums">
+                  {SCALE_NUMS.map((n) => (
+                    <span key={n}>{n}</span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

@@ -915,6 +915,178 @@ body::after {
     background: var(--accent);
 }
 
+/* ── Active-track readout band (Track Shape) ──────────────────────────────
+   The song's real pace/energy curve becomes the ambient band: it fills ink
+   behind the playhead, structure boundaries are hairline small-caps labels
+   that glow vermilion as you enter them, and a thin VOX lane shows where the
+   voice is. Theme-aware — all inks derive from --ink/--accent, so it flips
+   with the station palette. Falls back to <Waveform> on un-analysed tracks. */
+.tr-band {
+    /* token scope: alpha steps off the theme ink */
+    --tr-ink2: color-mix(in oklab, var(--ink) 62%, transparent);
+    --tr-ink3: color-mix(in oklab, var(--ink) 40%, transparent);
+    --tr-ink4: color-mix(in oklab, var(--ink) 18%, transparent);
+    --tr-brd: color-mix(in oklab, var(--ink) 12%, transparent);
+}
+.tr-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 2px 6px;
+    font-size: 9px;
+    letter-spacing: 0.26em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--tr-ink3);
+}
+.tr-head-meta {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.08em;
+}
+.tr-shape {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+}
+.tr-curve {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 14px;
+    bottom: 22px;
+    width: 100%;
+    height: calc(100% - 36px);
+}
+.tr-area-faint { fill: color-mix(in oklab, var(--ink) 7%, transparent); }
+.tr-area { fill: color-mix(in oklab, var(--ink) 20%, transparent); }
+.tr-line {
+    fill: none;
+    stroke: var(--tr-ink2);
+    stroke-width: 1.4;
+    vector-effect: non-scaling-stroke;
+}
+.tr-div {
+    position: absolute;
+    top: 12px;
+    bottom: 20px;
+    width: 1px;
+    background: var(--tr-brd);
+    z-index: 3;
+}
+.tr-seclbl {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    font-size: 8.5px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--tr-ink3);
+    white-space: nowrap;
+    transition: color 0.2s;
+}
+.tr-seclbl[data-on="true"] { color: var(--accent); }
+.tr-vlane {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 14px;
+}
+.tr-vlbl {
+    position: absolute;
+    left: 0;
+    bottom: 1px;
+    font-size: 8px;
+    letter-spacing: 0.16em;
+    font-weight: 700;
+    color: var(--tr-ink4);
+}
+.tr-vseg {
+    position: absolute;
+    bottom: 3px;
+    height: 3px;
+    background: var(--tr-ink4);
+    transition: background 0.2s, height 0.2s;
+}
+.tr-vseg[data-on="true"] {
+    background: var(--accent);
+    height: 4px;
+}
+.tr-ph {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1.5px;
+    background: var(--accent);
+    z-index: 6;
+    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.tr-ph::before {
+    content: "";
+    position: absolute;
+    top: -1px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid var(--accent);
+}
+.tr-time {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--tr-ink2);
+    letter-spacing: 0.04em;
+    font-variant-numeric: tabular-nums;
+}
+.tr-time span {
+    color: var(--tr-ink3);
+    font-weight: 500;
+}
+
+/* Footer song-timeline (#7) — the analog signal scale re-skinned to read the
+   song: section boundaries + small-caps labels, a vocal-presence lane, and the
+   existing .fz-needle as the playhead. Builds on .fz-scale chrome (border, bg,
+   ticks); only the song-specific overlays live here. */
+.fz-song .fz-song-bound {
+    position: absolute;
+    top: 0;
+    bottom: 14px;
+    width: 1px;
+    background: color-mix(in oklab, var(--ink) 40%, transparent);
+    opacity: 0.7;
+}
+.fz-song .fz-song-lbl {
+    position: absolute;
+    top: 3px;
+    transform: translateX(-50%);
+    font-size: 7.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: color-mix(in oklab, var(--ink) 40%, transparent);
+    white-space: nowrap;
+    transition: color 0.2s;
+    pointer-events: none;
+}
+.fz-song .fz-song-lbl[data-on="true"] { color: var(--accent); }
+.fz-song .fz-song-vox {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 3px;
+    height: 3px;
+}
+.fz-song .fz-song-vox span {
+    position: absolute;
+    bottom: 0;
+    height: 3px;
+    background: color-mix(in oklab, var(--ink) 18%, transparent);
+}
+
 /* Volume knob — open ring + inner cap + vermilion pointer; the conic ring of
    ticks behind it reads as a level scale (starts from -135deg, matching the
    pointer angle the JSX sets inline as -135 + volume*270). */

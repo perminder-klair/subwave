@@ -67,6 +67,9 @@ export default defineConfig([
             // (TransportBar), defined in app/globals.css. Same legacy-CSS deal
             // as the other prefixes: component CSS not yet promoted to @theme.
             '^fz-',
+            // .tr-* — the active-track readout band (TrackShape), defined in
+            // app/globals.css. Same legacy-CSS deal as .fz-* above.
+            '^tr-',
             '^bs-',
             '^broadsheet-',
             '^admin-',

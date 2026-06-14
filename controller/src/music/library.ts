@@ -159,6 +159,83 @@ export function paceMeanOf(pace: Array<{ value: number }> | null | undefined): n
     : null;
 }
 
+// ---------------------------------------------------------------------------
+// Now-playing readout — the per-track analysis the listener player surfaces in
+// the active-track band + footer timeline (the "Track Data" design). Distinct
+// from slimTrack (picker projection): this is the UI shape, with keyRanges
+// resolved to Camelot labels and time spans kept in ms for the playhead math.
+// Every acoustic field is null on an un-analysed track; the client gates on
+// presence and falls back to the plain waveform.
+// ---------------------------------------------------------------------------
+
+// tonic (sharp spelling, as the analyzer emits) + mode → Camelot code.
+const CAMELOT_BY_KEY: Record<string, string> = {
+  'G# minor': '1A', 'D# minor': '2A', 'A# minor': '3A', 'F minor': '4A',
+  'C minor': '5A', 'G minor': '6A', 'D minor': '7A', 'A minor': '8A',
+  'E minor': '9A', 'B minor': '10A', 'F# minor': '11A', 'C# minor': '12A',
+  'B major': '1B', 'F# major': '2B', 'C# major': '3B', 'G# major': '4B',
+  'D# major': '5B', 'A# major': '6B', 'F major': '7B', 'C major': '8B',
+  'G major': '9B', 'D major': '10B', 'A major': '11B', 'E major': '12B',
+};
+// Camelot code → human key name (flat spelling, the conventional DJ reading).
+const KEYNAME_BY_CAMELOT: Record<string, string> = {
+  '1A': 'Ab minor', '2A': 'Eb minor', '3A': 'Bb minor', '4A': 'F minor',
+  '5A': 'C minor', '6A': 'G minor', '7A': 'D minor', '8A': 'A minor',
+  '9A': 'E minor', '10A': 'B minor', '11A': 'F# minor', '12A': 'Db minor',
+  '1B': 'B major', '2B': 'F# major', '3B': 'Db major', '4B': 'Ab major',
+  '5B': 'Eb major', '6B': 'Bb major', '7B': 'F major', '8B': 'C major',
+  '9B': 'G major', '10B': 'D major', '11B': 'A major', '12B': 'E major',
+};
+
+export interface TrackReadout {
+  durationSec: number | null;
+  bpm: number | null;
+  key: string | null;        // dominant Camelot code, e.g. '8A'
+  keyName: string | null;    // e.g. 'A minor'
+  loudnessLufs: number | null;
+  peakDb: number | null;
+  energy: string | null;
+  moods: string[];
+  // Time spans in ms (matches the DB), so the client maps against the playhead.
+  structure: Array<{ startMs: number; endMs: number; kind?: string }> | null;
+  vocals: Array<{ startMs: number; endMs: number }> | null;
+  pace: Array<{ startMs: number; endMs: number; value: number }> | null;
+  keyRanges: Array<{ startMs: number; endMs: number; key: string }> | null;
+}
+
+export function getReadout(songId: string): TrackReadout | null {
+  if (!loaded) return null;
+  const t = db.getTrack(songId);
+  if (!t) return null;
+  const key = t.musicalKey ?? null;
+  return {
+    durationSec: t.durationSec ?? null,
+    bpm: t.bpm ?? null,
+    key,
+    keyName: key ? (KEYNAME_BY_CAMELOT[key] ?? null) : null,
+    loudnessLufs: t.loudnessLufs ?? null,
+    peakDb: t.peakDb ?? null,
+    energy: t.energy ?? null,
+    moods: Array.isArray(t.moods) ? t.moods : [],
+    structure: t.structure && t.structure.length
+      ? t.structure.map(s => ({ startMs: s.startMs, endMs: s.endMs, kind: s.kind }))
+      : null,
+    vocals: t.vocalRanges && t.vocalRanges.length
+      ? t.vocalRanges.map(s => ({ startMs: s.startMs, endMs: s.endMs }))
+      : null,
+    pace: t.pace && t.pace.length
+      ? t.pace.map(s => ({ startMs: s.startMs, endMs: s.endMs, value: s.value }))
+      : null,
+    keyRanges: t.keyRanges && t.keyRanges.length
+      ? t.keyRanges.map(r => ({
+          startMs: r.startMs,
+          endMs: r.endMs,
+          key: CAMELOT_BY_KEY[`${r.tonic} ${r.mode}`] ?? key ?? '',
+        }))
+      : null,
+  };
+}
+
 // plus the two tagger axes. Matches what songsByMood returns above; pulled
 // out so the new embedding-similar helpers can share the same projection.
 function slimTrack(r: db.TrackRecord) {

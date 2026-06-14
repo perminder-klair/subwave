@@ -6,6 +6,30 @@
 /** A track currently airing. `subsonic_id` is present for library tracks and
  *  drives MediaSession artwork via the `/api/cover/:id` proxy. Jingles +
  *  scanning have no id. */
+/** A time span in milliseconds (matches the controller's library.db shape). */
+export interface AnalysisSpan {
+  startMs: number;
+  endMs: number;
+}
+
+/** Per-track acoustic + tag analysis surfaced for the active-track readouts.
+ *  Every acoustic field is null on an un-analysed track; the player gates on
+ *  presence and falls back to the plain waveform band. */
+export interface TrackAnalysis {
+  durationSec: number | null;
+  bpm: number | null;
+  key: string | null;        // dominant Camelot code, e.g. '8A'
+  keyName: string | null;    // e.g. 'A minor'
+  loudnessLufs: number | null;
+  peakDb: number | null;
+  energy: string | null;
+  moods: string[];
+  structure: Array<AnalysisSpan & { kind?: string }> | null;
+  vocals: AnalysisSpan[] | null;
+  pace: Array<AnalysisSpan & { value: number }> | null;
+  keyRanges: Array<AnalysisSpan & { key: string }> | null;
+}
+
 export interface NowPlayingTrack {
   title?: string;
   artist?: string;
@@ -13,6 +37,8 @@ export interface NowPlayingTrack {
   year?: number;
   duration?: number;
   subsonic_id?: string;
+  /** Present only for library tracks found in library.db (see TrackAnalysis). */
+  analysis?: TrackAnalysis | null;
 }
 
 export interface WeatherContext {

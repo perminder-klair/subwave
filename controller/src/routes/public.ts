@@ -5,6 +5,7 @@ import express from 'express';
 import { stat, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import * as subsonic from '../music/subsonic.js';
+import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { getFullContext } from '../context.js';
 import { queue } from '../broadcast/queue.js';
@@ -139,10 +140,33 @@ router.get('/persona-avatar/:id', async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/now-playing', async (req, res) => {
   try {
-    const [nowPlaying, ctx] = await Promise.all([
+    const [rawNowPlaying, ctx] = await Promise.all([
       queue.getNowPlaying(),
       getFullContext(),
     ]);
+    // Enrich the airing track with its library.db analysis row (pace curve,
+    // structure, vocal-presence, bpm/key/LUFS, mood/energy) so the listener
+    // player can render the active-track readouts. Best-effort: any failure
+    // (db not yet loaded, track absent, jingle with no id) leaves nowPlaying
+    // exactly as Liquidsoap wrote it and the UI falls back to the waveform.
+    let nowPlaying = rawNowPlaying;
+    if (rawNowPlaying?.subsonic_id) {
+      try {
+        await library.load();
+        const analysis = library.getReadout(rawNowPlaying.subsonic_id);
+        if (analysis) {
+          nowPlaying = {
+            ...rawNowPlaying,
+            // Liquidsoap's now-playing.json carries no duration; backfill it
+            // from the library row so the progress bar + playhead work.
+            duration: rawNowPlaying.duration ?? analysis.durationSec ?? undefined,
+            analysis,
+          };
+        }
+      } catch {
+        // keep rawNowPlaying
+      }
+    }
     // Served from the 15s listener-monitor cache — no per-request Icecast hit.
     const stream = getStreamStatus();
     const persona = settings.getEffectivePersona();
