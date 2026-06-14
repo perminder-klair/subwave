@@ -24,6 +24,10 @@
           "type": "json",
           "path": "cli/package.json",
           "jsonpath": "$.version"
+        },
+        {
+          "type": "generic",
+          "path": "cli/src/assets.generated.ts"
         }
       ]
     }
