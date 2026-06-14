@@ -25,8 +25,10 @@ let lastCount: number | null = null;        // null = unknown (not yet polled, o
 export interface StreamStatus {
   online: boolean;
   listeners: { current: number; peak: number };
+  /** Bitrate (kbps) of the first attached broadcast mount, null when offline. */
+  bitrate: number | null;
 }
-let lastStatus: StreamStatus = { online: false, listeners: { current: 0, peak: 0 } };
+let lastStatus: StreamStatus = { online: false, listeners: { current: 0, peak: 0 }, bitrate: null };
 
 // Time-series file. JSONL of {t, count} rows, one per persisted sample.
 // We persist every minute (not every 15s poll) — keeps the file at ~1440
@@ -51,6 +53,9 @@ async function fetchCount() {
     const current: number = broadcastSources.reduce(
       (sum: number, s: any) => sum + Number(s.listeners || 0), 0);
     lastCount = current;
+    // Bitrate from the first attached mount — both share the same `radio` bus,
+    // so one figure represents the broadcast. Comes free off this same poll.
+    const firstBitrate = Number(broadcastSources[0]?.bitrate);
     lastStatus = {
       online: broadcastSources.length > 0,
       listeners: {
@@ -58,10 +63,11 @@ async function fetchCount() {
         peak: broadcastSources.reduce(
           (sum: number, s: any) => sum + Number(s.listener_peak || 0), 0),
       },
+      bitrate: Number.isFinite(firstBitrate) ? firstBitrate : null,
     };
   } catch {
     lastCount = null;
-    lastStatus = { online: false, listeners: { current: 0, peak: 0 } };
+    lastStatus = { online: false, listeners: { current: 0, peak: 0 }, bitrate: null };
   }
   // Persist at most one row per wall-clock minute. Skip null samples — a
   // stats outage shouldn't leave a misleading "0 listeners" stripe in the

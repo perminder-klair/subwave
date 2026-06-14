@@ -2883,6 +2883,277 @@ body::after {
     color: var(--danger);
 }
 
+/* ── Station Health Strip (admin dash header band) ──
+   Five glanceable instruments — a mixed-meter console read through a Braun /
+   Dieter Rams lens. Instrument type follows data shape (needle / LED ladder /
+   linear bar / pilot lamp). All colour comes from existing theme tokens, so it
+   tracks light + dark automatically. Motion is driven imperatively by the
+   StationHealthStrip component's rAF loop; this is structure + state styling. */
+.admin-root .hs-strip {
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    /* gauge face strokes, derived from ink so they track light + dark */
+    --hs-arc: color-mix(in oklab, var(--ink) 16%, transparent);
+    --hs-tick: color-mix(in oklab, var(--ink) 32%, transparent);
+}
+.admin-root .hs-cell {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 140px;
+    border-left: 1px solid var(--separator-strong);
+    padding: 13px 14px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    overflow: hidden;
+}
+.admin-root .hs-cell:first-child {
+    border-left: 0;
+}
+.admin-root .hs-cell.hs-lamp {
+    min-width: 196px;
+}
+/* on-air station context (weather / picker), stacked under the lamp */
+.admin-root .hs-lampctx {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 2px;
+}
+.admin-root .hs-ctxrow {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    min-width: 0;
+}
+.admin-root .hs-ctxk {
+    flex: none;
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+}
+.admin-root .hs-ctxv {
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.admin-root .hs-ctxv.hs-busy {
+    color: var(--accent);
+}
+.admin-root .hs-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    min-width: 0;
+}
+.admin-root .hs-lbl {
+    font-size: 10px;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.admin-root .hs-lbl .idx {
+    color: var(--muted);
+    margin-right: 7px;
+    font-weight: 500;
+}
+.admin-root .hs-sub {
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    text-align: right;
+}
+.admin-root .hs-read {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-variant-numeric: tabular-nums;
+}
+.admin-root .hs-read .hs-v {
+    font-size: 26px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -0.01em;
+}
+.admin-root .hs-read .hs-u {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+}
+.admin-root .hs-read .hs-x {
+    margin-left: auto;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+    align-self: flex-end;
+}
+.admin-root .hs-read .hs-x b {
+    color: var(--accent);
+    font-weight: 700;
+}
+.admin-root .hs-read.warn .hs-v {
+    color: var(--danger);
+}
+.admin-root .hs-read.warn .hs-x b {
+    color: var(--danger);
+}
+.admin-root .hs-gauge {
+    display: block;
+    width: 100%;
+    height: 64px;
+}
+/* tts inverted linear bar */
+.admin-root .hs-barwrap {
+    height: 54px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 8px;
+}
+.admin-root .hs-track {
+    position: relative;
+    height: 12px;
+    border: 1px solid color-mix(in oklab, var(--ink) 20%, transparent);
+    background: transparent;
+}
+.admin-root .hs-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 0;
+    background: var(--ink);
+    transition:
+        width 0.5s cubic-bezier(0.2, 0.7, 0.2, 1),
+        background 0.3s;
+}
+.admin-root .hs-fill.mid {
+    background: var(--muted);
+}
+.admin-root .hs-fill.bad {
+    background: var(--danger);
+}
+.admin-root .hs-mark {
+    position: absolute;
+    top: -4px;
+    bottom: -4px;
+    /* caution threshold marker (ttsMidPct) — fixed on the 0–100% track */
+    left: 12%;
+    width: 1px;
+    background: color-mix(in oklab, var(--ink) 30%, transparent);
+}
+.admin-root .hs-scale {
+    display: flex;
+    justify-content: space-between;
+    font-size: 8px;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    font-weight: 600;
+}
+/* on-air pilot lamp */
+.admin-root .hs-lampbody {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    height: 54px;
+}
+.admin-root .hs-bulb {
+    position: relative;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    flex: none;
+    border: 1px solid var(--ink);
+    background: var(--bg);
+}
+.admin-root .hs-bulb .hs-core {
+    position: absolute;
+    inset: 5px;
+    border-radius: 50%;
+    background: color-mix(in oklab, var(--ink) 14%, transparent);
+}
+.admin-root .hs-bulb.hs-on {
+    border-color: var(--accent);
+}
+.admin-root .hs-bulb.hs-on .hs-core {
+    background: var(--accent);
+    box-shadow: 0 0 10px 2px color-mix(in oklab, var(--accent) 70%, transparent);
+}
+.admin-root .hs-bulb .hs-ring {
+    position: absolute;
+    inset: -3px;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    opacity: 0;
+}
+.admin-root .hs-bulb.hs-on .hs-ring {
+    animation: hs-ring 1.7s cubic-bezier(0.2, 0.7, 0.2, 1) infinite;
+}
+@keyframes hs-ring {
+    0% {
+        transform: scale(1);
+        opacity: 0.7;
+    }
+    70% {
+        transform: scale(1.85);
+        opacity: 0;
+    }
+    100% {
+        opacity: 0;
+    }
+}
+.admin-root .hs-lampmeta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+.admin-root .hs-state {
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+.admin-root .hs-state.hs-off {
+    color: var(--muted);
+}
+.admin-root .hs-rate {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+}
+.admin-root .hs-rate b {
+    color: var(--ink);
+    font-weight: 700;
+}
+@media (prefers-reduced-motion: reduce) {
+    .admin-root .hs-bulb.hs-on .hs-ring {
+        display: none;
+    }
+    .admin-root .hs-fill {
+        transition: none;
+    }
+}
+
 /* Waveform */
 .admin-root .wave {
     display: flex;

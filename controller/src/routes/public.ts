@@ -175,6 +175,7 @@ router.get('/now-playing', async (req, res) => {
       session: s ? { id: s.id, kind: s.kind, startedAt: s.startedAt, show: s.show?.name || null } : null,
       listeners: stream.listeners,
       streamOnline: stream.online,
+      streamBitrate: stream.bitrate,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

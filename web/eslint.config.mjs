@@ -75,6 +75,10 @@ export default defineConfig([
             // .lib-* — redesigned /admin/library component classes in
             // app/globals.css (.admin-root .lib-*). Same legacy-CSS deal.
             '^lib-',
+            // .hs-* — the /admin/dash StationHeader status strip instruments
+            // (.admin-root .hs-*), ported from a Claude Design prototype.
+            // Bespoke gauge/bar/lamp CSS in app/globals.css.
+            '^hs-',
             // admin-scoped descendant classes from globals.css
             '^eyebrow$',
             '^caption$',

@@ -3,7 +3,7 @@
 // DJ command center — /admin/dash. Lets the operator step into the autonomous
 // booth: speak custom text on-air, fire any voice segment on demand,
 // flip the autonomous toggles, and watch live on-air status + the booth log.
-import type { ChangeEvent, MouseEvent, ReactNode } from 'react';
+import type { ChangeEvent, MouseEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
@@ -20,7 +20,8 @@ import type {
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { V3Alert } from '../ui/alert';
 import { Textarea } from '../ui/textarea';
-import { Card, Btn, Pill, Eyebrow, Seg, Toggle } from './ui';
+import { Card, Btn, Pill, Seg, Toggle } from './ui';
+import StationHeader, { type HealthMetrics } from './StationHeader';
 import { cn } from '../../lib/cn';
 
 const SAY_KINDS = [
@@ -51,9 +52,19 @@ interface DashStatus {
   context?: StationContext | null;
   dj?: DjState | null;
   listeners?: ListenerCount | number | null;
+  streamOnline?: boolean;
+  streamBitrate?: number | null;
   activeShow?: ActiveShow | null;
   queue?: QueueState;
   sessionMessages?: SessionTurn[];
+}
+
+// Subset of /stats (admin) the health strip reads: DJ p95 latency + the TTS
+// fallback rate, both since-boot rollups. Polled slower than live status since
+// they move slowly and the endpoint is heavier.
+interface HealthStats {
+  llm?: { count?: number; latency?: { p95?: number } };
+  tts?: { count?: number; fallbackRate?: number | null };
 }
 
 interface ActResponse {
@@ -175,6 +186,7 @@ export default function DashPanel() {
 
   const [conns, setConns] = useState<ConnectionsState | null>(null);
   const [connErr, setConnErr] = useState<string | null>(null);
+  const [stats, setStats] = useState<HealthStats | null>(null);
   // Longest-connected first by default — the most stable listeners on top.
   const [sort, setSort] = useState<SortState>({ key: 'connectedSeconds', dir: 'desc' });
   const [revealIps, setRevealIps] = useState(false);
@@ -241,6 +253,30 @@ export default function DashPanel() {
     };
   }, [hydrated, needsAuth, adminFetch]);
 
+  // Usage rollups for the health strip (DJ latency + TTS fallback) — polled
+  // every 15s. /stats is heavier than live status and both figures move slowly,
+  // so it gets its own slower cadence. Soft-fails: a miss just freezes the two
+  // meters at their last reading rather than erroring the dash.
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await adminFetch('/stats');
+        const j = (await r.json().catch(() => null)) as HealthStats | null;
+        if (!cancelled && r.ok && j) setStats(j);
+      } catch {
+        /* leave last reading in place */
+      }
+    };
+    tick();
+    const id = setInterval(tick, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [hydrated, needsAuth, adminFetch]);
+
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = 0;
   }, [status?.sessionMessages?.length]);
@@ -297,50 +333,46 @@ export default function DashPanel() {
     ? `${ctx.weather.condition}${ctx.weather.temp != null ? ` ${Math.round(ctx.weather.temp)}°` : ''}`
     : '—';
 
-  // 6-cell status strip — real data.
-  interface StripCell {
-    l: string;
-    v: ReactNode;
-    sub?: ReactNode;
-    accent?: boolean;
-  }
+  // Inputs for the top-of-dash health strip. Listeners/queue/online come from
+  // the 3s live poll; latency + TTS-fallback from the 15s /stats poll. A meter
+  // with no data yet (stats not loaded, or zero calls since boot) is passed
+  // null so the strip shows "—" rather than a misleading zero.
+  const lCurrent =
+    listenersObj?.current ?? (typeof listenersValue === 'number' ? listenersValue : 0);
+  const lPeak = listenersObj?.peak ?? lCurrent;
+  const healthMetrics: HealthMetrics = {
+    listeners: lCurrent,
+    listenersPeak: lPeak,
+    latencyMs: stats?.llm?.count ? (stats.llm.latency?.p95 ?? null) : null,
+    ttsFallbackPct: stats?.tts?.count ? Math.round((stats.tts.fallbackRate ?? 0) * 1000) / 10 : null,
+    online: status?.streamOnline ?? null,
+    bitrateKbps: status?.streamBitrate ?? null,
+  };
+
   const djName =
     status?.dj && typeof status.dj === 'object' && 'name' in status.dj
       ? String((status.dj as { name?: unknown }).name ?? '—')
       : '—';
-  const strip: StripCell[] = [
-    { l: 'dj on air', v: djName, accent: true },
-    { l: 'show', v: showName },
-    {
-      l: 'listeners',
-      v: listenersObj?.current != null ? String(listenersObj.current) : '—',
-      sub: listenersObj?.peak != null ? `peak ${listenersObj.peak}` : null,
-    },
-    { l: 'weather', v: weatherText },
-    {
-      l: 'picker',
-      v: q.pickerBusy ? 'thinking' : 'idle',
-      accent: !!q.pickerBusy,
-    },
-  ];
 
   return (
     <div className="grid gap-4">
+      {/* ── STATION HEADER: now-playing + unified health/status strip ───── */}
+      <StationHeader
+        metrics={healthMetrics}
+        np={np}
+        djName={djName}
+        showName={showName}
+        weatherText={weatherText}
+        pickerBusy={!!q.pickerBusy}
+        busy={busy}
+        onSkip={() => setConfirmSkip(true)}
+      />
+
       {err && (
         <V3Alert tone="error" title="controller error">
           {err}
         </V3Alert>
       )}
-
-      {/* ── ON AIR HERO ────────────────────────────────────────────────── */}
-      <HeroSection
-        err={err}
-        np={np}
-        q={q}
-        busy={busy}
-        onSkip={() => setConfirmSkip(true)}
-        strip={strip}
-      />
 
       {/* ── 2-COL OPS ──────────────────────────────────────────────────── */}
       <div className="stack-mobile grid grid-cols-[1.4fr_1fr] gap-4">
@@ -606,83 +638,7 @@ function SortableTh({
   );
 }
 
-interface HeroSectionProps {
-  err: string | null;
-  np: NowPlayingTrack | null | undefined;
-  q: QueueState;
-  busy: string | null;
-  onSkip: () => void;
-  strip: { l: string; v: ReactNode; sub?: ReactNode; accent?: boolean }[];
-}
-
-function HeroSection({ err, np, q, busy, onSkip, strip }: HeroSectionProps) {
-  // live-dot is admin-scoped CSS with `background: var(--accent)` already; we
-  // only need to override when there's a controller error, so route through
-  // the dynamic-style hook (via the DotWithBg helper below).
-  return (
-    <section className="card border-ink">
-      <div className="stack-mobile grid grid-cols-[1fr_auto] items-center gap-6 border-b border-ink p-[18px]">
-        <div>
-          <div className="mb-2.5 flex items-center gap-2.5">
-            <DotWithBg background={err ? 'var(--danger)' : 'var(--accent)'} />
-            <Eyebrow className="text-vermilion">on air</Eyebrow>
-            <span className="caption">
-              auto-pick {q.autoPick ? 'on' : 'off'} · auto-link {q.autoLink ? 'on' : 'off'}
-            </span>
-          </div>
-          {np?.title ? (
-            <>
-              <div className="text-[18px] leading-[1.2] font-bold tracking-[-0.01em]">
-                {np.title} <span className="font-semibold text-muted">— {np.artist}</span>
-              </div>
-              {np.album && <div className="caption mt-1.5">album · {np.album}</div>}
-            </>
-          ) : (
-            <div className="text-[22px] font-bold text-muted">nothing reported playing</div>
-          )}
-        </div>
-        <div className="flex gap-2">
-          <Btn lg tone="danger" disabled={!!busy || !np?.title} onClick={onSkip}>
-            {busy === 'skip' ? 'skipping…' : 'Skip track'}
-          </Btn>
-        </div>
-      </div>
-
-      {/* status strip */}
-      <div className="strip-mobile grid grid-cols-5">
-        {strip.map((c, i) => (
-          <div
-            key={i}
-            className={cn(
-              'flex flex-col gap-0.5 px-3.5 py-3',
-              i > 0 && 'border-l border-separator-strong',
-            )}
-          >
-            <span className="caption">{c.l}</span>
-            <span
-              className={cn('text-[14px] font-semibold', c.accent ? 'text-vermilion' : 'text-ink')}
-            >
-              {c.v}
-            </span>
-            {c.sub && <span className="caption text-[9px]">{c.sub}</span>}
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
-
-interface DotWithBgProps {
-  background: string;
-}
-
-function DotWithBg({ background }: DotWithBgProps) {
-  const ref = useRef<HTMLSpanElement>(null);
-  useDynamicStyle(ref, { background });
-  return <span ref={ref} className="live-dot" />;
-}
 
 interface SegmentButtonProps {
   label: string;

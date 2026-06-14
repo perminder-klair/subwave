@@ -105,6 +105,8 @@ export interface NowPlayingResponse {
   activeShow?: ActiveShow | null;
   listeners?: ListenerCount | number;
   streamOnline?: boolean;
+  /** kbps of the first attached broadcast mount; null when offline. */
+  streamBitrate?: number | null;
 }
 
 export interface QueueEntry {
