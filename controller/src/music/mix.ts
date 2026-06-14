@@ -40,6 +40,11 @@ function analysed(a: Analysis): boolean {
   return a.bpm != null || a.key != null;
 }
 
+// Broadcast crossfade bounds (seconds). The floor keeps every blend audible —
+// shorter than this and a transition reads as a hard cut / "no crossfade".
+export const CROSS_MIN_SECONDS = 6;
+export const CROSS_MAX_SECONDS = 14;
+
 // 0..1 — how close two tempos are, folding half/double time (70 ≈ 140).
 export function bpmCompat(a: number | null, b: number | null): number {
   if (!a || !b || a <= 0 || b <= 0) return 0;
@@ -98,7 +103,7 @@ export function mixCompat(cur: Analysis, next: Analysis): number {
 export function crossSecondsFor(
   cur: Analysis,
   next: Analysis,
-  opts: { energyDelta?: number; nextIntroMs?: number | null } = {},
+  opts: { energyDelta?: number; nextIntroMs?: number | null; maxSec?: number | null } = {},
 ): number | null {
   if (!analysed(cur) || !analysed(next)) return null;
 
@@ -137,14 +142,23 @@ export function crossSecondsFor(
   // buffer, so a buffer longer than the incoming track's instrumental intro
   // would fade up over the first vocals. Cap the blend to the intro length so
   // the fade-in completes before the song proper. Absent intro → no cap, i.e.
-  // today's behaviour. Floor at 3s so a near-zero intro still gets a real blend.
+  // today's behaviour. Floor at CROSS_MIN_SECONDS so a short intro still leaves
+  // an audible blend — a tighter cap collapsed most transitions to ~3s and read
+  // as "no crossfade".
   const introSec = typeof opts.nextIntroMs === 'number' && opts.nextIntroMs > 0
     ? opts.nextIntroMs / 1000
     : null;
-  if (introSec != null) secs = Math.min(secs, Math.max(3, introSec));
+  if (introSec != null) secs = Math.min(secs, Math.max(CROSS_MIN_SECONDS, introSec));
 
-  // Clamp to a sane broadcast range and quantise to 0.1s.
-  secs = Math.max(3, Math.min(14, secs));
+  // Clamp to the broadcast range and quantise to 0.1s. The upper bound is the
+  // operator's admin crossfade length (settings.crossfadeDuration, passed as
+  // opts.maxSec) so the adaptive blend never exceeds what they configured;
+  // falls back to CROSS_MAX_SECONDS when unset. An admin value below the audible
+  // floor wins as the ceiling — an explicit short crossfade is the operator's
+  // call — so the floor yields to it.
+  const maxSec = typeof opts.maxSec === 'number' && opts.maxSec > 0 ? opts.maxSec : CROSS_MAX_SECONDS;
+  const minSec = Math.min(CROSS_MIN_SECONDS, maxSec);
+  secs = Math.max(minSec, Math.min(maxSec, secs));
   return Math.round(secs * 10) / 10;
 }
 

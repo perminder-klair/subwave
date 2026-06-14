@@ -176,14 +176,20 @@ music = fallback(
 # chain does (see comment above mic_chain). The fix would be to put a
 # getter-controlled filter on the music source BEFORE `cross` and modulate
 # its cutoff from a transition trigger. Parked until needed.
-# DJ-mode adaptive blend: the controller may stamp `liq_cross_duration` on the
-# incoming track (annotate:, via subsonic.getAnnotatedUri) to size THIS
-# transition from the two tracks' tempo/harmonic compatibility. `cross` honours
-# the same metadata to size its buffer, so reading it here for the fades keeps
-# fade == buffer — the invariant that avoids the +6 dB doubling described above.
+# DJ-mode adaptive blend: the controller may stamp `liq_cross_duration` on a
+# track (annotate:, via subsonic.getAnnotatedUri) to size its transition from
+# tempo/harmonic compatibility. CRITICAL: `cross` reads `liq_cross_duration` to
+# size its buffer from the OUTGOING track's metadata — the value registered when
+# that track started controls the crossfade at its END (see liquidsoap docs).
+# So the buffer for THIS transition equals `a`'s override (the outgoing track),
+# NOT `b`'s. The fade therefore must read `a.metadata` too, or fade != buffer:
+# a fade longer than the buffer gets truncated → the outgoing track is cut
+# mid-fade and the incoming jumps to full (audible gaps / "no crossfade"); a
+# fade shorter than the buffer sums to +6 dB (doubling). Reading `a` keeps
+# fade == buffer — the invariant the whole section depends on.
 # Absent / unparseable → crossfade_duration(), i.e. the global startup default.
 def dj_transition(a, b) =
-  d = float_of_string(default=crossfade_duration(), b.metadata["liq_cross_duration"])
+  d = float_of_string(default=crossfade_duration(), a.metadata["liq_cross_duration"])
   a_source = fade.out(duration=d, initial_metadata=a.metadata, a.source)
   b_source = fade.in(duration=d, initial_metadata=b.metadata, b.source)
   add(normalize=false, [a_source, b_source])

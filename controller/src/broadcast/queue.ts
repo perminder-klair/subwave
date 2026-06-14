@@ -354,7 +354,10 @@ class Queue {
     try { energyDelta = energyForDaypart().speed - 1; } catch {}
     let nextIntroMs = item.track.introMs;
     if (nextIntroMs == null && item.track.id) nextIntroMs = library.get(item.track.id)?.introMs ?? null;
-    const secs = mix.crossSecondsFor(cur, next, { energyDelta, nextIntroMs });
+    // Cap the adaptive blend at the operator's configured crossfade length so the
+    // admin slider acts as a real ceiling on DJ-mode transitions too.
+    const maxSec = settings.get()?.crossfadeDuration ?? null;
+    const secs = mix.crossSecondsFor(cur, next, { energyDelta, nextIntroMs, maxSec });
     if (secs != null) {
       item.track.crossSec = secs;
       this.log('mix', `blend ${secs}s → ${item.track.title}`);
