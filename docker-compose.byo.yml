@@ -134,9 +134,12 @@ services:
         # Optional — bake the gated PocketTTS cloning weights in at build time.
         # Runtime HF_TOKEN (below) enables cloning without it.
         HF_TOKEN: ${HF_TOKEN:-}
-        # Optional — CLAP audio-embedding stack for the analyzer (~1.5GB);
-        # pair with ANALYZE_AUDIO_EMBEDDING=1 below.
-        WITH_CLAP: ${WITH_CLAP:-0}
+        # CLAP audio-embedding stack for the analyzer ("sounds-like", ~1.5GB)
+        # and Demucs vocal-activity ranges. Baked into the published image, so a
+        # plain pull gets them; these only apply to a source build, defaulted on
+        # so it matches. Both lazy-load at runtime (disk cost only).
+        WITH_CLAP: ${WITH_CLAP:-1}
+        WITH_DEMUCS: ${WITH_DEMUCS:-1}
     # amd64-only image (heavy PyTorch stack); pinned so it runs under emulation
     # on arm64 hosts. The other services are multi-arch and auto-select.
     platform: linux/amd64
@@ -151,9 +154,10 @@ services:
       # huggingface.co/kyutai/pocket-tts and set HF_TOKEN in your root .env.
       # Built-in voices need no token.
       - HF_TOKEN=${HF_TOKEN:-}
-      # Optional — CLAP audio embeddings in the analyze pass (needs an image
-      # built with WITH_CLAP=1 above; clean no-op otherwise). Set
-      # ANALYZE_AUDIO_EMBEDDING=1 in your root .env to enable.
+      # Optional — force CLAP audio embeddings on for the whole analyze pass.
+      # Usually unnecessary: the admin "sounds-like" toggle drives this per
+      # request, and the published image already carries CLAP. Set
+      # ANALYZE_AUDIO_EMBEDDING=1 in your root .env only to always-on it.
       - ANALYZE_AUDIO_EMBEDDING=${ANALYZE_AUDIO_EMBEDDING:-}
       - CLAP_MODEL=${CLAP_MODEL:-}
       - CLAP_MODEL_PATH=${CLAP_MODEL_PATH:-}

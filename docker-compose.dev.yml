@@ -118,9 +118,11 @@ services:
       args:
         # Optional — bake the gated PocketTTS cloning weights in at build time.
         HF_TOKEN: ${HF_TOKEN:-}
-        # Optional — CLAP audio-embedding stack for the analyzer (~1.5GB);
-        # pair with ANALYZE_AUDIO_EMBEDDING=1 below.
-        WITH_CLAP: ${WITH_CLAP:-0}
+        # CLAP audio-embedding stack ("sounds-like", ~1.5GB) + Demucs vocal
+        # ranges. Baked into the published image; these apply to a source build
+        # only, defaulted on to match. Both lazy-load at runtime (disk cost only).
+        WITH_CLAP: ${WITH_CLAP:-1}
+        WITH_DEMUCS: ${WITH_DEMUCS:-1}
     platform: linux/amd64
     container_name: sub-wave-tts-heavy
     restart: unless-stopped
@@ -132,8 +134,9 @@ services:
       # are gated; accept terms at huggingface.co/kyutai/pocket-tts and set
       # HF_TOKEN in your .env. Built-in voices need no token.
       - HF_TOKEN=${HF_TOKEN:-}
-      # Optional — CLAP audio embeddings in the analyze pass (needs an image
-      # built with WITH_CLAP=1 above; clean no-op otherwise).
+      # Optional — force CLAP embeddings on for the whole analyze pass. Usually
+      # unnecessary: the admin "sounds-like" toggle drives this per request and
+      # the published image already carries CLAP.
       - ANALYZE_AUDIO_EMBEDDING=${ANALYZE_AUDIO_EMBEDDING:-}
       - CLAP_MODEL=${CLAP_MODEL:-}
       - CLAP_MODEL_PATH=${CLAP_MODEL_PATH:-}

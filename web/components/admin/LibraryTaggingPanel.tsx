@@ -35,8 +35,8 @@ export interface Coverage {
   analysisAvailable?: boolean | null;
   analysisBackend?: string | null;
   // Whether the backend can emit CLAP "sounds-like" embeddings. false = engine
-  // is up but built without the CLAP stack (sidecar WITH_CLAP=0) — drives the
-  // active "rebuild with WITH_CLAP=1" warning. null = unknown / still probing.
+  // is up but on an image without the CLAP stack (an older tts-heavy) — drives
+  // the active "pull the latest image" warning. null = unknown / still probing.
   audioAnalysisAvailable?: boolean | null;
   // Whether the backend can emit Demucs vocal-activity ranges. false = engine
   // up but built without the Demucs stack (sidecar WITH_DEMUCS=0) — drives the
@@ -154,9 +154,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
   const running = !!p.tagger?.running;
   const analysisOff = p.coverage?.analysisAvailable === false;
-  // Engine is up but built without the CLAP stack — "sounds-like" fingerprints
-  // can't be produced until the sidecar is rebuilt with WITH_CLAP=1. We warn
-  // actively rather than letting a run finish with the bar stuck at 0.
+  // Engine is up but on an image without the CLAP stack (an older tts-heavy
+  // predating baked-in fingerprinting) — "sounds-like" can't be produced until
+  // the sidecar is pulled fresh. We warn actively rather than letting a run
+  // finish with the bar stuck at 0.
   const audioIncapable = !analysisOff && p.coverage?.audioAnalysisAvailable === false;
   // Vocal activity is on but the engine was built without Demucs — the analysis
   // pass would skip vocal backfill (no-op), so warn rather than silently never
@@ -390,10 +391,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             )}
             {audioIncapable && p.audioEnabled ? (
               <span className="basis-full border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
-                <b>Sounds-like is on, but the analysis engine can’t fingerprint audio.</b> The
-                tts-heavy sidecar was built without the CLAP model, so a run would only fill bpm/key
-                and leave this at 0. Rebuild it with the CLAP stack, then run the analysis:
-                <code className="mt-1 block font-mono text-[10.5px] text-muted">WITH_CLAP=1 docker compose build tts-heavy &amp;&amp; docker compose --profile tts-heavy up -d tts-heavy</code>
+                <b>Sounds-like is on, but the analysis engine can’t fingerprint audio.</b> Your
+                tts-heavy image predates audio fingerprinting, so a run would only fill bpm/key and
+                leave this at 0. Pull the latest image and recreate the sidecar, then run the analysis:
+                <code className="mt-1 block font-mono text-[10.5px] text-muted">docker compose pull tts-heavy &amp;&amp; docker compose --profile tts-heavy up -d tts-heavy</code>
               </span>
             ) : (
               <span className="caption basis-full !tracking-[0.04em] !normal-case">
@@ -406,10 +407,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
 
           {vocalIncapable && p.vocalEnabled ? (
             <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
-              <b>Vocal-activity is on, but the analysis engine can’t separate vocals.</b> The
-              tts-heavy sidecar was built without the Demucs stack, so the pass skips vocal ranges
-              (it won’t re-scan the whole library chasing them). Rebuild it with Demucs, then run the analysis:
-              <code className="mt-1 block font-mono text-[10.5px] text-muted">WITH_DEMUCS=1 docker compose build tts-heavy &amp;&amp; docker compose --profile tts-heavy up -d tts-heavy</code>
+              <b>Vocal-activity is on, but the analysis engine can’t separate vocals.</b> Your
+              tts-heavy image predates vocal separation, so the pass skips vocal ranges (it won’t
+              re-scan the whole library chasing them). Pull the latest image and recreate the sidecar, then run the analysis:
+              <code className="mt-1 block font-mono text-[10.5px] text-muted">docker compose pull tts-heavy &amp;&amp; docker compose --profile tts-heavy up -d tts-heavy</code>
             </div>
           ) : null}
 
