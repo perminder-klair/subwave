@@ -8,6 +8,7 @@ import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import { recentCalls } from '../llm/log.js';
 import * as llmProvider from '../llm/provider.js';
+import * as settings from '../settings.js';
 import { ttsCalls, summarizeLlm, summarizeTts, summarizeDjLog } from '../stats.js';
 import { queue } from '../broadcast/queue.js';
 
@@ -18,6 +19,11 @@ router.get('/stats', requireAdmin, (req, res) => {
     const llm: any = summarizeLlm(recentCalls);
     llm.provider = llmProvider.providerName();
     llm.activeModel = llmProvider.activeModelLabel();
+    // The DJ-agent deadline (admin-tunable, default 45s): past it the agent is
+    // killed and falls back to the stateless pool picker. The dash latency gauge
+    // anchors its redline to this so "red" means "hitting fallbacks", not an
+    // arbitrary ceiling. Mirror of agentDeadline() in broadcast/dj-agent.ts.
+    llm.agentTimeoutMs = settings.get().llm?.agentTimeoutMs ?? 45000;
 
     res.json({
       t: new Date().toISOString(),

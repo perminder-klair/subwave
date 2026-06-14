@@ -29,6 +29,12 @@ export interface HealthMetrics {
   listenersPeak: number;
   /** DJ think→speak p95 latency in ms, or null when unknown (stats not loaded) */
   latencyMs: number | null;
+  /**
+   * The live DJ-agent deadline in ms — the redline anchor. Past it the agent
+   * times out and falls back to the pool picker. Null until /stats loads, in
+   * which case the gauge uses its built-in default scale.
+   */
+  latencyDeadlineMs: number | null;
   /** TTS fallback rate as a percentage, or null when unknown */
   ttsFallbackPct: number | null;
   /** broadcast online? null before the first poll resolves */
@@ -39,11 +45,22 @@ export interface HealthMetrics {
 
 const SCALE = {
   listenersMax: 50,
-  latencyMax: 5000,
-  latencyRedline: 3000, // needle goes red past this
   ttsMidPct: 12, // fallback above this = caution (muted)
   ttsBadPct: 25, // fallback above this = redline
 } as const;
+
+// DJ-latency gauge scale. The redline anchors to the live DJ-agent deadline
+// (metrics.latencyDeadlineMs) — past it the agent times out and falls back to
+// the pool picker, so a redlined needle means "hitting fallbacks", not an
+// arbitrary ceiling. The band always sits at a fixed fraction of the sweep, so
+// only the numbers track the model in use, never the gauge geometry. Falls back
+// to 3 s until /stats reports the deadline.
+const DEFAULT_LATENCY_REDLINE_MS = 3000;
+const LATENCY_REDLINE_FRACTION = 0.6; // redline begins at 60% of the dial
+function latencyScale(deadlineMs: number | null): { redline: number; max: number } {
+  const redline = deadlineMs && deadlineMs > 0 ? deadlineMs : DEFAULT_LATENCY_REDLINE_MS;
+  return { redline, max: Math.round(redline / LATENCY_REDLINE_FRACTION) };
+}
 
 // ── geometry: a gauge sweeps the TOP semicircle, t=0→left, t=1→right ──
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -194,7 +211,7 @@ export default function StationHeader({
 
     const lG = listenersSvg.current ? buildGauge(listenersSvg.current, { withPeak: true }) : null;
     const aG = latencySvg.current
-      ? buildGauge(latencySvg.current, { redlineFrom: SCALE.latencyRedline / SCALE.latencyMax })
+      ? buildGauge(latencySvg.current, { redlineFrom: LATENCY_REDLINE_FRACTION })
       : null;
 
     // needles power up from zero on load (instrument warm-up)
@@ -215,9 +232,10 @@ export default function StationHeader({
       if (listenersV.current) listenersV.current.textContent = String(Math.round(sListeners.x));
       if (peakV.current) peakV.current.textContent = String(Math.round(sPeak.x));
 
-      // latency
-      aG?.setNeedle(sLatency.x / SCALE.latencyMax);
-      const redlined = sLatency.x >= SCALE.latencyRedline;
+      // latency — scale (redline + full-scale) tracks the live agent deadline
+      const { redline: latRedline, max: latMax } = latencyScale(t.latencyDeadlineMs);
+      aG?.setNeedle(sLatency.x / latMax);
+      const redlined = sLatency.x >= latRedline;
       if (latencyV.current) latencyV.current.textContent = t.latencyMs == null ? '—' : String(Math.round(sLatency.x));
       latencyRead.current?.classList.toggle('warn', redlined);
       if (zone.current) {
@@ -226,7 +244,7 @@ export default function StationHeader({
             ? 'no data'
             : redlined
               ? 'redline'
-              : sLatency.x > SCALE.latencyRedline * 0.8
+              : sLatency.x > latRedline * 0.8
                 ? 'rising'
                 : 'nominal';
       }
@@ -333,7 +351,7 @@ export default function StationHeader({
             </span>
             <span className="hs-u">ms</span>
             <span className="hs-x">
-              redline <b>{SCALE.latencyRedline / 1000}k</b>
+              redline <b>{Math.round(latencyScale(metrics.latencyDeadlineMs).redline / 1000)}k</b>
             </span>
           </div>
         </div>

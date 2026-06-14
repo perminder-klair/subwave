@@ -63,7 +63,7 @@ interface DashStatus {
 // fallback rate, both since-boot rollups. Polled slower than live status since
 // they move slowly and the endpoint is heavier.
 interface HealthStats {
-  llm?: { count?: number; latency?: { p95?: number } };
+  llm?: { count?: number; latency?: { p95?: number }; agentTimeoutMs?: number };
   tts?: { count?: number; fallbackRate?: number | null };
 }
 
@@ -398,6 +398,10 @@ export default function DashPanel() {
     listeners: lCurrent,
     listenersPeak: lPeak,
     latencyMs: stats?.llm?.count ? (stats.llm.latency?.p95 ?? null) : null,
+    // Redline at the DJ-agent deadline (the fallback threshold), so the gauge
+    // tracks the model in use instead of a fixed ceiling. Null until /stats
+    // loads → StationHeader falls back to its built-in default scale.
+    latencyDeadlineMs: stats?.llm?.agentTimeoutMs ?? null,
     ttsFallbackPct: stats?.tts?.count ? Math.round((stats.tts.fallbackRate ?? 0) * 1000) / 10 : null,
     online: status?.streamOnline ?? null,
     bitrateKbps: status?.streamBitrate ?? null,
