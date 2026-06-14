@@ -17,6 +17,27 @@ export default function Coda() {
           Run your own station →
         </Link>
       </div>
+
+      <p className="mt-1 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] tracking-[0.18em] text-muted uppercase">
+        <span>Get the app:</span>
+        <a
+          href="https://apps.apple.com/app/sub-wave/id6778786696"
+          target="_blank"
+          rel="noreferrer"
+          className="bs-link font-semibold tracking-[inherit] text-ink"
+        >
+          App Store ↗
+        </a>
+        <span aria-hidden>·</span>
+        <a
+          href="https://play.google.com/store/apps/details?id=com.getsubwave.app"
+          target="_blank"
+          rel="noreferrer"
+          className="bs-link font-semibold tracking-[inherit] text-ink"
+        >
+          Google Play ↗
+        </a>
+      </p>
     </EditorialReveal>
   );
 }
