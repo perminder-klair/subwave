@@ -3,7 +3,7 @@
 // DJ command center — /admin/dash. Lets the operator step into the autonomous
 // booth: speak custom text on-air, fire any voice segment on demand,
 // flip the autonomous toggles, and watch live on-air status + the booth log.
-import type { ChangeEvent, MouseEvent } from 'react';
+import type { ChangeEvent, MouseEvent, ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
@@ -83,6 +83,30 @@ interface ListenerConnection {
 interface ConnectionsState {
   count: number;
   connections: ListenerConnection[];
+}
+
+// One resolved/failed listener request, as returned by GET /requests. Mirrors
+// the durable record written by the controller's request-log.
+interface RequestEntry {
+  t?: string;
+  requester?: string;
+  text?: string;
+  status?: string;
+  ms?: number | null;
+  path?: string | null;
+  pickSource?: string | null;
+  intent?: string | null;
+  mood?: string | null;
+  scope?: string | null;
+  sort?: string | null;
+  artist?: string | null;
+  genre?: string | null;
+  language?: string | null;
+  searchTerms?: string[] | null;
+  track?: { title?: string; artist?: string; id?: string } | null;
+  ack?: string | null;
+  introScript?: string | null;
+  message?: string | null;
 }
 
 // connectedSeconds → short human string. Listeners rarely sit for days, so
@@ -187,6 +211,8 @@ export default function DashPanel() {
   const [conns, setConns] = useState<ConnectionsState | null>(null);
   const [connErr, setConnErr] = useState<string | null>(null);
   const [stats, setStats] = useState<HealthStats | null>(null);
+  const [requests, setRequests] = useState<RequestEntry[] | null>(null);
+  const [reqErr, setReqErr] = useState<string | null>(null);
   // Longest-connected first by default — the most stable listeners on top.
   const [sort, setSort] = useState<SortState>({ key: 'connectedSeconds', dir: 'desc' });
   const [revealIps, setRevealIps] = useState(false);
@@ -271,6 +297,34 @@ export default function DashPanel() {
     };
     tick();
     const id = setInterval(tick, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [hydrated, needsAuth, adminFetch]);
+
+  // Recent listener requests + how the DJ resolved each — admin-gated, durable
+  // across restarts. Polled at the slower 10s cadence; this is a review surface,
+  // not a live ticker.
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await adminFetch('/requests');
+        const j = (await r.json().catch(() => null)) as
+          | { requests?: RequestEntry[]; error?: string }
+          | null;
+        if (cancelled) return;
+        if (!r.ok) throw new Error(j?.error || `failed (${r.status})`);
+        setRequests(j?.requests ?? []);
+        setReqErr(null);
+      } catch (e) {
+        if (!cancelled) setReqErr(e instanceof Error ? e.message : String(e));
+      }
+    };
+    tick();
+    const id = setInterval(tick, 10000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -585,6 +639,9 @@ export default function DashPanel() {
         )}
       </Card>
 
+      {/* ── REQUESTS ───────────────────────────────────────────────────── */}
+      <RequestsCard requests={requests} err={reqErr} />
+
       {!status && !err && <div className="text-muted italic">connecting…</div>}
 
       <V3AlertDialog
@@ -706,4 +763,116 @@ function classTone(cls: string): string {
     default:
       return 'muted';
   }
+}
+
+// Collapse whitespace + truncate, for the one-line request preview in a summary.
+function oneLine(s: unknown, n = 80): string {
+  const t = String(s ?? '').replace(/\s+/g, ' ').trim();
+  return t.length > n ? `${t.slice(0, n)}…` : t;
+}
+
+// The Requests card — every listener request and exactly how the AI DJ
+// resolved it. Newest first; each row expands to the full debug trace.
+function RequestsCard({ requests, err }: { requests: RequestEntry[] | null; err: string | null }) {
+  return (
+    <Card
+      title="Requests"
+      sub={
+        err
+          ? 'unavailable'
+          : requests
+            ? `${requests.length} recent · what listeners asked + how the DJ answered`
+            : 'loading…'
+      }
+    >
+      {err ? (
+        <div className="text-muted italic">can’t load requests — {err}</div>
+      ) : !requests ? (
+        <div className="text-muted italic">loading…</div>
+      ) : requests.length === 0 ? (
+        <div className="text-muted italic">no requests yet</div>
+      ) : (
+        <div className="grid max-h-[520px] gap-1.5 overflow-y-auto">
+          {requests.map((r, i) => (
+            <RequestRow key={`${r.t ?? ''}:${i}`} r={r} />
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function RequestRow({ r }: { r: RequestEntry }) {
+  const ok = r.status === 'resolved';
+  // Matcher breakdown — only the fields that carry a value, joined compactly.
+  const trace = [
+    r.intent && `intent ${r.intent}`,
+    r.mood && `mood ${r.mood}`,
+    r.scope && `scope ${r.scope}`,
+    r.sort && `sort ${r.sort}`,
+    r.artist && `artist ${r.artist}`,
+    r.genre && `genre ${r.genre}`,
+    r.language && `lang ${r.language}`,
+  ].filter(Boolean) as string[];
+
+  return (
+    <details className="border border-separator-strong">
+      <summary className="grid cursor-pointer grid-cols-[auto_1fr_auto_auto] items-center gap-2.5 px-2.5 py-2">
+        <span className={cn('font-bold', ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
+          {ok ? '✓' : '✗'}
+        </span>
+        <span className="min-w-0 truncate text-[12px]">
+          <span className="font-bold">{r.requester || 'anon'}</span>
+          <span className="text-muted"> · {oneLine(r.text)}</span>
+        </span>
+        <span className="caption text-[10px]">{r.ms != null ? `${r.ms}ms` : ''}</span>
+        <span className="mono-num text-[10px] text-muted">
+          {r.t ? new Date(r.t).toLocaleTimeString('en-GB', { hour12: false }) : '—'}
+        </span>
+      </summary>
+      <div className="grid gap-2 px-2.5 pt-1 pb-2.5 text-[12px]">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {r.path && <Pill tone="accent">{r.path}</Pill>}
+          {r.pickSource && <Pill>{r.pickSource}</Pill>}
+        </div>
+
+        {trace.length > 0 && (
+          <div className="caption text-[10px]">{trace.join(' · ')}</div>
+        )}
+
+        {ok ? (
+          <RequestField label="track">
+            {r.track?.title ? (
+              <span>
+                {r.track.title}{' '}
+                <span className="text-muted">— {r.track.artist}</span>
+              </span>
+            ) : (
+              <span className="text-muted italic">—</span>
+            )}
+          </RequestField>
+        ) : (
+          <RequestField label="failed">
+            <span className="text-[var(--danger)]">{r.message || '—'}</span>
+          </RequestField>
+        )}
+
+        {r.ack && <RequestField label="ack">{r.ack}</RequestField>}
+        {r.introScript && (
+          <RequestField label="intro">
+            <span className="break-words whitespace-pre-wrap">{r.introScript}</span>
+          </RequestField>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function RequestField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[60px_1fr] items-baseline gap-2">
+      <span className="caption text-[9px]">{label}</span>
+      <span className="break-words">{children}</span>
+    </div>
+  );
 }

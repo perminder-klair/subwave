@@ -11,6 +11,7 @@ import { getFullContext } from '../context.js';
 import { queue } from '../broadcast/queue.js';
 import * as djAgent from '../broadcast/dj-agent.js';
 import * as session from '../broadcast/session.js';
+import * as requestLog from '../broadcast/request-log.js';
 import * as listeners from '../broadcast/listeners.js';
 import * as webhooks from '../broadcast/webhooks.js';
 import {
@@ -95,17 +96,58 @@ async function resolveGenre(name) {
 // `ctx` from getFullContext() is fetched once here and threaded through every
 // path, instead of the four separate fetches the inline handler used to do.
 // ---------------------------------------------------------------------------
+// Append the durable debug record once, at a request's terminal state. Reads
+// the trace fields the resolution paths stash on `entry` as they go (path,
+// pickSource, the matcher breakdown, the full picked track + intro script).
+// Best-effort — never let a logging hiccup affect the listener's outcome. Used
+// by both resolveRequest's terminal closures and the crash catch below, so a
+// request that throws mid-resolution still lands in the log.
+function recordOutcome(entry) {
+  try {
+    requestLog.record({
+      t: new Date(entry.createdAt).toISOString(),
+      id: String(entry.id).slice(0, 8),
+      requester: entry.requester,
+      text: entry.text,
+      status: entry.status,
+      ms: entry.startedAt ? Date.now() - entry.startedAt : null,
+      path: entry.path || null,
+      pickSource: entry.pickSource || null,
+      intent: entry.intent ?? null,
+      mood: entry.mood ?? null,
+      scope: entry.scope ?? null,
+      sort: entry.sort ?? null,
+      artist: entry.artist ?? null,
+      genre: entry.genre ?? null,
+      language: entry.language ?? null,
+      searchTerms: entry.searchTerms ?? null,
+      track: entry.pick
+        ? { title: entry.pick.title, artist: entry.pick.artist, id: entry.pick.id }
+        : (entry.track || null),
+      ack: entry.ack || null,
+      introScript: entry.introScript || null,
+      message: entry.message || null,
+    });
+  } catch (err) {
+    queue.log('error', `request-log record failed: ${err.message}`);
+  }
+}
+
 async function resolveRequest(entry) {
   const { requester, text } = entry;
+  entry.startedAt = Date.now();
+
   const resolved = ({ ack, track, queuePosition }) => {
     entry.status = 'resolved';
     entry.ack = ack || null;
     entry.track = track || null;
     entry.queuePosition = typeof queuePosition === 'number' ? queuePosition : null;
+    recordOutcome(entry);
   };
   const failed = (message) => {
     entry.status = 'failed';
     entry.message = message;
+    recordOutcome(entry);
   };
 
   let ctx;
@@ -138,6 +180,8 @@ async function resolveRequest(entry) {
   // by the current/last artist and skip the LLM match.
   const isMoreLikeThis = /^more\s+like\s+this[.!?]?$/i.test(text);
   if (isMoreLikeThis) {
+    entry.path = 'more-like-this';
+    entry.pickSource = 'more-like-this';
     const reference = queue.current || queue.history[0];
     const refArtist = reference?.track?.artist;
     if (!refArtist) {
@@ -170,6 +214,8 @@ async function resolveRequest(entry) {
       text: introScript || `More from ${refArtist}, coming up.`,
       meta: { trackId: pick.id, requester },
     });
+    entry.pick = pick;
+    entry.introScript = introScript || null;
     return resolved({
       ack: `More from ${refArtist}, coming up.`,
       track: { title: pick.title, artist: pick.artist },
@@ -185,6 +231,10 @@ async function resolveRequest(entry) {
     const agentRes = await djAgent.runRequest(queue, ctx, { requester, text });
     if (agentRes) {
       queue.log('request', `agent resolved: ${agentRes.track.title} — ${agentRes.track.artist}`);
+      entry.path = 'agent';
+      entry.pickSource = 'agent';
+      entry.pick = agentRes.track;
+      entry.introScript = agentRes.introScript || null;
       return resolved({
         ack: agentRes.ack,
         track: agentRes.track,
@@ -211,6 +261,18 @@ async function resolveRequest(entry) {
     language: matched.language,
     searchTerms: matched.search_terms,
   });
+
+  // Stash the matcher breakdown for the debug record — this path is the
+  // stateless cascade (agent + more-like-this never reach here).
+  entry.path = 'cascade';
+  entry.intent = matched.intent || null;
+  entry.mood = matched.mood || null;
+  entry.scope = matched.scope || null;
+  entry.sort = matched.sort || null;
+  entry.artist = matched.artist || null;
+  entry.genre = matched.genre || null;
+  entry.language = matched.language || null;
+  entry.searchTerms = matched.search_terms || null;
 
   // Requests stay near-unfiltered — see /more-like-this comment above.
   const recentIds = queue.recentlyPlayedIds(2);
@@ -394,6 +456,9 @@ async function resolveRequest(entry) {
     meta: { trackId: pick.id, requester },
   });
 
+  entry.pick = pick;
+  entry.pickSource = pickSource;
+  entry.introScript = introScript || null;
   return resolved({
     ack: matched.ack,
     track: { title: pick.title, artist: pick.artist },
@@ -465,6 +530,7 @@ router.post('/request', async (req, res) => {
     queue.log('error', `Request resolution crashed: ${err.message}`);
     entry.status = 'failed';
     entry.message = 'Something went wrong in the booth — try again.';
+    recordOutcome(entry);
   });
 });
 

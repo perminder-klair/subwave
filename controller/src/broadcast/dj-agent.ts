@@ -537,7 +537,8 @@ async function runRequestViaAgent(queue: any, { requester }: { requester: string
 
     return {
       ack: object.ack || `Coming up for you, ${requester}.`,
-      track: { title: song.title, artist: song.artist },
+      track: { title: song.title, artist: song.artist, id: song.id },
+      introScript: intro || null,
     };
   });
 }

@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.16.0](https://github.com/perminder-klair/subwave/compare/v0.15.0...v0.16.0) (2026-06-13)
+
+
+### Features
+
+* **analysis:** richer acoustic analysis (phases 1–6) ([#372](https://github.com/perminder-klair/subwave/issues/372)) ([300d0de](https://github.com/perminder-klair/subwave/commit/300d0deae43905fabc136e1d1588f9410ebdf6d5))
+* **app:** browse community stations in the Discover list ([#375](https://github.com/perminder-klair/subwave/issues/375)) ([f718390](https://github.com/perminder-klair/subwave/commit/f71839037dd1fc8829f5db8b8f11e9f868a9c159))
+* **app:** glassy frosted transport bar ([#376](https://github.com/perminder-klair/subwave/issues/376)) ([ab33346](https://github.com/perminder-klair/subwave/commit/ab33346e1937bd8f309389eb479155a60051d5fb))
+* **observatory:** Library Observatory — data-art view of the DJ's library ([#373](https://github.com/perminder-klair/subwave/issues/373)) ([eb194e8](https://github.com/perminder-klair/subwave/commit/eb194e80ccf1e95d0dad854c9da73bc2fb6eed96))
+* **web:** station tabs on the landing demo player ([#342](https://github.com/perminder-klair/subwave/issues/342)) ([defdecc](https://github.com/perminder-klair/subwave/commit/defdeccd4e8fd5144d6cfe55d875d58bddc8d445))
+
+
+### Bug Fixes
+
+* **broadcast:** soften heavy voice duck from 15% to 22% ([#382](https://github.com/perminder-klair/subwave/issues/382)) ([fcb025b](https://github.com/perminder-klair/subwave/commit/fcb025b0ebfc0cbc95368d1dcf4825ae98943a52))
+
+
+### Documentation
+
+* **app:** mark iOS app live on the App Store ([#374](https://github.com/perminder-klair/subwave/issues/374)) ([d502cd9](https://github.com/perminder-klair/subwave/commit/d502cd9483de9b1a333989d953d849f0867f6a80))
+* **skills:** capture the live-app version-bump rule ([#379](https://github.com/perminder-klair/subwave/issues/379)) ([884bda7](https://github.com/perminder-klair/subwave/commit/884bda7df4fa289d3ea19461430bb3a5651c153b))
+* **skills:** update app release skills for live store status ([#377](https://github.com/perminder-klair/subwave/issues/377)) ([e6fae20](https://github.com/perminder-klair/subwave/commit/e6fae2077ee58efcc3ffb76f0bdaf1854a0cb043))
+
 ## [0.15.0](https://github.com/perminder-klair/subwave/compare/v0.14.0...v0.15.0) (2026-06-12)
 
 

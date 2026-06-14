@@ -11,9 +11,22 @@ import { getFullContext } from '../context.js';
 import * as settings from '../settings.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
+import * as requestLog from '../broadcast/request-log.js';
 import { requireAdmin } from '../middleware/auth.js';
 
 export const router = express.Router();
+
+// GET /requests — recent listener requests and exactly how the AI DJ resolved
+// each (intent breakdown, which path handled it, the picked track, the spoken
+// ack + full intro script, timing). Durable across restarts via request-log's
+// on-disk JSONL. Feeds the dashboard's Requests card.
+router.get('/requests', requireAdmin, (req, res) => {
+  try {
+    res.json({ requests: requestLog.snapshot(50) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.get('/debug', requireAdmin, async (req, res) => {
   const out: any = { t: new Date().toISOString() };
