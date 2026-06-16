@@ -27,6 +27,15 @@ export async function load() {
   loaded = true;
 }
 
+// Close and re-open the backing DB. Called after a backup restore swaps the
+// library.db file underneath us, so the live picker/tools see the restored
+// tags without a controller restart.
+export async function reload() {
+  if (db.isOpen()) db.close();
+  loaded = false;
+  await load();
+}
+
 // SQLite WAL writes are durable per statement — no batched save needed. Kept
 // as a no-op so existing callers that call save() at intervals still work.
 export async function save() {

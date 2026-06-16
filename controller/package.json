@@ -21,6 +21,7 @@
     "@ai-sdk/google": "^3.0.75",
     "@ai-sdk/openai": "^3.0.63",
     "@openrouter/ai-sdk-provider": "^2.9.0",
+    "adm-zip": "^0.5.16",
     "ai": "^6.0.182",
     "ai-sdk-ollama": "^3.8.4",
     "better-sqlite3": "^11.10.0",
@@ -33,6 +34,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
     "@types/express": "^5.0.0",
     "@types/node": "^25.9.1",
     "@types/node-cron": "^3.0.11",

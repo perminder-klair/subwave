@@ -15,7 +15,7 @@
 
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import { readFile, rename } from 'node:fs/promises';
+import { readFile, rename, copyFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { STATE_DIR } from '../config.js';
 
@@ -239,6 +239,25 @@ export function close(): void {
 
 export function isOpen(): boolean {
   return db !== null;
+}
+
+// Write a consistent, single-file copy of the live DB to `destPath`. Uses
+// better-sqlite3's online backup API so the result is coherent even though the
+// DB runs in WAL mode (a raw file copy could miss un-checkpointed pages in the
+// -wal sidecar). Used by the backup/export route.
+export async function backup(destPath: string): Promise<void> {
+  await requireDb().backup(destPath);
+}
+
+// Replace the on-disk DB with the file at `srcPath` (a previously-exported
+// backup). Closes the live handle first, swaps the file, and clears any stale
+// WAL/SHM sidecars so the next open() reads the restored data cleanly. The
+// caller is responsible for reopening (see music/library.ts:reload()).
+export async function restoreFromFile(srcPath: string): Promise<void> {
+  close();
+  await copyFile(srcPath, DB_PATH);
+  await rm(`${DB_PATH}-wal`, { force: true });
+  await rm(`${DB_PATH}-shm`, { force: true });
 }
 
 function requireDb(): Database.Database {
