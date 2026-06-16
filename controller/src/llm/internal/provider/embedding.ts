@@ -1,0 +1,146 @@
+// Embedding models — the library tagger uses text embeddings for
+// KNN-propagating moods (see music/embeddings.ts + music/tag-library.ts).
+// Provider follows `settings.llm` by default — same auth, same dependency
+// surface — but operator can override either provider or model via
+// `settings.embedding.{provider,model}`.
+//
+// Default model per provider (all chosen for the homelab/single-host use case):
+//   ollama / unknown    → nomic-embed-text                (768d, free, local)
+//   openai / compat     → text-embedding-3-small          (1536d, ~$0.02/1M)
+//   google              → text-embedding-004              (768d)
+//   anthropic           → falls back to openai embeddings (Anthropic has no
+//                                                          first-party API as
+//                                                          of 2026-05)
+
+import { createOpenAI } from '@ai-sdk/openai';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { createOllama } from 'ai-sdk-ollama';
+import * as settings from '../../../settings.js';
+import { llmCfg, ollamaBaseUrl } from './registry.js';
+
+// Separate from the registry's language-model cache — the signature is prefixed
+// `embed|` so there's no key overlap, and keeping it local avoids exporting a
+// mutable Map across modules. Memoisation only; outputs are identical.
+const embedCache = new Map();
+
+function embeddingCfg() {
+  const s: any = settings.get().embedding || {};
+  const llm = llmCfg();
+  return {
+    enabled: s.enabled !== false,
+    provider: s.provider || llm.provider || 'ollama',
+    model: s.model || '',
+    apiKey: s.apiKey || llm.apiKey || '',
+    ollamaUrl: s.ollamaUrl || llm.ollamaUrl || '',
+    baseUrl: s.baseUrl || llm.baseUrl || '',
+  };
+}
+
+function defaultEmbeddingModelFor(provider: string): string {
+  switch (provider) {
+    case 'openai':
+    case 'openai-compatible':
+      return 'text-embedding-3-small';
+    case 'google':
+      return 'text-embedding-004';
+    case 'anthropic':
+      // No first-party Anthropic embedding API. We resolve via openai.
+      return 'text-embedding-3-small';
+    case 'ollama':
+    default:
+      return 'nomic-embed-text';
+  }
+}
+
+function defaultEmbeddingDimFor(model: string): number {
+  // Best-effort dim guess for known model names. This is only a FALLBACK seed:
+  // the tagger probes the live server and uses the real vector length as the
+  // authoritative dim (music/embeddings.ts probeOnce → tag-library.ts), and the
+  // live controller adopts whatever dim the tagger recorded (library-db
+  // adoptStoredDim). So an unknown / arbitrarily-named embedding model still
+  // works — this table just seeds the schema before the first tag run (#319).
+  if (model === 'nomic-embed-text') return 768;
+  if (model === 'mxbai-embed-large') return 1024;
+  if (model === 'text-embedding-3-small') return 1536;
+  if (model === 'text-embedding-3-large') return 3072;
+  if (model === 'text-embedding-004') return 768;
+  return 768; // homelab default until a probe says otherwise
+}
+
+export function embeddingModel() {
+  const cfg = embeddingCfg();
+  const id = cfg.model || defaultEmbeddingModelFor(cfg.provider);
+  const sig = `embed|${cfg.provider}|${id}|${cfg.apiKey || ''}|${cfg.ollamaUrl}|${cfg.baseUrl}`;
+
+  const cached = embedCache.get(sig);
+  if (cached) return cached;
+
+  let model;
+  switch (cfg.provider) {
+    case 'openai': {
+      const provider = createOpenAI(cfg.apiKey ? { apiKey: cfg.apiKey } : {});
+      model = provider.textEmbeddingModel(id);
+      break;
+    }
+    case 'openai-compatible': {
+      const provider = createOpenAI({
+        baseURL: cfg.baseUrl,
+        apiKey: cfg.apiKey || 'unused',
+        name: 'openai-compatible',
+      });
+      model = provider.textEmbeddingModel(id);
+      break;
+    }
+    case 'google': {
+      const provider = createGoogleGenerativeAI(cfg.apiKey ? { apiKey: cfg.apiKey } : {});
+      model = provider.textEmbeddingModel(id);
+      break;
+    }
+    case 'anthropic': {
+      // Anthropic has no first-party embedding model; punt to OpenAI.
+      const provider = createOpenAI(cfg.apiKey ? { apiKey: cfg.apiKey } : {});
+      model = provider.textEmbeddingModel(id);
+      break;
+    }
+    case 'ollama':
+    default: {
+      const provider = createOllama({ baseURL: ollamaBaseUrl(cfg as any) });
+      model = provider.textEmbeddingModel(id);
+      break;
+    }
+  }
+
+  embedCache.set(sig, model);
+  return model;
+}
+
+export function activeEmbeddingModelLabel(): string {
+  const cfg = embeddingCfg();
+  return `${cfg.provider}:${cfg.model || defaultEmbeddingModelFor(cfg.provider)}`;
+}
+
+export function activeEmbeddingDim(): number {
+  const cfg = embeddingCfg();
+  const id = cfg.model || defaultEmbeddingModelFor(cfg.provider);
+  return defaultEmbeddingDimFor(id);
+}
+
+export function embeddingEnabled(): boolean {
+  return embeddingCfg().enabled;
+}
+
+// Surface enough config for the tagger to (a) write a useful error message
+// and (b) auto-pull a missing model on the Ollama provider. Intentionally
+// just the fields callers need — no secrets, no live SDK clients.
+export function embeddingProviderInfo(): {
+  provider: string;
+  model: string;
+  ollamaUrl: string;
+} {
+  const cfg = embeddingCfg();
+  return {
+    provider: cfg.provider,
+    model: cfg.model || defaultEmbeddingModelFor(cfg.provider),
+    ollamaUrl: cfg.provider === 'ollama' ? ollamaBaseUrl(cfg as any) : '',
+  };
+}

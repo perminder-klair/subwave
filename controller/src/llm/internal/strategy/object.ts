@@ -1,0 +1,96 @@
+// djObject — schema-validated structured output. `schema` is a Zod object
+// schema; the returned value is parsed and validated.
+//
+// Two attempts, because small/cloud models occasionally botch structured output
+// (the AI SDK throws NoObjectGeneratedError — "could not parse the response"):
+//   1. native    — Output.object, which forwards the schema to the provider's
+//                   structured-output mode (constrained decoding where it's
+//                   supported). Ollama instead takes the forced-tool path
+//                   (objectViaToolCall) — it ignores JSON mode.
+//   2. recovery  — plain free-text, then strip <think> blocks / ``` fences and
+//                   Zod-validate ourselves. Catches models that wrap the JSON
+//                   in reasoning the native parser chokes on.
+// Throws only if BOTH attempts fail.
+
+import { generateText, Output } from 'ai';
+import { withFailover } from '../core/failover.js';
+import { withTransientRetry } from '../core/retry.js';
+import { stripThinking, extractJson, usageOf, failureDiagnostics } from '../core/pure.js';
+import { needsToolCallObject, providerOptions, samplingWithNumCtx } from '../provider/capabilities.js';
+import { objectViaToolCall } from './object-via-tool.js';
+
+const MAX_TOKENS_OBJECT = 8000;
+
+export async function djObject({
+  system,
+  prompt,
+  schema,
+  temperature = 0.4,
+  maxOutputTokens = MAX_TOKENS_OBJECT,
+  kind = 'sdk.djObject',
+  leg = undefined,
+}: any): Promise<any> {
+  return withFailover(
+    kind,
+    (err) => ({ user: prompt, ...failureDiagnostics(err) }),
+    async (l) => {
+      let lastErr;
+      // Track the strategy actually attempted so a failure record attributes to
+      // the right sub-path — bucketing every failure as 'ai-sdk' hides which
+      // structured-output branch is breaking in /stats.
+      let lastVia;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          let object;
+          let usage;
+          if (attempt === 1 && needsToolCallObject(l.cfg)) {
+            lastVia = 'ai-sdk:tool';
+            ({ object, usage } = await withTransientRetry(kind,
+              () => objectViaToolCall(l, { system, prompt, schema, temperature, maxOutputTokens })));
+          } else if (attempt === 1) {
+            lastVia = 'ai-sdk';
+            const result = await withTransientRetry(kind, () => generateText({
+              model: l.model,
+              system,
+              prompt,
+              temperature,
+              maxOutputTokens,
+              output: Output.object({ schema }),
+              providerOptions: providerOptions(l.cfg),
+            }));
+            object = result.output;
+            usage = usageOf(result);
+          } else {
+            lastVia = 'ai-sdk:recovery';
+            const result = await withTransientRetry(kind, () => generateText({
+              model: l.model,
+              system,
+              prompt: `${prompt}\n\nRespond with a single JSON object only — no prose, no markdown fences.`,
+              temperature,
+              maxOutputTokens,
+              providerOptions: providerOptions(l.cfg),
+            }));
+            object = schema.parse(JSON.parse(extractJson(stripThinking(result.text))));
+            usage = usageOf(result);
+          }
+          return {
+            value: object,
+            via: lastVia,
+            sampling: samplingWithNumCtx(l.cfg, { temperature }),
+            usage,
+            // Full, untruncated — the /debug surface shows the whole system prompt.
+            extra: { system, user: prompt, response: JSON.stringify(object).slice(0, 500) },
+          };
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      // Attribute the failure to the last sub-path tried, then let withFailover
+      // decide whether the error is host-unreachable (→ try the backup leg) or
+      // a model/parse failure (→ surface it).
+      (lastErr as any).__via = lastVia;
+      throw lastErr;
+    },
+    leg,
+  );
+}

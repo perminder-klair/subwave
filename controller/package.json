@@ -10,6 +10,8 @@
     "analyze": "tsx src/music/analyze-library.ts",
     "lastfm-session": "tsx scripts/lastfm-session.ts",
     "test:embed": "tsx scripts/embedding-preflight-test.ts",
+    "test:llm": "tsx scripts/llm-pure.test.ts",
+    "test": "tsx scripts/llm-pure.test.ts && tsx scripts/picker-recency-regression.ts",
     "lint": "eslint . && tsc --noEmit",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit"
