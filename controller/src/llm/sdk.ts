@@ -829,7 +829,12 @@ export async function djAgent({
           stopWhen: [stepCountIs(2), hasToolCall('done')],
           temperature,
           maxOutputTokens,
-          providerOptions: providerOpts(leg.cfg),
+          // Recovery forces done-only (toolChoice:'required') every step, so it
+          // has the same Anthropic/DeepSeek thinking conflict as the main run —
+          // suppress thinking here too, or this path trips "Thinking mode does
+          // not support this tool_choice" exactly when the main run already
+          // dodged it.
+          providerOptions: providerOpts(leg.cfg, { forceNoThink: true }),
           toolChoice: 'required',
           prepareStep: async () => ({ activeTools: ['done'], toolChoice: 'required' }),
         } as any);
