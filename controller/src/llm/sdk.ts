@@ -122,9 +122,13 @@ function usageOf(result) {
 //   Map reasoning:false → 'minimal', reasoning:true → 'medium' (the SDK's
 //   documented default). Gated on the model id since reasoningEffort is a
 //   no-op or error on gpt-4 / gpt-3.5.
-// - DeepSeek / OpenRouter / Gateway: no first-class knob. DeepSeek picks
-//   reasoning by model variant (deepseek-reasoner vs -chat); OpenRouter and
-//   Gateway pass through to the underlying provider's defaults.
+// - DeepSeek: the V4 hybrid models think by default. Map the toggle onto
+//   providerOptions.deepseek.thinking ({ type: 'enabled' | 'disabled' }).
+//   reasoning:false must DISABLE it — thinking mode rejects tool_choice, so
+//   the forced-tool paths (objectViaToolCall + picker done-tool) only work
+//   with thinking off. (deepseek-reasoner always thinks regardless.)
+// - OpenRouter / Gateway: no first-class knob; pass through to the
+//   underlying provider's defaults.
 // The num_ctx that will actually be sent for this leg, or null when none is.
 // num_ctx is for LOCAL Ollama only: Ollama's default window is 4096, but the DJ
 // agent feeds ~8k+ per turn (40-turn session window + tool schemas + discovery
@@ -154,9 +158,25 @@ function samplingWithNumCtx(cfg: any, sampling: any): any {
   return sampling;
 }
 
-function providerOpts(cfg: any, { repeatPenalty = null }: { repeatPenalty?: number | null } = {}) {
+// forceNoThink: this leg forces a tool call (toolChoice:'required' — every
+// objectViaToolCall + the picker's done-tool loop). Anthropic and DeepSeek
+// both REJECT forced tool use while thinking is active (Anthropic allows only
+// auto/none with extended thinking; DeepSeek returns "Thinking mode does not
+// support this tool_choice"). The picker can't use thinking on these providers
+// regardless of the global toggle, so we suppress it on these legs only — the
+// free-text DJ calls keep whatever the operator chose. OpenAI o-series/gpt-5
+// and Gemini permit forced tools while reasoning, so they're untouched.
+function providerOpts(
+  cfg: any,
+  { repeatPenalty = null, forceNoThink = false }: { repeatPenalty?: number | null; forceNoThink?: boolean } = {},
+) {
   const llm = cfg || {};
   const reasoning = llm.reasoning === true;
+  // Effective thinking for Anthropic/DeepSeek only — suppressed on forced-tool
+  // legs because those providers reject tool_choice while thinking. Ollama,
+  // OpenAI and Gemini permit forced tools mid-reasoning, so they read the raw
+  // toggle and forceNoThink leaves them unchanged.
+  const thinkForcedSafe = reasoning && !forceNoThink;
   const model = llm.model || '';
   const opts: any = {};
 
@@ -176,12 +196,24 @@ function providerOpts(cfg: any, { repeatPenalty = null }: { repeatPenalty?: numb
     }
   }
 
-  if (reasoning && /^claude-/i.test(model)) {
+  if (thinkForcedSafe && /^claude-/i.test(model)) {
     opts.anthropic = { thinking: { type: 'adaptive' } };
   }
 
   if (/^(o\d|gpt-5)/i.test(model)) {
     opts.openai = { reasoningEffort: reasoning ? 'medium' : 'minimal' };
+  }
+
+  // DeepSeek's V4 hybrid models (deepseek-v4-flash, deepseek-chat) THINK by
+  // default. While thinking is active the API rejects tool_choice — "Thinking
+  // mode does not support this tool_choice" — which breaks every forced-tool
+  // path here (objectViaToolCall + the picker's done-tool loop, both
+  // toolChoice:'required'). Map the reasoning toggle onto the provider's
+  // documented `thinking` knob so reasoning:false explicitly disables it and
+  // the tool paths work. With reasoning:on the picker still can't force tools,
+  // so leave thinking on only for the free-text calls that don't force tools.
+  if (llm.provider === 'deepseek') {
+    opts.deepseek = { thinking: { type: thinkForcedSafe ? 'enabled' : 'disabled' } };
   }
 
   return opts;
@@ -468,7 +500,7 @@ async function objectViaToolCall(leg: any, { system, prompt, messages, schema, t
     tools: { emit },
     toolChoice: 'required',
     stopWhen: stepCountIs(1),
-    providerOptions: providerOpts(leg.cfg),
+    providerOptions: providerOpts(leg.cfg, { forceNoThink: true }),
   } as any);
   if (captured === undefined) throw new Error('model never called the emit tool');
   return { object: schema.parse(captured), usage: usageOf(result) };
@@ -747,7 +779,9 @@ export async function djAgent({
         stopWhen: [stepCountIs(maxSteps), hasToolCall('done')],
         temperature,
         maxOutputTokens,
-        providerOptions: providerOpts(leg.cfg),
+        // useDoneTool forces tool calls every step — suppress thinking on the
+        // providers that reject forced tools mid-reasoning (Anthropic/DeepSeek).
+        providerOptions: providerOpts(leg.cfg, { forceNoThink: useDoneTool }),
         ...(useDoneTool ? { toolChoice: 'required' } : {}),
         ...(prepareStep ? { prepareStep } : {}),
         // Non-Ollama path: native structured-output via Output.object. Ollama

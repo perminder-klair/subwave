@@ -1856,10 +1856,14 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
               When off, the picker tells the model to skip or minimize its
               internal thinking step. Wired across providers that expose a
               thinking knob — Ollama, openai-compatible (Qwen3), Gemini 2.5/3.x,
-              OpenAI o-series and gpt-5, and Claude (adaptive thinking). DJ
-              scripts and structured picks are short, and an uncapped thought
-              chain just balloons latency and cost. Leave off unless you&apos;re
-              running a model that genuinely needs it.
+              OpenAI o-series and gpt-5, Claude (adaptive thinking) and DeepSeek
+              V4. DJ scripts and structured picks are short, and an uncapped
+              thought chain just balloons latency and cost. Leave off unless
+              you&apos;re running a model that genuinely needs it. Note: on
+              Claude and DeepSeek the picker always suppresses thinking for its
+              structured/tool calls — those APIs reject forced tool calls while
+              thinking — so there this toggle affects only the free-text DJ
+              lines.
             </div>
           </div>
           <Seg
