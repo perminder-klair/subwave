@@ -30,22 +30,6 @@ export default function StationFooter({ djName }: { djName?: string }) {
             className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
           >
             Discord
-          </AnimatedLink>{' '}
-          ·{' '}
-          <AnimatedLink
-            href="https://apps.apple.com/app/sub-wave/id6778786696"
-            variant="arrow"
-            className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
-          >
-            iOS
-          </AnimatedLink>{' '}
-          ·{' '}
-          <AnimatedLink
-            href="https://play.google.com/store/apps/details?id=com.getsubwave.app"
-            variant="arrow"
-            className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
-          >
-            Android
           </AnimatedLink>
         </span>
       </div>
