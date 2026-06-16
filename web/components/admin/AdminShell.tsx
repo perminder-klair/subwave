@@ -18,6 +18,10 @@ import {
   Archive,
   Webhook,
   Telescope,
+  DatabaseBackup,
+  BookOpen,
+  Apple,
+  Smartphone,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -68,6 +72,7 @@ const NAV_SECTIONS: NavSection[] = [
       { href: '/admin/stats', id: 'stats', label: 'Stats', icon: BarChart3 },
       { href: '/admin/archives', id: 'archives', label: 'Archives', icon: Archive },
       { href: '/admin/webhooks', id: 'webhooks', label: 'Webhooks', icon: Webhook },
+      { href: '/admin/backup', id: 'backup', label: 'Backup', icon: DatabaseBackup },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
     ],
@@ -181,6 +186,36 @@ export default function AdminShell({ children }: AdminShellProps) {
               })}
             </div>
           ))}
+          <Link
+            href="/manual"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="nav-item nav-item-manual"
+          >
+            <BookOpen className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+            <span className="nav-label">Manual</span>
+            <span className="pill">↗</span>
+          </Link>
+          <Link
+            href="https://apps.apple.com/app/sub-wave/id6778786696"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="nav-item"
+          >
+            <Apple className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+            <span className="nav-label">iOS app</span>
+            <span className="pill">↗</span>
+          </Link>
+          <Link
+            href="https://play.google.com/store/apps/details?id=com.getsubwave.app"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="nav-item"
+          >
+            <Smartphone className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+            <span className="nav-label">Android app</span>
+            <span className="pill">↗</span>
+          </Link>
           <div className="nav-foot">
             sub / wave
             <br />

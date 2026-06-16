@@ -9,6 +9,10 @@ language; the DJ works out what you meant and slots it in.
 It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 "up next for you." You tune in and hear whatever is on.
 
+## Showreel
+
+https://github.com/user-attachments/assets/fac7b723-c54f-438d-8440-bad1e0471e85
+
 ## Live demo
 
 - **Project site** — [getsubwave.com](https://www.getsubwave.com/)

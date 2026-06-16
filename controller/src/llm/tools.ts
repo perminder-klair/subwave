@@ -115,7 +115,15 @@ export function buildPickerTools({
       }),
       execute: async ({ query }) => {
         try {
-          const out = collect(await subsonic.search(query, { songCount: 25 }));
+          let songs = await subsonic.search(query, { songCount: 25 });
+          // A lexical miss is often just a spelling/transliteration variance —
+          // resolve the query as an artist and retry with the library's actual
+          // spelling ("Sikandar Kahlon" → the tagged "Sikander Kahlon").
+          if (songs.length === 0) {
+            const artist = await subsonic.resolveArtist(query);
+            if (artist) songs = await subsonic.search(artist.name, { songCount: 25 });
+          }
+          const out = collect(songs);
           if (out.length > 0) return out;
           // Lexical search3 found nothing — fall back to semantic embedding
           // search over the library (same path as searchByLyrics) so vibe

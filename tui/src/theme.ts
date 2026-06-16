@@ -34,8 +34,8 @@ export const glyph = {
 } as const;
 
 // Honest stream-format badge — these are the values `liquidsoap/radio.liq`
-// encodes with (`output.icecast(%mp3(bitrate=128))`, default sample rate
+// encodes with (`output.icecast(%mp3(bitrate=192))`, default sample rate
 // 44.1 kHz, stereo). Change these if the encoder ever changes.
-export const STREAM_BITRATE_LABEL = '128kbps';
+export const STREAM_BITRATE_LABEL = '192kbps';
 export const STREAM_SAMPLERATE_LABEL = '44kHz';
 export const STREAM_CHANNELS_LABEL = 'STEREO';

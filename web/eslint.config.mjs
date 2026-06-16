@@ -114,6 +114,7 @@ export default defineConfig([
             '^nav-section$',
             '^nav-section-label$',
             '^nav-item$',
+            '^nav-item-manual$',
             '^nav-icon$',
             '^nav-label$',
             '^nav-foot$',

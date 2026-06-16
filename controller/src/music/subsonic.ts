@@ -195,6 +195,100 @@ export async function resolveGenreName(name) {
   return hit?.value || null;
 }
 
+// ---------------------------------------------------------------------------
+// Fuzzy artist resolution
+// ---------------------------------------------------------------------------
+// Navidrome's search3 does exact token/substring matching only, so a one-letter
+// transliteration variance ("Sikandar" vs the library's "Sikander") or a
+// dropped accent ("Beyonce" vs "Beyoncé") returns zero artists, and a bare
+// "play <artist>" request silently falls through to mood filler. resolveArtist
+// is to artists what resolveGenreName is to genres: normalise the free text,
+// try an exact index hit, then relax to per-token index searches and
+// fuzzy-rank the candidates against the whole request. Returns the best
+// matching artist object ({ id, name, ... }) or null. Library-relative — it
+// ranks against whatever artists THIS operator actually has, so it needs no
+// per-library data and works on every install.
+
+function normArtist(s: string): string {
+  return String(s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // strip diacritics
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')                       // punctuation → space
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Classic Levenshtein edit distance. Inputs are short artist names, so the
+// O(m·n) two-row implementation is plenty.
+function editDistance(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  let cur = new Array(n + 1);
+  for (let i = 1; i <= m; i++) {
+    cur[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    [prev, cur] = [cur, prev];
+  }
+  return prev[n];
+}
+
+// 0..1 similarity (1 = identical), normalised by the longer string's length.
+function similarity(a: string, b: string): number {
+  const longer = Math.max(a.length, b.length);
+  if (longer === 0) return 1;
+  return 1 - editDistance(a, b) / longer;
+}
+
+// Tuned so "Sikandar Kahlon" (0.93) clears it but "Drake"/"Blake" (0.60) does
+// not. Paired with a shared-token guard on multi-word names so an unrelated
+// surname collision can't sneak through on edit-distance alone.
+const ARTIST_MATCH_THRESHOLD = 0.82;
+
+export async function resolveArtist(name, { artistCount = 10 } = {}) {
+  const query = normArtist(name);
+  if (!query) return null;
+
+  // 1. Exact index search — fast path, the common correctly-spelled case.
+  const exact = await searchArtists(name, { artistCount });
+  const direct = exact.find((a: any) => normArtist(a.name) === query);
+  if (direct) return direct;
+
+  // 2. Relax — search the artist index by each token. A surname or rarest
+  //    token usually returns the right artist even when the full string did
+  //    not ("Kahlon" finds "Sikander Kahlon"). Union with the exact hits.
+  const tokens = query.split(' ').filter(t => t.length >= 2);
+  const candidates = new Map<string, any>();
+  for (const a of exact) candidates.set(a.id, a);
+  for (const token of tokens) {
+    try {
+      for (const a of await searchArtists(token, { artistCount })) {
+        candidates.set(a.id, a);
+      }
+    } catch {}
+  }
+  if (candidates.size === 0) return null;
+
+  // 3. Fuzzy-rank against the full request. For multi-word names require at
+  //    least one shared token so a close-but-unrelated single name can't win;
+  //    single-token queries lean on the similarity threshold alone.
+  const queryTokens = new Set(tokens);
+  const requireShared = queryTokens.size >= 2;
+  let best: any = null;
+  let bestScore = 0;
+  for (const a of candidates.values()) {
+    const cand = normArtist(a.name);
+    if (requireShared && !cand.split(' ').some(t => queryTokens.has(t))) continue;
+    const score = similarity(query, cand);
+    if (score > bestScore) { bestScore = score; best = a; }
+  }
+  return bestScore >= ARTIST_MATCH_THRESHOLD ? best : null;
+}
+
 export async function getSimilarSongs(id, { count = 20 } = {}) {
   const r = await call('getSimilarSongs2', { id, count });
   return rejectArchive(r.similarSongs2?.song || []);
