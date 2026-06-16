@@ -198,7 +198,7 @@ export default function AdminShell({ children }: AdminShellProps) {
             href="https://apps.apple.com/app/sub-wave/id6778786696"
             target="_blank"
             rel="noopener noreferrer"
-            className="nav-item nav-item-app"
+            className="nav-item"
           >
             <Apple className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
             <span className="nav-label">iOS app</span>
@@ -208,7 +208,7 @@ export default function AdminShell({ children }: AdminShellProps) {
             href="https://play.google.com/store/apps/details?id=com.getsubwave.app"
             target="_blank"
             rel="noopener noreferrer"
-            className="nav-item nav-item-app"
+            className="nav-item"
           >
             <Smartphone className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
             <span className="nav-label">Android app</span>
