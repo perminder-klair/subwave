@@ -19,6 +19,8 @@ import {
   Webhook,
   Telescope,
   BookOpen,
+  Apple,
+  Smartphone,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -190,6 +192,26 @@ export default function AdminShell({ children }: AdminShellProps) {
           >
             <BookOpen className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
             <span className="nav-label">Manual</span>
+            <span className="pill">↗</span>
+          </Link>
+          <Link
+            href="https://apps.apple.com/app/sub-wave/id6778786696"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="nav-item nav-item-app"
+          >
+            <Apple className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+            <span className="nav-label">iOS app</span>
+            <span className="pill">↗</span>
+          </Link>
+          <Link
+            href="https://play.google.com/store/apps/details?id=com.getsubwave.app"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="nav-item nav-item-app"
+          >
+            <Smartphone className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+            <span className="nav-label">Android app</span>
             <span className="pill">↗</span>
           </Link>
           <div className="nav-foot">
