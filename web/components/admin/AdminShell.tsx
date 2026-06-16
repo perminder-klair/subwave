@@ -18,6 +18,7 @@ import {
   Archive,
   Webhook,
   Telescope,
+  BookOpen,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -181,6 +182,16 @@ export default function AdminShell({ children }: AdminShellProps) {
               })}
             </div>
           ))}
+          <Link
+            href="/manual"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="nav-item nav-item-manual"
+          >
+            <BookOpen className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+            <span className="nav-label">Manual</span>
+            <span className="pill">↗</span>
+          </Link>
           <div className="nav-foot">
             sub / wave
             <br />
