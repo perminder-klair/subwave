@@ -13,9 +13,6 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 
 https://github.com/user-attachments/assets/fac7b723-c54f-438d-8440-bad1e0471e85
 
-A 24.5s tour of SUB/WAVE — music, voiceover, and SFX, rendered at 60fps.
-Also available in [1080p / 4K](https://github.com/perminder-klair/subwave/releases/tag/showreel-v1).
-
 ## Live demo
 
 - **Project site** — [getsubwave.com](https://www.getsubwave.com/)
