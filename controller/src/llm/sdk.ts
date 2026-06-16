@@ -851,8 +851,21 @@ export async function djAgent({
         // staticToolCalls carries tool calls from the FINAL step — the SDK
         // surfaces calls that weren't executed (like our no-execute `done`) here.
         const doneCall = (result.staticToolCalls || []).find((c: any) => c.toolName === 'done');
-        if (!doneCall) throw new Error('agent did not call the done tool before stopping');
-        object = (doneCall as any).input;
+        if (doneCall) {
+          object = (doneCall as any).input;
+        } else {
+          // Salvage: some models (deepseek-v4-flash) end the forced loop emitting
+          // the answer as text/JSON instead of a `done` tool call — even after the
+          // done-only recovery. Parse it from the text and Zod-validate before
+          // giving up, mirroring djObject's free-text recovery. Only throw (→
+          // caller's pool fallback) when there's no usable JSON either.
+          try {
+            object = schema.parse(JSON.parse(extractJson(stripThinking(result.text || ''))));
+            lastVia = `${lastVia}:text`;
+          } catch {
+            throw new Error('agent did not call the done tool before stopping');
+          }
+        }
       } else if (schema) {
         object = result.output;
       } else {
