@@ -557,10 +557,12 @@ music_meta.on_metadata(on_meta)
 # controller. It is NOT persisted: a mixer restart always comes back on air.
 #
 # Two mounts in parallel:
-#   /stream.mp3  — MP3 128 kbps, the universal compatibility floor
+#   /stream.mp3  — MP3 192 kbps, the universal compatibility floor
 #                  (Sonos, hardware radios, car receivers, pre-iOS-17 Safari).
-#                  128 over 192 cuts ~33% per-listener bandwidth at a quality
-#                  difference that's inaudible for a personal station.
+#                  Bumped from 128 → 192: dense, brick-walled masters (e.g. hot
+#                  Punjabi/hip-hop catalogue pinned at 0 dBFS) produced audible
+#                  encode grain ("swishy static") at 128 with no headroom. The
+#                  extra ~50% bandwidth buys a clean re-encode of busy material.
 #   /stream.opus — Ogg-Opus 96 kbps, ~equal-or-better quality at half the
 #                  bandwidth for modern browsers (the web player auto-prefers
 #                  it via canPlayType). Browsers / VLC / cliamp on a recent
@@ -570,7 +572,7 @@ settings.init.force_start := true
 
 def make_stream_outputs() =
   mp3_out = output.icecast(
-    %mp3(bitrate=128, samplerate=44100, stereo=true),
+    %mp3(bitrate=192, samplerate=44100, stereo=true),
     id="stream_mp3",
     fallible=true,
     host=environment.get(default="icecast", "ICECAST_HOST"),
