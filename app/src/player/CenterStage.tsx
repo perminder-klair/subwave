@@ -12,6 +12,28 @@ import { isDjTurn } from '@/lib/sessionFeed';
 import type { NowPlayingTrack, SessionTurn } from '@/lib/types';
 import { useTheme } from '@/theme/ThemeContext';
 
+/** The quiet "music nerd" tokens shown under artist/album: genre · BPM · key.
+ *  Each token is omitted when its field is absent, so an untagged track yields
+ *  an empty array and the strip doesn't render. Mirrors web CenterStage. */
+function buildMetaTokens(t: NowPlayingTrack | null): string[] {
+  if (!t) return [];
+  const tokens: string[] = [];
+  if (t.genre) tokens.push(t.genre.toUpperCase());
+  if (typeof t.bpm === 'number' && t.bpm > 0) tokens.push(`${Math.round(t.bpm)} BPM`);
+  if (t.musicalKey) tokens.push(t.musicalKey);
+  return tokens;
+}
+
+/** The mood/energy phrase, e.g. "MELLOW · LOW ENERGY". Up to two moods plus the
+ *  energy level; empty string when the track carries neither. */
+function buildMoodPhrase(t: NowPlayingTrack | null): string {
+  if (!t) return '';
+  const parts: string[] = [];
+  if (Array.isArray(t.moods)) parts.push(...t.moods.slice(0, 2));
+  if (t.energy) parts.push(`${t.energy} energy`);
+  return parts.join('  ·  ').toUpperCase();
+}
+
 export interface CenterStageProps {
   nowPlaying: NowPlayingTrack | null;
   coverSrc: string | null;
@@ -37,6 +59,9 @@ export default function CenterStage({
   const has = !!nowPlaying?.title;
   const duration = nowPlaying?.duration ?? 0;
   const subsonicId = nowPlaying?.subsonic_id ?? null;
+  const metaTokens = buildMetaTokens(nowPlaying);
+  const moodPhrase = buildMoodPhrase(nowPlaying);
+  const hasMeta = metaTokens.length > 0 || moodPhrase.length > 0;
 
   // Glitch bursts for ~3s on two signals: every track change (subsonic_id flip)
   // and every new DJ turn (voice/dj) landing in the feed — the native analog of
@@ -100,6 +125,19 @@ export default function CenterStage({
             {nowPlaying?.album ? `  ·  ${nowPlaying.album}` : ''}
             {nowPlaying?.year ? `  ·  ${nowPlaying.year}` : ''}
           </Text>
+          {hasMeta ? (
+            <Text
+              className="font-mono mt-2"
+              style={{ fontSize: 11, letterSpacing: 1.5, color: colors.muted }}
+            >
+              {metaTokens.join('  ·  ')}
+              {moodPhrase ? (
+                <Text style={{ color: colors.accent }}>
+                  {metaTokens.length > 0 ? '  ·  ' : ''}↳ {moodPhrase}
+                </Text>
+              ) : null}
+            </Text>
+          ) : null}
         </>
       ) : (
         <Text className="font-display text-muted" style={{ fontSize: 26, lineHeight: 30 }}>

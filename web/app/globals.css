@@ -2605,8 +2605,12 @@ body::after {
     color: #fff;
     opacity: 1;
 }
-.admin-root .shell-nav .nav-foot {
+/* Manual link sits at the bottom of the rail, grouped with the foot — it
+   absorbs the free space so both it and the footer hug the bottom. */
+.admin-root .shell-nav .nav-item-manual {
     margin-top: auto;
+}
+.admin-root .shell-nav .nav-foot {
     padding-top: 14px;
     border-top: 1px dashed var(--separator-strong);
     font-size: 10px;

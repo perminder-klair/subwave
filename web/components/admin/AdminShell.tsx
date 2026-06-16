@@ -19,6 +19,9 @@ import {
   Webhook,
   Telescope,
   DatabaseBackup,
+  BookOpen,
+  Apple,
+  Smartphone,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -183,6 +186,36 @@ export default function AdminShell({ children }: AdminShellProps) {
               })}
             </div>
           ))}
+          <Link
+            href="/manual"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="nav-item nav-item-manual"
+          >
+            <BookOpen className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+            <span className="nav-label">Manual</span>
+            <span className="pill">↗</span>
+          </Link>
+          <Link
+            href="https://apps.apple.com/app/sub-wave/id6778786696"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="nav-item"
+          >
+            <Apple className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+            <span className="nav-label">iOS app</span>
+            <span className="pill">↗</span>
+          </Link>
+          <Link
+            href="https://play.google.com/store/apps/details?id=com.getsubwave.app"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="nav-item"
+          >
+            <Smartphone className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+            <span className="nav-label">Android app</span>
+            <span className="pill">↗</span>
+          </Link>
           <div className="nav-foot">
             sub / wave
             <br />

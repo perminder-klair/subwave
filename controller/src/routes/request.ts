@@ -43,9 +43,11 @@ function pruneRequests() {
 // albums by year, pick a song from the right album. Returns a Subsonic song or null.
 async function pickByArtistAndSort({ artistName, sort, scope: _scope, recentIds }: { artistName: string; sort: string | null; scope: string; recentIds: Set<string> }) {
   try {
-    const artists = await subsonic.searchArtists(artistName, { artistCount: 5 });
-    if (artists.length === 0) return null;
-    const artist = await subsonic.getArtist(artists[0].id);
+    // Fuzzy-resolve so a transliteration variance or typo ("Sikandar" vs the
+    // library's "Sikander") still lands on the right artist instead of failing.
+    const matchedArtist = await subsonic.resolveArtist(artistName);
+    if (!matchedArtist) return null;
+    const artist = await subsonic.getArtist(matchedArtist.id);
     let albums = artist?.album || [];
     if (albums.length === 0) return null;
 
@@ -121,6 +123,7 @@ function recordOutcome(entry) {
       genre: entry.genre ?? null,
       language: entry.language ?? null,
       searchTerms: entry.searchTerms ?? null,
+      artistMiss: entry.artistMiss ?? null,
       track: entry.pick
         ? { title: entry.pick.title, artist: entry.pick.artist, id: entry.pick.id }
         : (entry.track || null),
@@ -429,6 +432,23 @@ async function resolveRequest(entry) {
     queue.log('miss', `Nothing matched "${text}"`);
     return failed(`Sorry ${requester}, nothing in the crates matched that.`);
   }
+
+  // Near-miss flag: the listener named an artist but the track we're airing
+  // isn't by them — the cascade couldn't find that artist (even fuzzily) and
+  // fell through to mood/genre/starred filler. We still queue the filler (the
+  // station never refuses), but recording it makes this silent degrade visible
+  // in the request log instead of looking like a clean resolve.
+  if (matched.artist) {
+    const want = matched.artist.toLowerCase().trim();
+    const got = String(pick.artist || '').toLowerCase();
+    const hit = got.includes(want) || want.includes(got)
+      || want.split(/\s+/).some(t => t.length >= 3 && got.includes(t));
+    if (!hit) {
+      entry.artistMiss = matched.artist;
+      queue.log('miss', `Requested artist "${matched.artist}" not in library — airing ${pick.artist} instead`);
+    }
+  }
+
   queue.log('request', `resolved via ${pickSource}: ${pick.title} — ${pick.artist}`);
 
   // 3. Generate DJ intro that mentions the request

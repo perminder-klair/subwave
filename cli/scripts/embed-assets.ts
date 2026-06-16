@@ -67,10 +67,17 @@ function main(): void {
   // Bake the string in at embed time — release-please bumps this in lockstep
   // with the git tag, so the embedded version always matches the release the
   // binary came from.
+  //
+  // The trailing `x-release-please-version` marker lets release-please bump
+  // this line itself during the release PR (this file is a `generic`
+  // extra-file in release-please-config.json). Without it the committed copy
+  // would lag the version bump in cli/package.json until someone re-ran this
+  // script, and the verify-cli-assets check would fail on the next PR. Keep
+  // the marker on the same line as the version.
   const pkg = JSON.parse(readFileSync(resolve(REPO_ROOT, 'cli', 'package.json'), 'utf8')) as { version: string };
   parts.push('// cli/package.json#version (embedded so the compiled binary can self-identify');
   parts.push('// — used by `subwave --version` and by the TUI release fetch URL).');
-  parts.push(`export const CLI_VERSION = \`${encode(pkg.version)}\`;`);
+  parts.push(`export const CLI_VERSION = \`${encode(pkg.version)}\`; // x-release-please-version`);
   parts.push('');
 
   writeFileSync(OUT_FILE, parts.join('\n'));

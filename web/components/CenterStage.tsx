@@ -12,6 +12,29 @@ import { isDjTurn } from '@/lib/sessionFeed';
 import { useStationOrigin } from '@/lib/stationOrigin';
 import type { NowPlayingTrack, SessionTurn } from '@/lib/types';
 
+/** The quiet "music nerd" tokens shown under artist/album: genre · BPM · key.
+ *  Returned separately from the mood cluster so the latter can carry the accent
+ *  colour. Each token is omitted when its field is absent, so an untagged track
+ *  yields an empty array and the strip doesn't render at all. */
+function buildMetaTokens(t: NowPlayingTrack | null): string[] {
+  if (!t) return [];
+  const tokens: string[] = [];
+  if (t.genre) tokens.push(t.genre.toUpperCase());
+  if (typeof t.bpm === 'number' && t.bpm > 0) tokens.push(`${Math.round(t.bpm)} BPM`);
+  if (t.musicalKey) tokens.push(t.musicalKey);
+  return tokens;
+}
+
+/** The mood/energy phrase, e.g. "mellow · low energy". Up to two moods plus the
+ *  energy level; empty string when the track carries neither. */
+function buildMoodPhrase(t: NowPlayingTrack | null): string {
+  if (!t) return '';
+  const parts: string[] = [];
+  if (Array.isArray(t.moods)) parts.push(...t.moods.slice(0, 2));
+  if (t.energy) parts.push(`${t.energy} energy`);
+  return parts.join(' · ');
+}
+
 export interface CenterStageProps {
   nowPlaying: NowPlayingTrack | null;
   /** Epoch ms when the current track started (from useStationFeed). */
@@ -28,6 +51,9 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, feed, djL
   // only re-renders this subtree — not the whole player (see useElapsed).
   const elapsed = useElapsed(trackStartedAt);
   const has = !!nowPlaying?.title;
+  const metaTokens = buildMetaTokens(nowPlaying);
+  const moodPhrase = buildMoodPhrase(nowPlaying);
+  const hasMeta = metaTokens.length > 0 || moodPhrase.length > 0;
   const duration = nowPlaying?.duration ?? 0;
   const subsonicId = nowPlaying?.subsonic_id ?? null;
   const coverSrc = subsonicId
@@ -143,6 +169,16 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, feed, djL
                     {nowPlaying?.album && <span className="ml-[14px]"> · {nowPlaying.album}</span>}
                     {nowPlaying?.year && <span className="ml-[14px]"> · {nowPlaying.year}</span>}
                   </div>
+                  {hasMeta && (
+                    <div className="v3-caption mt-[10px] text-muted">
+                      {metaTokens.join(' · ')}
+                      {moodPhrase && (
+                        <span className="text-vermilion">
+                          {metaTokens.length > 0 ? ' · ' : ''}↳ {moodPhrase}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </>
               ) : (
                 <h1 className="v3-title m-0 text-muted">

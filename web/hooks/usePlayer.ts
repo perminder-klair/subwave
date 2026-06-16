@@ -113,7 +113,7 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
   // Opus but choke on the live chained Ogg stream Icecast emits at a crossfade
   // boundary, going silent at the first track change with no error/stalled
   // event for the watchdog to catch — so we keep both on the universal MP3
-  // 128 kbps mount instead:
+  // 192 kbps mount instead:
   //   • Safari iOS/iPadOS — returns the optimistic 'maybe', and its
   //     AVFoundation Opus decoder can't tolerate the Ogg page-chain boundary.
   //   • Firefox/Gecko — returns 'probably', decodes Opus fine in general, but
