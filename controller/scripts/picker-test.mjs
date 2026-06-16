@@ -214,6 +214,11 @@ async function main() {
   const s = settings.get();
   s.llm.provider = provider;
   s.llm.model = model;
+  // Allow OLLAMA_URL to override the persisted ollamaUrl — running on the host
+  // (the only place this harness works, since the container ships compiled
+  // dist) the settings value may be a Docker-internal name like
+  // host.docker.internal that doesn't resolve off-container.
+  if (process.env.OLLAMA_URL) s.llm.ollamaUrl = process.env.OLLAMA_URL;
 
   console.log(`\n=== picker-test: ${provider}:${model} × ${N} (messages=${messagesMode}) ===\n`);
 
