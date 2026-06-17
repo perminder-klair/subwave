@@ -36,6 +36,9 @@ export interface StationFeed {
   session: SessionPayload;
   elapsed: number;
   progress: number;
+  /** Station IANA timezone, or null before first poll. Render on-air
+   *  timestamps in this zone so they match what the DJ speaks (issue #418). */
+  timezone: string | null;
 }
 
 const EMPTY_STATE: StationState = { upcoming: [], history: [], djLog: [] };
@@ -54,6 +57,7 @@ export function useStationFeed(
   const [streamOnline, setStreamOnline] = useState<boolean | null>(null);
   const [state, setState] = useState<StationState>(EMPTY_STATE);
   const [session, setSession] = useState<SessionPayload>(EMPTY_SESSION);
+  const [timezone, setTimezone] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const trackStartRef = useRef<number | null>(null);
   const appActive = useAppActive();
@@ -86,6 +90,7 @@ export function useStationFeed(
     setStreamOnline(null);
     setState(EMPTY_STATE);
     setSession(EMPTY_SESSION);
+    setTimezone(null);
     setElapsed(0);
   }, [api]);
 
@@ -112,6 +117,7 @@ export function useStationFeed(
       setIfChanged('activeShow', npRes.activeShow ?? npRes.context?.activeShow ?? null, setActiveShow);
       if (npRes.listeners != null) setIfChanged('listeners', npRes.listeners, setListeners);
       if (typeof npRes.streamOnline === 'boolean') setStreamOnline(npRes.streamOnline);
+      if (typeof npRes.timezone === 'string' && npRes.timezone) setTimezone(npRes.timezone);
     };
 
     const tick = async () => {
@@ -173,5 +179,6 @@ export function useStationFeed(
     session,
     elapsed,
     progress,
+    timezone,
   };
 }

@@ -11,6 +11,7 @@ import {
   type TurnDisplayClass,
 } from '@/lib/sessionFeed';
 import type { SessionTurn } from '@/lib/types';
+import { fmtClock } from '@/lib/format';
 import { useTheme } from '@/theme/ThemeContext';
 
 type FilterId = 'all' | 'dj' | 'tracks';
@@ -20,20 +21,14 @@ const FILTERS: { id: FilterId; label: string }[] = [
   { id: 'tracks', label: 'Tracks' },
 ];
 
-function shortTime(t: string | number | undefined): string {
-  if (t == null) return '';
-  try {
-    return new Date(t).toLocaleTimeString('en-GB', { hour12: false });
-  } catch {
-    return String(t);
-  }
-}
-
 export interface BoothDrawerProps {
   items: SessionTurn[];
+  /** Station IANA timezone — timestamps render in it so they match what the DJ
+   *  speaks on-air (issue #418). Falls back to the device zone when absent. */
+  timezone?: string | null;
 }
 
-export default function BoothDrawer({ items }: BoothDrawerProps) {
+export default function BoothDrawer({ items, timezone }: BoothDrawerProps) {
   const { colors } = useTheme();
   const [filter, setFilter] = useState<FilterId>('all');
 
@@ -104,7 +99,7 @@ export default function BoothDrawer({ items }: BoothDrawerProps) {
           >
             <View className="flex-row items-baseline" style={{ gap: 8, marginBottom: 4 }}>
               <Text className="font-mono text-muted" style={{ fontSize: 10, minWidth: 56 }}>
-                {shortTime(turn.t)}
+                {fmtClock(turn.t, timezone)}
               </Text>
               <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 2, color: classColor(cls) }}>
                 {(turn.kind || '').toUpperCase()}

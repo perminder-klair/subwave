@@ -118,16 +118,18 @@ const TimelinePage = memo(function TimelinePage({
 
 const BoothPage = memo(function BoothPage({
   items,
+  timezone,
   topInset,
   bottomInset,
 }: {
   items: SessionPayload['messages'];
+  timezone?: string | null;
   topInset: number;
   bottomInset: number;
 }) {
   return (
     <PagePanel title="The booth" sub="DJ on the mic" topInset={topInset} bottomInset={bottomInset}>
-      <BoothDrawer items={items} />
+      <BoothDrawer items={items} timezone={timezone} />
     </PagePanel>
   );
 });
@@ -181,6 +183,7 @@ export default function PlayerScreen() {
     session,
     elapsed,
     progress,
+    timezone,
     // While tuned in, keep a slow background poll alive so the lock screen
     // (useNowPlayingInfo) tracks the broadcast; idle + backgrounded polls
     // nothing at all.
@@ -359,7 +362,7 @@ export default function PlayerScreen() {
                 </View>
               </View>
               <View style={{ width: pagerW }}>
-                <BoothPage items={boothFeed} topInset={headerInset} bottomInset={barInset} />
+                <BoothPage items={boothFeed} timezone={timezone} topInset={headerInset} bottomInset={barInset} />
               </View>
               <View style={{ width: pagerW }}>
                 {api ? (

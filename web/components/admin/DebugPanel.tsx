@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
-import { fmtSize } from '../../lib/format';
+import { fmtSize, fmtClock } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { V3Alert } from '../ui/alert';
 import { Checkbox } from '../ui/checkbox';
@@ -159,6 +159,8 @@ interface DebugContext {
 }
 
 interface DebugData {
+  /** Station IANA zone — render DJ-log timestamps in it (issue #418). */
+  timezone?: string;
   icecast?: DebugIcecast;
   liquidsoapLog?: string;
   llm?: DebugLlm;
@@ -389,7 +391,7 @@ export default function DebugPanel() {
           )}
 
           {/* ── DJ LOG ─────────────────────────────────────── */}
-          <Card title="DJ log" sub={`${data.queue?.djLogCount} total · last 30`}>
+          <Card title="DJ log" sub={`${data.queue?.djLogCount} total · last 30${data.timezone ? ` · times in ${data.timezone}` : ''}`}>
             <div className="grid max-h-72 gap-1 overflow-y-auto">
               <AnimatePresence initial={false} mode="popLayout">
                 {(data.queue?.djLog || []).map(e => (
@@ -403,7 +405,7 @@ export default function DebugPanel() {
                     className={`log ${kindTone(e.kind)}`}
                   >
                     <span className="t">
-                      {e.t ? new Date(e.t).toLocaleTimeString('en-GB', { hour12: false }) : '—'}
+                      {fmtClock(e.t, data.timezone) || '—'}
                     </span>
                     <span className="k">[{e.kind}]</span>
                     <span className="msg">{e.message}</span>

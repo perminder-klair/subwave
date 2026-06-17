@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../lib/notify';
+import { zonedDayHour } from '../../lib/format';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { Label } from '../ui/label';
@@ -88,7 +89,11 @@ interface SettingsResponse {
     shows?: Array<Partial<Show>>;
     schedule?: Schedule;
     personas?: Persona[];
+    /** Configured station zone; '' means Auto (use serverTimezone). */
+    timezone?: string;
   };
+  /** Effective zone when timezone is '' (Auto) — the container's own TZ. */
+  serverTimezone?: string;
   tts?: { moods?: string[] };
 }
 
@@ -183,8 +188,11 @@ export default function ShowsPanel() {
     const id = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(id);
   }, []);
-  const nowDay = now.getDay();
-  const nowHour = now.getHours();
+  // The grid + the controller both interpret the schedule in the station's
+  // zone (configured, or the container's own when Auto), so the "now" cell must
+  // be derived in that zone too — not the operator's browser zone (issue #418).
+  const stationTz = data?.values?.timezone || data?.serverTimezone;
+  const { dow: nowDay, hour: nowHour } = zonedDayHour(now, stationTz);
 
   // End any drag-paint stroke when the pointer is released anywhere.
   useEffect(() => {
@@ -478,9 +486,11 @@ export default function ShowsPanel() {
               <span className="mono-num text-[12px] font-bold tracking-[0.04em] text-ink">
                 {now.toLocaleDateString('en-GB', {
                   weekday: 'short', day: '2-digit', month: 'short', year: 'numeric',
+                  timeZone: stationTz || undefined,
                 })}
                 {' · '}
-                {now.toLocaleTimeString('en-GB', { hour12: false })}
+                {now.toLocaleTimeString('en-GB', { hour12: false, timeZone: stationTz || undefined })}
+                {stationTz ? ` · ${stationTz}` : ''}
               </span>
             </div>
             <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">

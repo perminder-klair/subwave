@@ -115,6 +115,8 @@ export interface NowPlayingResponse {
   streamOnline?: boolean;
   /** kbps of the first attached broadcast mount; null when offline. */
   streamBitrate?: number | null;
+  /** Station IANA timezone — render on-air timestamps in it (issue #418). */
+  timezone?: string;
 }
 
 export interface QueueEntry {

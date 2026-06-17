@@ -12,6 +12,7 @@ import * as settings from '../settings.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import * as requestLog from '../broadcast/request-log.js';
+import { getStationTimezone } from '../time.js';
 import { requireAdmin } from '../middleware/auth.js';
 
 export const router = express.Router();
@@ -29,7 +30,9 @@ router.get('/requests', requireAdmin, (req, res) => {
 });
 
 router.get('/debug', requireAdmin, async (req, res) => {
-  const out: any = { t: new Date().toISOString() };
+  // Station zone so the DJ-log timestamps render in station-local time, matching
+  // what the DJ speaks on-air (#418).
+  const out: any = { t: new Date().toISOString(), timezone: getStationTimezone() };
 
   // 1. now-playing.json (what Liquidsoap last wrote)
   try {

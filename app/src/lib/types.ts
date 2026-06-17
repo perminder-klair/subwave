@@ -109,6 +109,9 @@ export interface NowPlayingResponse {
   activeShow?: ActiveShow | null;
   listeners?: ListenerCount | number;
   streamOnline?: boolean;
+  /** Station IANA timezone — render on-air timestamps in it so they match what
+   *  the DJ speaks, regardless of the device's own timezone (issue #418). */
+  timezone?: string;
 }
 
 export interface QueueEntry {

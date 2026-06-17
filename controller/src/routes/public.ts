@@ -193,6 +193,11 @@ router.get('/now-playing', async (req, res) => {
       listeners: stream.listeners,
       streamOnline: stream.online,
       streamBitrate: stream.bitrate,
+      // The station's IANA zone. The DJ speaks the time in this zone (time.ts),
+      // so on-air log timestamps in the UI must be rendered in it too — else an
+      // operator/listener viewing from another zone sees stamps that disagree
+      // with what the DJ just said (issue #418).
+      timezone: getStationTimezone(),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -279,6 +284,8 @@ router.get('/state', (req, res) => {
     ...snap,
     needsSetup: getSetupStatusSync().needsSetup,
     theme: { active: activeThemeId },
+    // Station zone for rendering djLog timestamps in station-local time (#418).
+    timezone: getStationTimezone(),
   });
 });
 
