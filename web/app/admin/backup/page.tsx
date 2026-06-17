@@ -1,10 +1,6 @@
-import type { Metadata } from 'next';
-import BackupPanel from '../../../components/admin/BackupPanel';
+import { redirect } from 'next/navigation';
 
-export const metadata: Metadata = {
-  title: 'Backup',
-};
-
+// Backup moved into Settings → Backup. Redirect old bookmarks/links.
 export default function AdminBackupPage() {
-  return <BackupPanel />;
+  redirect('/admin/settings?section=backup');
 }

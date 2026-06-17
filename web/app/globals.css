@@ -2605,9 +2605,10 @@ body::after {
     color: #fff;
     opacity: 1;
 }
-/* Manual link sits at the bottom of the rail, grouped with the foot — it
-   absorbs the free space so both it and the footer hug the bottom. */
-.admin-root .shell-nav .nav-item-manual {
+/* External links (Manual / app stores) sit at the bottom of the rail, grouped
+   with the foot — margin-top:auto absorbs the free space so the group and the
+   footer hug the bottom. .nav-section gives them the tight 3px intra-group gap. */
+.admin-root .shell-nav .nav-ext {
     margin-top: auto;
 }
 .admin-root .shell-nav .nav-foot {

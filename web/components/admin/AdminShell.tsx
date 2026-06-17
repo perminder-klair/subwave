@@ -15,10 +15,7 @@ import {
   Sparkles,
   SlidersHorizontal,
   Terminal,
-  Archive,
-  Webhook,
   Telescope,
-  DatabaseBackup,
   BookOpen,
   Apple,
   Smartphone,
@@ -70,9 +67,6 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'System',
     items: [
       { href: '/admin/stats', id: 'stats', label: 'Stats', icon: BarChart3 },
-      { href: '/admin/archives', id: 'archives', label: 'Archives', icon: Archive },
-      { href: '/admin/webhooks', id: 'webhooks', label: 'Webhooks', icon: Webhook },
-      { href: '/admin/backup', id: 'backup', label: 'Backup', icon: DatabaseBackup },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
     ],
@@ -186,36 +180,41 @@ export default function AdminShell({ children }: AdminShellProps) {
               })}
             </div>
           ))}
-          <Link
-            href="/manual"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="nav-item nav-item-manual"
-          >
-            <BookOpen className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
-            <span className="nav-label">Manual</span>
-            <span className="pill">↗</span>
-          </Link>
-          <Link
-            href="https://apps.apple.com/app/sub-wave/id6778786696"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="nav-item"
-          >
-            <Apple className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
-            <span className="nav-label">iOS app</span>
-            <span className="pill">↗</span>
-          </Link>
-          <Link
-            href="https://play.google.com/store/apps/details?id=com.getsubwave.app"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="nav-item"
-          >
-            <Smartphone className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
-            <span className="nav-label">Android app</span>
-            <span className="pill">↗</span>
-          </Link>
+          {/* External links — grouped like a nav-section so they sit tight
+              together (3px) rather than the rail's 18px; nav-ext pins the
+              group to the bottom. */}
+          <div className="nav-section nav-ext">
+            <Link
+              href="/manual"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="nav-item"
+            >
+              <BookOpen className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+              <span className="nav-label">Manual</span>
+              <span className="pill">↗</span>
+            </Link>
+            <Link
+              href="https://apps.apple.com/app/sub-wave/id6778786696"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="nav-item"
+            >
+              <Apple className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+              <span className="nav-label">iOS app</span>
+              <span className="pill">↗</span>
+            </Link>
+            <Link
+              href="https://play.google.com/store/apps/details?id=com.getsubwave.app"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="nav-item"
+            >
+              <Smartphone className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+              <span className="nav-label">Android app</span>
+              <span className="pill">↗</span>
+            </Link>
+          </div>
           <div className="nav-foot">
             sub / wave
             <br />

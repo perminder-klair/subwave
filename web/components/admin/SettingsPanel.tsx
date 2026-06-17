@@ -18,6 +18,9 @@ import {
 } from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
 import { cn } from '../../lib/cn';
+import ArchivesPanel from './ArchivesPanel';
+import WebhooksPanel from './WebhooksPanel';
+import BackupPanel from './BackupPanel';
 
 const SECTIONS = [
   { id: 'station',  label: 'Station', hint: 'name · location · timezone' },
@@ -29,6 +32,9 @@ const SECTIONS = [
   { id: 'jingles',  label: 'Jingles', hint: 'stingers' },
   { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers' },
   { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz' },
+  { id: 'archives', label: 'Archives', hint: 'hourly recordings' },
+  { id: 'webhooks', label: 'Webhooks', hint: 'outbound events' },
+  { id: 'backup',   label: 'Backup', hint: 'export · restore' },
   { id: 'danger',   label: 'Danger zone', hint: 'broadcast control' },
 ] as const;
 
@@ -311,6 +317,14 @@ export default function SettingsPanel() {
       setSfxData((await r.json()) as SfxData);
     } catch { /* non-fatal */ }
   };
+
+  // Deep-link: /admin/settings?section=webhooks opens that rail directly. The
+  // old standalone /admin/{archives,webhooks,backup} routes redirect here, so
+  // existing bookmarks keep working after the move into Settings.
+  useEffect(() => {
+    const s = new URLSearchParams(window.location.search).get('section');
+    if (s && SECTIONS.some(x => x.id === s)) setActiveSection(s as SectionId);
+  }, []);
 
   useEffect(() => {
     if (!data?.values || form) return;
@@ -640,6 +654,11 @@ export default function SettingsPanel() {
             data={data} saveSettings={saveSettings} adminFetch={adminFetch}
           />
         )}
+        {/* Self-contained panels — each re-calls useAdminAuth and owns its
+            own data fetch, so they render outside the data && form guard. */}
+        {activeSection === 'archives' && <ArchivesPanel />}
+        {activeSection === 'webhooks' && <WebhooksPanel />}
+        {activeSection === 'backup' && <BackupPanel />}
         {activeSection === 'danger' && (
           <>
             <SectionHeader

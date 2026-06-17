@@ -1,10 +1,6 @@
-import type { Metadata } from 'next';
-import WebhooksPanel from '../../../components/admin/WebhooksPanel';
+import { redirect } from 'next/navigation';
 
-export const metadata: Metadata = {
-  title: 'Webhooks',
-};
-
+// Webhooks moved into Settings → Webhooks. Redirect old bookmarks/links.
 export default function AdminWebhooksPage() {
-  return <WebhooksPanel />;
+  redirect('/admin/settings?section=webhooks');
 }
