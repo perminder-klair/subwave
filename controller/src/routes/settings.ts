@@ -10,6 +10,7 @@ import * as tts from '../audio/tts.js';
 import * as chatterbox from '../audio/chatterbox.js';
 import * as piper from '../audio/piper.js';
 import * as llmProvider from '../llm/provider.js';
+import { probeEmbeddingConfig } from '../music/embeddings.js';
 import { queue } from '../broadcast/queue.js';
 import { restartLiquidsoap, startStream, stopStream, streamStatus } from '../broadcast/liquidsoap-control.js';
 import { invalidateWeatherCache } from '../context.js';
@@ -186,6 +187,29 @@ router.get('/settings/llm/discover', requireAdmin, async (req, res) => {
     res.json({ reachable: false, models: [], baseUrl, error: err?.message || 'unreachable' });
   } finally {
     clearTimeout(timer);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /settings/embedding/probe — test whether the configured (or supplied)
+// embedding endpoint can actually produce embeddings, surfacing the result
+// in the admin UI BEFORE a long tagging run instead of failing mid-job.
+// Optional query overrides (provider/model/baseUrl/ollamaUrl) test the unsaved
+// form values; omitted fields fall back to saved settings.embedding → llm.
+// Always 200s with { ok, dim, code, message } — a chat-model / unreachable
+// server is a normal, actionable answer, not an error.
+// ---------------------------------------------------------------------------
+router.get('/settings/embedding/probe', requireAdmin, async (req, res) => {
+  const overrides: Record<string, string> = {};
+  for (const k of ['provider', 'model', 'baseUrl', 'ollamaUrl']) {
+    const v = req.query[k];
+    if (typeof v === 'string' && v.trim()) overrides[k] = v.trim();
+  }
+  try {
+    const r = await probeEmbeddingConfig(overrides);
+    res.json({ ok: r.code === 'ok', dim: r.dim ?? null, code: r.code, message: r.message });
+  } catch (err: any) {
+    res.json({ ok: false, dim: null, code: 'unknown', message: err?.message || 'probe failed' });
   }
 });
 

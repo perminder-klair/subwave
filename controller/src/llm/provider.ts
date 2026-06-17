@@ -22,4 +22,8 @@ export {
   activeEmbeddingDim,
   embeddingEnabled,
   embeddingProviderInfo,
+  embeddingInfoOf,
+  resolveEmbeddingCfg,
+  buildEmbeddingModel,
 } from './internal/provider/embedding.js';
+export type { EmbeddingCfg } from './internal/provider/embedding.js';

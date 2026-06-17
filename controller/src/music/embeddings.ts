@@ -17,7 +17,11 @@ import {
   activeEmbeddingDim,
   embeddingEnabled,
   embeddingProviderInfo,
+  embeddingInfoOf,
+  resolveEmbeddingCfg,
+  buildEmbeddingModel,
 } from '../llm/provider.js';
+import type { EmbeddingCfg } from '../llm/provider.js';
 import { SHOW_MOODS as MOOD_VOCAB } from '../settings.js';
 import crypto from 'node:crypto';
 
@@ -149,8 +153,12 @@ function classifyEmbeddingError(err: any): { code: ProbeCode; raw: string } {
   return { code: 'unknown', raw };
 }
 
-function actionableMessage(code: ProbeCode, raw: string): string {
-  const { provider, model, ollamaUrl } = embeddingProviderInfo();
+function actionableMessage(
+  code: ProbeCode,
+  raw: string,
+  info: { provider: string; model: string; ollamaUrl: string },
+): string {
+  const { provider, model, ollamaUrl } = info;
   switch (code) {
     case 'not_found':
       if (provider === 'ollama') {
@@ -273,17 +281,31 @@ async function tryOllamaPull(model: string, ollamaUrl: string): Promise<boolean>
   }
 }
 
-async function probeOnce(): Promise<ProbeResult> {
+// Probe an explicit embedding config — builds a one-off model, embeds a short
+// string, and returns the real vector length on success or an actionable
+// message on failure. Shared by probeOnce() (saved config, used by the tagger
+// preflight) and the /settings/embedding/probe endpoint (unsaved form values,
+// passed as overrides) so both classify identically and name the right server.
+export async function probeEmbeddingConfig(
+  overrides: Partial<EmbeddingCfg> = {},
+): Promise<ProbeResult> {
+  const cfg = resolveEmbeddingCfg(overrides);
+  const info = embeddingInfoOf(cfg);
   try {
-    const vecs = await embedTexts(['subwave embedding probe']);
+    const model = buildEmbeddingModel(cfg);
+    const { embeddings } = await embedMany({ model, values: ['subwave embedding probe'] });
     // Measure the real vector length from the live server — authoritative dim,
     // independent of the name→dim guess table (#319).
-    const dim = Array.isArray(vecs[0]) ? vecs[0].length : undefined;
+    const dim = Array.isArray(embeddings?.[0]) ? embeddings[0].length : undefined;
     return { code: 'ok', message: 'ok', dim };
   } catch (err: any) {
     const { code, raw } = classifyEmbeddingError(err);
-    return { code, message: actionableMessage(code, raw) };
+    return { code, message: actionableMessage(code, raw, info) };
   }
+}
+
+function probeOnce(): Promise<ProbeResult> {
+  return probeEmbeddingConfig();
 }
 
 // One-shot readiness check used by the tagger before phase-1. Auto-pulls a

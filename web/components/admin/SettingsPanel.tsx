@@ -275,6 +275,7 @@ interface SettingsData {
   };
   jingles?: JingleEntry[];
   libraryStats?: { total?: number };
+  tagger?: { running?: boolean };
   env?: Record<string, unknown>;
   streamOnAir?: boolean;
   // What timezone '' (Auto) resolves to — the controller's own zone.
@@ -2175,6 +2176,86 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
   // Anthropic has no first-party embedding API — flagged in the hint.
   const providers = data.llm?.providers || ['ollama'];
 
+  // --- Guided setup: probe the endpoint up front, detect a locca embed server,
+  // and kick the tagger from here, instead of failing mid-run (#405 follow-up).
+  const { adminFetch } = useAdminAuth();
+  const [probe, setProbe] = useState<
+    { ok: boolean; dim: number | null; code: string; message: string } | null
+  >(null);
+  const [probing, setProbing] = useState(false);
+  const [detecting, setDetecting] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [tagBusy, setTagBusy] = useState(false);
+  const taggerRunning = !!data.tagger?.running;
+  // Local servers (llama.cpp/locca) need a dedicated embedding endpoint; cloud
+  // and Ollama providers serve embeddings on the same endpoint as chat.
+  const needsServerUrl = effectiveProvider === 'locca' || effectiveProvider === 'openai-compatible';
+
+  const probeQuery = () => {
+    const p = new URLSearchParams();
+    if (e.provider) p.set('provider', e.provider);
+    if (e.model) p.set('model', e.model);
+    if (e.baseUrl) p.set('baseUrl', e.baseUrl);
+    if (e.ollamaUrl) p.set('ollamaUrl', e.ollamaUrl);
+    return p.toString();
+  };
+
+  const runProbe = async () => {
+    setProbing(true);
+    setProbe(null);
+    try {
+      const r = await adminFetch(`/settings/embedding/probe?${probeQuery()}`);
+      setProbe(await r.json());
+    } catch (err) {
+      setProbe({ ok: false, dim: null, code: 'unknown', message: errorMessage(err) });
+    } finally {
+      setProbing(false);
+    }
+  };
+
+  // Find a locca embedding server on its default port (8090), pre-fill the form,
+  // and confirm it actually embeds.
+  const detect = async () => {
+    setDetecting(true);
+    setProbe(null);
+    const url = 'http://host.docker.internal:8090/v1';
+    try {
+      let model = 'nomic-embed-text';
+      try {
+        const d = await (
+          await adminFetch(`/settings/llm/discover?baseUrl=${encodeURIComponent(url)}`)
+        ).json();
+        if (d.reachable && Array.isArray(d.models) && d.models.length) model = d.models[0];
+      } catch {
+        /* discovery is best-effort — fall through and probe with the default model */
+      }
+      const p = new URLSearchParams({ provider: 'locca', baseUrl: url, model });
+      const j = await (await adminFetch(`/settings/embedding/probe?${p.toString()}`)).json();
+      setProbe(j);
+      if (j.ok) {
+        setForm(f => ({ ...f, embedding: { ...f.embedding, provider: 'locca', baseUrl: url, model } }));
+      }
+    } catch (err) {
+      setProbe({ ok: false, dim: null, code: 'unknown', message: errorMessage(err) });
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  const startTagging = async () => {
+    setTagBusy(true);
+    try {
+      const r = await adminFetch('/tag-library', { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) notify.ok('tagging started — watch progress on the Library tab');
+      else notify.err(j.error || 'could not start the tagger');
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTagBusy(false);
+    }
+  };
+
   return (
     <>
       <SectionHeader
@@ -2193,6 +2274,25 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
           },
         ]}
       />
+
+      {/* Plain-language intro + at-a-glance readiness. */}
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <p className="max-w-[560px] text-[12px] leading-[1.6] text-muted">
+          Auto-tagging reads each track once and labels its mood + energy so the DJ
+          picks tracks that fit the room. It needs a small <strong>embedding</strong>{' '}
+          model — separate from your chat LLM. Set it up below, hit{' '}
+          <strong>Test</strong>, then run the tagger.
+        </p>
+        {probing || detecting ? (
+          <Pill tone="default" dot>checking…</Pill>
+        ) : probe?.ok ? (
+          <Pill tone="accent" dot>ready{probe.dim ? ` · ${probe.dim}-dim` : ''}</Pill>
+        ) : probe ? (
+          <Pill tone="ink" dot className="!border-red-400 !text-red-400">needs attention</Pill>
+        ) : (
+          <Pill tone="default">not tested</Pill>
+        )}
+      </div>
 
       <Card title="Tagger" sub="enabled?">
         <div className="grid grid-cols-[1fr_auto] items-center gap-4">
@@ -2218,7 +2318,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
         </div>
       </Card>
 
-      <Card title="Embedding provider" sub="vector model">
+      <Card title="Embedding server" sub="where embeddings come from">
         <div className="grid gap-[18px]">
           <div className="field">
             <Label>Provider</Label>
@@ -2321,9 +2421,67 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
               </div>
             </div>
           )}
+
+          {/* Detect a locca embed server + test the endpoint BEFORE a long run. */}
+          <div className="field">
+            <div className="flex flex-wrap items-center gap-2">
+              {needsServerUrl && (
+                <Btn sm onClick={detect} disabled={detecting || probing}>
+                  {detecting ? 'Detecting…' : 'Detect locca server'}
+                </Btn>
+              )}
+              <Btn sm tone="accent" onClick={runProbe} disabled={probing || detecting}>
+                {probing ? 'Testing…' : 'Test embeddings'}
+              </Btn>
+            </div>
+            {probe && (
+              <div
+                className={cn(
+                  'mt-2 max-w-[560px] rounded border px-3 py-2 text-[11px] leading-[1.6] whitespace-pre-wrap',
+                  probe.ok
+                    ? 'border-[var(--accent)] text-[color:var(--accent)]'
+                    : 'border-red-400/50 text-red-300',
+                )}
+              >
+                {probe.ok
+                  ? `✓ Producing embeddings${probe.dim ? ` (${probe.dim}-dim vectors)` : ''} — you're ready to tag.`
+                  : `✗ ${probe.message}`}
+              </div>
+            )}
+          </div>
         </div>
       </Card>
 
+      {/* Run the tagger — gated on a green probe so it can't fail mid-job. */}
+      <Card title="Tag the library" sub="run the bulk tagger">
+        <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+          <div className="max-w-[480px] text-[11px] leading-[1.5] text-muted">
+            {taggerRunning
+              ? 'A tagging run is in progress — watch live progress on the Library tab.'
+              : probe?.ok
+                ? 'Embeddings look good. Start the bulk tagger — it runs in the background; watch progress on the Library tab.'
+                : 'Test the embedding endpoint above first — the tagger needs a working embedding server.'}
+          </div>
+          <Btn
+            tone="accent"
+            onClick={startTagging}
+            disabled={tagBusy || taggerRunning || !probe?.ok}
+          >
+            {taggerRunning ? 'Tagging…' : tagBusy ? 'Starting…' : 'Start tagging'}
+          </Btn>
+        </div>
+      </Card>
+
+      {/* Advanced knobs — collapsed by default so newcomers see only the basics. */}
+      <button
+        type="button"
+        onClick={() => setAdvancedOpen(o => !o)}
+        className="mb-1 w-fit text-[11px] font-bold tracking-[0.14em] text-muted uppercase hover:text-ink"
+      >
+        {advancedOpen ? '▾' : '▸'} Advanced — seed count, propagation, enrichment
+      </button>
+      {advancedOpen && (
+        <>
       <Card title="Seed phase" sub="how many tracks to LLM-tag">
         <div className="grid gap-[18px]">
           <div className="field">
@@ -2508,6 +2666,8 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
           </div>
         </div>
       </Card>
+        </>
+      )}
 
       <SaveBar
         note={`Saved values apply the next time the bulk tagger runs. Current run (if any) keeps its own snapshot.${
