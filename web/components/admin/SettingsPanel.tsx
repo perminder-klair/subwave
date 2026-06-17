@@ -113,6 +113,7 @@ interface LlmForm {
   baseUrl: string;
   reasoning: boolean;
   pickerAgent: boolean;
+  requestWebResolve: boolean;
   agentTimeoutMs: number;
   pauseWhenEmpty: boolean;
   fallback: LlmFallbackForm;
@@ -368,6 +369,7 @@ export default function SettingsPanel() {
         baseUrl: v.llm?.baseUrl ?? '',
         reasoning: !!v.llm?.reasoning,
         pickerAgent: !!v.llm?.pickerAgent,
+        requestWebResolve: !!v.llm?.requestWebResolve,
         agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
         pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
         fallback: {
@@ -1522,6 +1524,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
       baseUrl: form.llm.baseUrl,
       reasoning: form.llm.reasoning,
       pickerAgent: form.llm.pickerAgent,
+      requestWebResolve: form.llm.requestWebResolve,
       agentTimeoutMs: form.llm.agentTimeoutMs,
       pauseWhenEmpty: form.llm.pauseWhenEmpty,
       fallback: {
@@ -1939,6 +1942,29 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
               20&ndash;40s per pick; lower it for snappier fallbacks on a fast
               model. 5&ndash;180s.
             </div>
+          </div>
+        )}
+
+        {form.llm.pickerAgent && (
+          <div className="mt-4 grid grid-cols-[1fr_auto] items-center gap-4">
+            <div>
+              <div className="text-[13px] font-bold">Resolve described requests via web</div>
+              <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+                When on, a listener who <em>describes</em> a track instead of naming it
+                (&ldquo;the song from the new Dune movie&rdquo;) gets it looked up on the
+                web, then matched against your library. Needs a web-search provider
+                configured under Web search; otherwise it has no effect.
+              </div>
+            </div>
+            <Seg
+              accent
+              value={form.llm.requestWebResolve ? 'on' : 'off'}
+              options={[
+                { id: 'off', label: 'Off' },
+                { id: 'on', label: 'On' },
+              ]}
+              onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, requestWebResolve: v === 'on' } }))}
+            />
           </div>
         )}
       </Card>

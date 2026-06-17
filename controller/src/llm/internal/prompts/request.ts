@@ -101,3 +101,29 @@ export async function matchRequest(
     kind: 'matchRequest',
   });
 }
+
+// Map a vague listener DESCRIPTION of a track ("the song from the new Dune
+// movie", "the one all over TikTok") to a concrete {title, artist}, using web
+// snippets as the only evidence. Returns null when the snippets don't pin down
+// a single song — a wrong guess sends the library search confidently in the
+// wrong direction, so we never guess. Backs the request-only
+// `identifyRequestedTrack` tool (llm/internal/tools/picker-tools.ts), which then
+// resolves the result against the LOCAL library — this never returns a track id.
+const IDENTIFY_SCHEMA = z.object({
+  title: z.string().nullable().describe('the one specific song title the description points to, or null if the web text does not pin down a single song'),
+  artist: z.string().nullable().describe('the primary performing artist for that song, or null if the text does not make it clear'),
+});
+
+export async function identifyTrackFromText(
+  reference: string,
+  webText: string,
+): Promise<{ title: string; artist: string | null } | null> {
+  const out = await djObject({
+    system: 'You map a vague description of a song to the ONE specific track it refers to, using only the web snippets provided. Return the exact song title and primary performing artist. If the snippets do not clearly point to a single song, return nulls — never guess.',
+    prompt: `Listener's description: "${reference}"\n\nWeb context:\n${webText}\n\nWhich single song does this most likely mean?`,
+    schema: IDENTIFY_SCHEMA,
+    temperature: 0.2,
+    kind: 'identifyRequest',
+  });
+  return out?.title ? { title: String(out.title), artist: out.artist ? String(out.artist) : null } : null;
+}

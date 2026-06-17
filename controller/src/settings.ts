@@ -450,6 +450,13 @@ const DEFAULTS = {
     // dj-agent.js). When off, the stateless pool picker runs instead — still
     // inside a session, still logged, just without the conversational loop.
     pickerAgent: true,
+    // When on, the listener-request agent (djAgentRequest only — never the
+    // per-track picker) gets an extra `identifyRequestedTrack` tool that resolves
+    // a DESCRIBED track ("the song from the new Dune movie") via web search, then
+    // matches it against the local library. Off by default: it needs a web-search
+    // provider (settings.search) and costs a web round-trip + a small extraction
+    // call per use. No-op unless searchReady() — see llm/internal/tools/picker-tools.ts.
+    requestWebResolve: false,
     // Hard wall-clock ceiling (ms) on a single DJ-agent generation (track
     // picks and listener requests). Enforced by withDeadline in llm/sdk.ts;
     // the main and recovery runs each get the full budget, so worst case per
@@ -921,6 +928,10 @@ export async function load() {
         typeof stored.llm?.pickerAgent === 'boolean'
           ? stored.llm.pickerAgent
           : DEFAULTS.llm.pickerAgent,
+      requestWebResolve:
+        typeof stored.llm?.requestWebResolve === 'boolean'
+          ? stored.llm.requestWebResolve
+          : DEFAULTS.llm.requestWebResolve,
       // Clamped to [5s, 180s]; settings.json files from before the field
       // existed pick up the default.
       agentTimeoutMs: clampAgentTimeout(stored.llm?.agentTimeoutMs, DEFAULTS.llm.agentTimeoutMs),
@@ -1658,6 +1669,9 @@ export async function update(patch) {
     applyLlmLegPatch(next.llm, l, 'llm');
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
+    }
+    if (l.requestWebResolve !== undefined) {
+      next.llm.requestWebResolve = !!l.requestWebResolve;
     }
     if (l.agentTimeoutMs !== undefined) {
       next.llm.agentTimeoutMs = clampAgentTimeout(Number(l.agentTimeoutMs), next.llm.agentTimeoutMs);

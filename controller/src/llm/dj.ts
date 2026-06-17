@@ -11,7 +11,7 @@ export {
   decoratePrompt,
 } from './internal/prompts/context.js';
 export { introBudgetPhrase, enforceIntroBudget } from './internal/prompts/intro-budget.js';
-export { matchRequest } from './internal/prompts/request.js';
+export { matchRequest, identifyTrackFromText } from './internal/prompts/request.js';
 export {
   generateIntro,
   generateStationId,

@@ -284,9 +284,14 @@ export const requestAgent = defineAgent({
   timeoutMs: agentDeadline,
   buildSystem: () => requestSystem(),
   // recentArtists deliberately empty — a request for a recently-played artist
-  // must still resolve.
+  // must still resolve. resolveReferences adds the web-backed reference resolver
+  // (request path only; no-op without a search provider) when the operator opts
+  // in via settings.llm.requestWebResolve.
   buildTools: ({ recentIds }) => {
-    const { tools, seen } = buildPickerTools({ recentIds });
+    const { tools, seen } = buildPickerTools({
+      recentIds,
+      resolveReferences: settings.get().llm?.requestWebResolve ?? false,
+    });
     return { tools, extras: { seen } };
   },
 });

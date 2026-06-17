@@ -12,6 +12,8 @@ import * as subsonic from '../../../music/subsonic.js';
 import * as library from '../../../music/library.js';
 import * as embeddings from '../../../music/embeddings.js';
 import { filterPickerCandidates } from '../../../music/recency.js';
+import { searchWeb, searchReady } from '../../../skills/web-search.js';
+import { identifyTrackFromText } from '../prompts/request.js';
 
 function slim(s: any) {
   const base = {
@@ -69,6 +71,7 @@ export function buildPickerTools({
   recentKeys = new Set<string>(),
   recentArtists = new Set<string>(),
   audioWaypoint = null,
+  resolveReferences = false,
 }: {
   recentIds?: Set<string>;
   recentKeys?: Set<string>;        // lowercased "title|artist" — backfilled entries lack ids
@@ -77,6 +80,11 @@ export function buildPickerTools({
   // When present, the tracksTowardJourney tool below is registered, closing
   // over it — the agent never sees the raw vector, only the tracks near it.
   audioWaypoint?: number[] | null;
+  // Request path only (djAgentRequest): registers identifyRequestedTrack, which
+  // resolves a DESCRIBED track via web search and matches it to the LOCAL
+  // library. No-op unless a web-search provider is ready (searchReady()). Never
+  // set on the per-track picker — see the gating note on the tool below.
+  resolveReferences?: boolean;
 } = {}) {
   const seen = new Map<string, any>(); // id → slim song, accumulated across all tool calls
   const artistCounts = new Map<string, number>(); // artist key → songs already accepted into `seen`
@@ -282,6 +290,44 @@ export function buildPickerTools({
         execute: async () => {
           try { await library.load(); return collect(library.tracksByAudioVector(audioWaypoint, 20)); }
           catch (err) { return { error: err.message }; }
+        },
+      }),
+    } : {}),
+
+    // Request path only, and only when a web-search provider is ready. Resolves a
+    // listener's DESCRIPTION of a track (not a name) to songs in the LOCAL
+    // library: it looks the description up on the web, identifies the most likely
+    // single song, then searches Navidrome for it. Every returned candidate goes
+    // through collect() like any other tool, so the chosen id is always real —
+    // web text only steers which library tracks surface, never the id space.
+    ...(resolveReferences && searchReady() ? {
+      identifyRequestedTrack: tool({
+        description: 'LAST RESORT for a request that DESCRIBES a track instead of naming it — "the song from the new Dune movie", "the one all over TikTok", "this year\'s World Cup anthem". Looks the description up on the web, identifies the most likely song, then returns the matching tracks FROM THIS LIBRARY (or none if we do not have it). Do NOT use when the listener already gives an artist or a title — use searchLibrary for that. Returns { identified, candidates }: even when candidates is empty, `identified` tells you what the reference meant so you can pivot (e.g. topSongsByArtist) or tell the listener it is not in the library.',
+        inputSchema: z.object({
+          reference: z.string().min(3).describe("the listener's description of the track, verbatim"),
+        }),
+        execute: async ({ reference }) => {
+          try {
+            const web = await searchWeb(reference); // cached 30 min
+            const blob = [web.answer, ...web.results.map((r) => `${r.title}: ${r.content}`)]
+              .filter(Boolean).join('\n').slice(0, 2000);
+            if (!blob) return { error: 'no web result for that reference' };
+
+            const guess = await identifyTrackFromText(reference, blob);
+            if (!guess) return { error: 'could not identify a specific song from that description' };
+
+            // Resolve LOCALLY via the same path searchLibrary uses, so every id
+            // lands in `seen`. Try "artist title", then a resolved-artist retry
+            // (spelling/transliteration), then title-only.
+            const q = [guess.artist, guess.title].filter(Boolean).join(' ');
+            let songs = await subsonic.search(q, { songCount: 25 });
+            if (songs.length === 0 && guess.artist) {
+              const a = await subsonic.resolveArtist(guess.artist);
+              if (a) songs = await subsonic.search(`${a.name} ${guess.title}`, { songCount: 25 });
+            }
+            if (songs.length === 0) songs = await subsonic.search(guess.title, { songCount: 25 });
+            return { identified: guess, candidates: collect(songs) };
+          } catch (err) { return { error: err.message }; }
         },
       }),
     } : {}),
