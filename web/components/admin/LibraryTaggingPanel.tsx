@@ -62,9 +62,10 @@ export interface TaggerState {
   pid?: number;
   startedAt?: string;
   lastLog?: string[];
-  // 'tag' (tag-library) or 'analyze' (the acoustic/audio-embedding pass) —
-  // both run through the same single-flight child slot.
-  mode?: 'tag' | 'analyze' | null;
+  // 'tag' (tag-library), 'analyze' (the acoustic/audio-embedding pass), or
+  // 'reconcile' (walk Navidrome + prune orphaned rows) — all run through the
+  // same single-flight child slot.
+  mode?: 'tag' | 'analyze' | 'reconcile' | null;
   progress?: TaggerProgress | null;
 }
 
@@ -108,6 +109,8 @@ interface TaggingPanelProps {
   onStart: () => void;
   onStop: () => void;
   onRescan: (opts: RescanOpts) => void;
+  // Walk Navidrome and prune library entries for tracks that no longer exist.
+  onReconcile: () => void;
   // sounds-like (CLAP) controls — null until the first settings poll lands.
   audioEnabled: boolean | null;
   onToggleAudio: () => void;
@@ -276,6 +279,14 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             <Btn lg tone="accent" onClick={p.onStart} disabled={p.busy || remaining === 0}>
               <Play size={13} /> Start tagging
             </Btn>
+            <Btn
+              lg
+              onClick={p.onReconcile}
+              disabled={p.busy}
+              title="Walk Navidrome and remove library entries for tracks that no longer exist (deleted files or IDs changed by a full rescan). No tagging cost."
+            >
+              <RefreshCw size={13} /> Reconcile with Navidrome
+            </Btn>
           </div>
         </div>
       ) : (
@@ -294,7 +305,9 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                   )}
                 </>
               ) : (
-                p.tagger?.mode === 'analyze' ? 'Audio analysis in progress…' : 'Tagging in progress…'
+                p.tagger?.mode === 'analyze' ? 'Audio analysis in progress…'
+                  : p.tagger?.mode === 'reconcile' ? 'Reconciling with Navidrome…'
+                  : 'Tagging in progress…'
               )}
             </span>
             <span className="caption mono-num !tracking-[0.04em]">
@@ -318,7 +331,9 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             {(progress && PHASE_HINT[progress.phase]) ||
               (p.tagger?.mode === 'analyze'
                 ? 'The analysis engine is listening to each track — measuring tempo and key, and fingerprinting how it sounds.'
-                : 'The DJ is listening to each new track and deciding its mood & energy.')}
+                : p.tagger?.mode === 'reconcile'
+                  ? 'Checking every track against Navidrome and removing entries for files that no longer exist.'
+                  : 'The DJ is listening to each new track and deciding its mood & energy.')}
             {' '}You can keep browsing — this runs in the background.
           </div>
         </div>

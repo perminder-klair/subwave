@@ -14,7 +14,7 @@ import { tagBatch, TAGGER_BATCH_SYSTEM } from '../music/tagger-core.js';
 import { promptVocabHash } from '../music/embeddings.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
-import { tagger, startAnalyzer } from '../broadcast/tagger.js';
+import { tagger, startAnalyzer, startReconcile } from '../broadcast/tagger.js';
 
 export const router = express.Router();
 
@@ -341,6 +341,20 @@ router.post('/library/analyze', requireAdmin, (req, res) => {
   if (tagger.running) return res.status(409).json({ error: 'a tagger/analyzer run is already active', tagger });
   const limit = parseIntSafe(req.body?.limit, null);
   startAnalyzer({ limit: limit ?? undefined, audio: true });
+  res.json({ ok: true, tagger });
+});
+
+// ---------------------------------------------------------------------------
+// POST /library/reconcile — walk Navidrome and prune library rows for tracks
+// that no longer exist there (deleted files, or IDs re-minted by a full
+// rescan). No LLM, no embeddings — the cheap "clear orphaned entries" path,
+// usable even at 100% coverage where Start tagging is disabled. Shares the
+// tagger's single-flight slot: poll /settings (tagger.running / tagger.mode ===
+// 'reconcile') for progress, stop via /tag-library/stop.
+// ---------------------------------------------------------------------------
+router.post('/library/reconcile', requireAdmin, (req, res) => {
+  if (tagger.running) return res.status(409).json({ error: 'a tagger/analyzer run is already active', tagger });
+  startReconcile();
   res.json({ ok: true, tagger });
 });
 

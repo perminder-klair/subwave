@@ -571,6 +571,31 @@ export default function LibraryPanel() {
     }
   };
 
+  // Reconcile with Navidrome — walk the catalogue and prune library entries
+  // for tracks that no longer exist (deleted files, or IDs re-minted by a full
+  // rescan). No LLM/embedding cost; reuses the tagger's single-flight slot, so
+  // the running view + stop button below cover it. Usable at 100% coverage,
+  // where Start tagging is disabled.
+  const reconcile = async () => {
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/library/reconcile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `reconcile failed (${r.status})`);
+      notify.ok('reconcile started — scanning Navidrome');
+      setLogOpen(true);
+      await loadTagger();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
   // Run the analysis pass (bpm/key + audio fingerprints) as a background
   // child — same single-flight state as the tagger, so the running view and
   // stop button below cover it too.
@@ -641,6 +666,7 @@ export default function LibraryPanel() {
         onStart={startTagger}
         onStop={stopTagger}
         onRescan={rescanTagger}
+        onReconcile={reconcile}
         audioEnabled={audioEnabled}
         onToggleAudio={toggleAudio}
         onAnalyzeAudio={analyzeAudio}
