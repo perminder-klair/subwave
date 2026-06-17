@@ -79,6 +79,36 @@ async function pickByArtistAndSort({ artistName, sort, scope: _scope, recentIds 
   return null;
 }
 
+// Fallback for "more like this" when the currently-playing artist has nothing
+// else in the library (e.g. a one-off collab credit) — find a track that
+// actually RESEMBLES the current one. "more like this" means more like the
+// TRACK, not strictly more by the artist, so this honours the request instead
+// of dead-ending. Prefers the audio-similarity extension ("sounds like this"),
+// then the Last.fm similarity graph. Returns a fresh Subsonic song (same shape
+// as pickByArtistAndSort) or null. Excludes the seed track and recent plays.
+async function pickSimilarToTrack(reference, recentIds: Set<string>) {
+  const id = reference?.track?.id;
+  if (!id) return null;
+  const exclude = new Set(recentIds);
+  exclude.add(id); // never return the song that's playing right now
+  const pickFresh = (songs) => {
+    const list = (songs || []).filter((s) => s?.id && !exclude.has(s.id));
+    if (list.length === 0) return null;
+    return list[Math.floor(Math.random() * list.length)];
+  };
+  try {
+    if (await subsonic.supportsSonicSimilarity()) {
+      const pick = pickFresh(await subsonic.getSonicSimilarTracks(id, { count: 25 }));
+      if (pick) return pick;
+    }
+  } catch (err) { queue.log('error', `more-like-this sonic similar failed: ${err.message}`); }
+  try {
+    const pick = pickFresh(await subsonic.getSimilarSongs(id, { count: 25 }));
+    if (pick) return pick;
+  } catch (err) { queue.log('error', `more-like-this similar songs failed: ${err.message}`); }
+  return null;
+}
+
 // Resolve a listener's free-text genre ("hip hop", "punjabi") to a genre value
 // that actually exists in the library. search3 is a title/artist/album text
 // match and can't query the genre tag, so genre requests must go through
@@ -193,12 +223,23 @@ async function resolveRequest(entry) {
     // Requests stay near-unfiltered — 2h is enough to skip the song still
     // ringing in their ears without blocking a re-request from earlier today.
     const recentIds = queue.recentlyPlayedIds(2);
-    const pick = await pickByArtistAndSort({
+    // Try another track by the same artist first (the cheap, on-the-nose read),
+    // then fall back to real track similarity so a one-off collab credit playing
+    // now doesn't dead-end the request ("Couldn't find more from X in the crates").
+    let pick = await pickByArtistAndSort({
       artistName: refArtist, sort: null, scope: 'song', recentIds,
     });
     if (!pick) {
-      return failed(`Couldn't find more from ${refArtist} in the crates.`);
+      pick = await pickSimilarToTrack(reference, recentIds);
+      if (pick) entry.pickSource = 'more-like-this:similar';
     }
+    if (!pick) {
+      return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
+    }
+    // The fallback can land on a different artist, so phrase the ack from the
+    // actual pick, not the seed.
+    const sameArtist = !!pick.artist && pick.artist === refArtist;
+    const ackLine = sameArtist ? `More from ${refArtist}, coming up.` : `More like that, coming up.`;
     const introScript = await dj.generateIntro({
       track: pick,
       context: ctx,
@@ -214,13 +255,13 @@ async function resolveRequest(entry) {
     });
     session.appendTurn({
       role: 'dj', kind: 'request',
-      text: introScript || `More from ${refArtist}, coming up.`,
+      text: introScript || ackLine,
       meta: { trackId: pick.id, requester },
     });
     entry.pick = pick;
     entry.introScript = introScript || null;
     return resolved({
-      ack: `More from ${refArtist}, coming up.`,
+      ack: ackLine,
       track: { title: pick.title, artist: pick.artist },
       queuePosition: queue.upcoming.length,
     });
