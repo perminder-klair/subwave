@@ -65,6 +65,25 @@ const LLM_PROVIDER_LABELS: Record<string, string> = {
 const llmProviderLabel = (id: string | undefined): string =>
   (id && LLM_PROVIDER_LABELS[id]) || id || '—';
 
+// Suggested embedding model ids per provider — clickable chips under the Model
+// field so operators don't have to guess a valid name. The #1 trip-up is typing
+// an HF/locca repo id like "nomic-ai/nomic-embed-text-v1.5-GGUF" as an Ollama
+// tag, which 404s; Ollama wants the short tag (nomic-embed-text). dim is shown
+// so you can match the vector length of an already-tagged library.
+const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = {
+  ollama: [
+    { id: 'nomic-embed-text', dim: 768 },
+    { id: 'mxbai-embed-large', dim: 1024 },
+    { id: 'bge-m3', dim: 1024 },
+    { id: 'all-minilm', dim: 384 },
+  ],
+  openai: [
+    { id: 'text-embedding-3-small', dim: 1536 },
+    { id: 'text-embedding-3-large', dim: 3072 },
+  ],
+  google: [{ id: 'text-embedding-004', dim: 768 }],
+};
+
 const SEARCH_PROVIDER_LABELS: Record<string, string> = {
   duckduckgo: 'DuckDuckGo — free, no key',
   tavily: 'Tavily — paid web search',
@@ -2179,6 +2198,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
   const savedEmbedding = data.values?.embedding || {};
   const llmProvider = data.values?.llm?.provider || 'ollama';
   const effectiveProvider = e.provider || llmProvider;
+  const embedSuggestions = EMBED_MODEL_SUGGESTIONS[effectiveProvider] ?? [];
 
   // Provider list comes from /settings.llm.providers (the canonical LLM list).
   // Anthropic has no first-party embedding API — flagged in the hint.
@@ -2384,6 +2404,24 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
               hit <strong>Re-seed</strong> on the Library tab (or run{' '}
               <code>--reseed</code>) to drop and rebuild the vectors.
             </div>
+            {embedSuggestions.length > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] text-muted">Suggested:</span>
+                {embedSuggestions.map(s => (
+                  <Btn
+                    key={s.id}
+                    sm
+                    onClick={() =>
+                      setForm(f => ({ ...f, embedding: { ...f.embedding, model: s.id } }))
+                    }
+                    title={`Use ${s.id} (${s.dim}-dim)`}
+                  >
+                    {s.id}
+                    <span className="ml-1 text-muted">{s.dim}d</span>
+                  </Btn>
+                ))}
+              </div>
+            )}
           </div>
 
           {(effectiveProvider === 'openai-compatible' || effectiveProvider === 'locca') && (
