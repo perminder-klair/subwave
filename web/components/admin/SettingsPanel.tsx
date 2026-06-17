@@ -25,10 +25,10 @@ import BackupPanel from './BackupPanel';
 const SECTIONS = [
   { id: 'station',  label: 'Station', hint: 'name · location · timezone' },
   { id: 'theme',    label: 'Theme', hint: 'station-wide palette' },
-  { id: 'tts',      label: 'TTS voice', hint: 'default engine' },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing' },
-  { id: 'search',   label: 'Web search', hint: 'live-facts backend' },
+  { id: 'tts',      label: 'TTS voice', hint: 'default engine' },
   { id: 'library',  label: 'Library tagger', hint: 'embedding · propagation' },
+  { id: 'search',   label: 'Web search', hint: 'live-facts backend' },
   { id: 'jingles',  label: 'Jingles', hint: 'stingers' },
   { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers' },
   { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz' },
@@ -51,9 +51,9 @@ const LLM_ENV_VARS: Record<string, string> = {
 };
 
 const LLM_PROVIDER_LABELS: Record<string, string> = {
-  ollama: 'Ollama — local homelab',
+  ollama: 'Ollama — local/cloud',
   locca: 'locca — local llama.cpp (host)',
-  'openai-compatible': 'OpenAI-compatible — self-hosted (llama.cpp, vLLM, LM Studio)',
+  'openai-compatible': 'OpenAI-compatible — llama.cpp, vLLM, LM Studio',
   anthropic: 'Anthropic — Claude',
   openai: 'OpenAI — GPT',
   google: 'Google — Gemini',
@@ -1676,7 +1676,15 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                 (<code>http://host.docker.internal:8080/v1</code>). Override only
                 for a non-default port or a remote host. Bring a model up with{' '}
                 <code>locca serve &lt;model&gt; --yes</code>; the model id below is
-                what locca reports at <code>/v1/models</code>.
+                what locca reports at <code>/v1/models</code>.{' '}
+                <a
+                  href="https://github.com/perminder-klair/locca"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
+                >
+                  locca on GitHub ↗
+                </a>
               </div>
             </div>
           )}
@@ -2360,7 +2368,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
                 setForm(f => ({ ...f, embedding: { ...f.embedding, model: ev.target.value } }))
               }
               placeholder={
-                effectiveProvider === 'ollama'
+                effectiveProvider === 'ollama' || effectiveProvider === 'locca'
                   ? 'nomic-embed-text'
                   : effectiveProvider === 'openai' || effectiveProvider === 'openai-compatible'
                     ? 'text-embedding-3-small'
@@ -2392,13 +2400,25 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
               <div className="field-hint">
                 Embeddings need a <strong>dedicated</strong> server — one
                 llama.cpp / locca process can&apos;t serve both chat and
-                embeddings. Leave blank only if this server itself does
-                embeddings; otherwise run a separate embedding server (with locca:{' '}
-                <code>locca embed nomic</code>, or plain{' '}
-                <code>llama-server -m nomic-embed-text-v1.5.Q8_0.gguf --embeddings --pooling mean --port 8090</code>)
-                and point this at it, including the <code>/v1</code> suffix. Must be
-                reachable from the controller container — use the host LAN/Tailscale
-                IP or <code>host.docker.internal</code>, not <code>127.0.0.1</code>.
+                embeddings.{' '}
+                {effectiveProvider === 'locca' ? (
+                  <>
+                    Leave blank to use the locca embed server on its default port
+                    (<code>http://host.docker.internal:8090/v1</code>) — start it
+                    with <code>locca embed nomic</code>. Override only for a
+                    non-default port or remote host.
+                  </>
+                ) : (
+                  <>
+                    Leave blank only if this server itself does embeddings;
+                    otherwise run a separate embedding server (
+                    <code>llama-server -m nomic-embed-text-v1.5.Q8_0.gguf --embeddings --pooling mean --port 8090</code>)
+                    and point this at it, including the <code>/v1</code> suffix.
+                  </>
+                )}
+                {' '}Must be reachable from the controller container — use the host
+                LAN/Tailscale IP or <code>host.docker.internal</code>, not{' '}
+                <code>127.0.0.1</code>.
               </div>
             </div>
           )}

@@ -97,11 +97,11 @@ export const LLM_PROVIDERS = [
   'ollama',
   'openai-compatible',
   'locca',
+  'openrouter',
   'anthropic',
   'openai',
   'google',
   'deepseek',
-  'openrouter',
   'gateway',
 ];
 
