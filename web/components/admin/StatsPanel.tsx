@@ -173,15 +173,6 @@ const fmtTokens = (n: number | null | undefined): string => {
   return String(n);
 };
 
-// USD cost — kept compact for the metric cells. Zero is a real value (free
-// local model), so it renders "$0.00"; null means no token data to price.
-const fmtUsd = (n: number | null | undefined): string => {
-  if (n == null) return '—';
-  if (n === 0) return '$0.00';
-  if (n < 0.01) return '<$0.01';
-  return `$${n.toFixed(2)}`;
-};
-
 // One-decimal mean for the listener average — counts are small integers, so a
 // single decimal reads better than a rounded whole.
 const fmtAvg = (n: number | null | undefined): string =>
@@ -475,7 +466,6 @@ export default function StatsPanel() {
   const lMin = counts.length ? Math.min(...counts) : null;
   const lAvg = counts.length ? counts.reduce((a, b) => a + b, 0) / counts.length : null;
   const rangeLabel = range === '10080' ? '7d' : '24h';
-  const anyUnpriced = !!llm?.byModel?.some(m => m.priced === false);
 
   return (
     <div className="grid gap-4">
@@ -496,24 +486,6 @@ export default function StatsPanel() {
       </section>
 
       {err && <V3Alert tone="error" title="controller error">{err}</V3Alert>}
-
-      {/* ── KPI STRIP ───────────────────────────────────────────────────── */}
-      {data && llm && tts && requests && (
-        <section className="card">
-          <MetricStrip>
-            <StatCell label="Listeners now" value={fmtInt(lNow)} />
-            <StatCell label={`Peak · ${rangeLabel}`} value={fmtInt(lPeak)} />
-            <StatCell label="LLM success" value={fmtPct(llm.successRate)}
-              danger={llm.successRate != null && llm.successRate < 0.9} />
-            <StatCell label="Est. cost" value={fmtUsd(llm.cost?.usd)}
-              sub={llm.cost == null ? 'no token data' : !llm.cost.complete ? 'partial' : 'since boot'} />
-            <StatCell label="TTS fallback" value={fmtPct(tts.fallbackRate)}
-              danger={tts.fellBack > 0} />
-            <StatCell label="Requests ok" value={fmtPct(requests.successRate)} last
-              sub={`${requests.resolved}/${requests.count}`} />
-          </MetricStrip>
-        </section>
-      )}
 
       {/* ── AUDIENCE ────────────────────────────────────────────────────── */}
       <Card
@@ -578,14 +550,6 @@ export default function StatsPanel() {
                     sub={llm.tokens
                       ? `${fmtTokens(llm.tokens.input)} in · ${fmtTokens(llm.tokens.output)} out`
                       : 'provider reports none'} />
-                  <StatCell label="Est. cost" value={fmtUsd(llm.cost?.usd)}
-                    sub={llm.cost == null
-                      ? 'no token data'
-                      : !llm.cost.complete
-                        ? 'partial pricing'
-                        : llm.cost.usd === 0
-                          ? 'free · local'
-                          : 'since boot'} />
                   <StatCell label="Agent runs" value={fmtInt(llm.agent.calls)} last
                     sub={llm.agent.calls
                       ? `${llm.agent.avgSteps} steps · ${llm.agent.avgTools} tools avg`
@@ -622,17 +586,8 @@ export default function StatsPanel() {
                           render: r => <span className="mono-num">{r.count}</span> },
                         { key: 'tokens', label: 'Tokens', align: 'right',
                           render: r => <span className="mono-num">{fmtTokens(r.tokens || null)}</span> },
-                        { key: 'cost', label: 'Cost', align: 'right',
-                          render: r => (
-                            <span className={cn('mono-num', r.priced === false && 'text-muted')}>
-                              {fmtUsd(r.costUsd)}{r.priced === false ? '*' : ''}
-                            </span>
-                          ) },
                       ]}
                     />
-                    {anyUnpriced && (
-                      <div className="caption mt-2 text-muted">* list price unknown — excluded from total</div>
-                    )}
                   </div>
                 </div>
               </div>
