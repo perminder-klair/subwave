@@ -164,6 +164,18 @@ export function buildPickerTools({
       },
     }),
 
+    recentByArtist: tool({
+      description: 'A named artist\'s NEWEST releases, latest first — songs from their most recent albums/singles. Use this (not topSongsByArtist) when the listener asks for an artist\'s "latest", "newest", "new", or "most recent" song: topSongsByArtist ranks by popularity, so it cannot answer recency. Returns [] when the artist isn\'t in the library. Note: "latest in the library" — bounded by what has been added, not the artist\'s globally-newest release.',
+      inputSchema: z.object({ artist: z.string() }),
+      execute: async ({ artist }) => {
+        // Keep the pool tight (newest ~6 tracks): collect() shuffles and caps to
+        // MAX_PER_ARTIST per artist, and these are all one artist — a wide pool
+        // would let the shuffle drop the actual-newest tracks, defeating "latest".
+        try { return collect(await subsonic.getRecentSongsByArtist(artist, { albums: 2, count: 6 })); }
+        catch (err) { return { error: err.message }; }
+      },
+    }),
+
     songsByGenre: tool({
       description: 'Songs from a library genre tag, fuzzy-matched ("turkish" finds "Turkish Pop"). Use for language/country/style asks — "play something Turkish" — that searchLibrary cannot reach: genre lives in tags, not titles.',
       inputSchema: z.object({ genre: z.string().describe('a genre, language, or country word, e.g. "jazz", "turkish", "punjabi"') }),

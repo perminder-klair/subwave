@@ -366,6 +366,47 @@ export async function getTopSongs(artistName, { count = 10 } = {}) {
   return rejectArchive(r.topSongs?.song || []);
 }
 
+// Sortable release timestamp for an album object, preferring the most precise
+// signal Navidrome offers: OpenSubsonic `originalReleaseDate` {year,month,day}
+// → `releaseDate` string → bare `year` → `created` (library-import time) as a
+// last resort. Returns a comparable number (higher = newer); 0 when undated.
+function albumReleaseRank(a: any): number {
+  const ord = a?.originalReleaseDate;
+  if (ord?.year) {
+    return ord.year * 10000 + (ord.month || 0) * 100 + (ord.day || 0);
+  }
+  const rd = Date.parse(a?.releaseDate || '');
+  if (!Number.isNaN(rd)) return Math.floor(rd / 86400000) + 30000000; // keep above year*10000
+  if (a?.year) return a.year * 10000;
+  const cr = Date.parse(a?.created || '');
+  if (!Number.isNaN(cr)) return Math.floor(cr / 86400000);
+  return 0;
+}
+
+// An artist's most recent releases, newest first — for "play their latest /
+// newest" asks that getTopSongs (popularity-ranked) can't answer. Resolves the
+// name to an artist id, pulls their albums, sorts by release date, and returns
+// the songs from the newest `albums` releases (singles are single-track albums,
+// so a brand-new single surfaces too). Empty when the artist isn't in the library.
+export async function getRecentSongsByArtist(
+  artistName: string,
+  { albums = 3, count = 20 }: { albums?: number; count?: number } = {},
+) {
+  const artist = await resolveArtist(artistName);
+  if (!artist?.id) return [];
+  const full = await getArtist(artist.id);
+  const albumList = (full?.album || [])
+    .map((a: any) => ({ ...a, _rank: albumReleaseRank(a) }))
+    .sort((x: any, y: any) => y._rank - x._rank)
+    .slice(0, albums);
+  const songs: any[] = [];
+  for (const a of albumList) {
+    try { songs.push(...(await getAlbum(a.id))); } catch {}
+    if (songs.length >= count) break;
+  }
+  return songs.slice(0, count);
+}
+
 export async function getAlbum(id) {
   const r = await call('getAlbum', { id });
   return rejectArchive(r.album?.song || []);
