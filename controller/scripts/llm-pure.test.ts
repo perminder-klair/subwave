@@ -12,6 +12,8 @@ import { withDeadline } from '../src/llm/internal/core/retry.js';
 import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
+import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
+import { DEFAULT_LOCCA_EMBED_BASE_URL } from '../src/llm/internal/provider/registry.js';
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -107,6 +109,21 @@ async function main() {
     assert.equal(appliedNumCtx({ provider: 'ollama', model: 'qwen3', numCtx: 8192 }), 8192);
     assert.equal(appliedNumCtx({ provider: 'openai', model: 'gpt-4.1-mini', numCtx: 8192 }), null);
     assert.equal(appliedNumCtx({ provider: 'locca', model: 'qwen3', numCtx: 8192 }), null);
+  });
+
+  // ---- embedding base URL (the relative-/embeddings crash, #405 follow-up) ----
+  console.log('embeddingBaseUrl(cfg):');
+  await test('locca blank → dedicated EMBED default, never chat or a relative URL', () => {
+    // Blank locca baseUrl must resolve to the dedicated embed server (8090), NOT
+    // the chat default (8080) and NOT '' (which would make the SDK fetch
+    // "/embeddings" → "Failed to parse URL"). This is what makes locca a
+    // first-class embedding provider with no hand-typed URL.
+    assert.equal(embeddingBaseUrl({ provider: 'locca', baseUrl: '' }), DEFAULT_LOCCA_EMBED_BASE_URL);
+    assert.match(DEFAULT_LOCCA_EMBED_BASE_URL, /:8090\/v1$/);
+    assert.equal(embeddingBaseUrl({ provider: 'locca', baseUrl: 'http://x:9000/v1' }), 'http://x:9000/v1');
+    // openai-compatible has no sane default — blank stays '' so the builder errors.
+    assert.equal(embeddingBaseUrl({ provider: 'openai-compatible', baseUrl: '' }), '');
+    assert.equal(embeddingBaseUrl({ provider: 'openai-compatible', baseUrl: 'http://y:8090/v1' }), 'http://y:8090/v1');
   });
 
   // ---- agent plan routing ----

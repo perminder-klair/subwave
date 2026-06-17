@@ -110,6 +110,7 @@ export type ProbeCode =
   | 'unauthorized'        // 401 — typically cloud-routed Ollama or wrong API key
   | 'unreachable'         // connection refused / DNS / timeout
   | 'not_embedding_model' // server reached, but it's a chat model / no pooling (#319)
+  | 'bad_url'             // baseUrl missing/malformed — fetch can't parse the URL
   | 'unknown';            // anything else — message has the raw error
 
 export interface ProbeResult {
@@ -149,6 +150,15 @@ function classifyEmbeddingError(err: any): { code: ProbeCode; raw: string } {
     txt.includes('fetch failed')
   ) {
     return { code: 'unreachable', raw };
+  }
+  // A missing or malformed base URL makes the SDK build a relative request URL
+  // (e.g. just "/embeddings"), which fetch rejects before any network call.
+  if (
+    txt.includes('failed to parse url') ||
+    txt.includes('invalid url') ||
+    txt.includes('no embedding server url is set')
+  ) {
+    return { code: 'bad_url', raw };
   }
   return { code: 'unknown', raw };
 }
@@ -223,6 +233,26 @@ function actionableMessage(
         `  Point settings.embedding at a real embedding model (e.g. nomic-embed-text),\n` +
         `  served with embeddings enabled and a pooling type other than 'none'.\n` +
         `  (server said: ${raw})`
+      );
+    case 'bad_url':
+      if (provider === 'locca' || provider === 'openai-compatible') {
+        return (
+          `No usable embedding server URL for provider "${provider}".\n` +
+          `  By default settings.embedding inherits settings.llm — but a chat\n` +
+          `  llama.cpp/locca server can't also do embeddings. Run a DEDICATED\n` +
+          `  embedding server and point settings.embedding.baseUrl at it:\n` +
+          `        locca embed nomic     # dedicated embedding server on its own port\n` +
+          `  then in /admin/settings → Embedding set:\n` +
+          `        baseUrl = http://<host>:8090/v1   (full URL, with http:// and /v1)\n` +
+          `        model   = nomic-embed-text\n` +
+          `  (${raw})`
+        );
+      }
+      return (
+        `The embedding server base URL is missing or malformed, so the request\n` +
+        `  couldn't be sent. Set a full URL (with http:// and the /v1 suffix) in\n` +
+        `  /admin/settings → Embedding, e.g. http://host.docker.internal:8090/v1.\n` +
+        `  (${raw})`
       );
     case 'unknown':
     default:

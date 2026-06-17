@@ -74,6 +74,19 @@ export function loccaBaseUrl(cfg: any): string {
   return cfg.baseUrl || DEFAULT_LOCCA_BASE_URL;
 }
 
+// locca runs embeddings on a SEPARATE server (`locca embed`) on its own port —
+// a chat llama.cpp server can't also serve embeddings. locca's default embed
+// port is 8090, so embeddings get their own host default, distinct from the
+// chat default above. Operator still overrides via settings.embedding.baseUrl.
+export const DEFAULT_LOCCA_EMBED_BASE_URL = 'http://host.docker.internal:8090/v1';
+
+// Effective base URL for a locca EMBEDDING server: the (embedding) settings
+// field if set, else the host embed default. Mirrors loccaBaseUrl but points at
+// the dedicated embed port so a blank field resolves to `locca embed`, not chat.
+export function loccaEmbedBaseUrl(cfg: any): string {
+  return cfg.baseUrl || DEFAULT_LOCCA_EMBED_BASE_URL;
+}
+
 // Build a LanguageModel for any self-hosted OpenAI-compatible server (llama.cpp,
 // vLLM, LM Studio, locca). `.chat()` pins /v1/chat/completions — these servers
 // don't implement the Responses API the default `provider(id)` would target.

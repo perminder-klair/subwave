@@ -16,7 +16,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOllama } from 'ai-sdk-ollama';
 import * as settings from '../../../settings.js';
-import { llmCfg, ollamaBaseUrl } from './registry.js';
+import { llmCfg, ollamaBaseUrl, loccaEmbedBaseUrl } from './registry.js';
 
 // Separate from the registry's language-model cache — the signature is prefixed
 // `embed|` so there's no key overlap, and keeping it local avoids exporting a
@@ -96,6 +96,17 @@ export function resolveEmbeddingCfg(overrides: Partial<EmbeddingCfg> = {}): Embe
   };
 }
 
+// Effective base URL for the openai-compatible embedding transport. `locca`
+// defaults to its dedicated EMBED server (`locca embed`, port 8090) — NOT the
+// chat default — so first-class locca embeddings work with a blank field and
+// never collapse to a relative `/embeddings` URL (fetch rejects that as "Failed
+// to parse URL"). Plain `openai-compatible` has no sane default, so '' here
+// means "no server configured" and the caller errors.
+export function embeddingBaseUrl(cfg: { provider: string; baseUrl?: string }): string {
+  if (cfg.provider === 'locca') return loccaEmbedBaseUrl(cfg);
+  return cfg.baseUrl || '';
+}
+
 // Build an AI SDK text-embedding model from an explicit, already-resolved cfg.
 // No caching (callers that want it wrap, like embeddingModel below) — the probe
 // endpoint deliberately builds a fresh one-off client per test.
@@ -112,8 +123,18 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
     case 'locca': {
       // locca = a self-hosted openai-compatible embedding server (run via
       // `locca embed`); same transport, the operator points baseUrl at it.
+      // Resolve the base URL (locca defaults to the host) and refuse a blank
+      // one with an actionable message — otherwise createOpenAI emits a
+      // relative `/embeddings` URL that fetch can't parse.
+      const baseURL = embeddingBaseUrl(cfg);
+      if (!baseURL) {
+        throw new Error(
+          'No embedding server URL is set. In /admin/settings → Embedding, set ' +
+            'the base URL to your embedding server (e.g. http://host:8090/v1).',
+        );
+      }
       const provider = createOpenAI({
-        baseURL: cfg.baseUrl,
+        baseURL,
         apiKey: cfg.apiKey || 'unused',
         name: cfg.provider,
       });
