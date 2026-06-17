@@ -190,17 +190,21 @@ function actionableMessage(code: ProbeCode, raw: string): string {
       }
       return `Can't reach provider "${provider}" — check network / baseUrl. (${raw})`;
     case 'not_embedding_model':
-      if (provider === 'openai-compatible') {
+      if (provider === 'openai-compatible' || provider === 'locca') {
+        const startCmd =
+          provider === 'locca'
+            ? `        locca embed nomic     # dedicated embedding server on its own port`
+            : `        llama-server -m nomic-embed-text-v1.5.Q8_0.gguf \\\n` +
+              `          --embeddings --pooling mean --host 0.0.0.0 --port 8090`;
         return (
           `The embedding endpoint is reachable but "${model}" can't produce embeddings —\n` +
           `  it's a chat/generative model, not an embedding model.\n` +
           `  By default settings.embedding inherits settings.llm.baseUrl, so embeddings\n` +
-          `  point at your CHAT server. Run a DEDICATED embedding model on its own\n` +
-          `  llama.cpp server (note --embeddings --pooling mean):\n` +
-          `        llama-server -m nomic-embed-text-v1.5.Q8_0.gguf \\\n` +
-          `          --embeddings --pooling mean --host 0.0.0.0 --port 8090\n` +
+          `  point at your CHAT server. A single llama.cpp/locca server can't do both —\n` +
+          `  run a DEDICATED embedding server (note --embeddings --pooling mean):\n` +
+          startCmd + `\n` +
           `  then in /admin/settings → Embedding set:\n` +
-          `        baseUrl = http://<host>:8090/v1\n` +
+          `        baseUrl = http://<host>:8090/v1   (the embedding server's URL)\n` +
           `        model   = nomic-embed-text\n` +
           `  (server said: ${raw})`
         );

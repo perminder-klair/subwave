@@ -507,6 +507,13 @@ const DEFAULTS = {
     enabled: true,
     provider: '',         // empty → follow settings.llm.provider
     model: '',            // empty → sensible default per provider
+    // Embeddings often need a DIFFERENT endpoint than chat: one llama.cpp /
+    // locca server can't serve both chat and embeddings, so a dedicated
+    // embedding server runs on its own port. Empty → inherit settings.llm's
+    // baseUrl / ollamaUrl (fine only when the chat server also does embeddings,
+    // e.g. Ollama). See issue #405.
+    baseUrl: '',          // openai-compatible / locca embedding server URL (with /v1)
+    ollamaUrl: '',        // Ollama embedding server URL (ollama provider)
     seedCount: 0,         // 0 → auto max(200, ceil(sqrt(library)))
     knnNeighbours: 5,
     moodVoteThreshold: 0.6,
@@ -981,6 +988,14 @@ export async function load() {
         typeof stored.embedding?.model === 'string'
           ? stored.embedding.model.trim()
           : DEFAULTS.embedding.model,
+      baseUrl:
+        typeof stored.embedding?.baseUrl === 'string'
+          ? stored.embedding.baseUrl.trim()
+          : DEFAULTS.embedding.baseUrl,
+      ollamaUrl:
+        typeof stored.embedding?.ollamaUrl === 'string'
+          ? stored.embedding.ollamaUrl.trim()
+          : DEFAULTS.embedding.ollamaUrl,
       seedCount:
         Number.isFinite(stored.embedding?.seedCount) && stored.embedding.seedCount >= 0
           ? Math.floor(stored.embedding.seedCount)
@@ -1739,6 +1754,23 @@ export async function update(patch) {
       const v = String(e.model).trim();
       if (v.length > 100) throw new Error('embedding.model must be 0-100 chars');
       next.embedding.model = v;
+    }
+    // Dedicated embedding endpoint (issue #405). Empty → inherit settings.llm.
+    if (e.baseUrl !== undefined) {
+      const v = String(e.baseUrl).trim();
+      if (v.length > 200) throw new Error('embedding.baseUrl must be 0-200 chars');
+      if (v && !/^https?:\/\//i.test(v)) {
+        throw new Error('embedding.baseUrl must start with http:// or https://');
+      }
+      next.embedding.baseUrl = v.replace(/\/+$/, ''); // strip trailing slashes
+    }
+    if (e.ollamaUrl !== undefined) {
+      const v = String(e.ollamaUrl).trim();
+      if (v.length > 200) throw new Error('embedding.ollamaUrl must be 0-200 chars');
+      if (v && !/^https?:\/\//i.test(v)) {
+        throw new Error('embedding.ollamaUrl must start with http:// or https://');
+      }
+      next.embedding.ollamaUrl = v.replace(/\/+$/, '');
     }
     if (e.seedCount !== undefined) {
       const v = parseInt(e.seedCount, 10);

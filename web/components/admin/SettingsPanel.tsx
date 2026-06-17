@@ -134,6 +134,8 @@ interface EmbeddingForm {
   enabled: boolean;
   provider: string;          // empty → follow llm.provider
   model: string;             // empty → sensible default per provider
+  baseUrl: string;           // dedicated embedding server URL (openai-compatible / locca); empty → inherit llm
+  ollamaUrl: string;         // dedicated embedding server URL (ollama); empty → inherit llm
   seedCount: string;         // '0' = auto
   knnNeighbours: string;
   moodVoteThreshold: string;
@@ -233,6 +235,8 @@ interface SettingsData {
       enabled?: boolean;
       provider?: string;
       model?: string;
+      baseUrl?: string;
+      ollamaUrl?: string;
       seedCount?: number;
       knnNeighbours?: number;
       moodVoteThreshold?: number;
@@ -393,6 +397,8 @@ export default function SettingsPanel() {
         enabled: v.embedding?.enabled ?? true,
         provider: v.embedding?.provider ?? '',
         model: v.embedding?.model ?? '',
+        baseUrl: v.embedding?.baseUrl ?? '',
+        ollamaUrl: v.embedding?.ollamaUrl ?? '',
         seedCount: String(v.embedding?.seedCount ?? 0),
         knnNeighbours: String(v.embedding?.knnNeighbours ?? 5),
         moodVoteThreshold: String(v.embedding?.moodVoteThreshold ?? 0.6),
@@ -2147,6 +2153,8 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
       enabled: e.enabled,
       provider: e.provider,
       model: e.model,
+      baseUrl: e.baseUrl,
+      ollamaUrl: e.ollamaUrl,
       seedCount: parseInt(e.seedCount, 10) || 0,
       knnNeighbours: parseInt(e.knnNeighbours, 10) || 5,
       moodVoteThreshold: parseFloat(e.moodVoteThreshold) || 0.6,
@@ -2269,6 +2277,50 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
               <code>--reseed</code>) to drop and rebuild the vectors.
             </div>
           </div>
+
+          {(effectiveProvider === 'openai-compatible' || effectiveProvider === 'locca') && (
+            <div className="field">
+              <Label>Embedding server base URL</Label>
+              <Input
+                value={e.baseUrl}
+                onChange={(ev: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, embedding: { ...f.embedding, baseUrl: ev.target.value } }))
+                }
+                placeholder="http://host.docker.internal:8090/v1"
+                className="max-w-[360px]"
+              />
+              <div className="field-hint">
+                Embeddings need a <strong>dedicated</strong> server — one
+                llama.cpp / locca process can&apos;t serve both chat and
+                embeddings. Leave blank only if this server itself does
+                embeddings; otherwise run a separate embedding server (with locca:{' '}
+                <code>locca embed nomic</code>, or plain{' '}
+                <code>llama-server -m nomic-embed-text-v1.5.Q8_0.gguf --embeddings --pooling mean --port 8090</code>)
+                and point this at it, including the <code>/v1</code> suffix. Must be
+                reachable from the controller container — use the host LAN/Tailscale
+                IP or <code>host.docker.internal</code>, not <code>127.0.0.1</code>.
+              </div>
+            </div>
+          )}
+
+          {effectiveProvider === 'ollama' && (
+            <div className="field">
+              <Label>Embedding server URL</Label>
+              <Input
+                value={e.ollamaUrl}
+                onChange={(ev: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, embedding: { ...f.embedding, ollamaUrl: ev.target.value } }))
+                }
+                placeholder="http://host.docker.internal:11434"
+                className="max-w-[360px]"
+              />
+              <div className="field-hint">
+                Leave blank to use the same Ollama server as chat (it serves
+                embeddings too). Set this only to run embeddings against a
+                different Ollama host.
+              </div>
+            </div>
+          )}
         </div>
       </Card>
 
