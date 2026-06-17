@@ -201,3 +201,49 @@ export function summarizeDjLog(djLog) {
     byKind: [...m.entries()].map(([kind, count]) => ({ kind, count })).sort((a, b) => b.count - a.count),
   };
 }
+
+// --- Requests summary ---------------------------------------------------
+
+// Roll the listener-request ring (broadcast/request-log.js recentRequests) into
+// success/latency totals plus resolution-path, pick-source and requester
+// breakdowns. The Dash carries the per-request review (what was asked + the full
+// trace); this is the aggregate the Stats page shows. `requests` is newest-first,
+// each entry the durable record written by routes/request.ts recordOutcome —
+// terminal `status` is 'resolved' or 'failed'.
+export function summarizeRequests(requests) {
+  const resolved = requests.filter(r => r.status === 'resolved');
+  const misses = requests.filter(r => r.artistMiss);
+
+  // Group by a key, dropping empty keys; `withOk` also carries the resolved
+  // count per group (used by the by-path breakdown).
+  const tally = (keyFn, keyName, withOk = false) => {
+    const m = new Map();
+    for (const r of requests) {
+      const k = keyFn(r);
+      if (!k) continue;
+      let g = m.get(k);
+      if (!g) { g = { key: k, count: 0, ok: 0 }; m.set(k, g); }
+      g.count++;
+      if (r.status === 'resolved') g.ok++;
+    }
+    return [...m.values()]
+      .map(g => (withOk ? { [keyName]: g.key, count: g.count, ok: g.ok } : { [keyName]: g.key, count: g.count }))
+      .sort((a, b) => b.count - a.count);
+  };
+
+  return {
+    window: 150,
+    count: requests.length,
+    resolved: resolved.length,
+    failed: requests.length - resolved.length,
+    successRate: requests.length ? resolved.length / requests.length : null,
+    latency: latencyStats(requests.map(r => r.ms).filter(n => typeof n === 'number')),
+    artistMiss: {
+      count: misses.length,
+      rate: requests.length ? misses.length / requests.length : null,
+    },
+    byPath: tally(r => r.path, 'path', true),
+    byPickSource: tally(r => r.pickSource, 'source'),
+    topRequesters: tally(r => r.requester, 'requester').slice(0, 8),
+  };
+}

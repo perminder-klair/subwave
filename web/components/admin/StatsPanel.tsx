@@ -1,22 +1,30 @@
 'use client';
 
-/* Admin Stats page — usage rollups for the LLM and TTS call rings plus DJ
-   activity. Polls the controller's /stats endpoint, which aggregates the
-   in-memory call buffers (since boot, lost on restart). Deliberately carries
-   only rollups — the raw per-call lists live on /debug. */
+/* Admin Stats page — the station's rollup + trend dashboard.
+
+   Two data sources, two cadences:
+   - GET /stats (5s) aggregates the in-memory LLM / TTS / DJ-log / request rings
+     (since boot, lost on restart by design — the raw per-call lists live on
+     /debug, and the per-request trace lives on the Dash).
+   - GET /listeners (30s) returns the durable listener time-series persisted to
+     state/listeners.jsonl (24h–7d), drawn as the Audience trend chart.
+
+   The Dash is the live ops console (3s now-playing, live connections, per-request
+   review); this page is the aggregate/trend complement. */
 
 import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { V3Alert } from '../ui/alert';
-import { Card, Btn, Pill, Eyebrow } from './ui';
+import { Card, Btn, Pill, Eyebrow, Seg } from './ui';
 import { cn } from '../../lib/cn';
 
 // --- types --------------------------------------------------------------
 
 interface LatencyStats {
   avg?: number;
+  p50?: number;
   p95?: number;
   max?: number;
 }
@@ -39,6 +47,8 @@ interface ByModelRow {
   model: string;
   count: number;
   tokens?: number;
+  costUsd?: number;
+  priced?: boolean;
 }
 
 interface ByEngineRow {
@@ -67,6 +77,8 @@ interface LlmStats {
   successRate?: number;
   latency: LatencyStats;
   tokens?: TokenStats;
+  cost?: { usd: number; complete: boolean } | null;
+  provider?: string;
   agent: { calls: number; avgSteps?: number; avgTools?: number };
   byKind: ByKindRow[];
   byModel: ByModelRow[];
@@ -91,10 +103,53 @@ interface DjLogStats {
   byKind: ByDjKindRow[];
 }
 
+interface ByPathRow {
+  path: string;
+  count: number;
+  ok: number;
+}
+
+interface ByPickSourceRow {
+  source: string;
+  count: number;
+}
+
+interface TopRequesterRow {
+  requester: string;
+  count: number;
+}
+
+interface RequestsStats {
+  window: number;
+  count: number;
+  resolved: number;
+  failed: number;
+  successRate?: number | null;
+  latency: LatencyStats;
+  artistMiss: { count: number; rate?: number | null };
+  byPath: ByPathRow[];
+  byPickSource: ByPickSourceRow[];
+  topRequesters: TopRequesterRow[];
+}
+
 interface StatsResponse {
   llm?: LlmStats;
   tts?: TtsStats;
   djLog?: DjLogStats;
+  requests?: RequestsStats;
+  error?: string;
+}
+
+interface ListenerSample {
+  t: string;
+  count: number;
+}
+
+interface ListenersResponse {
+  current?: number | null;
+  sinceMinutes?: number;
+  bytes?: number;
+  samples?: ListenerSample[];
   error?: string;
 }
 
@@ -117,6 +172,20 @@ const fmtTokens = (n: number | null | undefined): string => {
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
   return String(n);
 };
+
+// USD cost — kept compact for the metric cells. Zero is a real value (free
+// local model), so it renders "$0.00"; null means no token data to price.
+const fmtUsd = (n: number | null | undefined): string => {
+  if (n == null) return '—';
+  if (n === 0) return '$0.00';
+  if (n < 0.01) return '<$0.01';
+  return `$${n.toFixed(2)}`;
+};
+
+// One-decimal mean for the listener average — counts are small integers, so a
+// single decimal reads better than a rounded whole.
+const fmtAvg = (n: number | null | undefined): string =>
+  n == null ? '—' : (Math.round(n * 10) / 10).toLocaleString('en-GB');
 
 // --- small building blocks ---------------------------------------------
 
@@ -236,6 +305,98 @@ function Table<R>({ cols, rows, empty }: TableProps<R>) {
   );
 }
 
+// Horizontal bar list — a label, a proportional bar, a trailing figure. Used
+// for the DJ-activity and request-by-path breakdowns. `max` anchors the widest
+// bar to 100%.
+interface BarRow {
+  label: string;
+  count: number;
+  trailing?: ReactNode;
+}
+
+function BarList({ rows, max }: { rows: BarRow[]; max: number }) {
+  return (
+    <div className="grid gap-1.5">
+      {rows.map(r => (
+        <div key={r.label} className="flex items-center gap-2.5 text-[12px]">
+          <span className="w-[110px] truncate text-muted" title={r.label}>{r.label}</span>
+          <Bar frac={r.count / (max || 1)} />
+          <span className="mono-num font-bold">{r.trailing ?? r.count}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// --- listener trend chart ----------------------------------------------
+
+// Hand-rolled SVG area chart for the listener time-series — same no-dependency
+// house style as the StationHeader gauge and the Wave bars. The viewBox is a
+// fixed 100×100 unit box stretched to the container (preserveAspectRatio=none);
+// strokes use vector-effect=non-scaling-stroke so they stay an even width
+// regardless of the stretch. Labels live in the metric strip below, not in the
+// SVG, so nothing gets distorted by the stretch.
+function ListenerChart({ samples }: { samples: ListenerSample[] }) {
+  if (!samples || samples.length < 2) {
+    return (
+      <div className="flex h-[130px] items-center justify-center">
+        <span className="field-hint italic">collecting listener history…</span>
+      </div>
+    );
+  }
+  const W = 100;
+  const H = 100;
+  const counts = samples.map(s => s.count);
+  const peak = Math.max(...counts);
+  // 12% headroom so the peak sits just below the top edge and the dashed peak
+  // line is visible rather than flush against the frame.
+  const drawMax = peak > 0 ? peak * 1.12 : 1;
+  const n = samples.length;
+  const x = (i: number) => (i / (n - 1)) * W;
+  const y = (c: number) => H - (c / drawMax) * H;
+  const pts = samples.map((s, i) => `${x(i).toFixed(2)},${y(s.count).toFixed(2)}`);
+  const line = `M ${pts.join(' L ')}`;
+  const area = `${line} L ${W},${H} L 0,${H} Z`;
+  const peakY = y(peak);
+  return (
+    <svg
+      className="block h-[130px] w-full"
+      viewBox={`0 0 ${W} ${H}`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      {peak > 0 && (
+        <line
+          x1="0"
+          y1={peakY}
+          x2={W}
+          y2={peakY}
+          stroke="var(--ink)"
+          strokeWidth={1}
+          strokeDasharray="2 3"
+          opacity={0.18}
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
+      <path d={area} fill="color-mix(in oklab, var(--accent) 14%, transparent)" stroke="none" />
+      <path
+        d={line}
+        fill="none"
+        stroke="var(--accent)"
+        strokeWidth={1.6}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
+  );
+}
+
+const RANGE_OPTIONS = [
+  { id: '1440', label: '24h' },
+  { id: '10080', label: '7d' },
+];
+
 // --- panel --------------------------------------------------------------
 
 export default function StatsPanel() {
@@ -243,7 +404,10 @@ export default function StatsPanel() {
   const [data, setData] = useState<StatsResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
+  const [listeners, setListeners] = useState<ListenersResponse | null>(null);
+  const [range, setRange] = useState('1440'); // minutes — 24h default
 
+  // /stats — usage rollups, 5s.
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     let cancelled = false;
@@ -273,9 +437,45 @@ export default function StatsPanel() {
     return () => { cancelled = true; clearInterval(id); };
   }, [paused, needsAuth, hydrated, adminFetch]);
 
+  // /listeners — durable time-series for the Audience chart, 30s (heavier: it
+  // reads the JSONL history file, and the series moves slowly). Soft-fails: a
+  // miss leaves the last reading in place rather than erroring the page.
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    const tick = async () => {
+      if (paused) return;
+      try {
+        const r = await adminFetch(`/listeners?sinceMinutes=${range}`);
+        if (r.status === 401) {
+          if (!cancelled) setListeners(null);
+          return;
+        }
+        const j = (await r.json()) as ListenersResponse;
+        if (!cancelled && r.ok) setListeners(j);
+      } catch {
+        /* leave last reading in place */
+      }
+    };
+    tick();
+    const id = setInterval(tick, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [paused, needsAuth, hydrated, adminFetch, range]);
+
   const llm = data?.llm;
   const tts = data?.tts;
   const djLog = data?.djLog;
+  const requests = data?.requests;
+
+  // Audience figures derived from the listener series + the live count.
+  const samples = listeners?.samples ?? [];
+  const counts = samples.map(s => s.count);
+  const lNow = listeners?.current ?? null;
+  const lPeak = counts.length ? Math.max(...counts) : null;
+  const lMin = counts.length ? Math.min(...counts) : null;
+  const lAvg = counts.length ? counts.reduce((a, b) => a + b, 0) / counts.length : null;
+  const rangeLabel = range === '10080' ? '7d' : '24h';
+  const anyUnpriced = !!llm?.byModel?.some(m => m.priced === false);
 
   return (
     <div className="grid gap-4">
@@ -287,7 +487,7 @@ export default function StatsPanel() {
           </Eyebrow>
           <span className="caption">refresh · 5s</span>
           <span className="caption text-muted">
-            in-memory · since controller boot
+            rollups since boot · listeners durable
           </span>
           <span className="ml-auto">
             <Btn sm onClick={() => setPaused(!paused)}>{paused ? 'Resume' : 'Pause'}</Btn>
@@ -297,19 +497,69 @@ export default function StatsPanel() {
 
       {err && <V3Alert tone="error" title="controller error">{err}</V3Alert>}
 
+      {/* ── KPI STRIP ───────────────────────────────────────────────────── */}
+      {data && llm && tts && requests && (
+        <section className="card">
+          <MetricStrip>
+            <StatCell label="Listeners now" value={fmtInt(lNow)} />
+            <StatCell label={`Peak · ${rangeLabel}`} value={fmtInt(lPeak)} />
+            <StatCell label="LLM success" value={fmtPct(llm.successRate)}
+              danger={llm.successRate != null && llm.successRate < 0.9} />
+            <StatCell label="Est. cost" value={fmtUsd(llm.cost?.usd)}
+              sub={llm.cost == null ? 'no token data' : !llm.cost.complete ? 'partial' : 'since boot'} />
+            <StatCell label="TTS fallback" value={fmtPct(tts.fallbackRate)}
+              danger={tts.fellBack > 0} />
+            <StatCell label="Requests ok" value={fmtPct(requests.successRate)} last
+              sub={`${requests.resolved}/${requests.count}`} />
+          </MetricStrip>
+        </section>
+      )}
+
+      {/* ── AUDIENCE ────────────────────────────────────────────────────── */}
+      <Card
+        title="Audience"
+        sub={`listeners over the last ${rangeLabel}`}
+        right={<Seg value={range} options={RANGE_OPTIONS} onChange={setRange} />}
+      >
+        <div className="grid gap-0">
+          <MetricStrip>
+            <StatCell label="Now" value={fmtInt(lNow)} accent />
+            <StatCell label="Peak" value={fmtInt(lPeak)} />
+            <StatCell label="Average" value={fmtAvg(lAvg)} />
+            <StatCell label="Low" value={fmtInt(lMin)} last />
+          </MetricStrip>
+          <div className="p-3.5">
+            {listeners == null ? (
+              <div className="flex h-[130px] items-center justify-center">
+                <span className="field-hint italic">loading…</span>
+              </div>
+            ) : (
+              <ListenerChart samples={samples} />
+            )}
+          </div>
+        </div>
+      </Card>
+
       {!data && !err && (
         <Card title="Stats">
           <span className="field-hint italic">connecting…</span>
         </Card>
       )}
 
-      {data && llm && tts && djLog && (
+      {data && llm && tts && djLog && requests && (
         <>
           {/* ── LLM USAGE ─────────────────────────────────────────────── */}
           <Card
             title="LLM usage"
             sub={`last ${llm.window} model calls`}
-            right={llm.activeModel ? <Pill tone="accent">{llm.activeModel}</Pill> : null}
+            right={
+              (llm.provider || llm.activeModel) ? (
+                <span className="flex items-center gap-1.5">
+                  {llm.provider && <Pill>{llm.provider}</Pill>}
+                  {llm.activeModel && <Pill tone="accent">{llm.activeModel}</Pill>}
+                </span>
+              ) : null
+            }
           >
             {llm.count === 0 ? (
               <span className="field-hint italic">
@@ -323,11 +573,19 @@ export default function StatsPanel() {
                   <StatCell label="Success rate" value={fmtPct(llm.successRate)}
                     danger={llm.successRate != null && llm.successRate < 0.9} />
                   <StatCell label="Avg latency" value={fmtMs(llm.latency.avg)}
-                    sub={`p95 ${fmtMs(llm.latency.p95)}`} />
+                    sub={`p50 ${fmtMs(llm.latency.p50)} · p95 ${fmtMs(llm.latency.p95)}`} />
                   <StatCell label="Tokens" value={fmtTokens(llm.tokens?.total)}
                     sub={llm.tokens
                       ? `${fmtTokens(llm.tokens.input)} in · ${fmtTokens(llm.tokens.output)} out`
                       : 'provider reports none'} />
+                  <StatCell label="Est. cost" value={fmtUsd(llm.cost?.usd)}
+                    sub={llm.cost == null
+                      ? 'no token data'
+                      : !llm.cost.complete
+                        ? 'partial pricing'
+                        : llm.cost.usd === 0
+                          ? 'free · local'
+                          : 'since boot'} />
                   <StatCell label="Agent runs" value={fmtInt(llm.agent.calls)} last
                     sub={llm.agent.calls
                       ? `${llm.agent.avgSteps} steps · ${llm.agent.avgTools} tools avg`
@@ -364,8 +622,17 @@ export default function StatsPanel() {
                           render: r => <span className="mono-num">{r.count}</span> },
                         { key: 'tokens', label: 'Tokens', align: 'right',
                           render: r => <span className="mono-num">{fmtTokens(r.tokens || null)}</span> },
+                        { key: 'cost', label: 'Cost', align: 'right',
+                          render: r => (
+                            <span className={cn('mono-num', r.priced === false && 'text-muted')}>
+                              {fmtUsd(r.costUsd)}{r.priced === false ? '*' : ''}
+                            </span>
+                          ) },
                       ]}
                     />
+                    {anyUnpriced && (
+                      <div className="caption mt-2 text-muted">* list price unknown — excluded from total</div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -429,6 +696,76 @@ export default function StatsPanel() {
             )}
           </Card>
 
+          {/* ── REQUESTS ──────────────────────────────────────────────── */}
+          <Card
+            title="Requests"
+            sub={`last ${requests.window} listener requests · full trace on the Dash`}
+          >
+            {requests.count === 0 ? (
+              <span className="field-hint italic">
+                no listener requests yet
+              </span>
+            ) : (
+              <div className="grid gap-0">
+                <MetricStrip>
+                  <StatCell label="Requests" value={fmtInt(requests.count)}
+                    sub={`${requests.resolved} ok · ${requests.failed} failed`} />
+                  <StatCell label="Success rate" value={fmtPct(requests.successRate)}
+                    danger={requests.successRate != null && requests.successRate < 0.8} />
+                  <StatCell label="Avg resolve" value={fmtMs(requests.latency.avg)}
+                    sub={`p95 ${fmtMs(requests.latency.p95)}`} />
+                  <StatCell label="Artist misses" value={fmtInt(requests.artistMiss.count)} last
+                    danger={requests.artistMiss.count > 0}
+                    sub={`${fmtPct(requests.artistMiss.rate)} of requests`} />
+                </MetricStrip>
+
+                <div className="stack-mobile grid grid-cols-[1fr_1fr] gap-0">
+                  <div className="border-r border-separator-soft p-3.5">
+                    <div className="caption mb-2">by resolution path</div>
+                    {requests.byPath.length ? (
+                      <BarList
+                        max={requests.byPath[0]?.count || 1}
+                        rows={requests.byPath.map(r => ({
+                          label: r.path,
+                          count: r.count,
+                          trailing: `${r.ok}/${r.count}`,
+                        }))}
+                      />
+                    ) : (
+                      <span className="field-hint italic">no paths recorded</span>
+                    )}
+                  </div>
+                  <div className="grid gap-3.5 p-3.5">
+                    <div>
+                      <div className="caption mb-2">by pick source</div>
+                      <Table<ByPickSourceRow>
+                        empty="no pick sources"
+                        rows={requests.byPickSource}
+                        cols={[
+                          { key: 'source', label: 'Source' },
+                          { key: 'count', label: 'Picks', align: 'right',
+                            render: r => <span className="mono-num">{r.count}</span> },
+                        ]}
+                      />
+                    </div>
+                    <div>
+                      <div className="caption mb-2">top requesters</div>
+                      <Table<TopRequesterRow>
+                        empty="no requesters"
+                        rows={requests.topRequesters}
+                        cols={[
+                          { key: 'requester', label: 'Listener' },
+                          { key: 'count', label: 'Requests', align: 'right',
+                            render: r => <span className="mono-num">{r.count}</span> },
+                        ]}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </Card>
+
           {/* ── DJ ACTIVITY ───────────────────────────────────────────── */}
           <Card title="DJ activity" sub={`${djLog.count} log events by kind`}>
             {!djLog.byKind.length ? (
@@ -436,21 +773,10 @@ export default function StatsPanel() {
                 no DJ-log events yet
               </span>
             ) : (
-              <div className="grid gap-1.5">
-                {djLog.byKind.map(r => {
-                  const max = djLog.byKind[0]?.count || 1;
-                  return (
-                    <div
-                      key={r.kind}
-                      className="flex items-center gap-2.5 text-[12px]"
-                    >
-                      <span className="w-[110px] text-muted">{r.kind}</span>
-                      <Bar frac={r.count / max} />
-                      <span className="mono-num font-bold">{r.count}</span>
-                    </div>
-                  );
-                })}
-              </div>
+              <BarList
+                max={djLog.byKind[0]?.count || 1}
+                rows={djLog.byKind.map(r => ({ label: r.kind, count: r.count }))}
+              />
             )}
           </Card>
         </>
