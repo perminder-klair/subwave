@@ -134,6 +134,7 @@ export function NavidromeStep({ w }: { w: WizardController }) {
 // ─── LLM ───────────────────────────────────────────────────────────────────
 const LLM_PROVIDERS = [
   { id: 'ollama', label: 'Ollama (local, no key)' },
+  { id: 'locca', label: 'locca (local llama.cpp, no key)' },
   { id: 'anthropic', label: 'Anthropic Claude' },
   { id: 'openai', label: 'OpenAI' },
   { id: 'google', label: 'Google Gemini' },
@@ -145,12 +146,23 @@ const LLM_PROVIDERS = [
 
 export function LlmStep({ w }: { w: WizardController }) {
   const [busy, setBusy] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
+  const [discovery, setDiscovery] = useState<
+    { reachable: boolean; models: string[]; error?: string } | null
+  >(null);
   const isOllama = w.data.llm.provider === 'ollama';
+  const isLocca = w.data.llm.provider === 'locca';
   const isCustom = w.data.llm.provider === 'openai-compatible';
   const onTest = async () => {
     setBusy(true);
     await w.testLlm();
     setBusy(false);
+  };
+  const onDiscover = async () => {
+    setDiscovering(true);
+    setDiscovery(null);
+    setDiscovery(await w.discoverLocca());
+    setDiscovering(false);
   };
   return (
     <div>
@@ -199,7 +211,63 @@ export function LlmStep({ w }: { w: WizardController }) {
             />
           </Field>
         )}
-        {!isOllama && (
+        {isLocca && (
+          <Field
+            label="Base URL"
+            hint="Blank → http://host.docker.internal:8080/v1 (the locca server on the host)"
+          >
+            <TextInput
+              value={w.data.llm.baseUrl}
+              placeholder="http://host.docker.internal:8080/v1"
+              onChange={e =>
+                w.patch(d => ({ llm: { ...d.llm, baseUrl: e.target.value }, llmTest: { ok: null } }))
+              }
+            />
+          </Field>
+        )}
+        {isLocca && (
+          <div className="grid gap-2">
+            <button
+              type="button"
+              onClick={onDiscover}
+              disabled={discovering}
+              className="w-fit rounded border border-ink px-3 py-1.5 text-xs font-medium tracking-wide uppercase hover:bg-ink hover:text-bg disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {discovering ? 'Detecting…' : 'Detect locca models'}
+            </button>
+            {discovery && !discovery.reachable && (
+              <p className="text-xs text-amber-300">
+                No locca server reachable{discovery.error ? ` (${discovery.error})` : ''}. Start one
+                with <code>locca serve &lt;model&gt; --yes</code> on the host, then retry.
+              </p>
+            )}
+            {discovery && discovery.reachable && discovery.models.length === 0 && (
+              <p className="text-xs text-amber-300">locca is up but has no model loaded.</p>
+            )}
+            {discovery && discovery.reachable && discovery.models.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-ink/60">✓ locca detected — pick a model:</span>
+                {discovery.models.map(id => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() =>
+                      w.patch(d => ({ llm: { ...d.llm, model: id }, llmTest: { ok: null } }))
+                    }
+                    className={`rounded border px-2 py-1 text-xs ${
+                      w.data.llm.model === id
+                        ? 'border-ink bg-ink text-bg'
+                        : 'border-ink/40 hover:border-ink'
+                    }`}
+                  >
+                    {id}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {!isOllama && !isLocca && (
           <Field label="API key" hint="Stored in state/secrets.env (mode 0600), not in settings.json">
             <TextInput
               type="password"

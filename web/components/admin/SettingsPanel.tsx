@@ -52,6 +52,7 @@ const LLM_ENV_VARS: Record<string, string> = {
 
 const LLM_PROVIDER_LABELS: Record<string, string> = {
   ollama: 'Ollama — local homelab',
+  locca: 'locca — local llama.cpp (host)',
   'openai-compatible': 'OpenAI-compatible — self-hosted (llama.cpp, vLLM, LM Studio)',
   anthropic: 'Anthropic — Claude',
   openai: 'OpenAI — GPT',
@@ -1609,7 +1610,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                   ? 'nemotron-3-super:cloud'
                   : form.llm.provider === 'deepseek'
                     ? 'deepseek-v4-flash'
-                    : form.llm.provider === 'openai-compatible'
+                    : form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca'
                       ? 'Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf'
                       : 'model id'
               }
@@ -1626,7 +1627,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                       ? 'Gemini model id, e.g. “gemini-2.5-flash”.'
                       : form.llm.provider === 'deepseek'
                         ? 'DeepSeek model id. Leave blank for the “deepseek-v4-flash” default.'
-                        : form.llm.provider === 'openai-compatible'
+                        : form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca'
                           ? 'Model id exactly as the server reports it at /v1/models — required.'
                           : 'Model id for the chosen provider — required.'}
             </div>
@@ -1648,6 +1649,27 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                 including the <code>/v1</code> suffix. Must be reachable from the
                 controller container — use the host’s LAN or Tailscale IP, not
                 <code>127.0.0.1</code>.
+              </div>
+            </div>
+          )}
+
+          {form.llm.provider === 'locca' && (
+            <div className="field">
+              <Label>locca server base URL</Label>
+              <Input
+                value={form.llm.baseUrl}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, llm: { ...f.llm, baseUrl: e.target.value } }))
+                }
+                placeholder="http://host.docker.internal:8080/v1"
+                className="max-w-[360px]"
+              />
+              <div className="field-hint">
+                Leave blank to use the locca server on the host
+                (<code>http://host.docker.internal:8080/v1</code>). Override only
+                for a non-default port or a remote host. Bring a model up with{' '}
+                <code>locca serve &lt;model&gt; --yes</code>; the model id below is
+                what locca reports at <code>/v1/models</code>.
               </div>
             </div>
           )}

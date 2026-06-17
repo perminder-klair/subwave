@@ -59,11 +59,28 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
     candidates,
   }, null, 2);
 
+  // Constrain the pick to the actual candidate ids. On a local model (llama.cpp
+  // via openai-compatible / locca) this becomes a grammar so the model can only
+  // emit a real id — closing the "agent returned unknown id" hole. On providers
+  // that don't enforce the schema at decode time, Zod still rejects an invalid
+  // id, so the caller's fallback fires instead of a bogus track. Empty pool →
+  // plain string (z.enum needs ≥1 literal); pickViaPool never calls with [].
+  const candidateIds = [
+    ...new Set(
+      (candidates || [])
+        .map((c: any) => c?.id)
+        .filter((id: any): id is string => typeof id === 'string' && id.length > 0),
+    ),
+  ];
+  const idSchema = candidateIds.length
+    ? z.enum(candidateIds as [string, ...string[]]).describe('the exact id of one candidate')
+    : z.string().describe('the exact id of one candidate');
+
   return djObject({
     system: pickerSystem(show),
     prompt: user,
     schema: z.object({
-      id: z.string().describe('the exact id of one candidate'),
+      id: idSchema,
       reason: z.string().describe('one short sentence on why this one'),
     }),
     temperature: 0.5,

@@ -93,13 +93,20 @@ async function main() {
   await test('openai-compatible: no providerOptions block (transport handles thinking)', () => {
     assert.deepEqual(providerOptions({ provider: 'openai-compatible', model: 'qwen3', reasoning: false }), {});
   });
+  await test('locca: shares the openai-compatible path — no providerOptions block', () => {
+    assert.deepEqual(providerOptions({ provider: 'locca', model: 'qwen3', reasoning: false }), {});
+    assert.deepEqual(providerOptions({ provider: 'locca', model: 'qwen3', reasoning: true }), {});
+  });
   await test('capability flags: tool-object + repeat-penalty are Ollama-only', () => {
     assert.equal(needsToolCallObject({ provider: 'ollama' }), true);
     assert.equal(needsToolCallObject({ provider: 'openai' }), false);
+    assert.equal(needsToolCallObject({ provider: 'locca' }), false);
     assert.equal(repeatPenaltyApplies({ provider: 'ollama' }), true);
     assert.equal(repeatPenaltyApplies({ provider: 'deepseek' }), false);
+    assert.equal(repeatPenaltyApplies({ provider: 'locca' }), false);
     assert.equal(appliedNumCtx({ provider: 'ollama', model: 'qwen3', numCtx: 8192 }), 8192);
     assert.equal(appliedNumCtx({ provider: 'openai', model: 'gpt-4.1-mini', numCtx: 8192 }), null);
+    assert.equal(appliedNumCtx({ provider: 'locca', model: 'qwen3', numCtx: 8192 }), null);
   });
 
   // ---- agent plan routing ----
@@ -109,6 +116,9 @@ async function main() {
     assert.equal(agentPlan({ provider: 'ollama' }, {}, 3), 'done-tool');
     assert.equal(agentPlan({ provider: 'openai' }, {}, 0), 'native-no-tools');
     assert.equal(agentPlan({ provider: 'openai' }, {}, 3), 'native-then-done');
+    // locca routes like any native provider (not the Ollama tool-object path).
+    assert.equal(agentPlan({ provider: 'locca' }, {}, 0), 'native-no-tools');
+    assert.equal(agentPlan({ provider: 'locca' }, {}, 3), 'native-then-done');
     assert.equal(agentPlan({ provider: 'openai' }, null, 3), 'free-text');
     assert.equal(agentPlan({ provider: 'ollama' }, null, 0), 'free-text');
   });

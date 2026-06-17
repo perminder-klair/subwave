@@ -8,6 +8,9 @@ export {
   activeModelLabel,
   providerName,
   activeOllamaUrl,
+  loccaBaseUrl,
+  DEFAULT_LOCCA_BASE_URL,
+  noThinkFetch,
 } from './internal/provider/registry.js';
 
 export { primaryLeg, fallbackLeg, probeLegReachable } from './internal/provider/legs.js';

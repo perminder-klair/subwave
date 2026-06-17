@@ -6,12 +6,12 @@
 // without a redeploy and without touching a single call site.
 //
 // The active provider/model lives in `settings.llm` (see settings.js):
-//   { provider:  'ollama' | 'openai-compatible' | 'anthropic' | 'openai' |
-//                'google' | 'deepseek' | 'openrouter' | 'gateway',
+//   { provider:  'ollama' | 'openai-compatible' | 'locca' | 'anthropic' |
+//                'openai' | 'google' | 'deepseek' | 'openrouter' | 'gateway',
 //     model:     string,   // empty → provider default
 //     apiKey:    string,   // empty → read the provider's env var
 //     ollamaUrl: string,   // empty → config.ollama.url default (Ollama only)
-//     baseUrl:   string,   // OpenAI-compatible server URL (openai-compatible only)
+//     baseUrl:   string,   // server URL (openai-compatible; locca → host default)
 //     reasoning: boolean } // false → suppress <think> chain-of-thought
 //
 // `ollama` is the default and needs no key. The cloud providers are opt-in.
@@ -41,7 +41,7 @@ export function llmCfg() {
 // chat template then omits the <think> priming entirely, so the model
 // never starts a chain-of-thought. Injected via a fetch wrapper because
 // the AI SDK's openai provider has no first-class field for it.
-function noThinkFetch(url: any, init: any) {
+export function noThinkFetch(url: any, init: any) {
   if (init?.body && typeof init.body === 'string') {
     try {
       const body = JSON.parse(init.body);
@@ -61,6 +61,34 @@ export function ollamaBaseUrl(cfg: any): string {
   return cfg.ollamaUrl || config.ollama.url;
 }
 
+// Default base URL for the `locca` provider — a locca-served llama.cpp on the
+// host, reachable from the controller container via host.docker.internal. The
+// operator can still override it (settings `llm.baseUrl`) for a non-default
+// port / remote host; an explicit value always wins.
+export const DEFAULT_LOCCA_BASE_URL = 'http://host.docker.internal:8080/v1';
+
+// Effective base URL for the `locca` provider: the settings field if set, else
+// the host default. Used by the builder and the cache signature so a blank
+// field and the resolved default key to the same client.
+export function loccaBaseUrl(cfg: any): string {
+  return cfg.baseUrl || DEFAULT_LOCCA_BASE_URL;
+}
+
+// Build a LanguageModel for any self-hosted OpenAI-compatible server (llama.cpp,
+// vLLM, LM Studio, locca). `.chat()` pins /v1/chat/completions — these servers
+// don't implement the Responses API the default `provider(id)` would target.
+// Most accept any non-empty key, so fall back to a placeholder. Reasoning off →
+// wrap fetch to force chat_template_kwargs.enable_thinking=false.
+function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: string) {
+  const provider = createOpenAI({
+    baseURL,
+    apiKey: cfg.apiKey || 'unused',
+    name,
+    ...(cfg.reasoning ? {} : { fetch: noThinkFetch }),
+  });
+  return provider.chat(id);
+}
+
 // Resolve the concrete model id. Ollama falls back to the env-configured
 // model; cloud providers must name a model explicitly — guessing a model id
 // that may not exist fails worse than a clear error.
@@ -78,7 +106,8 @@ export function resolveModelId(cfg: any): string {
 // client cache, since the signature below already keys on every field.
 export function languageModel(cfg: any = llmCfg()) {
   const id = resolveModelId(cfg);
-  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${cfg.baseUrl || ''}|${cfg.reasoning ? 'r1' : 'r0'}`;
+  const baseUrlSig = cfg.provider === 'locca' ? loccaBaseUrl(cfg) : (cfg.baseUrl || '');
+  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;
@@ -96,18 +125,14 @@ export function languageModel(cfg: any = llmCfg()) {
       break;
     }
     case 'openai-compatible': {
-      // Any self-hosted OpenAI-compatible server (llama.cpp, vLLM, LM Studio…).
-      // `.chat()` pins the /v1/chat/completions endpoint — these servers don't
-      // implement the Responses API the default `provider(id)` would target.
-      // Most accept any non-empty key, so fall back to a placeholder.
-      const provider = createOpenAI({
-        baseURL: cfg.baseUrl,
-        apiKey: cfg.apiKey || 'unused',
-        name: 'openai-compatible',
-        // Reasoning off → wrap fetch to force chat_template_kwargs.enable_thinking=false.
-        ...(cfg.reasoning ? {} : { fetch: noThinkFetch }),
-      });
-      model = provider.chat(id);
+      model = openAICompatibleModel(cfg, id, cfg.baseUrl, 'openai-compatible');
+      break;
+    }
+    case 'locca': {
+      // First-class locca: an openai-compatible llama.cpp server with a sane
+      // default base URL (host.docker.internal:8080) so the operator doesn't
+      // hand-type a URL. Same transport as openai-compatible, incl. no-think.
+      model = openAICompatibleModel(cfg, id, loccaBaseUrl(cfg), 'locca');
       break;
     }
     case 'google': {

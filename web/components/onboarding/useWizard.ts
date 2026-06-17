@@ -130,6 +130,20 @@ export function useWizard() {
     return result;
   }, [auth, data.llm, patch]);
 
+  // Probe a locca / openai-compatible server for its loaded model list so the
+  // operator can pick the model instead of typing it. Uses data.llm.baseUrl
+  // when set; otherwise the controller defaults to the locca host URL.
+  const discoverLocca = useCallback(async () => {
+    const qs = data.llm.baseUrl ? `?baseUrl=${encodeURIComponent(data.llm.baseUrl)}` : '';
+    const r = await auth.adminFetch(`/settings/llm/discover${qs}`);
+    const j = (await r.json().catch(() => ({}))) as {
+      reachable?: boolean;
+      models?: string[];
+      error?: string;
+    };
+    return { reachable: !!j.reachable, models: j.models || [], error: j.error };
+  }, [auth, data.llm.baseUrl]);
+
   const save = useCallback(async () => {
     // Stitch the apiKeys into the right env-var keys before sending.
     const apiKeys: Record<string, string> = { ...data.apiKeys };
@@ -198,6 +212,7 @@ export function useWizard() {
     goto,
     testNavidrome,
     testLlm,
+    discoverLocca,
     save,
     generateJingles,
   };

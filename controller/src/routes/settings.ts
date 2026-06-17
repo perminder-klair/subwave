@@ -159,6 +159,37 @@ router.post('/settings', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /settings/llm/discover — probe a locca / openai-compatible server for
+// liveness + its loaded model list, so the onboarding wizard and admin
+// Settings UI can auto-fill the model field with no hand-typing. Non-mutating.
+// `?baseUrl=` overrides; default is the locca host URL (host.docker.internal:8080).
+// Always 200s with { reachable, models, baseUrl } — an unreachable server is a
+// normal answer, not an error.
+// ---------------------------------------------------------------------------
+router.get('/settings/llm/discover', requireAdmin, async (req, res) => {
+  const baseUrl =
+    String(req.query.baseUrl || '').trim().replace(/\/+$/, '') ||
+    llmProvider.DEFAULT_LOCCA_BASE_URL;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 3000);
+  try {
+    const r = await fetch(`${baseUrl}/models`, { signal: ctrl.signal });
+    if (!r.ok) {
+      return res.json({ reachable: false, models: [], baseUrl, error: `HTTP ${r.status}` });
+    }
+    const data: any = await r.json();
+    const models = Array.isArray(data?.data)
+      ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string')
+      : [];
+    res.json({ reachable: true, models, baseUrl });
+  } catch (err: any) {
+    res.json({ reachable: false, models: [], baseUrl, error: err?.message || 'unreachable' });
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // POST /restart-mixer — telnet → Liquidsoap → shutdown → container restart
 // Brief gap of dead air covered by Icecast burst buffer + emergency.mp3.
 // ---------------------------------------------------------------------------

@@ -90,10 +90,13 @@ export const TTS_ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'clou
 // providers are opt-in and resolved by llm/provider.js. `openrouter` and
 // `gateway` are aggregators — one key, any vendor's models. `openai-compatible`
 // targets any self-hosted OpenAI-compatible server (llama.cpp, vLLM, LM Studio,
-// etc.) via the operator-supplied `llm.baseUrl`.
+// etc.) via the operator-supplied `llm.baseUrl`. `locca` is a first-class local
+// llama.cpp via the locca CLI — same transport as openai-compatible but with a
+// host default base URL (host.docker.internal:8080) and onboarding discovery.
 export const LLM_PROVIDERS = [
   'ollama',
   'openai-compatible',
+  'locca',
   'anthropic',
   'openai',
   'google',

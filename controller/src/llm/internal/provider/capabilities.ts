@@ -59,6 +59,13 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // registry), not via providerOptions.
     thinkingBlock: NONE,
   },
+  // locca is a first-class openai-compatible (llama.cpp) server — same traits:
+  // native objects, no repeat_penalty, no-think handled in transport.
+  locca: {
+    objectStrategy: 'native',
+    repeatPenaltyApplies: false,
+    thinkingBlock: NONE,
+  },
   anthropic: {
     objectStrategy: 'native',
     repeatPenaltyApplies: false,

@@ -23,6 +23,7 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 
 import { requireAdmin } from '../middleware/auth.js';
+import { DEFAULT_LOCCA_BASE_URL, noThinkFetch } from '../llm/provider.js';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as jingles from '../broadcast/jingles.js';
@@ -133,7 +134,18 @@ router.post('/onboarding/test-llm', requireAdmin, async (req, res) => {
         break;
       case 'openai-compatible':
         if (!baseUrl) throw new Error('baseUrl is required for openai-compatible');
-        m = createOpenAI({ baseURL: baseUrl, apiKey: apiKey || 'unused' }).chat(model);
+        // noThinkFetch so a thinking model (Qwen3 etc.) returns visible content
+        // in the test rather than spending its budget in the reasoning channel.
+        m = createOpenAI({ baseURL: baseUrl, apiKey: apiKey || 'unused', fetch: noThinkFetch }).chat(model);
+        break;
+      case 'locca':
+        // First-class locca: openai-compatible llama.cpp, base URL defaults to
+        // the host locca server when not supplied.
+        m = createOpenAI({
+          baseURL: baseUrl || DEFAULT_LOCCA_BASE_URL,
+          apiKey: apiKey || 'unused',
+          fetch: noThinkFetch,
+        }).chat(model);
         break;
       case 'google':
         m = createGoogleGenerativeAI(apiKey ? { apiKey } : {})(model);
