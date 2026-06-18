@@ -1487,9 +1487,9 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                     <Select
                       value={isPreset ? voice : '__custom__'}
                       onValueChange={val => {
-                        if (val !== '__custom__') {
-                          setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, voice: val } } }));
-                        }
+                        // "Custom voice id…" clears the preset so isPreset flips
+                        // false and the free-text input below appears for entry.
+                        setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, voice: val === '__custom__' ? '' : val } } }));
                       }}
                     >
                       <SelectTrigger><SelectValue /></SelectTrigger>

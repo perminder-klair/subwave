@@ -1221,9 +1221,9 @@ export default function PersonasPanel() {
                         <Select
                           value={isPreset ? voice : '__custom__'}
                           onValueChange={val => {
-                            if (val !== '__custom__') {
-                              setPersonaTts(safeIdx, { voice: val });
-                            }
+                            // "Custom voice id…" clears the preset so isPreset flips
+                            // false and the free-text input below appears for entry.
+                            setPersonaTts(safeIdx, { voice: val === '__custom__' ? '' : val });
                           }}
                         >
                           <SelectTrigger><SelectValue /></SelectTrigger>
