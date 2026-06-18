@@ -4,10 +4,15 @@
 // broadcast mounts (/stream.mp3 + /stream.opus), so the DJ gates can ask "is
 // anyone listening?" without each one hitting Icecast.
 //
-// The count is *deduped by IP+user-agent* (see dedupeListeners): Safari opens
-// two identical connections per client, so a raw sum double-counts every Apple
-// listener. That dedup needs the per-connection admin feed (/admin/listclients);
-// the public status-json.xsl still supplies online/bitrate and the fallback sum
+// The count *folds Safari's double connection* into one (see groupConnections /
+// dedupeListeners): iOS/macOS Safari opens two identical sockets per client, so
+// a raw sum double-counts every Apple listener. We can't key on IP — behind a
+// reverse proxy (Caddy → Icecast) every connection carries the proxy's IP, not
+// the listener's, and icecast-KH ignores X-Forwarded-For, so the real client IP
+// never reaches Icecast. Instead we count every non-Safari socket as a listener
+// and pair Safari's two near-simultaneous sockets by user-agent + connect-time.
+// That dedup needs the per-connection admin feed (/admin/listclients); the
+// public status-json.xsl still supplies online/bitrate and the fallback sum
 // when the admin endpoint is unavailable.
 //
 // Fail-open: if Icecast is unreachable the count is null and djCallsAllowed()
@@ -257,39 +262,72 @@ function parseListClients(xml: string, mount: string): ListenerConnection[] {
   return out;
 }
 
-// Collapse Safari/AppleCoreMedia's duplicate connections into one listener.
-// iOS and macOS Safari open *two* identical sockets to a live Icecast mount per
-// client (a fundamental AppleCoreMedia behaviour, confirmed upstream with no
-// client-side fix — see react-native-track-player #2096), which Icecast counts
-// as two listeners. Counting distinct IP+user-agent pairs folds those back into
-// one. Two genuinely-distinct devices sharing both a public IP *and* an
-// identical UA collapse too — rare, and a better failure mode than every Apple
-// visitor doubling the tally.
-export function dedupeListeners(conns: ListenerConnection[]): number {
-  const seen = new Set<string>();
-  for (const c of conns) seen.add(`${c.ip} ${c.userAgent}`);
-  return seen.size;
+// Max gap (seconds) between Safari's two sockets' Connected times for them to be
+// treated as the same listener's double. They open within the same second and
+// stay within ~1s of each other for the connection's life; 6s absorbs poll
+// jitter without bridging two genuinely separate joins.
+const DOUBLE_WINDOW_S = 6;
+
+// True when the user-agent is real Safari / AppleCoreMedia — the only clients
+// that open *two* identical sockets per listener (a fundamental AppleCoreMedia
+// behaviour, no client-side fix — see react-native-track-player #2096).
+// Chrome-on-Mac also carries the "Safari/537.36" token but is Blink and opens a
+// single socket, so it must NOT match: gate on "Version/" + "Safari" and exclude
+// the Chromium-family tokens.
+function isSafariDouble(ua: string): boolean {
+  if (/AppleCoreMedia/i.test(ua)) return true;
+  if (!/Safari/i.test(ua) || !/Version\//i.test(ua)) return false;
+  return !/(Chrome|CriOS|Chromium|Android|Edg|OPR)/i.test(ua);
 }
 
-// One row per distinct listener (IP+UA), matching the deduped count — for the
-// admin connections table, so Safari's duplicate socket shows as a single
-// listener rather than two rows. `connections` records how many raw sockets
-// folded in (Safari → 2); connectedSeconds is the longest-held of the group and
-// mount lists every mount the listener holds.
+// Number of distinct listeners — the headline count. Folds Safari's double
+// back into one (see groupConnections) without keying on IP, which is useless
+// behind a reverse proxy (every socket carries the proxy's IP). Single source of
+// truth with the admin table: both derive from groupConnections so they can't
+// drift apart.
+export function dedupeListeners(conns: ListenerConnection[]): number {
+  return groupConnections(conns).length;
+}
+
+// One row per distinct listener — for the admin connections table and the
+// headline count. Every non-Safari socket is its own listener (Chrome, Firefox,
+// Android, Sonos and hardware radios open exactly one socket each, so two
+// distinct listeners sharing the proxy IP — and even the same UA — both
+// count). Safari's two near-simultaneous sockets are paired into one row by
+// user-agent + connect-time. `connections` records how many raw sockets folded
+// in (Safari → 2); connectedSeconds is the longest-held of the group and mount
+// lists every mount the listener holds.
 export function groupConnections(conns: ListenerConnection[]): ListenerConnection[] {
-  const groups = new Map<string, ListenerConnection>();
-  for (const c of conns) {
-    const key = `${c.ip} ${c.userAgent}`;
-    const g = groups.get(key);
-    if (!g) {
-      groups.set(key, { ...c, connections: 1 });
-    } else {
-      g.connections = (g.connections ?? 1) + 1;
-      g.connectedSeconds = Math.max(g.connectedSeconds, c.connectedSeconds);
-      if (!g.mount.split(', ').includes(c.mount)) g.mount = `${g.mount}, ${c.mount}`;
+  const singles: ListenerConnection[] = [];
+  const safari: ListenerConnection[] = [];
+  for (const c of conns) (isSafariDouble(c.userAgent) ? safari : singles).push(c);
+
+  const out: ListenerConnection[] = singles.map(c => ({ ...c, connections: 1 }));
+
+  // Pair Safari sockets per mount: sort by Connected, greedily merge an adjacent
+  // socket within the window. Each real Apple listener is exactly two sockets, so
+  // for any even count this yields N/2 listeners regardless of pairing order; an
+  // odd leftover stands alone. Cap each group at 2 — Safari only ever doubles.
+  const byMount = new Map<string, ListenerConnection[]>();
+  for (const c of safari) {
+    const arr = byMount.get(c.mount) ?? [];
+    arr.push(c);
+    byMount.set(c.mount, arr);
+  }
+  for (const arr of byMount.values()) {
+    arr.sort((a, b) => b.connectedSeconds - a.connectedSeconds);
+    for (let i = 0; i < arr.length; i++) {
+      const cur = arr[i];
+      const next = arr[i + 1];
+      if (next && cur.connectedSeconds - next.connectedSeconds <= DOUBLE_WINDOW_S) {
+        out.push({ ...cur, connections: 2 });
+        i++; // consume the paired socket
+      } else {
+        out.push({ ...cur, connections: 1 });
+      }
     }
   }
-  return [...groups.values()];
+  return out;
 }
 
 // Live per-listener connections across both broadcast mounts. Returns [] when
