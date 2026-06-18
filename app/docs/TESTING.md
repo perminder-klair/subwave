@@ -160,6 +160,28 @@ properly judged on a **physical device** — the remote-control wiring lives in
 `service.ts` (Play/Pause/Stop; Next/Seek intentionally omitted for a live
 stream).
 
+### CarPlay / Android Auto — Now-Playing in the car
+
+Scope is **Tier 1**: control the *already-playing* stream from the dash (metadata,
+artwork, play/pause/stop). There is **no launchable in-car app icon** — start the
+stream in the phone app first, then connect the car. RNTP already feeds both OS
+surfaces (`MPNowPlayingInfoCenter` on iOS, a `MediaSession` on Android), so the
+only app-side wiring is `plugins/withAndroidAuto.js`, which declares SUB/WAVE as
+an Android-Auto media app (`automotive_app_desc.xml` + the
+`com.google.android.gms.car.application` manifest meta-data). iOS needs nothing
+extra. A config-plugin change alters the native fingerprint → it requires a
+**fresh native build**, not an OTA update.
+
+- **iOS** — run on a device, or use the **CarPlay Simulator** (Simulator app →
+  **I/O → External Displays → CarPlay**). Start the stream, open the CarPlay
+  screen → SUB/WAVE shows under **Now Playing** with title/artist/album + artwork;
+  Play/Pause work; no scrubber (the `isLiveStream` track hides it).
+- **Android Auto** — enable Android Auto **developer mode → "Unknown sources"**,
+  then use the **Desktop Head Unit** (Android Studio) or a real head unit. Start
+  the stream → the now-playing card shows metadata + artwork; Play/Pause/Stop
+  respond. (Play-Store visibility to *other* users would need Google's
+  "Android for Cars" media review — not required for testing.)
+
 ---
 
 ## EAS cloud builds (for distributing to testers)
@@ -230,6 +252,9 @@ eas submit --profile production --platform ios     # uploads to App Store Connec
   the Skia visualizer surface, not a crash.
 - **Gradle is pinned to 8.14.3** via `plugins/withGradleVersion.js` — RN's
   bundled Gradle plugins reference an API removed in Gradle 9.
+- **`plugins/withAndroidAuto.js`** injects the Android-Auto media-app declaration
+  at prebuild (Android only). It's a native-config change, so it ships in a
+  binary, never over OTA.
 - **`expo run:ios` non-interactively prints "Skipping dev server"** and then
   fails the final deep-link open — the build/install still succeeded; just start
   Metro and open via `localhost` (above).

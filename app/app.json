@@ -76,7 +76,8 @@
         {
           "version": "8.14.3"
         }
-      ]
+      ],
+      "./plugins/withAndroidAuto"
     ],
     "experiments": {
       "typedRoutes": true
