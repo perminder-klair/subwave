@@ -50,13 +50,20 @@ export function usageOf(result: any): { input: number; output: number; total: nu
 // Transient vs unreachable error classification
 // ---------------------------------------------------------------------------
 //
-// Two overlapping classifiers gate two different recovery mechanisms:
-//   isTransient  → withTransientRetry retries on the SAME leg (5xx/429/socket).
-//   isUnreachable → withFailover switches to the BACKUP leg (host is DOWN).
-// isUnreachable is a strict subset: it EXCLUDES 408/425/429/5xx, because a host
-// that answers with a status is reachable — those stay with transient retry on
-// the configured model rather than being masked by a silent failover to a
-// different model (discussion #320).
+// Three classifiers gate two different recovery mechanisms:
+//   isTransient        → withTransientRetry retries on the SAME leg (5xx / plain 429 / socket).
+//   isUnreachable      → withFailover switches to the BACKUP leg (host is DOWN).
+//   isQuotaOrAuthError → withFailover switches to the BACKUP leg (host UP but
+//                        refusing this leg: quota/usage-limit/billing 429, or
+//                        an auth failure — retrying the same model is futile).
+// isUnreachable is a strict subset of isTransient: it EXCLUDES 408/425/429/5xx,
+// because a host that answers with a status is reachable — those stay with
+// transient retry on the configured model rather than being masked by a silent
+// failover to a different model (discussion #320). The ONE exception is a
+// quota/auth rejection (isQuotaOrAuthError): the leg answered, but it can't
+// recover this call, so it is pulled OUT of the transient set and fails over
+// instead of pointlessly retrying a dead leg (issue #438 — Ollama Cloud's
+// "weekly usage limit" 429s looped on the exhausted leg and never failed over).
 
 const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 const TRANSIENT_CODE = new Set([
@@ -66,6 +73,11 @@ const TRANSIENT_CODE = new Set([
 
 export function isTransient(err: any): boolean {
   if (!err) return false;
+  // A quota/usage-limit/auth rejection is permanent for THIS leg this call —
+  // never burn same-leg retries on it; let it propagate to withFailover, which
+  // switches legs (#438). A plain rate-limit 429 (no quota/auth signature) is
+  // unaffected and stays transient below.
+  if (isQuotaOrAuthError(err)) return false;
   const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
   if (typeof status === 'number' && TRANSIENT_STATUS.has(status)) return true;
   const code = err.code ?? err.cause?.code;
@@ -99,6 +111,32 @@ export function isUnreachable(err: any): boolean {
   if (/fetch failed|socket hang up|getaddrinfo|connect ECONNREFUSED|connect ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(msg)) {
     return true;
   }
+  return false;
+}
+
+// Provider refused this leg in a way that retrying the SAME model won't fix
+// this call: a quota / usage-limit / billing rejection, or an authentication
+// failure (bad / missing API key). The host is UP (it answered), so this is NOT
+// isUnreachable — but unlike a transient "slow down" 429, the same leg can't
+// recover, so withFailover treats it like host-down and switches to the backup
+// leg (issue #438). Detected by message because providers surface quota/auth
+// differently and the AI SDK often flattens the status into the message text;
+// a bare 429 with no quota signature stays a plain transient rate-limit.
+const QUOTA_RE = /usage limit|quota|exceeded your current|insufficient[ _]?(quota|funds|credit|balance)|upgrade for higher|out of credit|payment required/i;
+const AUTH_RE = /invalid[ _]?api[ _]?key|incorrect[ _]?api[ _]?key|unauthorized|authentication (failed|error)|forbidden|api key (not|is|was) /i;
+
+export function isQuotaOrAuthError(err: any): boolean {
+  if (!err) return false;
+  const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
+  // Auth: any 401/403, or an auth-shaped message regardless of status.
+  if (status === 401 || status === 403) return true;
+  // Quota/billing: a payment-required status, or a quota-shaped message. NOTE a
+  // bare 429 is deliberately NOT enough — only a 429 whose message names a
+  // quota/usage-limit qualifies (via QUOTA_RE below).
+  if (status === 402) return true;
+  const msg = String(err.message || err.cause?.message || '');
+  if (AUTH_RE.test(msg)) return true;
+  if (QUOTA_RE.test(msg)) return true;
   return false;
 }
 

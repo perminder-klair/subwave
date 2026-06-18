@@ -32,7 +32,7 @@ import { config } from '../config.js';
 import { loadSecretsIntoEnv } from '../setup/secrets.js';
 import { loadSetupConfig } from '../setup/config.js';
 import { activeModelLabel, primaryLeg, fallbackLeg, probeLegReachable } from '../llm/provider.js';
-import { isUnreachable } from '../llm/sdk.js';
+import { isUnreachable, isQuotaOrAuthError } from '../llm/sdk.js';
 import { tagBatch, tagOne, TAGGER_BATCH_SYSTEM, type TagResult } from './tagger-core.js';
 import { runAnalysisPass } from './analyze.js';
 import { reportProgress } from './tagger-progress.js';
@@ -680,10 +680,12 @@ async function processBatch(
     results = await tagBatch(input, opts);
     state.callCount += 1;
   } catch (err: any) {
-    // A pinned leg whose host went down: rethrow BEFORE the per-track salvage,
-    // otherwise we'd grind 25 serial connect-timeouts against a dead box. The
-    // surviving consumer redoes the requeued batch.
-    if (consumer.pin && isUnreachable(err)) throw err;
+    // A pinned leg that can't recover this run — host down, OR a
+    // quota/usage-limit/auth rejection (#438): rethrow BEFORE the per-track
+    // salvage, otherwise we'd grind 25 serial connect-timeouts (or 25 identical
+    // 429s) against a leg that won't answer. The surviving consumer redoes the
+    // requeued batch.
+    if (consumer.pin && (isUnreachable(err) || isQuotaOrAuthError(err))) throw err;
     console.error(
       `[tag] LLM batch failed (${songs.length} tracks) on ${consumer.label}: ${err.message} — falling back to per-track`,
     );
@@ -693,8 +695,9 @@ async function processBatch(
         results.push(await tagOne(song, opts));
         state.callCount += 1;
       } catch (oneErr: any) {
-        // Host died mid-salvage — bail the whole batch (nothing upserted yet).
-        if (consumer.pin && isUnreachable(oneErr)) throw oneErr;
+        // Leg unusable mid-salvage (host died, or quota/auth) — bail the whole
+        // batch (nothing upserted yet).
+        if (consumer.pin && (isUnreachable(oneErr) || isQuotaOrAuthError(oneErr))) throw oneErr;
         console.error(`[tag] per-track tag failed on ${consumer.label}: ${oneErr.message}`);
         results.push(null);
       }

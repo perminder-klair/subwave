@@ -7,7 +7,7 @@
 // node:assert-via-tsx style of scripts/picker-recency-regression.ts.
 
 import assert from 'node:assert/strict';
-import { stripThinking, extractJson, usageOf, isUnreachable, isTransient } from '../src/llm/internal/core/pure.js';
+import { stripThinking, extractJson, usageOf, isUnreachable, isTransient, isQuotaOrAuthError } from '../src/llm/internal/core/pure.js';
 import { withDeadline } from '../src/llm/internal/core/retry.js';
 import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
@@ -30,9 +30,10 @@ async function main() {
     assert.equal(isTransient({ statusCode: 500 }), true);
     assert.equal(isUnreachable({ statusCode: 500 }), false);
   });
-  await test('429 is transient but NOT unreachable', () => {
+  await test('bare 429 (no quota signature) is transient, NOT unreachable, NOT quota/auth', () => {
     assert.equal(isTransient({ statusCode: 429 }), true);
     assert.equal(isUnreachable({ statusCode: 429 }), false);
+    assert.equal(isQuotaOrAuthError({ statusCode: 429 }), false);
   });
   await test('ECONNREFUSED is both transient and unreachable', () => {
     assert.equal(isTransient({ code: 'ECONNREFUSED' }), true);
@@ -53,6 +54,35 @@ async function main() {
     const thrown = await withDeadline(20, 'race', () => new Promise<never>(() => {})).catch((x) => x);
     assert.equal(thrown.name, 'AgentDeadlineError');
     assert.equal(isUnreachable(thrown), false);
+  });
+
+  // ---- quota/auth gate: failover-eligible, pulled OUT of same-leg retry (#438) ----
+  console.log('isQuotaOrAuthError (quota/usage-limit/auth → fail over, not retry):');
+  await test('Ollama Cloud weekly usage-limit 429 → quota/auth, NOT transient', () => {
+    // The exact shape from issue #438: status 429 + a usage-limit message.
+    const e: any = { statusCode: 429, message: 'you (acct) have reached your weekly usage limit, upgrade for higher limits: https://ollama.com/upgrade (ref: abc)' };
+    assert.equal(isQuotaOrAuthError(e), true);
+    assert.equal(isTransient(e), false);   // pulled OUT of same-leg retry
+    assert.equal(isUnreachable(e), false);  // host is up, just refusing
+  });
+  await test('quota message with no status still classifies (AI SDK flattens status)', () => {
+    const e: any = new Error('Insufficient quota — upgrade for higher limits');
+    assert.equal(isQuotaOrAuthError(e), true);
+    assert.equal(isTransient(e), false);
+  });
+  await test('401/403 are quota/auth (bad/missing API key never recovers on this leg)', () => {
+    assert.equal(isQuotaOrAuthError({ statusCode: 401 }), true);
+    assert.equal(isQuotaOrAuthError({ statusCode: 403 }), true);
+    assert.equal(isQuotaOrAuthError({ message: 'Incorrect API key provided' }), true);
+    assert.equal(isTransient({ statusCode: 401 }), false);
+  });
+  await test('cause.statusCode / cause.message are unwrapped', () => {
+    assert.equal(isQuotaOrAuthError({ cause: { statusCode: 402 } }), true);
+    assert.equal(isQuotaOrAuthError({ cause: { message: 'quota exceeded' } }), true);
+  });
+  await test('plain 5xx / socket errors are NOT quota/auth (still same-leg retry)', () => {
+    assert.equal(isQuotaOrAuthError({ statusCode: 503 }), false);
+    assert.equal(isQuotaOrAuthError({ code: 'ECONNRESET' }), false);
   });
 
   // ---- per-provider thinking knob (the single most regression-prone mapping) ----
