@@ -20,6 +20,37 @@ export default function ModelsAndTokens() {
           Switching reroutes every call immediately, with no redeploy.
         </p>
         <p>
+          &ldquo;On your own hardware&rdquo; isn't only Ollama — there are three local
+          paths, all keyless and all private to your box:
+        </p>
+        <ul className="bs-list">
+          <li>
+            <strong>Ollama</strong> — the default. One install, pull a model, done.
+          </li>
+          <li>
+            <strong>locca</strong> — a first-class, one-command local model server
+            (<code>locca serve &lt;model&gt;</code>) built on llama.cpp. No key, a sensible
+            host default, and the onboarding wizard can detect it for you.{' '}
+            <a
+              href="https://github.com/perminder-klair/locca"
+              className="bs-link"
+              target="_blank"
+              rel="noreferrer"
+            >
+              locca on GitHub ↗
+            </a>
+          </li>
+          <li>
+            <strong>OpenAI-compatible</strong> — any self-hosted server that speaks the
+            OpenAI API (llama.cpp, vLLM, LM Studio); you supply its URL.
+          </li>
+        </ul>
+        <p>
+          Thinking models are handled for you: with <strong>Reasoning off</strong> the
+          station tells a local model to skip its internal monologue, so a small model
+          stays fast and on-task (more on that below).
+        </p>
+        <p>
           Big hosted models are more capable but cost money per token; small local models
           are free to run but need a lighter workload to stay coherent. The settings
           below let you match the station to the model: run it <em>lean</em> for a small
@@ -123,6 +154,47 @@ export default function ModelsAndTokens() {
           lighter path the default rather than the exception.
         </p>
       </div>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">A SECOND, SMALLER MODEL</p>
+        <h2>How the DJ knows each track's mood.</h2>
+        <p>
+          The DJ picks partly by <em>mood</em> — mellow mornings, brighter afternoons, a
+          wind-down late at night. To know each track's mood it leans on the{' '}
+          <strong>library tagger</strong>, which uses a second, much smaller{' '}
+          <strong>embedding model</strong> — not the chat model that writes the show.
+        </p>
+        <p>
+          Rather than ask the chat model about every track (slow and expensive on a big
+          library), the tagger embeds each track once, has the chat model tag a small,
+          representative <strong>seed set</strong>, then <strong>propagates</strong> moods
+          and energy out to everything else by similarity. That's roughly ten times fewer
+          model calls than tagging track by track.
+        </p>
+        <p>
+          By default the embedding model <strong>follows your LLM provider</strong>, so
+          there's usually nothing extra to set up — an Ollama-local station gets{' '}
+          <code>nomic-embed-text</code> for free. Two things are worth knowing if you
+          stray from that:
+        </p>
+        <ul className="bs-list">
+          <li>
+            <strong>Anthropic has no embedding model</strong> — if your DJ runs on Claude,
+            point embeddings at Ollama or OpenAI instead.
+          </li>
+          <li>
+            <strong>locca and OpenAI-compatible need a dedicated embedding server</strong> —
+            one llama.cpp process can't serve chat and embeddings at once. With locca that's
+            a second command, <code>locca embed</code>, on its own port; the console can
+            detect it for you.
+          </li>
+        </ul>
+        <p>
+          It all lives under <strong>Admin &rarr; Library tagger</strong>, and you can see
+          the tagged library laid out in{' '}
+          <Link href="/manual/observatory" className="bs-link">Library Observatory</Link>.
+        </p>
+      </section>
 
       <section className="bs-section">
         <p className="bs-eyebrow">WHERE TO SET THEM</p>

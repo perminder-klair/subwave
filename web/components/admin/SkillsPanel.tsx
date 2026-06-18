@@ -278,6 +278,14 @@ export default function SkillsPanel() {
             <strong> Rescan</strong>. Custom skills arrive <strong>disabled</strong> — review,
             then enable them before they can air.
           </div>
+          <a
+            href="/manual/skills"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 inline-block text-[11px] font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
+          >
+            Read this in the manual ↗
+          </a>
         </div>
         <div className="flex items-center gap-4 bg-[var(--ink-softer)] p-3.5">
           <span className="caption">{skills.length} skill{skills.length === 1 ? '' : 's'}</span>

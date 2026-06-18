@@ -955,9 +955,11 @@ interface SectionHeaderProps {
   title: ReactNode;
   sub: ReactNode;
   metrics?: MetricSpec[];
+  manualHref?: string;
+  manualLabel?: ReactNode;
 }
 
-function SectionHeader({ eyebrow, title, sub, metrics }: SectionHeaderProps) {
+function SectionHeader({ eyebrow, title, sub, metrics, manualHref, manualLabel }: SectionHeaderProps) {
   return (
     <div className="flex flex-wrap items-start gap-4 border border-ink p-4">
       <div className="min-w-[240px] flex-1">
@@ -968,6 +970,16 @@ function SectionHeader({ eyebrow, title, sub, metrics }: SectionHeaderProps) {
         <div className="mt-1.5 max-w-[540px] text-[12px] leading-[1.5] text-muted">
           {sub}
         </div>
+        {manualHref && (
+          <a
+            href={manualHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 inline-block text-[12px] font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
+          >
+            {manualLabel || 'Read this in the manual'} ↗
+          </a>
+        )}
       </div>
       {metrics && metrics.length > 0 && (
         <div className="grid grid-flow-col gap-[18px] pt-1">
@@ -1581,6 +1593,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
         title="The model that writes scripts and picks tracks."
         sub="Ollama runs on the homelab box and needs no key; the cloud providers are opt-in. Switching here reroutes every LLM call — no redeploy."
         metrics={[{ n: String((data.llm?.providers || []).length), l: 'providers' }]}
+        manualHref="/manual/llm"
       />
 
       <Card title="Provider" sub="active routing">
@@ -2301,6 +2314,8 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
             l: 'tagged',
           },
         ]}
+        manualHref="/manual/llm"
+        manualLabel="How embeddings work"
       />
 
       {/* Plain-language intro + at-a-glance readiness. */}
@@ -3032,6 +3047,7 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
             accent: true,
           },
         ]}
+        manualHref="/manual/themes"
       />
 
       <Card title="Picker" sub="active station theme">
