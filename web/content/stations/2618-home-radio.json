@@ -2,6 +2,10 @@
   "name": "2618 Home Radio",
   "url": "https://radio.nirachetahomelab.org",
   "operator": "@_veteris",
+  "location": "Texas, United States",
+  "country": "United States",
+  "lat": 30.2672,
+  "lon": -97.7431,
   "genre": "rock / techno",
   "featured": false,
   "submitted": "2026-06-18"
