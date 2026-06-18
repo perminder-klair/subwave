@@ -81,6 +81,9 @@ interface ListenerConnection {
   mount: string;
   userAgent: string;
   connectedSeconds: number;
+  // Raw sockets folded into this row. Safari opens 2 per client (counts as one
+  // listener); >1 surfaces as a ×N badge. Absent/1 for normal single-socket clients.
+  connections?: number;
 }
 
 interface ConnectionsState {
@@ -638,6 +641,14 @@ export default function DashPanel() {
                     </td>
                     <td className="max-w-[360px] truncate py-1.5" title={c.userAgent}>
                       {clientLabel(c.userAgent)}
+                      {c.connections && c.connections > 1 ? (
+                        <span
+                          className="ml-1.5 text-[10px] font-bold text-muted"
+                          title={`${c.connections} connections — Safari opens 2 sockets per listener`}
+                        >
+                          ×{c.connections}
+                        </span>
+                      ) : null}
                     </td>
                   </tr>
                 ))}

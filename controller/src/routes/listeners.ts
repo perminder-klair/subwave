@@ -7,6 +7,7 @@ import {
   historyBytes,
   getListenerCount,
   getConnections,
+  groupConnections,
 } from '../broadcast/listeners.js';
 
 export const router = express.Router();
@@ -41,7 +42,9 @@ router.get('/listeners', requireAdmin, async (req, res) => {
 // "couldn't reach Icecast admin".
 router.get('/listeners/connections', requireAdmin, async (_req, res) => {
   try {
-    const connections = await getConnections();
+    // Group by IP+UA so Safari's duplicate socket is one row + one count, not
+    // two — same dedup the headline listener count uses.
+    const connections = groupConnections(await getConnections());
     res.json({ count: connections.length, connections });
   } catch (err: any) {
     res.status(502).json({ error: err.message });

@@ -1,8 +1,14 @@
 // Icecast listener-count monitor.
 //
-// Polls Icecast's status-json.xsl on an interval and caches the live listener
-// count across both broadcast mounts (/stream.mp3 + /stream.opus), so the DJ
-// gates can ask "is anyone listening?" without each one hitting Icecast.
+// Polls Icecast on an interval and caches the live listener count across both
+// broadcast mounts (/stream.mp3 + /stream.opus), so the DJ gates can ask "is
+// anyone listening?" without each one hitting Icecast.
+//
+// The count is *deduped by IP+user-agent* (see dedupeListeners): Safari opens
+// two identical connections per client, so a raw sum double-counts every Apple
+// listener. That dedup needs the per-connection admin feed (/admin/listclients);
+// the public status-json.xsl still supplies online/bitrate and the fallback sum
+// when the admin endpoint is unavailable.
 //
 // Fail-open: if Icecast is unreachable the count is null and djCallsAllowed()
 // treats the station as occupied — a stats outage must never silence the DJ.
@@ -14,6 +20,7 @@ import { config } from '../config.js';
 import * as settings from '../settings.js';
 
 let lastCount: number | null = null;        // null = unknown (not yet polled, or Icecast down)
+let peakSeen = 0;                            // running max of the deduped count this process run
 
 // Full cached stream status, refreshed by the same poll that maintains
 // lastCount. `online` is true when at least one broadcast mount has a source
@@ -38,6 +45,9 @@ const HISTORY_FILE = join(config.stateDir, 'listeners.jsonl');
 let lastPersistedMinute = -1;
 
 async function fetchCount() {
+  let online = false;
+  let bitrate: number | null = null;
+  let rawCount = 0; // un-deduped status sum — the fallback when admin is unreachable
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 1500);
@@ -50,21 +60,30 @@ async function fetchCount() {
     const broadcastSources = sources.filter((s: any) =>
       BROADCAST_MOUNTS.some(m => String(s?.listenurl || '').includes(m))
     );
-    const current: number = broadcastSources.reduce(
+    online = broadcastSources.length > 0;
+    rawCount = broadcastSources.reduce(
       (sum: number, s: any) => sum + Number(s.listeners || 0), 0);
-    lastCount = current;
     // Bitrate from the first attached mount — both share the same `radio` bus,
     // so one figure represents the broadcast. Comes free off this same poll.
     const firstBitrate = Number(broadcastSources[0]?.bitrate);
-    lastStatus = {
-      online: broadcastSources.length > 0,
-      listeners: {
-        current,
-        peak: broadcastSources.reduce(
-          (sum: number, s: any) => sum + Number(s.listener_peak || 0), 0),
-      },
-      bitrate: Number.isFinite(firstBitrate) ? firstBitrate : null,
-    };
+    bitrate = Number.isFinite(firstBitrate) ? firstBitrate : null;
+
+    // Dedupe by IP+UA off the admin per-connection feed (Safari double-counts —
+    // see dedupeListeners). Only worth a call when someone's actually attached;
+    // on any admin failure fall back to the raw status sum rather than dropping
+    // the count, so a missing admin password just degrades to the old numbers.
+    let current = rawCount;
+    if (online && rawCount > 0) {
+      try {
+        current = dedupeListeners(await getConnections());
+      } catch {
+        /* admin unreachable / no password — keep the raw status sum */
+      }
+    }
+
+    lastCount = current;
+    peakSeen = Math.max(peakSeen, current);
+    lastStatus = { online, listeners: { current, peak: peakSeen }, bitrate };
   } catch {
     lastCount = null;
     lastStatus = { online: false, listeners: { current: 0, peak: 0 }, bitrate: null };
@@ -175,6 +194,8 @@ export interface ListenerConnection {
   mount: string;
   userAgent: string;
   connectedSeconds: number;
+  /** Raw sockets folded into this row by groupConnections (Safari opens 2). */
+  connections?: number;
 }
 
 const BROADCAST_MOUNTS = ['/stream.mp3', '/stream.opus'];
@@ -234,6 +255,41 @@ function parseListClients(xml: string, mount: string): ListenerConnection[] {
     });
   }
   return out;
+}
+
+// Collapse Safari/AppleCoreMedia's duplicate connections into one listener.
+// iOS and macOS Safari open *two* identical sockets to a live Icecast mount per
+// client (a fundamental AppleCoreMedia behaviour, confirmed upstream with no
+// client-side fix — see react-native-track-player #2096), which Icecast counts
+// as two listeners. Counting distinct IP+user-agent pairs folds those back into
+// one. Two genuinely-distinct devices sharing both a public IP *and* an
+// identical UA collapse too — rare, and a better failure mode than every Apple
+// visitor doubling the tally.
+export function dedupeListeners(conns: ListenerConnection[]): number {
+  const seen = new Set<string>();
+  for (const c of conns) seen.add(`${c.ip} ${c.userAgent}`);
+  return seen.size;
+}
+
+// One row per distinct listener (IP+UA), matching the deduped count — for the
+// admin connections table, so Safari's duplicate socket shows as a single
+// listener rather than two rows. `connections` records how many raw sockets
+// folded in (Safari → 2); connectedSeconds is the longest-held of the group and
+// mount lists every mount the listener holds.
+export function groupConnections(conns: ListenerConnection[]): ListenerConnection[] {
+  const groups = new Map<string, ListenerConnection>();
+  for (const c of conns) {
+    const key = `${c.ip} ${c.userAgent}`;
+    const g = groups.get(key);
+    if (!g) {
+      groups.set(key, { ...c, connections: 1 });
+    } else {
+      g.connections = (g.connections ?? 1) + 1;
+      g.connectedSeconds = Math.max(g.connectedSeconds, c.connectedSeconds);
+      if (!g.mount.split(', ').includes(c.mount)) g.mount = `${g.mount}, ${c.mount}`;
+    }
+  }
+  return [...groups.values()];
 }
 
 // Live per-listener connections across both broadcast mounts. Returns [] when
