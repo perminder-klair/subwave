@@ -33,7 +33,10 @@ export default function Faq() {
           your own hardware is plenty. A 9B-class local model such as Qwen3.5 9B
           comfortably picks tracks and writes the DJ&rsquo;s lines, as long as you run the
           station on its <em>lean</em> settings: reasoning off, the simpler track-picker,
-          concise scripts. The full set of dials, and what to turn which way, is on the{' '}
+          concise scripts. Step up to a 12B-class model like <strong>Gemma 4 12B</strong>{' '}
+          and you can leave the richer dials on &mdash; including the full picker agent
+          &mdash; while still paying nothing per token. The full set of dials, and what to
+          turn which way, is on the{' '}
           <Link href="/manual/llm" className="bs-link">Models &amp; Tokens</Link> page.
         </p>
       </section>

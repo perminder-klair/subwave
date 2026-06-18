@@ -56,6 +56,16 @@ export default function ModelsAndTokens() {
           below let you match the station to the model: run it <em>lean</em> for a small
           or metered model, or <em>rich</em> for a large capable one.
         </p>
+        <p>
+          If you want a single recommendation, a 12B-class local model such as{' '}
+          <strong>Gemma 4 12B</strong> is the sweet spot — serve it with{' '}
+          <code>locca serve gemma4</code>, or as <code>gemma4:12b</code> on Ollama. It's
+          free and private on your own box, yet capable enough to run the station's{' '}
+          <em>richest</em> setting — the full conversational picker agent — without falling
+          over. A smaller 9B-class model still works on lean settings, and a large hosted
+          model buys you more headroom again; Gemma 4 12B is the comfortable middle that
+          most stations should reach for first.
+        </p>
       </section>
 
       <section className="bs-section">
@@ -68,10 +78,13 @@ export default function ModelsAndTokens() {
         </p>
         <p>
           With these settings in place, a small model runs the whole station
-          comfortably: a 9B-class local model such as{' '}
+          comfortably: even a 9B-class local model such as{' '}
           <strong>Qwen3.5 9B</strong> is plenty for picking tracks and writing the DJ's
           lines. The lean profile keeps each request short and well-shaped, which is
-          exactly what a smaller model needs to stay reliable.
+          exactly what a smaller model needs to stay reliable. Step up one size to a
+          12B-class model like <strong>Gemma 4 12B</strong> and you can leave more of the
+          rich dials on — including the picker agent — while still paying nothing per
+          token.
         </p>
         <ul className="bs-list">
           <li>
@@ -132,7 +145,9 @@ export default function ModelsAndTokens() {
             <strong>Picker agent on</strong> (Admin &rarr; LLM) — the full conversational
             DJ: it remembers the session, reasons about what it has already played, and
             uses tools to dig through the library. Richer and more coherent, but it leans
-            on the model being capable.
+            on the model being capable. You don't need a hosted model for it, though — a
+            tool-capable 12B-class local model like <strong>Gemma 4 12B</strong> runs the
+            agent reliably on your own hardware.
           </li>
           <li>
             <strong>Extended scripts</strong> (Admin &rarr; Personas) — a storytelling DJ

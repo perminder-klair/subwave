@@ -46,7 +46,8 @@ export default function Prerequisites() {
             <p>
               The DJ's words and track picks come from a language model. The
               homelab default is <strong>Ollama</strong> with a tool-capable model
-              (qwen3.5, qwen3.6, or gemma4 all work). Note the URL and model name.
+              (<code>gemma4:12b</code> is a great pick; qwen3.5 and qwen3.6 also work).
+              Note the URL and model name.
               Prefer a hosted model? Anthropic, OpenAI, Google, OpenRouter, and
               DeepSeek are all supported; you pick the provider and supply its key
               in the admin Settings UI after install, not during setup.{' '}

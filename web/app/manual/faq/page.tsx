@@ -19,7 +19,7 @@ const FAQ = [
   },
   {
     q: 'Does it work with a small model?',
-    a: 'Yes. The AI DJ does not need a frontier model; a modest local one is plenty. A 9B-class model such as Qwen3.5 9B comfortably picks tracks and writes the DJ’s lines when run on lean settings: reasoning off, the simpler track-picker, and concise scripts.',
+    a: 'Yes. The AI DJ does not need a frontier model; a modest local one is plenty. A 9B-class model such as Qwen3.5 9B comfortably picks tracks and writes the DJ’s lines when run on lean settings: reasoning off, the simpler track-picker, and concise scripts. A 12B-class model like Gemma 4 12B is the comfortable sweet spot — capable enough to run the full conversational picker agent on your own hardware while still costing nothing per token.',
   },
   {
     q: 'What is mood tagging?',
