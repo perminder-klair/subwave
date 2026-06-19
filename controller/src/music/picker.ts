@@ -26,6 +26,11 @@ const CAP_SIMILAR_ARTIST = 4;
 const CAP_EMBEDDING_SIMILAR = 4;
 const CAP_SONIC_SIMILAR = 4;
 const CAP_AUDIO_SIMILAR = 4;
+// When a show pins a genre/decade, its dedicated source is the dominant pool
+// contributor (soft lean) and the unrelated discovery sources shrink by this
+// factor so the genre/era actually shows up in the LLM's candidate list.
+const CAP_SHOW_GENRE = 12;
+const SHOW_NARROW_FACTOR = 0.5;
 
 // TTL cache for sources that don't change between picks. Without this, every
 // pick would re-fetch playlists, recent/frequent album lists and re-walk their
@@ -78,6 +83,51 @@ function softRankByCompat(pool: any[], current: { bpm: number | null; key: strin
     .map((s) => s.t);
 }
 
+// --- Show music-steering filters (soft lean) -------------------------------
+// A show can pin a genre, a decade (fromYear/toYear) and an energy band. None
+// of these is ever a hard filter: each prefers matching tracks but falls back
+// to the full set when matches are too thin to fill the pool, so a sparse genre
+// or an un-analysed library never starves the stream.
+
+type ShowFilter = { genre?: string; fromYear?: number | null; toYear?: number | null; energy?: string } | null;
+
+function hasMusicFilter(f: ShowFilter): boolean {
+  return !!f && (!!f.genre || f.fromYear != null || f.toYear != null);
+}
+
+// Per-track energy band — from the track itself (library sources carry it) or a
+// library lookup (Subsonic sources don't). null when un-analysed.
+function trackEnergy(t: any): string | null {
+  if (t?.energy) return t.energy;
+  const rec = t?.id ? library.get(t.id) : null;
+  return rec?.energy ?? null;
+}
+
+// Soft-prefer tracks within [fromYear, toYear]. Unknown-year tracks are treated
+// as out-of-range here, but the caller falls back to the full set when the
+// in-range slice is empty, so it never hard-drops everything.
+function inYearRange(tracks: any[], f: { fromYear?: number | null; toYear?: number | null }): any[] {
+  if (f.fromYear == null && f.toYear == null) return tracks;
+  return tracks.filter((t: any) => {
+    const y = Number(t?.year);
+    if (!Number.isFinite(y)) return false;
+    if (f.fromYear != null && y < f.fromYear) return false;
+    if (f.toYear != null && y > f.toYear) return false;
+    return true;
+  });
+}
+
+// Soft-prefer tracks matching the show's energy band; unknown-energy tracks
+// stay eligible. Falls back to the full set when no track matches.
+function preferEnergy(tracks: any[], energy?: string): any[] {
+  if (!energy) return tracks;
+  const match = tracks.filter((t: any) => {
+    const e = trackEnergy(t);
+    return e == null || e === energy;
+  });
+  return match.length ? match : tracks;
+}
+
 function notRecent(recentIds: Set<string>) {
   return (t: any) => t && t.id && !recentIds.has(t.id);
 }
@@ -100,7 +150,7 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null) {
   await library.load();
   const pool: any[] = [];
   const sources: Record<string, number> = {};
@@ -109,6 +159,10 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     pool.push(...items.map((t: any) => ({ ...t, _source: label })));
     sources[label] = (sources[label] || 0) + items.length;
   };
+  // When a show pins a genre/decade, shrink the unrelated discovery sources so
+  // the dedicated show-genre source dominates the candidate list (soft lean).
+  const narrow = hasMusicFilter(showFilter);
+  const nz = (cap: number) => (narrow ? Math.max(2, Math.ceil(cap * SHOW_NARROW_FACTOR)) : cap);
 
   // 1. Similar-songs from current track — strongest contextual signal.
   if (currentTrack?.id) {
@@ -116,7 +170,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       const similar = await subsonic.getSimilarSongs(currentTrack.id, {
         count: 20,
       });
-      add('similar', sampleWithRecentFallback(similar, recentIds, CAP_SIMILAR));
+      add('similar', sampleWithRecentFallback(similar, recentIds, nz(CAP_SIMILAR)));
     } catch {}
   }
 
@@ -129,7 +183,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   if (currentTrack?.id) {
     try {
       const knn = library.tracksLikeThis(currentTrack.id, 15);
-      add('embedding-similar', sampleWithRecentFallback(knn, recentIds, CAP_EMBEDDING_SIMILAR));
+      add('embedding-similar', sampleWithRecentFallback(knn, recentIds, nz(CAP_EMBEDDING_SIMILAR)));
     } catch {}
   }
 
@@ -143,7 +197,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     try {
       if (await subsonic.supportsSonicSimilarity()) {
         const sonic = await subsonic.getSonicSimilarTracks(currentTrack.id, { count: 20 });
-        add('sonic-similar', sampleWithRecentFallback(sonic, recentIds, CAP_SONIC_SIMILAR));
+        add('sonic-similar', sampleWithRecentFallback(sonic, recentIds, nz(CAP_SONIC_SIMILAR)));
       }
     } catch {}
   }
@@ -162,18 +216,46 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   if (audioWaypoint && audioWaypoint.length) {
     try {
       const knn = library.tracksByAudioVector(audioWaypoint, 15);
-      add('audio-journey', sampleWithRecentFallback(knn, recentIds, CAP_AUDIO_SIMILAR));
+      add('audio-journey', sampleWithRecentFallback(knn, recentIds, nz(CAP_AUDIO_SIMILAR)));
     } catch {}
   } else if (currentTrack?.id) {
     try {
       const knn = library.tracksLikeThisAudio(currentTrack.id, 15);
-      add('audio-similar', sampleWithRecentFallback(knn, recentIds, CAP_AUDIO_SIMILAR));
+      add('audio-similar', sampleWithRecentFallback(knn, recentIds, nz(CAP_AUDIO_SIMILAR)));
+    } catch {}
+  }
+
+  // 1e. Show genre / decade — the soft-dominant source when a show pins a
+  // genre or a year range. getRandomSongs takes genre + year-range natively in
+  // one call; when a genre is set we also pull the full genre-tagged set
+  // (broader than a random sample) and soft-filter it to the decade. The whole
+  // collection is then energy-preferred. Never a hard filter — see helpers.
+  if (hasMusicFilter(showFilter)) {
+    try {
+      let genreName: string | null = null;
+      if (showFilter!.genre) {
+        genreName = await subsonic.resolveGenreName(showFilter!.genre);
+      }
+      const collected: any[] = [];
+      collected.push(...await subsonic.getRandomSongs({
+        size: 40,
+        genre: genreName || undefined,
+        fromYear: showFilter!.fromYear ?? undefined,
+        toYear: showFilter!.toYear ?? undefined,
+      }));
+      if (genreName) {
+        const g = await subsonic.getSongsByGenre(genreName, { count: 60 });
+        const ranged = inYearRange(g, showFilter!);
+        collected.push(...(ranged.length ? ranged : g));
+      }
+      const leaned = preferEnergy(collected, showFilter!.energy);
+      add('show-genre', sampleWithRecentFallback(shuffle(leaned), recentIds, CAP_SHOW_GENRE));
     } catch {}
   }
 
   // 2. Mood-tagged library (LLM-built tags, may be sparse).
   if (mood) {
-    const moodHits = shuffle(library.songsByMood(mood));
+    const moodHits = shuffle(preferEnergy(library.songsByMood(mood), showFilter?.energy));
     add('mood-library', sampleWithRecentFallback(moodHits, recentIds, CAP_MOOD_LIBRARY));
   }
 
@@ -191,7 +273,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
           plTracks.push(...songs);
         } catch {}
       }
-      add('playlist', sampleWithRecentFallback(shuffle(plTracks), recentIds, CAP_PLAYLIST));
+      add('playlist', sampleWithRecentFallback(shuffle(plTracks), recentIds, nz(CAP_PLAYLIST)));
     } catch {}
   }
 
@@ -204,7 +286,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       const albums = await subsonic.getRecentlyAddedAlbums({ size: 12 });
       return tracksFromAlbums(shuffle(albums), 3, 40);
     });
-    add('recent', sampleWithRecentFallback(shuffle(recentPool), recentIds, CAP_RECENT));
+    add('recent', sampleWithRecentFallback(shuffle(recentPool), recentIds, nz(CAP_RECENT)));
   } catch {}
 
   // 5. Frequent albums — scrobble-backed favourites. Same wide-pool-then-
@@ -214,7 +296,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       const albums = await subsonic.getFrequentAlbums({ size: 12 });
       return tracksFromAlbums(shuffle(albums), 3, 40);
     });
-    add('frequent', sampleWithRecentFallback(shuffle(freqPool), recentIds, CAP_FREQUENT));
+    add('frequent', sampleWithRecentFallback(shuffle(freqPool), recentIds, nz(CAP_FREQUENT)));
   } catch {}
 
   // 6. Similar-artist top songs — adjacency through Last.fm artist graph.
@@ -244,7 +326,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       );
       add(
         'similar-artist',
-        sampleWithRecentFallback(similarArtistTracks, recentIds, CAP_SIMILAR_ARTIST),
+        sampleWithRecentFallback(similarArtistTracks, recentIds, nz(CAP_SIMILAR_ARTIST)),
       );
     } catch {}
   }
@@ -315,7 +397,13 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const recentIds = queue.recentlyPlayedIds(windows.trackHours);
   const recentArtists = queue.recentArtistsSince(windows.artistHours);
   const currentTrack = queue.current?.track || null;
-  const { candidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint);
+  // Resolve the active show once: its music-steering filters shape the pool
+  // (below) and its brief steers the LLM pick (further down).
+  const activeShow = settings.resolveActiveShow();
+  const showFilter: ShowFilter = activeShow
+    ? { genre: activeShow.genre, fromYear: activeShow.fromYear, toYear: activeShow.toYear, energy: activeShow.energy }
+    : null;
+  const { candidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter);
 
   if (candidates.length === 0) {
     queue.log('picker', 'no candidates available, skipping LLM pick');
@@ -335,9 +423,17 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   try {
     // Same show-brief plumbing as the agent picker (dj-agent.pickSystem) —
     // this is its fallback, so it must honour the brief too.
-    const activeShow = settings.resolveActiveShow();
     pickRaw = await dj.pickNextTrack({
-      show: activeShow ? { name: activeShow.name, topic: activeShow.topic } : null,
+      show: activeShow
+        ? {
+            name: activeShow.name,
+            topic: activeShow.topic,
+            genre: activeShow.genre,
+            fromYear: activeShow.fromYear,
+            toYear: activeShow.toYear,
+            energy: activeShow.energy,
+          }
+        : null,
       candidates: candidates.map(c => {
         const a = analysisFor(c);
         return {

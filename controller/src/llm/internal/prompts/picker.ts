@@ -12,13 +12,33 @@ export const PICKER_CRITERIA = `Selection criteria, in order:
 3. VARIETY — avoid the same artist back-to-back; don't repeat tracks you've already played today; rotate energy. Variety over cleverness — never pick a track because its title literally matches the time of day, the weather, or anything else literal.
 4. INTEREST — prefer something that creates a moment, not the most generic option.`;
 
-function pickerSystem(show?: { name: string; topic: string } | null) {
+export type ShowMusic = { name: string; topic: string; genre?: string; fromYear?: number | null; toYear?: number | null; energy?: string };
+
+// A show can pin a genre, decade and/or energy band as a SOFT lean on track
+// selection. Render it as one prompt line shared by both pick paths (the pool
+// picker here and the conversational agent in broadcast/dj-agent.ts). Returns
+// '' when the show pins nothing, so callers can append it unconditionally.
+export function showMusicLean(show?: ShowMusic | null): string {
+  if (!show) return '';
+  const parts: string[] = [];
+  if (show.genre) parts.push(`lean toward ${show.genre}`);
+  if (show.fromYear != null || show.toYear != null) {
+    const from = show.fromYear != null ? String(show.fromYear) : '';
+    const to = show.toYear != null ? String(show.toYear) : '';
+    parts.push(from && to ? `prefer tracks from ${from}–${to}` : `prefer tracks ${from ? `from ${from} onward` : `up to ${to}`}`);
+  }
+  if (show.energy) parts.push(`favour ${show.energy}-energy tracks`);
+  if (!parts.length) return '';
+  return `\n\nMusic steer for this show — ${parts.join('; ')}. These are preferences, not hard filters: break them only when the flow genuinely demands it.`;
+}
+
+function pickerSystem(show?: ShowMusic | null) {
   const stationName = settings.get().station;
   const showLine = show?.topic
     ? `\n\nCurrent show brief — follow this for every pick:\n${show.topic}`
     : '';
   return `You are the DJ for ${stationName}, a personal internet radio station.
-Pick the single best NEXT track from the candidate pool, given recent plays and the current context.${showLine}
+Pick the single best NEXT track from the candidate pool, given recent plays and the current context.${showLine}${showMusicLean(show)}
 
 ${PICKER_CRITERIA}
 
@@ -45,7 +65,7 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
   candidates: any[];
   recentPlays: any;
   context: any;
-  show?: { name: string; topic: string } | null;
+  show?: ShowMusic | null;
 }) {
   const user = JSON.stringify({
     now: {

@@ -19,7 +19,7 @@ export {
   generateLink,
   generateHourlyTime,
 } from './internal/prompts/scripts.js';
-export { PICKER_CRITERIA, pickNextTrack } from './internal/prompts/picker.js';
+export { PICKER_CRITERIA, pickNextTrack, showMusicLean } from './internal/prompts/picker.js';
 
 // Re-exported so routes/debug.js can read the LLM call ring buffer through the
 // same module that produces the calls.

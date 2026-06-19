@@ -59,6 +59,38 @@ interface Show {
    *  default while this show is on air". Validated against the live theme
    *  registry by the controller; a stale id silently falls back too. */
   themeId: string;
+  /** Optional music-steering filters — soft lean applied at pick time. Empty
+   *  string / null means "no constraint". Genre is free text resolved fuzzily
+   *  against the library; fromYear/toYear are a decade window; energy is one of
+   *  low|medium|high. */
+  genre: string;
+  fromYear: number | null;
+  toYear: number | null;
+  energy: string;
+}
+
+// Decade presets for the era dropdown → fromYear/toYear. 'any' clears the window.
+const DECADES: { key: string; label: string; from: number | null; to: number | null }[] = [
+  { key: 'any', label: 'Any era', from: null, to: null },
+  { key: '2020', label: '2020s', from: 2020, to: 2029 },
+  { key: '2010', label: '2010s', from: 2010, to: 2019 },
+  { key: '2000', label: '2000s', from: 2000, to: 2009 },
+  { key: '1990', label: '90s', from: 1990, to: 1999 },
+  { key: '1980', label: '80s', from: 1980, to: 1989 },
+  { key: '1970', label: '70s', from: 1970, to: 1979 },
+  { key: '1960', label: '60s', from: 1960, to: 1969 },
+  { key: '1950', label: '50s', from: 1950, to: 1959 },
+];
+const ENERGY_OPTIONS = ['low', 'medium', 'high'];
+const ANY_SENTINEL = '__any__';
+
+function decadeKeyOf(s: { fromYear: number | null; toYear: number | null }): string {
+  const hit = DECADES.find(d => d.from === s.fromYear && d.to === s.toYear);
+  return hit ? hit.key : 'any';
+}
+function decadeLabelOf(s: { fromYear: number | null; toYear: number | null }): string | null {
+  const hit = DECADES.find(d => d.from === s.fromYear && d.to === s.toYear);
+  return hit && hit.from != null ? hit.label : null;
 }
 
 // Slim view of a theme returned by GET /themes — only the bits the picker
@@ -131,11 +163,18 @@ function NowCard({ label, accent, slotHour, show, color, personaLabel }: NowCard
       </div>
       <div className="text-[11px] text-muted">
         {show
-          ? <>persona · {personaLabel} · mood · {show.mood}</>
+          ? <>persona · {personaLabel} · mood · {show.mood}{showFilterSummary(show)}</>
           : 'station runs on its own picker'}
       </div>
     </div>
   );
+}
+
+// Compact " · genre · 80s · high" suffix for the show summary lines, omitting
+// whatever the show doesn't pin.
+function showFilterSummary(s: { genre: string; fromYear: number | null; toYear: number | null; energy: string }): string {
+  const bits = [s.genre, decadeLabelOf(s), s.energy].filter(Boolean);
+  return bits.length ? ` · ${bits.join(' · ')}` : '';
 }
 
 function clientMintId() {
@@ -175,6 +214,9 @@ export default function ShowsPanel() {
   // Theme list for the per-show override dropdown. Public endpoint, no auth
   // needed — same source the player ThemeBootstrap reads.
   const [themes, setThemes] = useState<ThemeOption[]>([]);
+  // Library genres for the show genre autocomplete. Admin-gated endpoint, so it
+  // runs after sign-in; failures are silent (the field still accepts free text).
+  const [genres, setGenres] = useState<string[]>([]);
 
   // Drag-paint stroke: { active, value } — value is the showId/null painted
   // for the whole stroke, decided on mousedown so a drag doesn't flicker.
@@ -233,6 +275,10 @@ export default function ShowsPanel() {
           personaId: s.personaId ?? '',
           mood: s.mood ?? '',
           themeId: s.themeId ?? '',
+          genre: s.genre ?? '',
+          fromYear: s.fromYear ?? null,
+          toYear: s.toYear ?? null,
+          energy: s.energy ?? '',
         }));
         setForm({ shows, schedule: week });
         // Arm the first valid show as the brush so the grid is paintable at once.
@@ -260,6 +306,21 @@ export default function ShowsPanel() {
     return () => { cancelled = true; };
   }, [hydrated]);
 
+  // Fetch library genres once for the show genre autocomplete (admin-gated).
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await adminFetch('/library/genres');
+        if (!r.ok || cancelled) return;
+        const j = (await r.json()) as { genres?: { value: string }[] };
+        if (Array.isArray(j.genres)) setGenres(j.genres.map(g => g.value).filter(Boolean));
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const personas: Persona[] = data?.values?.personas || [];
   const moods: string[] = data?.tts?.moods || [];
   const colorOf = (showId: string | null | undefined): string => {
@@ -278,6 +339,7 @@ export default function ShowsPanel() {
       id: '', name: '', topic: '',
       personaId: personas[0]?.id || '', mood: moods[0] || '',
       themeId: '',
+      genre: '', fromYear: null, toYear: null, energy: '',
     });
   };
   const openEdit = (i: number) => {
@@ -289,6 +351,7 @@ export default function ShowsPanel() {
       id: s.id, name: s.name, topic: s.topic,
       personaId: s.personaId, mood: s.mood,
       themeId: s.themeId || '',
+      genre: s.genre || '', fromYear: s.fromYear ?? null, toYear: s.toYear ?? null, energy: s.energy || '',
     });
   };
   const closeModal = () => { setEditIndex(null); setDraft(null); };
@@ -299,6 +362,7 @@ export default function ShowsPanel() {
       name: draft.name.trim(), topic: draft.topic.trim(),
       personaId: draft.personaId, mood: draft.mood,
       themeId: draft.themeId || '',
+      genre: draft.genre.trim(), fromYear: draft.fromYear, toYear: draft.toYear, energy: draft.energy || '',
     };
     if (editIndex === -1) {
       const id = clientMintId();
@@ -434,6 +498,7 @@ export default function ShowsPanel() {
             id: s.id, name: s.name.trim(), topic: s.topic.trim(),
             personaId: s.personaId, mood: s.mood,
             themeId: s.themeId || '',
+            genre: s.genre.trim(), fromYear: s.fromYear, toYear: s.toYear, energy: s.energy || '',
           })),
           schedule: form.schedule,
         }),
@@ -766,6 +831,63 @@ export default function ShowsPanel() {
               </span>
             </Field>
 
+            <div className="stack-mobile grid grid-cols-[1.2fr_1fr_1fr] gap-3">
+              <Field>
+                <Label htmlFor="show-genre">genre lean</Label>
+                <Input
+                  id="show-genre"
+                  type="text" value={draft.genre} maxLength={64}
+                  list="show-genre-options"
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftField({ genre: e.target.value })}
+                  placeholder="e.g. Jazz (optional)"
+                />
+                <datalist id="show-genre-options">
+                  {genres.map(g => <option key={g} value={g} />)}
+                </datalist>
+              </Field>
+              <Field>
+                <Label>era</Label>
+                <Select
+                  value={decadeKeyOf(draft)}
+                  onValueChange={val => {
+                    const d = DECADES.find(x => x.key === val);
+                    setDraftField({ fromYear: d?.from ?? null, toYear: d?.to ?? null });
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {DECADES.map(d => <SelectItem key={d.key} value={d.key}>{d.label}</SelectItem>)}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <Label>energy</Label>
+                <Select
+                  value={draft.energy || ANY_SENTINEL}
+                  onValueChange={val => setDraftField({ energy: val === ANY_SENTINEL ? '' : val })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value={ANY_SENTINEL}>Any</SelectItem>
+                      {ENERGY_OPTIONS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </div>
+            <span className="field-hint -mt-1.5">
+              Optional soft music steer for this show — a genre, an era, an energy
+              band, or any mix. The DJ leans toward these but can break them for
+              flow; leave blank to let the topic and mood drive selection.
+            </span>
+
             <Field>
               <Label htmlFor="show-topic">topic — fed to the DJ as the show theme</Label>
               <span className="field-hint">
@@ -1001,7 +1123,7 @@ function ShowDefRow({ show: s, index: i, ok, hrs, personaLabel, onEdit, onRemove
           {s.name.trim() || 'untitled'}
         </div>
         <div className="text-[11px] text-muted">
-          persona · {personaLabel} · mood · {s.mood || '—'}
+          persona · {personaLabel} · mood · {s.mood || '—'}{showFilterSummary(s)}
         </div>
         {s.topic.trim() && (
           <div className="overflow-hidden text-[11px] text-ellipsis whitespace-nowrap text-muted italic">

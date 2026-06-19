@@ -200,9 +200,14 @@ export function pickSystem() {
   const showLine = activeShow?.topic
     ? `\n\nCurrent show brief — follow this for every pick:\n${activeShow.topic}`
     : '';
+  // The same soft genre/decade/energy lean the pool picker applies — the agent
+  // already owns songsByGenre + tracksByMood(energy) tools, so this line is
+  // enough to make it reach for them. Lives in the system prompt for the same
+  // session-window reason as the show brief above.
+  const musicLean = dj.showMusicLean(activeShow);
   return `${settings.agentPersonaPreamble(persona, { rules: false })}
 
-You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}
+You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}${musicLean}
 
 ${dj.PICKER_CRITERIA}`;
 }
