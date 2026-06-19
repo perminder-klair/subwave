@@ -153,6 +153,15 @@ interface ListenersResponse {
   error?: string;
 }
 
+interface AudienceResponse {
+  sinceMinutes?: number;
+  sessions?: number;
+  referrers?: { source: string; count: number }[];
+  countries?: { country: string; count: number }[];
+  paths?: { path: string; count: number }[];
+  error?: string;
+}
+
 // --- formatters ---------------------------------------------------------
 
 const fmtInt = (n: number | null | undefined): string =>
@@ -396,6 +405,7 @@ export default function StatsPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
   const [listeners, setListeners] = useState<ListenersResponse | null>(null);
+  const [audience, setAudience] = useState<AudienceResponse | null>(null);
   const [range, setRange] = useState('1440'); // minutes — 24h default
 
   // /stats — usage rollups, 5s.
@@ -453,6 +463,30 @@ export default function StatsPanel() {
     return () => { cancelled = true; clearInterval(id); };
   }, [paused, needsAuth, hydrated, adminFetch, range]);
 
+  // /audience — durable referral/geo rollup, 30s, soft-fail (same cadence and
+  // failure handling as /listeners).
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    const tick = async () => {
+      if (paused) return;
+      try {
+        const r = await adminFetch(`/audience?sinceMinutes=${range}`);
+        if (r.status === 401) {
+          if (!cancelled) setAudience(null);
+          return;
+        }
+        const j = (await r.json()) as AudienceResponse;
+        if (!cancelled && r.ok) setAudience(j);
+      } catch {
+        /* leave last reading in place */
+      }
+    };
+    tick();
+    const id = setInterval(tick, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [paused, needsAuth, hydrated, adminFetch, range]);
+
   const llm = data?.llm;
   const tts = data?.tts;
   const djLog = data?.djLog;
@@ -466,6 +500,11 @@ export default function StatsPanel() {
   const lMin = counts.length ? Math.min(...counts) : null;
   const lAvg = counts.length ? counts.reduce((a, b) => a + b, 0) / counts.length : null;
   const rangeLabel = range === '10080' ? '7d' : '24h';
+
+  // Audience-source rollup (referrers / countries / distinct sessions).
+  const audSessions = audience?.sessions ?? null;
+  const audReferrers = audience?.referrers ?? [];
+  const audCountries = audience?.countries ?? [];
 
   return (
     <div className="grid gap-4">
@@ -510,6 +549,54 @@ export default function StatsPanel() {
             )}
           </div>
         </div>
+      </Card>
+
+      {/* ── AUDIENCE SOURCES ─────────────────────────────────────────────── */}
+      <Card
+        title="Audience sources"
+        sub={`where listeners came from · last ${rangeLabel}`}
+      >
+        {audience == null ? (
+          <span className="field-hint italic">loading…</span>
+        ) : (audSessions ?? 0) === 0 ? (
+          <span className="field-hint italic">
+            no sessions recorded yet — sources appear as listeners arrive
+          </span>
+        ) : (
+          <div className="grid gap-0">
+            <MetricStrip>
+              <StatCell label="Sessions" value={fmtInt(audSessions)} accent
+                sub={`distinct, last ${rangeLabel}`} />
+              <StatCell label="Sources" value={fmtInt(audReferrers.length)} />
+              <StatCell label="Countries" value={fmtInt(audCountries.length)} last />
+            </MetricStrip>
+
+            <div className="stack-mobile grid grid-cols-[1fr_1fr] gap-0">
+              <div className="border-r border-separator-soft p-3.5">
+                <div className="caption mb-2">top referrers</div>
+                {audReferrers.length ? (
+                  <BarList
+                    rows={audReferrers.map(r => ({ label: r.source, count: r.count }))}
+                    max={audReferrers[0]?.count || 1}
+                  />
+                ) : (
+                  <span className="field-hint italic">none</span>
+                )}
+              </div>
+              <div className="p-3.5">
+                <div className="caption mb-2">top countries</div>
+                {audCountries.length ? (
+                  <BarList
+                    rows={audCountries.map(c => ({ label: c.country, count: c.count }))}
+                    max={audCountries[0]?.count || 1}
+                  />
+                ) : (
+                  <span className="field-hint italic">none</span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </Card>
 
       {!data && !err && (

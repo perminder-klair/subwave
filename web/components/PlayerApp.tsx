@@ -71,6 +71,33 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
     if (offline && tunedIn) stop();
   }, [offline, tunedIn, stop]);
 
+  // One-shot audience beacon: hand the controller the external referrer + any
+  // UTM tag on first load. The referrer is browser-only knowledge — by the time
+  // the API polls run, it's same-origin — so we report document.referrer here.
+  // Guarded by a per-tab sessionStorage flag so refreshes/remounts don't double
+  // count; the controller also dedupes by IP. Best-effort, never blocks.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (sessionStorage.getItem('sw_beacon')) return;
+      sessionStorage.setItem('sw_beacon', '1');
+    } catch {
+      /* private mode: no storage — proceed, the server dedupes by IP */
+    }
+    const q = new URLSearchParams(window.location.search);
+    const utmSource = q.get('utm_source') || q.get('ref') || q.get('source') || undefined;
+    fetch(`${apiUrl}/beacon`, {
+      method: 'POST',
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        referrer: document.referrer || '',
+        path: window.location.pathname,
+        utmSource,
+      }),
+    }).catch(() => {});
+  }, [apiUrl]);
+
   // Persona avatar to surface on the OS lock screen while the DJ is talking.
   // Prefer the on-air show's persona (a scheduled show can hand the hour to a
   // different DJ); fall back to the global "active" persona from /now-playing.
