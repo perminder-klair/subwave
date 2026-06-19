@@ -516,12 +516,22 @@ async function resolveRequest(entry) {
 
   queue.log('request', `resolved via ${pickSource}: ${pick.title} — ${pick.artist}`);
 
-  // 3. Generate DJ intro that mentions the request
+  // On an artist miss the up-front `ack` (written by matchRequest before the
+  // cascade knew it would miss) is a lie — "Got some Katy Perry coming up!"
+  // over a Daft Punk track. Replace it with an honest stand-in line.
+  const ack = entry.artistMiss
+    ? `No ${entry.artistMiss} in the crates — here's something that fits the moment instead.`
+    : matched.ack;
+
+  // 3. Generate DJ intro that mentions the request. On a miss, pass the
+  // requested-but-absent artist so the spoken intro owns the substitution
+  // instead of pretending the track is by them.
   const introScript = await dj.generateIntro({
     track: pick,
     context: ctx,
     requestedBy: requester,
     requestText: text,
+    artistMiss: entry.artistMiss || null,
     recap: queue.getDjRecap(),
     recentTracks: queue.getRecentTracks(),
     recentOpeners: queue.getRecentOpeners(),
@@ -537,7 +547,7 @@ async function resolveRequest(entry) {
   });
   session.appendTurn({
     role: 'dj', kind: 'request',
-    text: introScript || matched.ack || `Queued "${pick.title}".`,
+    text: introScript || ack || `Queued "${pick.title}".`,
     meta: { trackId: pick.id, requester },
   });
 
@@ -545,7 +555,7 @@ async function resolveRequest(entry) {
   entry.pickSource = pickSource;
   entry.introScript = introScript || null;
   return resolved({
-    ack: matched.ack,
+    ack,
     track: { title: pick.title, artist: pick.artist },
     queuePosition: queue.upcoming.length,
   });

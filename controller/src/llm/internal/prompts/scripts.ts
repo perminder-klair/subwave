@@ -9,7 +9,7 @@ import { djSystem, lengthPhrase } from './system.js';
 import { buildContextLines, decoratePrompt, randomSeed } from './context.js';
 import { introBudgetPhrase, introMsFor, bpmKeyFor } from './intro-budget.js';
 
-export async function generateIntro({ track, context, requestedBy = null, requestText = null, recap = null, recentTracks = null, recentOpeners = null }: any) {
+export async function generateIntro({ track, context, requestedBy = null, requestText = null, artistMiss = null, recap = null, recentTracks = null, recentOpeners = null }: any) {
   const ctxLines = buildContextLines(context, { recentTracks });
   if (requestedBy) ctxLines.push(`Requested by: ${requestedBy}`);
   if (requestText) {
@@ -17,13 +17,23 @@ export async function generateIntro({ track, context, requestedBy = null, reques
     const clipped = String(requestText).replace(/\s+/g, ' ').trim().slice(0, 200);
     if (clipped) ctxLines.push(`Listener asked: "${clipped}"`);
   }
+  // Substitution: the listener named an artist we don't have, so the cascade
+  // fell through to filler. Flag it so the intro stays HONEST instead of
+  // pretending the track is by the requested artist (issue: "asked for Katy
+  // Perry, got Daft Punk, intro still said Katy Perry").
+  if (artistMiss) {
+    ctxLines.push(`IMPORTANT: We do NOT have "${artistMiss}" in the library. The track coming up is NOT by them — it's a fitting substitute for the moment. Do not imply or claim the track is by "${artistMiss}".`);
+  }
   ctxLines.push(`Coming up: "${track.title}" by ${track.artist}${track.album ? ` from ${track.album}` : ''}${track.year ? ` (${track.year})` : ''}`);
 
   // Talk-within-the-intro (A.3 phase 1): when the track's intro runway is
   // known, budget the line to land before the vocals. Advisory + additive —
   // empty for un-analysed tracks, so behaviour is unchanged there.
   const budget = introBudgetPhrase(introMsFor(track));
-  const prompt = `Write an intro for this track. ${lengthPhrase('intro')}${budget ? ' ' + budget : ''} If the listener said something specific, acknowledge their words naturally — don't quote them verbatim, but weave the gist in. Never read the request out loud as-is.\n\n${ctxLines.join('\n')}`;
+  const missClause = artistMiss
+    ? ` The listener asked for "${artistMiss}", but we don't have them — briefly own that ("no ${artistMiss} in the crates", or similar), then introduce what's actually coming up as a worthy stand-in. Never pretend the track is by "${artistMiss}".`
+    : '';
+  const prompt = `Write an intro for this track. ${lengthPhrase('intro')}${budget ? ' ' + budget : ''} If the listener said something specific, acknowledge their words naturally — don't quote them verbatim, but weave the gist in. Never read the request out loud as-is.${missClause}\n\n${ctxLines.join('\n')}`;
 
   return djText({
     system: djSystem(),
