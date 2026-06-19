@@ -253,6 +253,32 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle, play
 - **[`SECURITY.md`](SECURITY.md):** reporting security issues.
 - **[`mcp-subwave/README.md`](mcp-subwave/README.md):** the MCP server.
 
+## Music licensing
+
+SUB/WAVE is playback and automation software. It does **not** grant you any
+rights to the music you broadcast through it, and it ships with no licensed
+content.
+
+Owning a file — a purchased download, a CD you ripped, anything in your
+Navidrome library — covers your own private listening. It does **not** cover
+**public performance**. The moment SUB/WAVE streams to anyone but you, you are
+publicly performing copyrighted works, which in most countries requires
+licences for *two* separate rights:
+
+- the **musical composition** (songwriting) — e.g. PRS for Music (UK),
+  ASCAP / BMI / SESAC (US);
+- the **sound recording** (the master) — e.g. PPL (UK), SoundExchange (US,
+  under the statutory webcasting licence and its DMCA §114 conditions).
+
+You are the broadcaster and you are solely responsible for clearing those
+rights. If you don't want to obtain licences, run the station privately (don't
+expose the stream publicly), or broadcast only content you're cleared to use —
+music you created or own the rights to, Creative-Commons-licensed tracks,
+royalty-free libraries, or public-domain recordings.
+
+This is general information, not legal advice. If you run a public station,
+talk to a media/IP lawyer in your jurisdiction.
+
 ## License
 
 [MIT](LICENSE).

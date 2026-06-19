@@ -126,6 +126,16 @@ export function NavidromeStep({ w }: { w: WizardController }) {
           </button>
           <TestPill result={w.data.navidromeTest} />
         </div>
+        <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+          <strong>Music licensing:</strong> owning these files covers your own
+          private listening, not <em>public</em> broadcast. If anyone but you
+          can hear the stream, you&apos;re publicly performing copyrighted works
+          and need the relevant licences (PRS&nbsp;+&nbsp;PPL in the UK,
+          ASCAP/BMI&nbsp;+&nbsp;SoundExchange in the US) — or broadcast only
+          content you&apos;re cleared to use (your own, Creative Commons,
+          royalty-free, public domain). You are the broadcaster and are
+          responsible for clearing these rights. Not legal advice.
+        </div>
       </div>
     </div>
   );
