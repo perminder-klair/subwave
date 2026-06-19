@@ -19,6 +19,8 @@ const REPO = 'https://github.com/perminder-klair/subwave';
 // non-collaborators to fork the repo (discussion #296), so we route through an
 // issue instead: anyone with a GitHub account can submit in one click.
 const SUBMIT_URL = `${REPO}/issues/new?template=add-station.yml`;
+// Report / takedown for a listed station — opens the report-station issue form.
+const REPORT_URL = `${REPO}/issues/new?template=report-station.yml`;
 
 export default function StationsIndex() {
   const stations = getAllStations();
@@ -77,6 +79,14 @@ export default function StationsIndex() {
           No stations on the directory yet. Be the first to add yours above.
         </p>
       )}
+
+      <p className="bs-stations-report">
+        Stations are run by their operators, not by SUB/WAVE.{' '}
+        <AnimatedLink href={REPORT_URL} className="bs-link">
+          Report a station or request a takedown
+        </AnimatedLink>
+        .
+      </p>
     </article>
   );
 }

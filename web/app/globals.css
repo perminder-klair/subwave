@@ -3861,6 +3861,11 @@ body::after {
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: clamp(24px, 3vw, 44px);
 }
+.bs-stations-report {
+    margin: clamp(32px, 5vw, 56px) 0 0;
+    font-size: 13px;
+    color: var(--muted);
+}
 .bs-station-card {
     display: flex;
     flex-direction: column;
