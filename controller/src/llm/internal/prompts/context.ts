@@ -14,7 +14,7 @@ export const ANGLES = {
     'Skip the introduction entirely and start mid-thought, as if continuing a conversation.',
     'React to the request itself — what kind of request it is, what mood it suggests — before mentioning the track.',
     'Use a short personal observation about the moment (Tuesday energy, the rain holding off, etc.) as the doorway.',
-    'Lean into contrast: how this track sits against what came before, or against the time of day.',
+    'Lean into contrast: how this track sits against the time of day, the weather, or the mood of the moment.',
     'Just say one true sentence and let the music start.',
   ],
   link: [

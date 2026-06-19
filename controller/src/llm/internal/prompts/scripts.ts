@@ -33,7 +33,7 @@ export async function generateIntro({ track, context, requestedBy = null, reques
   const missClause = artistMiss
     ? ` The listener asked for "${artistMiss}", but we don't have them — briefly own that ("no ${artistMiss} in the crates", or similar), then introduce what's actually coming up as a worthy stand-in. Never pretend the track is by "${artistMiss}".`
     : '';
-  const prompt = `Write an intro for this track. ${lengthPhrase('intro')}${budget ? ' ' + budget : ''} If the listener said something specific, acknowledge their words naturally — don't quote them verbatim, but weave the gist in. Never read the request out loud as-is.${missClause}\n\n${ctxLines.join('\n')}`;
+  const prompt = `Write an intro for this track. ${lengthPhrase('intro')}${budget ? ' ' + budget : ''} If the listener said something specific, acknowledge their words naturally — don't quote them verbatim, but weave the gist in. Never read the request out loud as-is. This is a listener request — keep the focus on what they asked for and the track coming up; don't back-announce or talk about the track that was just playing.${missClause}\n\n${ctxLines.join('\n')}`;
 
   return djText({
     system: djSystem(),
