@@ -652,8 +652,13 @@ function normalizeTts(raw: any) {
   }
   // Piper voices are `.onnx` filenames in the shared voice folder (issue #230).
   // Empty is legitimate ("use the baked-in default voice"); invalid filenames
-  // reset to empty rather than being rewritten to a Kokoro id.
-  if (engine === 'piper' && voice && !PIPER_VOICE_RE.test(voice)) voice = '';
+  // reset to empty. A Kokoro-shaped id is preserved, not wiped: the seed roster
+  // carries one per persona under piper so switching to Kokoro yields distinct
+  // voices without re-editing, and resolvePiperVoice() falls back gracefully for
+  // it at render time. Wiping it here would silently break that on first reload
+  // after a save (issue #454).
+  if (engine === 'piper' && voice && !PIPER_VOICE_RE.test(voice) && !KOKORO_VOICE_RE.test(voice))
+    voice = '';
   // openai-compatible voices are server-specific (often arbitrary cloning ref
   // names) — no canonical default; leave empty so generateSpeech omits the
   // field and the server picks its own.
@@ -1203,8 +1208,13 @@ function validateTtsBlock(raw, where) {
   } else {
     // piper: empty = use the baked-in default voice. Otherwise the value must
     // be an .onnx filename (no path separators) referencing a model the operator
-    // dropped into the shared voice folder (issue #230).
-    if (voice && !PIPER_VOICE_RE.test(voice)) {
+    // dropped into the shared voice folder (issue #230). A Kokoro-shaped id is
+    // also accepted: the seed roster carries a distinct Kokoro voice per persona
+    // under the piper engine so switching to Kokoro yields different-sounding
+    // DJs with no extra editing (see SEED_PERSONAS). resolvePiperVoice() falls
+    // back to the default for it at render time, so it is harmless under piper
+    // and must not block saving the shipped roster (issue #454).
+    if (voice && !PIPER_VOICE_RE.test(voice) && !KOKORO_VOICE_RE.test(voice)) {
       throw new Error(
         `${where}.tts.voice for piper must be an .onnx filename (no path), or empty for the default voice`,
       );
