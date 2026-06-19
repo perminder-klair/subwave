@@ -148,6 +148,37 @@ any inbound ports. Same end result, no firewall fiddling.
 The Caddyfile already trusts Cloudflare's IP ranges so `X-Forwarded-For`
 gives you real listener IPs in logs.
 
+### Make the station private (Cloudflare Access)
+
+SUB/WAVE has no built-in listener password — the player, stream, and API are
+all public by default. The simplest way to lock a station down is **Cloudflare
+Access** (Zero Trust), which gates the whole hostname at the edge with **zero
+code**. A private station is also the cleanest way to stay clear of
+public-performance licensing (see the README "Music licensing" section).
+
+1. Cloudflare dashboard → **Zero Trust → Access → Applications → Add a
+   self-hosted application**.
+2. Application domain: `subwave.<your-domain>` (cover all paths — this protects
+   `/`, `/stream.mp3`, and `/api/*` in one policy).
+3. Add a policy: **Allow** by emails (one-time PIN), a Google/GitHub identity
+   provider, or a shared **service token**.
+
+Notes:
+
+- **Browser listeners** authenticate once via Cloudflare's login page; a
+  session cookie then rides along to the `<audio>` stream request. No SUB/WAVE
+  change needed.
+- **Native apps / hardware radios** can't do the interactive login. Issue a
+  **service token** and send `CF-Access-Client-Id` / `CF-Access-Client-Secret`
+  headers (the native player passes them via the track-player `headers`
+  option). Pure-URL devices (Sonos, car receivers) can't authenticate — keep
+  one bypass path or accept they won't connect on a locked station.
+- This sits in front of the origin, so it composes with the firewall / Tunnel
+  setup above — no ports change.
+
+For a self-hosted alternative (no Cloudflare), put the stack behind a VPN such
+as Tailscale and don't expose `:80` publicly.
+
 ## 7. Updates
 
 ```bash

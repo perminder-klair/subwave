@@ -271,10 +271,11 @@ licences for *two* separate rights:
   under the statutory webcasting licence and its DMCA §114 conditions).
 
 You are the broadcaster and you are solely responsible for clearing those
-rights. If you don't want to obtain licences, run the station privately (don't
-expose the stream publicly), or broadcast only content you're cleared to use —
-music you created or own the rights to, Creative-Commons-licensed tracks,
-royalty-free libraries, or public-domain recordings.
+rights. If you don't want to obtain licences, run the station privately (see
+[DEPLOY.md → Make the station private](DEPLOY.md#make-the-station-private-cloudflare-access)),
+or broadcast only content you're cleared to use — music you created or own the
+rights to, Creative-Commons-licensed tracks, royalty-free libraries, or
+public-domain recordings.
 
 This is general information, not legal advice. If you run a public station,
 talk to a media/IP lawyer in your jurisdiction.
