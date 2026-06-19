@@ -23,6 +23,30 @@ export const router = express.Router();
 
 const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
 
+// Neutralize prompt-injection markup in listener-supplied request text before
+// it's stored, logged, displayed, or fed to the LLM. A song request is short
+// natural language ("play Diljit latest", "rainy day vibes") — it never legibly
+// contains instruction-shaped markup, so stripping it can't hurt a real request
+// but defangs attempts to smuggle directives to the DJ agent (the raw text is
+// posted verbatim as a session turn and aired as free-text patter). This is a
+// belt — the prompt framing still treats the text as data — not the only layer.
+function sanitizeRequestText(raw: string): string {
+  return String(raw ?? '')
+    // chat/template role + instruction tokens (Llama/Mistral/ChatML style)
+    .replace(/\[\/?INST\]|<<\/?SYS>>|<\|[^|>]*\|>/gi, ' ')
+    // any HTML/XML-ish tag, e.g. <project_instructions> … </project_instructions>
+    .replace(/<\/?[a-z][^>]*>/gi, ' ')
+    // leading role markers that fake a new turn ("system:", "assistant:")
+    .replace(/^[ \t]*(system|assistant|developer)\s*:/gim, ' ')
+    // the unambiguous "ignore/disregard the previous instructions" family
+    .replace(/\b(ignore|disregard|forget|override)\b[^.!?\n]*\b(previous|prior|above|earlier|all)\b[^.!?\n]*\binstructions?\b/gi, ' ')
+    // double quotes would let the text break out of the "${text}" framing
+    .replace(/"/g, "'")
+    // collapse the multi-line "instruction block" shape into one line
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 // ---------------------------------------------------------------------------
 // In-memory request ledger. Each POST /request mints an entry; the background
 // resolver mutates it; GET /request/:id reads it. Ephemeral by design — a
@@ -550,7 +574,7 @@ router.post('/request', async (req, res) => {
 
   const rawText = typeof req.body?.text === 'string' ? req.body.text : '';
   const rawName = typeof req.body?.name === 'string' ? req.body.name : '';
-  const text = rawText.trim().slice(0, REQUEST_TEXT_MAX);
+  const text = sanitizeRequestText(rawText).slice(0, REQUEST_TEXT_MAX);
   if (!text) {
     return res.status(400).json({ error: 'Empty request' });
   }
