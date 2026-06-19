@@ -2,11 +2,13 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
+import { Coins } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { fmtTime } from '@/lib/format';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import { useElapsed } from '@/hooks/useElapsed';
 import DjThinkingLine from './DjThinkingLine';
+import CountUp from './CountUp';
 import { Ripple } from './ui/ripple';
 import { isDjTurn } from '@/lib/sessionFeed';
 import { useStationOrigin } from '@/lib/stationOrigin';
@@ -39,13 +41,15 @@ export interface CenterStageProps {
   nowPlaying: NowPlayingTrack | null;
   /** Epoch ms when the current track started (from useStationFeed). */
   trackStartedAt: number | null;
+  /** Cumulative since-boot LLM token total, or null before the first poll. */
+  llmTokens: number | null;
   feed: SessionTurn[];
   djLineOn: boolean;
   onOpenBooth: () => void;
   onOpenTimeline: () => void;
 }
 
-export default memo(function CenterStage({ nowPlaying, trackStartedAt, feed, djLineOn, onOpenBooth, onOpenTimeline }: CenterStageProps) {
+export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens, feed, djLineOn, onOpenBooth, onOpenTimeline }: CenterStageProps) {
   const { apiUrl } = useStationOrigin();
   // The 1s elapsed tick lives here, in the component that displays it, so it
   // only re-renders this subtree — not the whole player (see useElapsed).
@@ -150,6 +154,19 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, feed, djL
         <div className="min-w-0">
           <div className="v3-caption mb-[14px] text-muted">
             Now playing{has && duration ? ` — ${fmtTime(elapsed)} / ${fmtTime(duration)}` : has ? ` — ${fmtTime(elapsed)}` : ''}
+            {llmTokens != null && (
+              <>
+                {' · '}
+                <span
+                  className="inline-flex items-center gap-1 align-middle text-muted"
+                  title="LLM tokens generated since the station booted"
+                  aria-label={`${llmTokens.toLocaleString('en-US')} AI tokens generated`}
+                >
+                  <Coins size={12} strokeWidth={1.75} aria-hidden="true" />
+                  <CountUp value={llmTokens} className="v3-tab-num" />
+                </span>
+              </>
+            )}
           </div>
           <AnimatePresence mode="popLayout" initial={false}>
             <m.div

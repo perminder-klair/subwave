@@ -12,9 +12,20 @@ import { logEvent, cap } from '../../../observability/events.js';
 const MAX_CALLS = 120;
 export const recentCalls: any[] = [];
 
+// Monotonic, since-boot sum of tokens reported by successful calls. Unlike the
+// ring buffer above (a rolling window of the last MAX_CALLS calls), this only
+// ever climbs — it backs the listener-facing token ticker on the player. Reset
+// to 0 on restart by design, like every other in-memory stat (see stats.ts).
+let lifetimeTokens = 0;
+export function lifetimeTokenCount() {
+  return lifetimeTokens;
+}
+
 export function record(call: any) {
   recentCalls.unshift(call);
   if (recentCalls.length > MAX_CALLS) recentCalls.length = MAX_CALLS;
+  // Mirror summarizeLlm: only successful calls that report usage contribute.
+  if (call.ok && call.usage?.total) lifetimeTokens += call.usage.total;
 
   // Durable, trace-correlated event. The ring buffer above is lost on restart
   // and uncorrelated; this lands on the unified events.jsonl timeline.

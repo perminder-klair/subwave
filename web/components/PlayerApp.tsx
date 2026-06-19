@@ -48,7 +48,7 @@ export interface PlayerAppProps {
 
 export default function PlayerApp({ contained = false }: PlayerAppProps) {
   const { apiUrl } = useStationOrigin();
-  const { nowPlaying, context, dj, activeShow, listeners, streamOnline, state, session, trackStartedAt, timezone } = useStationFeed();
+  const { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, timezone } = useStationFeed();
   const boothFeed = session.messages;
   const { audioRef, tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted, idleStopped } = usePlayer();
 
@@ -285,6 +285,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
       <CenterStage
         nowPlaying={nowPlaying}
         trackStartedAt={trackStartedAt}
+        llmTokens={llmTokens}
         feed={boothFeed}
         djLineOn={tickerOn}
         onOpenBooth={openBooth}

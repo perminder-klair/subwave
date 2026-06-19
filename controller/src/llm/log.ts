@@ -2,4 +2,4 @@
 // in internal/telemetry/log.ts. Barrel so call sites keep importing from
 // `llm/log.js` unchanged.
 
-export { recentCalls, record, recordPick } from './internal/telemetry/log.js';
+export { recentCalls, record, recordPick, lifetimeTokenCount } from './internal/telemetry/log.js';

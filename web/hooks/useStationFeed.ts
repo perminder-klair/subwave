@@ -22,6 +22,8 @@ export interface StationFeed {
   listeners: ListenerCount | number | null;
   /** null until the first poll resolves — distinguishes "not yet known" from "offline". */
   streamOnline: boolean | null;
+  /** Cumulative since-boot LLM token total, or null before the first poll. */
+  llmTokens: number | null;
   state: StationState;
   session: SessionPayload;
   /** Epoch ms when the current track was first seen, null before the first
@@ -56,6 +58,7 @@ export function useStationFeed(): StationFeed {
   const [activeShow, setActiveShow] = useState<ActiveShow | null>(null);
   const [listeners, setListeners] = useState<ListenerCount | number | null>(null);
   const [streamOnline, setStreamOnline] = useState<boolean | null>(null);
+  const [llmTokens, setLlmTokens] = useState<number | null>(null);
   const [state, setState] = useState<StationState>(EMPTY_STATE);
   const [session, setSession] = useState<SessionPayload>(EMPTY_SESSION);
   const [trackStartedAt, setTrackStartedAt] = useState<number | null>(null);
@@ -82,6 +85,7 @@ export function useStationFeed(): StationFeed {
         setIfChanged(setActiveShow, npRes.activeShow ?? npRes.context?.activeShow ?? null);
         if (npRes.listeners != null) setIfChanged<ListenerCount | number | null>(setListeners, npRes.listeners);
         if (typeof npRes.streamOnline === 'boolean') setStreamOnline(npRes.streamOnline);
+        if (typeof npRes.llmTokens === 'number') setIfChanged<number | null>(setLlmTokens, npRes.llmTokens);
         if (typeof npRes.timezone === 'string' && npRes.timezone) setTimezone(npRes.timezone);
         setIfChanged(setState, stRes);
         if (seRes && Array.isArray(seRes.messages)) setIfChanged(setSession, seRes);
@@ -90,5 +94,5 @@ export function useStationFeed(): StationFeed {
     return pollWhileVisible(() => { void tick(); }, 5000);
   }, [apiUrl]);
 
-  return { nowPlaying, context, dj, activeShow, listeners, streamOnline, state, session, trackStartedAt, timezone };
+  return { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, timezone };
 }

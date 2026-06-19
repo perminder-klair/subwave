@@ -14,6 +14,7 @@ import { getStreamStatus } from '../broadcast/listeners.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
 import { getStationTimezone } from '../time.js';
 import { listThemes, DEFAULT_THEME_ID } from '../themes.js';
+import { lifetimeTokenCount } from '../llm/log.js';
 
 export const router = express.Router();
 
@@ -193,6 +194,10 @@ router.get('/now-playing', async (req, res) => {
       listeners: stream.listeners,
       streamOnline: stream.online,
       streamBitrate: stream.bitrate,
+      // Cumulative since-boot LLM token total — drives the listener-facing
+      // token ticker next to the now-playing time. Aggregate integer only; no
+      // model/cost breakdown (that stays on the admin-gated /stats surface).
+      llmTokens: lifetimeTokenCount(),
       // The station's IANA zone. The DJ speaks the time in this zone (time.ts),
       // so on-air log timestamps in the UI must be rendered in it too — else an
       // operator/listener viewing from another zone sees stamps that disagree
