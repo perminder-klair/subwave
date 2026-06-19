@@ -691,4 +691,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version` and by the TUI release fetch URL).
-export const CLI_VERSION = `0.21.0`; // x-release-please-version
+export const CLI_VERSION = `0.23.0`; // x-release-please-version

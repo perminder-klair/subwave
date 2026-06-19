@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.23.0](https://github.com/perminder-klair/subwave/compare/v0.22.0...v0.23.0) (2026-06-19)
+
+
+### Features
+
+* **player:** show cumulative LLM token count by the now-playing time ([#449](https://github.com/perminder-klair/subwave/issues/449)) ([b222b79](https://github.com/perminder-klair/subwave/commit/b222b7998a5c97944ebabc376af84e76475d458a))
+
+
+### Bug Fixes
+
+* **library:** show real tag status in Recently-added & Search tabs ([#448](https://github.com/perminder-klair/subwave/issues/448)) ([a9b313b](https://github.com/perminder-klair/subwave/commit/a9b313b5cba86b96d56e12089e7cc05e9bb42402))
+* **listeners:** count distinct listeners behind a reverse proxy ([#445](https://github.com/perminder-klair/subwave/issues/445)) ([a16f641](https://github.com/perminder-klair/subwave/commit/a16f641c026d773112b8ca23cf04e9274432a1cf))
+* **requests:** sanitize listener request text against prompt injection ([#446](https://github.com/perminder-klair/subwave/issues/446)) ([6a57792](https://github.com/perminder-klair/subwave/commit/6a577923f4e3286ceb2063d0cc8ddacdb958fb76))
+
+## [0.22.0](https://github.com/perminder-klair/subwave/compare/v0.21.0...v0.22.0) (2026-06-18)
+
+
+### Features
+
+* **stations:** add 2618 Home Radio to the directory ([#435](https://github.com/perminder-klair/subwave/issues/435)) ([753a13e](https://github.com/perminder-klair/subwave/commit/753a13e4530fea721bd323e6ef5a79a6709a2b3a))
+* **stations:** add Millennial FM ([#416](https://github.com/perminder-klair/subwave/issues/416)) ([17b9c49](https://github.com/perminder-klair/subwave/commit/17b9c4996e4b1df39cb54ce4d658725bcb4c79e7))
+
+
+### Bug Fixes
+
+* **admin:** make "Custom voice id…" selectable for cloud TTS voices ([#437](https://github.com/perminder-klair/subwave/issues/437)) ([a9618c1](https://github.com/perminder-klair/subwave/commit/a9618c150f8d8b0e7444609b0c81e6e8df324d89))
+* **listeners:** dedupe Safari's double Icecast connection in counts + admin table ([#434](https://github.com/perminder-klair/subwave/issues/434)) ([24e0d49](https://github.com/perminder-klair/subwave/commit/24e0d494f2f74aa26b87ea7aa53592103ab0f075))
+* **llm:** fail over on quota/usage-limit/auth errors, not just host-down ([#438](https://github.com/perminder-klair/subwave/issues/438)) ([#440](https://github.com/perminder-klair/subwave/issues/440)) ([beb4e95](https://github.com/perminder-klair/subwave/commit/beb4e95ddf3dea183f3a1f391d73f8cfe76a9070))
+* **stations:** plot 2618 Home Radio + correct Millennial FM pin ([#436](https://github.com/perminder-klair/subwave/issues/436)) ([79afa90](https://github.com/perminder-klair/subwave/commit/79afa90accdb7c7609dcf11b04a0895ee62cae3a))
+
+
+### Documentation
+
+* **manual:** document locca + embeddings, link admin sections to the manual ([#433](https://github.com/perminder-klair/subwave/issues/433)) ([1fbc368](https://github.com/perminder-klair/subwave/commit/1fbc3683d843ebe8507e888e289d8cffa93771d9))
+* **manual:** recommend Gemma 4 12B as the local sweet spot ([#439](https://github.com/perminder-klair/subwave/issues/439)) ([6ee69dd](https://github.com/perminder-klair/subwave/commit/6ee69dde0d498aa837de9f1b25a4a95ce2a0a2c9))
+
 ## [0.21.0](https://github.com/perminder-klair/subwave/compare/v0.20.0...v0.21.0) (2026-06-18)
 
 

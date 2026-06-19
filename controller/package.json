@@ -1,6 +1,6 @@
 {
   "name": "sub-wave-controller",
-  "version": "0.21.0",
+  "version": "0.23.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
