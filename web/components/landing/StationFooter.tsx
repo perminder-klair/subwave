@@ -50,6 +50,10 @@ export default function StationFooter({ djName }: { djName?: string }) {
         <AnimatedLink href="/privacy" className="font-semibold tracking-[inherit] text-ink hover:text-vermilion">
           privacy
         </AnimatedLink>{' '}
+        ·{' '}
+        <AnimatedLink href="/terms" className="font-semibold tracking-[inherit] text-ink hover:text-vermilion">
+          terms
+        </AnimatedLink>{' '}
         —
       </div>
       <div className="pb-[6px] text-center text-[10px] tracking-[0.3em] text-balance text-muted uppercase">
