@@ -86,6 +86,25 @@ body:
       placeholder: Late-night ambient for people who keep odd hours.
     validations:
       required: false
+  - type: markdown
+    attributes:
+      value: |
+        ### Listing terms
+
+        By listing a station you agree:
+
+        - You're responsible for any licensing or permissions needed for whatever
+          your station streams.
+        - You either hold the necessary rights/licence, or you're streaming music
+          that's cleared for it (your own, Creative Commons, royalty-free, or public
+          domain).
+        - SUB/WAVE provides the software and the directory listing only. It grants no
+          music rights and is not the broadcaster of your station.
+        - Your station may be removed from the directory on a valid complaint or at
+          the maintainer's discretion.
+        - You'll handle any rights complaints directed at your station.
+
+        This isn't legal advice.
   - type: checkboxes
     id: confirm
     attributes:
@@ -94,4 +113,6 @@ body:
         - label: My station URL is public and reachable (visiting it loads the player).
           required: true
         - label: I understand a pull request will be opened from this issue and a maintainer will review it.
+          required: true
+        - label: I agree to the listing terms above — licensing for what my station streams is my responsibility.
           required: true

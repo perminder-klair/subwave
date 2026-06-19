@@ -1,0 +1,69 @@
+name: 🚩 Report a station / takedown request
+description: Report a listed station for a rights complaint, unlawful content, or because it's offline. Used to request removal from the public /stations directory.
+title: "Report station: "
+labels: ["station-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this to flag a station listed on the public **/stations** directory.
+
+        SUB/WAVE lists stations and provides the software; it is **not** the broadcaster
+        of any station. A listing may be removed on a valid complaint or at the
+        maintainer's discretion. For a **copyright / rights complaint**, the listing here
+        only links to the station — you may also need to contact the station operator and
+        the host actually serving the audio.
+  - type: input
+    id: station
+    attributes:
+      label: Station name
+      description: The name of the station as it appears on the directory.
+      placeholder: Night Owl Radio
+    validations:
+      required: true
+  - type: input
+    id: url
+    attributes:
+      label: Station URL
+      description: The public URL of the listed station.
+      placeholder: https://radio.example.com
+    validations:
+      required: true
+  - type: dropdown
+    id: reason
+    attributes:
+      label: Reason for the report
+      options:
+        - Copyright / rights complaint (I hold or represent the rights)
+        - Unlawful, harmful, or abusive content
+        - Station is offline / broken / no longer a SUB/WAVE station
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: >
+        What's the problem? For a rights complaint, identify the specific work(s) and the
+        rights you hold or represent, and where on the station they appear if you can.
+      placeholder: e.g. The station is broadcasting "Track Title" by Artist, to which I own the recording rights, without a licence.
+    validations:
+      required: true
+  - type: input
+    id: contact
+    attributes:
+      label: Contact (optional)
+      description: An email or handle we can reach you at if we need to follow up. Leave blank to stay anonymous.
+      placeholder: you@example.com
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before you submit
+      options:
+        - label: The information in this report is accurate to the best of my knowledge and I'm acting in good faith.
+          required: true
+        - label: I understand SUB/WAVE lists and provides software only, and is not the broadcaster of the reported station.
+          required: true
