@@ -3,13 +3,16 @@
 //
 // Files live at <stateDir>/jingles/<hash>.wav and are referenced from
 // <stateDir>/jingles.m3u (one path per line). A sidecar <stateDir>/
-// jingles.json maps filename → { text, createdAt, builtin }.
+// jingles.json maps filename → { text, createdAt, builtin, source }.
 
 import { readFile, writeFile, unlink, mkdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import crypto from 'node:crypto';
 import { speak } from '../audio/tts.js';
 import { STATE_DIR } from '../config.js';
+import {
+  transcodeAudio, hasFfmpeg, extOf, baseName, isAcceptedAudio,
+} from '../audio/audio-import.js';
 
 const DIR = `${STATE_DIR}/jingles`;
 const PLAYLIST = `${STATE_DIR}/jingles.m3u`;
@@ -55,6 +58,7 @@ export async function list() {
       text: info.text,
       createdAt: info.createdAt,
       builtin: !!info.builtin,
+      source: info.source || (info.builtin ? 'builtin' : 'tts'),
       size: s.size,
     });
   }
@@ -96,6 +100,43 @@ export async function create(text: string, { builtin = false }: { builtin?: bool
   await saveMeta(meta);
   await rewritePlaylist(Object.keys(meta.items));
   return { filename, text: text.trim(), outPath };
+}
+
+// Import an operator-supplied audio file as a jingle. The upload is transcoded
+// to WAV + loudness-levelled (matching generated jingles) when ffmpeg is
+// available, otherwise stored as-is with its original extension. `label` is the
+// display text; it defaults to the original file name. Returns { filename, text }.
+export async function importAudio(
+  buffer: Buffer,
+  { label = '', originalName = '' }: { label?: string; originalName?: string } = {},
+) {
+  if (!buffer?.length) throw new Error('Empty audio file');
+  if (originalName && !isAcceptedAudio(originalName)) {
+    throw new Error(`Unsupported audio type: ${originalName}`);
+  }
+  await mkdir(DIR, { recursive: true });
+
+  const id = crypto.randomBytes(4).toString('hex');
+  let filename: string;
+  if (await hasFfmpeg()) {
+    filename = `jingle_${id}.wav`;
+    await transcodeAudio(buffer, { outPath: `${DIR}/${filename}`, format: 'wav', loudnorm: true });
+  } else {
+    filename = `jingle_${id}.${extOf(originalName) || 'mp3'}`;
+    await writeFile(`${DIR}/${filename}`, buffer);
+  }
+
+  const text = (label || '').trim() || baseName(originalName) || 'Imported jingle';
+  const meta = await loadMeta();
+  meta.items[filename] = {
+    text,
+    createdAt: new Date().toISOString(),
+    builtin: false,
+    source: 'upload',
+  };
+  await saveMeta(meta);
+  await rewritePlaylist(Object.keys(meta.items));
+  return { filename, text };
 }
 
 export async function remove(filename: string) {

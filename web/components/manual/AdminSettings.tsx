@@ -99,12 +99,13 @@ export default function AdminSettings() {
           </li>
           <li>
             <strong>Jingles</strong> — the short pre-rendered idents the station rotates
-            between music tracks. Add, remove and re-render them through the configured
-            voice; new renders are picked up automatically.
+            between music tracks. Render them through the configured voice, or import your
+            own mp3/wav; new files are picked up automatically.
           </li>
           <li>
             <strong>Sound FX</strong> — the library of stingers the DJ can drop into a
-            spoken break. Toggle the whole library on or off.
+            spoken break. Generate one from a text prompt, or import your own audio file
+            (no ElevenLabs key needed). Toggle the whole library on or off.
           </li>
         </ul>
         <div className="bs-callout">

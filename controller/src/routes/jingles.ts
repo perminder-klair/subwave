@@ -4,6 +4,8 @@ import express from 'express';
 import * as jingles from '../broadcast/jingles.js';
 import { queue } from '../broadcast/queue.js';
 import { requireAdmin } from '../middleware/auth.js';
+import { audioUpload } from '../middleware/upload.js';
+import { audioContentType } from '../audio/audio-import.js';
 import { tagger, startTagger, stopTagger } from '../broadcast/tagger.js';
 
 export const router = express.Router();
@@ -32,6 +34,23 @@ router.post('/jingles', requireAdmin, async (req, res) => {
   }
 });
 
+// Import an operator-supplied mp3/wav as a jingle (multipart `file`, optional
+// `label`). Transcoded + level-matched server-side (see broadcast/jingles.js).
+router.post('/jingles/upload', requireAdmin, audioUpload('file'), async (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: 'file is required' });
+  try {
+    const created = await jingles.importAudio(file.buffer, {
+      label: req.body?.label,
+      originalName: file.originalname,
+    });
+    queue.log('scheduler', `Jingle imported: "${created.text.slice(0, 60)}…"`);
+    res.json(created);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 router.delete('/jingles/:filename', requireAdmin, async (req, res) => {
   try {
     res.json(await jingles.remove(req.params.filename));
@@ -47,7 +66,7 @@ router.get('/jingles/:filename/audio', requireAdmin, async (req, res) => {
   try {
     const filePath = await jingles.getPath(req.params.filename);
     if (!filePath) return res.status(404).json({ error: 'unknown jingle' });
-    res.type('audio/wav').sendFile(filePath);
+    res.type(audioContentType(filePath)).sendFile(filePath);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

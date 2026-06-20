@@ -216,6 +216,7 @@ interface JingleEntry {
   size?: number;
   createdAt?: string;
   builtin?: boolean;
+  source?: string;
 }
 
 interface SfxEntry {
@@ -224,6 +225,7 @@ interface SfxEntry {
   size?: number;
   durationSec?: number;
   builtin?: boolean;
+  source?: string;
 }
 
 interface SfxData {
@@ -540,6 +542,25 @@ export default function SettingsPanel() {
     finally { setBusy(false); }
   };
 
+  // Multipart upload — adminFetch leaves Content-Type unset so the browser
+  // sets the multipart boundary itself. The controller transcodes + levels.
+  const uploadJingle = async (file: File, label: string): Promise<boolean> => {
+    if (busy) return false;
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      if (label.trim()) fd.append('label', label.trim());
+      const r = await adminFetch('/jingles/upload', { method: 'POST', body: fd });
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      await refresh();
+      notify.ok('jingle imported');
+      return true;
+    } catch (e) { notify.err(`Jingle import failed: ${errorMessage(e)}`); return false; }
+    finally { setBusy(false); }
+  };
+
   const createSfx = async () => {
     if (!sfxForm.name.trim() || !sfxForm.prompt.trim() || busy) return;
     setBusy(true);
@@ -570,6 +591,25 @@ export default function SettingsPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       await refreshSfx();
     } catch (e) { notify.err(`Delete failed: ${errorMessage(e)}`); }
+    finally { setBusy(false); }
+  };
+
+  // Upload a ready-made effect — no ElevenLabs key required (unlike createSfx).
+  const uploadSfx = async (file: File, name: string, description: string): Promise<boolean> => {
+    if (busy) return false;
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('name', name.trim());
+      if (description.trim()) fd.append('description', description.trim());
+      const r = await adminFetch('/sfx/upload', { method: 'POST', body: fd });
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      await refreshSfx();
+      notify.ok('sound effect imported');
+      return true;
+    } catch (e) { notify.err(`Sound effect import failed: ${errorMessage(e)}`); return false; }
     finally { setBusy(false); }
   };
 
@@ -663,7 +703,8 @@ export default function SettingsPanel() {
               <JinglesSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 jingleText={jingleText} setJingleText={setJingleText}
-                createJingle={createJingle} saveSettings={saveSettings}
+                createJingle={createJingle} uploadJingle={uploadJingle}
+                saveSettings={saveSettings}
                 onDelete={setConfirmDelete} adminFetch={adminFetch}
               />
             )}
@@ -679,7 +720,8 @@ export default function SettingsPanel() {
         {activeSection === 'sfx' && (
           <SfxSection
             sfxData={sfxData} sfxForm={sfxForm} setSfxForm={setSfxForm}
-            busy={busy} createSfx={createSfx} onDelete={setConfirmDeleteSfx}
+            busy={busy} createSfx={createSfx} uploadSfx={uploadSfx}
+            onDelete={setConfirmDeleteSfx}
             data={data} saveSettings={saveSettings} adminFetch={adminFetch}
           />
         )}
@@ -3192,16 +3234,29 @@ interface JinglesSectionProps extends SectionProps {
   jingleText: string;
   setJingleText: (s: string) => void;
   createJingle: () => void;
+  uploadJingle: (file: File, label: string) => Promise<boolean>;
   onDelete: (filename: string | null) => void;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
 function JinglesSection({
   data, form, setForm, busy, jingleText, setJingleText,
-  createJingle, saveSettings, onDelete, adminFetch,
+  createJingle, uploadJingle, saveSettings, onDelete, adminFetch,
 }: JinglesSectionProps) {
   const ratioDirty = form.jingleRatio !== String(data.values?.jingleRatio);
   const jingles = data.jingles || [];
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importLabel, setImportLabel] = useState('');
+  const importRef = useRef<HTMLInputElement>(null);
+  const doImport = async () => {
+    if (!importFile) return;
+    const ok = await uploadJingle(importFile, importLabel);
+    if (ok) {
+      setImportFile(null);
+      setImportLabel('');
+      if (importRef.current) importRef.current.value = '';
+    }
+  };
 
   return (
     <>
@@ -3267,6 +3322,44 @@ function JinglesSection({
         </div>
       </Card>
 
+      <Card title="Import jingle" sub="bring your own mp3 / wav">
+        <div className="field">
+          <Label>Audio file</Label>
+          <input
+            ref={importRef}
+            type="file"
+            accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFile(e.target.files?.[0] ?? null)}
+            className="hidden"
+          />
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Btn tone="solid" onClick={() => importRef.current?.click()} disabled={busy}>
+              {importFile ? 'Change file…' : 'Choose audio file…'}
+            </Btn>
+            {importFile && (
+              <span className="text-[12px] text-ink">{importFile.name}</span>
+            )}
+          </div>
+          <div className="field-hint">
+            mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB · converted and level-matched on import
+          </div>
+        </div>
+        <div className="field mt-3.5">
+          <Label>Label (optional)</Label>
+          <Input
+            value={importLabel}
+            maxLength={200}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportLabel(e.target.value)}
+            placeholder="shown in the list — defaults to the file name"
+          />
+        </div>
+        <div className="mt-3.5 flex items-center gap-2.5">
+          <Btn tone="accent" onClick={doImport} disabled={busy || !importFile}>
+            {busy ? 'Importing…' : 'Import jingle'}
+          </Btn>
+        </div>
+      </Card>
+
       <Card title="Jingles" sub={`${jingles.length} file${jingles.length === 1 ? '' : 's'}`}>
         {jingles.length === 0 && (
           <div className="py-2 text-[12px] text-muted italic">
@@ -3287,6 +3380,7 @@ function JinglesSection({
                   <span className="caption">{new Date(j.createdAt).toLocaleString('en-GB')}</span>
                 )}
                 {j.builtin && <Pill tone="accent">builtin</Pill>}
+                {j.source === 'upload' && <Pill tone="ink">uploaded</Pill>}
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -3319,13 +3413,30 @@ interface SfxSectionProps {
   setSfxForm: (updater: (f: SfxForm) => SfxForm) => void;
   busy: boolean;
   createSfx: () => void;
+  uploadSfx: (file: File, name: string, description: string) => Promise<boolean>;
   onDelete: (name: string | null) => void;
   data: SettingsData | null;
   saveSettings: SaveSettings;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
-function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, onDelete, data, saveSettings, adminFetch }: SfxSectionProps) {
+function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, onDelete, data, saveSettings, adminFetch }: SfxSectionProps) {
+  // Hooks must run before the early "loading…" return — keep them at the top.
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importName, setImportName] = useState('');
+  const [importDesc, setImportDesc] = useState('');
+  const importRef = useRef<HTMLInputElement>(null);
+  const doImport = async () => {
+    if (!importFile || !importName.trim()) return;
+    const ok = await uploadSfx(importFile, importName, importDesc);
+    if (ok) {
+      setImportFile(null);
+      setImportName('');
+      setImportDesc('');
+      if (importRef.current) importRef.current.value = '';
+    }
+  };
+
   if (!sfxData) {
     return <div className="text-[13px] text-muted italic">loading…</div>;
   }
@@ -3338,7 +3449,7 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, onDelete, d
       <SectionHeader
         eyebrow="sound effects"
         title="Stingers the DJ agent plays under its voice."
-        sub="The segment-director agent can garnish a spoken break with one of these effects, mixed beneath the voice. Built-in effects ship with the station; new ones are generated by ElevenLabs from a text prompt."
+        sub="The segment-director agent can garnish a spoken break with one of these effects, mixed beneath the voice. Built-in effects ship with the station; add your own by generating one from a text prompt (ElevenLabs) or importing an audio file."
         metrics={[{ n: String(list.length), l: 'effects', accent: true }]}
       />
 
@@ -3438,6 +3549,56 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, onDelete, d
         </div>
       </Card>
 
+      <Card title="Import sound effect" sub="bring your own mp3 / wav — no ElevenLabs key needed">
+        <div className="field">
+          <Label>Name</Label>
+          <Input
+            value={importName}
+            maxLength={60}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportName(e.target.value)}
+            placeholder="e.g. my-stinger"
+            className="max-w-[280px]"
+          />
+          <div className="field-hint">A short slug the agent references — letters, numbers and dashes.</div>
+        </div>
+        <div className="field mt-3.5">
+          <Label>Description</Label>
+          <Input
+            value={importDesc}
+            maxLength={200}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportDesc(e.target.value)}
+            placeholder="when the agent should reach for this effect"
+          />
+          <div className="field-hint">The agent reads this to decide when the effect fits a line.</div>
+        </div>
+        <div className="field mt-3.5">
+          <Label>Audio file</Label>
+          <input
+            ref={importRef}
+            type="file"
+            accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFile(e.target.files?.[0] ?? null)}
+            className="hidden"
+          />
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Btn tone="solid" onClick={() => importRef.current?.click()} disabled={busy}>
+              {importFile ? 'Change file…' : 'Choose audio file…'}
+            </Btn>
+            {importFile && <span className="text-[12px] text-ink">{importFile.name}</span>}
+          </div>
+          <div className="field-hint">mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB · converted to MP3 on import</div>
+        </div>
+        <div className="mt-3.5 flex items-center gap-2.5">
+          <Btn
+            tone="accent"
+            onClick={doImport}
+            disabled={busy || !importFile || !importName.trim()}
+          >
+            {busy ? 'Importing…' : 'Import sound effect'}
+          </Btn>
+        </div>
+      </Card>
+
       <Card title="Effect library" sub={`${list.length} effect${list.length === 1 ? '' : 's'}`}>
         {list.length === 0 && (
           <div className="py-2 text-[12px] text-muted italic">
@@ -3460,6 +3621,7 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, onDelete, d
                 <span className="caption">{fmtSize(s.size)}</span>
                 {s.durationSec && <span className="caption">{s.durationSec}s</span>}
                 {s.builtin && <Pill tone="accent">builtin</Pill>}
+                {s.source === 'upload' && <Pill tone="ink">uploaded</Pill>}
               </div>
             </div>
             <div className="flex items-center gap-2">

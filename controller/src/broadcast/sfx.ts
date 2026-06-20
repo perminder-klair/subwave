@@ -12,6 +12,7 @@
 import { readFile, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/promises';
 import { STATE_DIR, SOUNDS_DIR } from '../config.js';
 import { generateSfx, isConfigured } from '../audio/sfx-gen.js';
+import { transcodeAudio, hasFfmpeg, extOf, isAcceptedAudio } from '../audio/audio-import.js';
 
 const DIR = `${STATE_DIR}/sfx`;
 const META = `${STATE_DIR}/sfx.json`;
@@ -96,6 +97,7 @@ export async function list() {
       prompt: info.prompt || '',
       durationSec: info.durationSec || null,
       builtin: !!info.builtin,
+      source: info.source || (info.builtin ? 'builtin' : 'generated'),
       createdAt: info.createdAt,
       size: s.size,
     });
@@ -140,6 +142,49 @@ export async function create({ name, description, prompt, durationSec, builtin =
     durationSec: Number(durationSec) || null,
     file,
     builtin,
+    createdAt: new Date().toISOString(),
+  };
+  await saveMeta(meta);
+  return meta.items[slug];
+}
+
+// Import an operator-supplied audio file as a sound effect. Transcoded to MP3
+// (matching generated effects) when ffmpeg is available, otherwise stored as-is
+// with its original extension. No loudnorm — effects are short and a one-pass
+// loudness pass on a transient is unreliable; the broadcast limiter catches
+// peaks. Rejects a name that already exists so a built-in can't be clobbered.
+export async function importAudio(
+  buffer: Buffer,
+  { name, description = '', originalName = '' }: { name: string; description?: string; originalName?: string },
+) {
+  const slug = slugify(name);
+  if (!slug) throw new Error('Sound effect name is required');
+  if (!buffer?.length) throw new Error('Empty audio file');
+  if (originalName && !isAcceptedAudio(originalName)) {
+    throw new Error(`Unsupported audio type: ${originalName}`);
+  }
+  await mkdir(DIR, { recursive: true });
+
+  const meta = await loadMeta();
+  if (meta.items[slug]) throw new Error(`a sound effect named "${slug}" already exists`);
+
+  let file: string;
+  if (await hasFfmpeg()) {
+    file = `${slug}.mp3`;
+    await transcodeAudio(buffer, { outPath: `${DIR}/${file}`, format: 'mp3' });
+  } else {
+    file = `${slug}.${extOf(originalName) || 'mp3'}`;
+    await writeFile(`${DIR}/${file}`, buffer);
+  }
+
+  meta.items[slug] = {
+    name: slug,
+    description: (description || '').trim(),
+    prompt: '',
+    durationSec: null,
+    file,
+    builtin: false,
+    source: 'upload',
     createdAt: new Date().toISOString(),
   };
   await saveMeta(meta);
