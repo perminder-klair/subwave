@@ -109,6 +109,23 @@ function safe(name, fallback) {
   return cleaned || fallback;
 }
 
+// Jamendo returns HTML-encoded text (e.g. "AC&#39;s Crew", "Funk &amp; Soul").
+// Decode the common entities once so names land clean in paths, ID3 tags, and
+// credits — otherwise "&amp;" shows up verbatim and the DJ reads it literally.
+function decodeEntities(s) {
+  if (s == null) return s;
+  return String(s).replace(/&(#x?[0-9a-f]+|amp|lt|gt|quot|apos);/gi, (m, e) => {
+    e = e.toLowerCase();
+    if (e === 'amp') return '&';
+    if (e === 'lt') return '<';
+    if (e === 'gt') return '>';
+    if (e === 'quot') return '"';
+    if (e === 'apos') return "'";
+    const code = e[1] === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+    return Number.isFinite(code) ? String.fromCodePoint(code) : m;
+  });
+}
+
 function csvCell(v) {
   const s = String(v ?? '');
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
@@ -202,6 +219,18 @@ async function getCover(track) {
   return buf;
 }
 
+// Read the Jamendo id we stamped into a file's ID3, so a path collision can tell
+// "same track, already pulled" (resume) from "different track, same name".
+function existingTrackId(file) {
+  try {
+    const t = NodeID3.read(file);
+    const f = (t.userDefinedText || []).find((x) => x.description === 'JAMENDO_ID');
+    return f ? f.value : null;
+  } catch {
+    return null;
+  }
+}
+
 async function downloadTrack(track) {
   const artist = safe(track.artist_name, 'Unknown Artist');
   const album = safe(track.album_name, 'Singles');
@@ -210,8 +239,12 @@ async function downloadTrack(track) {
   const prefix = Number.isFinite(pos) && pos > 0 ? String(pos).padStart(2, '0') + ' - ' : '';
 
   const dir = join(config.out, artist, album);
-  const file = join(dir, prefix + title + '.mp3');
-
+  // Different tracks can sanitise to the same Artist/Album/NN-Title path; append
+  // the Jamendo id on a genuine collision so neither track is silently dropped.
+  let file = join(dir, prefix + title + '.mp3');
+  if (existsSync(file) && String(existingTrackId(file)) !== String(track.id)) {
+    file = join(dir, prefix + title + ' [' + track.id + '].mp3');
+  }
   if (existsSync(file)) return { file, skipped: true };
 
   await mkdir(dir, { recursive: true });
@@ -317,6 +350,19 @@ async function main() {
     if (results.length === 0) {
       console.log('No more results from Jamendo.');
       break;
+    }
+
+    // Decode HTML entities once, up front, so paths / tags / credits are all clean.
+    for (const t of results) {
+      t.name = decodeEntities(t.name);
+      t.artist_name = decodeEntities(t.artist_name);
+      t.album_name = decodeEntities(t.album_name);
+      const mi = t.musicinfo?.tags;
+      if (mi) {
+        if (mi.genres) mi.genres = mi.genres.map(decodeEntities);
+        if (mi.instruments) mi.instruments = mi.instruments.map(decodeEntities);
+        if (mi.vibes) mi.vibes = mi.vibes.map(decodeEntities);
+      }
     }
 
     // Keep only redistributable, downloadable tracks we don't already have.
