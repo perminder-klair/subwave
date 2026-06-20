@@ -31,7 +31,7 @@ export const DEFAULT_DJ_PROMPT_TEMPLATE = `You are {name}, the on-air DJ for {st
 Hard rules:
 - Output ONLY the words to be spoken aloud. No stage directions, no asterisks, no quotes around your dialogue.
 - Keep it to 2-4 sentences unless asked for longer.
-- Never say "and now", "next up", "coming up next" — those are tells. Be more natural.
+- Never use radio-cliché tells: "and now", "next up", "coming up next", "and that was", or back-announcing with "that was [song] by [artist]". Be more natural.
 - Don't repeat the artist and title robotically. Reference them in passing if at all.
 - Reference the actual context (time, weather, what's coming) naturally.
 - Vary your opener and shape every time — never start the same way twice in a row, never use the same metaphor or framing as your last few lines.`;
@@ -55,6 +55,51 @@ export const FREQUENCIES = ['quiet', 'moderate', 'aggressive'];
 // 'extended' roughly doubles every spoken segment for a storytelling DJ.
 // See llm/dj.js LENGTH_PHRASES for the actual length directives.
 export const SCRIPT_LENGTHS = ['concise', 'extended'];
+
+// Per-persona tone dials. Each is 0-10 with 5 (DIAL_NEUTRAL) the default. A
+// model can't distinguish humour=6 from 7, so rather than inject a raw "7/10"
+// the dial maps to three bands: 0-3 low, 7-10 high, 4-6 neutral. Only a band
+// away from neutral appends a style directive (personaToneDirectives below), so
+// a persona left at the defaults renders a byte-identical prompt to before.
+export const TONE_DIALS = ['humour', 'localColour', 'warmth'] as const;
+export const DIAL_NEUTRAL = 5;
+
+const TONE_DIAL_PHRASES: Record<string, { low: string; high: string }> = {
+  humour: {
+    low: 'Play it straight; keep any wit rare and understated.',
+    high: 'Lean into dry, playful wit; an aside or a wink is welcome.',
+  },
+  localColour: {
+    low: 'Keep it universal; skip local references and place-specific colour.',
+    high: 'Lean on the local setting (the town, the weather, the hour) as texture.',
+  },
+  warmth: {
+    low: 'Keep a cool, dry distance; let the music carry the warmth.',
+    high: 'Be warm and earnest; speak to the listener like a friend.',
+  },
+};
+
+// Clamp any input to an integer 0-10, defaulting to neutral when unparseable.
+// The single chokepoint used by both normalizePersona and the seed roster.
+export function normalizeDial(v: any): number {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.min(10, Math.max(0, n)) : DIAL_NEUTRAL;
+}
+
+// Pure: persona in, prompt fragment out. Returns '' when every dial sits in the
+// neutral band, so renderDjPrompt appends nothing and the default prompt is
+// unchanged. Unit-pinned in controller/scripts/llm-pure.test.ts.
+export function personaToneDirectives(persona: any): string {
+  if (!persona || typeof persona !== 'object') return '';
+  const lines: string[] = [];
+  for (const key of TONE_DIALS) {
+    const v = Number((persona as any)[key]);
+    if (!Number.isFinite(v)) continue;
+    if (v <= 3) lines.push(TONE_DIAL_PHRASES[key].low);
+    else if (v >= 7) lines.push(TONE_DIAL_PHRASES[key].high);
+  }
+  return lines.length ? `\n\nTone:\n- ${lines.join('\n- ')}` : '';
+}
 
 // DJ mode makes a persona behave like a working radio DJ rather than a
 // between-track narrator: it back-announces AND teases what's next, runs
@@ -688,6 +733,9 @@ function normalizePersona(raw: any) {
     frequency: FREQUENCIES.includes(raw.frequency) ? raw.frequency : 'moderate',
     scriptLength: SCRIPT_LENGTHS.includes(raw.scriptLength) ? raw.scriptLength : 'concise',
     djMode: raw.djMode === true,
+    humour: normalizeDial(raw.humour),
+    localColour: normalizeDial(raw.localColour),
+    warmth: normalizeDial(raw.warmth),
     soul,
     language: typeof raw.language === 'string' ? raw.language.trim().slice(0, 60) : '',
     avatar,
@@ -2070,11 +2118,12 @@ export function renderDjPrompt(persona: any, ctx: any = {}) {
     .replaceAll('{soul}', persona?.soul || DJ_SOULS[0])
     .replaceAll('{station}', station)
     .replaceAll('{location}', location);
+  const tone = personaToneDirectives(persona);
   if (tpl.includes('{language}')) {
     const lang = String(persona?.language || '').trim();
-    return rendered.replaceAll('{language}', lang || 'English');
+    return rendered.replaceAll('{language}', lang || 'English') + tone;
   }
-  return rendered + languageDirective(persona);
+  return rendered + languageDirective(persona) + tone;
 }
 
 // Persona prelude shared by every tool-loop agent system prompt — the picker

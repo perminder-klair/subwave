@@ -14,6 +14,7 @@ import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
 import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
 import { DEFAULT_LOCCA_EMBED_BASE_URL } from '../src/llm/internal/provider/registry.js';
+import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL } from '../src/settings.js';
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -210,6 +211,32 @@ async function main() {
     assert.ok(sentences.endsWith('.') && sentences.split(/\s+/).length <= 10);        // last full sentence
     const hardcut = enforceIntroBudget('a b c d e f g h i j k l m n o p q r s t', 4000);
     assert.ok(hardcut.endsWith('…') && hardcut.split(/\s+/).length <= 11);            // ellipsis fallback
+  });
+
+  // ---- persona tone dials (humour / local colour / warmth) ----
+  console.log('personaToneDirectives / normalizeDial:');
+  await test('normalizeDial clamps to 0-10 int, neutral on garbage', () => {
+    assert.equal(normalizeDial(7), 7);
+    assert.equal(normalizeDial(-3), 0);
+    assert.equal(normalizeDial(99), 10);
+    assert.equal(normalizeDial(6.7), 7);
+    assert.equal(normalizeDial('abc'), DIAL_NEUTRAL);
+    assert.equal(normalizeDial(undefined), DIAL_NEUTRAL);
+  });
+  await test('neutral / missing dials append nothing (prompt stays byte-identical)', () => {
+    assert.equal(personaToneDirectives({ humour: 5, localColour: 5, warmth: 5 }), '');
+    assert.equal(personaToneDirectives({}), '');
+    assert.equal(personaToneDirectives(null), '');
+    assert.equal(personaToneDirectives({ humour: 4, localColour: 6 }), '');
+  });
+  await test('low/high bands append the matching directive, in dial order', () => {
+    assert.match(personaToneDirectives({ humour: 9 }), /playful wit/);
+    assert.match(personaToneDirectives({ humour: 1 }), /Play it straight/);
+    assert.match(personaToneDirectives({ localColour: 10 }), /local setting/);
+    assert.match(personaToneDirectives({ warmth: 0 }), /cool, dry distance/);
+    const both = personaToneDirectives({ humour: 8, warmth: 8 });
+    assert.ok(both.startsWith('\n\nTone:\n- '));
+    assert.equal(both.split('\n- ').length, 3); // header + 2 bullets
   });
 
   console.log(failures === 0 ? '\nAll llm-pure tests passed.' : `\n${failures} test(s) FAILED.`);

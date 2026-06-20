@@ -29,6 +29,16 @@ const SCRIPT_LENGTHS = [
   { id: 'concise',  label: 'Concise',  desc: 'Standard one-to-four sentence segments. The default.' },
   { id: 'extended', label: 'Extended', desc: 'Longer, storytelling segments — roughly double the length across intros, links, weather and idents.' },
 ];
+// Personality dials, 0–10, default 5. They map to three prompt bands server-side
+// (settings.personaToneDirectives): 0–3 low, 7–10 high, 4–6 neutral (nothing
+// injected). Surfacing the band keeps operators from expecting 6 vs 7 to differ.
+const TONE_DIALS = [
+  { id: 'humour',      label: 'Humour',       low: 'play it straight', high: 'playful & dry'  },
+  { id: 'localColour', label: 'Local colour', low: 'universal',        high: 'leans local'    },
+  { id: 'warmth',      label: 'Warmth',       low: 'cool & dry',       high: 'warm & earnest' },
+] as const;
+const DIAL_NEUTRAL = 5;
+const toneBand = (v: number) => (v <= 3 ? 'low' : v >= 7 ? 'high' : 'neutral');
 const ENGINES = [
   { id: 'piper',  label: 'Piper' },
   { id: 'kokoro', label: 'Kokoro' },
@@ -70,6 +80,10 @@ interface Persona {
   // what's next, runs callbacks across the session, and is more present. Off =
   // the historical tasteful-narrator behaviour.
   djMode: boolean;
+  // Tone dials, 0–10, default 5 (neutral). Map to prompt bands server-side.
+  humour: number;
+  localColour: number;
+  warmth: number;
   soul: string;
   // Free-text on-air language ("Turkish", "Türkçe"). Empty = English (no
   // directive injected server-side).
@@ -396,6 +410,9 @@ export default function PersonasPanel() {
             frequency: p.frequency ?? 'moderate',
             scriptLength: p.scriptLength ?? 'concise',
             djMode: p.djMode === true,
+            humour: typeof p.humour === 'number' ? p.humour : DIAL_NEUTRAL,
+            localColour: typeof p.localColour === 'number' ? p.localColour : DIAL_NEUTRAL,
+            warmth: typeof p.warmth === 'number' ? p.warmth : DIAL_NEUTRAL,
             soul: p.soul ?? '',
             language: typeof p.language === 'string' ? p.language : '',
             avatar: typeof p.avatar === 'string' ? p.avatar : '',
@@ -429,7 +446,8 @@ export default function PersonasPanel() {
         ...f,
         personas: [...f.personas, {
           id: clientMintId(), name: 'New persona', tagline: '',
-          frequency: 'moderate', scriptLength: 'concise', djMode: false, soul: '',
+          frequency: 'moderate', scriptLength: 'concise', djMode: false,
+          humour: DIAL_NEUTRAL, localColour: DIAL_NEUTRAL, warmth: DIAL_NEUTRAL, soul: '',
           language: '',
           avatar: '',
           tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella' },
@@ -564,6 +582,9 @@ export default function PersonasPanel() {
             frequency: p.frequency,
             scriptLength: p.scriptLength,
             djMode: p.djMode,
+            humour: p.humour,
+            localColour: p.localColour,
+            warmth: p.warmth,
             soul: p.soul.trim(),
             language: p.language.trim(),
             avatar: p.avatar || '',
@@ -950,6 +971,40 @@ export default function PersonasPanel() {
                 on={focused.djMode}
                 onClick={() => setPersona(safeIdx, { djMode: !focused.djMode })}
               />
+            </div>
+
+            <div className="rule-label">tone dials</div>
+
+            <div className="space-y-3.5">
+              {TONE_DIALS.map(d => {
+                const val = focused[d.id];
+                return (
+                  <div key={d.id}>
+                    <div className="flex items-center justify-between text-[12px]">
+                      <span className="font-bold">{d.label}</span>
+                      <span className="text-muted">{val}/10 · {toneBand(val)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={10}
+                      step={1}
+                      value={val}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setPersona(safeIdx, { [d.id]: Number(e.target.value) } as Partial<Persona>)}
+                      className="mt-1 w-full accent-[var(--accent)]"
+                    />
+                    <div className="flex justify-between text-[10px] text-muted">
+                      <span>{d.low}</span>
+                      <span>{d.high}</span>
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="field-hint">
+                Personality on top of the soul. The middle band (4–6) injects nothing, so the
+                default stays exactly as before; push a dial low or high to shift the voice.
+              </div>
             </div>
           </Card>
 
