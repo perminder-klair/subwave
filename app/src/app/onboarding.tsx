@@ -22,7 +22,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import DiscMark from '@/components/DiscMark';
 import LiveDot from '@/components/LiveDot';
 import StationLiveStatus from '@/components/StationLiveStatus';
-import { createApi, normalizeBase } from '@/lib/api';
+import { createApi, normalizeBase, type StationApi } from '@/lib/api';
 import { useStation } from '@/config/StationContext';
 import { fetchDirectory, type DirectoryStation } from '@/lib/directory';
 import type { StationRef } from '@/lib/station';
@@ -78,24 +78,42 @@ export default function Onboarding() {
   });
 
   const runCheck = async (rawUrl: string, presetName?: string) => {
-    const withProto = /:\/\//.test(rawUrl) ? rawUrl : `https://${rawUrl.trim()}`;
-    const normalized = normalizeBase(withProto);
-    if (!normalized) return;
+    const trimmed = rawUrl.trim();
+    // A bare hostname probes https first then falls back to cleartext http, so
+    // listeners on HTTP-only stations can just type the address. An explicit
+    // protocol (http:// or https://) is honored verbatim — no fallback.
+    const candidates = (/:\/\//.test(trimmed) ? [trimmed] : [`https://${trimmed}`, `http://${trimmed}`])
+      .map((c) => normalizeBase(c))
+      .filter(Boolean);
+    if (!candidates.length) return;
 
     const id = ++runId.current;
-    const fallbackName = presetName || stripProto(normalized);
-    setTarget({ base: normalized, url: stripProto(normalized), name: fallbackName });
+    const first = candidates[0];
+    setTarget({ base: first, url: stripProto(first), name: presetName || stripProto(first) });
     setSteps(['wait', 'wait', 'wait', 'wait']);
     setDone(false);
     setFailed(false);
     setPhase('check');
 
-    const api = createApi(normalized);
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
     const set = (i: number, s: StepState) =>
       setSteps((prev) => (runId.current === id ? prev.map((v, idx) => (idx === i ? s : v)) : prev));
     const alive = () => runId.current === id;
+
+    // Hit one candidate's controller /health behind its own timeout. Returns
+    // the live StationApi on success, or null on failure / unreachable so the
+    // caller can try the next candidate.
+    const probe = async (candidate: string): Promise<StationApi | null> => {
+      const api = createApi(candidate);
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
+      try {
+        return (await api.health(ctrl.signal)) ? api : null;
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
 
     try {
       // 1 · Resolving host (cosmetic)
@@ -104,15 +122,24 @@ export default function Onboarding() {
       if (!alive()) return;
       set(0, 'ok');
 
-      // 2 · Controller /health — the real gate
+      // 2 · Controller /health — the real gate. Try each candidate in turn.
       set(1, 'run');
-      const ok = await api.health(ctrl.signal);
-      if (!alive()) return;
-      if (!ok) {
+      let api: StationApi | null = null;
+      let base = first;
+      for (const candidate of candidates) {
+        base = candidate;
+        api = await probe(candidate);
+        if (!alive()) return;
+        if (api) break;
+      }
+      if (!api) {
         set(1, 'fail');
         setFailed(true);
         return;
       }
+      // Re-point the target at the candidate that actually answered.
+      const fallbackName = presetName || stripProto(base);
+      setTarget({ base, url: stripProto(base), name: fallbackName });
       set(1, 'ok');
 
       // 3 · Icecast /stream (cosmetic — controller answered, mount assumed up)
@@ -124,11 +151,15 @@ export default function Onboarding() {
       // 4 · DJ booth — best-effort name resolution
       set(3, 'run');
       let name = fallbackName;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
       try {
         const dj = await api.dj(ctrl.signal);
         if (dj?.station || dj?.name) name = dj.station || dj.name || name;
       } catch {
         /* booth name is best-effort */
+      } finally {
+        clearTimeout(timer);
       }
       if (!alive()) return;
       set(3, 'ok');
@@ -139,8 +170,6 @@ export default function Onboarding() {
         set(1, 'fail');
         setFailed(true);
       }
-    } finally {
-      clearTimeout(timer);
     }
   };
 

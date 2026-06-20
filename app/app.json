@@ -24,7 +24,7 @@
           "audio"
         ],
         "NSAppTransportSecurity": {
-          "NSAllowsArbitraryLoads": false,
+          "NSAllowsArbitraryLoads": true,
           "NSAllowsLocalNetworking": true
         }
       }
@@ -64,7 +64,8 @@
         {
           "android": {
             "compileSdkVersion": 36,
-            "targetSdkVersion": 36
+            "targetSdkVersion": 36,
+            "usesCleartextTraffic": true
           },
           "ios": {
             "deploymentTarget": "16.4"
