@@ -91,7 +91,14 @@ async function fetchCount() {
     lastStatus = { online, listeners: { current, peak: peakSeen }, bitrate };
   } catch {
     lastCount = null;
-    lastStatus = { online: false, listeners: { current: 0, peak: 0 }, bitrate: null };
+    // Treat Icecast status fetch failures as "unknown", not as proof the
+    // broadcast went offline. The listener UI polls this cached status and
+    // should not tear down a healthy audio element because the stats endpoint
+    // had a transient timeout.
+    lastStatus = {
+      ...lastStatus,
+      listeners: { current: 0, peak: peakSeen },
+    };
   }
   // Persist at most one row per wall-clock minute. Skip null samples — a
   // stats outage shouldn't leave a misleading "0 listeners" stripe in the

@@ -38,6 +38,7 @@ export interface StationFeed {
 
 const EMPTY_STATE: StationState = { upcoming: [], history: [], djLog: [] };
 const EMPTY_SESSION: SessionPayload = { session: null, messages: [] };
+const OFFLINE_CONFIRM_POLLS = 4;
 
 // Only commit a freshly-parsed payload when it differs from what's already in
 // state — returning `prev` from the updater skips the re-render, so a quiet
@@ -64,6 +65,7 @@ export function useStationFeed(): StationFeed {
   const [trackStartedAt, setTrackStartedAt] = useState<number | null>(null);
   const [timezone, setTimezone] = useState<string | null>(null);
   const lastTrackKeyRef = useRef<string | null>(null);
+  const offlinePollsRef = useRef(0);
 
   useEffect(() => {
     const tick = async () => {
@@ -84,7 +86,15 @@ export function useStationFeed(): StationFeed {
         if (npRes.dj) setIfChanged<DjState | null>(setDj, npRes.dj);
         setIfChanged(setActiveShow, npRes.activeShow ?? npRes.context?.activeShow ?? null);
         if (npRes.listeners != null) setIfChanged<ListenerCount | number | null>(setListeners, npRes.listeners);
-        if (typeof npRes.streamOnline === 'boolean') setStreamOnline(npRes.streamOnline);
+        if (typeof npRes.streamOnline === 'boolean') {
+          if (npRes.streamOnline) {
+            offlinePollsRef.current = 0;
+            setStreamOnline(true);
+          } else {
+            offlinePollsRef.current += 1;
+            if (offlinePollsRef.current >= OFFLINE_CONFIRM_POLLS) setStreamOnline(false);
+          }
+        }
         if (typeof npRes.llmTokens === 'number') setIfChanged<number | null>(setLlmTokens, npRes.llmTokens);
         if (typeof npRes.timezone === 'string' && npRes.timezone) setTimezone(npRes.timezone);
         setIfChanged(setState, stRes);
