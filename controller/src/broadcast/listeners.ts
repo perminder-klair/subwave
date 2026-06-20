@@ -26,6 +26,7 @@ import * as settings from '../settings.js';
 
 let lastCount: number | null = null;        // null = unknown (not yet polled, or Icecast down)
 let peakSeen = 0;                            // running max of the deduped count this process run
+let consecutiveStatusFailures = 0;          // resets to 0 on every successful poll
 
 // Full cached stream status, refreshed by the same poll that maintains
 // lastCount. `online` is true when at least one broadcast mount has a source
@@ -41,6 +42,34 @@ export interface StreamStatus {
   bitrate: number | null;
 }
 let lastStatus: StreamStatus = { online: false, listeners: { current: 0, peak: 0 }, bitrate: null };
+
+// How many *consecutive* failed status polls before we stop trusting the last
+// known `online` and report the broadcast as offline. Below this we hold the
+// last good status so a transient stats-endpoint timeout never tears down a
+// healthy listener (issue #461); at or above it a genuinely unreachable Icecast
+// still surfaces as offline instead of being pinned "online" forever. 4 polls
+// × 15s ≈ 1 min of sustained failure.
+const STALE_STATUS_LIMIT = 4;
+
+// Next cached status after a status-fetch failure. Pure (no I/O) so the
+// transient-vs-sustained branching is unit-tested in isolation
+// (scripts/listeners-status.test.ts).
+//   • transient (failures < limit): hold the last known status — the count is
+//     stale-but-best-known, not a freshly-observed 0. Keeps a healthy player
+//     alive through a momentary stats blip.
+//   • sustained (failures ≥ limit): the broadcast really looks gone — report
+//     offline, zero the current count, drop bitrate; keep the run's peak.
+export function statusAfterFailure(
+  prev: StreamStatus,
+  consecutiveFailures: number,
+  limit: number,
+  peak: number,
+): StreamStatus {
+  if (consecutiveFailures >= limit) {
+    return { online: false, listeners: { current: 0, peak }, bitrate: null };
+  }
+  return { ...prev, listeners: { ...prev.listeners, peak } };
+}
 
 // Time-series file. JSONL of {t, count} rows, one per persisted sample.
 // We persist every minute (not every 15s poll) — keeps the file at ~1440
@@ -89,16 +118,16 @@ async function fetchCount() {
     lastCount = current;
     peakSeen = Math.max(peakSeen, current);
     lastStatus = { online, listeners: { current, peak: peakSeen }, bitrate };
+    consecutiveStatusFailures = 0;
   } catch {
     lastCount = null;
-    // Treat Icecast status fetch failures as "unknown", not as proof the
-    // broadcast went offline. The listener UI polls this cached status and
-    // should not tear down a healthy audio element because the stats endpoint
-    // had a transient timeout.
-    lastStatus = {
-      ...lastStatus,
-      listeners: { current: 0, peak: peakSeen },
-    };
+    // Treat a transient Icecast status fetch failure as "unknown", not as proof
+    // the broadcast went offline: hold the last known status so the listener UI
+    // doesn't tear down a healthy audio element over a momentary stats timeout
+    // (issue #461). Only once failures persist (STALE_STATUS_LIMIT) do we report
+    // offline — a genuinely unreachable Icecast must still surface eventually.
+    consecutiveStatusFailures += 1;
+    lastStatus = statusAfterFailure(lastStatus, consecutiveStatusFailures, STALE_STATUS_LIMIT, peakSeen);
   }
   // Persist at most one row per wall-clock minute. Skip null samples — a
   // stats outage shouldn't leave a misleading "0 listeners" stripe in the
