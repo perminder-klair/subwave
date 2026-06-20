@@ -80,6 +80,23 @@ function resolveEngine(kind: string, personaTts: any) {
   return chosen;
 }
 
+// Effective voice level trim (dB) for a spoken segment of `kind`: the resolved
+// engine's per-engine gain (settings.tts.gainDb) plus the on-air persona's own
+// trim (persona.tts.gainDb), clamped to ±TTS_GAIN_CLAMP_DB. Applied downstream
+// by broadcast/queue.ts as a Liquidsoap `liq_amplify` annotation on the handoff
+// file — the same mechanism music loudness uses. 0 = unity (no annotation
+// written), i.e. today's behaviour. Uses the *resolved* engine (post
+// availability/key fallback), so the gain matches the engine that will actually
+// speak; the rare runtime-throw fallback inside speak() is an error path.
+export function voiceGainDb(kind: string): number {
+  const personaTts = djPersonaTts(kind);
+  const engine = resolveEngine(kind, personaTts);
+  const tts: any = settings.get().tts || {};
+  const engineGain = settings.clampTtsGain(tts.gainDb?.[engine]);
+  const personaGain = personaTts ? settings.clampTtsGain(personaTts.gainDb) : 0;
+  return settings.clampTtsGain(engineGain + personaGain);
+}
+
 async function speakWith(engine: string, text: string, opts: any, personaTts: any) {
   if (engine === 'kokoro') {
     const voice = (personaTts && personaTts.engine === 'kokoro' && personaTts.voice)

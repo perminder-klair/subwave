@@ -338,8 +338,16 @@ def mic_chain(s) =
   s
 end
 
-voice = mic_chain(voice_queue)
-intro = mic_chain(intro_queue)
+# Per-segment voice level trim. The controller stamps `liq_amplify` (in the
+# "<n> dB" form) onto the say.txt/intro.txt URI per spoken clip — a per-engine +
+# per-persona gain that levels the loudness gap between TTS engines (see
+# settings.tts.gainDb + audio/tts.ts:voiceGainDb). `amplify` reads it per
+# request — the same ReplayGain mechanism the music bus uses (line 214). Applied
+# BEFORE mic_chain so the fixed-threshold compressor sees a levelled input. The
+# un-annotated silent lead-in carries no `liq_amplify`, so it plays at the base
+# factor 1. (unity). Un-trimmed clips (gainDb 0) write a bare path → also unity.
+voice = mic_chain(amplify(override="liq_amplify", 1., voice_queue))
+intro = mic_chain(amplify(override="liq_amplify", 1., intro_queue))
 
 # ---------------------------------------------------------------------------
 # STUDIO BED — continuous low-level ambient room tone (Phase 2)

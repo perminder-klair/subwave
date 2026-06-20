@@ -86,6 +86,34 @@ export function effectiveFrequency(persona: any = getEffectivePersona()) {
 // engine just falls back to Piper).
 export const TTS_ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud'];
 
+// DJ-voice level trim, in dB. A per-engine gain levels the loudness gap between
+// TTS engines (only PocketTTS self-normalises today, so it sits quieter than
+// raw Piper/Kokoro under the same fixed-threshold mic compressor); a per-persona
+// gain stacks on top as a character trim. Applied via Liquidsoap's `liq_amplify`
+// annotation on say.txt/intro.txt (see audio/tts.ts:voiceGainDb +
+// broadcast/queue.ts) — the same mechanism the music loudness path uses. A
+// manual dial, not auto-normalisation, so the range is generous (±12 dB).
+export const TTS_GAIN_CLAMP_DB = 12;
+
+// Coerce any value to a clean gain: finite number, clamped to ±TTS_GAIN_CLAMP_DB,
+// rounded to 0.1 dB (finer is inaudible and just bloats the annotate string).
+// Garbage / non-finite → 0 (unity, i.e. today's behaviour).
+export function clampTtsGain(v: any): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  const c = Math.max(-TTS_GAIN_CLAMP_DB, Math.min(TTS_GAIN_CLAMP_DB, n));
+  return Math.round(c * 10) / 10;
+}
+
+// Normalise a per-engine gain map to exactly one clean gain per known engine
+// (default 0). Drops unknown keys so a hand-edited settings.json can't smuggle
+// arbitrary keys into the annotate path.
+function normalizeTtsGainMap(raw: any): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const e of TTS_ENGINES) out[e] = clampTtsGain(raw?.[e]);
+  return out;
+}
+
 // LLM provider abstraction. `ollama` is the homelab default; the cloud
 // providers are opt-in and resolved by llm/provider.js. `openrouter` and
 // `gateway` are aggregators — one key, any vendor's models. `openai-compatible`
@@ -317,7 +345,7 @@ export const SEED_PERSONAS = [
     soul: DJ_SOULS[0],
     language: '',
     avatar: '',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_george' },
+    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_george', gainDb: 0 },
   },
   {
     id: 'p_default1',
@@ -328,7 +356,7 @@ export const SEED_PERSONAS = [
     soul: DJ_SOULS[1],
     language: '',
     avatar: '',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_alice' },
+    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_alice', gainDb: 0 },
   },
   {
     id: 'p_default2',
@@ -339,7 +367,7 @@ export const SEED_PERSONAS = [
     soul: DJ_SOULS[3],
     language: '',
     avatar: '',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_daniel' },
+    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_daniel', gainDb: 0 },
   },
 ];
 
@@ -424,6 +452,12 @@ const DEFAULTS = {
       // provider === 'openai-compatible'.
       baseUrl: '',
     },
+    // Per-engine voice level trim (dB), applied via Liquidsoap's liq_amplify on
+    // every spoken segment that resolves to that engine. Levels the loudness gap
+    // between engines (e.g. boost PocketTTS to match raw Piper). Stacks with each
+    // persona's own tts.gainDb. All 0 = unity = today's behaviour. See
+    // TTS_GAIN_CLAMP_DB and audio/tts.ts:voiceGainDb().
+    gainDb: { piper: 0, kokoro: 0, chatterbox: 0, 'pocket-tts': 0, cloud: 0 },
   },
   llm: {
     provider: 'ollama',
@@ -668,7 +702,7 @@ function normalizeTts(raw: any) {
   // field and the server picks its own.
   if (!voice && engine === 'cloud' && cloudProvider !== 'openai-compatible') voice = 'alloy';
   if (!voice && engine !== 'cloud' && engine !== 'chatterbox' && engine !== 'piper') voice = 'bf_isabella';
-  return { engine, cloudProvider, voice };
+  return { engine, cloudProvider, voice, gainDb: clampTtsGain(raw?.gainDb) };
 }
 
 function normalizePersona(raw: any) {
@@ -938,6 +972,9 @@ export async function load() {
             ? stored.tts.cloud.baseUrl.trim()
             : DEFAULTS.tts.cloud.baseUrl,
       },
+      // Per-engine gain map — one clean gain per known engine, missing keys → 0,
+      // unknown keys dropped. So an older save (no gainDb) loads at unity.
+      gainDb: normalizeTtsGainMap(stored.tts?.gainDb),
     },
     llm: {
       provider: LLM_PROVIDERS.includes(stored.llm?.provider)
@@ -1237,7 +1274,7 @@ function validateTtsBlock(raw, where) {
       );
     }
   }
-  return { engine: t.engine, cloudProvider: t.cloudProvider, voice };
+  return { engine: t.engine, cloudProvider: t.cloudProvider, voice, gainDb: clampTtsGain(t.gainDb) };
 }
 
 function validatePersonasStrict(raw) {
@@ -1728,6 +1765,17 @@ export async function update(patch) {
       // save the provider without one. Mirrors the LLM-side check below.
       if (next.tts.cloud.provider === 'openai-compatible' && !next.tts.cloud.baseUrl) {
         throw new Error('tts.cloud.baseUrl is required when provider is "openai-compatible"');
+      }
+    }
+    if (t.gainDb !== undefined) {
+      if (typeof t.gainDb !== 'object' || t.gainDb === null || Array.isArray(t.gainDb)) {
+        throw new Error('tts.gainDb must be an object keyed by engine');
+      }
+      for (const key of Object.keys(t.gainDb)) {
+        if (!TTS_ENGINES.includes(key)) {
+          throw new Error(`tts.gainDb has unknown engine "${key}"; must be one of: ${TTS_ENGINES.join(', ')}`);
+        }
+        next.tts.gainDb[key] = clampTtsGain(t.gainDb[key]);
       }
     }
   }

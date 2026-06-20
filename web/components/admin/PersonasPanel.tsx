@@ -58,6 +58,9 @@ interface PersonaTts {
   engine: 'piper' | 'kokoro' | 'chatterbox' | 'pocket-tts' | 'cloud' | string;
   cloudProvider: string;
   voice: string;
+  // Per-persona voice-level trim in dB (−12..+12, default 0 = no change). Stacks
+  // on top of the per-engine gain. See controller settings.ts:clampTtsGain.
+  gainDb: number;
 }
 
 interface Persona {
@@ -403,6 +406,7 @@ export default function PersonasPanel() {
               engine: p.tts?.engine ?? 'piper',
               cloudProvider: p.tts?.cloudProvider ?? 'openai',
               voice: p.tts?.voice ?? 'bf_isabella',
+              gainDb: typeof p.tts?.gainDb === 'number' ? p.tts.gainDb : 0,
             },
             skills: Array.isArray(p.skills) ? p.skills : allSkills,
           })),
@@ -432,7 +436,7 @@ export default function PersonasPanel() {
           frequency: 'moderate', scriptLength: 'concise', djMode: false, soul: '',
           language: '',
           avatar: '',
-          tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella' },
+          tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 0 },
           skills: (data?.skills?.catalog || []).map(s => s.name),
         }],
       };
@@ -579,6 +583,8 @@ export default function PersonasPanel() {
               //   chatterbox — must be a .wav filename or empty (built-in)
               //   piper/cloud — passed through as-is
               voice: voiceForSave(p.tts.engine, p.tts.voice.trim()),
+              // Per-persona voice-level trim (dB). Server clamps to ±12.
+              gainDb: p.tts.gainDb ?? 0,
             },
             skills: p.skills,
           })),
@@ -1254,6 +1260,36 @@ export default function PersonasPanel() {
                   </div>
                 </div>
                 </>
+              );
+            })()}
+
+            {(() => {
+              const gain = focused.tts.gainDb ?? 0;
+              const label = !gain
+                ? '0 dB'
+                : `${gain > 0 ? '+' : '−'}${Math.abs(gain).toFixed(1)} dB`;
+              return (
+                <div className="field mt-3.5 max-w-[360px]">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label>Voice level (dB)</Label>
+                    <span className="font-mono text-[12px] text-ink tabular-nums">{label}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={-12}
+                    max={12}
+                    step={0.5}
+                    value={gain}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setPersonaTts(safeIdx, { gainDb: Number(e.target.value) })
+                    }
+                    aria-label="Persona voice level in decibels"
+                    className="mt-1.5 w-full accent-[var(--accent)]"
+                  />
+                  <div className="field-hint">
+                    Trim this persona’s loudness on top of the engine level. <code>0 dB</code> = no change.
+                  </div>
+                </div>
               );
             })()}
           </Card>

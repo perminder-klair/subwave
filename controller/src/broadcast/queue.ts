@@ -9,7 +9,7 @@ import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
 import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
-import { speak } from '../audio/tts.js';
+import { speak, voiceGainDb } from '../audio/tts.js';
 import * as djAgent from './dj-agent.js';
 import * as sfx from './sfx.js';
 import * as session from './session.js';
@@ -440,7 +440,7 @@ class Queue {
       const targetFile = kind === 'link'
         ? config.liquidsoap.introFile
         : config.liquidsoap.sayFile;
-      await airVoice(targetFile, wavPath, text);
+      await airVoice(targetFile, wavPath, text, voiceGainDb(kind));
       this.log(kind, text);
       session.appendTurn({ role: 'segment', kind, text });
       // The auto-DJ link channel is its own event; everything else (station
@@ -467,7 +467,7 @@ class Queue {
       ? config.liquidsoap.introFile
       : config.liquidsoap.sayFile;
     try {
-      await airVoice(targetFile, item.introWav, item.introScript || '');
+      await airVoice(targetFile, item.introWav, item.introScript || '', voiceGainDb(kind));
       this.persist();
       this.log(kind, item.introScript);
       session.appendTurn({ role: 'segment', kind, text: item.introScript });
@@ -845,14 +845,27 @@ const VOICE_TAIL_MS = 700;     // duck ramp-back + poll/scheduling slack
 // really aired) can't wedge the voice channel for minutes.
 const VOICE_HOLD_MAX_MS = 90_000;
 
-async function airVoice(path: string, wavPath: string, text: string) {
+async function airVoice(path: string, wavPath: string, text: string, gainDb = 0) {
+  // Duration is read from the bare WAV path (header parse), so compute it BEFORE
+  // wrapping — the annotate URI isn't a real file. The wrapped URI is only what
+  // gets written to the handoff file for Liquidsoap to consume.
   const holdMs = Math.min(VOICE_HOLD_MAX_MS, speechDurationMs(wavPath, text));
+  const uri = voiceUriWithGain(wavPath, gainDb);
   const turn = _voiceChain
     .catch(() => undefined)
-    .then(() => writeHandoff(path, wavPath));
+    .then(() => writeHandoff(path, uri));
   // Extend the shared lock until this clip has (about) finished playing.
   _voiceChain = turn.then(() => sleep(holdMs)).then(() => {}, () => {});
   return turn;
+}
+
+// Wrap a rendered voice-clip path in a Liquidsoap `annotate:` URI carrying a
+// liq_amplify gain, so the per-engine/persona voice trim is applied as the clip
+// plays (radio.liq wraps the voice queues in amplify(override="liq_amplify")).
+// 0 dB → the bare path, no annotation — byte-for-byte today's behaviour. Mirrors
+// subsonic.getAnnotatedUri's liq_amplify="<n> dB" form (the music loudness path).
+function voiceUriWithGain(wavPath: string, gainDb: number): string {
+  return gainDb !== 0 ? `annotate:liq_amplify="${gainDb} dB":${wavPath}` : wavPath;
 }
 
 // Best-effort playback duration of a rendered voice clip, plus the lead-in and
