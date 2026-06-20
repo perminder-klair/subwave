@@ -52,8 +52,13 @@ const CAPS: Record<string, ProviderCapabilities> = {
         ? { openai: { reasoningEffort: reasoning ? 'medium' : 'minimal' } }
         : {},
   },
+  // openai-compatible targets self-hosted llama.cpp / vLLM / LM Studio — the
+  // same local GGUF model class as ollama and locca, which emit a schema-valid
+  // object WITHOUT exploring under native Output.object + auto tool_choice
+  // (verified 8/8 explored=false on gemma-4-12b via this provider). So it takes
+  // the forced done-tool path too, not the dead native leg.
   'openai-compatible': {
-    objectStrategy: 'native',
+    objectStrategy: 'tool',
     repeatPenaltyApplies: false,
     // Thinking suppression is done at the transport layer (noThinkFetch in the
     // registry), not via providerOptions.
