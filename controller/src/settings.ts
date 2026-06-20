@@ -374,6 +374,10 @@ const DEFAULTS = {
   // Empty = Auto: the container's own TZ, so existing installs are untouched.
   // Applied live via time.ts setStationTimezone(); no restart.
   timezone: '',
+  // Operator-facing locale for display copy/time formatting. Defaults to the
+  // existing UK English + 24-hour clock behaviour; en-US switches visible
+  // clocks to AM/PM without changing schedule/time-of-day semantics.
+  locale: 'en-GB' as 'en-GB' | 'en-US',
   // Station-wide visual theme — every listener and the admin UI render with
   // this palette. The id resolves through controller/src/themes.ts, which
   // ships the built-ins and reads optional user JSONs from
@@ -867,6 +871,10 @@ export async function load() {
       typeof stored.timezone === 'string' && isValidTimezone(stored.timezone.trim())
         ? stored.timezone.trim()
         : DEFAULTS.timezone,
+    locale:
+      stored.locale === 'en-US' || stored.locale === 'en-GB'
+        ? stored.locale
+        : DEFAULTS.locale,
     theme: {
       // We only validate the *shape* here. The active id might reference a
       // theme file that's since been removed; the public /themes endpoint
@@ -1585,6 +1593,13 @@ export async function update(patch) {
       throw new Error(`invalid timezone "${v}" — use an IANA name like Europe/Athens`);
     }
     next.timezone = v;
+  }
+  if ('locale' in patch) {
+    const v = String(patch.locale ?? '').trim();
+    if (v !== 'en-GB' && v !== 'en-US') {
+      throw new Error("locale must be 'en-GB' or 'en-US'");
+    }
+    next.locale = v;
   }
   if ('theme' in patch) {
     const t = patch.theme || {};

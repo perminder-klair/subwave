@@ -59,6 +59,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         stream: s.stream,
         station: s.station,
         timezone: s.timezone,
+        locale: s.locale,
         theme: s.theme,
         weather: s.weather,
         djPrompt: s.djPrompt,
@@ -81,6 +82,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         tts: settings.getDefaults().tts,
         llm: settings.getDefaults().llm,
         search: settings.getDefaults().search,
+        locale: settings.getDefaults().locale,
       },
       tts: {
         engines: tts.ENGINES,

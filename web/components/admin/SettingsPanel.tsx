@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { m } from 'motion/react';
 import { notify, errorMessage } from '../../lib/notify';
-import { fmtSize } from '../../lib/format';
+import { fmtClockMinute, fmtSize, normalizeStationLocale, type StationLocale } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { applyTheme, cacheTheme } from '../../lib/theme';
 import { CLOUD_VOICES, CLOUD_MODELS } from '../../lib/cloudVoices';
@@ -23,7 +23,7 @@ import WebhooksPanel from './WebhooksPanel';
 import BackupPanel from './BackupPanel';
 
 const SECTIONS = [
-  { id: 'station',  label: 'Station', hint: 'name · location · timezone' },
+  { id: 'station',  label: 'Station', hint: 'name · location · locale' },
   { id: 'theme',    label: 'Theme', hint: 'station-wide palette' },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing' },
   { id: 'tts',      label: 'TTS voice', hint: 'default engine' },
@@ -202,6 +202,7 @@ interface FormState {
   stream: StreamForm;
   station: string;
   timezone: string;
+  locale: StationLocale;
   weather: WeatherCfg;
   tts: TtsForm;
   llm: LlmForm;
@@ -239,6 +240,7 @@ interface SettingsData {
     stream?: { opusEnabled?: boolean };
     station?: string;
     timezone?: string;
+    locale?: StationLocale;
     theme?: { active?: string };
     weather?: { lat?: number; lng?: number; locationName?: string; units?: 'metric' | 'imperial' };
     tts?: {
@@ -291,6 +293,7 @@ interface SettingsData {
   };
   defaults?: {
     search?: Partial<SearchForm>;
+    locale?: StationLocale;
   };
   jingles?: JingleEntry[];
   libraryStats?: { total?: number };
@@ -367,6 +370,7 @@ export default function SettingsPanel() {
       },
       station: v.station ?? '',
       timezone: v.timezone ?? '',
+      locale: normalizeStationLocale(v.locale),
       weather: {
         lat: String(v.weather?.lat ?? ''),
         lng: String(v.weather?.lng ?? ''),
@@ -2776,18 +2780,15 @@ const TZ_GROUPS: Array<{ region: string; zones: string[] }> = (() => {
 })();
 
 // Wall-clock preview for a zone, or '' when the zone can't be formatted.
-function clockPreview(timeZone: string) {
-  try {
-    return new Date().toLocaleTimeString('en-GB', { timeZone: timeZone || undefined, hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return '';
-  }
+function clockPreview(timeZone: string, locale: StationLocale) {
+  return fmtClockMinute(new Date(), timeZone || undefined, locale);
 }
 
 function StationSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const save = () => saveSettings({
     station: form.station,
     timezone: form.timezone,
+    locale: form.locale,
     weather: {
       lat: parseFloat(form.weather.lat),
       lng: parseFloat(form.weather.lng),
@@ -2807,14 +2808,15 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
   const serverTz = data.serverTimezone || 'server timezone';
   // '' = Auto → preview the server's zone, which is what the station runs on.
   const previewTz = form.timezone || data.serverTimezone || '';
-  const preview = clockPreview(previewTz);
+  const preview = clockPreview(previewTz, form.locale);
+  const localeLabel = form.locale === 'en-US' ? 'English (US)' : 'English (UK)';
 
   return (
     <>
       <SectionHeader
         eyebrow="station"
         title="How the DJ identifies this radio on air."
-        sub="The station name is substituted into the DJ prompt as {station}. The location sets where the DJ thinks it broadcasts from and drives the Open-Meteo weather it reads on air. The timezone sets the clock the DJ lives on. All apply live — no mixer restart."
+        sub="The station name is substituted into the DJ prompt as {station}. The location sets where the DJ thinks it broadcasts from and drives the Open-Meteo weather it reads on air. The timezone sets the clock the DJ lives on; locale controls how station times are displayed. All apply live — no mixer restart."
         metrics={[
           { n: data.values?.station || 'SUB/WAVE', l: 'station', accent: true },
         ]}
@@ -2929,7 +2931,7 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
           </Select>
           {preview && (
             <div className="field-hint">
-              Station clock: <span className="mono-num">{preview}</span> — if that doesn’t match your watch, pick your zone above.
+              Station clock: <span className="mono-num">{preview}</span> in {localeLabel} — if that doesn’t match your watch, pick your zone above.
             </div>
           )}
           <div className="field-hint">
@@ -2940,8 +2942,31 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
         </div>
       </Card>
 
+      <Card title="Localization" sub="Language variant and clock display">
+        <div className="field">
+          <Label>Station locale</Label>
+          <Select
+            value={form.locale}
+            onValueChange={val =>
+              setForm(f => ({ ...f, locale: normalizeStationLocale(val) }))
+            }
+          >
+            <SelectTrigger className="w-[260px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="en-GB">English (UK) — 24-hour</SelectItem>
+                <SelectItem value="en-US">English (US) — AM/PM</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <div className="field-hint">
+            Sets station-facing display language and clock style. US English uses AM/PM for visible clock times. Applies live.
+          </div>
+        </div>
+      </Card>
+
       <SaveBar
-        note="Station name, location, and timezone apply live."
+        note="Station name, location, timezone, and locale apply live."
         busy={busy}
         onSave={save}
         saveLabel="Save station settings"

@@ -12,6 +12,7 @@ import type {
   SessionPayload,
   StationContext,
   StationState,
+  StationLocale,
 } from '@/lib/types';
 
 export interface StationFeed {
@@ -34,6 +35,7 @@ export interface StationFeed {
    *  Render on-air timestamps in this zone so they match what the DJ speaks
    *  (issue #418). */
   timezone: string | null;
+  locale: StationLocale;
 }
 
 const EMPTY_STATE: StationState = { upcoming: [], history: [], djLog: [] };
@@ -63,6 +65,7 @@ export function useStationFeed(): StationFeed {
   const [session, setSession] = useState<SessionPayload>(EMPTY_SESSION);
   const [trackStartedAt, setTrackStartedAt] = useState<number | null>(null);
   const [timezone, setTimezone] = useState<string | null>(null);
+  const [locale, setLocale] = useState<StationLocale>('en-GB');
   const lastTrackKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -87,6 +90,7 @@ export function useStationFeed(): StationFeed {
         if (typeof npRes.streamOnline === 'boolean') setStreamOnline(npRes.streamOnline);
         if (typeof npRes.llmTokens === 'number') setIfChanged<number | null>(setLlmTokens, npRes.llmTokens);
         if (typeof npRes.timezone === 'string' && npRes.timezone) setTimezone(npRes.timezone);
+        if (npRes.locale === 'en-US' || npRes.locale === 'en-GB') setLocale(npRes.locale);
         setIfChanged(setState, stRes);
         if (seRes && Array.isArray(seRes.messages)) setIfChanged(setSession, seRes);
       } catch {}
@@ -94,5 +98,5 @@ export function useStationFeed(): StationFeed {
     return pollWhileVisible(() => { void tick(); }, 5000);
   }, [apiUrl]);
 
-  return { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, timezone };
+  return { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, timezone, locale };
 }

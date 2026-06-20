@@ -15,7 +15,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../lib/notify';
-import { zonedDayHour } from '../../lib/format';
+import { fmtClock, normalizeStationLocale, zonedDayHour } from '../../lib/format';
+import type { StationLocale } from '../../lib/types';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { Label } from '../ui/label';
@@ -123,6 +124,7 @@ interface SettingsResponse {
     personas?: Persona[];
     /** Configured station zone; '' means Auto (use serverTimezone). */
     timezone?: string;
+    locale?: StationLocale;
   };
   /** Effective zone when timezone is '' (Auto) — the container's own TZ. */
   serverTimezone?: string;
@@ -234,6 +236,7 @@ export default function ShowsPanel() {
   // zone (configured, or the container's own when Auto), so the "now" cell must
   // be derived in that zone too — not the operator's browser zone (issue #418).
   const stationTz = data?.values?.timezone || data?.serverTimezone;
+  const stationLocale = normalizeStationLocale(data?.values?.locale);
   const { dow: nowDay, hour: nowHour } = zonedDayHour(now, stationTz);
 
   // End any drag-paint stroke when the pointer is released anywhere.
@@ -549,12 +552,12 @@ export default function ShowsPanel() {
             <div className="flex flex-wrap items-baseline gap-2.5">
               <Eyebrow className="text-vermilion">shows · weekly grid</Eyebrow>
               <span className="mono-num text-[12px] font-bold tracking-[0.04em] text-ink">
-                {now.toLocaleDateString('en-GB', {
+                {now.toLocaleDateString(stationLocale, {
                   weekday: 'short', day: '2-digit', month: 'short', year: 'numeric',
                   timeZone: stationTz || undefined,
                 })}
                 {' · '}
-                {now.toLocaleTimeString('en-GB', { hour12: false, timeZone: stationTz || undefined })}
+                {fmtClock(now.getTime(), stationTz, stationLocale)}
                 {stationTz ? ` · ${stationTz}` : ''}
               </span>
             </div>

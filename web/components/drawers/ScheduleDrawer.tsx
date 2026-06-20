@@ -2,12 +2,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { cn } from '@/lib/cn';
+import { fmtClockMinute, normalizeStationLocale } from '@/lib/format';
 import type {
   ActiveShow,
   ScheduleGrid,
   SchedulePayload,
   SchedulePersona,
   ScheduleShow,
+  StationLocale,
   StationContext,
 } from '@/lib/types';
 import { useStationOrigin } from '@/lib/stationOrigin';
@@ -46,11 +48,16 @@ function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
 
-function fmtHourRange(start: number, end: number): string {
-  return `${pad2(start)}:00 – ${pad2((end + 1) % 24)}:00`;
+function fmtHourRange(start: number, end: number, locale: StationLocale): string {
+  return `${fmtHour(start, locale)} – ${fmtHour((end + 1) % 24, locale)}`;
 }
 
-function fmtHour(start: number): string {
+function fmtHour(start: number, locale: StationLocale): string {
+  if (locale === 'en-US') {
+    const hour = start % 24;
+    const suffix = hour < 12 ? 'AM' : 'PM';
+    return `${hour % 12 || 12}:00 ${suffix}`;
+  }
   return `${pad2(start)}:00`;
 }
 
@@ -158,6 +165,7 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
   }
 
   const hasAnyShow = data.shows.length > 0;
+  const locale = normalizeStationLocale(data.locale);
   if (!hasAnyShow) {
     // Autonomous mode (no scheduled shows) is the common state for a personal
     // station, so still surface the station time + location here — that's
@@ -167,6 +175,7 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
         <StationHeader
           now={now}
           timezone={data.timezone ?? null}
+          locale={locale}
           location={context?.weather?.location ?? null}
         />
         <div className="text-[13px] leading-relaxed text-muted">
@@ -183,9 +192,10 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
       <StationHeader
         now={now}
         timezone={data.timezone ?? null}
+        locale={locale}
         location={context?.weather?.location ?? null}
       />
-      <OnNowCard onNow={onNow} activeShow={activeShow} />
+      <OnNowCard onNow={onNow} activeShow={activeShow} locale={locale} />
 
       <section>
         <SectionLabel>
@@ -202,6 +212,7 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
                 key={`${viewDay}-${slot.hour}`}
                 slot={slot}
                 isNow={viewDay === today && slot.hour <= currentHour && currentHour <= slot.endHour}
+                locale={locale}
               />
             ))}
           </ul>
@@ -216,21 +227,18 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
 function StationHeader({
   now,
   timezone,
+  locale,
   location,
 }: {
   now: Date;
   timezone: string | null;
+  locale: StationLocale;
   location: string | null;
 }) {
   // If the operator's TZ isn't on the schedule payload we fall back to the
   // viewer's local TZ — close enough for a personal station where operator
   // and listener usually overlap.
-  const time = new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-    ...(timezone ? { timeZone: timezone } : {}),
-  }).format(now);
+  const time = fmtClockMinute(now, timezone, locale);
   return (
     <section className="flex items-end justify-between gap-4 border-b border-separator-soft pb-3">
       <div>
@@ -303,8 +311,9 @@ function AvatarThumb({ avatar, name, tier }: { avatar: string; name: string; tie
 function OnNowCard(props: {
   onNow: { show: ScheduleShow; persona: SchedulePersona | null; endHour: number } | null;
   activeShow: ActiveShow | null;
+  locale: StationLocale;
 }) {
-  const { onNow, activeShow } = props;
+  const { onNow, activeShow, locale } = props;
   const { apiUrl } = useStationOrigin();
   if (!onNow) {
     return (
@@ -324,7 +333,7 @@ function OnNowCard(props: {
   const avatar = resolveAvatar(apiUrl, onNow.persona?.avatar || activeShow?.persona?.avatar || '');
   return (
     <section>
-      <SectionLabel>On now · until {fmtHour((onNow.endHour + 1) % 24)}</SectionLabel>
+      <SectionLabel>On now · until {fmtHour((onNow.endHour + 1) % 24, locale)}</SectionLabel>
       <div className="flex gap-4 border border-separator-strong p-4">
         <AvatarThumb avatar={avatar} name={personaName} tier="lg" />
         <div className="min-w-0 flex-1">
@@ -345,11 +354,11 @@ function OnNowCard(props: {
   );
 }
 
-function ScheduleRow({ slot, isNow }: { slot: Slot; isNow: boolean }) {
+function ScheduleRow({ slot, isNow, locale }: { slot: Slot; isNow: boolean; locale: StationLocale }) {
   const { apiUrl } = useStationOrigin();
   const personaName = slot.persona?.name || (slot.show ? 'Host' : null);
   const avatar = resolveAvatar(apiUrl, slot.persona?.avatar || '');
-  const time = slot.hour === slot.endHour ? fmtHour(slot.hour) : fmtHourRange(slot.hour, slot.endHour);
+  const time = slot.hour === slot.endHour ? fmtHour(slot.hour, locale) : fmtHourRange(slot.hour, slot.endHour, locale);
   return (
     <li
       className={cn(

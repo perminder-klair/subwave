@@ -3,6 +3,8 @@
 // writes — for runtime guarantees, see the Zod schemas in controller/src
 // (when controller TS migration lands per issue #43).
 
+export type StationLocale = 'en-GB' | 'en-US';
+
 /** A track currently airing. `subsonic_id` is present for library tracks and
  *  drives MediaSession artwork via the `/api/cover/:id` proxy. Jingles +
  *  scanning have no id. */
@@ -57,6 +59,7 @@ export interface DjPublic {
   avatar?: string;
   station?: string;
   location?: string;
+  locale?: StationLocale;
 }
 
 /** `/schedule` response — listener-safe view of the week. */
@@ -79,6 +82,7 @@ export interface SchedulePayload {
   shows: ScheduleShow[];
   schedule: ScheduleGrid;
   timezone?: string | null;
+  locale?: StationLocale;
 }
 
 /** Context envelope returned by `/now-playing` — driven by controller's
@@ -119,6 +123,8 @@ export interface NowPlayingResponse {
   llmTokens?: number | null;
   /** Station IANA timezone — render on-air timestamps in it (issue #418). */
   timezone?: string;
+  /** Station display locale — UK keeps 24-hour time; US uses AM/PM. */
+  locale?: StationLocale;
 }
 
 export interface QueueEntry {
@@ -166,6 +172,8 @@ export interface StationState {
   upcoming: QueueEntry[];
   history: QueueEntry[];
   djLog: DjLogEntry[];
+  timezone?: string;
+  locale?: StationLocale;
 }
 
 /** A single turn in the live DJ session — `voice` (spoken on-air), `dj` (the

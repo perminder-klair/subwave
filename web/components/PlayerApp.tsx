@@ -48,7 +48,7 @@ export interface PlayerAppProps {
 
 export default function PlayerApp({ contained = false }: PlayerAppProps) {
   const { apiUrl } = useStationOrigin();
-  const { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, timezone } = useStationFeed();
+  const { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, timezone, locale } = useStationFeed();
   const boothFeed = session.messages;
   const { audioRef, tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted, idleStopped } = usePlayer();
 
@@ -354,7 +354,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
         {drawer === 'timeline' && (
           <TimelineDrawer upcoming={state.upcoming} history={state.history} />
         )}
-        {drawer === 'booth'   && <BoothDrawer items={boothFeed} timezone={timezone} />}
+        {drawer === 'booth'   && <BoothDrawer items={boothFeed} timezone={timezone} locale={locale} />}
         {drawer === 'request' && (
           <RequestDrawer
             requestText={requestText} setRequestText={setRequestText}

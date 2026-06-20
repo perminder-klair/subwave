@@ -5,7 +5,7 @@ import { AnimatePresence, m } from 'motion/react';
 import { turnClass, turnKey, turnText, isDjTurn, type TurnDisplayClass } from '@/lib/sessionFeed';
 import { cn } from '@/lib/cn';
 import { fmtClock } from '@/lib/format';
-import type { SessionTurn } from '@/lib/types';
+import type { SessionTurn, StationLocale } from '@/lib/types';
 
 type FilterId = 'all' | 'dj' | 'tracks';
 
@@ -33,6 +33,7 @@ export interface BoothDrawerProps {
   /** Station IANA timezone — timestamps render in it so they match what the DJ
    *  speaks on-air (issue #418). Falls back to the browser zone when absent. */
   timezone?: string | null;
+  locale?: StationLocale;
 }
 
 // `items` is the live session's `messages` array — turns of
@@ -43,7 +44,7 @@ export interface BoothDrawerProps {
 // when new ones insert. `initial={false}` on the AnimatePresence parent means
 // the first render isn't animated (we don't want a 30-row enter animation on
 // drawer open).
-export default function BoothDrawer({ items, timezone }: BoothDrawerProps) {
+export default function BoothDrawer({ items, timezone, locale }: BoothDrawerProps) {
   const [filter, setFilter] = useState<FilterId>('all');
 
   const filtered = useMemo<SessionTurn[]>(() => {
@@ -108,7 +109,7 @@ export default function BoothDrawer({ items, timezone }: BoothDrawerProps) {
             >
               <div className="mb-1 flex items-baseline gap-2">
                 <span className="v3-tab-num min-w-[56px] text-[10px] text-muted">
-                  {fmtClock(turn.t, timezone)}
+                  {fmtClock(turn.t, timezone, locale)}
                 </span>
                 <span className={cn('text-[9px] font-semibold tracking-[0.3em] uppercase', color)}>
                   {turn.kind}

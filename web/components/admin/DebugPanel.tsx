@@ -10,6 +10,7 @@ import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
 import { Card, Btn, Pill, Eyebrow } from './ui';
 import { cn } from '../../lib/cn';
+import type { StationLocale } from '../../lib/types';
 
 // All admin endpoints return loose JSON; type as unknown then narrow with
 // optional-chaining at call sites. The shapes mirror the controller's
@@ -161,6 +162,7 @@ interface DebugContext {
 interface DebugData {
   /** Station IANA zone — render DJ-log timestamps in it (issue #418). */
   timezone?: string;
+  locale?: StationLocale;
   icecast?: DebugIcecast;
   liquidsoapLog?: string;
   llm?: DebugLlm;
@@ -405,7 +407,7 @@ export default function DebugPanel() {
                     className={`log ${kindTone(e.kind)}`}
                   >
                     <span className="t">
-                      {fmtClock(e.t, data.timezone) || '—'}
+                      {fmtClock(e.t, data.timezone, data.locale) || '—'}
                     </span>
                     <span className="k">[{e.kind}]</span>
                     <span className="msg">{e.message}</span>

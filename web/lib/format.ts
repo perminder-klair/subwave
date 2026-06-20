@@ -6,6 +6,18 @@ export function fmtTime(sec: number | null | undefined): string {
   return `${m}:${String(r).padStart(2, '0')}`;
 }
 
+export type StationLocale = 'en-GB' | 'en-US';
+
+export const DEFAULT_STATION_LOCALE: StationLocale = 'en-GB';
+
+export function normalizeStationLocale(locale: unknown): StationLocale {
+  return locale === 'en-US' ? 'en-US' : DEFAULT_STATION_LOCALE;
+}
+
+function stationClockOptions(locale: StationLocale): Intl.DateTimeFormatOptions {
+  return locale === 'en-US' ? { hour12: true } : { hour12: false };
+}
+
 // Wall-clock time-of-day for an on-air event, rendered in the station's zone.
 // The DJ speaks the time in the configured station timezone (controller's
 // time.ts), so log/booth timestamps must use that same zone — otherwise an
@@ -13,15 +25,38 @@ export function fmtTime(sec: number | null | undefined): string {
 // disagree with what the DJ just said (issue #418). `tz` is the IANA zone from
 // /now-playing | /state | /debug; falls back to the browser's local zone when
 // it's absent. Returns '' for a missing timestamp so callers can `|| '—'`.
-export function fmtClock(t: string | number | null | undefined, tz?: string | null): string {
+export function fmtClock(
+  t: string | number | null | undefined,
+  tz?: string | null,
+  locale?: StationLocale | null,
+): string {
   if (t == null) return '';
+  const stationLocale = normalizeStationLocale(locale);
   try {
-    return new Date(t).toLocaleTimeString('en-GB', {
-      hour12: false,
+    return new Date(t).toLocaleTimeString(stationLocale, {
+      ...stationClockOptions(stationLocale),
       ...(tz ? { timeZone: tz } : {}),
     });
   } catch {
     return String(t);
+  }
+}
+
+export function fmtClockMinute(
+  t: string | number | Date,
+  tz?: string | null,
+  locale?: StationLocale | null,
+): string {
+  const stationLocale = normalizeStationLocale(locale);
+  try {
+    return new Date(t).toLocaleTimeString(stationLocale, {
+      hour: '2-digit',
+      minute: '2-digit',
+      ...stationClockOptions(stationLocale),
+      ...(tz ? { timeZone: tz } : {}),
+    });
+  } catch {
+    return '';
   }
 }
 

@@ -163,6 +163,7 @@ router.get('/now-playing', async (req, res) => {
     }
     // Served from the 15s listener-monitor cache — no per-request Icecast hit.
     const stream = getStreamStatus();
+    const stationSettings = settings.get();
     const persona = settings.getEffectivePersona();
     // activeShow is { name, persona:{ id, name, avatar } } | null — the
     // persona block is reshaped here to include the public avatar URL so the
@@ -187,7 +188,7 @@ router.get('/now-playing', async (req, res) => {
         name: persona?.name || 'Frequency',
         tagline: persona?.tagline || '',
         avatar: avatarUrlFor(persona?.id),
-        station: settings.get().station,
+        station: stationSettings.station,
       },
       activeShow,
       session: s ? { id: s.id, kind: s.kind, startedAt: s.startedAt, show: s.show?.name || null } : null,
@@ -203,6 +204,7 @@ router.get('/now-playing', async (req, res) => {
       // operator/listener viewing from another zone sees stamps that disagree
       // with what the DJ just said (issue #418).
       timezone: getStationTimezone(),
+      locale: stationSettings.locale,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -227,6 +229,7 @@ router.get('/dj', async (req, res) => {
       avatar: avatarUrlFor(persona?.id),
       station: s.station,
       location: s.weather?.locationName || '',
+      locale: s.locale,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -266,6 +269,7 @@ router.get('/schedule', async (req, res) => {
       // can show a small "Times shown in station local time" hint where
       // needed.
       timezone: getStationTimezone(),
+      locale: s.locale,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -291,6 +295,7 @@ router.get('/state', (req, res) => {
     theme: { active: activeThemeId },
     // Station zone for rendering djLog timestamps in station-local time (#418).
     timezone: getStationTimezone(),
+    locale: s.locale,
   });
 });
 

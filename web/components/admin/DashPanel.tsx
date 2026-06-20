@@ -17,6 +17,7 @@ import type {
   DjState,
   ListenerCount,
   QueueEntry,
+  StationLocale,
 } from '../../lib/types';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { V3Alert } from '../ui/alert';
@@ -60,6 +61,7 @@ interface DashStatus {
   sessionMessages?: SessionTurn[];
   /** Station IANA zone — render on-air timestamps in it (issue #418). */
   timezone?: string;
+  locale?: StationLocale;
 }
 
 // Subset of /stats (admin) the health strip reads: DJ p95 latency + the TTS
@@ -383,6 +385,7 @@ export default function DashPanel() {
   // Station zone — on-air timestamps render in it so they match what the DJ
   // speaks, regardless of the operator's own browser timezone (issue #418).
   const tz = status?.timezone;
+  const locale = status?.locale;
   const q: QueueState = status?.queue || {};
   const listenersValue = status?.listeners;
   const listenersObj = listenersValue && typeof listenersValue === 'object' ? listenersValue : null;
@@ -487,7 +490,7 @@ export default function DashPanel() {
                 {booth.map((turn, i) => (
                   <div key={turnKey(turn, i)} className={`log ${classTone(turnClass(turn))}`}>
                     <span className="t">
-                      {fmtClock(turn.t, tz)}
+                      {fmtClock(turn.t, tz, locale)}
                     </span>
                     <span className="k">[{turn.kind}]</span>
                     <span className="msg">{turnText(turn)}</span>
@@ -659,7 +662,7 @@ export default function DashPanel() {
       </Card>
 
       {/* ── REQUESTS ───────────────────────────────────────────────────── */}
-      <RequestsCard requests={requests} err={reqErr} tz={tz} />
+      <RequestsCard requests={requests} err={reqErr} tz={tz} locale={locale} />
 
       {!status && !err && <div className="text-muted italic">connecting…</div>}
 
@@ -792,7 +795,17 @@ function oneLine(s: unknown, n = 80): string {
 
 // The Requests card — every listener request and exactly how the AI DJ
 // resolved it. Newest first; each row expands to the full debug trace.
-function RequestsCard({ requests, err, tz }: { requests: RequestEntry[] | null; err: string | null; tz?: string }) {
+function RequestsCard({
+  requests,
+  err,
+  tz,
+  locale,
+}: {
+  requests: RequestEntry[] | null;
+  err: string | null;
+  tz?: string;
+  locale?: StationLocale;
+}) {
   return (
     <Card
       title="Requests"
@@ -813,7 +826,7 @@ function RequestsCard({ requests, err, tz }: { requests: RequestEntry[] | null; 
       ) : (
         <div className="grid max-h-[520px] gap-1.5 overflow-y-auto">
           {requests.map((r, i) => (
-            <RequestRow key={`${r.t ?? ''}:${i}`} r={r} tz={tz} />
+            <RequestRow key={`${r.t ?? ''}:${i}`} r={r} tz={tz} locale={locale} />
           ))}
         </div>
       )}
@@ -821,7 +834,7 @@ function RequestsCard({ requests, err, tz }: { requests: RequestEntry[] | null; 
   );
 }
 
-function RequestRow({ r, tz }: { r: RequestEntry; tz?: string }) {
+function RequestRow({ r, tz, locale }: { r: RequestEntry; tz?: string; locale?: StationLocale }) {
   const ok = r.status === 'resolved';
   // Matcher breakdown — only the fields that carry a value, joined compactly.
   const trace = [
@@ -846,7 +859,7 @@ function RequestRow({ r, tz }: { r: RequestEntry; tz?: string }) {
         </span>
         <span className="caption text-[10px]">{r.ms != null ? `${r.ms}ms` : ''}</span>
         <span className="mono-num text-[10px] text-muted">
-          {fmtClock(r.t, tz) || '—'}
+          {fmtClock(r.t, tz, locale) || '—'}
         </span>
       </summary>
       <div className="grid gap-2 px-2.5 pt-1 pb-2.5 text-[12px]">

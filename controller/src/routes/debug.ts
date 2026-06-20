@@ -32,7 +32,13 @@ router.get('/requests', requireAdmin, (req, res) => {
 router.get('/debug', requireAdmin, async (req, res) => {
   // Station zone so the DJ-log timestamps render in station-local time, matching
   // what the DJ speaks on-air (#418).
-  const out: any = { t: new Date().toISOString(), timezone: getStationTimezone() };
+  let settingsSnapshot: any = null;
+  try { settingsSnapshot = settings.get(); } catch { settingsSnapshot = null; }
+  const out: any = {
+    t: new Date().toISOString(),
+    timezone: getStationTimezone(),
+    locale: settingsSnapshot?.locale,
+  };
 
   // 1. now-playing.json (what Liquidsoap last wrote)
   try {
@@ -167,12 +173,10 @@ router.get('/debug', requireAdmin, async (req, res) => {
   // (falling back to config) rather than the stale env default. The LLM
   // provider/model/endpoint is provider-agnostic (any AI SDK provider or
   // router) and already reported in `out.llm` — not duplicated here.
-  let s: any = null;
-  try { s = settings.get(); } catch { s = null; }
   out.config = {
     navidromeUrl: config.navidrome.url,
     navidromeUser: config.navidrome.user,
-    location: s?.weather?.locationName || config.weather.locationName,
+    location: settingsSnapshot?.weather?.locationName || config.weather.locationName,
     port: config.server.port,
   };
 
