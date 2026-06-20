@@ -146,7 +146,7 @@ The pipeline is already proven (ascAppId `6778786696`, submit config in `eas.jso
   - Lock-screen metadata + persona/cover swap on song change
   - Headphone unplug → pauses; resume returns to live edge (validates A3)
   - Phone-call interruption + resume (`autoHandleInterruptions`)
-  - CarPlay / Android Auto controls
+  - CarPlay controls (iOS; Android Auto intentionally not declared — Play policy)
   - Wifi→cellular switch: banner shows, reconnect within a beat (validates A1)
   - Airplane-mode cold start: banner shows, no stuck splash
   - Station off-air mid-listen

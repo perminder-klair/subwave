@@ -9,7 +9,7 @@ behaves differently for background audio, interruptions, and OTA).
 
 - ≥1 **physical iPhone** (background audio / lock screen / CarPlay can't be judged
   on the simulator).
-- ≥1 **physical Android** phone (foreground-service notification, Android Auto).
+- ≥1 **physical Android** phone (foreground-service notification, lock-screen controls).
 
 Mark each box per platform. Note the device + OS version you tested on.
 
@@ -35,7 +35,7 @@ Mark each box per platform. Note the device + OS version you tested on.
 ## Platform controls
 
 - [ ] **iOS** — **CarPlay**: SUB/WAVE appears, shows now-playing, Play/Pause/Stop work.
-- [ ] **Android** — **Android Auto**: same.
+      _(Android Auto is intentionally **not** declared — rejected by Google Play under the Auto TTS-content policy; nothing to test there.)_
 - [ ] **Android** — **Kill the app** (swipe from recents): the **foreground-service notification is removed** and audio stops (`StopPlaybackAndRemoveNotification`).
 
 ## Accessibility
