@@ -129,10 +129,12 @@ async function main() {
     assert.deepEqual(providerOptions({ provider: 'locca', model: 'qwen3', reasoning: false }), {});
     assert.deepEqual(providerOptions({ provider: 'locca', model: 'qwen3', reasoning: true }), {});
   });
-  await test('capability flags: tool-object + repeat-penalty are Ollama-only', () => {
+  await test('capability flags: tool-object covers ollama + locca; repeat-penalty is Ollama-only', () => {
     assert.equal(needsToolCallObject({ provider: 'ollama' }), true);
     assert.equal(needsToolCallObject({ provider: 'openai' }), false);
-    assert.equal(needsToolCallObject({ provider: 'locca' }), false);
+    // locca serves local GGUF models that don't explore under native Output.object
+    // (32/32 explored=false on gemma-4-12b / qwen3.5-9b) — same as ollama.
+    assert.equal(needsToolCallObject({ provider: 'locca' }), true);
     assert.equal(repeatPenaltyApplies({ provider: 'ollama' }), true);
     assert.equal(repeatPenaltyApplies({ provider: 'deepseek' }), false);
     assert.equal(repeatPenaltyApplies({ provider: 'locca' }), false);
@@ -163,9 +165,11 @@ async function main() {
     assert.equal(agentPlan({ provider: 'ollama' }, {}, 3), 'done-tool');
     assert.equal(agentPlan({ provider: 'openai' }, {}, 0), 'native-no-tools');
     assert.equal(agentPlan({ provider: 'openai' }, {}, 3), 'native-then-done');
-    // locca routes like any native provider (not the Ollama tool-object path).
-    assert.equal(agentPlan({ provider: 'locca' }, {}, 0), 'native-no-tools');
-    assert.equal(agentPlan({ provider: 'locca' }, {}, 3), 'native-then-done');
+    // locca serves local GGUF models (same class as Ollama), so it takes the
+    // forced tool-object / done-tool path, NOT the native path — local llama.cpp
+    // models emit the object without exploring tools under native Output.object.
+    assert.equal(agentPlan({ provider: 'locca' }, {}, 0), 'object-via-tool');
+    assert.equal(agentPlan({ provider: 'locca' }, {}, 3), 'done-tool');
     assert.equal(agentPlan({ provider: 'openai' }, null, 3), 'free-text');
     assert.equal(agentPlan({ provider: 'ollama' }, null, 0), 'free-text');
   });

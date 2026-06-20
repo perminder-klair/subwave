@@ -59,10 +59,14 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // registry), not via providerOptions.
     thinkingBlock: NONE,
   },
-  // locca is a first-class openai-compatible (llama.cpp) server — same traits:
-  // native objects, no repeat_penalty, no-think handled in transport.
+  // locca serves local llama.cpp GGUF models — the SAME model class as Ollama,
+  // not a cloud endpoint. Under native Output.object + auto tool_choice they emit
+  // a schema-valid object WITHOUT calling any discovery tool (verified 32/32
+  // explored=false on gemma-4-12b / qwen3.5-9b), so the native-then-done path
+  // wastes a model call before falling back. Use the forced done-tool path like
+  // ollama. No repeat_penalty, no-think handled in transport.
   locca: {
-    objectStrategy: 'native',
+    objectStrategy: 'tool',
     repeatPenaltyApplies: false,
     thinkingBlock: NONE,
   },
