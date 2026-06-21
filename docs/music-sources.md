@@ -1,10 +1,12 @@
 # Music sources (beyond Navidrome)
 
-> **Status: design / proposal.** This document sketches a *source provider*
-> abstraction so SUB/WAVE can play music from sources other than a self-hosted
-> Navidrome — other Subsonic-compatible servers, Jellyfin, Jamendo, a plain local
-> folder, and yt-dlp-backed sources. None of this except the "other Subsonic
-> servers already work" point is implemented yet; it's the plan we'd build against.
+> **Status: implemented** (Navidrome/Subsonic, Jamendo, Jellyfin, local folder).
+> This document sketched a *source provider* abstraction so SUB/WAVE can play
+> music from sources other than a self-hosted Navidrome. The `MusicSource` seam
+> and the three new library providers shipped; **yt-dlp is deferred** (its
+> generative-picker path + `ytdl:` protocol remain out of scope). The original
+> sketch is kept below for context — see **"What actually shipped"** at the bottom
+> for where the build deviated from it.
 
 ## Why this exists
 
@@ -253,3 +255,59 @@ are **required**. Everything else (`getSimilarSongs`, `getSongsByGenre`,
 `getTopSongs`, `getRecentSongsByArtist`, `supportsSonicSimilarity`,
 `getSonicSimilarTracks`, `getLyrics`) is **optional** and gated by the matching
 capability flag.
+
+## What actually shipped
+
+The build followed the sketch above, with these deliberate deviations:
+
+- **Single active source**, not multi-source. One provider is selected in
+  `settings.source.provider` (env `MUSIC_SOURCE` wins). Ids are namespaced at the
+  boundary (`nd:`/`jf:`/`jam:`/`local:`) so multi-source remains an additive
+  follow-up, but the picker does **not** merge across providers.
+- **yt-dlp deferred.** The generative-picker path and `ytdl:` protocol weren't
+  built. Shipped: Navidrome/Subsonic (`navidrome`, with the `subsonic` alias),
+  Jamendo, Jellyfin, local folder.
+- **Methods are non-optional** on the `MusicSource` interface. Every provider
+  implements the full surface; unsupported capabilities return empty/null/false
+  (via a shared `emptyDiscovery` default) and the `capabilities` flags tell the
+  picker/agent whether a call is worth making. This keeps the ~80 call sites clean
+  (no `?.`).
+- **The coupling was wider than the table claimed** — ~80 `subsonic.*` calls
+  across **14** files (the table listed 8). All route through `getSource()` now.
+- **`Song` gained the fields the sketch missed**: `path`, `albumId`, `coverArt`,
+  `duration`; transient `crossSec`/`gainDb`/`_source`/`_similarity` are stamped by
+  the queue/picker after the provider returns.
+- **Enrichment was decoupled from the provider** (the dependency the sketch
+  skipped): `music/enrichment/lastfm.ts` fetches Last.fm crowd tags / similar by
+  **artist name** directly (reusing the scrobble key), and
+  `music/enrichment/lyrics.ts` falls back to LRCLIB — so Jamendo / Jellyfin /
+  local get rich embeddings, not just Navidrome. The picker also backfills
+  "similar" from Last.fm for sources with no native graph (local).
+- **Code layout**: the interface + `Song` + id helpers + annotate builder +
+  `sourceConfig()` live in `music/source-kit.ts`; `music/source.ts` is the
+  registry/accessor and re-exports the kit; providers live under
+  `music/sources/*.ts`.
+
+### Per-source capabilities as built
+
+| Source | pool | similar | genre | playlists | starred | recent | frequent | artistGraph | sonic | lyrics | walk |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| navidrome | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓¹ | ✓ | ✓ |
+| jamendo | ✓ | ✓ | ✓ | – | – | ✓ | ✓ | ✓ | – | –² | – |
+| jellyfin | ✓ | ✓ | ✓ | ✓ | ✓³ | ✓ | ✓³ | ✓ | – | ✓ | ✓ |
+| local | ✓ | –⁴ | ✓ | – | – | ✓ | – | ✓ | – | –² | ✓ |
+
+¹ probed per-server (OpenSubsonic extension). ² lyrics via the LRCLIB enricher.
+³ needs a Jellyfin user id. ⁴ similar comes from the embedding library + the
+Last.fm picker backfill.
+
+### Limitations (v1)
+
+- Jamendo cover art relies on an in-memory URL cache (populated as tracks flow
+  through); a cold restart can miss covers for tracks restored from the persisted
+  queue until they're seen again.
+- Local folder serves **no cover art** (embedded-art extraction isn't wired) and
+  skips acoustic bpm/key analysis (the analyzer fetches over HTTP, not file
+  paths); text embeddings still build.
+- Switching providers orphans the embedding library (keyed by provider ids) — a
+  different source re-tags from scratch. No cross-provider id migration.
