@@ -206,3 +206,36 @@ export async function isValidThemeId(id: string): Promise<boolean> {
   const all = await listThemes();
   return all.some(t => t.id === id);
 }
+
+// Turn a human name into a valid theme id (lowercase, dash-separated, ≤32
+// chars, leading alphanumeric) so the create form can derive one when the
+// operator doesn't supply it. Falls back to "theme" if nothing survives.
+export function slugifyThemeId(name: string): string {
+  const slug = String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32)
+    .replace(/-+$/g, '');
+  return /^[a-z0-9]/.test(slug) ? slug : `t-${slug}`.slice(0, 32) || 'theme';
+}
+
+// Persist an operator-created theme as ${STATE_DIR}/themes/<id>.json, the same
+// shape the file-drop convention uses. Validates with the shared ThemeSchema
+// (so the token security regex applies), refuses reserved built-in ids, then
+// refreshes the user cache and returns the full registry.
+export async function saveUserTheme(input: any): Promise<Theme[]> {
+  const id = (typeof input?.id === 'string' && input.id.trim())
+    ? slugifyThemeId(input.id)
+    : slugifyThemeId(input?.name || '');
+  const theme = ThemeSchema.parse({ ...input, id });
+  if (BUILTIN_IDS.has(theme.id)) {
+    throw new Error(`"${theme.id}" is a reserved built-in theme id — pick another name`);
+  }
+  const dir = userThemesDir();
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(join(dir, `${theme.id}.json`), JSON.stringify(theme, null, 2), 'utf8');
+  clearUserThemeCache();
+  await loadUserThemes(true);
+  return listThemes();
+}

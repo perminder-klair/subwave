@@ -33,6 +33,7 @@ import { router as personasRoutes } from './routes/personas.js';
 import { router as backupRoutes } from './routes/backup.js';
 import { router as audienceRoutes } from './routes/audience.js';
 import { router as systemRoutes } from './routes/system.js';
+import { router as generateRoutes } from './routes/generate.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
 import { loadSetupConfig } from './setup/config.js';
 import { getSetupStatus } from './setup/firstRun.js';
@@ -66,6 +67,7 @@ app.use(personasRoutes);
 app.use(backupRoutes);
 app.use(audienceRoutes);
 app.use(systemRoutes);
+app.use(generateRoutes);
 
 // (manual skip is not implemented in this build — Liquidsoap controls pacing)
 

@@ -18,6 +18,7 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Seg, Toggle } from './ui';
+import { AiFill } from './AiFill';
 import { cn } from '../../lib/cn';
 
 const FREQUENCIES = [
@@ -840,6 +841,15 @@ export default function PersonasPanel() {
               </>
             }
           >
+            <div className="mb-4">
+              <AiFill<Partial<Persona>>
+                endpoint="/generate/persona"
+                resultKey="persona"
+                adminFetch={adminFetch}
+                placeholder="e.g. a late-night jazz host with a dry wit"
+                onApply={(p) => setPersona(safeIdx, p)}
+              />
+            </div>
             <div className="stack-mobile grid grid-cols-[96px_1fr] items-start gap-4">
               <PersonaAvatarPicker
                 persona={focused}

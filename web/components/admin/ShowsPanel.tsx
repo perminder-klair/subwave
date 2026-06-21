@@ -26,6 +26,7 @@ import {
 } from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Metric } from './ui';
 import { Modal } from '../ui/modal';
+import { AiFill } from './AiFill';
 import { cn } from '../../lib/cn';
 
 const NAME_MAX = 60;
@@ -757,6 +758,17 @@ export default function ShowsPanel() {
       >
         {draft && (
           <div className="grid gap-3.5">
+            <AiFill<Partial<Omit<Show, 'personaId' | 'themeId'>> & { personaId?: string | null; themeId?: string | null }>
+              endpoint="/generate/show"
+              resultKey="show"
+              adminFetch={adminFetch}
+              placeholder="e.g. a Sunday-morning gospel hour, warm and uplifting"
+              onApply={(s) => setDraftField({
+                ...s,
+                personaId: s.personaId ?? draft.personaId ?? '',
+                themeId: s.themeId ?? '',
+              })}
+            />
             <Field>
               <Label htmlFor="show-name">show name</Label>
               <Input

@@ -17,6 +17,7 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
+import { AiFill } from './AiFill';
 import { cn } from '../../lib/cn';
 import ArchivesPanel from './ArchivesPanel';
 import WebhooksPanel from './WebhooksPanel';
@@ -3143,6 +3144,126 @@ function Swatch({ color }: { color?: string }) {
   return <span ref={ref} className="h-7 w-7" aria-hidden="true" />;
 }
 
+// The 7 themable tokens (mirrors controller THEME_TOKEN_KEYS) with human
+// labels for the create form. Generated drafts and manual edits both fill these.
+const THEME_TOKENS: { key: string; label: string }[] = [
+  { key: '--bg', label: 'background' },
+  { key: '--ink', label: 'text' },
+  { key: '--muted', label: 'muted text' },
+  { key: '--accent', label: 'accent' },
+  { key: '--overlay', label: 'overlay' },
+  { key: '--soft-border', label: 'border' },
+  { key: '--field', label: 'field' },
+];
+
+// Create a custom theme from a description (AI-drafted) or by hand, then save it
+// as state/themes/<id>.json via POST /themes. Tokens are editable before save so
+// the operator reviews the palette first.
+function ThemeCreator({
+  adminFetch,
+  onSaved,
+}: {
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  onSaved: (themes: ThemeDef[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [mode, setMode] = useState<'light' | 'dark'>('dark');
+  const [tokens, setTokens] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const applyDraft = (t: {
+    name?: string;
+    description?: string;
+    mode?: 'light' | 'dark';
+    tokens?: Record<string, string>;
+  }) => {
+    if (t.name && !name.trim()) setName(t.name);
+    if (t.description) setDescription(t.description);
+    if (t.mode) setMode(t.mode);
+    if (t.tokens) setTokens(prev => ({ ...prev, ...t.tokens }));
+  };
+
+  const reset = () => {
+    setName(''); setDescription(''); setTokens({}); setErr(null); setOpen(false);
+  };
+
+  const save = async () => {
+    if (!name.trim() || saving) return;
+    setSaving(true); setErr(null);
+    try {
+      const r = await adminFetch('/themes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), description: description.trim(), mode, tokens }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; themes?: ThemeDef[] };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      onSaved(j.themes ?? []);
+      notify.ok(`saved "${name.trim()}"`);
+      reset();
+    } catch (e) {
+      setErr(errorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <Btn sm tone="accent" onClick={() => setOpen(true)}>Create theme with AI</Btn>
+    );
+  }
+
+  return (
+    <div className="grid gap-3 border border-ink p-3">
+      <AiFill<{ name?: string; description?: string; mode?: 'light' | 'dark'; tokens?: Record<string, string> }>
+        endpoint="/generate/theme"
+        resultKey="theme"
+        adminFetch={adminFetch}
+        placeholder="e.g. a warm sepia newspaper, easy on the eyes"
+        extra={{ mode }}
+        onApply={applyDraft}
+      />
+      <div className="grid grid-cols-[1fr_auto] items-end gap-3">
+        <div className="field">
+          <Label>theme name</Label>
+          <Input value={name} maxLength={60} onChange={(e: ChangeEvent<HTMLInputElement>) => setName(e.target.value)} placeholder="e.g. Sepia Press" />
+        </div>
+        <Seg
+          value={mode}
+          onChange={(v) => setMode(v as 'light' | 'dark')}
+          options={[{ id: 'dark', label: 'Dark' }, { id: 'light', label: 'Light' }]}
+        />
+      </div>
+      <div className="grid gap-1.5">
+        {THEME_TOKENS.map(({ key, label }) => (
+          <div key={key} className="grid grid-cols-[auto_5.5rem_1fr] items-center gap-2">
+            <span className="inline-flex shrink-0 border border-ink"><Swatch color={tokens[key]} /></span>
+            <span className="text-[11px] tracking-[0.12em] text-muted uppercase">{label}</span>
+            <Input
+              value={tokens[key] || ''}
+              maxLength={100}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setTokens(prev => ({ ...prev, [key]: e.target.value }))}
+              placeholder="#000000 or rgba(…)"
+              className="font-mono text-[12px]"
+            />
+          </div>
+        ))}
+      </div>
+      {err && <span className="text-[12px] text-[var(--danger)]">{err}</span>}
+      <div className="flex gap-2">
+        <Btn sm tone="accent" onClick={save} disabled={saving || !name.trim()}>
+          {saving ? 'Saving…' : 'Save theme'}
+        </Btn>
+        <Btn sm onClick={reset} disabled={saving}>Cancel</Btn>
+      </div>
+    </div>
+  );
+}
+
 function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProps) {
   const [themes, setThemes] = useState<ThemeDef[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -3260,16 +3381,17 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
 
       <Card title="Custom themes" sub="state/themes/*.json">
         <div className="grid gap-3">
+          <ThemeCreator adminFetch={adminFetch} onSaved={setThemes} />
           <div>
             <Btn sm onClick={refresh} disabled={refreshing || busy}>
               {refreshing ? 'Refreshing…' : 'Refresh themes'}
             </Btn>
           </div>
           <div className="field-hint">
-            Drop a JSON theme file in <code>state/themes/</code> and click <em>Refresh</em> to
-            add it to the picker — no controller restart needed. The folder
-            includes a <code>README.md</code> with the format and the allowed
-            token keys.
+            Describe a look above and we&apos;ll draft the palette, or drop a JSON
+            theme file in <code>state/themes/</code> and click <em>Refresh</em> —
+            no controller restart needed. The folder includes a
+            <code>README.md</code> with the format and the allowed token keys.
           </div>
         </div>
       </Card>
