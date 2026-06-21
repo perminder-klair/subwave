@@ -6,7 +6,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
 import { stat, rename } from 'node:fs/promises';
 import { config } from '../config.js';
-import * as subsonic from '../music/subsonic.js';
+import { getSource } from '../music/source.js';
 import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
 import { speak, voiceGainDb } from '../audio/tts.js';
@@ -412,7 +412,7 @@ class Queue {
         // tracks resolve to null → no liq_amplify → unity gain, i.e. today.
         this.applyLoudnessGain(item.track);
 
-        const uri = subsonic.getAnnotatedUri(item.track);
+        const uri = getSource().getAnnotatedUri(item.track);
         await writeHandoff(config.liquidsoap.queueFile, uri);
         item.sent = true;
         this.persist();  // record the sent flag — these are now live in dj_queue

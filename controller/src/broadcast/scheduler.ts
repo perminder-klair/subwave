@@ -7,7 +7,7 @@
 import cron from 'node-cron';
 import { writeFile } from 'node:fs/promises';
 import { config } from '../config.js';
-import * as subsonic from '../music/subsonic.js';
+import { getSource } from '../music/source.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import { getFullContext } from '../context.js';
@@ -35,7 +35,7 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   for (const a of albums) {
     if (out.length >= max) break;
     try {
-      const songs = await subsonic.getAlbum(a.id);
+      const songs = await getSource().getAlbum(a.id);
       out.push(...shuffle(songs).slice(0, perAlbum));
     } catch {}
   }
@@ -79,12 +79,12 @@ async function refreshAutoPlaylistInner() {
   // 2. Navidrome playlists whose name matches the mood — operator's hand curation.
   if (mood) {
     try {
-      const playlists = await subsonic.getPlaylists();
+      const playlists = await getSource().getPlaylists();
       const matched = playlists.filter((p: any) => p.name?.toLowerCase().includes(mood.toLowerCase()));
       const tracks: any[] = [];
       for (const pl of matched.slice(0, 2)) {
         try {
-          const songs = await subsonic.getPlaylist(pl.id);
+          const songs = await getSource().getPlaylist(pl.id);
           tracks.push(...songs);
         } catch {}
       }
@@ -96,7 +96,7 @@ async function refreshAutoPlaylistInner() {
 
   // 3. Recently-added albums — surfaces new music without any tagging.
   try {
-    const recentAlbums = await subsonic.getRecentlyAddedAlbums({ size: 8 });
+    const recentAlbums = await getSource().getRecentlyAddedAlbums({ size: 8 });
     const tracks = await tracksFromAlbums(shuffle(recentAlbums).slice(0, 4), 2, RECENT_WEIGHT * 2);
     take('recent', tracks, RECENT_WEIGHT);
   } catch (err) {
@@ -105,7 +105,7 @@ async function refreshAutoPlaylistInner() {
 
   // 4. Frequent albums — Navidrome's scrobble-backed favourites.
   try {
-    const freqAlbums = await subsonic.getFrequentAlbums({ size: 8 });
+    const freqAlbums = await getSource().getFrequentAlbums({ size: 8 });
     const tracks = await tracksFromAlbums(shuffle(freqAlbums).slice(0, 4), 2, FREQUENT_WEIGHT * 2);
     take('frequent', tracks, FREQUENT_WEIGHT);
   } catch (err) {
@@ -114,7 +114,7 @@ async function refreshAutoPlaylistInner() {
 
   // 5. Starred — hand-curated.
   try {
-    const starred = shuffle(await subsonic.getStarred());
+    const starred = shuffle(await getSource().getStarred());
     take('starred', starred, STARRED_WEIGHT);
   } catch (err) {
     queue.log('error', `Starred fetch failed: ${err.message}`);
@@ -123,14 +123,14 @@ async function refreshAutoPlaylistInner() {
   // 6. Top up with random to TARGET_POOL.
   if (pool.length < TARGET_POOL) {
     try {
-      const random = await subsonic.getRandomSongs({ size: TARGET_POOL });
+      const random = await getSource().getRandomSongs({ size: TARGET_POOL });
       take('random', random, TARGET_POOL);
     } catch (err) {
       queue.log('error', `Random fetch failed: ${err.message}`);
     }
   }
 
-  const lines = ['#EXTM3U', ...pool.map((t: any) => subsonic.getAnnotatedUri(t))];
+  const lines = ['#EXTM3U', ...pool.map((t: any) => getSource().getAnnotatedUri(t))];
   await writeFile(config.liquidsoap.autoPlaylist, lines.join('\n'));
   queue.log('scheduler',
     `Auto-playlist refreshed: ${pool.length} tracks (` +

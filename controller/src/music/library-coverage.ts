@@ -7,7 +7,7 @@
 // after a manual refresh. Concurrent /coverage requests share the in-flight
 // scan via a single promise.
 
-import * as subsonic from './subsonic.js';
+import { getSource } from './source.js';
 import * as library from './library.js';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
@@ -63,7 +63,7 @@ async function doScan() {
   cache.scanning = true;
   try {
     let count = 0;
-    for await (const _song of subsonic.iterateAllSongs()) count++;
+    for await (const _song of getSource().iterateAllSongs()) count++;
     cache.total = count;
     cache.scannedAt = new Date().toISOString();
   } finally {

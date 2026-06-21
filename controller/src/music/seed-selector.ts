@@ -12,7 +12,7 @@
 // Selection is deterministic given the same library state + random seed,
 // which keeps test assertions clean.
 
-import * as subsonic from './subsonic.js';
+import { getSource } from './source.js';
 import * as db from './library-db.js';
 import { SHOW_MOODS } from '../settings.js';
 
@@ -69,7 +69,7 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
 
   if (chosen.size < operatorCap) {
     try {
-      const starred = await subsonic.getStarred();
+      const starred = await getSource().getStarred();
       for (const s of starred) {
         if (chosen.size >= operatorCap) break;
         if (s?.id) take('operatorStarred', s.id);
@@ -79,7 +79,7 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
 
   if (chosen.size < operatorCap) {
     try {
-      const playlists = await subsonic.getPlaylists();
+      const playlists = await getSource().getPlaylists();
       const moodPlaylists = (Array.isArray(playlists) ? playlists : []).filter(
         (p: any) => {
           const name = String(p?.name || '').toLowerCase();
@@ -92,7 +92,7 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
       for (const pl of moodPlaylists.slice(0, 6)) {
         if (chosen.size >= operatorCap) break;
         try {
-          const songs = await subsonic.getPlaylist(pl.id);
+          const songs = await getSource().getPlaylist(pl.id);
           for (const s of songs) {
             if (chosen.size >= operatorCap) break;
             if (s?.id) take('operatorPlaylists', s.id);
@@ -104,11 +104,11 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
 
   if (chosen.size < operatorCap) {
     try {
-      const freqAlbums = await subsonic.getFrequentAlbums({ size: 12 });
+      const freqAlbums = await getSource().getFrequentAlbums({ size: 12 });
       for (const album of freqAlbums.slice(0, 8)) {
         if (chosen.size >= operatorCap) break;
         try {
-          const songs = await subsonic.getAlbum(album.id);
+          const songs = await getSource().getAlbum(album.id);
           for (const s of songs.slice(0, 3)) {
             if (chosen.size >= operatorCap) break;
             if (s?.id) take('operatorFrequent', s.id);

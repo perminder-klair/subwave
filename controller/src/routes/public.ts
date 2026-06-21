@@ -4,7 +4,7 @@
 import express from 'express';
 import { stat, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import * as subsonic from '../music/subsonic.js';
+import { getSource, getSourceByKey, parseId } from '../music/source.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { getFullContext } from '../context.js';
@@ -55,9 +55,10 @@ const coverCache = new Map<string, { buf: Buffer; contentType: string }>();
 
 router.get('/cover/:id', async (req, res) => {
   const { id } = req.params;
-  // Subsonic ids are short alphanumerics (Navidrome uses base32 hashes).
-  // Reject anything else to keep this from being a generic SSRF surface.
-  if (!/^[\w-]{1,64}$/.test(id)) return res.status(400).end();
+  // Subsonic ids are short alphanumerics (Navidrome uses base32 hashes). Other
+  // providers prefix their ids (jam:123, jf:abc) — allow one optional lowercase
+  // prefix. Reject anything else to keep this from being a generic SSRF surface.
+  if (!/^([a-z]+:)?[\w-]{1,80}$/.test(id)) return res.status(400).end();
 
   const sendCover = (entry: { buf: Buffer; contentType: string }) => {
     res.setHeader('Content-Type', entry.contentType);
@@ -75,9 +76,15 @@ router.get('/cover/:id', async (req, res) => {
   }
 
   try {
+    // Route by id prefix so cover art resolves against the provider that owns
+    // the id; un-prefixed (native Navidrome) ids fall to the active source.
+    const { provider, raw } = parseId(id);
+    const src = provider ? getSourceByKey(provider) : getSource();
+    const coverUrl = src.getCoverArtUrl(raw, 512);
+    if (!coverUrl) return res.status(404).end();
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 5000);
-    const r = await fetch(subsonic.getCoverArtUrl(id, 512), { signal: ctrl.signal });
+    const r = await fetch(coverUrl, { signal: ctrl.signal });
     clearTimeout(timer);
     if (!r.ok) return res.status(502).end();
     const entry = {

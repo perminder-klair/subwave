@@ -7,7 +7,7 @@ import { requireAdmin } from '../middleware/auth.js';
 import * as library from '../music/library.js';
 import * as db from '../music/library-db.js';
 import * as coverage from '../music/library-coverage.js';
-import * as subsonic from '../music/subsonic.js';
+import { getSource } from '../music/source.js';
 import * as settings from '../settings.js';
 import * as embeddings from '../music/embeddings.js';
 import { tagBatch, TAGGER_BATCH_SYSTEM } from '../music/tagger-core.js';
@@ -51,7 +51,7 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
     // Drop any station-archive rows the tagger may have written into the index
     // before the subsonic-layer guard existed (issue #273), so the admin library
     // is clean without requiring a re-tag.
-    const cleanRows = result.rows.filter((row) => !subsonic.isStationArchive(row));
+    const cleanRows = result.rows.filter((row) => !getSource().isStationArchive(row));
     const removed = result.rows.length - cleanRows.length;
     result.rows = cleanRows;
     result.total = Math.max(0, result.total - removed);
@@ -82,7 +82,7 @@ router.get('/library/genres', requireAdmin, async (req, res) => {
     await library.load();
     const tagged = library.stats().byGenre || {};
     let navidromeGenres: { value: string; songCount?: number }[] = [];
-    try { navidromeGenres = await subsonic.getGenres(); } catch {}
+    try { navidromeGenres = await getSource().getGenres(); } catch {}
     const merged: Record<string, number> = { ...tagged };
     for (const g of navidromeGenres || []) {
       if (!g?.value) continue;
@@ -132,7 +132,7 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
     const all = sampled ? db.allTaggedSampled(max, total) : db.allTagged();
     const truncated = sampled;
     const tracks = all
-      .filter((t) => !subsonic.isStationArchive(t))
+      .filter((t) => !getSource().isStationArchive(t))
       .slice(0, max)
       .map((t) => ({
         id: t.id,
@@ -275,12 +275,12 @@ router.get('/library/untagged', requireAdmin, async (req, res) => {
 
   try {
     outer: while (visited < SCAN_BUDGET) {
-      const albums = await subsonic.getAlbumList(albumOffset, BATCH);
+      const albums = await getSource().getAlbumList(albumOffset, BATCH);
       if (albums.length === 0) break;
       for (let i = 0; i < albums.length; i++) {
         const album = albums[i];
         let songs: any[] = [];
-        try { songs = await subsonic.getAlbum(album.id); } catch { songs = []; }
+        try { songs = await getSource().getAlbum(album.id); } catch { songs = []; }
         for (let j = (i === 0 ? songIndex : 0); j < songs.length; j++) {
           const s = songs[j];
           visited++;
@@ -382,7 +382,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     let song: any = req.body || {};
     if (!song.title || !song.artist) {
       // Reach back to Subsonic to fill metadata when the caller only sent an id.
-      const found = await subsonic.search(`${song.title || ''} ${song.artist || ''}`.trim() || id, { songCount: 25 });
+      const found = await getSource().search(`${song.title || ''} ${song.artist || ''}`.trim() || id, { songCount: 25 });
       const hit = (found || []).find((s: any) => s.id === id);
       if (hit) song = { ...hit, ...song };
     }
@@ -408,10 +408,10 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     let lyricExcerpt: string | null = null;
     if (lastfmEnabled && song.artist) {
       try {
-        const matches = await subsonic.searchArtists(song.artist, { artistCount: 1 });
+        const matches = await getSource().searchArtists(song.artist, { artistCount: 1 });
         const artistId = matches?.[0]?.id;
         if (artistId) {
-          lastfmTags = await subsonic.getArtistLastfmTags(artistId, { count: 10 });
+          lastfmTags = await getSource().getArtistLastfmTags(artistId, { count: 10 });
         }
       } catch (err: any) {
         queue.log('warn', `/library/retag enrich(lastfm) ${id}: ${err.message}`);
@@ -419,7 +419,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     }
     if (lyricsEnabled) {
       try {
-        const raw = await subsonic.getLyrics(id);
+        const raw = await getSource().getLyrics(id);
         if (typeof raw === 'string' && raw.trim()) lyricExcerpt = raw.trim();
       } catch (err: any) {
         queue.log('warn', `/library/retag enrich(lyrics) ${id}: ${err.message}`);
@@ -512,7 +512,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
     // Resolve the seed track — Subsonic first (carries albumId), library-db
     // row as fallback so already-indexed tracks work even if Navidrome misses.
     let song: any = null;
-    try { song = await subsonic.getSong(id); } catch {}
+    try { song = await getSource().getSong(id); } catch {}
     if (!song) {
       const row = db.getTrack(id);
       if (row) song = { id: row.id, title: row.title, artist: row.artist, album: row.album, year: row.year, genre: row.genre, duration: row.durationSec };
@@ -522,7 +522,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
     let targets: any[] = [song];
     if (applyToAlbum) {
       if (!song.albumId) return res.status(404).json({ error: 'album not resolvable for this track' });
-      targets = await subsonic.getAlbum(song.albumId);
+      targets = await getSource().getAlbum(song.albumId);
       if (!targets.length) return res.status(404).json({ error: 'album has no tracks' });
     }
 

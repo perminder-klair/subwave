@@ -22,7 +22,7 @@
 // The heavy DSP lives in music/analyzer.ts's backend (tts-heavy sidecar or a
 // local librosa venv via ANALYZE_PYTHON). With no backend the pass is a no-op.
 
-import * as subsonic from './subsonic.js';
+import { getSource } from './source.js';
 import * as db from './library-db.js';
 import * as settings from '../settings.js';
 import * as embeddings from './embeddings.js';
@@ -97,7 +97,7 @@ async function main() {
     reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
     let walked = 0;
     const liveIds = new Set<string>();
-    for await (const song of subsonic.iterateAllSongs()) {
+    for await (const song of getSource().iterateAllSongs()) {
       db.upsertTrackMeta(song.id, {
         title: song.title,
         artist: song.artist,

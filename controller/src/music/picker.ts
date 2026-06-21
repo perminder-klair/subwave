@@ -6,7 +6,7 @@
 // agent (broadcast/dj-agent.js) whenever the conversational agent is disabled
 // or fails — so a pick is never missed.
 
-import * as subsonic from './subsonic.js';
+import { getSource } from './source.js';
 import * as library from './library.js';
 import * as dj from '../llm/dj.js';
 import * as settings from '../settings.js';
@@ -143,7 +143,7 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   for (const a of albums) {
     if (out.length >= max) break;
     try {
-      const songs = await subsonic.getAlbum(a.id);
+      const songs = await getSource().getAlbum(a.id);
       out.push(...shuffle(songs).slice(0, perAlbum));
     } catch {}
   }
@@ -167,7 +167,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // 1. Similar-songs from current track — strongest contextual signal.
   if (currentTrack?.id) {
     try {
-      const similar = await subsonic.getSimilarSongs(currentTrack.id, {
+      const similar = await getSource().getSimilarSongs(currentTrack.id, {
         count: 20,
       });
       add('similar', sampleWithRecentFallback(similar, recentIds, nz(CAP_SIMILAR)));
@@ -195,8 +195,8 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // extension is actually present; otherwise it's a silent no-op.
   if (currentTrack?.id) {
     try {
-      if (await subsonic.supportsSonicSimilarity()) {
-        const sonic = await subsonic.getSonicSimilarTracks(currentTrack.id, { count: 20 });
+      if (await getSource().supportsSonicSimilarity()) {
+        const sonic = await getSource().getSonicSimilarTracks(currentTrack.id, { count: 20 });
         add('sonic-similar', sampleWithRecentFallback(sonic, recentIds, nz(CAP_SONIC_SIMILAR)));
       }
     } catch {}
@@ -234,17 +234,17 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     try {
       let genreName: string | null = null;
       if (showFilter!.genre) {
-        genreName = await subsonic.resolveGenreName(showFilter!.genre);
+        genreName = await getSource().resolveGenreName(showFilter!.genre);
       }
       const collected: any[] = [];
-      collected.push(...await subsonic.getRandomSongs({
+      collected.push(...await getSource().getRandomSongs({
         size: 40,
         genre: genreName || undefined,
         fromYear: showFilter!.fromYear ?? undefined,
         toYear: showFilter!.toYear ?? undefined,
       }));
       if (genreName) {
-        const g = await subsonic.getSongsByGenre(genreName, { count: 60 });
+        const g = await getSource().getSongsByGenre(genreName, { count: 60 });
         const ranged = inYearRange(g, showFilter!);
         collected.push(...(ranged.length ? ranged : g));
       }
@@ -262,13 +262,13 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // 3. Mood-matched Navidrome playlists — operator's hand curation.
   if (mood) {
     try {
-      const playlists = await memo('playlists', CACHE_TTL_MS, () => subsonic.getPlaylists());
+      const playlists = await memo('playlists', CACHE_TTL_MS, () => getSource().getPlaylists());
       const matched = playlists.filter((p: any) => p.name?.toLowerCase().includes(mood.toLowerCase()));
       const plTracks: any[] = [];
       for (const pl of matched.slice(0, 2)) {
         try {
           const songs = await memo(`playlist:${pl.id}`, CACHE_TTL_MS, () =>
-            subsonic.getPlaylist(pl.id),
+            getSource().getPlaylist(pl.id),
           );
           plTracks.push(...songs);
         } catch {}
@@ -283,7 +283,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // tracks for the whole TTL — see the library-search review, finding C.
   try {
     const recentPool = await memo('recent-track-pool', CACHE_TTL_MS, async () => {
-      const albums = await subsonic.getRecentlyAddedAlbums({ size: 12 });
+      const albums = await getSource().getRecentlyAddedAlbums({ size: 12 });
       return tracksFromAlbums(shuffle(albums), 3, 40);
     });
     add('recent', sampleWithRecentFallback(shuffle(recentPool), recentIds, nz(CAP_RECENT)));
@@ -293,7 +293,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // shuffle pattern as recently-added above.
   try {
     const freqPool = await memo('frequent-track-pool', CACHE_TTL_MS, async () => {
-      const albums = await subsonic.getFrequentAlbums({ size: 12 });
+      const albums = await getSource().getFrequentAlbums({ size: 12 });
       return tracksFromAlbums(shuffle(albums), 3, 40);
     });
     add('frequent', sampleWithRecentFallback(shuffle(freqPool), recentIds, nz(CAP_FREQUENT)));
@@ -306,18 +306,18 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
         `similar-artist:${currentTrack.artist}`,
         CACHE_TTL_MS,
         async () => {
-          const matches = await subsonic.searchArtists(currentTrack.artist, {
+          const matches = await getSource().searchArtists(currentTrack.artist, {
             artistCount: 1,
           });
           if (matches.length === 0) return [];
-          const info = await subsonic.getArtistInfo(matches[0].id, {
+          const info = await getSource().getArtistInfo(matches[0].id, {
             count: 5,
           });
           const similars = (info?.similarArtist || []).slice(0, 2);
           const collected: any[] = [];
           for (const sa of similars) {
             try {
-              const top = await subsonic.getTopSongs(sa.name, { count: 5 });
+              const top = await getSource().getTopSongs(sa.name, { count: 5 });
               collected.push(...top);
             } catch {}
           }
@@ -334,11 +334,11 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // 7. Fallback if the pool is still thin — starred + random.
   if (pool.length < 8) {
     try {
-      const starred = await subsonic.getStarred();
+      const starred = await getSource().getStarred();
       add('starred', sampleWithRecentFallback(shuffle(starred), recentIds, 4));
     } catch {}
     try {
-      const random = await subsonic.getRandomSongs({ size: 10 });
+      const random = await getSource().getRandomSongs({ size: 10 });
       add('random', sampleWithRecentFallback(random, recentIds, 4));
     } catch {}
   }

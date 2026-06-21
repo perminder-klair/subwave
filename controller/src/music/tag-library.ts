@@ -22,7 +22,7 @@
 // On boot the library-db auto-migrates any state/moods.json into the SQLite
 // tracks table as legacy v1 entries (see library-db.ts).
 
-import * as subsonic from './subsonic.js';
+import { getSource } from './source.js';
 import * as db from './library-db.js';
 import * as settings from '../settings.js';
 import * as embeddings from './embeddings.js';
@@ -104,7 +104,7 @@ async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<string> }
   reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
   let walked = 0;
   const liveIds = new Set<string>();
-  for await (const song of subsonic.iterateAllSongs()) {
+  for await (const song of getSource().iterateAllSongs()) {
     db.upsertTrackMeta(song.id, {
       title: song.title,
       artist: song.artist,
@@ -529,10 +529,10 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
         lastfmTags = artistTagCache.get(cacheKey) ?? null;
       } else {
         try {
-          const matches = await subsonic.searchArtists(t.artist, { artistCount: 1 });
+          const matches = await getSource().searchArtists(t.artist, { artistCount: 1 });
           const artistId = matches?.[0]?.id;
           if (artistId) {
-            const tags = await subsonic.getArtistLastfmTags(artistId, { count: 10 });
+            const tags = await getSource().getArtistLastfmTags(artistId, { count: 10 });
             lastfmTags = tags;
           }
         } catch { /* ignore */ }
@@ -543,7 +543,7 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
     let lyricExcerpt: string | null = null;
     if (lyricsEnabled) {
       try {
-        const raw = await subsonic.getLyrics(id);
+        const raw = await getSource().getLyrics(id);
         if (typeof raw === 'string' && raw.trim()) {
           lyricExcerpt = raw.trim();
         }

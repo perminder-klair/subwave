@@ -15,7 +15,7 @@ import { queue } from '../../../broadcast/queue.js';
 import { fetchHeadlines, hashHeadline } from '../../../skills/news.js';
 import { searchWeb, searchReady } from '../../../skills/web-search.js';
 import { fetchOnThisDay, hashCuriosity } from '../../../skills/curiosity.js';
-import { getArtist, searchArtists } from '../../../music/subsonic.js';
+import { getSource } from '../../../music/source.js';
 
 // `caps` is the list of capabilities offered this tick (see skills/_agent.js).
 // Only data-backed kinds get a tool — traffic is pure generation and needs none.
@@ -130,20 +130,19 @@ export function buildSegmentTools(ctx: any, state: any, caps: any[]) {
         if (!artistName || /^unknown/i.test(artistName)) return { available: false };
         try {
           // Resolve the artist id — search3 returns artist matches, take the best one.
-          const matches = await searchArtists(artistName, { artistCount: 3 });
+          const matches = await getSource().searchArtists(artistName, { artistCount: 3 });
           const artist = matches.find((a: any) => a.name?.toLowerCase() === artistName.toLowerCase())
                        || matches[0];
           if (!artist?.id) return { available: false };
-          const detail = await getArtist(artist.id);
+          const detail = await getSource().getArtist(artist.id);
           const albums = Array.isArray(detail?.album) ? detail.album : [];
           if (!albums.length) return { available: false };
           const { ids, keys } = queue.recentlyPlayed(30 * 24); // 30 days
           // Walk a bounded slice of albums (cheapest viable: top 8 by year/recent).
           // We only need to know whether at least one cold track exists.
           const cold: { title: string; album: string }[] = [];
-          const { getAlbum } = await import('../../../music/subsonic.js');
           for (const album of albums.slice(0, 8)) {
-            const songs = await getAlbum(album.id);
+            const songs = await getSource().getAlbum(album.id);
             for (const s of songs) {
               const songId = String(s?.id || '');
               const key = `${(s?.title || '').toLowerCase().trim()}|${(s?.artist || artistName).toLowerCase().trim()}`;
