@@ -64,7 +64,13 @@ export function requireAdmin(req, res, next) {
   const header = req.headers.authorization || '';
   if (header.startsWith('Basic ')) {
     try {
-      const [u, p] = Buffer.from(header.slice(6), 'base64').toString('utf8').split(':');
+      // Split on the FIRST colon only: per RFC 7617 the userid can't contain a
+      // colon but the password can, so split(':') would truncate any password
+      // with a ':' in it and reject otherwise-correct credentials.
+      const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
+      const sep = decoded.indexOf(':');
+      const u = sep === -1 ? decoded : decoded.slice(0, sep);
+      const p = sep === -1 ? '' : decoded.slice(sep + 1);
       if (safeEqual(u, ADMIN_USER) && safeEqual(p, ADMIN_PASS)) {
         if (rec) authAttempts.delete(ip);
         return next();
