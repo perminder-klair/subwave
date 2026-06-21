@@ -76,7 +76,10 @@ export default function DjThinkingLine({ feed, enabled, onOpenBooth }: DjThinkin
       <span className="opacity-70" aria-hidden="true">
         {MARKER[cls] || '·'}
       </span>
-      <span className="[overflow-wrap:anywhere]">
+      {/* Clamp the inline teaser so the long "extended" scripts can't grow the
+          column and shove the artwork/title up under the header on mobile.
+          The full text stays one tap away in the Booth (and in aria-label). */}
+      <span className="line-clamp-5 min-w-0 flex-1 [overflow-wrap:anywhere] sm:line-clamp-10">
         <AnimatePresence mode="wait">
           <m.span
             key={turnId}
