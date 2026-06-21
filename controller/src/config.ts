@@ -193,10 +193,10 @@ export const config = {
     recentPlaysMax: 300,
   },
   weather: {
-    // Wolverhampton — your home location
-    lat: 52.5862,
-    lng: -2.1288,
-    locationName: 'Wolverhampton',
+    // Punjab (Chandigarh) — your home location
+    lat: 30.7333,
+    lng: 76.7794,
+    locationName: 'Punjab',
     // 'metric' → Celsius, 'imperial' → Fahrenheit. Drives Open-Meteo's
     // temperature_unit query param and what unit the DJ announces on air.
     units: 'metric' as 'metric' | 'imperial',

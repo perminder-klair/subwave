@@ -36,6 +36,10 @@ export interface WizardData {
   dj: {
     stationName: string;
     locationName: string;
+    // Weather coordinates — strings since they back text inputs; parsed +
+    // range-checked by the controller's settings.update() on save.
+    lat: string;
+    lng: string;
     frequency: 'quiet' | 'moderate' | 'aggressive';
   };
 
@@ -65,22 +69,24 @@ export const DEFAULT_DATA: WizardData = {
   },
   dj: {
     stationName: 'SUB/WAVE',
-    locationName: 'Wolverhampton',
+    // Punjab (Chandigarh) — operator's home region; coordinates drive weather.
+    locationName: 'Punjab',
+    lat: '30.7333',
+    lng: '76.7794',
     frequency: 'moderate',
   },
   apiKeys: {},
 };
 
-export type StepId = 'navidrome' | 'llm' | 'tts' | 'dj' | 'jingles' | 'review';
+export type StepId = 'navidrome' | 'llm' | 'tts' | 'dj' | 'review';
 
-export const STEP_ORDER: StepId[] = ['navidrome', 'llm', 'tts', 'dj', 'jingles', 'review'];
+export const STEP_ORDER: StepId[] = ['navidrome', 'llm', 'tts', 'dj', 'review'];
 
 export const STEP_LABELS: Record<StepId, string> = {
   navidrome: 'Navidrome',
   llm: 'LLM',
   tts: 'TTS',
   dj: 'DJ persona',
-  jingles: 'Jingles',
   review: 'Review',
 };
 
@@ -182,7 +188,7 @@ export function useWizard() {
           ? { enabled: true, provider: data.tts.cloud.provider }
           : { enabled: false },
       },
-      weather: { locationName: data.dj.locationName },
+      weather: { locationName: data.dj.locationName, lat: data.dj.lat, lng: data.dj.lng },
       station: data.dj.stationName,
       apiKeys,
     };
@@ -194,12 +200,6 @@ export function useWizard() {
     const j = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
     return { ok: !!j.ok, error: j.error };
   }, [auth, data]);
-
-  const generateJingles = useCallback(async () => {
-    const r = await auth.adminFetch('/onboarding/generate-jingles', { method: 'POST' });
-    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; created?: number; total?: number; error?: string };
-    return { ok: !!j.ok, created: j.created, total: j.total, error: j.error };
-  }, [auth]);
 
   return {
     auth,
@@ -214,7 +214,6 @@ export function useWizard() {
     testLlm,
     discoverLocca,
     save,
-    generateJingles,
   };
 }
 

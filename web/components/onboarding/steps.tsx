@@ -126,7 +126,7 @@ export function NavidromeStep({ w }: { w: WizardController }) {
           </button>
           <TestPill result={w.data.navidromeTest} />
         </div>
-        <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+        <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-ink/80">
           <strong>Music licensing:</strong> owning these files covers your own
           private listening, not <em>public</em> broadcast. If anyone but you
           can hear the stream, you&apos;re publicly performing copyrighted works
@@ -430,54 +430,23 @@ export function DjStep({ w }: { w: WizardController }) {
             onChange={e => w.patch(d => ({ dj: { ...d.dj, locationName: e.target.value } }))}
           />
         </Field>
-      </div>
-    </div>
-  );
-}
-
-// ─── JINGLES ──────────────────────────────────────────────────────────────
-export function JinglesStep({ w }: { w: WizardController }) {
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
-  const onGenerate = async () => {
-    setBusy(true);
-    setResult(null);
-    const r = await w.generateJingles();
-    setResult({
-      ok: r.ok,
-      msg: r.ok
-        ? `Rendered ${r.created || 0} new jingle${(r.created || 0) === 1 ? '' : 's'} (${r.total || 0} total).`
-        : r.error || 'failed',
-    });
-    setBusy(false);
-  };
-  return (
-    <div>
-      <StepHeader
-        title="Generate station idents"
-        blurb='5 default jingles, rendered with your chosen TTS engine. Plays between tracks. You can re-run this later in the admin Jingles panel.'
-      />
-      <button
-        type="button"
-        onClick={onGenerate}
-        disabled={busy}
-        className="rounded border border-ink bg-ink px-4 py-2 text-sm font-medium tracking-wide text-bg uppercase hover:opacity-90 disabled:opacity-40"
-      >
-        {busy ? 'Rendering…' : 'Generate now'}
-      </button>
-      <p className="mt-3 text-xs text-ink/60">
-        Or click <strong>Next</strong> to skip — jingles aren&apos;t required for the station to broadcast.
-      </p>
-      {result && (
-        <div
-          className={
-            'mt-3 rounded px-3 py-2 text-sm ' +
-            (result.ok ? 'bg-green-100 text-green-900' : 'bg-red-100 text-red-900')
-          }
-        >
-          {result.msg}
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Latitude" hint="-90 to 90">
+            <TextInput
+              inputMode="decimal"
+              value={w.data.dj.lat}
+              onChange={e => w.patch(d => ({ dj: { ...d.dj, lat: e.target.value } }))}
+            />
+          </Field>
+          <Field label="Longitude" hint="-180 to 180">
+            <TextInput
+              inputMode="decimal"
+              value={w.data.dj.lng}
+              onChange={e => w.patch(d => ({ dj: { ...d.dj, lng: e.target.value } }))}
+            />
+          </Field>
         </div>
-      )}
+      </div>
     </div>
   );
 }

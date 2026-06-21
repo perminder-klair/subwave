@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { CalendarClock, History, Mic } from 'lucide-react';
@@ -47,10 +48,28 @@ export interface PlayerAppProps {
 }
 
 export default function PlayerApp({ contained = false }: PlayerAppProps) {
+  const router = useRouter();
   const { apiUrl } = useStationOrigin();
   const { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, timezone, locale } = useStationFeed();
   const boothFeed = session.messages;
   const { audioRef, tunedIn, status, volume, setVolume, tune, toggleMute, muted, idleStopped } = usePlayer();
+
+  // First-run redirect — if this install hasn't been configured yet (no
+  // Navidrome creds), bounce the operator into the wizard instead of dropping
+  // them on a silent player. Mirrors AdminShell. Only for the full-page player:
+  // `contained` instances embedded in showcases must never redirect, and the
+  // check hits the same-origin controller (/api), not the multi-station origin —
+  // needsSetup is about *this* install, not a remote station.
+  useEffect(() => {
+    if (contained) return;
+    const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
+    fetch(`${API}/onboarding/status`)
+      .then(r => (r.ok ? r.json() : null))
+      .then((j: { needsSetup?: boolean } | null) => {
+        if (j?.needsSetup) router.push('/onboarding');
+      })
+      .catch(() => {});
+  }, [contained, router]);
 
   // streamOnline is null until the first poll resolves — only treat an
   // explicit false as offline so the player never flashes "offline" on load.
