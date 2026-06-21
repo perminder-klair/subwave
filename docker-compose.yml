@@ -105,6 +105,10 @@ services:
       # unreachable and audio/chatterbox.ts + audio/pocketTts.ts silently
       # fall back to Piper (same behaviour as the default image today).
       - TTS_HEAVY_URL=${TTS_HEAVY_URL:-http://tts-heavy:8080}
+      # Per-container CPU/memory for the admin Stats page (GET /system) is read
+      # from the docker-socket-proxy sidecar over TCP — the controller never
+      # touches the raw Docker socket. Unset this to disable the panel.
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
     env_file:
       # All controller config (Navidrome creds, LLM keys, ADMIN_*, etc.) lives
       # in the root .env. Vars not set are simply absent — settings.json takes
@@ -114,10 +118,24 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - *state-mount
-      # Read-only Docker socket — lets the admin Stats page report per-container
-      # CPU/memory for the stack (GET /system, via the Docker Engine API; no
-      # docker CLI in the image). Optional: drop this line and the panel just
-      # shows "container stats unavailable" — nothing else depends on it.
+
+  # -------------------------------------------------------------------------
+  # DOCKER-SOCKET-PROXY — locked-down Docker API for the Stats system panel
+  # -------------------------------------------------------------------------
+  # Owns the real /var/run/docker.sock and exposes a read-only, GET-only slice
+  # of the Docker Engine API over TCP (CONTAINERS section only; POST and every
+  # other section refused by default). The controller reads per-container
+  # CPU/memory through it via DOCKER_HOST=tcp://docker-socket-proxy:2375, so the
+  # controller image itself never holds the socket. No host port — only
+  # reachable on the internal compose network. Optional: remove this service
+  # (and the controller's DOCKER_HOST above) to drop the Stats system panel.
+  docker-socket-proxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
+    container_name: sub-wave-docker-proxy
+    restart: unless-stopped
+    environment:
+      - CONTAINERS=1
+    volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
   # -------------------------------------------------------------------------
