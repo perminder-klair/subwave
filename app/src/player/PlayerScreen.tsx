@@ -390,6 +390,10 @@ export default function PlayerScreen() {
             intensity={mode === 'light' ? 40 : 26}
             tint={mode === 'light' ? 'light' : 'dark'}
             blurMethod="dimezisBlurView"
+            // Decorative only — on Android 16 the Dimezis BlurView native view
+            // otherwise swallows touches across its bounds, killing the masthead
+            // tabs and (via the transport bar's twin) the whole UI (#…).
+            pointerEvents="none"
             style={StyleSheet.absoluteFill}
           />
           <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: glassFilm }]} />

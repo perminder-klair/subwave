@@ -94,6 +94,10 @@ export default function TransportBar({
           intensity={mode === 'light' ? 40 : 26}
           tint={mode === 'light' ? 'light' : 'dark'}
           blurMethod="dimezisBlurView"
+          // Decorative only — without this the Dimezis BlurView native view
+          // intercepts touches on Android 16, so the tune/play button under it
+          // never fires (works on Android 15, dead on 16).
+          pointerEvents="none"
           style={StyleSheet.absoluteFill}
         />
         <View
