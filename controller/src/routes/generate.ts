@@ -26,7 +26,7 @@ router.post('/generate/persona', requireAdmin, async (req, res) => {
   if (!description) return res.status(400).json({ error: 'description is required' });
   try {
     const out = await dj.generatePersona(description);
-    res.json({ ok: true, persona: out.value });
+    res.json({ ok: true, persona: out });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -49,7 +49,7 @@ router.post('/generate/show', requireAdmin, async (req, res) => {
     } catch {}
 
     const out = await dj.generateShow(description, { personas, themes, genres });
-    const draft = { ...out.value };
+    const draft = { ...out };
 
     // Soft-normalise against the real lists — a near-miss from a weaker model
     // becomes null/default rather than an invalid id the Save would reject.
@@ -76,7 +76,7 @@ router.post('/generate/theme', requireAdmin, async (req, res) => {
   const mode = req.body?.mode === 'light' ? 'light' : 'dark';
   try {
     const out = await dj.generateTheme(description, mode);
-    res.json({ ok: true, theme: { ...out.value, mode } });
+    res.json({ ok: true, theme: { ...out, mode } });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
