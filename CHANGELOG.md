@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.26.0](https://github.com/perminder-klair/subwave/compare/v0.25.0...v0.26.0) (2026-06-21)
+
+
+### Features
+
+* **admin:** AI "describe it → auto-fill" for personas, shows & themes ([#492](https://github.com/perminder-klair/subwave/issues/492)) ([7e77451](https://github.com/perminder-klair/subwave/commit/7e77451d0fcdd56785c478d1a3dedc51394745d4))
+* **dj:** per-persona tone dials (humour, local colour, warmth) + anti-cliché ([#470](https://github.com/perminder-klair/subwave/issues/470)) ([1d9e586](https://github.com/perminder-klair/subwave/commit/1d9e58611b0f5a118ce7c3ab45bcc517aa0548f5))
+* **unraid:** all-in-one image + Community Applications one-click install ([#499](https://github.com/perminder-klair/subwave/issues/499)) ([29332e0](https://github.com/perminder-klair/subwave/commit/29332e0162f9ede50e6754ceb4150138b8d10abb))
+
+
+### Bug Fixes
+
+* **onboarding:** redirect unconfigured player to wizard, Punjab default + coords, drop jingles ([#498](https://github.com/perminder-klair/subwave/issues/498)) ([1fde280](https://github.com/perminder-klair/subwave/commit/1fde2807eda4697fe1614e1c18bc48d6b19745fa))
+* **tagger:** hide chat-only providers from the embedding picker ([#493](https://github.com/perminder-klair/subwave/issues/493)) ([#497](https://github.com/perminder-klair/subwave/issues/497)) ([678bf7f](https://github.com/perminder-klair/subwave/commit/678bf7f9bb9f472f4fed69f0ff1aadddd916a79f))
+* **web:** clamp DJ thinking line so long scripts don't shove artwork under the header ([#486](https://github.com/perminder-klair/subwave/issues/486)) ([2540fc3](https://github.com/perminder-klair/subwave/commit/2540fc3095b675fc170cd6442b253fb66f1f5763))
+
+
+### Documentation
+
+* **news:** dispatch on running Chatterbox on an nvidia GPU ([#487](https://github.com/perminder-klair/subwave/issues/487)) ([aebfa7f](https://github.com/perminder-klair/subwave/commit/aebfa7f50a03f0eea06a1d5c70265438bc481e32))
+
 ## [0.25.0](https://github.com/perminder-klair/subwave/compare/v0.24.0...v0.25.0) (2026-06-21)
 
 
