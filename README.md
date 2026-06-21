@@ -183,6 +183,9 @@ the canonical path: `curl` two files, fill in three vars, `docker compose
 up -d`, finish setup in the browser. See **[`DEPLOY.md`](DEPLOY.md)** for host
 prerequisites, Cloudflare setup, updates, and backup.
 
+**On Unraid?** Run it through the Compose Manager Plus plugin — see
+**[`docs/unraid.md`](docs/unraid.md)**.
+
 **Bring your own reverse proxy.** If you already run Traefik, nginx, or your
 own Caddy in your homelab, swap the bundled-Caddy compose for the BYO variant:
 
@@ -247,6 +250,7 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle, play
 ## Documentation
 
 - **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
+- **[`docs/unraid.md`](docs/unraid.md):** running on Unraid via the Compose Manager Plus plugin.
 - **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
   non-obvious constraints behind each subsystem.
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.
