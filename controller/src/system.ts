@@ -1,24 +1,48 @@
 // System-resource readout for the admin Stats page.
 //
 // Answers "how much CPU/memory is SUB/WAVE using on this box?" by talking to the
-// Docker Engine API directly over the mounted unix socket (/var/run/docker.sock)
-// — no `docker` CLI in the image, just Node's http over a socketPath. The
-// controller runs as root in its container, so it can read the socket when the
-// compose file mounts it (read-only). When the socket isn't mounted (dev on a
-// Mac, a BYO operator who'd rather not expose it), dockerAvailable() is false
-// and summary() returns just the host figures with an empty container list — the
-// UI degrades to "container stats unavailable" rather than erroring.
+// Docker Engine API — no `docker` CLI in the image, just Node's http. The
+// controller never holds the raw Docker socket: the compose files run a
+// `docker-socket-proxy` sidecar that owns /var/run/docker.sock and exposes a
+// read-only, GET-only slice of the API over TCP (CONTAINERS only; all POST/
+// mutating calls refused). The controller reaches it via DOCKER_HOST
+// (tcp://docker-socket-proxy:2375). A direct unix-socket path is still supported
+// for ad-hoc use (DOCKER_HOST=unix:///path or DOCKER_SOCKET), but the shipped
+// composes never mount the socket into the controller.
+//
+// When neither transport is reachable (dev on a Mac without the proxy, a BYO
+// operator who dropped it), summary() returns just the host figures with an
+// empty container list — the UI degrades to "container stats unavailable"
+// rather than erroring.
 //
 // Container selection: we resolve the controller's own Compose project label and
 // return every running container in that project (caddy, broadcast, controller,
-// web, and the tts-heavy sidecar when enabled). Falls back to the sub-wave-*
-// container-name convention if the project label isn't present.
+// web, the proxy, and the tts-heavy sidecar when enabled). Falls back to the
+// sub-wave-* container-name convention if the project label isn't present.
 
 import http from 'node:http';
 import os from 'node:os';
 import { existsSync } from 'node:fs';
 
+// Resolve the Docker API transport from DOCKER_HOST (Docker's own convention),
+// falling back to a local unix socket. tcp:// → talk to the socket-proxy; unix://
+// or unset → a socketPath (only used for ad-hoc direct runs).
+const DOCKER_HOST = process.env.DOCKER_HOST || '';
 const DOCKER_SOCK = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
+
+interface DockerTransport {
+  socketPath?: string;
+  host?: string;
+  port?: number;
+}
+
+function transport(): DockerTransport {
+  const tcp = /^tcp:\/\/([^:/]+):(\d+)/.exec(DOCKER_HOST);
+  if (tcp) return { host: tcp[1], port: Number(tcp[2]) };
+  const unix = /^unix:\/\/(.+)/.exec(DOCKER_HOST);
+  if (unix) return { socketPath: unix[1] };
+  return { socketPath: DOCKER_SOCK };
+}
 
 // --- Docker API types (only the fields we read) ---------------------------
 
@@ -69,8 +93,10 @@ export interface SystemSummary {
 // --- helpers --------------------------------------------------------------
 
 export function dockerAvailable(): boolean {
+  const t = transport();
+  if (t.host) return true; // TCP proxy — reachability is confirmed at request time
   try {
-    return existsSync(DOCKER_SOCK);
+    return existsSync(t.socketPath!);
   } catch {
     return false;
   }
@@ -82,7 +108,7 @@ const round = (n: number): number => Math.round(n * 10) / 10;
 function dockerGetJson<T>(path: string, timeoutMs = 4000): Promise<T> {
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { socketPath: DOCKER_SOCK, path, method: 'GET', timeout: timeoutMs },
+      { ...transport(), path, method: 'GET', timeout: timeoutMs },
       res => {
         const chunks: Buffer[] = [];
         res.on('data', c => chunks.push(c as Buffer));
@@ -120,7 +146,7 @@ function dockerStats(id: string, timeoutMs = 6000): Promise<DockerStat> {
       fn();
     };
     const req = http.request(
-      { socketPath: DOCKER_SOCK, path: `/containers/${id}/stats?stream=true`, method: 'GET', timeout: timeoutMs },
+      { ...transport(), path: `/containers/${id}/stats?stream=true`, method: 'GET', timeout: timeoutMs },
       res => {
         let buf = '';
         const frames: DockerStat[] = [];
@@ -212,7 +238,7 @@ export async function summary(): Promise<SystemSummary> {
   const base = { t: new Date().toISOString(), host, containers: [] as ContainerUsage[] };
 
   if (!dockerAvailable()) {
-    return { ...base, dockerAvailable: false, dockerError: 'docker socket not mounted' };
+    return { ...base, dockerAvailable: false, dockerError: 'docker socket-proxy not reachable' };
   }
 
   try {

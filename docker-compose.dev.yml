@@ -78,6 +78,10 @@ services:
       # below; unreachable URL → fall back to Piper. Dev usage:
       #   docker compose -f docker-compose.dev.yml --profile tts-heavy up -d
       - TTS_HEAVY_URL=${TTS_HEAVY_URL:-http://tts-heavy:8080}
+      # Per-container CPU/memory for the admin Stats page (GET /system) is read
+      # from the docker-socket-proxy sidecar over TCP — the controller never
+      # touches the raw Docker socket. Unset this to disable the panel.
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
     ports:
       - "7701:7701"
     env_file:
@@ -102,9 +106,23 @@ services:
       # /app/node_modules with the (possibly empty) host node_modules.
       - ./controller/src:/app/src
       - ./controller/scripts:/app/scripts
-      # Read-only Docker socket — powers the admin Stats system-resource panel
-      # (GET /system) in dev too. Optional: drop it and the panel shows
-      # "container stats unavailable".
+
+  # -------------------------------------------------------------------------
+  # DOCKER-SOCKET-PROXY — locked-down Docker API for the Stats system panel
+  # -------------------------------------------------------------------------
+  # Owns the real /var/run/docker.sock and exposes a read-only, GET-only slice
+  # of the Docker Engine API over TCP (CONTAINERS section only; POST and every
+  # other section refused by default). The controller reads per-container
+  # CPU/memory through it via DOCKER_HOST=tcp://docker-socket-proxy:2375, so the
+  # controller never holds the socket. No host port. Optional: remove this
+  # service (and the controller's DOCKER_HOST above) to drop the Stats panel.
+  docker-socket-proxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
+    container_name: sub-wave-docker-proxy
+    restart: unless-stopped
+    environment:
+      - CONTAINERS=1
+    volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
   # -------------------------------------------------------------------------
