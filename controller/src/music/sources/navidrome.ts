@@ -9,7 +9,7 @@
 // with URL/cred changes. Capabilities are all true: Navidrome is the richest
 // source and the one every other provider is measured against.
 
-import type { MusicSource } from '../source.js';
+import type { MusicSource } from '../source-kit.js';
 import * as subsonic from '../subsonic.js';
 
 export const navidromeSource: MusicSource = {

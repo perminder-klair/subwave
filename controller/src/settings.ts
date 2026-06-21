@@ -207,6 +207,13 @@ function applyLlmLegPatch(target: any, patch: any, label: string): void {
 // LLM provider of the same name.
 export const TTS_CLOUD_PROVIDERS = ['openai', 'elevenlabs', 'openai-compatible'];
 
+// Music source providers (see music/source.ts). `navidrome` is the default and
+// the alias `subsonic` resolves to the same client — any Subsonic-compatible
+// server (Navidrome, Airsonic, Gonic, Ampache, LMS). The others are catalogues
+// with their own clients. `getSource()` resolves the active one from
+// settings.source.provider (env MUSIC_SOURCE wins).
+export const MUSIC_SOURCES = ['navidrome', 'jellyfin', 'jamendo', 'local'];
+
 // Web-search backends for the segment director's `web-search` capability.
 // `duckduckgo` is the homelab default — DuckDuckGo's Instant Answer API is free
 // and keyless, returns useful results only for entity / definition queries, and
@@ -627,6 +634,19 @@ const DEFAULTS = {
       userToken: '',
       username: '',
     },
+  },
+  // Active music source — the catalogue that backs the picker/request/queue
+  // pipeline (music/source.ts). 'navidrome' (any Subsonic-compatible server) is
+  // the default and needs no extra config beyond the Navidrome creds collected
+  // at onboarding (those live in setup-config.json, NOT here). This block holds
+  // the connection details for the non-Subsonic providers; only the active
+  // provider's block is used. Env wins (MUSIC_SOURCE / JELLYFIN_* / JAMENDO_* /
+  // MUSIC_LOCAL_DIR) — see config.music + sourceConfig().
+  source: {
+    provider: 'navidrome',
+    jellyfin: { url: '', apiKey: '', userId: '' },
+    jamendo: { clientId: '' },
+    local: { dir: '' },
   },
 };
 
@@ -1150,6 +1170,22 @@ export async function load() {
             : '',
       },
     },
+    source: {
+      provider: MUSIC_SOURCES.includes(stored.source?.provider)
+        ? stored.source.provider
+        : DEFAULTS.source.provider,
+      jellyfin: {
+        url: typeof stored.source?.jellyfin?.url === 'string' ? stored.source.jellyfin.url.trim().slice(0, 200) : '',
+        apiKey: typeof stored.source?.jellyfin?.apiKey === 'string' ? stored.source.jellyfin.apiKey : '',
+        userId: typeof stored.source?.jellyfin?.userId === 'string' ? stored.source.jellyfin.userId.trim().slice(0, 100) : '',
+      },
+      jamendo: {
+        clientId: typeof stored.source?.jamendo?.clientId === 'string' ? stored.source.jamendo.clientId.trim().slice(0, 100) : '',
+      },
+      local: {
+        dir: typeof stored.source?.local?.dir === 'string' ? stored.source.local.dir.trim().slice(0, 500) : '',
+      },
+    },
   };
   if (typeof stored.timezone === 'string' && stored.timezone.trim() && !cache.timezone) {
     console.warn(`[settings] ignoring invalid timezone "${stored.timezone.trim()}" — using Auto (container TZ)`);
@@ -1216,6 +1252,9 @@ export function getRedacted() {
   }
   if (clone.scrobble?.listenbrainz) {
     clone.scrobble.listenbrainz.userToken = s.scrobble?.listenbrainz?.userToken ? 'set' : '';
+  }
+  if (clone.source?.jellyfin) {
+    clone.source.jellyfin.apiKey = s.source?.jellyfin?.apiKey ? 'set' : '';
   }
   return clone;
 }
@@ -1993,6 +2032,51 @@ export async function update(patch) {
         const v = String(lb.userToken ?? '').trim();
         if (v.length > 200) throw new Error('scrobble.listenbrainz.userToken must be 0-200 chars');
         next.scrobble.listenbrainz.userToken = v;
+      }
+    }
+  }
+  if ('source' in patch) {
+    const so = patch.source || {};
+    if (so.provider !== undefined) {
+      if (!MUSIC_SOURCES.includes(so.provider)) {
+        throw new Error(`source.provider must be one of: ${MUSIC_SOURCES.join(', ')}`);
+      }
+      next.source.provider = so.provider;
+    }
+    if (so.jellyfin !== undefined) {
+      const jf = so.jellyfin || {};
+      if (jf.url !== undefined) {
+        const v = String(jf.url ?? '').trim();
+        if (v.length > 200) throw new Error('source.jellyfin.url must be 0-200 chars');
+        if (v && !/^https?:\/\//i.test(v)) throw new Error('source.jellyfin.url must start with http:// or https://');
+        next.source.jellyfin.url = v.replace(/\/+$/, '');
+      }
+      if (jf.userId !== undefined) {
+        const v = String(jf.userId ?? '').trim();
+        if (v.length > 100) throw new Error('source.jellyfin.userId must be 0-100 chars');
+        next.source.jellyfin.userId = v;
+      }
+      // 'set' is the redaction sentinel from getRedacted() — ignore it.
+      if (jf.apiKey !== undefined && jf.apiKey !== 'set') {
+        const v = String(jf.apiKey ?? '').trim();
+        if (v.length > 200) throw new Error('source.jellyfin.apiKey must be 0-200 chars');
+        next.source.jellyfin.apiKey = v;
+      }
+    }
+    if (so.jamendo !== undefined) {
+      const jm = so.jamendo || {};
+      if (jm.clientId !== undefined) {
+        const v = String(jm.clientId ?? '').trim();
+        if (v.length > 100) throw new Error('source.jamendo.clientId must be 0-100 chars');
+        next.source.jamendo.clientId = v;
+      }
+    }
+    if (so.local !== undefined) {
+      const lo = so.local || {};
+      if (lo.dir !== undefined) {
+        const v = String(lo.dir ?? '').trim();
+        if (v.length > 500) throw new Error('source.local.dir must be 0-500 chars');
+        next.source.local.dir = v;
       }
     }
   }

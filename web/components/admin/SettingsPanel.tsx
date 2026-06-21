@@ -24,6 +24,7 @@ import BackupPanel from './BackupPanel';
 
 const SECTIONS = [
   { id: 'station',  label: 'Station', hint: 'name · location · locale' },
+  { id: 'source',   label: 'Music source', hint: 'navidrome · jamendo · …' },
   { id: 'theme',    label: 'Theme', hint: 'station-wide palette' },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing' },
   { id: 'tts',      label: 'TTS voice', hint: 'default engine' },
@@ -185,6 +186,15 @@ interface ScrobbleForm {
   listenbrainz: ScrobbleListenbrainzForm;
 }
 
+interface SourceForm {
+  provider: string;
+  jellyfinUrl: string;
+  jellyfinApiKey: string;
+  jellyfinUserId: string;
+  jamendoClientId: string;
+  localDir: string;
+}
+
 interface ArchiveForm {
   enabled: boolean;
   bitrate: string;
@@ -212,6 +222,7 @@ interface FormState {
   search: SearchForm;
   embedding: EmbeddingForm;
   scrobble: ScrobbleForm;
+  source: SourceForm;
 }
 
 interface JingleEntry {
@@ -275,6 +286,12 @@ interface SettingsData {
     scrobble?: {
       lastfm?: Partial<ScrobbleLastfmForm>;
       listenbrainz?: Partial<ScrobbleListenbrainzForm>;
+    };
+    source?: {
+      provider?: string;
+      jellyfin?: { url?: string; apiKey?: string; userId?: string };
+      jamendo?: { clientId?: string };
+      local?: { dir?: string };
     };
   };
   tts?: {
@@ -463,6 +480,15 @@ export default function SettingsPanel() {
           userToken: v.scrobble?.listenbrainz?.userToken ?? '',
           username: v.scrobble?.listenbrainz?.username ?? '',
         },
+      },
+      source: {
+        provider: v.source?.provider ?? 'navidrome',
+        jellyfinUrl: v.source?.jellyfin?.url ?? '',
+        // 'set' sentinel from getRedacted() — round-trips harmlessly.
+        jellyfinApiKey: v.source?.jellyfin?.apiKey ?? '',
+        jellyfinUserId: v.source?.jellyfin?.userId ?? '',
+        jamendoClientId: v.source?.jamendo?.clientId ?? '',
+        localDir: v.source?.local?.dir ?? '',
       },
     });
   }, [data, form]);
@@ -707,6 +733,12 @@ export default function SettingsPanel() {
             )}
             {activeSection === 'station' && (
               <StationSection
+                data={data} form={form} setForm={updateForm} busy={busy}
+                saveSettings={saveSettings}
+              />
+            )}
+            {activeSection === 'source' && (
+              <SourceSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings}
               />
@@ -2212,6 +2244,133 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
 }
 
 /* ── Web search ──────────────────────────────────────────────────────── */
+
+/* ── Music source ───────────────────────────────────────────────────── */
+
+// Providers wired into the controller registry today. Jellyfin + local folder
+// are accepted by the backend (settings/config) but not yet registered, so they
+// stay out of the picker until their phases land — offering them here would
+// silently fall back to Navidrome.
+const SOURCE_OPTIONS: Array<{ id: string; label: string }> = [
+  { id: 'navidrome', label: 'Subsonic-compatible server' },
+  { id: 'jamendo', label: 'Jamendo (Creative Commons)' },
+];
+function sourceLabel(id: string): string {
+  return SOURCE_OPTIONS.find(o => o.id === id)?.label || id;
+}
+
+function SourceSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
+  const s = form.source;
+  const provider = s.provider;
+  const save = () => {
+    const patch: Record<string, unknown> = { provider };
+    if (provider === 'jamendo') {
+      patch.jamendo = { clientId: s.jamendoClientId.trim() };
+    }
+    // navidrome carries no creds here — they live in onboarding/setup-config.
+    saveSettings({ source: patch });
+  };
+
+  const savedSource = data.values?.source || {};
+  const savedProvider = savedSource.provider || 'navidrome';
+  const dirty = provider !== savedProvider
+    || (provider === 'jamendo'
+        && s.jamendoClientId.trim() !== (savedSource.jamendo?.clientId || ''));
+  const jamendoKeySet = !!s.jamendoClientId.trim() || !!data.env?.JAMENDO_CLIENT_ID;
+
+  return (
+    <>
+      <SectionHeader
+        eyebrow="music source"
+        title="Where the music comes from."
+        sub={<>
+          The catalogue that backs the DJ&apos;s picks and listener requests. A
+          Subsonic-compatible server (Navidrome, Airsonic, Gonic, Ampache, LMS) is
+          the default — you hold the audio. Jamendo needs no self-hosting: paste a
+          free client id and the DJ draws from its Creative-Commons catalogue.
+          Switching re-routes the next pick; the embedding library is keyed per
+          source, so a different provider re-tags from scratch.
+        </>}
+        metrics={[{ n: String(SOURCE_OPTIONS.length), l: 'providers' }]}
+      />
+
+      <Card title="Provider" sub="active catalogue">
+        <div className="grid gap-[18px]">
+          <div className="flex items-start gap-2.5 border border-[var(--accent)] bg-[var(--ink-softer)] p-3">
+            <span className="mt-1 size-1.5 flex-none rounded-full bg-vermilion" />
+            <div className="grid min-w-0 gap-0.5">
+              <span className="text-[11px] font-bold tracking-[0.12em] text-vermilion uppercase">
+                Playing from · {sourceLabel(savedProvider)}
+              </span>
+              <span className="text-[11px] leading-[1.5] text-muted">
+                {dirty
+                  ? <>Your edits below aren&apos;t live until you Save.</>
+                  : <>This is the saved, running source.</>}
+              </span>
+            </div>
+          </div>
+
+          <div className="field">
+            <div className="flex items-center gap-2">
+              <Label>Provider</Label>
+              {dirty && <Pill tone="accent" dot>unsaved</Pill>}
+            </div>
+            <Select
+              value={provider}
+              onValueChange={v => setForm(f => ({ ...f, source: { ...f.source, provider: v } }))}
+            >
+              <SelectTrigger className="max-w-[360px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {SOURCE_OPTIONS.map(o => (
+                    <SelectItem key={o.id} value={o.id}>{o.label}</SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <div className="field-hint">
+              {provider === 'navidrome'
+                ? 'Any Subsonic-compatible server. Connection details (URL, user, password) are set in onboarding and stored separately. Last.fm tags, lyrics and sonic-similarity work best on Navidrome.'
+                : 'Jamendo — a remote Creative-Commons catalogue. No server to run; tracks stream from Jamendo. No personal playlists/starred, and the library tagger is skipped (the catalogue is unbounded).'}
+            </div>
+          </div>
+
+          {provider === 'jamendo' && (
+            <>
+              <div className="field">
+                <Label>Jamendo client id</Label>
+                <Input
+                  type="text"
+                  value={s.jamendoClientId}
+                  placeholder="e.g. 2b7c8fa1"
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({ ...f, source: { ...f.source, jamendoClientId: e.target.value } }))
+                  }
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">
+                  Free — register an app at{' '}
+                  <a className="underline" href="https://developer.jamendo.com/v3.0/apps" target="_blank" rel="noreferrer">developer.jamendo.com</a>.
+                  Falls back to <code>JAMENDO_CLIENT_ID</code> in <code>.env</code> when blank.
+                </div>
+              </div>
+              <KeyStatus envVar="JAMENDO_CLIENT_ID" present={jamendoKeySet} />
+            </>
+          )}
+        </div>
+      </Card>
+
+      <SaveBar
+        note="Applies to the next pick — no restart needed."
+        busy={busy}
+        onSave={save}
+        saveLabel="Save music source"
+      />
+    </>
+  );
+}
+
+/* ── Web search ─────────────────────────────────────────────────────── */
 
 function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const save = () => saveSettings({

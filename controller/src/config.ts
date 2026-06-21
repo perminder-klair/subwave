@@ -48,6 +48,30 @@ export const config = {
     apiVersion: '1.16.1',
     clientName: 'sub-wave',
   },
+  // Music source selection + the non-Subsonic providers' connection details.
+  // The active provider is resolved by music/source.ts (sourceConfig): env here
+  // wins over settings.source, which wins over the 'navidrome' default. Navidrome
+  // creds are NOT duplicated here — they stay in config.navidrome (env →
+  // state/setup-config.json). Only the active provider's block is used.
+  music: {
+    // Env override of the active provider; '' → settings.source.provider.
+    source: process.env.MUSIC_SOURCE || '',
+    jellyfin: {
+      url: process.env.JELLYFIN_URL || '',
+      apiKey: process.env.JELLYFIN_API_KEY || '',
+      userId: process.env.JELLYFIN_USER_ID || '',
+      clientName: 'sub-wave',
+    },
+    jamendo: {
+      clientId: process.env.JAMENDO_CLIENT_ID || '',
+      apiBase: process.env.JAMENDO_API_BASE || 'https://api.jamendo.com/v3.0',
+    },
+    local: {
+      // Absolute path to a folder of audio files the controller can read
+      // directly (must be mounted into the container). '' → not configured.
+      dir: process.env.MUSIC_LOCAL_DIR || '',
+    },
+  },
   ollama: {
     // Default-when-blank server URL + model. The admin Settings UI
     // (`llm.ollamaUrl` / `llm.model`) overrides both — there are no

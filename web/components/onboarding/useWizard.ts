@@ -76,7 +76,7 @@ export type StepId = 'navidrome' | 'llm' | 'tts' | 'dj' | 'jingles' | 'review';
 export const STEP_ORDER: StepId[] = ['navidrome', 'llm', 'tts', 'dj', 'jingles', 'review'];
 
 export const STEP_LABELS: Record<StepId, string> = {
-  navidrome: 'Navidrome',
+  navidrome: 'Music server',
   llm: 'LLM',
   tts: 'TTS',
   dj: 'DJ persona',

@@ -11,7 +11,7 @@
     "lastfm-session": "tsx scripts/lastfm-session.ts",
     "test:embed": "tsx scripts/embedding-preflight-test.ts",
     "test:llm": "tsx scripts/llm-pure.test.ts",
-    "test": "tsx scripts/llm-pure.test.ts && tsx scripts/picker-recency-regression.ts && tsx scripts/listeners-status.test.ts",
+    "test": "tsx scripts/llm-pure.test.ts && tsx scripts/picker-recency-regression.ts && tsx scripts/listeners-status.test.ts && tsx scripts/source.test.ts && tsx scripts/jamendo-source.test.ts",
     "lint": "eslint . && tsc --noEmit",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit"

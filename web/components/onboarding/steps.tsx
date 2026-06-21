@@ -83,11 +83,11 @@ export function NavidromeStep({ w }: { w: WizardController }) {
   return (
     <div>
       <StepHeader
-        title="Connect Navidrome"
-        blurb="SUB/WAVE plays from your Subsonic-compatible music library. Point it at your Navidrome and the AI DJ takes over."
+        title="Connect a Subsonic-compatible server"
+        blurb="SUB/WAVE plays from your own music library — any Subsonic-compatible server (Navidrome, Airsonic, Gonic, Ampache, LMS). Point it at yours and the AI DJ takes over. Other sources (Jamendo, Jellyfin) can be set later in Admin → Settings → Music source."
       />
       <div className="grid gap-3">
-        <Field label="Navidrome URL" hint="e.g. http://host.docker.internal:4533">
+        <Field label="Server URL" hint="e.g. http://host.docker.internal:4533">
           <TextInput
             value={w.data.navidrome.url}
             placeholder="http://host.docker.internal:4533"
@@ -504,7 +504,7 @@ export function ReviewStep({
     }
   };
   const rows: Array<[string, string]> = [
-    ['Navidrome', w.data.navidrome.url ? `${w.data.navidrome.user} @ ${w.data.navidrome.url}` : '— skipped —'],
+    ['Music server', w.data.navidrome.url ? `${w.data.navidrome.user} @ ${w.data.navidrome.url}` : '— skipped —'],
     ['LLM', `${w.data.llm.provider} · ${w.data.llm.model}`],
     ['TTS', w.data.tts.defaultEngine + (w.data.tts.cloud.enabled ? ` (+ ${w.data.tts.cloud.provider})` : '')],
     ['Station', `${w.data.dj.stationName} — ${w.data.dj.locationName}`],
