@@ -9,18 +9,18 @@
 // more variety here, the less the DJ repeats itself.
 export const ANGLES = {
   intro: [
-    'Open with one specific image from right now (weather, time, day, season) and slide into the track.',
+    'Open with one specific image from right now (the time, the day, the season, the light) and slide into the track.',
     'Mention the artist in passing — one detail (era, scene, mood) — not a full title-and-artist back-announce.',
     'Skip the introduction entirely and start mid-thought, as if continuing a conversation.',
     'React to the request itself — what kind of request it is, what mood it suggests — before mentioning the track.',
-    'Use a short personal observation about the moment (Tuesday energy, the rain holding off, etc.) as the doorway.',
-    'Lean into contrast: how this track sits against the time of day, the weather, or the mood of the moment.',
+    'Use a short personal observation about the moment (Tuesday energy, the slow drift of the afternoon, etc.) as the doorway.',
+    'Lean into contrast: how this track sits against the time of day or the mood of the moment.',
     'Just say one true sentence and let the music start.',
   ],
   link: [
     'Comment on a contrast or similarity between the two tracks (era, mood, instrumentation, tempo).',
-    'Tie the next track to the time of day, weather, or season — specifically, not generically.',
-    'Mention something small and tactile about right now (the rain, the dark, the smell of coffee, the day of the week).',
+    'Tie the next track to the time of day or the season — specifically, not generically.',
+    'Mention something small and tactile about right now (the dark, the smell of coffee, the day of the week).',
     'Reference the previous artist or song obliquely — one detail, no full back-announce.',
     'Skip the back-announce entirely and just open a small thought about what is next.',
     'Acknowledge a listener-shaped moment (commute, late shift, weekend, midweek lull) without naming any listener.',
@@ -28,9 +28,9 @@ export const ANGLES = {
   ],
   station_id: [
     'Plain ident — say the station name and the DJ name, nothing else.',
-    'Anchor the ident to the current moment (a Tuesday afternoon, a foggy evening, the slow part of Sunday).',
+    'Anchor the ident to the current moment (a Tuesday afternoon, a quiet evening, the slow part of Sunday).',
     'Make it a near-aside: like someone reminding themselves where they are.',
-    'Open with the time or weather, then drop the station name in the middle of the sentence.',
+    'Open with the time of day, then drop the station name in the middle of the sentence.',
     'A single observation about broadcasting from a homelab, with the station name woven in.',
   ],
   hourly: [
@@ -52,28 +52,59 @@ export function randomSeed() {
   return Math.floor(Math.random() * 1_000_000_000);
 }
 
-export function buildContextLines(context: any, { recentTracks }: { recentTracks?: any[] } = {}) {
+// The "right now" fields buildContextLines can emit — the vocabulary every
+// per-skill / per-generator context allowlist is drawn from (issue #471). Order
+// is the order the lines are emitted in. Keep in sync with the guards below.
+export const CONTEXT_FIELDS = ['date', 'clock', 'time', 'weather', 'festival', 'show', 'listeners'] as const;
+export type ContextField = (typeof CONTEXT_FIELDS)[number];
+
+// Normalise a contextFields spec (array | comma-string | null/undefined) to a
+// Set of known field keys, or `null` meaning "every field" — the back-compat
+// default for callers that pass nothing. `all` / `*` is an explicit "every
+// field" too. Unknown tokens are dropped silently, so a typo in a SKILL.md
+// just narrows the block rather than crashing the tick.
+export function normalizeContextFields(spec?: string | readonly string[] | null): Set<string> | null {
+  if (spec == null) return null;
+  const raw = Array.isArray(spec) ? spec : String(spec).split(',');
+  const out = new Set<string>();
+  for (const tok of raw as readonly string[]) {
+    const k = String(tok).trim().toLowerCase();
+    if (!k) continue;
+    if (k === 'all' || k === '*') return null;
+    if ((CONTEXT_FIELDS as readonly string[]).includes(k)) out.add(k);
+  }
+  return out;
+}
+
+export function buildContextLines(
+  context: any,
+  { recentTracks, contextFields }: { recentTracks?: any[]; contextFields?: string | readonly string[] | null } = {},
+) {
+  // `allow === null` means no gating (every field) — the historical behaviour
+  // for callers that don't pass contextFields.
+  const allow = normalizeContextFields(contextFields);
+  const on = (f: ContextField) => allow === null || allow.has(f);
   const lines: string[] = [];
-  if (context?.date) {
+  if (on('date') && context?.date) {
     lines.push(`Day: ${context.date.dayLabel}, ${context.date.dayOfMonth} ${context.date.monthLabel} (${context.date.season})`);
   }
-  if (context?.clock) {
+  if (on('clock') && context?.clock) {
     const tags: string[] = [];
     if (context.clock.isWeekend) tags.push('weekend');
     if (context.clock.isLateNight) tags.push('late night');
     if (context.clock.isCommute) tags.push('commute hour');
     lines.push(`Local time: ${context.clock.hhmm}${tags.length ? ' · ' + tags.join(' · ') : ''}`);
   }
-  if (context?.time) lines.push(`Period: ${context.time.period} (${context.time.vibe})`);
-  if (context?.weather && context.weather.condition && context.weather.condition !== 'unknown') {
+  if (on('time') && context?.time) lines.push(`Period: ${context.time.period} (${context.time.vibe})`);
+  if (on('weather') && context?.weather && context.weather.condition && context.weather.condition !== 'unknown') {
     lines.push(`Weather in ${context.weather.location}: ${context.weather.condition}${context.weather.temp != null ? `, ${context.weather.temp}°${context.weather.tempUnit || 'C'}` : ''}`);
   }
-  if (context?.festival) lines.push(`Festival: ${context.festival.name}`);
-  if (context?.activeShow) {
+  if (on('festival') && context?.festival) lines.push(`Festival: ${context.festival.name}`);
+  if (on('show') && context?.activeShow) {
     const topic = context.activeShow.topic ? ` — ${context.activeShow.topic}` : '';
     lines.push(`On now: the show "${context.activeShow.name}"${topic}. Stay loosely on its theme.`);
   }
-  if (context?.listeners?.count != null) {
+  if (on('listeners') && context?.listeners?.count != null) {
     const n = context.listeners.count;
     lines.push(n === 0
       ? `No one is tuned in right now.`

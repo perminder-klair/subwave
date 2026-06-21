@@ -9,6 +9,8 @@ export {
   randomSeed,
   buildContextLines,
   decoratePrompt,
+  CONTEXT_FIELDS,
+  normalizeContextFields,
 } from './internal/prompts/context.js';
 export { introBudgetPhrase, enforceIntroBudget } from './internal/prompts/intro-budget.js';
 export { matchRequest, identifyTrackFromText } from './internal/prompts/request.js';

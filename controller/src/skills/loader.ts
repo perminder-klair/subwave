@@ -21,10 +21,16 @@
 //   window           "any" (default) | "commute" — only offered during commute hours
 //   requiresKey      env var the skill needs; absent → never offered
 //   toolDescription  description shown to the agent for the tool.mjs data tool
+//   context          comma-separated "right now" fields the segment may weave in
+//                    — any of: date, clock, time, weather, festival, show,
+//                    listeners. Absent → the default profile (everything EXCEPT
+//                    weather), so a skill only mentions weather when it opts in
+//                    (issue #471). e.g. `context: time, weather` for a commute-
+//                    conditions skill where weather is genuinely topical.
 //
 // EDITING BUILT-INS: a folder named after a built-in kind (weather, news, …;
 // see BUILTIN_KINDS) is treated as an OVERRIDE — it edits the shipped built-in's
-// brief/cooldown/label in place (and, for `news`, its `feed:` RSS URL +
+// brief/cooldown/label/context in place (and, for `news`, its `feed:` RSS URL +
 // `feedMaxItems`) rather than being rejected as a clash. Built-in overrides may
 // leave the body empty (= keep the default brief) and never load a tool.mjs.
 // These files are scaffolded on first boot (see skills/scaffold.js).
@@ -123,6 +129,16 @@ function titleCase(slug: string): string {
   return slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
+// Parse a `context:` (or `contextFields:`) frontmatter value — a comma list of
+// "right now" field names — into lowercase tokens, or undefined when absent or
+// empty. Unknown tokens are kept here and dropped downstream (buildContextLines
+// validates against CONTEXT_FIELDS), so the loader stays dependency-free.
+function parseContextFields(raw: string | undefined): string[] | undefined {
+  if (raw == null) return undefined;
+  const list = String(raw).split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  return list.length ? list : undefined;
+}
+
 // Dynamically import a skill's optional tool.mjs and return its data function,
 // or null. The function is invoked per tick with the moment's context; the
 // call itself is timeout-guarded at the call site (segment-tools.js).
@@ -171,6 +187,8 @@ async function loadOne(slug: string): Promise<any | null> {
     if (body) override.desc = body;
     if (data.cooldown) override.cooldownMs = parseCooldownMs(data.cooldown);
     if (data.label) override.label = data.label.trim();
+    const ovContext = parseContextFields(data.context ?? data.contextFields);
+    if (ovContext) override.contextFields = ovContext;
     if (data.feed) override.feed = data.feed.trim();
     if (data.feedMaxItems) {
       const n = parseInt(data.feedMaxItems, 10);
@@ -207,6 +225,9 @@ async function loadOne(slug: string): Promise<any | null> {
     custom: true,
     window,
     requiresKey,
+    // Absent → effectiveContextFields() falls back to the default profile (no
+    // weather). A skill opts weather (or any field) in via `context:` (#471).
+    contextFields: parseContextFields(data.context ?? data.contextFields),
     // A keyed skill is only ready when its env var is set. Keyless skills are
     // always ready. Mirrors the built-in `ready()` convention.
     ready: requiresKey ? () => !!process.env[requiresKey] : undefined,

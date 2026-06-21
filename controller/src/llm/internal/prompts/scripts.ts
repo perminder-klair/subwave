@@ -9,8 +9,17 @@ import { djSystem, lengthPhrase } from './system.js';
 import { buildContextLines, decoratePrompt, randomSeed } from './context.js';
 import { introBudgetPhrase, introMsFor, bpmKeyFor } from './intro-budget.js';
 
+// Real-world context the generic between-track generators are allowed to weave
+// in. Weather is deliberately EXCLUDED (issue #471): ambient weather stapled to
+// every intro/link/ident/time-check made the DJ comically weather-heavy (~50%
+// of all quips). Weather now reaches air only through the dedicated `weather`
+// segment skill, which is cooldown- and change-gated. The weather-pushing
+// narrative angles were trimmed to match — without the weather line in front of
+// it, a model told to "mention the weather" would only invent it.
+const SCRIPT_CONTEXT_FIELDS = ['date', 'clock', 'time', 'festival', 'show', 'listeners'];
+
 export async function generateIntro({ track, context, requestedBy = null, requestText = null, artistMiss = null, recap = null, recentTracks = null, recentOpeners = null }: any) {
-  const ctxLines = buildContextLines(context, { recentTracks });
+  const ctxLines = buildContextLines(context, { recentTracks, contextFields: SCRIPT_CONTEXT_FIELDS });
   if (requestedBy) ctxLines.push(`Requested by: ${requestedBy}`);
   if (requestText) {
     // Clip and sanitise so a long request can't dominate the prompt or break formatting.
@@ -46,7 +55,7 @@ export async function generateIntro({ track, context, requestedBy = null, reques
 export async function generateStationId({ recap = null, context = null, recentOpeners = null }: any = {}) {
   const djName = settings.getEffectivePersona()?.name || 'your host';
   const stationName = settings.get().station;
-  const ctxLines = buildContextLines(context);
+  const ctxLines = buildContextLines(context, { contextFields: SCRIPT_CONTEXT_FIELDS });
   ctxLines.push(`Task: ${lengthPhrase('stationId')} for ${stationName} with ${djName}. A little understated.`);
   return djText({
     system: djSystem(),
@@ -60,7 +69,7 @@ export async function generateStationId({ recap = null, context = null, recentOp
 // Takes a free-text instruction/topic and performs it in character, rather
 // than reading it verbatim (that's what raw mode is for).
 export async function generateAdLib({ instruction, context = null, recap = null, recentOpeners = null }: any) {
-  const ctxLines = buildContextLines(context);
+  const ctxLines = buildContextLines(context, { contextFields: SCRIPT_CONTEXT_FIELDS });
   const clipped = String(instruction || '').replace(/\s+/g, ' ').trim().slice(0, 300);
   ctxLines.push(`Task: the station operator wants you to say something on-air. Their instruction: "${clipped}". Deliver it in character as a natural spoken line — don't read the instruction back verbatim, perform it. ${lengthPhrase('adlib')}.`);
   return djText({
@@ -72,7 +81,7 @@ export async function generateAdLib({ instruction, context = null, recap = null,
 }
 
 export async function generateLink({ previous, current, context, recap = null, recentTracks = null, recentOpeners = null }: any) {
-  const ctxLines = buildContextLines(context, { recentTracks });
+  const ctxLines = buildContextLines(context, { recentTracks, contextFields: SCRIPT_CONTEXT_FIELDS });
   if (previous?.title) ctxLines.push(`Just played: "${previous.title}" by ${previous.artist || 'unknown'}`);
   if (current?.title) ctxLines.push(`Now playing: "${current.title}" by ${current.artist || 'unknown'}`);
 
@@ -103,7 +112,7 @@ export async function generateLink({ previous, current, context, recap = null, r
 
 export async function generateHourlyTime(time: any, weather: any, { recap = null, context = null, recentOpeners = null }: any = {}) {
   const ctx = context || { time, weather };
-  const ctxLines = buildContextLines(ctx);
+  const ctxLines = buildContextLines(ctx, { contextFields: SCRIPT_CONTEXT_FIELDS });
   ctxLines.push(`Task: a brief top-of-the-hour time check, in character. ${lengthPhrase('hourly')}.`);
   return djText({
     system: djSystem(),

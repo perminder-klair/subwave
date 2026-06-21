@@ -72,6 +72,10 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
       isNews: kind === 'news',
       label: data.label || cat?.label || kind,
       cooldown: data.cooldown || msToCooldownStr(cat?.cooldownMs || 0),
+      // Comma-separated "right now" fields this segment may weave in (#471).
+      // Prefer the file's own value; fall back to the live effective set.
+      context: (data.context ?? data.contextFields)?.trim() || (cat?.contextFields || []).join(', '),
+      knownContextFields: [...dj.CONTEXT_FIELDS],
       feed: data.feed || cat?.feed || null,
       feedMaxItems: data.feedMaxItems ? parseInt(data.feedMaxItems, 10) : (cat?.feedMaxItems || null),
       brief: body || cat?.description || '',
@@ -84,6 +88,8 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
       isNews: kind === 'news',
       label: cat?.label || kind,
       cooldown: msToCooldownStr(cat?.cooldownMs || 0),
+      context: (cat?.contextFields || []).join(', '),
+      knownContextFields: [...dj.CONTEXT_FIELDS],
       feed: cat?.feed || null,
       feedMaxItems: cat?.feedMaxItems || null,
       brief: cat?.description || '',
@@ -113,6 +119,21 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
   const label = typeof b.label === 'string' && b.label.trim() ? b.label.trim() : undefined;
 
   const fields: any = { kind, label, cooldown: cooldown || undefined, brief };
+
+  // Context fields — the "right now" lines this segment may weave in (#471).
+  // Accept a comma string or an array; validate every token against the known
+  // vocabulary so a typo fails loudly here instead of silently narrowing the
+  // block. An empty selection resets the skill to the default profile.
+  if (b.context !== undefined) {
+    const raw = Array.isArray(b.context) ? b.context : String(b.context).split(',');
+    const toks = raw.map((s: any) => String(s).trim().toLowerCase()).filter(Boolean);
+    const known = new Set<string>(dj.CONTEXT_FIELDS as readonly string[]);
+    const bad = toks.filter((t: string) => !known.has(t));
+    if (bad.length) {
+      return res.status(400).json({ error: `unknown context field(s): ${bad.join(', ')} — valid: ${[...known].join(', ')}` });
+    }
+    if (toks.length) fields.contextFields = toks;
+  }
 
   // Feed is news-only. Validate it parses as an http(s) URL.
   if (kind === 'news') {

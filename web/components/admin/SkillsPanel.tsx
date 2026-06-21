@@ -52,6 +52,8 @@ interface SkillFileResponse {
   isNews?: boolean;
   label?: string;
   cooldown?: string;
+  context?: string;                 // comma-separated "right now" fields (#471)
+  knownContextFields?: string[];    // the full vocabulary, for the tick-boxes
   feed?: string | null;
   feedMaxItems?: number | null;
   brief?: string;
@@ -64,9 +66,29 @@ interface EditForm {
   isNews: boolean;
   label: string;
   cooldown: string;
+  context: string[];          // selected "right now" fields the segment may mention
+  knownContext: string[];     // the full vocabulary to render tick-boxes from
   feed: string;
   feedMaxItems: string;
   brief: string;
+}
+
+// Friendly labels for the context fields (#471). Keys are the controller's
+// CONTEXT_FIELDS vocabulary; anything not listed falls back to the raw key.
+const CONTEXT_FIELD_LABELS: Record<string, string> = {
+  date: 'Date & season',
+  clock: 'Clock time',
+  time: 'Daypart',
+  weather: 'Weather',
+  festival: 'Festival',
+  show: 'Current show',
+  listeners: 'Listener count',
+};
+// Fallback vocabulary if the controller doesn't send knownContextFields.
+const CONTEXT_FIELDS_FALLBACK = ['date', 'clock', 'time', 'weather', 'festival', 'show', 'listeners'];
+
+function splitContext(s?: string): string[] {
+  return typeof s === 'string' ? s.split(',').map(t => t.trim()).filter(Boolean) : [];
 }
 
 function cooldownLabel(ms?: number): string {
@@ -178,6 +200,10 @@ export default function SkillsPanel() {
         isNews: !!j.isNews,
         label: j.label || '',
         cooldown: j.cooldown || '',
+        context: splitContext(j.context),
+        knownContext: Array.isArray(j.knownContextFields) && j.knownContextFields.length
+          ? j.knownContextFields
+          : CONTEXT_FIELDS_FALLBACK,
         feed: j.feed || '',
         feedMaxItems: j.feedMaxItems != null ? String(j.feedMaxItems) : '',
         brief: j.brief || '',
@@ -196,6 +222,9 @@ export default function SkillsPanel() {
         brief: editForm.brief,
         cooldown: editForm.cooldown,
         label: editForm.label,
+        // Sent as an array; an empty list resets the skill to the default
+        // profile (everything except weather). See issue #471.
+        context: editForm.context,
       };
       if (editForm.isNews) {
         body.feed = editForm.feed;
@@ -270,7 +299,8 @@ export default function SkillsPanel() {
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
             The built-in skills are editable too — hit <strong>Edit</strong> to change a skill&apos;s
-            brief or cooldown (and, for News, its feed URL). Edits are saved to
+            brief, cooldown, or which real-world context (time, weather…) it may mention
+            (and, for News, its feed URL). Edits are saved to
             <code> state/skills/&lt;kind&gt;/SKILL.md</code>.
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
@@ -414,6 +444,34 @@ export default function SkillsPanel() {
                     />
                     <span className="text-[10px] text-muted">e.g. <code>45m</code>, <code>6h</code>, <code>2d</code>, or a bare number (minutes)</span>
                   </label>
+                  <div className="grid gap-1">
+                    <span className="caption">Context this segment may mention</span>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                      {editForm.knownContext.map(field => {
+                        const checked = editForm.context.includes(field);
+                        return (
+                          <label key={field} className="flex items-center gap-1.5 text-[12px]">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => setEditForm({
+                                ...editForm,
+                                context: checked
+                                  ? editForm.context.filter(f => f !== field)
+                                  : [...editForm.context, field],
+                              })}
+                              className="accent-vermilion"
+                            />
+                            {CONTEXT_FIELD_LABELS[field] || field}
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <span className="text-[10px] text-muted">
+                      Tick only what&apos;s topical for this segment. Leaving <strong>Weather</strong> off keeps it
+                      out of the prompt, so the DJ stops mentioning it on every break.
+                    </span>
+                  </div>
                   <label className="grid gap-1">
                     <span className="caption">Brief (what the DJ says, and when to stay silent)</span>
                     <textarea

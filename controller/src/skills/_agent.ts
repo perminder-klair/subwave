@@ -34,7 +34,7 @@ import { z } from 'zod';
 import { queue } from '../broadcast/queue.js';
 import * as settings from '../settings.js';
 import { defineAgent } from '../llm/agent.js';
-import { buildContextLines } from '../llm/dj.js';
+import { buildContextLines, CONTEXT_FIELDS } from '../llm/dj.js';
 import { buildSegmentTools } from '../llm/segment-tools.js';
 import { searchReady } from './web-search.js';
 import { customCapabilities, getBuiltinOverrides } from './loader.js';
@@ -49,6 +49,11 @@ import * as sfx from '../broadcast/sfx.js';
 //   desc        — the one-line briefing shown BOTH to the agent (per-capability
 //                 guidance — for traffic, which has no data tool, this is the
 //                 agent's ONLY brief) and to the admin UI
+//   contextFields — (optional) the "right now" fields (CONTEXT_FIELDS) this
+//                 capability's situation block may include. Unset → the default
+//                 profile (everything EXCEPT weather), so a segment only sees
+//                 weather if it opts in. `weather` opts back in below; an
+//                 operator opts any skill in with `context:` in its SKILL.md.
 //   requiresKey — (optional) env key the capability needs
 //   keyUrl      — (optional) where the operator obtains that key
 //   ready       — (optional) () => boolean; false when the env key is missing
@@ -60,6 +65,11 @@ export const CAPABILITIES: any[] = [
   {
     kind: 'weather', skill: 'weather', label: 'Weather',
     cooldownMs: 25 * 60 * 1000,
+    // The one built-in that opts the weather line into its situation block — it
+    // is literally the weather segment. Everything else falls back to the
+    // default profile (no weather), so weather stops bleeding into news,
+    // curiosity, deep cuts, etc. (issue #471).
+    contextFields: [...CONTEXT_FIELDS],
     desc: 'A short weather check, in character — one or two sentences. Only worth airing when conditions have genuinely changed.',
   },
   {
@@ -117,6 +127,35 @@ function allCapabilities(): any[] {
 function builtinCapabilities(): any[] {
   const ov = getBuiltinOverrides();
   return CAPABILITIES.map(c => (ov[c.kind] ? { ...c, ...ov[c.kind] } : c));
+}
+
+// The default per-skill context profile: every "right now" field EXCEPT
+// weather. A capability sees weather only when it (or its SKILL.md `context:`
+// override) explicitly asks for it — see issue #471.
+const DEFAULT_SEGMENT_CONTEXT = (CONTEXT_FIELDS as readonly string[]).filter(f => f !== 'weather');
+
+// The context fields a single capability's situation block should carry.
+// cap.contextFields may be an array (built-ins) or a comma-string (custom
+// skills / built-in overrides, straight from SKILL.md frontmatter). Absent or
+// empty → the default profile (no weather).
+export function effectiveContextFields(cap: any): string[] {
+  const raw = cap?.contextFields;
+  if (raw == null) return DEFAULT_SEGMENT_CONTEXT;
+  const list = Array.isArray(raw)
+    ? raw.map((s: any) => String(s).trim()).filter(Boolean)
+    : String(raw).split(',').map(s => s.trim()).filter(Boolean);
+  return list.length ? list : DEFAULT_SEGMENT_CONTEXT;
+}
+
+// Union of the context fields across the capabilities on offer this tick. The
+// autonomous director makes ONE decision over many capabilities, so it sees a
+// field if ANY offered capability wants it: when the weather skill is
+// off-cooldown weather shows up, but on the (many) ticks it isn't eligible the
+// director never sees weather and can't tempt a news/curiosity line into it.
+function unionContextFields(caps: any[]): string[] {
+  const out = new Set<string>();
+  for (const c of caps) for (const f of effectiveContextFields(c)) out.add(f);
+  return [...out];
 }
 
 const SEGMENT_SCHEMA = z.object({
@@ -233,9 +272,9 @@ export const directorAgent = defineAgent({
 // The concrete situation handed to the agent as its single user turn. Built
 // from what is on air and queue.getDjRecap() (what actually aired recently) —
 // NOT the track-pick session history, which derails small models.
-function buildSituation(ctx: any, { forced = false }: { forced?: boolean } = {}) {
+function buildSituation(ctx: any, { forced = false, contextFields }: { forced?: boolean; contextFields?: string[] } = {}) {
   const lines = ['The current moment:'];
-  const ctxLines = buildContextLines(ctx);
+  const ctxLines = buildContextLines(ctx, { contextFields });
   if (ctxLines.length) lines.push(...ctxLines);
   const cur = queue.current?.track;
   if (cur) lines.push(`On air now: "${cur.title}" by ${cur.artist || 'unknown'}`);
@@ -278,7 +317,7 @@ export async function agenticTick(ctx) {
     // Empty catalogue when SFX are disabled — the agent is never offered effects.
     const sfxCatalog = settings.get().sfx?.enabled === false ? [] : await sfx.catalog();
     const { object } = await directorAgent.run({
-      messages: [{ role: 'user', content: buildSituation(ctx) }],
+      messages: [{ role: 'user', content: buildSituation(ctx, { contextFields: unionContextFields(caps) }) }],
       persona, caps, freq, sfxCatalog,
       ctx, segmentState,
     });
@@ -407,7 +446,7 @@ export async function runCapability(which, ctx) {
   // Empty catalogue when SFX are disabled — the agent is never offered effects.
   const sfxCatalog = settings.get().sfx?.enabled === false ? [] : await sfx.catalog();
   const { object } = await forcedDirectorAgent.run({
-    messages: [{ role: 'user', content: buildSituation(ctx, { forced: true }) }],
+    messages: [{ role: 'user', content: buildSituation(ctx, { forced: true, contextFields: effectiveContextFields(cap) }) }],
     persona, cap, sfxCatalog,
     ctx, segmentState,
   });
@@ -479,6 +518,10 @@ export function skillCatalog() {
       // without a second fetch. Undefined on every other capability.
       feed: c.feed || null,
       feedMaxItems: c.feedMaxItems || null,
+      // The "right now" fields this segment's situation may include (issue
+      // #471). Resolved to the default profile (no weather) when unset, so the
+      // admin UI can render the current tick-box selection without guessing.
+      contextFields: effectiveContextFields(c),
     };
   });
 }

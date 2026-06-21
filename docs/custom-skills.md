@@ -37,6 +37,7 @@ name: moon-phase          # the slug / "kind" (defaults to the folder name)
 label: Moon phase         # human label in /admin/skills (defaults to title-cased name)
 cooldown: 6h              # hard min gap between autonomous firings — "90m" | "6h" | "2d" | "45" (bare = minutes)
 window: any               # "any" (default) | "commute" — only offered during commute hours
+context: time, festival   # OPTIONAL: which "right now" fields this segment may mention (see below)
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; if unset, the skill stays inert
 toolDescription: ...      # OPTIONAL: how the DJ-facing tool is described (only matters with tool.mjs)
 ---
@@ -49,6 +50,44 @@ Only a **non-empty body** is required; every frontmatter key has a default. The
 body becomes the per-segment briefing the DJ agent follows (the same role the
 inline `desc:` strings play for built-in skills) and the description shown in the
 admin UI.
+
+### `context:` — what the segment is allowed to mention
+
+`context:` is a comma-separated allow-list of the "right now" fields the DJ may
+weave into this segment. Valid fields:
+
+| field | what it surfaces |
+| --- | --- |
+| `date` | day of week, date, season |
+| `clock` | local clock time, plus weekend / late-night / commute tags |
+| `time` | the daypart and its vibe (e.g. "morning, productive") |
+| `weather` | current condition, temperature, location |
+| `festival` | the named festival, if today is one |
+| `show` | the scheduled show on air, if any |
+| `listeners` | how many people are tuned in |
+
+**Leave `context:` off and the segment gets the default profile: everything
+*except* `weather`.** This is deliberate — ambient weather stapled to every
+break made the DJ comically weather-heavy ([#471](https://github.com/perminder-klair/subwave/issues/471)).
+Weather now reaches air through the dedicated **weather** skill, which is
+cooldown- and change-gated, rather than as filler everywhere.
+
+Tick `weather` back on for a skill where it's genuinely topical — e.g. a
+commute-conditions segment:
+
+```yaml
+---
+name: commute-conditions
+label: Commute conditions
+window: commute
+context: time, clock, weather
+---
+A quick word on what the drive looks like right now — lean on the weather and
+the hour. One sentence; skip it if nothing's notable.
+```
+
+You can also set this from the admin UI: **/admin/skills → Edit** shows a
+tick-box per field. An empty selection resets the skill to the default profile.
 
 For a **new** skill the `name` must be a lowercase slug that isn't a built-in kind
 (`weather`, `news`, `traffic`, `curiosity`, `album-anniversary`, `library-deep-cut`,
@@ -86,9 +125,11 @@ writes from the brief alone.
 The 7 built-ins — `weather`, `news`, `traffic`, `curiosity`, `album-anniversary`,
 `library-deep-cut`, `web-search` — are written into `state/skills/<kind>/SKILL.md`
 the first time the controller boots. A file **named after a built-in kind** is an
-**override**: it edits that skill's brief / cooldown / label in place rather than
-being rejected as a name clash. (For everything else, a built-in kind in `name:` is
-still off-limits.)
+**override**: it edits that skill's brief / cooldown / label / `context:` in place
+rather than being rejected as a name clash. (For everything else, a built-in kind in
+`name:` is still off-limits.) The scaffolded files already carry a `context:` line
+showing each built-in's current fields — `weather` ships with weather ticked on, the
+rest with the default (no-weather) profile.
 
 Differences from a custom skill:
 

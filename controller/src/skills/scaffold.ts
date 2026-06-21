@@ -14,7 +14,7 @@ import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { STATE_DIR, config } from '../config.js';
 import { queue } from '../broadcast/queue.js';
-import { CAPABILITIES } from './_agent.js';
+import { CAPABILITIES, effectiveContextFields } from './_agent.js';
 
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
 
@@ -31,6 +31,7 @@ interface SkillFileFields {
   kind: string;
   label?: string;
   cooldown?: string;
+  contextFields?: string[]; // "right now" fields the segment may mention (#471)
   feed?: string;        // news only
   feedMaxItems?: number; // news only
   brief?: string;
@@ -45,6 +46,10 @@ export async function writeBuiltinSkillFile(fields: SkillFileFields): Promise<vo
   const lines = ['---', `name: ${kind}`];
   if (fields.label) lines.push(`label: ${fields.label}`);
   if (fields.cooldown) lines.push(`cooldown: ${fields.cooldown}`);
+  // The "right now" fields this segment may weave in (issue #471). Seeded so
+  // the knob is visible+editable in every scaffolded SKILL.md; add or drop
+  // tokens (e.g. `weather`) to change what the segment is allowed to mention.
+  if (fields.contextFields && fields.contextFields.length) lines.push(`context: ${fields.contextFields.join(', ')}`);
   if (fields.feed) lines.push(`feed: ${fields.feed}`);
   if (fields.feedMaxItems) lines.push(`feedMaxItems: ${fields.feedMaxItems}`);
   lines.push('---', (fields.brief || '').trim(), '');
@@ -74,6 +79,7 @@ export async function scaffoldBuiltinSkills(): Promise<void> {
         kind: cap.kind,
         label: cap.label,
         cooldown: msToCooldownStr(cap.cooldownMs),
+        contextFields: effectiveContextFields(cap),
         brief: cap.desc,
       };
       if (cap.kind === 'news') {
