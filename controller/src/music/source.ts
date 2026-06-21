@@ -20,6 +20,7 @@ import type { MusicSource } from './source-kit.js';
 import { sourceConfig } from './source-kit.js';
 import { navidromeSource } from './sources/navidrome.js';
 import { jamendoSource } from './sources/jamendo.js';
+import { jellyfinSource } from './sources/jellyfin.js';
 
 export * from './source-kit.js';
 
@@ -29,6 +30,7 @@ const REGISTRY: Record<string, SourceBuilder> = {
   navidrome: () => navidromeSource,
   subsonic: () => navidromeSource, // alias — same Subsonic client, any compatible server
   jamendo: () => jamendoSource,
+  jellyfin: () => jellyfinSource,
 };
 
 let cached: { key: string; source: MusicSource } | null = null;

@@ -2254,6 +2254,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
 const SOURCE_OPTIONS: Array<{ id: string; label: string }> = [
   { id: 'navidrome', label: 'Subsonic-compatible server' },
   { id: 'jamendo', label: 'Jamendo (Creative Commons)' },
+  { id: 'jellyfin', label: 'Jellyfin' },
 ];
 function sourceLabel(id: string): string {
   return SOURCE_OPTIONS.find(o => o.id === id)?.label || id;
@@ -2267,6 +2268,14 @@ function SourceSection({ data, form, setForm, busy, saveSettings }: SectionProps
     if (provider === 'jamendo') {
       patch.jamendo = { clientId: s.jamendoClientId.trim() };
     }
+    if (provider === 'jellyfin') {
+      patch.jellyfin = {
+        url: s.jellyfinUrl.trim(),
+        userId: s.jellyfinUserId.trim(),
+        // Skip the 'set' redaction sentinel so a round-trip doesn't clobber the key.
+        ...(s.jellyfinApiKey && s.jellyfinApiKey !== 'set' ? { apiKey: s.jellyfinApiKey.trim() } : {}),
+      };
+    }
     // navidrome carries no creds here — they live in onboarding/setup-config.
     saveSettings({ source: patch });
   };
@@ -2275,8 +2284,14 @@ function SourceSection({ data, form, setForm, busy, saveSettings }: SectionProps
   const savedProvider = savedSource.provider || 'navidrome';
   const dirty = provider !== savedProvider
     || (provider === 'jamendo'
-        && s.jamendoClientId.trim() !== (savedSource.jamendo?.clientId || ''));
+        && s.jamendoClientId.trim() !== (savedSource.jamendo?.clientId || ''))
+    || (provider === 'jellyfin'
+        && (s.jellyfinUrl.trim() !== (savedSource.jellyfin?.url || '')
+            || s.jellyfinUserId.trim() !== (savedSource.jellyfin?.userId || '')
+            || (!!s.jellyfinApiKey && s.jellyfinApiKey !== 'set'
+                && s.jellyfinApiKey !== (savedSource.jellyfin?.apiKey || ''))));
   const jamendoKeySet = !!s.jamendoClientId.trim() || !!data.env?.JAMENDO_CLIENT_ID;
+  const jellyfinKeySet = s.jellyfinApiKey === 'set' || !!data.env?.JELLYFIN_API_KEY;
 
   return (
     <>
@@ -2331,9 +2346,56 @@ function SourceSection({ data, form, setForm, busy, saveSettings }: SectionProps
             <div className="field-hint">
               {provider === 'navidrome'
                 ? 'Any Subsonic-compatible server. Connection details (URL, user, password) are set in onboarding and stored separately. Last.fm tags, lyrics and sonic-similarity work best on Navidrome.'
+                : provider === 'jellyfin'
+                ? 'Jellyfin — its own API. Search, genres, playlists, InstantMix (≈ similar), favourites, recently-added, cover art and lyrics. Needs a server URL + API key (Jellyfin admin → API keys); a user id unlocks favourites / play counts / InstantMix.'
                 : 'Jamendo — a remote Creative-Commons catalogue. No server to run; tracks stream from Jamendo. No personal playlists/starred, and the library tagger is skipped (the catalogue is unbounded).'}
             </div>
           </div>
+
+          {provider === 'jellyfin' && (
+            <>
+              <div className="field">
+                <Label>Jellyfin URL</Label>
+                <Input
+                  type="text"
+                  value={s.jellyfinUrl}
+                  placeholder="http://host.docker.internal:8096"
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({ ...f, source: { ...f.source, jellyfinUrl: e.target.value } }))
+                  }
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">Falls back to <code>JELLYFIN_URL</code> in <code>.env</code> when blank.</div>
+              </div>
+              <div className="field">
+                <Label>API key</Label>
+                <Input
+                  type="password"
+                  value={s.jellyfinApiKey === 'set' ? '' : s.jellyfinApiKey}
+                  placeholder={s.jellyfinApiKey === 'set' ? '•••••• (key on file)' : 'Jellyfin admin → API keys'}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({ ...f, source: { ...f.source, jellyfinApiKey: e.target.value } }))
+                  }
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">Falls back to <code>JELLYFIN_API_KEY</code>. Set one or the other, not both.</div>
+              </div>
+              <KeyStatus envVar="JELLYFIN_API_KEY" present={jellyfinKeySet} />
+              <div className="field">
+                <Label>User id <span className="text-muted">(optional)</span></Label>
+                <Input
+                  type="text"
+                  value={s.jellyfinUserId}
+                  placeholder="unlocks favourites / play counts / InstantMix"
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({ ...f, source: { ...f.source, jellyfinUserId: e.target.value } }))
+                  }
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">Falls back to <code>JELLYFIN_USER_ID</code> in <code>.env</code> when blank.</div>
+              </div>
+            </>
+          )}
 
           {provider === 'jamendo' && (
             <>
