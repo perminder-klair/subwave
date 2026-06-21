@@ -27,7 +27,7 @@ Open an issue with:
 
 ## Pull requests
 
-- Branch off `main` and keep PRs focused on one change.
+- Branch off `develop` (the integration branch) and target it in your PR — keep PRs focused on one change.
 - Explain the *why*, not just the *what*, in the description.
 - If you touch the queue/playback path, `radio.liq`, the crossfade, ducking, or
   the LLM layer, read the relevant note in `CLAUDE.md` first — those areas have
@@ -54,12 +54,13 @@ A scope in parens (`fix(ui): …`, `feat(controller): …`) is optional but help
 when skimming the changelog. Use `!` after the type, or a `BREAKING CHANGE:`
 footer, for anything that breaks compatibility.
 
-PR titles follow the same convention — squash-merging then produces a clean
-commit on `main` that release-please can read.
+PR titles follow the same convention — squash-merging keeps history clean, and
+the commit carries through `develop` → `main`, where release-please reads it.
 
 ## Releases
 
-You don't cut releases by hand. On every push to `main`, the **Release Please**
+You don't cut releases by hand. Maintainers merge `develop` into `main` to ship;
+on every push to `main`, the **Release Please**
 workflow opens (or updates) a release PR that bumps `package.json` +
 `CHANGELOG.md` based on the Conventional Commits since the last tag. Merging
 that PR creates a `vX.Y.Z` tag and a GitHub Release, which triggers

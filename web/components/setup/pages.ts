@@ -15,6 +15,7 @@ export const SETUP_PAGES: SetupPageEntry[] = [
   { href: '/setup/prerequisites', label: 'Prerequisites' },
   { href: '/setup/quick-start', label: 'Quick Start' },
   { href: '/setup/manual', label: 'Manual Install' },
+  { href: '/setup/unraid', label: 'Unraid' },
   { href: '/setup/development', label: 'Development' },
   { href: '/setup/updates', label: 'Updates & Help' },
 ];

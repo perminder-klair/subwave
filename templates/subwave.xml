@@ -1,0 +1,92 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>SUB-WAVE</Name>
+  <Repository>ghcr.io/perminder-klair/subwave-aio:latest</Repository>
+  <Registry>https://ghcr.io/perminder-klair/subwave-aio</Registry>
+  <Network>bridge</Network>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+
+  <!-- Lets the in-container controller reach an Ollama (or Navidrome) running
+       on the Unraid host itself via http://host.docker.internal:PORT on the
+       default bridge network. Harmless when those services live elsewhere. -->
+  <ExtraParams>--add-host host.docker.internal:host-gateway</ExtraParams>
+
+  <Icon>https://raw.githubusercontent.com/perminder-klair/subwave/main/app/assets/icon.png</Icon>
+  <WebUI>http://[IP]:[PORT:80]</WebUI>
+
+  <Overview>
+    SUB/WAVE is a personal internet radio station: one Icecast stream every
+    listener hears together, with an AI DJ that picks tracks from your own
+    Navidrome / Subsonic library and reads scripts between them (station IDs,
+    the time, the weather, listener requests).
+
+    This is the all-in-one image — icecast2 + liquidsoap, the controller, the
+    Next.js web UI and a Caddy edge all run in this one container behind a
+    single port. Everything persists under the Appdata path.
+
+    [b]After it starts, open the WebUI and go to /onboarding[/b] (sign in with
+    the admin user/password you set here) to point it at your Navidrome server,
+    pick an LLM provider (Ollama local or cloud, or a cloud API key) and a
+    voice, and shape the DJ persona. The bundled Piper voice means the DJ can
+    talk out of the box with no extra setup.
+
+    Needs: a reachable Navidrome / Subsonic music server, and an LLM provider.
+    Most Unraid boxes have no big GPU, so Ollama cloud models are the easiest
+    path — install the official ollama container, run "ollama signin" in its
+    console, then set the provider to "Ollama - local/cloud" with a :cloud model.
+  </Overview>
+
+  <Support>https://github.com/perminder-klair/subwave/issues</Support>
+  <Project>https://github.com/perminder-klair/subwave</Project>
+  <TemplateURL>https://raw.githubusercontent.com/perminder-klair/subwave/main/templates/subwave.xml</TemplateURL>
+  <ReadMe>https://raw.githubusercontent.com/perminder-klair/subwave/main/README.md</ReadMe>
+
+  <Category>MediaApp:Music MediaServer:Music</Category>
+  <ExtraSearchTerms>radio internet radio icecast liquidsoap ai dj navidrome subsonic stream ollama station broadcast</ExtraSearchTerms>
+  <Requires>A reachable Navidrome / Subsonic music server and an LLM provider (Ollama local/cloud or a cloud API key), both configured in the browser at /onboarding after first boot.</Requires>
+
+  <Date>2026-06-22</Date>
+  <Changes>
+### 2026-06-22
+- Initial release: SUB/WAVE all-in-one image on Community Applications.
+  </Changes>
+
+  <License>MIT</License>
+  <MinVer>6.12</MinVer>
+
+  <!-- Reuse the screenshots already maintained in the main repo. -->
+  <Screenshot>https://raw.githubusercontent.com/perminder-klair/subwave/main/web/public/screenshots/listen.webp</Screenshot>
+  <Screenshot>https://raw.githubusercontent.com/perminder-klair/subwave/main/web/public/screenshots/observatory.webp</Screenshot>
+  <Screenshot>https://raw.githubusercontent.com/perminder-klair/subwave/main/web/public/screenshots/admin-dash.webp</Screenshot>
+
+  <!-- ports / paths / variables (v2 Config entries) -->
+
+  <!-- Host port mapped to Caddy's :80. The web UI, /api and /stream.mp3 are all
+       served from this single port. -->
+  <Config Name="WebUI Port" Target="80" Default="7700" Mode="tcp"
+          Description="Host port for the SUB/WAVE web UI + audio stream."
+          Type="Port" Display="always" Required="true" Mask="false">7700</Config>
+
+  <!-- Persistent state. Keep this on the array/pool, NOT the flash drive —
+       it grows (hourly archives, library cache, rendered voices). -->
+  <Config Name="Appdata" Target="/var/sub-wave" Default="/mnt/user/appdata/subwave" Mode="rw"
+          Description="Persistent state: settings, library cache, rendered voices, hourly archives."
+          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/subwave</Config>
+
+  <Config Name="ADMIN_USER" Target="ADMIN_USER" Default="admin"
+          Description="Admin username for /admin and the /onboarding wizard."
+          Type="Variable" Display="always" Required="true" Mask="false">admin</Config>
+
+  <Config Name="ADMIN_PASS" Target="ADMIN_PASS" Default=""
+          Description="Admin password (required — the station refuses to start without it). Generate one, e.g. 'openssl rand -hex 16'."
+          Type="Variable" Display="always" Required="true" Mask="true"/>
+
+  <Config Name="SITE_URL" Target="SITE_URL" Default=""
+          Description="Public base URL of this station, e.g. http://YOUR-UNRAID-IP:7700 — used for share cards and absolute links."
+          Type="Variable" Display="always" Required="true" Mask="false"/>
+
+  <Config Name="TZ" Target="TZ" Default="Europe/London"
+          Description="Timezone — keeps scheduled shows and hourly-archive timestamps on local time."
+          Type="Variable" Display="advanced" Required="false" Mask="false">Europe/London</Config>
+</Container>
