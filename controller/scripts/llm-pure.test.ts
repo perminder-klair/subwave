@@ -14,7 +14,7 @@ import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
 import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
 import { DEFAULT_LOCCA_EMBED_BASE_URL } from '../src/llm/internal/provider/registry.js';
-import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL } from '../src/settings.js';
+import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict } from '../src/settings.js';
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -237,6 +237,21 @@ async function main() {
     const both = personaToneDirectives({ humour: 8, warmth: 8 });
     assert.ok(both.startsWith('\n\nTone:\n- '));
     assert.equal(both.split('\n- ').length, 3); // header + 2 bullets
+  });
+  // The save path (validatePersonasStrict) rebuilds each persona from a field
+  // whitelist; if the dials aren't in it they are silently dropped on every
+  // save and the feature is dead end-to-end. Pin that they round-trip.
+  await test('validatePersonasStrict carries the dials through the save path', () => {
+    const base = { name: 'Nova', soul: 'late-night', frequency: 'moderate',
+      tts: { engine: 'piper', cloudProvider: 'openai', voice: '' } };
+    const [saved] = validatePersonasStrict([{ ...base, humour: 9, localColour: 0, warmth: 99 }]);
+    assert.equal(saved.humour, 9);
+    assert.equal(saved.localColour, 0);
+    assert.equal(saved.warmth, 10);            // clamped, same as normalizeDial
+    const [bare] = validatePersonasStrict([base]);
+    assert.equal(bare.humour, DIAL_NEUTRAL);   // absent dials default to neutral
+    assert.equal(bare.localColour, DIAL_NEUTRAL);
+    assert.equal(bare.warmth, DIAL_NEUTRAL);
   });
 
   console.log(failures === 0 ? '\nAll llm-pure tests passed.' : `\n${failures} test(s) FAILED.`);

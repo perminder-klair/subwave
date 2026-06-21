@@ -1288,7 +1288,7 @@ function validateTtsBlock(raw, where) {
   return { engine: t.engine, cloudProvider: t.cloudProvider, voice };
 }
 
-function validatePersonasStrict(raw) {
+export function validatePersonasStrict(raw) {
   if (!Array.isArray(raw) || raw.length < 1 || raw.length > PERSONA_LIMIT) {
     throw new Error(`personas must be an array of 1-${PERSONA_LIMIT} entries`);
   }
@@ -1386,6 +1386,9 @@ function validatePersonasStrict(raw) {
       frequency: item.frequency,
       scriptLength,
       djMode,
+      humour: normalizeDial(item.humour),
+      localColour: normalizeDial(item.localColour),
+      warmth: normalizeDial(item.warmth),
       soul,
       language,
       avatar,
