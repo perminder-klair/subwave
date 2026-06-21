@@ -2255,6 +2255,7 @@ const SOURCE_OPTIONS: Array<{ id: string; label: string }> = [
   { id: 'navidrome', label: 'Subsonic-compatible server' },
   { id: 'jamendo', label: 'Jamendo (Creative Commons)' },
   { id: 'jellyfin', label: 'Jellyfin' },
+  { id: 'local', label: 'Local folder' },
 ];
 function sourceLabel(id: string): string {
   return SOURCE_OPTIONS.find(o => o.id === id)?.label || id;
@@ -2276,6 +2277,9 @@ function SourceSection({ data, form, setForm, busy, saveSettings }: SectionProps
         ...(s.jellyfinApiKey && s.jellyfinApiKey !== 'set' ? { apiKey: s.jellyfinApiKey.trim() } : {}),
       };
     }
+    if (provider === 'local') {
+      patch.local = { dir: s.localDir.trim() };
+    }
     // navidrome carries no creds here — they live in onboarding/setup-config.
     saveSettings({ source: patch });
   };
@@ -2289,7 +2293,8 @@ function SourceSection({ data, form, setForm, busy, saveSettings }: SectionProps
         && (s.jellyfinUrl.trim() !== (savedSource.jellyfin?.url || '')
             || s.jellyfinUserId.trim() !== (savedSource.jellyfin?.userId || '')
             || (!!s.jellyfinApiKey && s.jellyfinApiKey !== 'set'
-                && s.jellyfinApiKey !== (savedSource.jellyfin?.apiKey || ''))));
+                && s.jellyfinApiKey !== (savedSource.jellyfin?.apiKey || ''))))
+    || (provider === 'local' && s.localDir.trim() !== (savedSource.local?.dir || ''));
   const jamendoKeySet = !!s.jamendoClientId.trim() || !!data.env?.JAMENDO_CLIENT_ID;
   const jellyfinKeySet = s.jellyfinApiKey === 'set' || !!data.env?.JELLYFIN_API_KEY;
 
@@ -2348,6 +2353,8 @@ function SourceSection({ data, form, setForm, busy, saveSettings }: SectionProps
                 ? 'Any Subsonic-compatible server. Connection details (URL, user, password) are set in onboarding and stored separately. Last.fm tags, lyrics and sonic-similarity work best on Navidrome.'
                 : provider === 'jellyfin'
                 ? 'Jellyfin — its own API. Search, genres, playlists, InstantMix (≈ similar), favourites, recently-added, cover art and lyrics. Needs a server URL + API key (Jellyfin admin → API keys); a user id unlocks favourites / play counts / InstantMix.'
+                : provider === 'local'
+                ? 'A folder of audio files the controller reads directly. Metadata comes from the files’ own tags; "similar" leans on the embedding library + Last.fm. The folder must be mounted into BOTH the controller and broadcast containers at the same path. No cover art in v1.'
                 : 'Jamendo — a remote Creative-Commons catalogue. No server to run; tracks stream from Jamendo. No personal playlists/starred, and the library tagger is skipped (the catalogue is unbounded).'}
             </div>
           </div>
@@ -2418,6 +2425,26 @@ function SourceSection({ data, form, setForm, busy, saveSettings }: SectionProps
               </div>
               <KeyStatus envVar="JAMENDO_CLIENT_ID" present={jamendoKeySet} />
             </>
+          )}
+
+          {provider === 'local' && (
+            <div className="field">
+              <Label>Folder path</Label>
+              <Input
+                type="text"
+                value={s.localDir}
+                placeholder="/music"
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, source: { ...f.source, localDir: e.target.value } }))
+                }
+                className="max-w-[360px]"
+              />
+              <div className="field-hint">
+                Absolute path inside the container — mount your library into the
+                controller AND broadcast services at this same path. Falls back to
+                <code> MUSIC_LOCAL_DIR</code> in <code>.env</code> when blank.
+              </div>
+            </div>
           )}
         </div>
       </Card>

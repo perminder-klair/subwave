@@ -7,6 +7,7 @@
 // or fails — so a pick is never missed.
 
 import { getSource } from './source.js';
+import * as lastfm from './enrichment/lastfm.js';
 import * as library from './library.js';
 import * as dj from '../llm/dj.js';
 import * as settings from '../settings.js';
@@ -171,6 +172,23 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
         count: 20,
       });
       add('similar', sampleWithRecentFallback(similar, recentIds, nz(CAP_SIMILAR)));
+    } catch {}
+  }
+
+  // 1a. Last.fm similar backfill — for sources with no native similar graph
+  // (e.g. the local folder). Use Last.fm's track.getSimilar and resolve each
+  // pick against the active source. Gated on the source LACKING native similar
+  // AND a Last.fm key being set, so Navidrome/Jamendo/Jellyfin never pay for it.
+  if (currentTrack?.artist && currentTrack?.title
+      && !getSource().capabilities.similar && lastfm.isAvailable()) {
+    try {
+      const src = getSource();
+      const pairs = await lastfm.getSimilarTracks(currentTrack.artist, currentTrack.title, { limit: 12 });
+      const resolved = (await Promise.all(
+        pairs.slice(0, 8).map(p =>
+          src.search(`${p.artist} ${p.title}`, { songCount: 1 }).then(h => h[0]).catch(() => null)),
+      )).filter(Boolean);
+      add('lastfm-similar', sampleWithRecentFallback(resolved, recentIds, nz(CAP_SIMILAR)));
     } catch {}
   }
 
