@@ -162,6 +162,32 @@ interface AudienceResponse {
   error?: string;
 }
 
+interface ContainerUsage {
+  name: string;
+  service: string;
+  cpuPct: number;
+  memUsed: number;
+  memLimit: number;
+  memPct: number;
+}
+
+interface HostUsage {
+  cpus: number;
+  loadavg: [number, number, number];
+  memTotal: number;
+  memUsed: number;
+  uptime: number;
+}
+
+interface SystemResponse {
+  t?: string;
+  dockerAvailable?: boolean;
+  dockerError?: string;
+  host?: HostUsage;
+  containers?: ContainerUsage[];
+  error?: string;
+}
+
 // --- formatters ---------------------------------------------------------
 
 const fmtInt = (n: number | null | undefined): string =>
@@ -186,6 +212,14 @@ const fmtTokens = (n: number | null | undefined): string => {
 // single decimal reads better than a rounded whole.
 const fmtAvg = (n: number | null | undefined): string =>
   n == null ? '—' : (Math.round(n * 10) / 10).toLocaleString('en-GB');
+
+const fmtBytes = (n: number | null | undefined): string => {
+  if (n == null) return '—';
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
+  if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+  return `${n} B`;
+};
 
 // --- small building blocks ---------------------------------------------
 
@@ -274,6 +308,9 @@ function Table<R>({ cols, rows, empty }: TableProps<R>) {
               key={c.key}
               className={cn(
                 'caption border-b border-separator-strong px-2 py-1 whitespace-nowrap',
+                // Sticky so the header stays put when the table is wrapped in a
+                // ScrollBox; the card-bg masks rows scrolling underneath.
+                'sticky top-0 z-[1] bg-[var(--card-bg)]',
                 c.align === 'right' && 'text-right',
                 c.align === 'center' && 'text-center',
               )}
@@ -326,6 +363,15 @@ function BarList({ rows, max }: { rows: BarRow[]; max: number }) {
       ))}
     </div>
   );
+}
+
+// Caps a breakdown list/table to a scrollable area so a long tail (e.g. 40
+// referrers or countries) can't stretch the card down the page. Short lists are
+// untouched — the scrollbar only appears once content exceeds the cap. Uses the
+// house ink-tinted scrollbar (.v3-scroll, globals.css); tables wrapped here keep
+// their header visible via the sticky <thead> in <Table>.
+function ScrollBox({ children }: { children: ReactNode }) {
+  return <div className="v3-scroll max-h-[260px] overflow-y-auto">{children}</div>;
 }
 
 // --- listener trend chart ----------------------------------------------
@@ -406,6 +452,7 @@ export default function StatsPanel() {
   const [paused, setPaused] = useState(false);
   const [listeners, setListeners] = useState<ListenersResponse | null>(null);
   const [audience, setAudience] = useState<AudienceResponse | null>(null);
+  const [systemRes, setSystemRes] = useState<SystemResponse | null>(null);
   const [range, setRange] = useState('1440'); // minutes — 24h default
 
   // /stats — usage rollups, 5s.
@@ -487,6 +534,31 @@ export default function StatsPanel() {
     return () => { cancelled = true; clearInterval(id); };
   }, [paused, needsAuth, hydrated, adminFetch, range]);
 
+  // /system — per-container CPU/memory, 30s (it samples the Docker stats stream
+  // for ~1s per container, so it's heavier than /stats). Soft-fails like the
+  // others. Range-independent — always "right now".
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    const tick = async () => {
+      if (paused) return;
+      try {
+        const r = await adminFetch('/system');
+        if (r.status === 401) {
+          if (!cancelled) setSystemRes(null);
+          return;
+        }
+        const j = (await r.json()) as SystemResponse;
+        if (!cancelled && r.ok) setSystemRes(j);
+      } catch {
+        /* leave last reading in place */
+      }
+    };
+    tick();
+    const id = setInterval(tick, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [paused, needsAuth, hydrated, adminFetch]);
+
   const llm = data?.llm;
   const tts = data?.tts;
   const djLog = data?.djLog;
@@ -505,6 +577,10 @@ export default function StatsPanel() {
   const audSessions = audience?.sessions ?? null;
   const audReferrers = audience?.referrers ?? [];
   const audCountries = audience?.countries ?? [];
+
+  // System resources (container CPU/mem + host totals).
+  const sysHost = systemRes?.host ?? null;
+  const sysContainers = systemRes?.containers ?? [];
 
   return (
     <div className="grid gap-4">
@@ -575,10 +651,12 @@ export default function StatsPanel() {
               <div className="border-r border-separator-soft p-3.5">
                 <div className="caption mb-2">top referrers</div>
                 {audReferrers.length ? (
-                  <BarList
-                    rows={audReferrers.map(r => ({ label: r.source, count: r.count }))}
-                    max={audReferrers[0]?.count || 1}
-                  />
+                  <ScrollBox>
+                    <BarList
+                      rows={audReferrers.map(r => ({ label: r.source, count: r.count }))}
+                      max={audReferrers[0]?.count || 1}
+                    />
+                  </ScrollBox>
                 ) : (
                   <span className="field-hint italic">none</span>
                 )}
@@ -586,10 +664,12 @@ export default function StatsPanel() {
               <div className="p-3.5">
                 <div className="caption mb-2">top countries</div>
                 {audCountries.length ? (
-                  <BarList
-                    rows={audCountries.map(c => ({ label: c.country, count: c.count }))}
-                    max={audCountries[0]?.count || 1}
-                  />
+                  <ScrollBox>
+                    <BarList
+                      rows={audCountries.map(c => ({ label: c.country, count: c.count }))}
+                      max={audCountries[0]?.count || 1}
+                    />
+                  </ScrollBox>
                 ) : (
                   <span className="field-hint italic">none</span>
                 )}
@@ -815,14 +895,67 @@ export default function StatsPanel() {
                 no DJ-log events yet
               </span>
             ) : (
-              <BarList
-                max={djLog.byKind[0]?.count || 1}
-                rows={djLog.byKind.map(r => ({ label: r.kind, count: r.count }))}
-              />
+              <ScrollBox>
+                <BarList
+                  max={djLog.byKind[0]?.count || 1}
+                  rows={djLog.byKind.map(r => ({ label: r.kind, count: r.count }))}
+                />
+              </ScrollBox>
             )}
           </Card>
         </>
       )}
+
+      {/* ── SYSTEM RESOURCES ──────────────────────────────────────────── */}
+      <Card
+        title="System resources"
+        sub="CPU + memory for the SUB/WAVE containers on this host"
+      >
+        {systemRes == null ? (
+          <span className="field-hint italic">loading…</span>
+        ) : (
+          <div className="grid gap-0">
+            <MetricStrip>
+              <StatCell label="Host cores" value={fmtInt(sysHost?.cpus)} />
+              <StatCell label="Load (1m)"
+                value={sysHost ? sysHost.loadavg[0].toFixed(2) : '—'}
+                danger={!!sysHost && sysHost.loadavg[0] > sysHost.cpus}
+                sub={sysHost
+                  ? `${sysHost.loadavg[1].toFixed(2)} · ${sysHost.loadavg[2].toFixed(2)} (5m · 15m)`
+                  : undefined} />
+              <StatCell label="Host memory" value={fmtBytes(sysHost?.memUsed)}
+                sub={sysHost ? `of ${fmtBytes(sysHost.memTotal)}` : undefined} />
+              <StatCell label="Containers" value={fmtInt(sysContainers.length)} last />
+            </MetricStrip>
+            <div className="p-3.5">
+              {!systemRes.dockerAvailable ? (
+                <span className="field-hint italic">
+                  container stats unavailable — mount /var/run/docker.sock (read-only)
+                  into the controller to enable
+                </span>
+              ) : sysContainers.length === 0 ? (
+                <span className="field-hint italic">no containers reporting</span>
+              ) : (
+                <ScrollBox>
+                  <Table<ContainerUsage>
+                    empty="no containers"
+                    rows={sysContainers}
+                    cols={[
+                      { key: 'service', label: 'Service' },
+                      { key: 'cpuPct', label: 'CPU', align: 'right',
+                        render: r => <span className="mono-num">{r.cpuPct.toFixed(1)}%</span> },
+                      { key: 'memUsed', label: 'Memory', align: 'right',
+                        render: r => <span className="mono-num">{fmtBytes(r.memUsed)}</span> },
+                      { key: 'memPct', label: 'Mem %', align: 'right',
+                        render: r => <span className="mono-num">{r.memPct.toFixed(1)}%</span> },
+                    ]}
+                  />
+                </ScrollBox>
+              )}
+            </div>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

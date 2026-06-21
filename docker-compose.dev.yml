@@ -102,6 +102,10 @@ services:
       # /app/node_modules with the (possibly empty) host node_modules.
       - ./controller/src:/app/src
       - ./controller/scripts:/app/scripts
+      # Read-only Docker socket — powers the admin Stats system-resource panel
+      # (GET /system) in dev too. Optional: drop it and the panel shows
+      # "container stats unavailable".
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
   # -------------------------------------------------------------------------
   # TTS-HEAVY (optional) — sidecar for Chatterbox + PocketTTS
