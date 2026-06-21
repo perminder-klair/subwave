@@ -11,7 +11,10 @@ const ADMIN_USER = process.env.ADMIN_USER || '';
 const ADMIN_PASS = process.env.ADMIN_PASS || '';
 export const ADMIN_AUTH_REQUIRED = Boolean(ADMIN_USER && ADMIN_PASS);
 const IS_PROD = process.env.NODE_ENV === 'production';
-const MAX_AUTH_FAILURES = 5;
+// 10 strikes before a temporary lockout: brute-forcing a real password in 10
+// tries is implausible, while an operator (or a household behind one NAT IP)
+// fat-fingering the password a few times shouldn't get locked out for 15 min.
+const MAX_AUTH_FAILURES = 10;
 const AUTH_LOCKOUT_MS = 15 * 60 * 1000;
 const authAttempts = new Map<string, { failures: number; lockedUntil: number }>();
 
@@ -42,6 +45,12 @@ export function assertAdminConfigured() {
 export function requireAdmin(req, res, next) {
   if (!ADMIN_AUTH_REQUIRED) return next();
 
+  // Lockout keys on clientIp() — the left-most X-Forwarded-For — which is
+  // client-controlled and therefore spoofable: an attacker can rotate the
+  // header per request to dodge this counter. So this is defense-in-depth that
+  // slows casual brute-forcing from a single source, not a hard guarantee. For
+  // durable enforcement put a real rate limit at the edge (Caddy/Cloudflare),
+  // where the connecting IP is known before it gets flattened into a header.
   const ip = clientIp(req);
   const now = Date.now();
   const rec = authAttempts.get(ip);
