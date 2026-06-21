@@ -569,13 +569,14 @@ const DEFAULTS = {
     confidenceThreshold: 0.6,
     maxActiveLearningRounds: 3,
     enrichment: {
-      // Vanilla Navidrome's getArtistInfo2 doesn't surface Last.fm crowd
-      // tags (the agent only exposes bio + images). Until SUB/WAVE adds a
-      // direct Last.fm API path, leave this off — enabling it just wastes
-      // an HTTP round trip per artist with empty results. Operators
-      // running a custom Navidrome that does expose tag[] can flip it on.
-      lastfmTags: false,
-      lyrics: true,       // fetch + include lyric excerpt in embed text
+      // Last.fm crowd tags for the embedding text, fetched DIRECTLY by artist
+      // name (music/enrichment/lastfm.ts), independent of the music provider —
+      // so every source benefits, not just a Last.fm-synced Navidrome. Reuses
+      // the scrobble Last.fm key (settings.scrobble.lastfm.apiKey /
+      // LASTFM_API_KEY); with no key the fetch is a clean no-op, so leaving this
+      // on costs nothing when unconfigured.
+      lastfmTags: true,
+      lyrics: true,       // provider lyrics (if supported) else LRCLIB by artist+title
     },
   },
   // Web-search backend for the segment director's web-search capability.

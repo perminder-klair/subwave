@@ -23,6 +23,8 @@
 // tracks table as legacy v1 entries (see library-db.ts).
 
 import { getSource } from './source.js';
+import * as lastfm from './enrichment/lastfm.js';
+import * as lyricsEnricher from './enrichment/lyrics.js';
 import * as db from './library-db.js';
 import * as settings from '../settings.js';
 import * as embeddings from './embeddings.js';
@@ -522,6 +524,8 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
     if (!t) continue;
     if (!reEnrich && t.enrichedAt) continue;
 
+    // Last.fm crowd tags by ARTIST NAME — provider-independent (works for every
+    // source, not just a Last.fm-synced Navidrome). No key → empty, clean no-op.
     let lastfmTags: string[] | null = null;
     if (lastfmEnabled && t.artist) {
       const cacheKey = t.artist;
@@ -529,25 +533,31 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
         lastfmTags = artistTagCache.get(cacheKey) ?? null;
       } else {
         try {
-          const matches = await getSource().searchArtists(t.artist, { artistCount: 1 });
-          const artistId = matches?.[0]?.id;
-          if (artistId) {
-            const tags = await getSource().getArtistLastfmTags(artistId, { count: 10 });
-            lastfmTags = tags;
-          }
+          lastfmTags = await lastfm.getArtistTags(t.artist, { count: 10 });
         } catch { /* ignore */ }
         artistTagCache.set(cacheKey, lastfmTags ?? []);
       }
     }
 
+    // Lyrics: prefer the provider's own (Navidrome's getLyricsBySongId) when it
+    // advertises the capability, else fall back to LRCLIB by artist+title so
+    // non-Subsonic sources still get a lyric excerpt.
     let lyricExcerpt: string | null = null;
     if (lyricsEnabled) {
-      try {
-        const raw = await getSource().getLyrics(id);
-        if (typeof raw === 'string' && raw.trim()) {
-          lyricExcerpt = raw.trim();
-        }
-      } catch { /* ignore */ }
+      const src = getSource();
+      let raw = '';
+      if (src.capabilities.lyrics) {
+        try { raw = await src.getLyrics(id); } catch { /* ignore */ }
+      }
+      if (!raw.trim() && t.artist && t.title) {
+        try {
+          raw = await lyricsEnricher.getLyrics(t.artist, t.title, {
+            album: t.album || undefined,
+            durationSec: t.durationSec || undefined,
+          });
+        } catch { /* ignore */ }
+      }
+      if (raw.trim()) lyricExcerpt = raw.trim();
     }
 
     db.upsertTrackEnrichment(id, {
