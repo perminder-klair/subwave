@@ -110,6 +110,7 @@ export type ProbeCode =
   | 'unauthorized'        // 401 — typically cloud-routed Ollama or wrong API key
   | 'unreachable'         // connection refused / DNS / timeout
   | 'not_embedding_model' // server reached, but it's a chat model / no pooling (#319)
+  | 'no_embeddings'       // provider is chat-only — no embeddings endpoint at all (#493)
   | 'bad_url'             // baseUrl missing/malformed — fetch can't parse the URL
   | 'unknown';            // anything else — message has the raw error
 
@@ -125,6 +126,12 @@ function classifyEmbeddingError(err: any): { code: ProbeCode; raw: string } {
   const raw = err?.message || String(err);
   const status = err?.cause?.status_code ?? err?.statusCode ?? err?.status;
   const txt = raw.toLowerCase();
+  // buildEmbeddingModel throws this for chat-only providers (openrouter /
+  // deepseek / gateway) that have no embeddings endpoint at all (#493). Check
+  // before the network-shaped codes — it's a config error, not a reachability one.
+  if (txt.includes('has no text-embedding support')) {
+    return { code: 'no_embeddings', raw };
+  }
   if (status === 404 || txt.includes('not found') || txt.includes('try pulling')) {
     return { code: 'not_found', raw };
   }
@@ -207,6 +214,15 @@ function actionableMessage(
         );
       }
       return `Can't reach provider "${provider}" — check network / baseUrl. (${raw})`;
+    case 'no_embeddings':
+      return (
+        `Provider "${provider}" is chat-only — it has no embeddings endpoint, so the\n` +
+        `  library tagger can't use it. (The DJ still works on "${provider}".)\n` +
+        `  Pick an embedding-capable provider in /admin/settings → Embedding:\n` +
+        `    • Ollama   — local + free (ollama pull nomic-embed-text; auto-pulled)\n` +
+        `    • OpenAI / Google — cloud (needs the matching API key)\n` +
+        `    • locca / openai-compatible — your own embedding server`
+      );
     case 'not_embedding_model':
       if (provider === 'openai-compatible' || provider === 'locca') {
         const startCmd =

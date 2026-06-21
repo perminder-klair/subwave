@@ -294,6 +294,9 @@ interface SettingsData {
     providers?: string[];
     active?: string;
   };
+  embedding?: {
+    providers?: string[];
+  };
   search?: {
     providers?: string[];
   };
@@ -2353,9 +2356,20 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
   const effectiveProvider = e.provider || llmProvider;
   const embedSuggestions = EMBED_MODEL_SUGGESTIONS[effectiveProvider] ?? [];
 
-  // Provider list comes from /settings.llm.providers (the canonical LLM list).
-  // Anthropic has no first-party embedding API — flagged in the hint.
-  const providers = data.llm?.providers || ['ollama'];
+  // Provider list is the embedding-capable subset (/settings.embedding.providers),
+  // NOT the full LLM list — chat-only providers (openrouter, deepseek, gateway)
+  // have no embeddings endpoint and can't be picked here (#493). Anthropic stays
+  // in; it routes to OpenAI, flagged in the hint.
+  const embedProviders = data.embedding?.providers ||
+    ['ollama', 'openai-compatible', 'locca', 'anthropic', 'openai', 'google'];
+  // Keep a stale explicit choice (a chat-only provider saved before this list
+  // shrank) visible so the Select isn't blank and the warning below makes sense.
+  const providers = e.provider && !embedProviders.includes(e.provider)
+    ? [e.provider, ...embedProviders]
+    : embedProviders;
+  // The effective provider can't embed when "Follow LLM provider" resolves to a
+  // chat-only LLM, or a stale config still names one. Drives the warning below.
+  const canEmbed = embedProviders.includes(effectiveProvider);
 
   // --- Guided setup: probe the endpoint up front, detect a locca embed server,
   // and kick the tagger from here, instead of failing mid-run (#405 follow-up).
@@ -2533,6 +2547,31 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
               pick OpenAI here (needs <code>OPENAI_API_KEY</code>).
               {' '}Effective: <code>{llmProviderLabel(effectiveProvider)}</code>.
             </div>
+
+            {!canEmbed && (
+              <div
+                role="alert"
+                className="mt-2 max-w-[480px] border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_7%,transparent)] p-3"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-[13px] leading-none text-[var(--danger)]">⚠</span>
+                  <span className="text-[11px] font-bold tracking-[0.14em] text-[var(--danger)] uppercase">
+                    {llmProviderLabel(effectiveProvider)} can’t make embeddings
+                  </span>
+                </div>
+                <p className="mt-2 text-[11px] leading-[1.55] text-muted">
+                  {e.provider ? (
+                    <><code>{llmProviderLabel(effectiveProvider)}</code> is a chat-only provider — it has no embeddings endpoint, so the tagger can’t use it.</>
+                  ) : (
+                    <>“Follow LLM provider” resolves to <code>{llmProviderLabel(llmProvider)}</code>, which is chat-only and has no embeddings endpoint.</>
+                  )}{' '}
+                  Pick a real embedding provider above — <strong>Ollama</strong> is local
+                  and free (<code>nomic-embed-text</code>, auto-pulled on first run), or
+                  use OpenAI / Google / locca. Your DJ stays on{' '}
+                  <code>{llmProviderLabel(llmProvider)}</code>.
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="field">
