@@ -27,6 +27,8 @@ check('getSource() defaults to navidrome', getSource().key === 'navidrome');
 check('getSourceByKey(navidrome) → navidrome', getSourceByKey('navidrome').key === 'navidrome');
 check('getSourceByKey(subsonic) alias → navidrome', getSourceByKey('subsonic').key === 'navidrome');
 check('getSourceByKey(jamendo) → jamendo', getSourceByKey('jamendo').key === 'jamendo');
+check('getSourceByKey(jellyfin) → jellyfin', getSourceByKey('jellyfin').key === 'jellyfin');
+check('getSourceByKey(local) → local', getSourceByKey('local').key === 'local');
 check('getSourceByKey(bogus) → active source fallback', getSourceByKey('bogus').key === 'navidrome');
 
 // Every provider implements the full interface surface (the capability-gated
@@ -37,7 +39,7 @@ const REQUIRED = [
   'getArtist', 'searchArtists', 'getTopSongs', 'iterateAllSongs', 'getLyrics',
   'getArtistLastfmTags', 'getRawStreamUrl', 'supportsSonicSimilarity',
 ];
-for (const key of ['navidrome', 'jamendo']) {
+for (const key of ['navidrome', 'jamendo', 'jellyfin', 'local']) {
   const src: any = getSourceByKey(key);
   const missing = REQUIRED.filter((m) => typeof src[m] !== 'function');
   check(`${key} implements the full method surface`, missing.length === 0, `missing: ${missing.join(', ')}`);
