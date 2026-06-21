@@ -104,6 +104,12 @@ router.get('/settings', requireAdmin, async (req, res) => {
         providers: settings.LLM_PROVIDERS,
         active: llmProvider.activeModelLabel(),
       },
+      embedding: {
+        // Embedding-capable providers only — a strict subset of llm.providers.
+        // The picker maps over this so chat-only providers (openrouter, deepseek,
+        // gateway) can't be chosen as an embedding source (#493).
+        providers: settings.EMBEDDING_PROVIDERS,
+      },
       search: {
         providers: settings.SEARCH_PROVIDERS,
       },

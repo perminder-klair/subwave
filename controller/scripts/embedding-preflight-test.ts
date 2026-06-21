@@ -96,8 +96,19 @@ for (const msg of [
   ok('message points at the fix', /--embeddings|pooling|embedding model/i.test(r.message));
 }
 
-// ---- 3. library-db dim handling (#2) --------------------------------------
-console.log('\n[3] library-db honours the stored dim');
+// ---- 3. chat-only provider → no_embeddings (#493) -------------------------
+// openrouter / deepseek / gateway have no embeddings endpoint; buildEmbeddingModel
+// throws synchronously (no network), so this is classified offline.
+console.log('\n[3] a chat-only provider is classified no_embeddings (offline)');
+for (const provider of ['openrouter', 'deepseek', 'gateway']) {
+  S.embedding = { enabled: true, provider, model: '', apiKey: '', baseUrl: '', ollamaUrl: '' };
+  const r = await embeddings.ensureReady();
+  ok(`${provider} → no_embeddings`, r.code === 'no_embeddings', `code=${r.code}`);
+  ok(`${provider} message names the real fix`, /chat-only|embedding-capable|Ollama/i.test(r.message));
+}
+
+// ---- 4. library-db dim handling (#2) --------------------------------------
+console.log('\n[4] library-db honours the stored dim');
 // Seed a 768-d DB the way the tagger would.
 await db.open({ embeddingDim: 768, reseed: false });
 db.setEmbeddingMeta('ollama:nomic-embed-text', 768);

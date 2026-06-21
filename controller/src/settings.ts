@@ -178,6 +178,23 @@ export const LLM_PROVIDERS = [
   'gateway',
 ];
 
+// Subset of LLM_PROVIDERS that can actually produce text embeddings — the
+// library tagger embeds every track (music/embeddings.ts), and several chat
+// providers route chat ONLY: openrouter, deepseek and the Vercel AI gateway
+// have no embeddings endpoint. Offering them in the embedding-provider picker
+// silently fell through to a local Ollama and failed with a misleading
+// "can't reach <provider>" error (#493). `anthropic` stays in — it has no
+// first-party embedding model, but llm/internal/provider/embedding.ts routes it
+// to OpenAI (needs OPENAI_API_KEY), as the picker hint already explains.
+export const EMBEDDING_PROVIDERS = [
+  'ollama',
+  'openai-compatible',
+  'locca',
+  'anthropic',
+  'openai',
+  'google',
+];
+
 // Coerce a stored Ollama context-window value. 0 disables (use Ollama's own
 // default); any other number is clamped to a sane [2048, 131072] band and
 // floored to an integer. Non-numeric/NaN falls back to `def`. Shared by the

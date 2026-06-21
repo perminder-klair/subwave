@@ -144,11 +144,22 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
       const provider = createGoogleGenerativeAI(cfg.apiKey ? { apiKey: cfg.apiKey } : {});
       return provider.textEmbeddingModel(id);
     }
-    case 'ollama':
-    default: {
+    case 'ollama': {
       const provider = createOllama({ baseURL: ollamaBaseUrl(cfg as any) });
       return provider.textEmbeddingModel(id);
     }
+    default:
+      // openrouter / deepseek / gateway (and any future chat-only provider) have
+      // no embeddings endpoint. Previously these fell through to the ollama
+      // branch, silently pointed at a local Ollama, and failed with a misleading
+      // "can't reach <provider>" (#493). Throw an honest error so the probe +
+      // tagger preflight name the real problem. The picker already hides these
+      // (settings.EMBEDDING_PROVIDERS) — this guards the API/JSON path.
+      throw new Error(
+        `Provider "${cfg.provider}" has no text-embedding support. Pick an ` +
+          `embedding-capable provider in Settings → Library tagger → Embedding ` +
+          `(ollama, openai, google, locca, or openai-compatible).`,
+      );
   }
 }
 
