@@ -123,6 +123,11 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - *state-mount
+      # Read-only Docker socket — lets the admin Stats page report per-container
+      # CPU/memory for the stack (GET /system, via the Docker Engine API; no
+      # docker CLI in the image). Optional: drop this line and the panel just
+      # shows "container stats unavailable" — nothing else depends on it.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
   # -------------------------------------------------------------------------
   # WEB — Next.js listener UI
@@ -331,6 +336,11 @@ services:
       - "\${CONTROLLER_PORT:-7701}:7701"
     volumes:
       - *state-mount
+      # Read-only Docker socket — lets the admin Stats page report per-container
+      # CPU/memory for the stack (GET /system, via the Docker Engine API; no
+      # docker CLI in the image). Optional: drop this line and the panel just
+      # shows "container stats unavailable" — nothing else depends on it.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
   # -------------------------------------------------------------------------
   # WEB — Next.js listener UI, bound to host for your reverse proxy
@@ -527,6 +537,10 @@ services:
       # /app/node_modules with the (possibly empty) host node_modules.
       - ./controller/src:/app/src
       - ./controller/scripts:/app/scripts
+      # Read-only Docker socket — powers the admin Stats system-resource panel
+      # (GET /system) in dev too. Optional: drop it and the panel shows
+      # "container stats unavailable".
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
   # -------------------------------------------------------------------------
   # TTS-HEAVY (optional) — sidecar for Chatterbox + PocketTTS
