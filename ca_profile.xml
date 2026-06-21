@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<CommunityApplications>
+  <!-- Maintainer profile shown on the SUB/WAVE author page in Community Apps.
+       This repo IS the SUB/WAVE source repo; the CA submission files live at the
+       root alongside it (ca_profile.xml + templates/). See
+       docs/unraid-ca-submission.md. -->
+  <Profile>
+## SUB/WAVE
+
+A personal internet radio station: **one Icecast stream that every listener
+hears together**, with an **AI DJ** that picks tracks from your own
+Navidrome / Subsonic library and reads scripts between them — station IDs,
+the time, the weather, listener requests.
+
+This template installs the **one-click all-in-one image** (`subwave-aio`): the
+entire stack — icecast2 + liquidsoap, the controller (the DJ brain), the
+Next.js web UI, and a Caddy edge — runs in a **single container** exposing one
+port. After installing, finish setup in your browser at `/onboarding`
+(Navidrome, the LLM provider, the voice, the DJ persona).
+
+- **Project &amp; full docs:** https://github.com/perminder-klair/subwave
+- **Support / issues:** https://github.com/perminder-klair/subwave/issues
+
+> Prefer the full split-container deployment (separate broadcast / controller /
+> web / Caddy services, BYO reverse proxy)? Run the maintained
+> `docker-compose.yml` via the Compose Manager Plus plugin instead — see
+> docs/unraid.md.
+  </Profile>
+  <Icon>https://raw.githubusercontent.com/perminder-klair/subwave/main/app/assets/icon.png</Icon>
+  <WebPage>https://github.com/perminder-klair/subwave</WebPage>
+</CommunityApplications>

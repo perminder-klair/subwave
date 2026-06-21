@@ -1,0 +1,141 @@
+# SUB/WAVE all-in-one image — the entire stack in a single container.
+#
+# Why this exists: Unraid's Community Applications catalogue is strictly one
+# container per template, so the five-service compose stack can't be listed
+# there directly. This image collapses icecast2 + liquidsoap (broadcast), the
+# controller, the Next.js web UI, and Caddy into one container supervised by
+# docker/aio/supervisor.sh, exposing a single port (80, fronted by Caddy). It's
+# also handy anywhere you'd rather run `docker run` once than orchestrate five
+# services (Synology, a plain VPS, Portainer one-shot).
+#
+# The split-stack images (subwave-{caddy,broadcast,controller,web}) remain the
+# canonical deployment. This is an additional packaging of the same source —
+# nothing here forks app behaviour; it only repoints internal URLs at loopback
+# (see docker/aio/supervisor.sh) and bakes in a loopback Caddyfile.
+#
+# NOT bundled (to keep the image lean): the optional tts-heavy engines
+# (Chatterbox / PocketTTS) and the docker-socket-proxy Stats panel. Both degrade
+# gracefully — TTS falls back to the bundled Piper voice, the Stats system panel
+# simply hides. Piper + Kokoro are included, so the DJ has a natural voice.
+
+# ---- web build: Next.js standalone (mirrors web/Dockerfile) ----------------
+FROM node:22-bookworm-slim AS webbuild
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+ENV NEXT_TELEMETRY_DISABLED=1
+# SITE_URL is frozen into statically-rendered routes (robots, sitemap, OG cards)
+# at build time. For the AIO it's unknown until the operator sets it, so we bake
+# the localhost fallback; the force-dynamic homepage still reads the runtime
+# SITE_URL env for live share-card tags.
+ARG SITE_URL
+ENV SITE_URL=${SITE_URL}
+RUN npm run build
+
+# ---- caddy binary: lift the glibc build from the official Debian image ------
+FROM caddy:2 AS caddybin
+
+# ---- final: everything under the liquidsoap (Debian bookworm) base ----------
+FROM savonet/liquidsoap:v2.2.5
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+
+# System packages:
+#  - icecast2: the broadcast server (apt also creates the icecast2 user)
+#  - sudo: lets the supervisor drop privileges to icecast2 / liquidsoap
+#  - openssl: first-boot icecast secret generation
+#  - curl/ca-certificates: liquidsoap's HTTPS Subsonic fetch + health probes
+#  - espeak-ng/libsndfile1: Kokoro phonemisation + audio I/O
+#  - ffmpeg: jingle/SFX transcode on import (audio/audio-import.ts)
+#  - python3/python3-venv: the Kokoro worker venv
+#  - wget/tar/xz-utils: Piper + Kokoro model/binary pulls
+#  - gnupg: NodeSource apt key
+RUN apt-get update -qq \
+ && apt-get install -y --no-install-recommends \
+        icecast2 sudo openssl curl ca-certificates \
+        espeak-ng libsndfile1 ffmpeg \
+        python3 python3-venv \
+        wget tar xz-utils gnupg \
+ && rm -rf /var/lib/apt/lists/*
+
+# Node.js 22 (NodeSource) — runs both the controller (tsx) and the web server.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && rm -rf /var/lib/apt/lists/*
+
+# Caddy — the loopback edge.
+COPY --from=caddybin /usr/bin/caddy /usr/local/bin/caddy
+
+ARG WGET_RETRY="--tries=5 --retry-connrefused --waitretry=10 --timeout=60 --retry-on-http-error=429,500,502,503,504"
+
+# --- Piper (default TTS, ~30ms/word) ---------------------------------------
+# TARGETARCH is set by buildx; empty on a plain `docker build` → treat as amd64.
+ARG PIPER_VERSION=2023.11.14-2
+ARG TARGETARCH
+RUN cd /tmp && \
+    case "${TARGETARCH}" in \
+      amd64|"") piper_arch=x86_64 ;; \
+      arm64)    piper_arch=aarch64 ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH} for Piper" >&2; exit 1 ;; \
+    esac && \
+    wget -q ${WGET_RETRY} https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/piper_linux_${piper_arch}.tar.gz && \
+    tar -xzf piper_linux_${piper_arch}.tar.gz -C /opt && \
+    ln -s /opt/piper/piper /usr/local/bin/piper && \
+    rm piper_linux_${piper_arch}.tar.gz
+RUN mkdir -p /opt/piper/voices && \
+    wget -q ${WGET_RETRY} -O /opt/piper/voices/en_GB-alan-medium.onnx \
+      https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx && \
+    wget -q ${WGET_RETRY} -O /opt/piper/voices/en_GB-alan-medium.onnx.json \
+      https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx.json
+
+# --- Kokoro (optional second TTS, more natural) ----------------------------
+RUN python3 -m venv /opt/kokoro/venv && \
+    /opt/kokoro/venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /opt/kokoro/venv/bin/pip install --no-cache-dir \
+      kokoro-onnx==0.4.9 soundfile==0.12.1
+RUN mkdir -p /opt/kokoro/models && \
+    wget -q ${WGET_RETRY} -O /opt/kokoro/models/kokoro-v1.0.onnx \
+      https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx && \
+    wget -q ${WGET_RETRY} -O /opt/kokoro/models/voices-v1.0.bin \
+      https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
+    KOKORO_VOICES=/opt/kokoro/models/voices-v1.0.bin \
+    KOKORO_PYTHON=/opt/kokoro/venv/bin/python
+
+# --- Controller app ---------------------------------------------------------
+WORKDIR /app
+COPY controller/package*.json ./
+RUN npm install --omit=dev
+COPY controller/src ./src
+COPY controller/scripts ./scripts
+
+# --- Web app (standalone build from the webbuild stage) ---------------------
+# Mirrors web/Dockerfile's runner layout, rooted at /web instead of /app.
+COPY --from=webbuild /web/.next/standalone /web
+COPY --from=webbuild /web/.next/static /web/.next/static
+COPY --from=webbuild /web/public /web/public
+
+# --- Broadcast + edge config + bundled audio --------------------------------
+COPY docker/icecast.xml.template /etc/icecast2/icecast.xml.template
+COPY liquidsoap/radio.liq /etc/liquidsoap/radio.liq
+COPY sounds /sounds
+COPY docker/aio/Caddyfile /etc/caddy/Caddyfile
+COPY docker/aio/supervisor.sh /usr/local/bin/subwave-supervisor
+RUN chmod +x /usr/local/bin/subwave-supervisor
+
+# Shared state dir (the supervisor re-asserts perms on every boot).
+RUN mkdir -p /var/sub-wave && chmod 777 /var/sub-wave
+
+ENV NODE_ENV=production \
+    STATE_DIR=/var/sub-wave \
+    SOUNDS_DIR=/sounds
+
+# Single public port: Caddy on :80. Health = the controller's liveness via the
+# edge, which only answers once web + controller are both up.
+EXPOSE 80
+HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=6 \
+    CMD curl -fsS http://localhost:80/api/health > /dev/null || exit 1
+
+ENTRYPOINT ["/usr/local/bin/subwave-supervisor"]

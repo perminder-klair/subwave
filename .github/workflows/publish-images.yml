@@ -1,6 +1,6 @@
 name: Publish images
 
-# Builds and pushes the five first-party SUB/WAVE images to GHCR.
+# Builds and pushes the first-party SUB/WAVE images to GHCR.
 #
 # Triggers:
 #   - push of a tag like v1.2.3 → versioned release (also tagged :latest)
@@ -11,6 +11,8 @@ name: Publish images
 #   ghcr.io/<owner>/subwave-broadcast   (icecast2 + liquidsoap + radio.liq + sounds/)
 #   ghcr.io/<owner>/subwave-controller
 #   ghcr.io/<owner>/subwave-web
+#   ghcr.io/<owner>/subwave-aio         (whole stack in one container — the Unraid
+#                                        Community Applications one-click image)
 #   ghcr.io/<owner>/subwave-tts-heavy   (optional Chatterbox + PocketTTS sidecar, ~3-4GB)
 #
 # Platforms: the core four images (caddy, broadcast, controller, web) are
@@ -48,6 +50,17 @@ jobs:
             platforms: linux/amd64,linux/arm64
           - image: subwave-web
             dockerfile: web/Dockerfile
+            platforms: linux/amd64,linux/arm64
+          # The Unraid one-click image: the whole stack (icecast2 + liquidsoap,
+          # controller, web, Caddy) in one container, supervised by
+          # docker/aio/supervisor.sh. Multi-arch like the split-stack images —
+          # amd64 (x86-64, every Unraid box) plus arm64 (ARM servers / Apple
+          # Silicon). Dockerfile.aio selects the matching Piper build via
+          # $TARGETARCH; Kokoro/onnx, node, icecast2 and the liquidsoap base all
+          # have arm64 builds. The arm64 variant cross-builds under QEMU, so this
+          # is the slowest image in the matrix.
+          - image: subwave-aio
+            dockerfile: docker/Dockerfile.aio
             platforms: linux/amd64,linux/arm64
           - image: subwave-tts-heavy
             dockerfile: docker/Dockerfile.tts-heavy

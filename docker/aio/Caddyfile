@@ -1,0 +1,47 @@
+# Caddy edge router for the SUB/WAVE all-in-one image (docker/Dockerfile.aio).
+#
+# Unlike the split-stack docker/Caddyfile, every backend lives in THIS SAME
+# container, so the upstreams are loopback addresses rather than compose service
+# names. The route table is otherwise identical: one origin on :80, split by URL
+# prefix. The single host port the Unraid template maps points here.
+#
+# No Cloudflare trusted_proxies block — the AIO is aimed at LAN / self-hosted
+# use behind whatever reverse proxy the operator already runs (or none at all).
+{
+	auto_https off
+}
+
+:80 {
+	# /stream.mp3 + /stream.opus — Icecast (served by liquidsoap → icecast on
+	# 7702). flush_interval -1 keeps the never-ending audio body live.
+	@streams path /stream.mp3 /stream.opus
+	handle @streams {
+		reverse_proxy 127.0.0.1:7702 {
+			flush_interval -1
+			transport http {
+				read_buffer 16KB
+				response_header_timeout 30s
+				dial_timeout 5s
+			}
+		}
+	}
+
+	# /api/* — controller REST API (prefix stripped so its routes stay at root).
+	handle_path /api/* {
+		reverse_proxy 127.0.0.1:7701
+	}
+
+	# Everything else → Next.js web UI.
+	handle {
+		reverse_proxy 127.0.0.1:7700
+	}
+
+	# Don't gzip the already-compressed live audio mounts.
+	@compressible not path /stream.mp3 /stream.opus
+	encode @compressible gzip zstd
+
+	log {
+		output stdout
+		format console
+	}
+}

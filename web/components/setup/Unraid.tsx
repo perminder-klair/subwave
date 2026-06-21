@@ -12,25 +12,120 @@ STATE_DIR=/mnt/user/appdata/subwave/state
 CADDY_PORT=7700
 TZ=Europe/London`;
 
+const TEMPLATE_URL =
+  'https://raw.githubusercontent.com/perminder-klair/subwave/main/templates/subwave.xml';
+
 export default function Unraid() {
   return (
     <SetupPage
       eyebrow="SETUP · UNRAID"
       title="Run it on Unraid."
-      intro="SUB/WAVE is a multi-container Compose stack, so on Unraid it runs through the Compose Manager Plus plugin — not as individual Community Applications templates. It uses the same docker-compose.yml as every other host, so there's nothing Unraid-specific to drift. Start to on-air is about five minutes."
+      intro="Two supported paths. The easy one: install the one-click all-in-one container from Community Applications. The flexible one: run the full Compose stack via Compose Manager Plus (separate containers, BYO reverse proxy, optional heavy-TTS sidecar). Both finish in the same browser wizard. Start to on-air is about five minutes."
       current="/setup/unraid"
     >
       <section className="bs-section">
         <div className="bs-callout">
-          <div className="bs-eyebrow">WHY NOT THE APPS STORE?</div>
+          <div className="bs-eyebrow">TWO WAYS TO RUN IT</div>
           <p>
-            Community Applications is a single-container catalogue — it can&apos;t
-            one-click a Compose stack. <strong>Compose Manager Plus</strong> is the
-            supported way to run one, and because it reuses the maintained{' '}
-            <code className="bs-code-inline">docker-compose.yml</code>, you stay on
-            the same images and upgrade path as everyone else.
+            <strong>One-click (Community Applications)</strong> — the all-in-one
+            image bundles the whole stack into a single container behind one
+            port. Easiest; recommended for most people.{' '}
+            <strong>Full Compose stack (Compose Manager Plus)</strong> — the
+            maintained{' '}
+            <code className="bs-code-inline">docker-compose.yml</code> as
+            separate broadcast / controller / web / Caddy services. Pick it for
+            isolated containers, your own proxy, or the heavy-TTS sidecar.
           </p>
         </div>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">OPTION 1 — ONE-CLICK</p>
+        <h2>Community Applications.</h2>
+        <p>
+          The Apps catalogue is one container per template, so the{' '}
+          <code className="bs-code-inline">subwave-aio</code> image bundles
+          icecast2 + liquidsoap, the controller, the web UI and a Caddy edge
+          together. Same images as the Compose stack — just packaged into one.
+        </p>
+
+        <div className="bs-step">
+          <div className="bs-step-num">01</div>
+          <div className="bs-step-body">
+            <h3>Install &amp; fill the fields</h3>
+            <p>
+              <strong>Apps</strong> tab &rarr; search{' '}
+              <strong>SUB/WAVE</strong> &rarr; <strong>Install</strong>, then set:
+            </p>
+            <ul className="bs-list">
+              <li>
+                <strong>WebUI Port</strong> — host port for the UI + stream
+                (default <code className="bs-code-inline">7700</code>).
+              </li>
+              <li>
+                <strong>Appdata</strong> —{' '}
+                <code className="bs-code-inline">/mnt/user/appdata/subwave</code>,
+                on the array/pool (<em>not</em> the flash).
+              </li>
+              <li>
+                <strong>ADMIN_USER</strong> / <strong>ADMIN_PASS</strong> — your
+                admin login; the password is <strong>required</strong>.
+              </li>
+              <li>
+                <strong>SITE_URL</strong> —{' '}
+                <code className="bs-code-inline">http://YOUR-UNRAID-IP:7700</code>.
+              </li>
+            </ul>
+            <div className="bs-callout">
+              <div className="bs-eyebrow">KEEP APPDATA OFF THE FLASH</div>
+              <p>
+                SUB/WAVE&apos;s state grows — hourly archives, the library cache,
+                rendered voices. Point <strong>Appdata</strong> at{' '}
+                <code className="bs-code-inline">/mnt/user/appdata/subwave</code>{' '}
+                on your pool/array, never{' '}
+                <code className="bs-code-inline">/boot/…</code>.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bs-step">
+          <div className="bs-step-num">02</div>
+          <div className="bs-step-body">
+            <h3>Finish setup in the browser</h3>
+            <CodeBlock>{`open http://YOUR-UNRAID-IP:7700/onboarding`}</CodeBlock>
+            <p>
+              Sign in with the{' '}
+              <code className="bs-code-inline">ADMIN_USER</code> /{' '}
+              <code className="bs-code-inline">ADMIN_PASS</code> you set, and the
+              wizard collects the rest — Navidrome, the LLM provider, TTS, the DJ
+              persona. The player is at{' '}
+              <code className="bs-code-inline">http://YOUR-UNRAID-IP:7700</code>.
+            </p>
+          </div>
+        </div>
+
+        <div className="bs-callout">
+          <div className="bs-eyebrow">NOT IN THE STORE YET?</div>
+          <p>
+            Until the listing is approved (or to try a pre-release), add it
+            directly: <strong>Docker</strong> tab &rarr;{' '}
+            <strong>Add Container</strong> &rarr; paste this into{' '}
+            <strong>Template URL</strong>, then fill the same fields.
+          </p>
+          <CodeBlock>{TEMPLATE_URL}</CodeBlock>
+        </div>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">OPTION 2 — FULL COMPOSE STACK</p>
+        <h2>Compose Manager Plus.</h2>
+        <p>
+          Run the maintained{' '}
+          <code className="bs-code-inline">docker-compose.yml</code> as separate
+          services — good for isolated containers, your own Traefik/SWAG/NPM in
+          front, or the optional Chatterbox/PocketTTS sidecar.
+        </p>
 
         <div className="bs-step">
           <div className="bs-step-num">01</div>
@@ -126,12 +221,8 @@ export default function Unraid() {
             <h3>Finish setup in the browser</h3>
             <CodeBlock>{`open http://YOUR-UNRAID-IP:7700/onboarding`}</CodeBlock>
             <p>
-              Sign in with the{' '}
-              <code className="bs-code-inline">ADMIN_USER</code> /{' '}
-              <code className="bs-code-inline">ADMIN_PASS</code> you set, and the
-              wizard collects the rest — Navidrome, the LLM provider, TTS, the DJ
-              persona. The player is at{' '}
-              <code className="bs-code-inline">http://YOUR-UNRAID-IP:7700</code>.
+              Same wizard as the one-click path — Navidrome, the LLM provider,
+              TTS, the DJ persona.
             </p>
           </div>
         </div>
@@ -141,7 +232,7 @@ export default function Unraid() {
         <div className="bs-callout">
           <div className="bs-eyebrow">THE AI DJ — OLLAMA, LOCAL OR CLOUD</div>
           <p>
-            SUB/WAVE ships a first-class{' '}
+            Applies to both options. SUB/WAVE ships a first-class{' '}
             <strong>&ldquo;Ollama — local/cloud&rdquo;</strong> provider. Most
             Unraid boxes lack a big GPU, so the nicest path is Ollama&apos;s{' '}
             <strong>cloud models</strong>, which offload inference — even a
@@ -177,19 +268,18 @@ export default function Unraid() {
               <strong>No reverse proxy needed</strong> for LAN use — Caddy fronts{' '}
               <code className="bs-code-inline">/</code>,{' '}
               <code className="bs-code-inline">/api</code>, and{' '}
-              <code className="bs-code-inline">/stream.mp3</code> on the single{' '}
-              <code className="bs-code-inline">CADDY_PORT</code>. Want TLS + a
-              hostname behind SWAG / NPM / Traefik? Front{' '}
-              <code className="bs-code-inline">CADDY_PORT</code> with it, or use{' '}
+              <code className="bs-code-inline">/stream.mp3</code> on the single
+              host port. Want TLS + a hostname behind SWAG / NPM / Traefik? Front
+              that port with it, or (Compose stack) use{' '}
               <code className="bs-code-inline">docker-compose.byo.yml</code>.
             </li>
             <li>
-              <strong>Updates:</strong> stack menu &rarr; <strong>Pull &amp; Up</strong>{' '}
-              (or <strong>Check for Updates</strong>).
+              <strong>Updates:</strong> one-click &rarr; Unraid&apos;s normal{' '}
+              <strong>Check for Updates</strong>. Compose stack &rarr; stack menu
+              &rarr; <strong>Pull &amp; Up</strong>.
             </li>
             <li>
-              <strong>Backups:</strong> everything lives under{' '}
-              <code className="bs-code-inline">STATE_DIR</code> —
+              <strong>Backups:</strong> everything lives under the appdata path —
               settings, library cache, archives, voices. Back up{' '}
               <code className="bs-code-inline">/mnt/user/appdata/subwave</code>.
             </li>
@@ -201,7 +291,7 @@ export default function Unraid() {
         <p className="bs-eyebrow">WHAT&apos;S NEXT</p>
         <h2>Keep it running.</h2>
         <p>
-          The stack is on the air. When a new version lands, head to{' '}
+          The station is on the air. When a new version lands, head to{' '}
           <Link href="/setup/updates" className="bs-link">Updates &amp; Help</Link>{' '}
           for the update workflow and the troubleshooting checklist.
         </p>
