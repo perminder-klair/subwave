@@ -53,15 +53,16 @@ jobs:
             platforms: linux/amd64,linux/arm64
           # The Unraid one-click image: the whole stack (icecast2 + liquidsoap,
           # controller, web, Caddy) in one container, supervised by
-          # docker/aio/supervisor.sh. Multi-arch like the split-stack images —
-          # amd64 (x86-64, every Unraid box) plus arm64 (ARM servers / Apple
-          # Silicon). Dockerfile.aio selects the matching Piper build via
-          # $TARGETARCH; Kokoro/onnx, node, icecast2 and the liquidsoap base all
-          # have arm64 builds. The arm64 variant cross-builds under QEMU, so this
-          # is the slowest image in the matrix.
+          # docker/aio/supervisor.sh. amd64-only (x86-64 — every Unraid box, the
+          # target for this image). arm64 is deliberately NOT built here: the
+          # bundled Next.js webbuild fails its arm64 cross-build under QEMU
+          # because lightningcss (Tailwind) can't load its native
+          # `lightningcss.linux-arm64-gnu.node` binary in the emulated stage.
+          # Native-arm64 users can still run the split-stack images, which stay
+          # multi-arch. Revisit if the lightningcss/QEMU issue is resolved.
           - image: subwave-aio
             dockerfile: docker/Dockerfile.aio
-            platforms: linux/amd64,linux/arm64
+            platforms: linux/amd64
           - image: subwave-tts-heavy
             dockerfile: docker/Dockerfile.tts-heavy
             platforms: linux/amd64

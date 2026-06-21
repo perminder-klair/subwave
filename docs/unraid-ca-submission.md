@@ -21,7 +21,9 @@ Icon + screenshots are referenced by raw URL from existing in-repo assets
 ## 1. Publish the `subwave-aio` image
 
 Built by `.github/workflows/publish-images.yml` (matrix entry `subwave-aio`,
-multi-arch amd64+arm64). It publishes on a `v*` tag push:
+amd64-only — that's x86-64, every Unraid box; arm64 is skipped because the
+bundled Next.js webbuild fails its arm64 cross-build under QEMU on
+lightningcss). It publishes on a `v*` tag push:
 
 ```bash
 git tag v<next-version> && git push origin v<next-version>
