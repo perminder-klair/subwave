@@ -586,7 +586,7 @@ export default function LibraryPanel() {
       });
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `reconcile failed (${r.status})`);
-      notify.ok('reconcile started — scanning Navidrome');
+      notify.ok('reconcile started, scanning Navidrome');
       setLogOpen(true);
       await loadTagger();
     } catch (err) {
@@ -1036,9 +1036,9 @@ function TrackTable(p: TrackTableProps) {
   if (p.rows.length === 0) {
     return (
       <div className="px-4 py-10 text-center text-[12px] text-muted italic">
-        {p.tab === 'browse' && 'no tracks match — try clearing some filters'}
+        {p.tab === 'browse' && 'no tracks match, try clearing some filters'}
         {p.tab === 'search' && 'search your library to queue a track on demand'}
-        {p.tab === 'untagged' && 'every track is tagged — nice'}
+        {p.tab === 'untagged' && 'every track is tagged, nice'}
         {p.tab === 'recent' && 'nothing here yet'}
       </div>
     );

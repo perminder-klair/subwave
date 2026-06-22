@@ -127,7 +127,7 @@ export default function ArchivesPanel() {
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
             Liquidsoap writes one MP3 per clock hour into <code>state/archive/</code>.
-            They&rsquo;re kept until the operator deletes them — there is no automatic rotation,
+            They&rsquo;re kept until the operator deletes them. There is no automatic rotation,
             so keep an eye on disk if the station runs 24/7.
           </div>
         </div>

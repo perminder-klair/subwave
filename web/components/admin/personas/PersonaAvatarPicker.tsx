@@ -62,7 +62,7 @@ export function PersonaAvatarPicker({ persona, tick, uploading, onPick, onGenera
         <Btn sm className="w-full justify-center" onClick={() => inputRef.current?.click()} disabled={uploading}>
           {uploading ? '…' : hasAvatar ? 'Replace' : 'Upload'}
         </Btn>
-        <Btn sm className="w-full justify-center" onClick={onGenerate} disabled={uploading} title="Random DiceBear avatar — click again for a different one">
+        <Btn sm className="w-full justify-center" onClick={onGenerate} disabled={uploading} title="Random DiceBear avatar. Click again for a different one">
           Generate
         </Btn>
         {hasAvatar && (

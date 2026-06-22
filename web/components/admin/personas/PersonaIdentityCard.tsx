@@ -132,7 +132,7 @@ export function PersonaIdentityCard({
           <Textarea
             rows={9}
             value={persona.soul}
-            placeholder="e.g. warm and dry, never corny — observant, favours one good image over a list"
+            placeholder="e.g. warm and dry, never corny, observant, favours one good image over a list"
             onChange={(e: ChangeEvent<HTMLTextAreaElement>) => update({ soul: e.target.value })}
             className={soulOver || soulLen === 0 ? 'border-[var(--danger)]' : 'border-ink'}
           />

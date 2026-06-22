@@ -56,7 +56,7 @@ export function PersonaHero({
         <span className="caption">voice · {activePersona ? engineLabel(activePersona) : '—'}</span>
         {activeCloudIssue && (
           <span className="caption text-[var(--danger)]">
-            ⚠ cloud voice inactive — speaking via {defaultEngine}
+            ⚠ cloud voice inactive, speaking via {defaultEngine}
           </span>
         )}
         <span className="caption">override · — (a scheduled show may reassign the hour)</span>

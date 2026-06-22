@@ -165,7 +165,7 @@ function NowCard({ label, accent, slotHour, show, color, personaLabel }: NowCard
             show ? 'text-ink' : 'text-muted',
           )}
         >
-          {show ? show.name : '(no show — autonomous)'}
+          {show ? show.name : '(no show, autonomous)'}
         </span>
       </div>
       <div className="text-[11px] text-muted">
@@ -520,7 +520,7 @@ export default function ShowsPanel() {
       });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      notify.ok('schedule saved — the current hour applies on the next pick');
+      notify.ok('schedule saved, the current hour applies on the next pick');
       await load();
     } catch (e) {
       notify.err(errorMessage(e));
@@ -605,7 +605,7 @@ export default function ShowsPanel() {
       {personas.length === 0 && (
         <Card title="Personas required" sub="setup">
           <div className="text-[13px] text-[var(--danger)]">
-            No personas defined — create one under Personas first.
+            No personas defined. Create one under Personas first.
           </div>
         </Card>
       )}
@@ -715,7 +715,7 @@ export default function ShowsPanel() {
       >
         {form.shows.length === 0 && (
           <p className="text-[12px] text-muted">
-            No shows yet — add one to start programming the week.
+            No shows yet. Add one to start programming the week.
           </p>
         )}
         <div className="grid gap-2">
@@ -829,7 +829,7 @@ export default function ShowsPanel() {
             </div>
 
             <Field>
-              <Label>theme override — applied while this show is on air</Label>
+              <Label>theme override (applied while this show is on air)</Label>
               <Select
                 value={draft.themeId || THEME_DEFAULT_SENTINEL}
                 onValueChange={val =>
@@ -929,16 +929,16 @@ export default function ShowsPanel() {
             </div>
 
             <span className="field-hint -mt-1.5">
-              Optional soft music steer for this show — a genre, an era, an energy
+              Optional soft music steer for this show: a genre, an era, an energy
               band, or any mix. The DJ leans toward these but can break them for
               flow; leave blank to let the topic and mood drive selection.
             </span>
 
             <Field>
-              <Label htmlFor="show-topic">topic — fed to the DJ as the show theme</Label>
+              <Label htmlFor="show-topic">topic (fed to the DJ as the show theme)</Label>
               <span className="field-hint">
                 This is the brief the AI DJ works from. The more you describe,
-                the better it picks music and writes links — name genres, eras,
+                the better it picks music and writes links: name genres, eras,
                 moods, artists to lean into or avoid, the time of day, the kind
                 of listener, and how the host should sound. Write it like
                 you&apos;re briefing a real DJ before their slot.
@@ -947,7 +947,7 @@ export default function ShowsPanel() {
                 id="show-topic"
                 rows={7} value={draft.topic} maxLength={TOPIC_MAX}
                 onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setDraftField({ topic: e.target.value })}
-                placeholder="e.g. Slow ambient, modern classical and downtempo for the late shift. Think Nils Frahm, Hammock, Bonobo's quieter side — nothing with a hard beat. Keep the host calm and unhurried, like a friend talking you down at 1am."
+                placeholder="e.g. Slow ambient, modern classical and downtempo for the late shift. Think Nils Frahm, Hammock, Bonobo's quieter side, nothing with a hard beat. Keep the host calm and unhurried, like a friend talking you down at 1am."
               />
               <span className="field-hint">{draft.topic.trim().length}/{TOPIC_MAX}</span>
             </Field>
@@ -1121,7 +1121,7 @@ function GridCell({
       onMouseEnter={onMouseEnter}
       onTouchStart={onTouchStart}
       title={
-        (show ? `${show.name} (${show.mood})` : `${label} ${String(hour).padStart(2, '0')}:00 — empty`)
+        (show ? `${show.name} (${show.mood})` : `${label} ${String(hour).padStart(2, '0')}:00, empty`)
         + (isNow ? ' · on air now' : '')
       }
       className={cn(

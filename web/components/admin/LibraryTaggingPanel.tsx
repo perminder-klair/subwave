@@ -219,7 +219,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         </h1>
         <p className="lib-hero-sub">
           The DJ reads each track&rsquo;s <b>mood</b> and <b>energy</b> to pick the right song for
-          the moment — new tracks need tagging before they go on air.
+          the moment. New tracks need tagging before they go on air.
         </p>
       </div>
 
@@ -244,7 +244,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
           </div>
           {embeddingMissing && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] text-ink">
-              <span><b>Embeddings missing.</b> Your embedding model may have changed — re-embed to restore similarity-based picks.</span>
+              <span><b>Embeddings missing.</b> Your embedding model may have changed. Re-embed to restore similarity-based picks.</span>
               <button
                 type="button"
                 className="font-bold text-vermilion underline-offset-2 hover:underline"
@@ -330,11 +330,11 @@ export default function TaggingPanel(p: TaggingPanelProps) {
           <div className="caption !tracking-[0.04em] !normal-case">
             {(progress && PHASE_HINT[progress.phase]) ||
               (p.tagger?.mode === 'analyze'
-                ? 'The analysis engine is listening to each track — measuring tempo and key, and fingerprinting how it sounds.'
+                ? 'The analysis engine is listening to each track: measuring tempo and key, and fingerprinting how it sounds.'
                 : p.tagger?.mode === 'reconcile'
                   ? 'Checking every track against Navidrome and removing entries for files that no longer exist.'
                   : 'The DJ is listening to each new track and deciding its mood & energy.')}
-            {' '}You can keep browsing — this runs in the background.
+            {' '}You can keep browsing. This runs in the background.
           </div>
         </div>
       )}
@@ -373,7 +373,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             </span>
             <span className="caption basis-full !tracking-[0.04em] !normal-case">
               {analysisOff
-                ? 'No analysis engine running — start the tts-heavy sidecar (docker compose --profile tts-heavy up -d) or configure a local librosa venv.'
+                ? 'No analysis engine running. Start the tts-heavy sidecar (docker compose --profile tts-heavy up -d) or configure a local librosa venv.'
                 : 'Improves beat-matching between tracks; tagging works fine without it.'}
             </span>
           </div>
@@ -390,7 +390,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                   ? 'engine missing CLAP'
                   : audioOn
                     ? <>{num(audioEmbedded)} / {num(total)} · {audpct != null ? `${audpct}%` : '…'}</>
-                    : p.audioEnabled ? 'enabled — not yet analysed' : 'off'}
+                    : p.audioEnabled ? 'enabled, not yet analysed' : 'off'}
             </span>
             {!analysisOff && p.audioEnabled != null && (
               <span className="flex items-center gap-2">
@@ -431,7 +431,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
 
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1.5 border-t border-dashed border-separator-strong pt-3.5">
             <span className="max-w-[64ch] text-[12px] leading-[1.55] text-muted">
-              <b className="text-ink">Re-scan</b> — only needed after changing the LLM, embedding model, or analysis
+              <b className="text-ink">Re-scan.</b> Only needed after changing the LLM, embedding model, or analysis
               engine. Pick the passes to redo (tick all for a full rebuild); existing mood tags are kept as seeds.
             </span>
             <button
@@ -449,7 +449,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             <Pass on={!!passes.reEnrich} onClick={() => togglePass('reEnrich')} name="Re-enrich metadata"
               hint="Re-fetch Last.fm tags + lyrics that feed the tagging." />
             <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics"
-              hint="Redo BPM / key for every track — also refreshes sounds-like fingerprints when enabled." />
+              hint="Redo BPM / key for every track. Also refreshes sounds-like fingerprints when enabled." />
             <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods"
               hint="Re-tag tracks whose prompt or model is now stale." />
           </div>
@@ -464,7 +464,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
       {/* log drawer — reuses the theme-aware .term surface */}
       {p.logOpen && (
         <pre ref={logRef} className="term m-0 max-h-56 overflow-y-auto !border-t !border-l-0 border-separator-strong">
-          {(p.tagger?.lastLog || []).join('\n') || '(no log output yet — start a tagging run to see the booth think)'}
+          {(p.tagger?.lastLog || []).join('\n') || '(no log output yet, start a tagging run to see the booth think)'}
         </pre>
       )}
 

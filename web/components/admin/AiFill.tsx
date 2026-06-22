@@ -61,7 +61,7 @@ export function AiFill<T = unknown>({
   return (
     <div className="flex flex-col gap-2 border border-soft-border bg-overlay/40 p-3">
       <span className="field-hint">
-        Describe what you want — we&apos;ll draft the fields, then you can edit before saving.
+        Describe what you want. We&apos;ll draft the fields, then you can edit before saving.
       </span>
       <Textarea
         rows={2}

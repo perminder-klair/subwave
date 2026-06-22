@@ -463,7 +463,7 @@ function TtsRouting({ tts }: { tts: DebugTts }) {
         </span>
       </div>
       {fellBack && (
-        <V3Alert tone="error" title={`Cloud voice unavailable — speaking via ${s.engine}`}>
+        <V3Alert tone="error" title={`Cloud voice unavailable, speaking via ${s.engine}`}>
           This persona is set to <strong>{s.requested}</strong> TTS, but it isn’t usable
           (switched off, or the provider’s API key is missing). Spoken segments are coming
           out of <strong>{s.engine}</strong> instead. Fix it in Settings → TTS voice.
@@ -673,7 +673,7 @@ function DjContext({ ctx }: { ctx?: DebugContext | null }) {
             {activeShow.persona?.name ? <span className="text-muted"> · {activeShow.persona.name}</span> : null}
           </>
         ) : (
-          <span className="text-muted italic">autonomous — no show scheduled</span>
+          <span className="text-muted italic">autonomous, no show scheduled</span>
         )}
       </dd>
       <dt>Listeners</dt>

@@ -74,7 +74,7 @@ const PAYLOADS: PayloadDoc[] = [
   },
   {
     event: 'dj.link',
-    blurb: 'A between-track auto-DJ link (the light-ducked voice). The chattiest stream — most relays filter this one out.',
+    blurb: 'A between-track auto-DJ link (the light-ducked voice). The chattiest stream, so most relays filter this one out.',
     json: `{
   "event": "dj.link",
   "t": "2026-06-02T19:07:55.020Z",
@@ -103,7 +103,7 @@ const PAYLOADS: PayloadDoc[] = [
   },
   {
     event: 'test',
-    blurb: 'What the "Send test" button fires — ignores the event subscriptions so you can sanity-check a fresh hook.',
+    blurb: 'What the "Send test" button fires. It ignores the event subscriptions so you can sanity-check a fresh hook.',
     json: `{
   "event": "test",
   "t": "2026-06-02T19:00:00.000Z",
@@ -121,7 +121,7 @@ interface RecipeDoc {
 
 const RECIPES: RecipeDoc[] = [
   {
-    title: 'Discord — “now playing” via a Cloudflare Worker',
+    title: 'Discord: “now playing” via a Cloudflare Worker',
     blurb: <>Discord expects <code>{'{ content }'}</code>, not sub-wave&apos;s shape, so reshape in a tiny relay. Point a <code>track.play</code> hook at the Worker; it forwards a message to your Discord webhook.</>,
     lang: 'js',
     code: `export default {
@@ -140,7 +140,7 @@ const RECIPES: RecipeDoc[] = [
 };`,
   },
   {
-    title: 'Home Assistant — pulse a light on every track',
+    title: 'Home Assistant: pulse a light on every track',
     blurb: <>HA webhook triggers accept any JSON. Subscribe <code>track.play</code> and set the hook URL to your HA webhook (<code>…/api/webhook/&lt;id&gt;</code>).</>,
     lang: 'yaml',
     code: `# automation
@@ -154,7 +154,7 @@ action:
     data: { flash: short }`,
   },
   {
-    title: 'n8n / Pipedream — durable relay with retries',
+    title: 'n8n / Pipedream: durable relay with retries',
     blurb: <>sub-wave fires once with no retry queue. When delivery matters, put a workflow in front: add a Webhook node, subscribe the events you need, and branch on the event name.</>,
     lang: 'text',
     code: `Webhook node  →  Switch on {{ $json.event }}
@@ -179,12 +179,12 @@ function ExamplesSection() {
   return (
     <Card
       title="Payloads & recipes"
-      sub="reference — what each event sends, and how to wire it"
+      sub="reference: what each event sends, and how to wire it"
     >
       <div className="text-[12px] leading-[1.6] text-muted">
         Every payload is JSON, fire-and-forget, with <code>event</code> and an ISO <code>t</code> timestamp.
         Most targets want a different shape than sub-wave emits, so point hooks at a relay that reshapes
-        the body — these examples do exactly that.
+        the body. The examples below do exactly that.
       </div>
 
       <div className="caption mt-4 mb-1.5">Event payloads</div>
@@ -291,7 +291,7 @@ export default function WebhooksPanel() {
             Pipe station events into other systems.
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            Each row POSTs a JSON event to <code>url</code> the moment it happens — no retry queue, no buffer.
+            Each row POSTs a JSON event to <code>url</code> the moment it happens. No retry queue, no buffer.
             Best paired with a relay like a Cloudflare Worker or n8n. See
             <code> controller/src/routes/webhooks.ts </code> for the payload shapes.
           </div>
@@ -363,7 +363,7 @@ export default function WebhooksPanel() {
                 <Label className="caption">Authorization header (optional)</Label>
                 <Input
                   value={h.authHeader === 'set' ? '' : h.authHeader}
-                  placeholder={h.authHeader === 'set' ? '(stored — leave blank to keep)' : 'Bearer …'}
+                  placeholder={h.authHeader === 'set' ? '(stored, leave blank to keep)' : 'Bearer …'}
                   onChange={e => update({ authHeader: e.target.value })}
                   spellCheck={false}
                 />

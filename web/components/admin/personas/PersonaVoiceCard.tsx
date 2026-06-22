@@ -98,8 +98,8 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                 </Select>
                 <div className="field-hint">
                   Piper is fast, local, and keyless. Drop a voice’s <code>.onnx</code> and its{' '}
-                  <code>.onnx.json</code> manifest into <code>state/voices/</code> on the host — the
-                  same files Home Assistant uses — and they’ll show up here. Leave on the built-in
+                  <code>.onnx.json</code> manifest into <code>state/voices/</code> on the host (the
+                  same files Home Assistant uses) and they’ll show up here. Leave on the built-in
                   default if you don’t have any.
                 </div>
               </div>
@@ -137,7 +137,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
               <div className="field max-w-[360px]">
                 {!cbAvailable && (
                   <div className="mb-2.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
-                    Chatterbox isn’t currently available — it lives in the optional{' '}
+                    Chatterbox isn’t currently available. It lives in the optional{' '}
                     <code>tts-heavy</code> sidecar. Start it with{' '}
                     <code>docker compose --profile tts-heavy up -d</code> (or set{' '}
                     <code>COMPOSE_PROFILES=tts-heavy</code> in <code>.env</code>).
@@ -185,7 +185,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
               <div className="field max-w-[360px]">
                 {!ptAvailable && (
                   <div className="mb-2.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
-                    PocketTTS isn’t currently available — it lives in the same optional{' '}
+                    PocketTTS isn’t currently available. It lives in the same optional{' '}
                     <code>tts-heavy</code> sidecar as Chatterbox. Start it with{' '}
                     <code>docker compose --profile tts-heavy up -d</code> (or set{' '}
                     <code>COMPOSE_PROFILES=tts-heavy</code> in <code>.env</code>).
@@ -196,7 +196,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                 {ptAvailable && ptCloning === false && usingClone && (
                   <div className="mb-2.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
                     Voice <strong>cloning is unavailable</strong> in this build, so this
-                    cloned voice won’t play — PocketTTS reverts to a built-in voice. The
+                    cloned voice won’t play; PocketTTS reverts to a built-in voice. The
                     cloning model (<code>kyutai/pocket-tts</code>) is gated on Hugging Face:
                     accept its terms, then set <code>HF_TOKEN</code> in your <code>.env</code>{' '}
                     and restart <code>tts-heavy</code>. Built-in voices below work without a token.
@@ -218,7 +218,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                     {customVoices.length > 0 && (
                       <SelectGroup>
                         <SelectLabel>
-                          Custom (cloned){ptCloning === false ? ' — cloning unavailable' : ''}
+                          Custom (cloned){ptCloning === false ? ', cloning unavailable' : ''}
                         </SelectLabel>
                         {customVoices.map(v => (
                           <SelectItem key={v} value={v}>{v}</SelectItem>
@@ -239,7 +239,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                 <div className="field-hint">
                   CPU-only, ~6× real-time. Built-in voices cover English, French, German,
                   Italian, Spanish and Portuguese. Drop a ~5s WAV into{' '}
-                  <code>state/voices/</code> to clone a voice — it’ll appear under
+                  <code>state/voices/</code> to clone a voice; it’ll appear under
                   <em> Custom</em> on next reload (cloning needs <code>HF_TOKEN</code>; see above).
                 </div>
               </div>
@@ -293,7 +293,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                           onChange={(e: ChangeEvent<HTMLInputElement>) => updateTts({ voice: e.target.value })}
                         />
                         <div className="field-hint">
-                          Server-specific — Chatterbox cloning ref name, Qwen3
+                          Server-specific: Chatterbox cloning ref name, Qwen3
                           speaker id, etc. Leave blank to let the server pick.
                         </div>
                       </>

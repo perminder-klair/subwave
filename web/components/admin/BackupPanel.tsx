@@ -113,7 +113,7 @@ export default function BackupPanel() {
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
             One zip with your personas, DJ prompt, LLM/TTS settings, shows &amp; schedule,
             the mood/tag database, and operator media (jingles, SFX, voices, themes, skills).
-            API keys are <strong>redacted</strong> — the file is safe to store and share, and a
+            API keys are <strong>redacted</strong>, so the file is safe to store and share, and a
             restore never wipes the keys already set on the target station. Navidrome
             credentials and Icecast secrets are host-specific and stay put.
           </div>
@@ -148,7 +148,7 @@ export default function BackupPanel() {
             {result.restored?.length ? result.restored.join(', ') : '(nothing)'}
             {result.requiresRestart && (
               <div className="mt-2 flex items-center gap-2">
-                <span className="text-muted">Mixer settings changed — restart to apply.</span>
+                <span className="text-muted">Mixer settings changed. Restart to apply.</span>
                 <Btn sm tone="danger" onClick={restartMixer} disabled={restarting}>
                   {restarting ? 'Restarting…' : 'Restart mixer'}
                 </Btn>

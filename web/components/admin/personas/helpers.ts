@@ -45,7 +45,7 @@ export async function fileToAvatarDataUrl(file: File): Promise<string> {
     throw new Error('please pick a PNG, JPEG, or WebP image');
   }
   if (file.size > 12 * 1024 * 1024) {
-    throw new Error('image is over 12 MB — pick something smaller');
+    throw new Error('image is over 12 MB, pick something smaller');
   }
   const bitmap = await createImageBitmap(file);
   try {

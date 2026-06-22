@@ -178,7 +178,7 @@ export default function SkillsPanel() {
       const j = (await r.json().catch(() => ({}))) as SkillToggleResponse & { custom?: number };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       if (Array.isArray(j.skills)) setSkills(j.skills);
-      notify.ok(`Rescanned — ${j.custom ?? 0} custom skill${j.custom === 1 ? '' : 's'} loaded`);
+      notify.ok(`Rescanned, ${j.custom ?? 0} custom skill${j.custom === 1 ? '' : 's'} loaded`);
     } catch (e) {
       notify.err(`Rescan failed: ${errorMessage(e)}`);
     } finally { setRescanning(false); }
@@ -294,19 +294,19 @@ export default function SkillsPanel() {
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
             Each skill is an autonomous segment. A skill fires only when it is enabled here
-            <strong> and</strong> assigned to the persona on air — set per-persona assignments
+            <strong> and</strong> assigned to the persona on air. Set per-persona assignments
             on the Personas page. “Run now” is an operator override and ignores both.
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            The built-in skills are editable too — hit <strong>Edit</strong> to change a skill&apos;s
+            The built-in skills are editable too. Hit <strong>Edit</strong> to change a skill&apos;s
             brief, cooldown, or which real-world context (time, weather…) it may mention
             (and, for News, its feed URL). Edits are saved to
             <code> state/skills/&lt;kind&gt;/SKILL.md</code>.
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
             Drop your own skills into <code>state/skills/&lt;name&gt;/SKILL.md</code> and hit
-            <strong> Rescan</strong>. Custom skills arrive <strong>disabled</strong> — review,
-            then enable them before they can air.
+            <strong> Rescan</strong>. Custom skills arrive <strong>disabled</strong>, so review
+            them, then enable them before they can air.
           </div>
           <a
             href="/manual/skills"
@@ -353,7 +353,7 @@ export default function SkillsPanel() {
               <V3Alert tone="error" title="API key not set">
                 This skill needs the <code>{s.requiresKey || 'required API key'}</code> environment
                 variable set in <code>.env</code>. Until then it stays inert and never
-                fires autonomously — even when enabled.
+                fires autonomously, even when enabled.
                 {s.keyUrl && (
                   <>
                     {' '}

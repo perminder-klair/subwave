@@ -359,7 +359,7 @@ export default function DashPanel() {
       });
       const j = (await r.json().catch(() => ({}))) as ActResponse;
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      notify.ok(j.spoken ? `on air: “${j.spoken}”` : `${label} — done`);
+      notify.ok(j.spoken ? `on air: “${j.spoken}”` : `${label} done`);
       return j;
     } catch (e) {
       notify.err(`${label}: ${errorMessage(e)}`);
@@ -450,7 +450,7 @@ export default function DashPanel() {
         <div className="grid grid-rows-[auto_1fr] gap-4">
           <Card title="Queue" sub={`${upcoming.length} upcoming`} bodyClass="px-3.5 py-1">
             {upcoming.length === 0 ? (
-              <div className="py-2.5 text-muted italic">queue empty — auto-playlist fallback</div>
+              <div className="py-2.5 text-muted italic">queue empty, auto-playlist fallback</div>
             ) : (
               upcoming.slice(0, 8).map((t, i) => (
                 <div className="track-row" key={i}>
@@ -512,7 +512,7 @@ export default function DashPanel() {
               placeholder={
                 sayMode === 'raw'
                   ? 'Exact words the DJ will speak, verbatim…'
-                  : 'An instruction or topic — the DJ writes it in persona…'
+                  : 'An instruction or topic. The DJ writes it in persona…'
               }
             />
             <div className="mt-2.5 flex flex-wrap items-center gap-3.5">
@@ -607,7 +607,7 @@ export default function DashPanel() {
         }
       >
         {connErr ? (
-          <div className="text-muted italic">can’t reach Icecast admin — {connErr}</div>
+          <div className="text-muted italic">can’t reach Icecast admin: {connErr}</div>
         ) : !conns ? (
           <div className="text-muted italic">loading…</div>
         ) : conns.connections.length === 0 ? (
@@ -647,7 +647,7 @@ export default function DashPanel() {
                       {c.connections && c.connections > 1 ? (
                         <span
                           className="ml-1.5 text-[10px] font-bold text-muted"
-                          title={`${c.connections} connections — Safari opens 2 sockets per listener`}
+                          title={`${c.connections} connections (Safari opens 2 sockets per listener)`}
                         >
                           ×{c.connections}
                         </span>
@@ -818,7 +818,7 @@ function RequestsCard({
       }
     >
       {err ? (
-        <div className="text-muted italic">can’t load requests — {err}</div>
+        <div className="text-muted italic">can’t load requests: {err}</div>
       ) : !requests ? (
         <div className="text-muted italic">loading…</div>
       ) : requests.length === 0 ? (

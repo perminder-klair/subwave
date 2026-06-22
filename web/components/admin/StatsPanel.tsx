@@ -636,7 +636,7 @@ export default function StatsPanel() {
           <span className="field-hint italic">loading…</span>
         ) : (audSessions ?? 0) === 0 ? (
           <span className="field-hint italic">
-            no sessions recorded yet — sources appear as listeners arrive
+            no sessions recorded yet, sources appear as listeners arrive
           </span>
         ) : (
           <div className="grid gap-0">
@@ -930,7 +930,7 @@ export default function StatsPanel() {
             <div className="p-3.5">
               {!systemRes.dockerAvailable ? (
                 <span className="field-hint italic">
-                  container stats unavailable — mount /var/run/docker.sock (read-only)
+                  container stats unavailable, mount /var/run/docker.sock (read-only)
                   into the controller to enable
                 </span>
               ) : sysContainers.length === 0 ? (

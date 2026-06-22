@@ -153,7 +153,7 @@ export default function PersonasPanel() {
     // the entry tucked at the end of the roster.
     scrollToEditorRef.current = true;
     setFocusIdx(newIdx);
-    notify.ok('New persona added — fill in its details, then Save persona.');
+    notify.ok('New persona added. Fill in its details, then Save persona.');
   };
   const removePersona = (i: number) =>
     setForm(f => {
@@ -286,7 +286,7 @@ export default function PersonasPanel() {
       });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      notify.ok('personas saved — applies on the next spoken line');
+      notify.ok('personas saved, applies on the next spoken line');
       await load();
     } catch (e) {
       notify.err(errorMessage(e));

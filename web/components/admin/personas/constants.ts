@@ -7,7 +7,7 @@ export const FREQUENCIES = [
 ];
 export const SCRIPT_LENGTHS = [
   { id: 'concise',  label: 'Concise',  desc: 'Standard one-to-four sentence segments. The default.' },
-  { id: 'extended', label: 'Extended', desc: 'Longer, storytelling segments — roughly double the length across intros, links, weather and idents.' },
+  { id: 'extended', label: 'Extended', desc: 'Longer, storytelling segments. Roughly double the length across intros, links, weather and idents.' },
 ];
 // Personality dials, 0–10, default 5. They map to three prompt bands server-side
 // (settings.personaToneDirectives): 0–3 low, 7–10 high, 4–6 neutral (nothing

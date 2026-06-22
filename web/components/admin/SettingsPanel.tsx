@@ -52,15 +52,15 @@ const LLM_ENV_VARS: Record<string, string> = {
 };
 
 const LLM_PROVIDER_LABELS: Record<string, string> = {
-  ollama: 'Ollama — local/cloud',
-  locca: 'locca — local llama.cpp (host)',
-  'openai-compatible': 'OpenAI-compatible — llama.cpp, vLLM, LM Studio',
-  anthropic: 'Anthropic — Claude',
-  openai: 'OpenAI — GPT',
-  google: 'Google — Gemini',
+  ollama: 'Ollama (local/cloud)',
+  locca: 'locca (local llama.cpp, host)',
+  'openai-compatible': 'OpenAI-compatible (llama.cpp, vLLM, LM Studio)',
+  anthropic: 'Anthropic (Claude)',
+  openai: 'OpenAI (GPT)',
+  google: 'Google (Gemini)',
   deepseek: 'DeepSeek',
-  openrouter: 'OpenRouter — multi-vendor aggregator',
-  gateway: 'Vercel AI Gateway — multi-vendor aggregator',
+  openrouter: 'OpenRouter (multi-vendor aggregator)',
+  gateway: 'Vercel AI Gateway (multi-vendor aggregator)',
 };
 
 const llmProviderLabel = (id: string | undefined): string =>
@@ -90,8 +90,8 @@ const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = {
 };
 
 const SEARCH_PROVIDER_LABELS: Record<string, string> = {
-  duckduckgo: 'DuckDuckGo — free, no key',
-  tavily: 'Tavily — paid web search',
+  duckduckgo: 'DuckDuckGo (free, no key)',
+  tavily: 'Tavily (paid web search)',
 };
 
 const searchProviderLabel = (id: string | undefined): string =>
@@ -494,7 +494,7 @@ export default function SettingsPanel() {
       const j = (await r.json().catch(() => ({}))) as { error?: string; requiresRestart?: boolean };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       if (j.requiresRestart) setPendingRestart(true);
-      notify.ok(j.requiresRestart ? 'saved — restart the mixer to apply' : 'saved');
+      notify.ok(j.requiresRestart ? 'saved, restart the mixer to apply' : 'saved');
       await refresh();
     } catch (e) {
       notify.err(errorMessage(e));
@@ -508,7 +508,7 @@ export default function SettingsPanel() {
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setPendingRestart(false);
-      notify.ok('mixer restarting — give it a few seconds');
+      notify.ok('mixer restarting, give it a few seconds');
     } catch (e) {
       notify.err(errorMessage(e));
     } finally { setBusy(false); }
@@ -520,7 +520,7 @@ export default function SettingsPanel() {
       const r = await adminFetch('/stream-stop', { method: 'POST' });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      notify.ok('stream stopped — station is off air');
+      notify.ok('stream stopped, station is off air');
       await refresh();
     } catch (e) {
       notify.err(errorMessage(e));
@@ -533,7 +533,7 @@ export default function SettingsPanel() {
       const r = await adminFetch('/stream-start', { method: 'POST' });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      notify.ok('stream started — station is on air');
+      notify.ok('stream started, station is on air');
       await refresh();
     } catch (e) {
       notify.err(errorMessage(e));
@@ -820,7 +820,7 @@ export default function SettingsPanel() {
                   </div>
                   <div className="field-hint">
                     Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
-                    Saving flags a pending restart — apply it with the Mixer card below.
+                    Saving flags a pending restart. Apply it with the Mixer card below.
                   </div>
                 </div>
               </Card>
@@ -859,7 +859,7 @@ export default function SettingsPanel() {
                     </div>
                     <div className="field-hint">
                       The archive runs a second MP3 encoder 24/7 and is the biggest constant
-                      CPU cost in the broadcast container — turn it off if you don't replay
+                      CPU cost in the broadcast container. Turn it off if you don't replay
                       the hourly tapes (issue #137).
                     </div>
                   </div>
@@ -910,7 +910,7 @@ export default function SettingsPanel() {
             )}
 
             {form && (
-              <Card title="Opus stream" sub="/stream.opus — Ogg-Opus 96 kbps">
+              <Card title="Opus stream" sub="/stream.opus (Ogg-Opus 96 kbps)">
                 <div className="field">
                   <div className="flex items-center gap-2">
                     <Label>Serve the secondary Opus mount</Label>
@@ -944,7 +944,7 @@ export default function SettingsPanel() {
                     Firefox stay on the universal MP3 mount); for them it&apos;s equal-or-better
                     quality at ~half the bandwidth, but it adds a continuous second encoder + a
                     44.1→48 kHz resample. Turn it on if you have Chrome/Edge listeners and want
-                    the bandwidth saving — the mandatory <code>/stream.mp3</code> mount serves
+                    the bandwidth saving. The mandatory <code>/stream.mp3</code> mount serves
                     everyone either way.
                   </div>
                 </div>
@@ -983,7 +983,7 @@ export default function SettingsPanel() {
         open={confirmStop}
         onOpenChange={setConfirmStop}
         title="Stop stream"
-        description="Take the station off air? The Icecast mount disconnects — every current listener is dropped and new listeners get nothing until you start the stream again."
+        description="Take the station off air? The Icecast mount disconnects. Every current listener is dropped and new listeners get nothing until you start the stream again."
         confirmLabel="stop stream"
         danger
         onConfirm={stopStream}
@@ -1114,7 +1114,7 @@ function KeyStatus({ envVar, present }: KeyStatusProps) {
         </span>
         <span className="text-[11px] leading-[1.5] text-muted">
           {present ? (
-            <>The controller has <code>{envVar}</code> set — this provider is ready to use.</>
+            <>The controller has <code>{envVar}</code> set, so this provider is ready to use.</>
           ) : (
             <>
               Set <code>{envVar}</code> in <code>.env</code> and restart the controller.
@@ -1219,7 +1219,7 @@ function HeavyEngineSetupGuide({ engine, buildArg }: { engine: 'Chatterbox' | 'P
       <p className="mt-2 text-[11px] leading-[1.55] text-muted">
         {engine} is a heavy PyTorch engine, so the controller image doesn’t carry it.
         It ships in the optional <code>tts-heavy</code> sidecar. Until that’s running,
-        every segment routed here <strong>falls back to Piper</strong> — the DJ never
+        every segment routed here <strong>falls back to Piper</strong>. The DJ never
         goes silent, it just won’t use this voice.
       </p>
 
@@ -1242,7 +1242,7 @@ function HeavyEngineSetupGuide({ engine, buildArg }: { engine: 'Chatterbox' | 'P
         </li>
         <li>
           Give it ~30 s to pull the model and pass its health check, then reload this
-          page — the warning clears once the controller can reach the sidecar.
+          page. The warning clears once the controller can reach the sidecar.
         </li>
       </ol>
 
@@ -1335,21 +1335,21 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
 
   let activeDetail: ReactNode = null;
   if (savedEngine === 'piper') {
-    activeDetail = <>Bundled — no key, no config. Always the safe fallback.</>;
+    activeDetail = <>Bundled, no key, no config. Always the safe fallback.</>;
   } else if (savedEngine === 'kokoro') {
     activeDetail = <>Voice <code>{savedKokoroVoice || '—'}</code>. Falls back to Piper if the model isn’t loaded.</>;
   } else if (savedEngine === 'chatterbox') {
     activeDetail = <>
-      Reference <code>{savedChatterboxVoice || 'built-in'}</code> — voice cloning + paralinguistic tags. Falls back to Piper if the worker isn’t installed.
+      Reference <code>{savedChatterboxVoice || 'built-in'}</code>, with voice cloning + paralinguistic tags. Falls back to Piper if the worker isn’t installed.
     </>;
   } else if (savedEngine === 'pocket-tts') {
     activeDetail = <>
-      Voice <code>{savedPocketTtsVoice || 'alba'}</code> — CPU-only, ~6× real-time, multilingual built-in voices. Falls back to Piper if the worker isn’t installed.
+      Voice <code>{savedPocketTtsVoice || 'alba'}</code>. CPU-only, ~6× real-time, multilingual built-in voices. Falls back to Piper if the worker isn’t installed.
     </>;
   } else if (savedEngine === 'cloud') {
     activeDetail = <>
       {savedCloud.provider || '—'} · model <code>{savedCloud.model || '—'}</code>
-      {savedCloud.voice ? <> · voice <code>{savedCloud.voice}</code></> : null}
+      {savedCloud.voice ? <> · voice <code>{savedCloud.voice}</code></> : null}.
     </>;
   }
   const savedEngineMissing = available[savedEngine] === false;
@@ -1360,7 +1360,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
         eyebrow="tts voice"
         title="Pick a voice engine, then configure it."
         sub={<>
-          Every spoken segment is voiced by the <strong>persona on air</strong> — set each
+          Every spoken segment is voiced by the <strong>persona on air</strong>. Set each
           persona’s engine and voice on the Personas page. Here you pick the station’s
           default engine (used for jingles and as the fallback) and configure whichever
           one you choose.
@@ -1382,9 +1382,9 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                 Default engine now · {savedEngineLabel}
               </span>
               <span className="text-[11px] leading-[1.5] text-muted">
-                {activeDetail} — {ttsDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}
+                {activeDetail} {ttsDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}
                 {savedEngineMissing && (
-                  <span className="text-[var(--danger)]"> This engine isn’t installed in this build — segments fall back to Piper. See the setup steps below.</span>
+                  <span className="text-[var(--danger)]"> This engine isn’t installed in this build, so segments fall back to Piper. See the setup steps below.</span>
                 )}
               </span>
             </div>
@@ -1403,8 +1403,8 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
             />
             <div className="field-hint">
               {ttsDirty
-                ? <>Engine changed — hit “Save TTS settings” below to make <strong>{formEngineLabel}</strong> the new default.</>
-                : <>The station default — renders jingles and is the fallback when a persona’s own engine fails. Per-segment voice still comes from the persona on air.</>}
+                ? <>Engine changed. Hit “Save TTS settings” below to make <strong>{formEngineLabel}</strong> the new default.</>
+                : <>The station default. Renders jingles and is the fallback when a persona’s own engine fails. Per-segment voice still comes from the persona on air.</>}
             </div>
           </div>
 
@@ -1412,7 +1412,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
           <>
             <div className="field mt-4">
               <div className="field-hint">
-                Piper is bundled with the controller — fast, lightweight, and always
+                Piper is bundled with the controller: fast, lightweight, and always
                 available. Nothing else to configure.
               </div>
             </div>
@@ -1426,7 +1426,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
               <Label>Kokoro voice</Label>
               {available.kokoro === false && (
                 <div className="field-hint text-[var(--danger)]">
-                  Kokoro is not installed in this build — it will fall back to Piper.
+                  Kokoro is not installed in this build, so it will fall back to Piper.
                 </div>
               )}
               {(data.tts?.kokoroVoices?.length || 0) > 0 ? (
@@ -1494,7 +1494,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                   No reference voices found in{' '}
                   <code>state/voices/</code>{' '}
                   (legacy <code>state/chatterbox-voices/</code> also empty). The engine will
-                  use its built-in default voice — drop a 5-second WAV into that directory
+                  use its built-in default voice. Drop a 5-second WAV into that directory
                   to enable cloning.
                 </div>
               )}
@@ -1579,7 +1579,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                   Any OpenAI-compatible TTS server (Chatterbox, Qwen3 TTS,
                   VibeVoice, …) that exposes <code>/v1/audio/speech</code>,
                   including the <code>/v1</code> suffix. Must be reachable from the
-                  controller container — use the host’s LAN or Tailscale IP, not
+                  controller container. Use the host’s LAN or Tailscale IP, not
                   <code>127.0.0.1</code>.
                 </div>
               </div>
@@ -1600,7 +1600,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                 />
                 <div className="field-hint">
                   {isCompat
-                    ? <>Model id exactly as the server reports it at <code>/v1/models</code> — required.</>
+                    ? <>Model id exactly as the server reports it at <code>/v1/models</code>, required.</>
                     : <>e.g. “gpt-4o-mini-tts” (OpenAI) or “eleven_flash_v2_5” (ElevenLabs).</>}
                 </div>
               </div>
@@ -1621,7 +1621,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                         }
                       />
                       <div className="field-hint">
-                        Server-specific — Chatterbox cloning ref name, Qwen3
+                        Server-specific: Chatterbox cloning ref name, Qwen3
                         speaker id, etc. Leave blank to let the server pick its
                         own default.
                       </div>
@@ -1676,8 +1676,8 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
             )}
             {isCompat && (
               <div className="field-hint mt-3.5">
-                Most self-hosted servers accept any non-empty API key — no env
-                var required.
+                Most self-hosted servers accept any non-empty API key, so no env
+                var is required.
               </div>
             )}
             <TtsGainField engineId="cloud" form={form} setForm={setForm} />
@@ -1739,7 +1739,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
       <SectionHeader
         eyebrow="llm provider"
         title="The model that writes scripts and picks tracks."
-        sub="Ollama runs on the homelab box and needs no key; the cloud providers are opt-in. Switching here reroutes every LLM call — no redeploy."
+        sub="Ollama runs on the homelab box and needs no key; the cloud providers are opt-in. Switching here reroutes every LLM call, no redeploy."
         metrics={[{ n: String((data.llm?.providers || []).length), l: 'providers' }]}
         manualHref="/manual/llm"
       />
@@ -1754,7 +1754,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
               </span>
               <span className="text-[11px] leading-[1.5] text-muted">
                 {activeModel
-                  ? <>Model <code>{activeModel}</code> — every LLM call goes here. {llmDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}</>
+                  ? <>Model <code>{activeModel}</code>, every LLM call goes here. {llmDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}</>
                   : <>No model is set for this provider yet.</>}
               </span>
             </div>
@@ -1780,8 +1780,8 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
             </Select>
             <div className="field-hint">
               {llmDirty
-                ? 'Provider changed — hit “Save LLM provider” below to route every call here.'
-                : 'The provider every LLM call routes through. Switching reroutes instantly on save — no redeploy.'}
+                ? 'Provider changed. Hit “Save LLM provider” below to route every call here.'
+                : 'The provider every LLM call routes through. Switching reroutes instantly on save, no redeploy.'}
             </div>
           </div>
 
@@ -1815,8 +1815,8 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                       : form.llm.provider === 'deepseek'
                         ? 'DeepSeek model id. Leave blank for the “deepseek-v4-flash” default.'
                         : form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca'
-                          ? 'Model id exactly as the server reports it at /v1/models — required.'
-                          : 'Model id for the chosen provider — required.'}
+                          ? 'Model id exactly as the server reports it at /v1/models, required.'
+                          : 'Model id for the chosen provider, required.'}
             </div>
           </div>
 
@@ -1834,7 +1834,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
               <div className="field-hint">
                 Any OpenAI-compatible server (llama.cpp, vLLM, LM Studio…),
                 including the <code>/v1</code> suffix. Must be reachable from the
-                controller container — use the host’s LAN or Tailscale IP, not
+                controller container. Use the host’s LAN or Tailscale IP, not
                 <code>127.0.0.1</code>.
               </div>
             </div>
@@ -1904,7 +1904,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
               <div className="field-hint">
                 Tokens of context for <strong>local</strong> Ollama models.
                 Ollama&apos;s own default is 4096, which is too small for the DJ
-                agent — the prompt gets truncated and the model fails to pick a
+                agent: the prompt gets truncated and the model fails to pick a
                 track (the &ldquo;agent did not call the done tool&rdquo; error).
                 16384 is a safe default for a 7&ndash;9B model on a 12GB GPU;
                 raise it for reasoning models, lower it on tight VRAM. Set 0 to
@@ -1928,8 +1928,8 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
             <div>
               <div className="text-[13px] font-bold">Use a backup LLM</div>
               <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
-                When the primary host can&apos;t be reached — connection refused,
-                DNS failure, timeout (e.g. a GPU box that&apos;s powered off) — the
+                When the primary host can&apos;t be reached (connection refused,
+                DNS failure, timeout, e.g. a GPU box that&apos;s powered off), the
                 call is retried once against this backup, then routes straight back
                 to the primary on the next call. A primary that&apos;s up but busy
                 (rate-limited or erroring) is <em>not</em> failed over. Heavy work
@@ -1970,7 +1970,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                   </SelectContent>
                 </Select>
                 <div className="field-hint">
-                  The provider to fall back to. Can differ from the primary — e.g.
+                  The provider to fall back to. Can differ from the primary, e.g.
                   primary on a self-hosted box, backup on always-on Ollama.
                 </div>
               </div>
@@ -2010,7 +2010,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                   />
                   <div className="field-hint">
                     OpenAI-compatible server URL including the <code>/v1</code>
-                    suffix — required for this provider.
+                    suffix, required for this provider.
                   </div>
                 </div>
               )}
@@ -2094,14 +2094,14 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
             <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
               When off, the picker tells the model to skip or minimize its
               internal thinking step. Wired across providers that expose a
-              thinking knob — Ollama, openai-compatible (Qwen3), Gemini 2.5/3.x,
+              thinking knob: Ollama, openai-compatible (Qwen3), Gemini 2.5/3.x,
               OpenAI o-series and gpt-5, Claude (adaptive thinking) and DeepSeek
               V4. DJ scripts and structured picks are short, and an uncapped
               thought chain just balloons latency and cost. Leave off unless
               you&apos;re running a model that genuinely needs it. Note: on
               Claude and DeepSeek the picker always suppresses thinking for its
-              structured/tool calls — those APIs reject forced tool calls while
-              thinking — so there this toggle affects only the free-text DJ
+              structured/tool calls, since those APIs reject forced tool calls while
+              thinking, so there this toggle affects only the free-text DJ
               lines.
             </div>
           </div>
@@ -2123,7 +2123,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
             <div className="text-[13px] font-bold">Agentic picker</div>
             <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
               When on, the next-track picker is a tool-using agent that explores the library
-              itself. Needs a model that handles multi-step tool calls well — leave off for
+              itself. Needs a model that handles multi-step tool calls well. Leave off for
               small local models.
             </div>
           </div>
@@ -2191,8 +2191,8 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
           <div>
             <div className="text-[13px] font-bold">Pause DJ when empty</div>
             <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
-              When on, the DJ stops making LLM calls — track picks, links, station
-              IDs, hourly checks, segments and listener requests — whenever Icecast
+              When on, the DJ stops making LLM calls (track picks, links, station
+              IDs, hourly checks, segments and listener requests) whenever Icecast
               reports zero listeners. The stream keeps playing from the auto
               playlist, and the DJ resumes the moment someone tunes back in.
             </div>
@@ -2210,7 +2210,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
       </Card>
 
       <SaveBar
-        note={`Active model: ${data.llm?.active}. Applies to the next LLM call — no restart needed.`}
+        note={`Active model: ${data.llm?.active}. Applies to the next LLM call, no restart needed.`}
         busy={busy}
         onSave={save}
         saveLabel="Save LLM provider"
@@ -2250,9 +2250,9 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
         title="Where the DJ gets live facts about the artist on air."
         sub={<>
           The segment director can air a single line of recent artist context between
-          tracks — when the active backend returns something worth saying. DuckDuckGo
+          tracks, when the active backend returns something worth saying. DuckDuckGo
           is free and keyless; Tavily is paid but returns full web results. Switching
-          here reroutes the next call — no restart.
+          here reroutes the next call, no restart.
         </>}
         metrics={[{ n: String(providers.length), l: 'providers' }]}
       />
@@ -2293,8 +2293,8 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
             </Select>
             <div className="field-hint">
               {provider === 'duckduckgo'
-                ? 'DuckDuckGo Instant Answer — free, no key. Useful for definitions and well-known entities; silent otherwise. The segment director treats silence as a valid outcome.'
-                : 'Tavily — paid web search with full results and an answer summary. Needs an API key.'}
+                ? 'DuckDuckGo Instant Answer, free and keyless. Useful for definitions and well-known entities; silent otherwise. The segment director treats silence as a valid outcome.'
+                : 'Tavily, paid web search with full results and an answer summary. Needs an API key.'}
             </div>
           </div>
 
@@ -2313,7 +2313,7 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
                 />
                 <div className="field-hint">
                   Stored alongside the other admin settings. Falls back to
-                  <code> SEARCH_API_KEY</code> in <code>.env</code> when blank — set
+                  <code> SEARCH_API_KEY</code> in <code>.env</code> when blank. Set
                   one or the other, not both.
                 </div>
               </div>
@@ -2324,7 +2324,7 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
       </Card>
 
       <SaveBar
-        note="Applies to the next web-search call — no restart needed."
+        note="Applies to the next web-search call, no restart needed."
         busy={busy}
         onSave={save}
         saveLabel="Save web search"
@@ -2448,7 +2448,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
     try {
       const r = await adminFetch('/tag-library', { method: 'POST' });
       const j = await r.json().catch(() => ({}));
-      if (r.ok) notify.ok('tagging started — watch progress on the Library tab');
+      if (r.ok) notify.ok('tagging started, watch progress on the Library tab');
       else notify.err(j.error || 'could not start the tagger');
     } catch (err) {
       notify.err(errorMessage(err));
@@ -2483,7 +2483,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
         <p className="max-w-[560px] text-[12px] leading-[1.6] text-muted">
           Auto-tagging reads each track once and labels its mood + energy so the DJ
           picks tracks that fit the room. It needs a small <strong>embedding</strong>{' '}
-          model — separate from your chat LLM. Set it up below, hit{' '}
+          model, separate from your chat LLM. Set it up below, hit{' '}
           <strong>Test</strong>, then run the tagger.
         </p>
         {probing || detecting ? (
@@ -2548,7 +2548,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
             </Select>
             <div className="field-hint">
               Where the text embeddings come from. Default follows your LLM
-              provider — Ollama-local users get <code>nomic-embed-text</code> free.
+              provider, so Ollama-local users get <code>nomic-embed-text</code> free.
               Anthropic has no first-party embedding API; if your LLM is Anthropic,
               pick OpenAI here (needs <code>OPENAI_API_KEY</code>).
               {' '}Effective: <code>{llmProviderLabel(effectiveProvider)}</code>.
@@ -2567,11 +2567,11 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
                 </div>
                 <p className="mt-2 text-[11px] leading-[1.55] text-muted">
                   {e.provider ? (
-                    <><code>{llmProviderLabel(effectiveProvider)}</code> is a chat-only provider — it has no embeddings endpoint, so the tagger can’t use it.</>
+                    <><code>{llmProviderLabel(effectiveProvider)}</code> is a chat-only provider, with no embeddings endpoint, so the tagger can’t use it.</>
                   ) : (
                     <>“Follow LLM provider” resolves to <code>{llmProviderLabel(llmProvider)}</code>, which is chat-only and has no embeddings endpoint.</>
                   )}{' '}
-                  Pick a real embedding provider above — <strong>Ollama</strong> is local
+                  Pick a real embedding provider above. <strong>Ollama</strong> is local
                   and free (<code>nomic-embed-text</code>, auto-pulled on first run), or
                   use OpenAI / Google / locca. Your DJ stays on{' '}
                   <code>{llmProviderLabel(llmProvider)}</code>.
@@ -2600,8 +2600,8 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
             />
             <div className="field-hint">
               Leave blank for the sensible default per provider. If you change
-              this on a tagged library, the next run will reject the new dim —
-              hit <strong>Re-seed</strong> on the Library tab (or run{' '}
+              this on a tagged library, the next run will reject the new dim.
+              Hit <strong>Re-seed</strong> on the Library tab (or run{' '}
               <code>--reseed</code>) to drop and rebuild the vectors.
             </div>
             {embedSuggestions.length > 0 && (
@@ -2636,13 +2636,13 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
                 className="max-w-[360px]"
               />
               <div className="field-hint">
-                Embeddings need a <strong>dedicated</strong> server — one
+                Embeddings need a <strong>dedicated</strong> server: one
                 llama.cpp / locca process can&apos;t serve both chat and
                 embeddings.{' '}
                 {effectiveProvider === 'locca' ? (
                   <>
                     Leave blank to use the locca embed server on its default port
-                    (<code>http://host.docker.internal:8090/v1</code>) — start it
+                    (<code>http://host.docker.internal:8090/v1</code>). Start it
                     with <code>locca embed nomic</code>. Override only for a
                     non-default port or remote host.
                   </>
@@ -2654,7 +2654,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
                     and point this at it, including the <code>/v1</code> suffix.
                   </>
                 )}
-                {' '}Must be reachable from the controller container — use the host
+                {' '}Must be reachable from the controller container. Use the host
                 LAN/Tailscale IP or <code>host.docker.internal</code>, not{' '}
                 <code>127.0.0.1</code>.
               </div>
@@ -2702,7 +2702,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
                 )}
               >
                 {probe.ok
-                  ? `✓ Producing embeddings${probe.dim ? ` (${probe.dim}-dim vectors)` : ''} — you're ready to tag.`
+                  ? `✓ Producing embeddings${probe.dim ? ` (${probe.dim}-dim vectors)` : ''}, you're ready to tag.`
                   : `✗ ${probe.message}`}
               </div>
             )}
@@ -2715,10 +2715,10 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
         <div className="grid grid-cols-[1fr_auto] items-center gap-4">
           <div className="max-w-[480px] text-[11px] leading-[1.5] text-muted">
             {taggerRunning
-              ? 'A tagging run is in progress — watch live progress on the Library tab.'
+              ? 'A tagging run is in progress, watch live progress on the Library tab.'
               : probe?.ok
-                ? 'Embeddings look good. Start the bulk tagger — it runs in the background; watch progress on the Library tab.'
-                : 'Test the embedding endpoint above first — the tagger needs a working embedding server.'}
+                ? 'Embeddings look good. Start the bulk tagger; it runs in the background, and you can watch progress on the Library tab.'
+                : 'Test the embedding endpoint above first. The tagger needs a working embedding server.'}
           </div>
           <Btn
             tone="accent"
@@ -2736,7 +2736,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
         onClick={() => setAdvancedOpen(o => !o)}
         className="mb-1 w-fit text-[11px] font-bold tracking-[0.14em] text-muted uppercase hover:text-ink"
       >
-        {advancedOpen ? '▾' : '▸'} Advanced — seed count, propagation, enrichment
+        {advancedOpen ? '▾' : '▸'} Advanced: seed count, propagation, enrichment
       </button>
       {advancedOpen && (
         <>
@@ -2871,7 +2871,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
               <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
                 Vanilla Navidrome&apos;s <code>getArtistInfo2</code> doesn&apos;t
                 surface crowd tags. Leave off unless you&apos;re running a
-                custom Navidrome that does — otherwise this just burns an HTTP
+                custom Navidrome that does. Otherwise this just burns an HTTP
                 round trip per artist for nothing.
               </div>
             </div>
@@ -2997,7 +2997,7 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
       <SectionHeader
         eyebrow="station"
         title="How the DJ identifies this radio on air."
-        sub="The station name is substituted into the DJ prompt as {station}. The location sets where the DJ thinks it broadcasts from and drives the Open-Meteo weather it reads on air. The timezone sets the clock the DJ lives on; locale controls how station times are displayed. All apply live — no mixer restart."
+        sub="The station name is substituted into the DJ prompt as {station}. The location sets where the DJ thinks it broadcasts from and drives the Open-Meteo weather it reads on air. The timezone sets the clock the DJ lives on; locale controls how station times are displayed. All apply live, no mixer restart."
         metrics={[
           { n: data.values?.station || 'SUB/WAVE', l: 'station', accent: true },
         ]}
@@ -3055,7 +3055,7 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
             />
           </div>
           <div className="field-hint">
-            Where the station broadcasts from — sets the DJ’s {'{location}'} and the Open-Meteo
+            Where the station broadcasts from. Sets the DJ’s {'{location}'} and the Open-Meteo
             weather it reads on air (current: {data.values?.weather?.locationName} @ {data.values?.weather?.lat}, {data.values?.weather?.lng}). Applies live.
           </div>
         </div>
@@ -3074,8 +3074,8 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
             <SelectTrigger className="w-[240px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectItem value="metric">Metric — °C</SelectItem>
-                <SelectItem value="imperial">Imperial — °F</SelectItem>
+                <SelectItem value="metric">Metric (°C)</SelectItem>
+                <SelectItem value="imperial">Imperial (°F)</SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>
@@ -3098,7 +3098,7 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
             <SelectTrigger className="w-[300px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectItem value="auto">Auto — server timezone ({serverTz})</SelectItem>
+                <SelectItem value="auto">Auto, server timezone ({serverTz})</SelectItem>
               </SelectGroup>
               {TZ_GROUPS.map(g => (
                 <SelectGroup key={g.region}>
@@ -3112,11 +3112,11 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
           </Select>
           {preview && (
             <div className="field-hint">
-              Station clock: <span className="mono-num">{preview}</span> in {localeLabel} — if that doesn’t match your watch, pick your zone above.
+              Station clock: <span className="mono-num">{preview}</span> in {localeLabel}. If that doesn’t match your watch, pick your zone above.
             </div>
           )}
           <div className="field-hint">
-            Drives everything the DJ derives from the clock — time-of-day moods, schedule slots,
+            Drives everything the DJ derives from the clock: time-of-day moods, schedule slots,
             hourly time checks, festival dates. Applies live. Hourly archive filenames still follow
             the server’s TZ.
           </div>
@@ -3135,8 +3135,8 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
             <SelectTrigger className="w-[260px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectItem value="en-GB">English (UK) — 24-hour</SelectItem>
-                <SelectItem value="en-US">English (US) — AM/PM</SelectItem>
+                <SelectItem value="en-GB">English (UK), 24-hour</SelectItem>
+                <SelectItem value="en-US">English (US), AM/PM</SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>
@@ -3342,7 +3342,7 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       const next = j.themes ?? [];
       setThemes(next);
-      notify.ok(`reloaded — ${next.length} theme${next.length === 1 ? '' : 's'}`);
+      notify.ok(`reloaded, ${next.length} theme${next.length === 1 ? '' : 's'}`);
     } catch (e) {
       notify.err(`Refresh failed: ${errorMessage(e)}`);
     } finally {
@@ -3433,7 +3433,7 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
           </div>
           <div className="field-hint">
             Describe a look above and we&apos;ll draft the palette, or drop a JSON
-            theme file in <code>state/themes/</code> and click <em>Refresh</em> —
+            theme file in <code>state/themes/</code> and click <em>Refresh</em>,
             no controller restart needed. The folder includes a
             <code>README.md</code> with the format and the allowed token keys.
           </div>
@@ -3635,7 +3635,7 @@ function JinglesSection({
             value={importLabel}
             maxLength={200}
             onChange={(e: ChangeEvent<HTMLInputElement>) => setImportLabel(e.target.value)}
-            placeholder="shown in the list — defaults to the file name"
+            placeholder="shown in the list, defaults to the file name"
           />
         </div>
         <div className="mt-3.5 flex items-center gap-2.5">
@@ -3785,7 +3785,7 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
             placeholder="e.g. record-scratch"
             className="max-w-[280px]"
           />
-          <div className="field-hint">A short slug the agent references — letters, numbers and dashes.</div>
+          <div className="field-hint">A short slug the agent references: letters, numbers and dashes.</div>
         </div>
         <div className="field mt-3.5">
           <Label>Description</Label>
@@ -3805,7 +3805,7 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
             onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setSfxForm(f => ({ ...f, prompt: e.target.value }))}
             placeholder='e.g. "abrupt vinyl record scratch, short and sharp"'
           />
-          <div className="field-hint">{sfxForm.prompt.length}/500 chars — describe the sound for ElevenLabs.</div>
+          <div className="field-hint">{sfxForm.prompt.length}/500 chars. Describe the sound for ElevenLabs.</div>
         </div>
         <div className="field mt-3.5">
           <Label>Duration (optional)</Label>
@@ -3834,7 +3834,7 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
         </div>
       </Card>
 
-      <Card title="Import sound effect" sub="bring your own mp3 / wav — no ElevenLabs key needed">
+      <Card title="Import sound effect" sub="bring your own mp3 / wav, no ElevenLabs key needed">
         <div className="field">
           <Label>Name</Label>
           <Input
@@ -3844,7 +3844,7 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
             placeholder="e.g. my-stinger"
             className="max-w-[280px]"
           />
-          <div className="field-hint">A short slug the agent references — letters, numbers and dashes.</div>
+          <div className="field-hint">A short slug the agent references: letters, numbers and dashes.</div>
         </div>
         <div className="field mt-3.5">
           <Label>Description</Label>
@@ -4000,7 +4000,7 @@ function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch }
         eyebrow="scrobbling"
         title="Station-wide scrobbling to Last.fm and ListenBrainz."
         sub={<>
-          Each backend is independent — pick one or both. Tracks scrobble only when at
+          Each backend is independent, pick one or both. Tracks scrobble only when at
           least one listener is tuned in to the stream. Paste credentials below; nothing
           here leaves the controller. See the <code>npm run lastfm-session</code> helper
           if you don&apos;t already have a Last.fm session key.
@@ -4112,13 +4112,13 @@ function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch }
               className="max-w-[360px]"
             />
             <div className="field-hint">
-              Cosmetic — used to label the &quot;scrobbling as&quot; status line above.
+              Cosmetic, used to label the &quot;scrobbling as&quot; status line above.
             </div>
           </div>
         </div>
 
         <SaveBar
-          note="Applies on the next track transition — no restart needed."
+          note="Applies on the next track transition, no restart needed."
           busy={busy}
           onSave={saveLastfm}
           saveLabel="Save Last.fm"
@@ -4154,8 +4154,8 @@ function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch }
               options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
             />
             <div className="field-hint">
-              ListenBrainz is the open-source alternative to Last.fm — same listener gate,
-              same eligibility rules.
+              ListenBrainz is the open-source alternative to Last.fm, with the same listener gate
+              and eligibility rules.
             </div>
           </div>
 
@@ -4203,7 +4203,7 @@ function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch }
         </div>
 
         <SaveBar
-          note="Applies on the next track transition — no restart needed."
+          note="Applies on the next track transition, no restart needed."
           busy={busy}
           onSave={saveListenbrainz}
           saveLabel="Save ListenBrainz"
