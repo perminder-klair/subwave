@@ -26,6 +26,18 @@ export interface RequestBody {
   name?: string;
 }
 
+/** Why a controller health probe failed. `network` is the catch-all for DNS,
+ *  refused connections, and TLS/certificate errors — RN's fetch collapses all
+ *  of these into a single rejected promise with no detail, so we can't tell
+ *  them apart from JS. The common "works in the browser, fails in the app" case
+ *  is a TLS chain the browser tolerates (it fetches missing intermediates via
+ *  AIA) but Android's OkHttp does not, and it lands here. `http` means we got a
+ *  response but a non-2xx status (usually /api not routed to the controller).
+ *  `timeout` is our own abort firing. */
+export type HealthResult =
+  | { ok: true }
+  | { ok: false; kind: 'timeout' | 'http' | 'network'; status?: number; message?: string };
+
 export interface StationApi {
   base: string;
   nowPlaying(signal?: AbortSignal): Promise<NowPlayingResponse>;
@@ -35,6 +47,9 @@ export interface StationApi {
   dj(signal?: AbortSignal): Promise<DjPublic>;
   themes(signal?: AbortSignal): Promise<ThemesPayload>;
   health(signal?: AbortSignal): Promise<boolean>;
+  /** Like health(), but returns *why* it failed so callers can show a real
+   *  diagnostic instead of a bare "failed". */
+  probeHealth(signal?: AbortSignal): Promise<HealthResult>;
   postRequest(body: RequestBody): Promise<RequestResult>;
   pollRequest(id: string): Promise<RequestResult>;
   /** Absolute URL for an album cover (for <Image source>). */
@@ -87,6 +102,17 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
 export function createApi(rawBase: string): StationApi {
   const base = normalizeBase(rawBase);
   const api = (p: string) => `${base}/api${p}`;
+  // Single source of the health logic; health() below is just its boolean.
+  const probeHealth = async (signal?: AbortSignal): Promise<HealthResult> => {
+    try {
+      const res = await fetchWithTimeout(api('/health'), { cache: 'no-store', signal });
+      return res.ok ? { ok: true } : { ok: false, kind: 'http', status: res.status };
+    } catch (e) {
+      const err = e as { name?: string; message?: string };
+      const aborted = signal?.aborted || err?.name === 'AbortError';
+      return { ok: false, kind: aborted ? 'timeout' : 'network', message: err?.message };
+    }
+  };
   return {
     base,
     nowPlaying: (signal) => getJson<NowPlayingResponse>(api('/now-playing'), signal),
@@ -95,10 +121,17 @@ export function createApi(rawBase: string): StationApi {
     schedule: (signal) => getJson<SchedulePayload>(api('/schedule'), signal),
     dj: (signal) => getJson<DjPublic>(api('/dj'), signal),
     themes: (signal) => getJson<ThemesPayload>(api('/themes'), signal),
+    // Preserves the original contract: a non-2xx response resolves to false, but
+    // a network/TLS error or timeout *throws* — callers like useSignal rely on
+    // the throw to detect a dead link. probeHealth (below) never throws; it's for
+    // callers that want the reason instead of a boolean.
     health: async (signal) => {
-      const res = await fetchWithTimeout(api('/health'), { cache: 'no-store', signal });
-      return res.ok;
+      const r = await probeHealth(signal);
+      if (r.ok) return true;
+      if (r.kind === 'http') return false;
+      throw new Error(r.message || r.kind);
     },
+    probeHealth,
     postRequest: (body) =>
       fetchWithTimeout(api('/request'), {
         method: 'POST',

@@ -17,12 +17,12 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { ChevronRight } from 'lucide-react-native';
+import { ArrowLeftRight, ChevronRight } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DiscMark from '@/components/DiscMark';
 import LiveDot from '@/components/LiveDot';
 import StationLiveStatus from '@/components/StationLiveStatus';
-import { createApi, normalizeBase, type StationApi } from '@/lib/api';
+import { createApi, normalizeBase, type HealthResult, type StationApi } from '@/lib/api';
 import { useStation } from '@/config/StationContext';
 import { fetchDirectory, type DirectoryStation } from '@/lib/directory';
 import type { StationRef } from '@/lib/station';
@@ -52,6 +52,25 @@ const isLocalHost = (h: string) =>
   /^192\.168\./.test(h) ||
   /^172\.(1[6-9]|2\d|3[01])\./.test(h);
 
+// Cleartext-warning / http-scheme accent. Mirrors HealthCheck's local copy.
+const DANGER = '#c5302a';
+
+// Turn a failed health probe into a human diagnostic for the failure card. The
+// network case names the usual "works in the browser, fails in the app" culprit
+// (a TLS chain Android rejects but the browser tolerates) — the most common and
+// least obvious cause for an otherwise-valid HTTPS station.
+function describeFail(fail: HealthResult | null, candidates: string[]): string | undefined {
+  if (!fail || fail.ok) return undefined;
+  if (fail.kind === 'timeout')
+    return 'No response in time — the box may be asleep, on another network, or blocked by a firewall.';
+  if (fail.kind === 'http')
+    return `The server answered with HTTP ${fail.status ?? '?'}, so the address is reachable but the request never reached the controller. Check that your reverse proxy routes /api/* to the controller on port 7701.`;
+  const triedHttps = candidates.some((c) => c.startsWith('https://'));
+  return triedHttps
+    ? "Couldn't open a connection. If the same address works in your phone's browser, it's usually a TLS/certificate the app rejects but the browser tolerates — most often an incomplete certificate chain (set your reverse proxy to serve the full chain, including intermediates) or a private/self-signed CA Android doesn't trust. DNS or a firewall on this network can cause it too."
+    : "Couldn't open a connection — check the address is right and the station is reachable from this network.";
+}
+
 interface Target {
   base: string;
   url: string;
@@ -73,9 +92,16 @@ export default function Onboarding() {
   const [target, setTarget] = useState<Target | null>(null);
   const [done, setDone] = useState(false);
   const [failed, setFailed] = useState(false);
-  // True when the probe silently fell back from https to cleartext http on a
-  // non-local host — gates "Tune in" behind an explicit consent button.
+  // True when the resolved station is cleartext http on a non-local host —
+  // gates "Tune in" behind an explicit consent button.
   const [insecure, setInsecure] = useState(false);
+  // Scheme for the manual entry field. https is the friendly default (a bare
+  // host still auto-falls back to http); switching to http forces cleartext for
+  // HTTP-only boxes. An explicit scheme typed into the field always wins.
+  const [scheme, setScheme] = useState<'https' | 'http'>('https');
+  // Diagnostic + raw error for the failure card, set by runCheck on a dead probe.
+  const [failDetail, setFailDetail] = useState<string | undefined>(undefined);
+  const [failRaw, setFailRaw] = useState<string | undefined>(undefined);
   const [directory, setDirectory] = useState<DirectoryStation[]>([]);
   const runId = useRef(0);
 
@@ -115,6 +141,8 @@ export default function Onboarding() {
     setDone(false);
     setFailed(false);
     setInsecure(false);
+    setFailDetail(undefined);
+    setFailRaw(undefined);
     setPhase('check');
 
     const set = (i: number, s: StepState) =>
@@ -122,16 +150,19 @@ export default function Onboarding() {
     const alive = () => runId.current === id;
 
     // Hit one candidate's controller /health behind its own timeout. Returns
-    // the live StationApi on success, or null on failure / unreachable so the
-    // caller can try the next candidate.
-    const probe = async (candidate: string): Promise<StationApi | null> => {
+    // the live StationApi on success, or a structured failure (timeout / http /
+    // network) so the caller can try the next candidate and, if all fail, show
+    // a real diagnostic instead of a bare "failed".
+    const probe = async (candidate: string): Promise<{ api: StationApi } | { fail: HealthResult }> => {
       const api = createApi(candidate);
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
       try {
-        return (await api.health(ctrl.signal)) ? api : null;
-      } catch {
-        return null;
+        const r = await api.probeHealth(ctrl.signal);
+        return r.ok ? { api } : { fail: r };
+      } catch (e) {
+        const err = e as { message?: string };
+        return { fail: { ok: false, kind: 'network', message: err?.message } };
       } finally {
         clearTimeout(timer);
       }
@@ -148,29 +179,36 @@ export default function Onboarding() {
       set(1, 'run');
       let api: StationApi | null = null;
       let base = first;
+      let lastFail: HealthResult | null = null;
       for (const candidate of candidates) {
         base = candidate;
-        api = await probe(candidate);
+        const r = await probe(candidate);
         if (!alive()) return;
-        if (api) break;
+        if ('api' in r) {
+          api = r.api;
+          break;
+        } else {
+          lastFail = r.fail;
+        }
       }
       if (!api) {
         set(1, 'fail');
+        setFailDetail(describeFail(lastFail, candidates));
+        const raw = lastFail && !lastFail.ok ? lastFail.message : undefined;
+        // The Android generic carries no detail; iOS often surfaces a useful one.
+        setFailRaw(raw && raw !== 'Network request failed' ? raw : undefined);
         setFailed(true);
         return;
       }
       // Re-point the target at the candidate that actually answered.
       const fallbackName = presetName || stripProto(base);
       setTarget({ base, url: stripProto(base), name: fallbackName });
-      // Flag a silent https→http downgrade: the probe tried https first and
-      // ended up on cleartext, which an on-path attacker could have forced by
-      // blocking the https attempt. Local hosts carry bounded risk and skip
-      // this; a public-looking host requires explicit consent before tuning in.
-      setInsecure(
-        base.startsWith('http://') &&
-          candidates.some((c) => c.startsWith('https://')) &&
-          !isLocalHost(hostOf(base)),
-      );
+      // Flag cleartext on a non-local host — whether the probe silently fell
+      // back from https (an on-path attacker could force that by blocking the
+      // https attempt) or the listener picked http explicitly. Either way a
+      // public-looking host over plain HTTP needs one-tap consent; local hosts
+      // carry bounded risk and skip it.
+      setInsecure(base.startsWith('http://') && !isLocalHost(hostOf(base)));
       set(1, 'ok');
 
       // 3 · Icecast /stream (cosmetic — controller answered, mount assumed up)
@@ -224,6 +262,15 @@ export default function Onboarding() {
     setPhase('entry');
   };
 
+  // Manual-entry submit. An explicit scheme typed into the field wins; otherwise
+  // https keeps the bare-host auto-fallback (https→http) and http forces cleartext.
+  const submitEntry = () => {
+    const h = host.trim();
+    if (!h) return;
+    if (/:\/\//.test(h)) runCheck(h);
+    else runCheck(scheme === 'http' ? `http://${h}` : h);
+  };
+
   // Auto-run the probe once when arriving with a prefilled station (Discover).
   useEffect(() => {
     if (autoRan.current || !params.url) return;
@@ -262,14 +309,24 @@ export default function Onboarding() {
                 stream, one broadcast: you join whatever&apos;s on.
               </Text>
 
-              {/* URL field with https:// prefix */}
+              {/* URL field with a tappable scheme toggle (https ⇄ http) */}
               <View
                 className="flex-row items-center"
                 style={{ marginTop: 18, borderWidth: 1, borderColor: colors.muted, backgroundColor: colors.field }}
               >
-                <Text className="font-mono text-muted" style={{ fontSize: 13, paddingLeft: 13, paddingRight: 2 }}>
-                  https://
-                </Text>
+                <Pressable
+                  onPress={() => setScheme((s) => (s === 'https' ? 'http' : 'https'))}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Connection scheme ${scheme}. Tap to switch to ${scheme === 'https' ? 'HTTP' : 'HTTPS'}.`}
+                  hitSlop={8}
+                  className="flex-row items-center"
+                  style={{ gap: 5, paddingLeft: 13, paddingRight: 9, paddingVertical: 14, borderRightWidth: 1, borderRightColor: colors.softBorder }}
+                >
+                  <Text className="font-mono" style={{ fontSize: 13, fontWeight: '700', color: scheme === 'http' ? DANGER : colors.accent }}>
+                    {scheme}://
+                  </Text>
+                  <ArrowLeftRight size={11} color={colors.muted} />
+                </Pressable>
                 <TextInput
                   value={host}
                   onChangeText={setHost}
@@ -281,14 +338,19 @@ export default function Onboarding() {
                   keyboardType="url"
                   inputMode="url"
                   returnKeyType="go"
-                  onSubmitEditing={() => host.trim() && runCheck(host)}
+                  onSubmitEditing={submitEntry}
                   className="font-mono flex-1"
-                  style={{ color: colors.ink, fontSize: 14, paddingVertical: 14, paddingRight: 13, paddingLeft: 4 }}
+                  style={{ color: colors.ink, fontSize: 14, paddingVertical: 14, paddingRight: 13, paddingLeft: 10 }}
                 />
               </View>
+              {/* HTTPS is tried first for a bare host and falls back to HTTP; tap
+                  the prefix to force one or the other. */}
+              <Text className="font-mono text-muted" style={{ fontSize: 10.5, lineHeight: 16, marginTop: 7 }}>
+                Tap the prefix to switch HTTPS / HTTP. HTTPS auto-falls back to HTTP.
+              </Text>
 
               <Pressable
-                onPress={() => host.trim() && runCheck(host)}
+                onPress={submitEntry}
                 disabled={!host.trim()}
                 accessibilityRole="button"
                 accessibilityLabel="Run health check"
@@ -387,6 +449,8 @@ export default function Onboarding() {
               done={done}
               failed={failed}
               insecure={insecure}
+              failDetail={failDetail}
+              failRaw={failRaw}
               onTuneIn={tuneIn}
               onBack={backToEntry}
               onRetry={() => target && runCheck(target.url, target.name)}
@@ -404,6 +468,8 @@ function HealthCheck({
   done,
   failed,
   insecure,
+  failDetail,
+  failRaw,
   onTuneIn,
   onBack,
   onRetry,
@@ -413,6 +479,8 @@ function HealthCheck({
   done: boolean;
   failed: boolean;
   insecure: boolean;
+  failDetail?: string;
+  failRaw?: string;
   onTuneIn: () => void;
   onBack: () => void;
   onRetry: () => void;
@@ -504,11 +572,16 @@ function HealthCheck({
 
       {failed ? (
         <View style={{ gap: 14 }}>
-          <View style={{ borderWidth: 1, borderColor: destructive, padding: 14 }}>
+          <View style={{ borderWidth: 1, borderColor: destructive, padding: 14, gap: 8 }}>
             <Text className="font-body text-muted" style={{ fontSize: 12.5, lineHeight: 20 }}>
-              <Text className="font-body-semibold text-ink">Stream unreachable.</Text> The controller didn&apos;t
-              answer — the station may be off air, or the box is asleep.
+              <Text className="font-body-semibold text-ink">Stream unreachable. </Text>
+              {failDetail ?? "The controller didn't answer — the station may be off air, or the box is asleep."}
             </Text>
+            {failRaw ? (
+              <Text className="font-mono text-muted" style={{ fontSize: 10.5, lineHeight: 16 }} numberOfLines={3}>
+                {failRaw}
+              </Text>
+            ) : null}
           </View>
           <View className="flex-row" style={{ gap: 10 }}>
             <Pressable onPress={onBack} accessibilityRole="button" accessibilityLabel="Try another URL" className="flex-1 items-center justify-center" style={{ borderWidth: 1, borderColor: colors.muted, paddingVertical: 13 }}>
