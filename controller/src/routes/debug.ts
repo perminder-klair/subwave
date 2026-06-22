@@ -4,6 +4,12 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { config } from '../config.js';
 import * as dj from '../llm/dj.js';
 import * as llmProvider from '../llm/provider.js';
+import {
+  rawDebugEnabled,
+  rawDebugEnabledViaEnv,
+  LLM_DEBUG_LOG,
+  LLM_DEBUG_MAX,
+} from '../llm/log.js';
 import * as tts from '../audio/tts.js';
 import * as library from '../music/library.js';
 import * as subsonicLog from '../music/subsonic-log.js';
@@ -127,6 +133,15 @@ router.get('/debug', requireAdmin, async (req, res) => {
     activeModel: llmProvider.activeModelLabel(),
     ollamaUrl: llmProvider.activeOllamaUrl(),
     recentCalls: dj.recentCalls,
+    // Raw-request capture status — the admin UI shows the toggle + the file path
+    // so operators know where to look. `viaEnv` means LLM_DEBUG_RAW forces it on
+    // (the UI toggle can't turn it off in that case).
+    debug: {
+      enabled: rawDebugEnabled(),
+      viaEnv: rawDebugEnabledViaEnv(),
+      file: LLM_DEBUG_LOG,
+      max: LLM_DEBUG_MAX,
+    },
   };
 
   // 6c. TTS routing — which engine/voice the effective persona resolves to,

@@ -576,6 +576,14 @@ const DEFAULTS = {
     // reports zero listeners — the stream coasts on the auto playlist — and
     // resume as soon as someone tunes in. Off by default.
     pauseWhenEmpty: false,
+    // When on (or when LLM_DEBUG_RAW is set in the env), every outbound model
+    // request's exact body is captured to ${STATE_DIR}/logs/llm-debug.log (the
+    // last 10, newest first) and dumped to stderr — a copy-pasteable view of
+    // exactly what SUB/WAVE sends the provider, for debugging odd model
+    // behaviour. The admin toggle (admin → Debug) means no-CLI operators can
+    // flip it without editing env; the env flag can only force it on. Off by
+    // default: zero file writes / overhead when disabled.
+    debugRawRequests: false,
     // Optional backup LLM. When `enabled`, any LLM call whose primary host is
     // unreachable (connection refused / DNS / timeout — NOT a 429/5xx from a
     // host that's up) is retried once against this leg, then routed straight
@@ -1081,6 +1089,10 @@ export async function load() {
         typeof stored.llm?.pauseWhenEmpty === 'boolean'
           ? stored.llm.pauseWhenEmpty
           : DEFAULTS.llm.pauseWhenEmpty,
+      debugRawRequests:
+        typeof stored.llm?.debugRawRequests === 'boolean'
+          ? stored.llm.debugRawRequests
+          : DEFAULTS.llm.debugRawRequests,
       // Backup leg — same connection fields as the primary, coerced identically.
       fallback: (() => {
         const fb = stored.llm?.fallback || {};
@@ -1876,6 +1888,9 @@ export async function update(patch) {
     }
     if (l.pauseWhenEmpty !== undefined) {
       next.llm.pauseWhenEmpty = !!l.pauseWhenEmpty;
+    }
+    if (l.debugRawRequests !== undefined) {
+      next.llm.debugRawRequests = !!l.debugRawRequests;
     }
     // An OpenAI-compatible provider is useless without a server to talk to.
     if (next.llm.provider === 'openai-compatible' && !next.llm.baseUrl) {
