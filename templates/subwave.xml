@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <Container version="2">
-  <Name>SUB-WAVE</Name>
+  <Name>subwave</Name>
   <Repository>ghcr.io/perminder-klair/subwave-aio:latest</Repository>
   <Registry>https://ghcr.io/perminder-klair/subwave-aio</Registry>
   <Network>bridge</Network>
@@ -41,7 +41,7 @@
   <ReadMe>https://raw.githubusercontent.com/perminder-klair/subwave/main/README.md</ReadMe>
 
   <Category>MediaApp:Music MediaServer:Music</Category>
-  <ExtraSearchTerms>radio internet radio icecast liquidsoap ai dj navidrome subsonic stream ollama station broadcast</ExtraSearchTerms>
+  <ExtraSearchTerms>subwave sub-wave sub/wave subwave-aio radio internet radio icecast liquidsoap ai dj navidrome subsonic stream ollama station broadcast</ExtraSearchTerms>
   <Requires>A reachable Navidrome / Subsonic music server and an LLM provider (Ollama local/cloud or a cloud API key), both configured in the browser at /onboarding after first boot.</Requires>
 
   <Date>2026-06-22</Date>
