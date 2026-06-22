@@ -3,9 +3,6 @@
 // cli/src/ transforms at import time — no build step. The launcher itself
 // must stay JS, since the loader is only active for imports that happen
 // *after* register() runs.
-//
-// (When the rest of the codebase migrates to TS, the loader registration
-// pattern stays — same as how the listener `subwave-tui` works in /tui/.)
 
 import { register } from 'tsx/esm/api';
 import { resolve, dirname } from 'node:path';

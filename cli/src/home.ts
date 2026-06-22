@@ -127,9 +127,9 @@ export function requireSubwaveHome(opts: ResolveOptions = {}): ResolvedHome {
 }
 
 // A SUBWAVE_HOME is "clone-mode" when it has the developer-only directories
-// (controller/, web/, tui/, scripts/) alongside the compose files. The
+// (controller/, web/, scripts/) alongside the compose files. The
 // standalone-CLI install only has docker-compose.yml + state/ + .env.
-// Several commands (start dev, play, web dev hot-reload) only make sense
+// Several commands (start dev, web dev hot-reload) only make sense
 // in clone-mode.
 export function isCloneMode(home: string): boolean {
   return (

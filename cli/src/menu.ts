@@ -13,7 +13,6 @@ import { runStartCommand } from './commands/start.ts';
 import { runStopCommand } from './commands/stop.ts';
 import { runRestartCommand } from './commands/restart.ts';
 import { runLogsCommand } from './commands/logs.ts';
-import { runPlayCommand } from './commands/play.ts';
 import { runOpenWebCommand } from './commands/open-web.ts';
 import { runSetupCommand } from './commands/setup.ts';
 
@@ -48,7 +47,6 @@ export async function runMenu(): Promise<void> {
 
   options.push({ value: 'status', label: 'status', hint: 'compose + now-playing + recent events' });
   options.push({ value: 'doctor', label: 'doctor', hint: 'full diagnostic sweep' });
-  options.push({ value: 'play', label: 'play', hint: 'open the terminal player (TUI)' });
   options.push({ value: 'listen', label: 'listen', hint: 'open the web player in a browser' });
   options.push({ value: 'admin', label: 'admin', hint: 'open the admin console in a browser' });
 
@@ -94,7 +92,6 @@ async function dispatch(choice: string): Promise<void> {
   switch (choice) {
     case 'status':  return runStatusCommand();
     case 'doctor':  return runDoctorCommand();
-    case 'play':    return runPlayCommand();
     case 'listen':  return runOpenWebCommand('listen');
     case 'admin':   return runOpenWebCommand('admin');
     case 'start':   return runStartCommand();

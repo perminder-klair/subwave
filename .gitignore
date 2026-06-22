@@ -21,11 +21,6 @@ cli/tsconfig.tsbuildinfo
 # Distributed via the publish-cli GitHub workflow as release assets.
 cli/dist/
 
-# Compiled TUI binaries (produced by `bun run --cwd tui build:all`).
-# Distributed alongside CLI binaries as release assets; standalone CLI
-# installs fetch them on demand from the GitHub release.
-tui/dist/
-
 # Runtime state — file-based IPC, TTS output, archives, logs
 state/
 

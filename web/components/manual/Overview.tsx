@@ -15,7 +15,7 @@ const GUIDE = [
   {
     href: '/manual/clients',
     label: 'Listen With',
-    blurb: 'Tune in from the SUB/WAVE TUI, VLC, or any app that opens an internet-radio stream.',
+    blurb: 'Tune in from the native apps, VLC, or any app that opens an internet-radio stream.',
   },
   {
     href: '/manual/shortcuts',

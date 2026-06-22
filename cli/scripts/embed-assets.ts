@@ -76,7 +76,7 @@ function main(): void {
   // the marker on the same line as the version.
   const pkg = JSON.parse(readFileSync(resolve(REPO_ROOT, 'cli', 'package.json'), 'utf8')) as { version: string };
   parts.push('// cli/package.json#version (embedded so the compiled binary can self-identify');
-  parts.push('// — used by `subwave --version` and by the TUI release fetch URL).');
+  parts.push('// — used by `subwave --version`).');
   parts.push(`export const CLI_VERSION = \`${encode(pkg.version)}\`; // x-release-please-version`);
   parts.push('');
 

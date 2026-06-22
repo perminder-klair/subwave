@@ -65,26 +65,6 @@ export async function runSelfUpdateCommand(args: { version?: string } = {}): Pro
     });
   });
 
-  // Drop the cached TUI binary so the next `subwave play` re-fetches a
-  // version-matched copy from the new release. We can't do this from inside
-  // the new binary (it has no opinion about "what was here before"), so it
-  // happens here, before the in-place replacement returns control.
-  try {
-    const { existsSync, unlinkSync } = await import('node:fs');
-    const { resolveSubwaveHome } = await import('../home.ts');
-    const { resolve } = await import('node:path');
-    const home = resolveSubwaveHome();
-    if (home) {
-      const cachedTui = resolve(home.home, 'tui', 'bin', 'subwave-tui');
-      if (existsSync(cachedTui)) {
-        unlinkSync(cachedTui);
-        muted('cleared cached TUI binary — `subwave play` will re-fetch on next launch.');
-      }
-    }
-  } catch {
-    // Non-fatal — the stale binary will still run; user can delete it manually.
-  }
-
   console.log();
   muted('The running process is still the old binary — next invocation picks up the new one.');
   await pauseForEnter();

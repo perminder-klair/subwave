@@ -57,7 +57,7 @@ https://github.com/user-attachments/assets/fac7b723-c54f-438d-8440-bad1e0471e85
 - **Five TTS engines.** Piper and Kokoro in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) is also available. Pick a different engine per kind of speech.
 - **Multiple DJ personas.** Up to 10 souls in rotation, each with its own voice and writing style.
 - **Dual-codec broadcast.** MP3 128 kbps for Sonos, hardware radios, and cars; Ogg-Opus 96 kbps for modern browsers. The web player picks automatically.
-- **Native apps, PWA, and TUI.** Native iOS (on the App Store) and Android (on Google Play) players — background audio, lock-screen / CarPlay / Android Auto controls, multi-station — an installable PWA on phone and desktop, and a TUI for the command line.
+- **Native apps and PWA.** Native iOS (on the App Store) and Android (on Google Play) players — background audio, lock-screen / CarPlay / Android Auto controls, multi-station — plus an installable PWA on phone and desktop.
 - **Scheduled shows.** A 24×7 grid; each slot has its own persona, mood, and skills.
 - **Pluggable skills.** The DJ's between-track segments — weather, news, traffic, and your own — are skills. The built-ins are scaffolded as editable files under `state/skills/<kind>/` on first boot, so you can rewrite a brief or change the news feed (BBC → your own RSS) right from the admin console — no code, no redeploy. Add your own by dropping a `SKILL.md` (plus optional data-fetching code) into `state/skills/`, hitting Rescan, and enabling it. See [`docs/custom-skills.md`](docs/custom-skills.md).
 - **Mood-aware rotation.** Time of day, weather, and festival days bias what gets played and how the DJ talks.
@@ -169,7 +169,6 @@ npm start -- start dev          # docker compose up -d (dev or prod)
 npm start -- restart broadcast  # plain restart (radio.liq is bind-mounted in dev)
 npm start -- restart controller # rebuild + recreate (source is COPY-d at build)
 npm start -- logs controller    # tail one service
-npm start -- play               # SUB/WAVE TUI — the terminal player
 npm start -- listen             # open the web player in a browser
 npm start -- admin              # open the admin console in a browser
 npm start -- stop               # docker compose down (confirms first)
@@ -216,12 +215,11 @@ controller/        Node.js controller, the AI DJ brain
   src/routes/      HTTP API split by surface (public, request, onboarding, settings, …)
 liquidsoap/        radio.liq, the Liquidsoap mixing pipeline
 web/               Next.js 15 web UI (player, landing, admin, setup)
-tui/               Terminal player, the listener UI in your terminal
 docker/            Caddyfile, Dockerfiles, icecast.xml.template, supervisor entrypoint
 scripts/           setup, jingle generation, update, health check
 mcp-subwave/       MCP server that lets an agent request songs / drive the DJ
 cli/               Operator CLI (TS, run via tsx loader, no build step)
-bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle, play
+bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 ```
 
 ## Notable details

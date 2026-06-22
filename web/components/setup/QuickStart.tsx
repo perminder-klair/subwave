@@ -119,19 +119,9 @@ cd subwave`}</CodeBlock>
           The setup wizard is one screen of the operator console. Run{' '}
           <code className="bs-code-inline">npm start</code> from the repo any time to open it:
           a menu to check the stack, run a diagnostic sweep, tail logs, restart a service,
-          or open the terminal player.
+          or open the web player and admin.
         </p>
         <CodeBlock>{`npm start`}</CodeBlock>
-        <div className="bs-callout">
-          <div className="bs-eyebrow">LISTEN FROM THE TERMINAL</div>
-          <p>
-            The console's <strong>play</strong> option launches the TUI player: now-playing,
-            the timeline, the live booth feed, and track requests, right in your terminal. It
-            needs <code className="bs-code-inline">mpv</code> or{' '}
-            <code className="bs-code-inline">ffplay</code> for audio, and runs as a read-only
-            dashboard without them.
-          </p>
-        </div>
       </section>
     </SetupPage>
   );

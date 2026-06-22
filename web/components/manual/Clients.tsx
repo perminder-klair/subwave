@@ -34,40 +34,10 @@ export default function Clients() {
       current="/manual/clients"
     >
       <section className="bs-section">
-        <p className="bs-eyebrow">SUB/WAVE TUI</p>
-        <h2>The station&rsquo;s own terminal app.</h2>
-        <p>
-          Start here: SUB/WAVE ships its own terminal player. Where the other apps below just
-          carry the audio, the TUI mirrors the browser player: now-playing with track
-          metadata, the timeline of recent and upcoming songs, the live booth feed, and a
-          request form.
-        </p>
-        <p>
-          It&rsquo;s built into the operator console, so there&rsquo;s nothing separate to
-          install. With the <code className="bs-code-inline">subwave</code> CLI, run{' '}
-          <code className="bs-code-inline">subwave play</code>. The TUI is fetched on first
-          run and opens pointed at your stack:
-        </p>
-        <CodeBlock>{`subwave play`}</CodeBlock>
-        <p className="text-muted">
-          From a SUB/WAVE checkout instead, run <code className="bs-code-inline">npm
-          start</code> and choose <strong>play</strong> — same TUI, same stack.
-        </p>
-        <p className="text-muted">
-          For audio it wants <code className="bs-code-inline">mpv</code> (preferred, for live
-          volume control) or <code className="bs-code-inline">ffplay</code>; with
-          neither installed the TUI still runs as a read-only dashboard. The same console also
-          opens the web player and admin in your browser, and{' '}
-          <Link href="/manual/cli" className="bs-link">The Operator CLI</Link> covers all of
-          it.
-        </p>
-      </section>
-
-      <section className="bs-section">
         <p className="bs-eyebrow">iOS &amp; ANDROID</p>
         <h2>The app on your phone.</h2>
         <p>
-          SUB/WAVE has native players for iOS and Android. Like the TUI, they mirror the
+          SUB/WAVE has native players for iOS and Android. They mirror the
           browser player rather than just carrying the audio: now-playing with cover
           art and a live visualiser, the booth feed, the timeline, a request form, the
           schedule, and station themes that recolour the whole app. Playback keeps going in
@@ -278,7 +248,7 @@ export default function Clients() {
         <p className="bs-eyebrow">MORE TO COME</p>
         <h2>Any internet-radio player works.</h2>
         <p>
-          The SUB/WAVE TUI is the full-featured way in; VLC and cliamp are the walked-through
+          The native apps are the full-featured way in; VLC and cliamp are the walked-through
           audio-only examples. But none of them are special: anything that can open an
           internet-radio URL can tune in, and more client guides will be added here over time.
           Running the station yourself rather than listening along? That&rsquo;s covered in{' '}

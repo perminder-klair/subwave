@@ -30,7 +30,6 @@ Usage:
   subwave restart [svc]    rebuild / restart a service (dev adds \`web-dev\`)
   subwave logs [svc|all]   tail docker compose logs (dev adds \`web-dev\`)
   subwave update           pull new images + recreate changed services
-  subwave play [dev|prod]  open the terminal player (TUI; auto-fetched on first run)
   subwave listen [dev|prod] open the web player in a browser
   subwave admin [dev|prod] open the admin console in a browser
   subwave self-update      replace the installed binary with the latest release
@@ -209,16 +208,6 @@ async function main(): Promise<void> {
     case 'update': {
       const { runUpdateCommand } = await import('./commands/update.ts');
       await runUpdateCommand();
-      return;
-    }
-    case 'play': {
-      const { runPlayCommand } = await import('./commands/play.ts');
-      const envArg = rest[0];
-      if (envArg && envArg !== 'dev' && envArg !== 'prod' && envArg !== 'prod-byo') {
-        process.stderr.write(`Unknown env: ${envArg}. Expected 'dev', 'prod', or 'prod-byo'.\n`);
-        process.exit(2);
-      }
-      await runPlayCommand({ envArg: envArg as 'dev' | 'prod' | 'prod-byo' | undefined });
       return;
     }
     case 'listen':

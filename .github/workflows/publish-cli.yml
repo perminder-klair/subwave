@@ -1,8 +1,7 @@
-name: Publish CLI + TUI binaries
+name: Publish CLI binaries
 
-# Builds the standalone `subwave` CLI and the terminal-player TUI for
-# linux + macOS (x64 + arm64) and attaches both sets of binaries to the
-# GitHub Release matching the tag.
+# Builds the standalone `subwave` CLI for linux + macOS (x64 + arm64) and
+# attaches the binaries to the GitHub Release matching the tag.
 #
 # Triggers:
 #   - push of a tag like v1.2.3 → builds + uploads
@@ -10,9 +9,7 @@ name: Publish CLI + TUI binaries
 #
 # The install script at install.sh (served from cli.getsubwave.com → raw
 # GitHub URL → this repo) downloads the matching CLI binary from the latest
-# release. The TUI binary is fetched on demand by `subwave play` from the
-# same release tag (version-pinned to the CLI's own version), so standalone
-# installs get a working terminal player without ever needing Node + npm.
+# release.
 #
 # Inputs are all matrix-controlled — no user-supplied data flows into
 # `run:` steps, so the standard command-injection vectors don't apply.
@@ -87,61 +84,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: cli/dist/${{ matrix.asset }}
-          fail_on_unmatched_files: true
-
-  build-tui:
-    # Same matrix as the CLI: one bun --compile per platform/arch, one
-    # release asset per binary. Runs in parallel with `build` — both jobs
-    # upload to the same release tag.
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: bun-linux-x64
-            asset:  subwave-tui-linux-x64
-          - target: bun-linux-arm64
-            asset:  subwave-tui-linux-arm64
-          - target: bun-darwin-x64
-            asset:  subwave-tui-darwin-x64
-          - target: bun-darwin-arm64
-            asset:  subwave-tui-darwin-arm64
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install TUI deps
-        working-directory: tui
-        run: bun install --frozen-lockfile || bun install
-
-      - name: Compile TUI binary
-        working-directory: tui
-        env:
-          TARGET: ${{ matrix.target }}
-          ASSET: ${{ matrix.asset }}
-        run: |
-          mkdir -p dist
-          bun build src/main.tsx \
-            --compile \
-            --target="$TARGET" \
-            --outfile="dist/$ASSET"
-
-      - name: Smoke test
-        # Only the linux-x64 binary runs on the GH runner. --help exits
-        # before Ink takes the TTY, so it's safe in a non-TTY job.
-        if: matrix.target == 'bun-linux-x64'
-        env:
-          ASSET: ${{ matrix.asset }}
-        run: |
-          chmod +x "tui/dist/$ASSET"
-          "tui/dist/$ASSET" --help
-
-      - name: Upload to release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: tui/dist/${{ matrix.asset }}
           fail_on_unmatched_files: true

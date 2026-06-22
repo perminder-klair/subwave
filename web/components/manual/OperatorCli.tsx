@@ -7,7 +7,7 @@ export default function OperatorCli() {
     <ManualPage
       eyebrow="MANUAL · 10"
       title="The operator console."
-      intro="SUB/WAVE ships a command-line console for running the station. One command opens a menu that boots the stack, checks its health, tails logs, and opens a terminal player, with no Docker flags to remember."
+      intro="SUB/WAVE ships a command-line console for running the station. One command opens a menu that boots the stack, checks its health, tails logs, and opens the web player or admin, with no Docker flags to remember."
       current="/manual/cli"
     >
       <section className="bs-section">
@@ -62,9 +62,6 @@ export default function OperatorCli() {
             <code className="bs-code-inline">docker compose -f …</code> incantation.
           </li>
           <li>
-            <strong>play</strong> — open the terminal player (below).
-          </li>
-          <li>
             <strong>listen</strong> — open the web player in your browser.
           </li>
           <li>
@@ -89,19 +86,14 @@ export default function OperatorCli() {
       </section>
 
       <section className="bs-section">
-        <p className="bs-eyebrow">PLAYER &amp; CONSOLES</p>
-        <h2>Jump straight to the player or the admin.</h2>
+        <p className="bs-eyebrow">CONSOLES</p>
+        <h2>Jump straight to the web player or the admin.</h2>
         <p>
-          The <strong>play</strong> option launches the SUB/WAVE TUI: now-playing, the
-          timeline, the live booth feed, and a request form, all in your terminal and pointed
-          at your own stack. It&rsquo;s the full station experience without a browser. The{' '}
-          <Link href="/manual/clients" className="bs-link">Listen With</Link> page covers the
-          TUI in detail.
-        </p>
-        <p>
-          Prefer the browser? <strong>listen</strong> and <strong>admin</strong> open the web
+          <strong>listen</strong> and <strong>admin</strong> open the web
           player and the admin console in your default browser, pointed at the same stack, with
-          no host or port to remember.
+          no host or port to remember. For tuning in from outside the browser, the{' '}
+          <Link href="/manual/clients" className="bs-link">Listen With</Link> page covers VLC,
+          cliamp, and the native apps.
         </p>
       </section>
 
