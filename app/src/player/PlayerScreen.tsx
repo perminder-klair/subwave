@@ -14,7 +14,6 @@
 // re-render the pages whose data actually changed (useStationFeed keeps
 // unchanged payloads reference-stable for exactly this reason).
 
-import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -382,16 +381,21 @@ export default function PlayerScreen() {
 
         {/* Frosted masthead + FM dial — floated as an absolute overlay at the
             head of every band stop so page content scrolls under the glass,
-            mirroring the transport bar. The BlurView picks up the cover-art
-            ambient wash + scrolling content behind it; a thin mode-aware film
-            keeps the wordmark and dial legible. */}
+            mirroring the transport bar. A thin mode-aware film keeps the
+            wordmark and dial legible.
+
+            NB: do NOT put an expo-blur <BlurView> here. On the New Architecture
+            (Fabric) the Dimezis BlurView is a custom *native* view; Fabric routes
+            touches to the new/old-arch event emitter by target-view id parity,
+            and the BlurView's internal Android views get ids that break that
+            resolution ("Cannot find EventEmitter for receivedTouches"), silently
+            dropping every tap on the controls layered over it. It's device/ROM
+            -flaky (dead on some Pixels, fine on others) and pointerEvents="none"
+            does NOT fix it — the hazard is the native view's mere presence, not
+            touch capture. The blur was already inert under expo-blur ≥55 anyway
+            (the bare dimezisBlurView method now needs a BlurTargetView), so this
+            is a touch-only fix with no visual change. See issue #458. */}
         <View style={{ position: 'absolute', top: 0, left: 0, right: 0 }} onLayout={onHeaderLayout}>
-          <BlurView
-            intensity={mode === 'light' ? 40 : 26}
-            tint={mode === 'light' ? 'light' : 'dark'}
-            blurMethod="dimezisBlurView"
-            style={StyleSheet.absoluteFill}
-          />
           <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: glassFilm }]} />
           <TopBar
             tunedIn={tunedIn}

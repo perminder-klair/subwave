@@ -4,7 +4,6 @@
 // grip, and a 0–250 latency ruler), and Volume (rotary knob + dot-grille mute).
 // Docked below the FM-dial pager, so it stays at the foot of every band stop.
 
-import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -85,17 +84,20 @@ export default function TransportBar({
 
   return (
     <View style={{ marginHorizontal: 16, marginBottom: insets.bottom + 12 }}>
-      {/* Frosted-glass console: a real backdrop blur picks up the cover-art
-          ambient wash behind the bar, with a thin translucent film over it and
-          a softened glass edge — so the deck reads as transparent glass rather
-          than a flat panel. The controls render on top, unblurred. */}
+      {/* Frosted-glass console: a thin translucent film + softened glass edge so
+          the deck reads as transparent glass rather than a flat panel. The
+          controls render on top.
+
+          NB: do NOT put an expo-blur <BlurView> here. On the New Architecture
+          (Fabric) the Dimezis BlurView is a custom *native* view, and its
+          presence under the controls breaks Fabric's touch-event dispatch
+          ("Cannot find EventEmitter for receivedTouches") — device/ROM-flaky,
+          and the symptom is the whole transport bar going dead to taps on some
+          Pixels while fine on others. pointerEvents="none" does NOT fix it. The
+          blur was already inert under expo-blur ≥55 (the bare dimezisBlurView
+          method now needs a BlurTargetView), so dropping it is a touch-only fix
+          with no visual change. See issue #458. */}
       <View style={{ borderWidth: 1, borderColor: `${colors.ink}59`, overflow: 'hidden' }}>
-        <BlurView
-          intensity={mode === 'light' ? 40 : 26}
-          tint={mode === 'light' ? 'light' : 'dark'}
-          blurMethod="dimezisBlurView"
-          style={StyleSheet.absoluteFill}
-        />
         <View
           pointerEvents="none"
           style={[
