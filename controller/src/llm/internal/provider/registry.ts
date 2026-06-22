@@ -16,7 +16,7 @@
 //
 // `ollama` is the default and needs no key. The cloud providers are opt-in.
 
-import { gateway, createGateway } from 'ai';
+import { createGateway } from 'ai';
 import { createOllama } from 'ai-sdk-ollama';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -25,6 +25,7 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
+import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
 
 // Memoise built clients so we don't reconstruct a provider on every call.
 // Keyed by a signature that changes whenever provider/model/key changes, so a
@@ -36,12 +37,37 @@ export function llmCfg() {
     || { provider: 'ollama', model: '', apiKey: '', ollamaUrl: '', baseUrl: '', reasoning: false };
 }
 
+// When raw-request debug capture is enabled (LLM_DEBUG_RAW env flag or the
+// settings.llm.debugRawRequests admin toggle), record the exact outbound body —
+// verbatim, the JSON string as actually sent — before delegating to the real
+// fetch. This is the single capture point: it's wired into EVERY provider's
+// `fetch` option in languageModel() below, so capture is provider-agnostic.
+// Gated at call time, so when disabled it's one boolean check then a plain
+// passthrough — zero behavioural change, no file writes. Only method + URL +
+// body are recorded; Authorization and other headers are never touched.
+export function debugFetch(url: any, init: any) {
+  if (rawDebugEnabled()) {
+    try {
+      const body = init?.body;
+      if (typeof body === 'string') {
+        const method = init?.method || 'POST';
+        const target = typeof url === 'string' ? url : (url?.url ?? String(url));
+        recordRawRequest(method, target, body);
+      }
+    } catch { /* capture must never break a model call */ }
+  }
+  return fetch(url, init);
+}
+
 // When reasoning is disabled, llama.cpp / vLLM / LM Studio honour
 // chat_template_kwargs.enable_thinking=false — the Qwen3 (and similar)
 // chat template then omits the <think> priming entirely, so the model
 // never starts a chain-of-thought. Injected via a fetch wrapper because
-// the AI SDK's openai provider has no first-class field for it.
-export function noThinkFetch(url: any, init: any) {
+// the AI SDK's openai provider has no first-class field for it. `baseFetch`
+// is the transport to delegate to once the body is rewritten — debugFetch in
+// languageModel() (so the captured body is the post-injection one as sent),
+// global fetch for callers that don't compose it (e.g. onboarding probes).
+export function noThinkFetch(url: any, init: any, baseFetch: any = fetch) {
   if (init?.body && typeof init.body === 'string') {
     try {
       const body = JSON.parse(init.body);
@@ -52,7 +78,7 @@ export function noThinkFetch(url: any, init: any) {
       init = { ...init, body: JSON.stringify(body) };
     } catch { /* not JSON — leave the request untouched */ }
   }
-  return fetch(url, init);
+  return baseFetch(url, init);
 }
 
 // Ollama server URL — from settings (admin UI), falling back to the config
@@ -93,11 +119,17 @@ export function loccaEmbedBaseUrl(cfg: any): string {
 // Most accept any non-empty key, so fall back to a placeholder. Reasoning off →
 // wrap fetch to force chat_template_kwargs.enable_thinking=false.
 function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: string) {
+  // Reasoning off → force enable_thinking=false (noThinkFetch) THEN capture;
+  // reasoning on → capture only. debugFetch is the inner transport in both
+  // cases, so what's recorded is the body exactly as sent (post no-think).
+  const fetchImpl = cfg.reasoning
+    ? debugFetch
+    : (url: any, init: any) => noThinkFetch(url, init, debugFetch);
   const provider = createOpenAI({
     baseURL,
     apiKey: cfg.apiKey || 'unused',
     name,
-    ...(cfg.reasoning ? {} : { fetch: noThinkFetch }),
+    fetch: fetchImpl,
   });
   return provider.chat(id);
 }
@@ -128,12 +160,12 @@ export function languageModel(cfg: any = llmCfg()) {
   let model;
   switch (cfg.provider) {
     case 'anthropic': {
-      const provider = createAnthropic(cfg.apiKey ? { apiKey: cfg.apiKey } : {});
+      const provider = createAnthropic({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
       model = provider(id);
       break;
     }
     case 'openai': {
-      const provider = createOpenAI(cfg.apiKey ? { apiKey: cfg.apiKey } : {});
+      const provider = createOpenAI({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
       model = provider(id);
       break;
     }
@@ -149,22 +181,25 @@ export function languageModel(cfg: any = llmCfg()) {
       break;
     }
     case 'google': {
-      const provider = createGoogleGenerativeAI(cfg.apiKey ? { apiKey: cfg.apiKey } : {});
+      const provider = createGoogleGenerativeAI({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
       model = provider(id);
       break;
     }
     case 'deepseek': {
-      const provider = createDeepSeek(cfg.apiKey ? { apiKey: cfg.apiKey } : {});
+      const provider = createDeepSeek({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
       model = provider(id);
       break;
     }
     case 'openrouter': {
-      const provider = createOpenRouter(cfg.apiKey ? { apiKey: cfg.apiKey } : {});
+      const provider = createOpenRouter({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
       model = provider(id);
       break;
     }
     case 'gateway': {
-      const provider = cfg.apiKey ? createGateway({ apiKey: cfg.apiKey }) : gateway;
+      // Always go through createGateway so debugFetch can be wired in; with no
+      // apiKey it resolves the same env / OIDC credentials the bare `gateway`
+      // default instance would.
+      const provider = createGateway({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
       model = provider(id);
       break;
     }
@@ -175,7 +210,7 @@ export function languageModel(cfg: any = llmCfg()) {
       // returns a LanguageModelV3 that translates tools / toolChoice / activeTools
       // correctly — no `.chat(id)` override required. `baseURL` is the bare
       // Ollama host (no `/api` suffix); the package appends the path itself.
-      const provider = createOllama({ baseURL: ollamaBaseUrl(cfg) });
+      const provider = createOllama({ baseURL: ollamaBaseUrl(cfg), fetch: debugFetch });
       model = provider(id);
       break;
     }

@@ -83,6 +83,10 @@ const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = {
     { id: 'text-embedding-3-large', dim: 3072 },
   ],
   google: [{ id: 'text-embedding-004', dim: 768 }],
+  openrouter: [
+    { id: 'openai/text-embedding-3-small', dim: 1536 },
+    { id: 'openai/text-embedding-3-large', dim: 3072 },
+  ],
 };
 
 const SEARCH_PROVIDER_LABELS: Record<string, string> = {
@@ -2358,11 +2362,12 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
   const embedSuggestions = EMBED_MODEL_SUGGESTIONS[effectiveProvider] ?? [];
 
   // Provider list is the embedding-capable subset (/settings.embedding.providers),
-  // NOT the full LLM list — chat-only providers (openrouter, deepseek, gateway)
-  // have no embeddings endpoint and can't be picked here (#493). Anthropic stays
-  // in; it routes to OpenAI, flagged in the hint.
+  // NOT the full LLM list — chat-only providers (deepseek, gateway) have no
+  // embeddings endpoint and can't be picked here (#493). OpenRouter shipped an
+  // embeddings endpoint so it's back in (#522); anthropic stays in too, routing
+  // to OpenAI as flagged in the hint.
   const embedProviders = data.embedding?.providers ||
-    ['ollama', 'openai-compatible', 'locca', 'anthropic', 'openai', 'google'];
+    ['ollama', 'openai-compatible', 'locca', 'anthropic', 'openai', 'google', 'openrouter'];
   // Keep a stale explicit choice (a chat-only provider saved before this list
   // shrank) visible so the Select isn't blank and the warning below makes sense.
   const providers = e.provider && !embedProviders.includes(e.provider)

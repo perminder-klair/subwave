@@ -6,7 +6,7 @@ export default function Prerequisites() {
     <SetupPage
       eyebrow="SETUP · 01"
       title="Have these ready."
-      intro="SUB/WAVE doesn't ship Navidrome or Ollama; it talks to yours. Get them running first if they aren't already, and note the URLs and credentials. The install wizard will ask for them."
+      intro="SUB/WAVE doesn't ship Navidrome or Ollama; it talks to yours. Get them running first if they aren't already, and write down the URLs and credentials. The install wizard asks for them."
       current="/setup/prerequisites"
     >
       <section className="bs-section">
@@ -46,10 +46,10 @@ export default function Prerequisites() {
             <p>
               The DJ's words and track picks come from a language model. The
               homelab default is <strong>Ollama</strong> with a tool-capable model
-              (<code>gemma4:12b</code> is a great pick; qwen3.5 and qwen3.6 also work).
+              (<code>gemma4:12b</code> works well; so do qwen3.5 and qwen3.6).
               Note the URL and model name.
               Prefer a hosted model? Anthropic, OpenAI, Google, OpenRouter, and
-              DeepSeek are all supported; you pick the provider and supply its key
+              DeepSeek all work. You pick the provider and supply its key
               in the admin Settings UI after install, not during setup.{' '}
               <a
                 href="https://ollama.com/"

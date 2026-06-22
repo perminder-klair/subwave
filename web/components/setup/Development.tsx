@@ -6,7 +6,7 @@ export default function Development() {
     <SetupPage
       eyebrow="SETUP · 04"
       title="Hacking on SUB/WAVE."
-      intro="Three compose files, three deployment shapes. Icecast and Liquidsoap live together in a single broadcast container in every shape. Dev mode runs the radio backend in Docker and the Next.js UI on the host with hot reload, so you can iterate on the web without a rebuild. The two prod variants differ only at the edge. One bundles Caddy, the other binds host ports for your own reverse proxy."
+      intro="Three compose files, three deployment shapes. In every one, Icecast and Liquidsoap share a single broadcast container. Dev mode runs the radio backend in Docker and the Next.js UI on the host with hot reload, so you can work on the web without a rebuild. The two prod variants differ only at the edge: one bundles Caddy, the other binds host ports for your own reverse proxy."
       current="/setup/development"
     >
       <section className="bs-section">
@@ -23,12 +23,12 @@ export default function Development() {
           <tbody>
             <tr>
               <td><code className="bs-code-inline">docker-compose.yml</code></td>
-              <td>prod — broadcast · controller · web · caddy edge on <code className="bs-code-inline">:7700</code></td>
+              <td>prod: broadcast · controller · web · caddy edge on <code className="bs-code-inline">:7700</code></td>
               <td><code className="bs-code-inline">${'{STATE_DIR:-<repo>/state}'}</code></td>
             </tr>
             <tr>
               <td><code className="bs-code-inline">docker-compose.byo.yml</code></td>
-              <td>same as prod minus caddy — web, controller, broadcast on host ports{' '}
+              <td>same as prod minus caddy: web, controller, broadcast on host ports{' '}
                 <code className="bs-code-inline">:7700</code> /{' '}
                 <code className="bs-code-inline">:7701</code> /{' '}
                 <code className="bs-code-inline">:7702</code> for your own reverse proxy
@@ -37,7 +37,7 @@ export default function Development() {
             </tr>
             <tr>
               <td><code className="bs-code-inline">docker-compose.dev.yml</code></td>
-              <td>dev — broadcast · controller with <code className="bs-code-inline">tsx watch</code> hot-reload (web runs separately on host)</td>
+              <td>dev: broadcast · controller with <code className="bs-code-inline">tsx watch</code> hot-reload (web runs separately on host)</td>
               <td><code className="bs-code-inline">./state</code></td>
             </tr>
           </tbody>
@@ -64,7 +64,7 @@ export default function Development() {
           <div className="bs-cmd">
             <CodeBlock>{`npm run dev:docker`}</CodeBlock>
             <p>
-              <code className="bs-code-inline">docker compose up -d</code> — radio
+              <code className="bs-code-inline">docker compose up -d</code>, radio
               backend only.
             </p>
           </div>
@@ -72,14 +72,14 @@ export default function Development() {
             <CodeBlock>{`npm run dev:web`}</CodeBlock>
             <p>
               <code className="bs-code-inline">next dev</code> on{' '}
-              <code className="bs-code-inline">:7700</code> — hot-reloaded UI.
+              <code className="bs-code-inline">:7700</code>, the hot-reloaded UI.
             </p>
           </div>
           <div className="bs-cmd">
             <CodeBlock>{`npm run rebuild`}</CodeBlock>
             <p>
-              <code className="bs-code-inline">docker compose up -d --build</code> —
-              rarely needed in dev, since <code className="bs-code-inline">controller/src</code>{' '}
+              <code className="bs-code-inline">docker compose up -d --build</code>.
+              Rarely needed in dev, since <code className="bs-code-inline">controller/src</code>{' '}
               and <code className="bs-code-inline">radio.liq</code> are bind-mounted.
             </p>
           </div>
@@ -105,11 +105,11 @@ export default function Development() {
         <div className="bs-cmd-list">
           <div className="bs-cmd">
             <CodeBlock>{`npm run dev:docker`}</CodeBlock>
-            <p>Terminal 1 — radio backend (broadcast + controller).</p>
+            <p>Terminal 1, radio backend (broadcast + controller).</p>
           </div>
           <div className="bs-cmd">
             <CodeBlock>{`npm run dev:web`}</CodeBlock>
-            <p>Terminal 2 — Next.js on http://localhost:7700.</p>
+            <p>Terminal 2, Next.js on http://localhost:7700.</p>
           </div>
         </div>
         <p>

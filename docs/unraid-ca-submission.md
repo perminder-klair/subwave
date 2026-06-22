@@ -1,5 +1,10 @@
 # Submitting SUB/WAVE to Unraid Community Applications
 
+> **Status: published.** SUB/WAVE is live in Community Applications —
+> [ca.unraid.net/apps/sub-wave](https://ca.unraid.net/apps/sub-wave-073qgwu0ch9rtu).
+> This runbook now applies to *re-scanning after changes* and to anyone forking
+> the listing.
+
 Maintainer runbook. The CA submission files live at the **root of this repo** —
 `ca_profile.xml` + `templates/subwave.xml` — so the app and its store listing
 stay versioned together. The runnable artifact is the `subwave-aio` image

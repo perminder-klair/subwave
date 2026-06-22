@@ -179,13 +179,15 @@ export const LLM_PROVIDERS = [
 ];
 
 // Subset of LLM_PROVIDERS that can actually produce text embeddings — the
-// library tagger embeds every track (music/embeddings.ts), and several chat
-// providers route chat ONLY: openrouter, deepseek and the Vercel AI gateway
-// have no embeddings endpoint. Offering them in the embedding-provider picker
-// silently fell through to a local Ollama and failed with a misleading
-// "can't reach <provider>" error (#493). `anthropic` stays in — it has no
-// first-party embedding model, but llm/internal/provider/embedding.ts routes it
-// to OpenAI (needs OPENAI_API_KEY), as the picker hint already explains.
+// library tagger embeds every track (music/embeddings.ts). Two chat providers
+// still route chat ONLY: deepseek and the Vercel AI gateway have no embeddings
+// endpoint. Offering them in the embedding-provider picker silently fell through
+// to a local Ollama and failed with a misleading "can't reach <provider>" error
+// (#493). `openrouter` was originally in that chat-only set, but OpenRouter
+// shipped an OpenAI-compatible embeddings endpoint, so it's back in (#522) and
+// routes through llm/internal/provider/embedding.ts. `anthropic` stays in too —
+// it has no first-party embedding model, but embedding.ts routes it to OpenAI
+// (needs OPENAI_API_KEY), as the picker hint already explains.
 export const EMBEDDING_PROVIDERS = [
   'ollama',
   'openai-compatible',
@@ -193,6 +195,7 @@ export const EMBEDDING_PROVIDERS = [
   'anthropic',
   'openai',
   'google',
+  'openrouter',
 ];
 
 // Coerce a stored Ollama context-window value. 0 disables (use Ollama's own
@@ -576,6 +579,14 @@ const DEFAULTS = {
     // reports zero listeners — the stream coasts on the auto playlist — and
     // resume as soon as someone tunes in. Off by default.
     pauseWhenEmpty: false,
+    // When on (or when LLM_DEBUG_RAW is set in the env), every outbound model
+    // request's exact body is captured to ${STATE_DIR}/logs/llm-debug.log (the
+    // last 10, newest first) and dumped to stderr — a copy-pasteable view of
+    // exactly what SUB/WAVE sends the provider, for debugging odd model
+    // behaviour. The admin toggle (admin → Debug) means no-CLI operators can
+    // flip it without editing env; the env flag can only force it on. Off by
+    // default: zero file writes / overhead when disabled.
+    debugRawRequests: false,
     // Optional backup LLM. When `enabled`, any LLM call whose primary host is
     // unreachable (connection refused / DNS / timeout — NOT a 429/5xx from a
     // host that's up) is retried once against this leg, then routed straight
@@ -624,12 +635,19 @@ const DEFAULTS = {
     confidenceThreshold: 0.6,
     maxActiveLearningRounds: 3,
     enrichment: {
-      // Vanilla Navidrome's getArtistInfo2 doesn't surface Last.fm crowd
-      // tags (the agent only exposes bio + images). Until SUB/WAVE adds a
-      // direct Last.fm API path, leave this off — enabling it just wastes
-      // an HTTP round trip per artist with empty results. Operators
-      // running a custom Navidrome that does expose tag[] can flip it on.
-      lastfmTags: false,
+      // Last.fm crowd tags. Tri-state: true = always fetch, false = never,
+      // null = auto (fetch only when a Last.fm api_key is configured — see
+      // music/lastfm.ts + the gate in tag-library.ts phaseEnrich).
+      //
+      // Tags now come straight from the Last.fm REST API (artist.getTopTags)
+      // reusing the scrobbling api_key, which actually returns tag[]. The old
+      // path went through Navidrome's getArtistInfo2, where vanilla Navidrome's
+      // agent only surfaces bio + images — never tag[] — so tags always came
+      // back empty. That Navidrome path stays as the fallback when lastfmTags
+      // is forced on (true) but no api_key is set (custom Navidromes that DO
+      // expose tag[]). Default `null` avoids the wasted round trip for keyless
+      // vanilla-Navidrome installs.
+      lastfmTags: null as boolean | null,
       lyrics: true,       // fetch + include lyric excerpt in embed text
     },
   },
@@ -845,6 +863,10 @@ function normalizeShows(raw: any, personaIds: string[]) {
     const fromYear = Number.isFinite(item.fromYear) ? Math.trunc(item.fromYear) : null;
     const toYear = Number.isFinite(item.toYear) ? Math.trunc(item.toYear) : null;
     const energy = SHOW_ENERGY.includes(item.energy) ? item.energy : '';
+    // Opt-in: hard-filter the pick pool to `genre` instead of the default soft
+    // lean. Only meaningful when a genre is set; defaults off so existing shows
+    // and soft shows are byte-for-byte unchanged.
+    const genreStrict = item.genreStrict === true;
     out.push({
       id,
       name,
@@ -856,6 +878,7 @@ function normalizeShows(raw: any, personaIds: string[]) {
       fromYear,
       toYear,
       energy,
+      genreStrict,
     });
     if (out.length >= SHOWS_LIMIT) break;
   }
@@ -1081,6 +1104,10 @@ export async function load() {
         typeof stored.llm?.pauseWhenEmpty === 'boolean'
           ? stored.llm.pauseWhenEmpty
           : DEFAULTS.llm.pauseWhenEmpty,
+      debugRawRequests:
+        typeof stored.llm?.debugRawRequests === 'boolean'
+          ? stored.llm.debugRawRequests
+          : DEFAULTS.llm.debugRawRequests,
       // Backup leg — same connection fields as the primary, coerced identically.
       fallback: (() => {
         const fb = stored.llm?.fallback || {};
@@ -1497,6 +1524,8 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     if (energy && !SHOW_ENERGY.includes(energy)) {
       throw new Error(`shows[${i}].energy must be one of: ${SHOW_ENERGY.join(', ')}`);
     }
+    // Opt-in hard genre filter (vs the default soft lean). Boolean, defaults off.
+    const genreStrict = item.genreStrict === true;
     const parseYear = (v, field) => {
       if (v == null || v === '') return null;
       const n = Number(v);
@@ -1513,7 +1542,7 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId, genre, fromYear, toYear, energy };
+    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId, genre, fromYear, toYear, energy, genreStrict };
   });
 }
 
@@ -1877,6 +1906,9 @@ export async function update(patch) {
     if (l.pauseWhenEmpty !== undefined) {
       next.llm.pauseWhenEmpty = !!l.pauseWhenEmpty;
     }
+    if (l.debugRawRequests !== undefined) {
+      next.llm.debugRawRequests = !!l.debugRawRequests;
+    }
     // An OpenAI-compatible provider is useless without a server to talk to.
     if (next.llm.provider === 'openai-compatible' && !next.llm.baseUrl) {
       throw new Error('llm.baseUrl is required when provider is "openai-compatible"');
@@ -2153,6 +2185,10 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     fromYear: Number.isFinite(show.fromYear) ? show.fromYear : null,
     toYear: Number.isFinite(show.toYear) ? show.toYear : null,
     energy: typeof show.energy === 'string' ? show.energy : '',
+    // When true (and a genre is set) the pick pool is hard-filtered to the
+    // genre instead of softly leaned; off-genre tracks only survive as a
+    // never-starve fallback. Defaults off.
+    genreStrict: show.genreStrict === true,
     // Empty string means "fall back to the station-wide default". The route
     // layer is responsible for resolving an empty/stale id against the live
     // theme registry; we just surface what the show declares.

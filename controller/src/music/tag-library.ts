@@ -23,6 +23,7 @@
 // tracks table as legacy v1 entries (see library-db.ts).
 
 import * as subsonic from './subsonic.js';
+import * as lastfm from './lastfm.js';
 import * as db from './library-db.js';
 import * as settings from '../settings.js';
 import * as embeddings from './embeddings.js';
@@ -505,11 +506,24 @@ function finish(startedAt: number, llmCalls: number, llmTagged: number, byLeg: R
 async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
   if (ids.length === 0) return;
   const enrichCfg = (settings.get() as any).embedding?.enrichment ?? {};
-  const lastfmEnabled = enrichCfg.lastfmTags !== false;
+  // A configured Last.fm api_key (LASTFM_API_KEY / scrobble.lastfm.apiKey) lets
+  // us hit the Last.fm API directly (music/lastfm.ts), which actually returns
+  // tag[]. Tri-state gate: explicit `true` always enriches; explicit `false`
+  // never does; the default (null/unset) enriches only when a key is present —
+  // so keyless vanilla-Navidrome installs don't waste a round trip per artist
+  // on the tag-less getArtistInfo2 path.
+  const hasKey = lastfm.hasLastfmKey();
+  const lastfmEnabled =
+    enrichCfg.lastfmTags === true || (enrichCfg.lastfmTags !== false && hasKey);
   const lyricsEnabled = enrichCfg.lyrics !== false;
   if (!lastfmEnabled && !lyricsEnabled) {
     console.log('[tag] phase-0 skipped: both lastfmTags and lyrics disabled in settings.embedding.enrichment');
     return;
+  }
+  if (lastfmEnabled) {
+    console.log(
+      `[tag] phase-0 Last.fm tags via ${hasKey ? 'direct API (artist.getTopTags)' : 'Navidrome getArtistInfo2 (no api_key — likely empty)'}`,
+    );
   }
   reportProgress({ phase: 'enrich', label: 'Enriching metadata', done: 0, total: ids.length });
   const artistTagCache = new Map<string, string[]>();
@@ -529,11 +543,19 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
         lastfmTags = artistTagCache.get(cacheKey) ?? null;
       } else {
         try {
-          const matches = await subsonic.searchArtists(t.artist, { artistCount: 1 });
-          const artistId = matches?.[0]?.id;
-          if (artistId) {
-            const tags = await subsonic.getArtistLastfmTags(artistId, { count: 10 });
-            lastfmTags = tags;
+          if (hasKey) {
+            // Direct Last.fm API — reuses the scrobbling api_key and actually
+            // returns crowd tags (artist.getTopTags). Returns [] on miss/error.
+            lastfmTags = await lastfm.getArtistTopTags(t.artist, { count: 10 });
+          } else {
+            // Fallback: route through Navidrome's getArtistInfo2. Only useful on
+            // a custom Navidrome whose agent exposes tag[]; empty on vanilla.
+            const matches = await subsonic.searchArtists(t.artist, { artistCount: 1 });
+            const artistId = matches?.[0]?.id;
+            if (artistId) {
+              const tags = await subsonic.getArtistLastfmTags(artistId, { count: 10 });
+              lastfmTags = tags;
+            }
           }
         } catch { /* ignore */ }
         artistTagCache.set(cacheKey, lastfmTags ?? []);

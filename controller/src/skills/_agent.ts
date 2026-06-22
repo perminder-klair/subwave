@@ -80,7 +80,7 @@ export const CAPABILITIES: any[] = [
   {
     kind: 'traffic', skill: 'traffic', label: 'Traffic',
     cooldownMs: 90 * 60 * 1000,
-    desc: 'A tongue-in-cheek made-up "traffic update for the listening area" — one absurd, small-scale sentence (a cat on the cable, a queue at the kettle, slow buffering on the M6). Never a real road incident.',
+    desc: 'A deadpan mock "travel and traffic report for the listening area" — one absurd, small-scale sentence played dead straight, like a real travel bulletin, but about everyday or online congestion instead of roads: a tailback at the kettle, a bottleneck on the stairs, slow buffering in the inside lane, a queue building on the sofa. Keep it small and universal — never a real road, place name, or actual incident.',
   },
   {
     kind: 'curiosity', skill: 'curiosity', label: 'Curiosity',

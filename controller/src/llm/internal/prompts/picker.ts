@@ -12,24 +12,38 @@ export const PICKER_CRITERIA = `Selection criteria, in order:
 3. VARIETY — avoid the same artist back-to-back; don't repeat tracks you've already played today; rotate energy. Variety over cleverness — never pick a track because its title literally matches the time of day, the weather, or anything else literal.
 4. INTEREST — prefer something that creates a moment, not the most generic option.`;
 
-export type ShowMusic = { name: string; topic: string; genre?: string; fromYear?: number | null; toYear?: number | null; energy?: string };
+export type ShowMusic = { name: string; topic: string; genre?: string; fromYear?: number | null; toYear?: number | null; energy?: string; genreStrict?: boolean };
 
-// A show can pin a genre, decade and/or energy band as a SOFT lean on track
-// selection. Render it as one prompt line shared by both pick paths (the pool
-// picker here and the conversational agent in broadcast/dj-agent.ts). Returns
-// '' when the show pins nothing, so callers can append it unconditionally.
+// A show can pin a genre, decade and/or energy band on track selection. Genre
+// is a SOFT lean by default, or a HARD constraint when `genreStrict` is on;
+// decade and energy are always soft. Render it as one prompt line shared by both
+// pick paths (the pool picker here and the conversational agent in
+// broadcast/dj-agent.ts). Returns '' when the show pins nothing, so callers can
+// append it unconditionally.
 export function showMusicLean(show?: ShowMusic | null): string {
   if (!show) return '';
+  // Strict only bites when there's actually a genre to lock to.
+  const strict = !!(show.genreStrict && show.genre);
+  // Soft preferences (the genre lean is dropped here when strict — it becomes a
+  // hard rule on its own line below).
   const parts: string[] = [];
-  if (show.genre) parts.push(`lean toward ${show.genre}`);
+  if (show.genre && !strict) parts.push(`lean toward ${show.genre}`);
   if (show.fromYear != null || show.toYear != null) {
     const from = show.fromYear != null ? String(show.fromYear) : '';
     const to = show.toYear != null ? String(show.toYear) : '';
     parts.push(from && to ? `prefer tracks from ${from}–${to}` : `prefer tracks ${from ? `from ${from} onward` : `up to ${to}`}`);
   }
   if (show.energy) parts.push(`favour ${show.energy}-energy tracks`);
-  if (!parts.length) return '';
-  return `\n\nMusic steer for this show — ${parts.join('; ')}. These are preferences, not hard filters: break them only when the flow genuinely demands it.`;
+
+  // The hard genre rule, phrased as a constraint rather than a preference. Still
+  // carries the never-starve escape hatch so a thin genre can't strand the show.
+  const lock = strict
+    ? `\n\nGenre lock for this show — every pick MUST be ${show.genre}. Stay within ${show.genre}; do not pick other genres. Only reach outside ${show.genre} if there is genuinely no ${show.genre} track left to play (never leave dead air).`
+    : '';
+  const soft = parts.length
+    ? `\n\nMusic steer for this show — ${parts.join('; ')}. These are preferences, not hard filters: break them only when the flow genuinely demands it.`
+    : '';
+  return `${lock}${soft}`;
 }
 
 function pickerSystem(show?: ShowMusic | null) {

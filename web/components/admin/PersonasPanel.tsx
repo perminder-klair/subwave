@@ -371,6 +371,13 @@ export default function PersonasPanel() {
   // Per-persona "uploading" flag — drives the spinner / disables the buttons
   // while the request is in flight.
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  // The editor column. After adding a persona we scroll it into view so the
+  // operator actually sees the new persona open for editing — on mobile the
+  // editor stacks below the long roster and would otherwise be off-screen.
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  // Set true by addPersona so the focus-change effect knows to scroll. A plain
+  // roster click changes focus too, but shouldn't yank the page around.
+  const scrollToEditorRef = useRef(false);
 
   const load = async () => {
     try {
@@ -436,6 +443,14 @@ export default function PersonasPanel() {
     })();
   }, [hydrated, needsAuth, adminFetch]);
 
+  // After an add bumps focus to the new persona, bring the editor into view.
+  // Guarded by scrollToEditorRef so ordinary roster clicks don't scroll.
+  useEffect(() => {
+    if (!scrollToEditorRef.current) return;
+    scrollToEditorRef.current = false;
+    editorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [focusIdx]);
+
   // ── persona helpers ──────────────────────────────────────────────────────
   const setPersona = (i: number, patch: Partial<Persona>) =>
     setForm(f => f ? { ...f, personas: f.personas.map((p, idx) => (idx === i ? { ...p, ...patch } : p)) } : f);
@@ -443,7 +458,11 @@ export default function PersonasPanel() {
     setForm(f => f ? { ...f, personas: f.personas.map((p, idx) => (idx === i ? { ...p, tts: { ...p.tts, ...patch } } : p)) } : f);
   const setPersonaSkills = (i: number, skills: string[]) =>
     setForm(f => f ? { ...f, personas: f.personas.map((p, idx) => (idx === i ? { ...p, skills } : p)) } : f);
-  const addPersona = () =>
+  const addPersona = () => {
+    if (!form || form.personas.length >= PERSONA_MAX) return;
+    // The new persona lands at the end of the roster — its index is the
+    // current length. Capture it before the append so we can focus it.
+    const newIdx = form.personas.length;
     setForm(f => {
       if (!f) return f;
       if (f.personas.length >= PERSONA_MAX) return f;
@@ -460,6 +479,13 @@ export default function PersonasPanel() {
         }],
       };
     });
+    // Open the new persona in the editor (+ scroll it into view) and confirm
+    // with a toast — otherwise the add is silent and the operator never notices
+    // the entry tucked at the bottom of the roster.
+    scrollToEditorRef.current = true;
+    setFocusIdx(newIdx);
+    notify.ok('New persona added — fill in its details, then Save persona.');
+  };
   const removePersona = (i: number) =>
     setForm(f => {
       if (!f) return f;
@@ -841,7 +867,7 @@ export default function PersonasPanel() {
         </div>
 
         {/* EDITOR */}
-        <div className="grid gap-4">
+        <div ref={editorRef} className="grid scroll-mt-4 gap-4">
           <Card
             title={`Editing · ${focused.name.trim() || `Persona ${safeIdx + 1}`}`}
             sub={`persona ${safeIdx + 1} of ${form.personas.length}`}

@@ -200,10 +200,12 @@ export function pickSystem() {
   const showLine = activeShow?.topic
     ? `\n\nCurrent show brief — follow this for every pick:\n${activeShow.topic}`
     : '';
-  // The same soft genre/decade/energy lean the pool picker applies — the agent
+  // The same genre/decade/energy steer the pool picker applies — the agent
   // already owns songsByGenre + tracksByMood(energy) tools, so this line is
-  // enough to make it reach for them. Lives in the system prompt for the same
-  // session-window reason as the show brief above.
+  // enough to make it reach for them. showMusicLean reflects the show's
+  // genreStrict here too: a strict show gets a hard "stay within {genre}" rule
+  // instead of a soft lean, so both pick paths honour strict the same way. Lives
+  // in the system prompt for the same session-window reason as the show brief.
   const musicLean = dj.showMusicLean(activeShow);
   return `${settings.agentPersonaPreamble(persona, { rules: false })}
 

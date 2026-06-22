@@ -98,6 +98,13 @@ interface DebugLlm {
   activeModel?: string;
   provider?: string;
   recentCalls?: LlmCall[];
+  /** Raw-request capture status — drives the toggle + file-path hint. */
+  debug?: {
+    enabled?: boolean;
+    viaEnv?: boolean;
+    file?: string;
+    max?: number;
+  };
 }
 
 interface SubsonicEndpoint {
@@ -831,10 +838,34 @@ function FilterChip({ active, onClick, children }: FilterChipProps) {
 }
 
 function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
+  const { adminFetch } = useAdminAuth();
   const calls = llm?.recentCalls || [];
   const [filter, setFilter] = useState('all');
   const kinds = Array.from(new Set(calls.map(c => c.kind).filter(Boolean) as string[]));
   const shown = filter === 'all' ? calls : calls.filter(c => c.kind === filter);
+
+  const dbg = llm?.debug;
+  const viaEnv = !!dbg?.viaEnv;
+  // Optimistic local view so the checkbox responds instantly; the 2s /debug poll
+  // reconciles it. Cleared whenever the server-reported value changes (below).
+  const [override, setOverride] = useState<boolean | null>(null);
+  const enabled = override ?? !!dbg?.enabled;
+  useEffect(() => { setOverride(null); }, [dbg?.enabled]);
+
+  const toggleRaw = async (next: boolean) => {
+    if (viaEnv) return; // LLM_DEBUG_RAW forces it on — can't change from here
+    setOverride(next);
+    try {
+      await adminFetch('/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ llm: { debugRawRequests: next } }),
+      });
+    } catch {
+      setOverride(null);
+    }
+  };
+
   return (
     <Card
       title="LLM recent calls"
@@ -852,6 +883,23 @@ function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
         </div>
       }
     >
+      {/* Raw-request capture — writes the last N exact request bodies to a file
+          operators can open. Toggle here, or set LLM_DEBUG_RAW in the env. */}
+      <div className="mb-2 grid gap-1 border border-separator-strong p-2.5">
+        <Label className="flex cursor-pointer items-center gap-2 text-[11px] tracking-[0.12em] text-muted uppercase">
+          <Checkbox
+            checked={enabled}
+            disabled={viaEnv}
+            onCheckedChange={v => toggleRaw(v === true)}
+          />
+          Raw request capture {enabled ? 'on' : 'off'}
+          {viaEnv && <span className="normal-case">· forced on by LLM_DEBUG_RAW</span>}
+        </Label>
+        <span className="field-hint">
+          last {dbg?.max ?? 10} raw request bodies (newest first) →{' '}
+          <code className="break-all">{dbg?.file || `${'…'}/logs/llm-debug.log`}</code>
+        </span>
+      </div>
       <div className="grid max-h-[600px] gap-1.5 overflow-y-auto">
         {shown.length === 0 && (
           <span className="field-hint italic">

@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <Container version="2">
-  <Name>SUB-WAVE</Name>
+  <Name>subwave</Name>
   <Repository>ghcr.io/perminder-klair/subwave-aio:latest</Repository>
   <Registry>https://ghcr.io/perminder-klair/subwave-aio</Registry>
   <Network>bridge</Network>
@@ -16,25 +16,23 @@
   <WebUI>http://[IP]:[PORT:80]</WebUI>
 
   <Overview>
-    SUB/WAVE is a personal internet radio station: one Icecast stream every
-    listener hears together, with an AI DJ that picks tracks from your own
-    Navidrome / Subsonic library and reads scripts between them (station IDs,
-    the time, the weather, listener requests).
+    SUB/WAVE is a personal internet radio station. One Icecast stream, everyone
+    hears the same thing at once, and an AI DJ pulls the tracks from your own
+    Navidrome (or any Subsonic) library and talks between them: station IDs, the
+    time, the weather, song requests.
 
-    This is the all-in-one image — icecast2 + liquidsoap, the controller, the
-    Next.js web UI and a Caddy edge all run in this one container behind a
-    single port. Everything persists under the Appdata path.
+    This is the all-in-one build. Icecast, Liquidsoap, the DJ controller, the web
+    player and a Caddy front-end all run in this single container on one port.
+    Your settings, library cache and recordings live under the Appdata path.
 
-    [b]After it starts, open the WebUI and go to /onboarding[/b] (sign in with
-    the admin user/password you set here) to point it at your Navidrome server,
-    pick an LLM provider (Ollama local or cloud, or a cloud API key) and a
-    voice, and shape the DJ persona. The bundled Piper voice means the DJ can
-    talk out of the box with no extra setup.
+    Once it's up, open the WebUI and go to /onboarding. Sign in with the admin
+    login you set here, point it at your Navidrome server, choose an LLM provider
+    and a voice, and give the DJ a personality. There's a built-in Piper voice,
+    so it can talk straight away with nothing else to install.
 
-    Needs: a reachable Navidrome / Subsonic music server, and an LLM provider.
-    Most Unraid boxes have no big GPU, so Ollama cloud models are the easiest
-    path — install the official ollama container, run "ollama signin" in its
-    console, then set the provider to "Ollama - local/cloud" with a :cloud model.
+    No big GPU? That's most Unraid boxes. Install the official ollama container,
+    run "ollama signin" in its console, and pick an Ollama cloud model. A small
+    local model works too if you'd rather keep everything on the box.
   </Overview>
 
   <Support>https://github.com/perminder-klair/subwave/issues</Support>
@@ -43,7 +41,7 @@
   <ReadMe>https://raw.githubusercontent.com/perminder-klair/subwave/main/README.md</ReadMe>
 
   <Category>MediaApp:Music MediaServer:Music</Category>
-  <ExtraSearchTerms>radio internet radio icecast liquidsoap ai dj navidrome subsonic stream ollama station broadcast</ExtraSearchTerms>
+  <ExtraSearchTerms>subwave sub-wave sub/wave subwave-aio radio internet radio icecast liquidsoap ai dj navidrome subsonic stream ollama station broadcast</ExtraSearchTerms>
   <Requires>A reachable Navidrome / Subsonic music server and an LLM provider (Ollama local/cloud or a cloud API key), both configured in the browser at /onboarding after first boot.</Requires>
 
   <Date>2026-06-22</Date>

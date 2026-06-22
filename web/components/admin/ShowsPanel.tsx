@@ -24,7 +24,7 @@ import { Field } from '../ui/field';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
 } from '../ui/select';
-import { Card, Btn, Pill, Eyebrow, Metric } from './ui';
+import { Card, Btn, Pill, Eyebrow, Metric, Toggle } from './ui';
 import { Modal } from '../ui/modal';
 import { AiFill } from './AiFill';
 import { cn } from '../../lib/cn';
@@ -69,6 +69,10 @@ interface Show {
   fromYear: number | null;
   toYear: number | null;
   energy: string;
+  /** When true (and a genre is set) the genre becomes a HARD filter on the pick
+   *  pool instead of a soft lean — off-genre tracks only play as a last resort
+   *  to avoid silence. Defaults off. */
+  genreStrict: boolean;
 }
 
 // Decade presets for the era dropdown → fromYear/toYear. 'any' clears the window.
@@ -174,9 +178,11 @@ function NowCard({ label, accent, slotHour, show, color, personaLabel }: NowCard
 }
 
 // Compact " · genre · 80s · high" suffix for the show summary lines, omitting
-// whatever the show doesn't pin.
-function showFilterSummary(s: { genre: string; fromYear: number | null; toYear: number | null; energy: string }): string {
-  const bits = [s.genre, decadeLabelOf(s), s.energy].filter(Boolean);
+// whatever the show doesn't pin. A strict genre is flagged inline so the hard
+// lock is visible at a glance.
+function showFilterSummary(s: { genre: string; fromYear: number | null; toYear: number | null; energy: string; genreStrict?: boolean }): string {
+  const genre = s.genre ? (s.genreStrict ? `${s.genre} (strict)` : s.genre) : '';
+  const bits = [genre, decadeLabelOf(s), s.energy].filter(Boolean);
   return bits.length ? ` · ${bits.join(' · ')}` : '';
 }
 
@@ -283,6 +289,7 @@ export default function ShowsPanel() {
           fromYear: s.fromYear ?? null,
           toYear: s.toYear ?? null,
           energy: s.energy ?? '',
+          genreStrict: s.genreStrict ?? false,
         }));
         setForm({ shows, schedule: week });
         // Arm the first valid show as the brush so the grid is paintable at once.
@@ -343,7 +350,7 @@ export default function ShowsPanel() {
       id: '', name: '', topic: '',
       personaId: personas[0]?.id || '', mood: moods[0] || '',
       themeId: '',
-      genre: '', fromYear: null, toYear: null, energy: '',
+      genre: '', fromYear: null, toYear: null, energy: '', genreStrict: false,
     });
   };
   const openEdit = (i: number) => {
@@ -356,6 +363,7 @@ export default function ShowsPanel() {
       personaId: s.personaId, mood: s.mood,
       themeId: s.themeId || '',
       genre: s.genre || '', fromYear: s.fromYear ?? null, toYear: s.toYear ?? null, energy: s.energy || '',
+      genreStrict: s.genreStrict ?? false,
     });
   };
   const closeModal = () => { setEditIndex(null); setDraft(null); };
@@ -367,6 +375,8 @@ export default function ShowsPanel() {
       personaId: draft.personaId, mood: draft.mood,
       themeId: draft.themeId || '',
       genre: draft.genre.trim(), fromYear: draft.fromYear, toYear: draft.toYear, energy: draft.energy || '',
+      // Strict is only meaningful with a genre to lock to — drop it otherwise.
+      genreStrict: !!draft.genre.trim() && draft.genreStrict,
     };
     if (editIndex === -1) {
       const id = clientMintId();
@@ -503,6 +513,7 @@ export default function ShowsPanel() {
             personaId: s.personaId, mood: s.mood,
             themeId: s.themeId || '',
             genre: s.genre.trim(), fromYear: s.fromYear, toYear: s.toYear, energy: s.energy || '',
+            genreStrict: !!s.genre.trim() && s.genreStrict,
           })),
           schedule: form.schedule,
         }),
@@ -897,6 +908,26 @@ export default function ShowsPanel() {
                 </Select>
               </Field>
             </div>
+
+            <div className="flex items-start gap-3">
+              <div className="pt-0.5">
+                <Toggle
+                  on={draft.genreStrict}
+                  disabled={!draft.genre.trim()}
+                  onClick={() => setDraftField({ genreStrict: !draft.genreStrict })}
+                />
+              </div>
+              <div className="grid gap-0.5">
+                <Label className={!draft.genre.trim() ? 'opacity-40' : undefined}>
+                  Strict genre
+                </Label>
+                <span className="field-hint">
+                  Stay strictly within this genre (off-genre tracks only as a last
+                  resort to avoid silence). Needs a genre lean set above.
+                </span>
+              </div>
+            </div>
+
             <span className="field-hint -mt-1.5">
               Optional soft music steer for this show — a genre, an era, an energy
               band, or any mix. The DJ leans toward these but can break them for

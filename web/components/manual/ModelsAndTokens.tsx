@@ -198,13 +198,12 @@ export default function ModelsAndTokens() {
             point embeddings at Ollama or OpenAI instead.
           </li>
           <li>
-            <strong>Some providers do chat only</strong> — OpenRouter, DeepSeek and the
-            Vercel AI gateway have no embeddings endpoint at all. A DJ on one of those works
-            fine, but the tagger can't follow it, so the console only lists{' '}
-            <em>embedding-capable</em> providers in the tagger dropdown (Ollama, OpenAI,
-            Google, locca, OpenAI-compatible). If you don't see your chat provider there,
-            that's why — pick Ollama (local and free) for the embedding step and leave the
-            DJ where it is.
+            <strong>Some providers do chat only</strong> — DeepSeek and the Vercel AI
+            gateway have no embeddings endpoint at all. A DJ on one of those works fine, but
+            the tagger can't follow it, so the console only lists <em>embedding-capable</em>{' '}
+            providers in the tagger dropdown (Ollama, OpenAI, Google, OpenRouter, locca,
+            OpenAI-compatible). If you don't see your chat provider there, that's why — pick
+            Ollama (local and free) for the embedding step and leave the DJ where it is.
           </li>
           <li>
             <strong>locca and OpenAI-compatible need a dedicated embedding server</strong> —
