@@ -1,0 +1,93 @@
+// Direct Last.fm tag client (read-only).
+//
+// Library tag enrichment wants Last.fm's crowd tags for an artist. The older
+// path went *through* Navidrome (subsonic.getArtistLastfmTags → getArtistInfo2),
+// but vanilla Navidrome's agent only surfaces bio + images there, never the
+// tag[] array — so tags always came back empty. This module skips Navidrome and
+// hits the Last.fm REST API directly, reusing the api_key the operator already
+// configured for scrobbling (LASTFM_API_KEY / settings.scrobble.lastfm.apiKey).
+//
+// Read methods (artist.getTopTags) are unauthenticated beyond the api_key — no
+// md5 signing, no session key (unlike the write calls in broadcast/scrobble.ts).
+// Every call is fire-and-forget with a 5s timeout and returns [] on any failure
+// so the caller can fall back; no retry (project convention — Last.fm's read
+// API is generous and the tagger loop is already sequential + per-artist cached).
+
+import * as settings from '../settings.js';
+
+const TIMEOUT_MS = 5000;
+const LASTFM_API = 'https://ws.audioscrobbler.com/2.0/';
+
+// artist.getTopTags returns a normalised popularity `count` (0–100, top tag at
+// 100). A count of 0 means essentially nobody applied the tag after
+// normalisation — pure noise — so drop those. Anything with a positive (or
+// missing/non-numeric) count is kept; the slice to `count` handles ordering,
+// since Last.fm returns tags sorted by popularity descending.
+const MIN_TAG_COUNT = 1;
+
+// Resolve the Last.fm api_key. Env wins, then settings.scrobble.lastfm.apiKey.
+// Note: unlike scrobbling, tag fetching does NOT require scrobble.enabled — the
+// key alone is enough to read public tags.
+function resolveKey(): string {
+  const s: any = settings.get()?.scrobble?.lastfm || {};
+  return process.env.LASTFM_API_KEY || s.apiKey || '';
+}
+
+export function hasLastfmKey(): boolean {
+  return !!resolveKey();
+}
+
+// Last.fm crowd tags for an artist, normalised to lowercase trimmed strings and
+// sliced to `count` (default 10, matching the legacy Navidrome path). Returns []
+// when no key is configured, the artist has no Last.fm coverage, or any request
+// failure — the caller treats [] as "no tags" and may fall back.
+export async function getArtistTopTags(
+  artist: string,
+  opts: { count?: number } = {},
+): Promise<string[]> {
+  const count = opts.count ?? 10;
+  const apiKey = resolveKey();
+  if (!apiKey || !artist || !artist.trim()) return [];
+
+  const params = new URLSearchParams({
+    method: 'artist.getTopTags',
+    artist,
+    autocorrect: '1',
+    api_key: apiKey,
+    format: 'json',
+  });
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const r = await fetch(`${LASTFM_API}?${params.toString()}`, {
+      method: 'GET',
+      headers: { 'User-Agent': 'sub-wave/tags' },
+      signal: ctrl.signal,
+    });
+    if (!r.ok) {
+      console.warn(`[lastfm] artist.getTopTags → ${r.status} for "${artist}"`);
+      return [];
+    }
+    const data = (await r.json()) as any;
+    // 200 doesn't guarantee success — Last.fm embeds a JSON `error` field
+    // (e.g. error 6 "no such artist" for obscure releases). Treat as no tags.
+    if (data?.error) return [];
+    const raw = data?.toptags?.tag ?? [];
+    const arr = Array.isArray(raw) ? raw : [raw];
+    return arr
+      .filter((t: any) => {
+        const c = Number(t?.count);
+        return !Number.isFinite(c) || c >= MIN_TAG_COUNT;
+      })
+      .map((t: any) => (typeof t === 'string' ? t : t?.name))
+      .filter((s: any): s is string => typeof s === 'string' && s.trim().length > 0)
+      .map((s: string) => s.toLowerCase().trim())
+      .slice(0, count);
+  } catch (err: any) {
+    console.warn(`[lastfm] artist.getTopTags failed for "${artist}": ${err?.message || err}`);
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}

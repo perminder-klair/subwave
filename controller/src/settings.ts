@@ -624,12 +624,19 @@ const DEFAULTS = {
     confidenceThreshold: 0.6,
     maxActiveLearningRounds: 3,
     enrichment: {
-      // Vanilla Navidrome's getArtistInfo2 doesn't surface Last.fm crowd
-      // tags (the agent only exposes bio + images). Until SUB/WAVE adds a
-      // direct Last.fm API path, leave this off — enabling it just wastes
-      // an HTTP round trip per artist with empty results. Operators
-      // running a custom Navidrome that does expose tag[] can flip it on.
-      lastfmTags: false,
+      // Last.fm crowd tags. Tri-state: true = always fetch, false = never,
+      // null = auto (fetch only when a Last.fm api_key is configured — see
+      // music/lastfm.ts + the gate in tag-library.ts phaseEnrich).
+      //
+      // Tags now come straight from the Last.fm REST API (artist.getTopTags)
+      // reusing the scrobbling api_key, which actually returns tag[]. The old
+      // path went through Navidrome's getArtistInfo2, where vanilla Navidrome's
+      // agent only surfaces bio + images — never tag[] — so tags always came
+      // back empty. That Navidrome path stays as the fallback when lastfmTags
+      // is forced on (true) but no api_key is set (custom Navidromes that DO
+      // expose tag[]). Default `null` avoids the wasted round trip for keyless
+      // vanilla-Navidrome installs.
+      lastfmTags: null as boolean | null,
       lyrics: true,       // fetch + include lyric excerpt in embed text
     },
   },
