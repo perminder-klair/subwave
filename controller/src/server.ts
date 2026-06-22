@@ -14,7 +14,7 @@ import { startScheduler } from './broadcast/scheduler.js';
 import { startListenerMonitor } from './broadcast/listeners.js';
 import { startAudienceMonitor } from './broadcast/audience.js';
 import { cors } from './middleware/cors.js';
-import { assertAdminConfigured } from './middleware/auth.js';
+import { assertAdminConfigured, initAdminCredentials } from './middleware/auth.js';
 import { router as publicRoutes } from './routes/public.js';
 import { router as requestRoutes } from './routes/request.js';
 import { router as settingsRoutes } from './routes/settings.js';
@@ -90,6 +90,14 @@ app.listen(config.server.port, async () => {
     }
   } catch (err: any) {
     console.error('[secrets] load failed:', err.message);
+  }
+
+  // Load or migrate admin credentials (env -> scrypt hash file).
+  // Must run after secrets are loaded but before any admin route can fire.
+  try {
+    await initAdminCredentials();
+  } catch (err: any) {
+    console.error('[admin-credentials] init failed:', err.message);
   }
 
   // Wizard overlay — Navidrome creds the operator typed in. Env wins; this
