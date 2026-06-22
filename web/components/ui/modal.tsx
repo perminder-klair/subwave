@@ -31,31 +31,32 @@ export function Modal({
   sub,
   children,
   footer,
-  width = 560,
+  width = 600,
 }: ModalProps) {
   const [container, setContainer] = useState<HTMLElement | null>(null);
   useEffect(() => {
     setContainer(document.querySelector<HTMLElement>('.admin-root') || document.body);
   }, []);
 
-  // Dynamic width is parameter-driven; the persistent translate keeps the
-  // dialog centred between the v3-modal-pop entry animation and its idle
-  // resting state.
+  // Centering is done with the STATIC Tailwind translate classes below (matching
+  // the glitch-free ShortcutsDialog), never via a post-mount JS transform — a
+  // JS-applied transform/width lands a frame late and makes the dialog visibly
+  // jump on open. The only dynamic value is the width, fed in as a CSS var so
+  // the class can clamp it to the viewport; the `600px` fallback keeps the very
+  // first paint correct even before the effect runs.
   const contentRef = useRef<HTMLDivElement>(null);
-  useDynamicStyle(contentRef, {
-    width: `min(${width}px, calc(100vw - 2rem))`,
-    transform: 'translate(-50%, -50%)',
-  });
+  useDynamicStyle(contentRef, { '--modal-w': `${width}px` });
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal container={container}>
-        <Dialog.Overlay className="v3-drawer-overlay fixed inset-0 z-40 bg-overlay" />
+        <Dialog.Overlay className="v3-drawer-overlay fixed inset-0 z-40 bg-overlay [backdrop-filter:blur(8px)_saturate(1.1)] [-webkit-backdrop-filter:blur(8px)_saturate(1.1)]" />
         <Dialog.Content
           ref={contentRef}
           aria-describedby={undefined}
           className={cn(
-            'v3-modal-pop fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100vh-3rem)] flex-col border border-ink bg-[var(--card-bg,var(--bg))] text-ink shadow-drawer outline-none',
+            'v3-modal-pop fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100vh-3rem)] w-[var(--modal-w,600px)] max-w-[calc(100vw-2rem)] flex-col border border-ink bg-[var(--card-bg,var(--bg))] text-ink shadow-drawer outline-none',
+            '-translate-x-1/2 -translate-y-1/2',
           )}
         >
           <div className="flex items-baseline justify-between gap-3 border-b border-ink px-5 py-3">

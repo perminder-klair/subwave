@@ -363,13 +363,19 @@ body::after {
     animation: sw-pulse 1.4s ease-in-out infinite;
 }
 
+/* Scale + fade only — NO translate. Both consumers (admin Modal, ShortcutsDialog)
+   are centered with Tailwind's `-translate-x/y-1/2`, which in Tailwind v4 emits
+   the separate CSS `translate:` property. A `transform: translate(...)` here would
+   stack on top of that and double-shift the dialog up-left for the 160ms of the
+   animation before snapping back to center (the open "glitch"). Scaling alone
+   composes cleanly with the `translate:` property, popping in at the center. */
 @keyframes v3-modal-pop {
     from {
-        transform: translate(-50%, -50%) scale(0.97);
+        transform: scale(0.97);
         opacity: 0;
     }
     to {
-        transform: translate(-50%, -50%) scale(1);
+        transform: scale(1);
         opacity: 1;
     }
 }
