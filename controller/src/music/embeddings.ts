@@ -126,9 +126,9 @@ function classifyEmbeddingError(err: any): { code: ProbeCode; raw: string } {
   const raw = err?.message || String(err);
   const status = err?.cause?.status_code ?? err?.statusCode ?? err?.status;
   const txt = raw.toLowerCase();
-  // buildEmbeddingModel throws this for chat-only providers (openrouter /
-  // deepseek / gateway) that have no embeddings endpoint at all (#493). Check
-  // before the network-shaped codes — it's a config error, not a reachability one.
+  // buildEmbeddingModel throws this for chat-only providers (deepseek / gateway)
+  // that have no embeddings endpoint at all (#493). Check before the
+  // network-shaped codes — it's a config error, not a reachability one.
   if (txt.includes('has no text-embedding support')) {
     return { code: 'no_embeddings', raw };
   }
@@ -220,7 +220,7 @@ function actionableMessage(
         `  library tagger can't use it. (The DJ still works on "${provider}".)\n` +
         `  Pick an embedding-capable provider in /admin/settings → Embedding:\n` +
         `    • Ollama   — local + free (ollama pull nomic-embed-text; auto-pulled)\n` +
-        `    • OpenAI / Google — cloud (needs the matching API key)\n` +
+        `    • OpenAI / Google / OpenRouter — cloud (needs the matching API key)\n` +
         `    • locca / openai-compatible — your own embedding server`
       );
     case 'not_embedding_model':
