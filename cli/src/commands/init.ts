@@ -230,16 +230,21 @@ async function scaffold(a: InitAnswers): Promise<void> {
       res(d.toString('hex'));
     });
   });
+  // maxmem is a Node runtime cap, not a scrypt cost parameter, so it is
+  // intentionally omitted from the persisted schema; the controller backfills
+  // a default at read time when computing the verifier.
   const hashData = {
     user: a.adminUser,
     hash,
     salt,
-    scryptParams: { N: 131072, r: 8, p: 1, keyLen: 64, maxmem: SCRYPT_MAXMEM },
+    scryptParams: { N: 131072, r: 8, p: 1, keyLen: 64 },
     changedAt: new Date().toISOString(),
   };
   const hashPath = resolve(a.home, 'state', 'admin-hash.json');
   const hashTmp = `${hashPath}.tmp`;
-  writeFileSync(hashTmp, JSON.stringify(hashData, null, 2) + '\n');
+  // Create with 0600 up front so the tmp file is never world-readable even
+  // under a permissive umask. chmodSync stays as belt-and-suspenders.
+  writeFileSync(hashTmp, JSON.stringify(hashData, null, 2) + '\n', { mode: 0o600 });
   chmodSync(hashTmp, 0o600);
   renameSync(hashTmp, hashPath);
   ok('wrote state/admin-hash.json (scrypt-hashed admin password)');

@@ -41,6 +41,33 @@ import { getSetupStatus } from './setup/firstRun.js';
 // Fail fast in production if the admin gate isn't configured.
 assertAdminConfigured();
 
+// Source the wizard-managed secrets file (state/secrets.env) into process.env
+// before anything else touches the AI SDK. Real env vars (from compose
+// env_file) always win - secrets.env is the persistence layer for keys the
+// operator typed into the first-run wizard. Must run before the server starts
+// accepting requests so any code that reads process.env at request time sees
+// the merged view.
+try {
+  const { loaded, skipped } = await loadSecretsIntoEnv();
+  if (loaded.length || skipped.length) {
+    console.log(
+      `[secrets] state/secrets.env: loaded=${loaded.length} skipped(env-already-set)=${skipped.length}`,
+    );
+  }
+} catch (err: any) {
+  console.error('[secrets] load failed:', err.message);
+}
+
+// Load or migrate admin credentials (env -> scrypt hash file).
+// Must run after secrets are loaded but BEFORE app.listen() - otherwise there
+// is a boot-time bypass window where requireAdmin sees ADMIN_AUTH_REQUIRED=false
+// and waves admin routes through between socket-bind and init-complete.
+try {
+  await initAdminCredentials();
+} catch (err: any) {
+  console.error('[admin-credentials] init failed:', err.message);
+}
+
 const app = express();
 // Global cap covers small JSON payloads everywhere; the persona-avatar route
 // re-applies its own (slightly larger) cap on top via per-route json middleware.
@@ -76,29 +103,6 @@ app.use(generateRoutes);
 // ---------------------------------------------------------------------------
 app.listen(config.server.port, async () => {
   console.log(`SUB/WAVE controller on :${config.server.port}`);
-
-  // Source the wizard-managed secrets file (state/secrets.env) into process.env
-  // before anything else touches the AI SDK. Real env vars (from compose
-  // env_file) always win — secrets.env is the persistence layer for keys the
-  // operator typed into the first-run wizard.
-  try {
-    const { loaded, skipped } = await loadSecretsIntoEnv();
-    if (loaded.length || skipped.length) {
-      console.log(
-        `[secrets] state/secrets.env: loaded=${loaded.length} skipped(env-already-set)=${skipped.length}`,
-      );
-    }
-  } catch (err: any) {
-    console.error('[secrets] load failed:', err.message);
-  }
-
-  // Load or migrate admin credentials (env -> scrypt hash file).
-  // Must run after secrets are loaded but before any admin route can fire.
-  try {
-    await initAdminCredentials();
-  } catch (err: any) {
-    console.error('[admin-credentials] init failed:', err.message);
-  }
 
   // Wizard overlay — Navidrome creds the operator typed in. Env wins; this
   // only fills in fields that env didn't already provide.

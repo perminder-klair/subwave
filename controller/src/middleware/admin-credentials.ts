@@ -7,7 +7,10 @@ export interface ScryptParams {
   r: number;
   p: number;
   keyLen: number;
-  maxmem: number;
+  // Node runtime cap, not a cost parameter. Kept on the in-memory shape for
+  // crypto.scrypt() calls but intentionally OMITTED from the on-disk JSON so
+  // the persisted schema only carries actual scrypt cost parameters.
+  maxmem?: number;
 }
 
 export interface AdminCredentials {
@@ -43,15 +46,22 @@ export function loadCredentials(): AdminCredentials | null {
 }
 
 export async function saveCredentials(user: string, hash: string, salt: string): Promise<void> {
+  // Persist only the actual scrypt cost parameters - maxmem is a Node runtime
+  // cap, not part of the hashing function's parameterisation, so it does not
+  // belong in the on-disk schema. loadCredentials() backfills it at read time.
+  const { N, r, p, keyLen } = SCRYPT_PARAMS;
   const data: AdminCredentials = {
     user,
     hash,
     salt,
-    scryptParams: SCRYPT_PARAMS,
+    scryptParams: { N, r, p, keyLen },
     changedAt: new Date().toISOString(),
   };
   const tmp = `${HASH_PATH}.tmp`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n');
+  // Create the tmp file with 0600 up front so there is no umask window where
+  // the file is briefly world-readable before chmodSync tightens it. chmodSync
+  // is retained as belt-and-suspenders for platforms that ignore the mode arg.
+  writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });
   chmodSync(tmp, 0o600);
   renameSync(tmp, HASH_PATH);
 }
