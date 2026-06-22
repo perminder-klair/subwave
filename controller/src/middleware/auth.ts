@@ -55,6 +55,15 @@ export function requireAdmin(req, res, next) {
   const now = Date.now();
   const rec = authAttempts.get(ip);
 
+  // Once a lockout window has elapsed, clear the counter so the operator gets a
+  // fresh set of MAX_AUTH_FAILURES attempts. Without this, failures stays >=
+  // MAX_AUTH_FAILURES after the first lockout, so the very next wrong attempt
+  // immediately re-locks for another window — effectively one try every 15 min.
+  if (rec && rec.lockedUntil > 0 && rec.lockedUntil <= now) {
+    rec.failures = 0;
+    rec.lockedUntil = 0;
+  }
+
   if (rec && rec.lockedUntil > now) {
     const retryAfter = Math.ceil((rec.lockedUntil - now) / 1000);
     res.setHeader('Retry-After', String(retryAfter));
