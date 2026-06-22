@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { cn } from '@/lib/cn';
-import { fmtClockMinute, normalizeStationLocale } from '@/lib/format';
+import { fmtClockMinute, normalizeStationLocale, zonedDayHour } from '@/lib/format';
 import type {
   ActiveShow,
   ScheduleGrid,
@@ -96,6 +96,9 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
   const [now, setNow] = useState(() => new Date());
   // Defaults to today; tapping a day tab flips this without refetching.
   const [viewDay, setViewDay] = useState<number>(() => new Date().getDay());
+  // Once set, stop auto-syncing viewDay to the station's today so a manual day
+  // pick sticks across re-renders/ticks.
+  const [userPickedDay, setUserPickedDay] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -123,8 +126,20 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
     return () => window.clearInterval(id);
   }, []);
 
-  const today = now.getDay();
-  const currentHour = now.getHours();
+  // The initial viewDay seeds from the browser's day; once the schedule loads
+  // (and its station timezone with it), snap the default selection to the
+  // station's today — unless the listener has already tapped a day tab.
+  useEffect(() => {
+    if (!data || userPickedDay) return;
+    setViewDay(zonedDayHour(new Date(), data.timezone ?? null).dow);
+  }, [data, userPickedDay]);
+
+  // Resolve "now" in the *station's* timezone, not the viewer's browser zone —
+  // the controller resolves the active show with the same wall clock, so this
+  // keeps the on-now card naming the same show that's actually on air (#418).
+  // Safe before `data` loads: zonedDayHour falls back to local time when tz is
+  // nullish, and every consumer below is guarded on `data`.
+  const { dow: today, hour: currentHour } = zonedDayHour(now, data?.timezone ?? null);
 
   const daySlots = useMemo(() => {
     if (!data) return [];
@@ -219,7 +234,14 @@ export default function ScheduleDrawer({ activeShow, context }: ScheduleDrawerPr
         )}
       </section>
 
-      <DayTabs value={viewDay} today={today} onChange={setViewDay} />
+      <DayTabs
+        value={viewDay}
+        today={today}
+        onChange={d => {
+          setUserPickedDay(true);
+          setViewDay(d);
+        }}
+      />
     </div>
   );
 }
