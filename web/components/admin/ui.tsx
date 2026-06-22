@@ -136,7 +136,10 @@ export function Seg({ value, options, accent, onChange }: SegProps) {
       type="single"
       value={value}
       onValueChange={(v: string) => { if (v && onChange) onChange(v); }}
-      className="inline-flex flex-wrap gap-0 border border-ink"
+      // w-fit/max-w-full keep the control hugging its tabs: a parent flex/grid
+      // `.field` (align-items:stretch) would otherwise stretch this inline-flex
+      // to full width, leaving dead bordered space to the right of the tabs.
+      className="inline-flex w-fit max-w-full flex-wrap gap-0 border border-ink"
     >
       {options.map((o, i) => (
         <ToggleGroupItem
