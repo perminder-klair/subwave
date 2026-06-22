@@ -17,6 +17,9 @@ five minutes either way.
 
 ## Option 1 — One-click (Community Applications)
 
+SUB/WAVE is **live in Community Applications** —
+[ca.unraid.net/apps/sub-wave](https://ca.unraid.net/apps/sub-wave-073qgwu0ch9rtu).
+
 The Apps store catalogue is one container per template, so the one-click image
 (`subwave-aio`) bundles the whole stack — icecast2 + liquidsoap, the controller,
 the web UI and a Caddy edge — into a single container behind one port. It's the
@@ -43,11 +46,11 @@ same images as the Compose stack, just packaged together.
 > grows — hourly archives, the library cache, rendered voices — so point it at
 > `/mnt/user/appdata/subwave`, never `/boot/...`.
 
-### Not in the store yet? Install by Template URL
+### Install a pre-release by Template URL
 
-Until the Community Applications listing is approved (or to try a pre-release),
-add it directly: **Docker** tab → **Add Container** → paste this into
-**Template URL**, then fill the same fields:
+To run a build before it propagates into the Apps catalogue (e.g. testing a
+new tag), add the template directly instead of searching: **Docker** tab →
+**Add Container** → paste this into **Template URL**, then fill the same fields:
 
 ```
 https://raw.githubusercontent.com/perminder-klair/subwave/main/templates/subwave.xml

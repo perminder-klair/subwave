@@ -7,7 +7,7 @@ export default function Updates() {
     <SetupPage
       eyebrow="SETUP · 05"
       title="Updates & help."
-      intro="Pulling a new version, rebuilding only what changed, and what to check when the stream goes quiet. Liquidsoap and the Controller COPY source at build time, so docker compose restart does not pick up code changes. You need up -d --build."
+      intro="How to pull a new version, rebuild only what changed, and what to check when the stream goes quiet. Liquidsoap and the Controller COPY source at build time, so docker compose restart does not pick up code changes. You need up -d --build."
       current="/setup/updates"
     >
       <section className="bs-section">
@@ -31,8 +31,8 @@ export default function Updates() {
         </table>
 
         <p className="mt-4">
-          Typical manual deploy: pull, rebuild only what changed (here, controller
-          + web), then verify:
+          A manual deploy usually looks like this: pull, rebuild what changed
+          (controller and web here), then check the stream is back.
         </p>
         <CodeBlock>{`git pull --ff-only
 docker compose up -d --build controller web
@@ -43,13 +43,13 @@ docker compose up -d --build controller web
           <p>
             If you installed via{' '}
             <code className="bs-code-inline">curl cli.getsubwave.com | sh</code>, two
-            commands cover both update axes:
+            commands cover the two things you might want to update:
           </p>
           <CodeBlock>{`subwave update`}</CodeBlock>
           <CodeBlock>{`subwave self-update`}</CodeBlock>
           <p className="text-muted">
-            <code className="bs-code-inline">subwave update</code> is a docker
-            pull + up -d wrapper that knows which compose file is live;{' '}
+            <code className="bs-code-inline">subwave update</code> wraps docker
+            pull + up -d and knows which compose file is live.{' '}
             <code className="bs-code-inline">self-update</code> re-runs the
             installer in place.
           </p>
@@ -67,7 +67,7 @@ docker compose up -d --build controller web
           <CodeBlock>{`docker compose pull
 docker compose up -d`}</CodeBlock>
           <p className="text-muted">
-            Same flow if you&apos;re on{' '}
+            Same flow on{' '}
             <code className="bs-code-inline">docker-compose.byo.yml</code>, just
             swap the file flag.
           </p>
@@ -77,10 +77,10 @@ docker compose up -d`}</CodeBlock>
           <div className="bs-eyebrow">OR LET CLAUDE CODE DO IT</div>
           <p>
             The <code className="bs-code-inline">subwave-deploy</code> skill at{' '}
-            <code className="bs-code-inline">.claude/skills/subwave-deploy/</code> automates
-            the whole "pull, detect what changed, rebuild only the affected services, verify
-            health" loop. Open a Claude Code session in the repo and say{' '}
-            <em>"deploy subwave"</em> or <em>"pull and restart"</em>.
+            <code className="bs-code-inline">.claude/skills/subwave-deploy/</code> does the
+            whole loop for you: pull, work out what changed, rebuild only the affected
+            services, and confirm the stream is healthy. Open a Claude Code session in the
+            repo and say <em>"deploy subwave"</em> or <em>"pull and restart"</em>.
           </p>
         </div>
       </section>
@@ -99,15 +99,15 @@ docker compose up -d`}</CodeBlock>
           </li>
           <li>
             <strong>Operator console</strong> —{' '}
-            <code className="bs-code-inline">npm start</code> opens a menu whose{' '}
-            <strong>doctor</strong> option runs a full diagnostic sweep and{' '}
+            <code className="bs-code-inline">npm start</code> opens a menu. Its{' '}
+            <strong>doctor</strong> option runs a diagnostic sweep, and{' '}
             <strong>logs</strong> tails any service without the long compose flags.
           </li>
           <li>
             <strong>Built-in diagnostics</strong> — open{' '}
             <Link href="/admin/debug" className="bs-link">/admin/debug</Link> for a live
-            snapshot of every state file, recent LLM calls, Icecast status, and the most
-            recent 100 lines of Liquidsoap.
+            look at every state file, recent LLM calls, Icecast status, and the last 100
+            lines of Liquidsoap.
           </li>
           <li>
             <strong>Source code</strong> —{' '}
@@ -123,8 +123,8 @@ docker compose up -d`}</CodeBlock>
         <p className="bs-eyebrow">RUNNING THE STATION</p>
         <h2>Now shape the DJ.</h2>
         <p>
-          Installation is the start. Tuning the personas, scheduling shows, choosing the LLM
-          provider, and managing jingles all happen in the admin console; that's covered in{' '}
+          Installation is just the start. Tuning personas, scheduling shows, picking an LLM
+          provider, and managing jingles all happen in the admin console. That's covered in{' '}
           <Link href="/manual/admin" className="bs-link">the manual's Admin &amp; Settings
           page</Link>.
         </p>

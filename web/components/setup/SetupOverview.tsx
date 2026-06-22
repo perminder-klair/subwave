@@ -6,17 +6,17 @@ const PATHS = [
   {
     href: '/setup/quick-start',
     label: 'Quick Start',
-    blurb: 'The standalone CLI — install once, init / setup / start, done.',
+    blurb: 'The standalone CLI. Install once, then init / setup / start.',
   },
   {
     href: '/setup/manual',
     label: 'Manual Install',
-    blurb: 'No CLI on your host — pure docker compose, same outcome.',
+    blurb: 'No CLI on your host: plain docker compose, same result.',
   },
   {
     href: '/setup/development',
     label: 'Development',
-    blurb: 'Hacking on SUB/WAVE itself — the three compose files and hot reload.',
+    blurb: 'Working on SUB/WAVE itself: the three compose files and hot reload.',
   },
 ];
 
@@ -26,7 +26,7 @@ export default function SetupOverview() {
       eyebrow="SELF-HOSTED · OPEN SOURCE"
       title="Run your own SUB/WAVE."
       meta="≈ 10 min · 4 commands · needs Navidrome + an LLM"
-      intro="SUB/WAVE points at your Navidrome library and your LLM: a local Ollama box by default, or any hosted provider you prefer. Once it's running, the AI DJ broadcasts from your homelab, plays from your music collection, and answers requests from anyone with the URL."
+      intro="SUB/WAVE points at your Navidrome library and your LLM, which is a local Ollama box by default, or any hosted provider you like. Once it's running, the AI DJ broadcasts from your homelab, picks tracks from your own collection, and takes requests from anyone you share the URL with."
       current="/setup"
       heroAside={
         <div className="bs-dj-glyph" aria-hidden="true">
@@ -63,9 +63,9 @@ export default function SetupOverview() {
           <p className="text-muted">
             After that,{' '}
             <code className="bs-code-inline">subwave status / logs / doctor / restart / update</code>{' '}
-            drive the station from anywhere on your shell, with no{' '}
+            run the station from any shell. No{' '}
             <code className="bs-code-inline">cd</code> into a project dir, no clone
-            required. Prefer pure <code className="bs-code-inline">docker compose</code>?{' '}
+            needed. Prefer plain <code className="bs-code-inline">docker compose</code>?{' '}
             <Link href="/setup/manual" className="bs-link">Manual Install</Link>{' '}
             covers that path.
           </p>
@@ -79,16 +79,16 @@ export default function SetupOverview() {
           SUB/WAVE talks to services it doesn't ship, so a couple of things need
           to be running first.{' '}
           <Link href="/setup/prerequisites" className="bs-link">Prerequisites</Link>{' '}
-          covers them, then pick whichever install path suits you — they all land
-          at the same place:
+          covers them. Then pick whichever install path suits you. They all end
+          up at the same place:
         </p>
         <ul className="bs-list">
           {PATHS.map((p) => (
             <li key={p.href}>
               <Link href={p.href} className="bs-link">
                 <strong>{p.label}</strong>
-              </Link>{' '}
-              — {p.blurb}
+              </Link>
+              {`: ${p.blurb}`}
             </li>
           ))}
         </ul>
