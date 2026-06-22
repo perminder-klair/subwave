@@ -272,6 +272,105 @@ export default function Unraid() {
             </li>
           </ul>
         </div>
+      </section>
+
+      <section className="bs-section" id="reverse-proxy">
+        <p className="bs-eyebrow">BEHIND YOUR OWN PROXY</p>
+        <h2>Putting it behind your reverse proxy.</h2>
+        <p>
+          Most Unraid boxes already run a reverse proxy, NPM / SWAG / Traefik /
+          Caddy, for TLS and a tidy hostname. Putting SUB/WAVE behind yours is
+          the common path, and it&apos;s a <em>single upstream</em>, not a pile
+          of per-path rules. This applies to both options above.
+        </p>
+        <p>
+          The one-click AIO image (and the Compose stack&apos;s bundled Caddy)
+          already does the same-origin routing internally:{' '}
+          <code className="bs-code-inline">/</code> &rarr; web UI,{' '}
+          <code className="bs-code-inline">/api/*</code> &rarr; controller,{' '}
+          <code className="bs-code-inline">/stream.mp3</code> &rarr; the Icecast
+          stream, all on the one host port. So your front proxy points at a
+          single target, with no separate backends and no per-path forwarding.
+        </p>
+        <CodeBlock>{`http://YOUR-UNRAID-IP:7700`}</CodeBlock>
+        <p>
+          Once a hostname fronts the box, set{' '}
+          <code className="bs-code-inline">SITE_URL</code> to the public{' '}
+          <code className="bs-code-inline">https://</code> address, not the{' '}
+          <code className="bs-code-inline">IP:port</code>. It backs share cards
+          and absolute links, so it has to be the address listeners actually
+          use. TLS terminates at your proxy; SUB/WAVE speaks plain HTTP behind
+          it, exactly as the bundled Caddy does behind Cloudflare in the
+          reference setup.
+        </p>
+        <CodeBlock lang="env">{`SITE_URL=https://radio.example.com`}</CodeBlock>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">THE ONE GOTCHA: DON&apos;T BUFFER THE STREAM</div>
+          <p>
+            Turn response buffering <strong>off</strong> for{' '}
+            <code className="bs-code-inline">/stream.mp3</code>. The bundled
+            Caddy serves the stream unbuffered (
+            <code className="bs-code-inline">flush_interval -1</code>). A front
+            proxy that buffers, and <strong>NPM buffers by default</strong>,
+            holds the live audio back: latency and stutter, or stalled playback
+            outright. Exempt the stream path and leave everything else on the
+            proxy&apos;s normal settings.
+          </p>
+          <p>
+            <strong>Nginx Proxy Manager</strong>: open the proxy host &rarr;{' '}
+            <strong>Advanced</strong> tab and add a location block for the
+            stream. The rest of the site keeps NPM&apos;s normal proxying from
+            the main tab.
+          </p>
+          <CodeBlock lang="nginx">{`location /stream.mp3 {
+    proxy_pass http://YOUR-UNRAID-IP:7700;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;   # the stream never ends, don't time it out
+}`}</CodeBlock>
+          <p>The same one knob in the other proxies:</p>
+          <ul className="bs-list">
+            <li>
+              <strong>raw nginx</strong>:{' '}
+              <code className="bs-code-inline">proxy_buffering off;</code> plus a
+              long <code className="bs-code-inline">proxy_read_timeout</code> in a{' '}
+              <code className="bs-code-inline">location /stream.mp3</code> block.
+            </li>
+            <li>
+              <strong>Caddy</strong>:{' '}
+              <code className="bs-code-inline">{'reverse_proxy … { flush_interval -1 }'}</code>{' '}
+              on the stream path.
+            </li>
+            <li>
+              <strong>Traefik</strong>: nothing, it doesn&apos;t buffer responses
+              by default.
+            </li>
+          </ul>
+        </div>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">PREFER TO DROP THE BUNDLED CADDY?</div>
+          <p>
+            If you&apos;d rather your proxy talk to each service directly, run
+            the split-container stack (Option 2) with{' '}
+            <code className="bs-code-inline">docker-compose.byo.yml</code>. There{' '}
+            <code className="bs-code-inline">web</code> /{' '}
+            <code className="bs-code-inline">controller</code> /{' '}
+            <code className="bs-code-inline">broadcast</code> bind host ports
+            themselves (<code className="bs-code-inline">7700</code> /{' '}
+            <code className="bs-code-inline">7701</code> /{' '}
+            <code className="bs-code-inline">7702</code>), but the web image is
+            still baked for same-origin{' '}
+            <code className="bs-code-inline">/api</code> +{' '}
+            <code className="bs-code-inline">/stream.mp3</code>, so your proxy
+            then has to replicate the whole route table on one hostname.
+            That&apos;s more proxy config, not less, and only worth it if you
+            specifically want the bundled Caddy out of the path. For most people
+            the single-upstream setup above is the easier win.
+          </p>
+        </div>
+      </section>
+
+      <section className="bs-section">
         <div className="bs-callout">
           <div className="bs-eyebrow">GOOD TO KNOW</div>
           <ul className="bs-list">
@@ -280,9 +379,11 @@ export default function Unraid() {
               <code className="bs-code-inline">/</code>,{' '}
               <code className="bs-code-inline">/api</code>, and{' '}
               <code className="bs-code-inline">/stream.mp3</code> on the single
-              host port. Want TLS and a hostname behind SWAG / NPM / Traefik?
-              Front that port with it, or on the Compose stack use{' '}
-              <code className="bs-code-inline">docker-compose.byo.yml</code>.
+              host port. Want TLS and a hostname behind SWAG / NPM / Traefik? See{' '}
+              <Link href="#reverse-proxy" className="bs-link">
+                Putting it behind your reverse proxy
+              </Link>{' '}
+              above: one upstream, plus the one stream-buffering gotcha.
             </li>
             <li>
               <strong>Updates:</strong> for one-click, use Unraid&apos;s normal{' '}
