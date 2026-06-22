@@ -10,7 +10,7 @@
 // After init, the operator runs `subwave start` (which brings docker up)
 // and `subwave setup` (the full wizard for Navidrome / LLM / TTS / DJ).
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, chmodSync, renameSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 import crypto from 'node:crypto';
@@ -219,6 +219,31 @@ async function scaffold(a: InitAnswers): Promise<void> {
   mkdirSync(resolve(a.home, 'state', 'logs'), { recursive: true });
   ok(`created ${a.home}/ (state/, state/logs/)`);
 
+  // Hash admin password directly to state/admin-hash.json so plaintext
+  // never touches .env. The controller reads this on boot.
+  const { scrypt: scryptCb, randomBytes: rb } = await import('node:crypto');
+  const salt = rb(16).toString('hex');
+  const SCRYPT_MAXMEM = 256 * 1024 * 1024;
+  const hash: string = await new Promise((res, rej) => {
+    scryptCb(a.adminPass, salt, 64, { N: 131072, r: 8, p: 1, maxmem: SCRYPT_MAXMEM }, (e, d) => {
+      if (e) return rej(e);
+      res(d.toString('hex'));
+    });
+  });
+  const hashData = {
+    user: a.adminUser,
+    hash,
+    salt,
+    scryptParams: { N: 131072, r: 8, p: 1, keyLen: 64, maxmem: SCRYPT_MAXMEM },
+    changedAt: new Date().toISOString(),
+  };
+  const hashPath = resolve(a.home, 'state', 'admin-hash.json');
+  const hashTmp = `${hashPath}.tmp`;
+  writeFileSync(hashTmp, JSON.stringify(hashData, null, 2) + '\n');
+  chmodSync(hashTmp, 0o600);
+  renameSync(hashTmp, hashPath);
+  ok('wrote state/admin-hash.json (scrypt-hashed admin password)');
+
   // 2. Write the compose file the operator chose. Both modes get a copy of
   // docker-compose.byo.yml alongside the default so operators can switch
   // later without re-running init.
@@ -242,12 +267,11 @@ async function scaffold(a: InitAnswers): Promise<void> {
   writeFileSync(envExamplePath, ENV_EXAMPLE);
   const envValues: Record<string, string> = {
     ADMIN_USER: a.adminUser,
-    ADMIN_PASS: a.adminPass,
     TZ: a.tz,
   };
   if (a.siteUrl) envValues.SITE_URL = a.siteUrl;
   writeEnvFileAt(resolve(a.home, '.env'), envValues, envExamplePath);
-  ok(`wrote .env (ADMIN_USER, ADMIN_PASS, TZ=${a.tz}${a.siteUrl ? ', SITE_URL' : ''})`);
+  ok(`wrote .env (ADMIN_USER, TZ=${a.tz}${a.siteUrl ? ', SITE_URL' : ''})`);
 
   // 4. Persist the home in ~/.config/subwave/config.json so subsequent
   // `subwave …` commands resolve to this directory without --home or
@@ -267,7 +291,7 @@ async function scaffold(a: InitAnswers): Promise<void> {
     console.log();
     info(`admin user: ${pc.bold(a.adminUser)}`);
     info(`admin pass: ${pc.bold(a.adminPass)}`);
-    muted('Stored in .env at the install dir. Visible to anyone with shell access — protect accordingly.');
+    muted('Hashed in state/admin-hash.json. The plaintext is not stored on disk.');
   }
 }
 
