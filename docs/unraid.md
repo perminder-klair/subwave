@@ -46,6 +46,11 @@ same images as the Compose stack, just packaged together.
 > grows — hourly archives, the library cache, rendered voices — so point it at
 > `/mnt/user/appdata/subwave`, never `/boot/...`.
 
+Fronting this with your own NPM / SWAG / Traefik for TLS + a hostname? See
+[Putting it behind your own reverse
+proxy](#putting-it-behind-your-own-reverse-proxy) — it's one upstream, with a
+single stream-buffering gotcha to mind.
+
 ### Install a pre-release by Template URL
 
 To run a build before it propagates into the Apps catalogue (e.g. testing a
@@ -142,13 +147,93 @@ N95) handles them fine:
 where the ollama container publishes `11434`. (The one-click template adds the
 `host-gateway` mapping for you; the Compose stack sets it via `extra_hosts`.)
 
+---
+
+## Putting it behind your own reverse proxy
+
+Most Unraid boxes already run a reverse proxy — **Nginx Proxy Manager (NPM)**,
+**SWAG**, **Traefik** or **Caddy** — for TLS and a tidy hostname. Putting
+SUB/WAVE behind yours is the common path, and it's a *single upstream*, not a
+pile of per-path rules. This applies to both options above.
+
+### One upstream, not per-path rules
+
+The one-click AIO image (and the Compose stack's bundled Caddy) already does all
+the same-origin routing internally — `/` → web UI, `/api/*` → controller,
+`/stream.mp3` → the Icecast stream — on the one host port. So your front proxy
+points at a **single** target:
+
+```
+http://YOUR-UNRAID-IP:7700
+```
+
+No separate backends, no per-path forwarding. Map your hostname to that one
+address and the bundled Caddy sorts out the rest.
+
+### Set SITE_URL to the public https URL
+
+Once a hostname fronts the box, set **`SITE_URL`** to the public `https://`
+address — not the `IP:port`:
+
+```ini
+SITE_URL=https://radio.example.com
+```
+
+`SITE_URL` backs share cards and absolute links, so it has to be the address
+listeners actually use. **TLS terminates at your proxy**; SUB/WAVE speaks plain
+HTTP behind it (exactly as the bundled Caddy does behind Cloudflare in the
+reference setup). One-click → edit the **SITE_URL** template field; Compose
+stack → edit `.env` and **Pull & Up**.
+
+### ⚠️ The one gotcha: don't buffer the audio stream
+
+> ⚠️ **Turn response buffering OFF for `/stream.mp3`.** The bundled Caddy serves
+> the stream unbuffered (`flush_interval -1`). A front proxy that buffers — and
+> **NPM buffers by default** — holds the live audio back, adding latency and
+> stutter or stalling playback outright. Exempt the stream path; leave everything
+> else on the proxy's normal settings.
+
+**Nginx Proxy Manager** — open the proxy host → **Advanced** tab and add a
+location block for the stream (the rest of the site keeps NPM's normal proxying
+from the main tab):
+
+```nginx
+location /stream.mp3 {
+    proxy_pass http://YOUR-UNRAID-IP:7700;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;   # the stream never ends — don't time it out
+}
+```
+
+The same one knob in the other proxies:
+
+| Proxy | What to set on `/stream.mp3` |
+|---|---|
+| **raw nginx** | `proxy_buffering off;` (+ a long `proxy_read_timeout`) in a `location /stream.mp3` block |
+| **Caddy** | `reverse_proxy … { flush_interval -1 }` on the stream path |
+| **Traefik** | nothing — Traefik doesn't buffer responses by default |
+
+### Prefer to drop the bundled Caddy entirely?
+
+If you'd rather your proxy talk to each service directly instead of through the
+AIO's internal Caddy, run the split-container stack (Option 2) with
+[`docker-compose.byo.yml`](https://raw.githubusercontent.com/perminder-klair/subwave/main/docker-compose.byo.yml).
+There `web` / `controller` / `broadcast` bind host ports themselves
+(`7700` / `7701` / `7702`) — but the web image is still baked for same-origin
+`/api` + `/stream.mp3`, so **your proxy then has to replicate the route table**
+(`/` → web, `/api/*` → controller, `/stream.mp3` → broadcast, unbuffered) on one
+hostname. That's more proxy config, not less — only worth it if you specifically
+want the bundled Caddy out of the path. For most people the single-upstream setup
+above is the easier win.
+
 ## Notes
 
 - **No reverse proxy needed** for LAN use — Caddy fronts `/`, `/api`, and
-  `/stream.mp3` on the single host port. If you already run SWAG / NPM /
-  Traefik and want TLS + a hostname, front that port with it, or (Compose stack)
-  switch to
-  [`docker-compose.byo.yml`](https://raw.githubusercontent.com/perminder-klair/subwave/main/docker-compose.byo.yml).
+  `/stream.mp3` on the single host port. Already run SWAG / NPM / Traefik and
+  want TLS + a hostname? See [Putting it behind your own reverse
+  proxy](#putting-it-behind-your-own-reverse-proxy) above — one upstream, plus
+  the one stream-buffering gotcha.
 - **Updates:** one-click → Unraid's normal **Check for Updates** / **Apply
   Update**. Compose stack → stack menu → **Pull & Up**.
 - **Backups:** everything lives under the appdata path
