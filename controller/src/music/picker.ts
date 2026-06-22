@@ -30,6 +30,10 @@ const CAP_AUDIO_SIMILAR = 4;
 // contributor (soft lean) and the unrelated discovery sources shrink by this
 // factor so the genre/era actually shows up in the LLM's candidate list.
 const CAP_SHOW_GENRE = 12;
+// In strict mode the show-genre source becomes the dominant contributor: a
+// larger cap than the soft path so genre matches fill most of the final pool
+// (CANDIDATE_CAP) even after dedup / artist-cap / recency trims it.
+const CAP_SHOW_GENRE_STRICT = 24;
 const SHOW_NARROW_FACTOR = 0.5;
 
 // TTL cache for sources that don't change between picks. Without this, every
@@ -83,16 +87,60 @@ function softRankByCompat(pool: any[], current: { bpm: number | null; key: strin
     .map((s) => s.t);
 }
 
-// --- Show music-steering filters (soft lean) -------------------------------
-// A show can pin a genre, a decade (fromYear/toYear) and an energy band. None
-// of these is ever a hard filter: each prefers matching tracks but falls back
-// to the full set when matches are too thin to fill the pool, so a sparse genre
-// or an un-analysed library never starves the stream.
+// --- Show music-steering filters -------------------------------------------
+// A show can pin a genre, a decade (fromYear/toYear) and an energy band. By
+// default none is a hard filter: each prefers matching tracks but falls back to
+// the full set when matches are too thin to fill the pool, so a sparse genre or
+// an un-analysed library never starves the stream.
+//
+// `strict` opts the GENRE (only) into a hard filter: the off-genre discovery
+// sources are genre-filtered before they enter the pool, so the pool is
+// genuinely genre-dominated rather than just shrunk. The same never-starve
+// fallback applies — a genre too thin to fill the pool degrades to off-genre
+// tracks rather than dead air (logged by the caller). Decade and energy stay
+// soft either way.
 
-type ShowFilter = { genre?: string; fromYear?: number | null; toYear?: number | null; energy?: string } | null;
+type ShowFilter = { genre?: string; fromYear?: number | null; toYear?: number | null; energy?: string; strict?: boolean } | null;
 
 function hasMusicFilter(f: ShowFilter): boolean {
   return !!f && (!!f.genre || f.fromYear != null || f.toYear != null);
+}
+
+// Normalised genre token for fuzzy comparison — mirrors subsonic.resolveGenreName
+// so the show's resolved tag and a track's tag compare the same way.
+function normGenre(s: any): string {
+  return String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+// Per-track genre — from the track itself (Subsonic + slimTrack library sources
+// both carry it) or a library lookup. null when the track has no genre tag.
+function trackGenre(t: any): string | null {
+  if (t?.genre) return t.genre;
+  const rec = t?.id ? library.get(t.id) : null;
+  return rec?.genre ?? null;
+}
+
+// True when a track's genre matches the (already library-resolved) target genre.
+// Exact-normalised match, or substring either way — same shape as
+// subsonic.resolveGenreName, so "Hip-Hop" matches a "Hip Hop" tag etc.
+function genreMatches(t: any, targetNorm: string): boolean {
+  const g = trackGenre(t);
+  if (!g) return false;
+  const gn = normGenre(g);
+  return !!gn && (gn === targetNorm || gn.includes(targetNorm) || targetNorm.includes(gn));
+}
+
+// Hard-prefer tracks matching the show's genre (strict mode). Unlike the soft
+// energy/year leans, an untagged or off-genre track does NOT stay eligible —
+// the whole point of strict is a genre-pure pool. But it FALLS BACK to the
+// unfiltered set when no track matches, so a thin genre degrades to off-genre
+// rather than emptying the source (never-starve, mirrors preferEnergy/inYearRange).
+function preferGenre(tracks: any[], genreName?: string | null): any[] {
+  if (!genreName) return tracks;
+  const target = normGenre(genreName);
+  if (!target) return tracks;
+  const match = tracks.filter((t: any) => genreMatches(t, target));
+  return match.length ? match : tracks;
 }
 
 // Per-track energy band — from the track itself (library sources carry it) or a
@@ -164,13 +212,29 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   const narrow = hasMusicFilter(showFilter);
   const nz = (cap: number) => (narrow ? Math.max(2, Math.ceil(cap * SHOW_NARROW_FACTOR)) : cap);
 
+  // Strict genre: resolve the show's free-text genre to the library's exact tag
+  // ONCE, up front, so the off-genre discovery sources below can be hard-filtered
+  // to it before they enter the pool — making the pool genuinely genre-dominated,
+  // not just shrunk. Soft mode (or no genre) leaves the sources untouched (only
+  // the nz() shrink applies). A resolution failure / absent genre degrades to no
+  // filter so a misspelled genre never strands the show (never-starve).
+  const strict = !!(showFilter?.strict && showFilter?.genre);
+  let strictGenre: string | null = null;
+  if (strict) {
+    try { strictGenre = await subsonic.resolveGenreName(showFilter!.genre!); } catch {}
+  }
+  // Hard-prefer the resolved genre on a discovery source in strict mode; a no-op
+  // otherwise. preferGenre always falls back to the full set when nothing in the
+  // source matches, so leaning a source can only tighten genre, never starve it.
+  const lean = (items: any[]) => (strict && strictGenre ? preferGenre(items, strictGenre) : items);
+
   // 1. Similar-songs from current track — strongest contextual signal.
   if (currentTrack?.id) {
     try {
       const similar = await subsonic.getSimilarSongs(currentTrack.id, {
         count: 20,
       });
-      add('similar', sampleWithRecentFallback(similar, recentIds, nz(CAP_SIMILAR)));
+      add('similar', sampleWithRecentFallback(lean(similar), recentIds, nz(CAP_SIMILAR)));
     } catch {}
   }
 
@@ -183,7 +247,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   if (currentTrack?.id) {
     try {
       const knn = library.tracksLikeThis(currentTrack.id, 15);
-      add('embedding-similar', sampleWithRecentFallback(knn, recentIds, nz(CAP_EMBEDDING_SIMILAR)));
+      add('embedding-similar', sampleWithRecentFallback(lean(knn), recentIds, nz(CAP_EMBEDDING_SIMILAR)));
     } catch {}
   }
 
@@ -197,7 +261,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     try {
       if (await subsonic.supportsSonicSimilarity()) {
         const sonic = await subsonic.getSonicSimilarTracks(currentTrack.id, { count: 20 });
-        add('sonic-similar', sampleWithRecentFallback(sonic, recentIds, nz(CAP_SONIC_SIMILAR)));
+        add('sonic-similar', sampleWithRecentFallback(lean(sonic), recentIds, nz(CAP_SONIC_SIMILAR)));
       }
     } catch {}
   }
@@ -216,12 +280,12 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   if (audioWaypoint && audioWaypoint.length) {
     try {
       const knn = library.tracksByAudioVector(audioWaypoint, 15);
-      add('audio-journey', sampleWithRecentFallback(knn, recentIds, nz(CAP_AUDIO_SIMILAR)));
+      add('audio-journey', sampleWithRecentFallback(lean(knn), recentIds, nz(CAP_AUDIO_SIMILAR)));
     } catch {}
   } else if (currentTrack?.id) {
     try {
       const knn = library.tracksLikeThisAudio(currentTrack.id, 15);
-      add('audio-similar', sampleWithRecentFallback(knn, recentIds, nz(CAP_AUDIO_SIMILAR)));
+      add('audio-similar', sampleWithRecentFallback(lean(knn), recentIds, nz(CAP_AUDIO_SIMILAR)));
     } catch {}
   }
 
@@ -232,30 +296,33 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // collection is then energy-preferred. Never a hard filter — see helpers.
   if (hasMusicFilter(showFilter)) {
     try {
-      let genreName: string | null = null;
-      if (showFilter!.genre) {
+      // Reuse the strict-resolved tag when we already paid for it above; only
+      // resolve here on the soft path (or if strict resolution came back null).
+      let genreName: string | null = strict ? strictGenre : null;
+      if (!genreName && showFilter!.genre) {
         genreName = await subsonic.resolveGenreName(showFilter!.genre);
       }
       const collected: any[] = [];
       collected.push(...await subsonic.getRandomSongs({
-        size: 40,
+        size: strict ? 60 : 40,
         genre: genreName || undefined,
         fromYear: showFilter!.fromYear ?? undefined,
         toYear: showFilter!.toYear ?? undefined,
       }));
       if (genreName) {
-        const g = await subsonic.getSongsByGenre(genreName, { count: 60 });
+        const g = await subsonic.getSongsByGenre(genreName, { count: strict ? 100 : 60 });
         const ranged = inYearRange(g, showFilter!);
         collected.push(...(ranged.length ? ranged : g));
       }
       const leaned = preferEnergy(collected, showFilter!.energy);
-      add('show-genre', sampleWithRecentFallback(shuffle(leaned), recentIds, CAP_SHOW_GENRE));
+      // Strict bumps the cap so this genre-native source dominates the merged pool.
+      add('show-genre', sampleWithRecentFallback(shuffle(leaned), recentIds, strict ? CAP_SHOW_GENRE_STRICT : CAP_SHOW_GENRE));
     } catch {}
   }
 
   // 2. Mood-tagged library (LLM-built tags, may be sparse).
   if (mood) {
-    const moodHits = shuffle(preferEnergy(library.songsByMood(mood), showFilter?.energy));
+    const moodHits = shuffle(lean(preferEnergy(library.songsByMood(mood), showFilter?.energy)));
     add('mood-library', sampleWithRecentFallback(moodHits, recentIds, CAP_MOOD_LIBRARY));
   }
 
@@ -273,7 +340,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
           plTracks.push(...songs);
         } catch {}
       }
-      add('playlist', sampleWithRecentFallback(shuffle(plTracks), recentIds, nz(CAP_PLAYLIST)));
+      add('playlist', sampleWithRecentFallback(lean(shuffle(plTracks)), recentIds, nz(CAP_PLAYLIST)));
     } catch {}
   }
 
@@ -286,7 +353,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       const albums = await subsonic.getRecentlyAddedAlbums({ size: 12 });
       return tracksFromAlbums(shuffle(albums), 3, 40);
     });
-    add('recent', sampleWithRecentFallback(shuffle(recentPool), recentIds, nz(CAP_RECENT)));
+    add('recent', sampleWithRecentFallback(lean(shuffle(recentPool)), recentIds, nz(CAP_RECENT)));
   } catch {}
 
   // 5. Frequent albums — scrobble-backed favourites. Same wide-pool-then-
@@ -296,7 +363,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       const albums = await subsonic.getFrequentAlbums({ size: 12 });
       return tracksFromAlbums(shuffle(albums), 3, 40);
     });
-    add('frequent', sampleWithRecentFallback(shuffle(freqPool), recentIds, nz(CAP_FREQUENT)));
+    add('frequent', sampleWithRecentFallback(lean(shuffle(freqPool)), recentIds, nz(CAP_FREQUENT)));
   } catch {}
 
   // 6. Similar-artist top songs — adjacency through Last.fm artist graph.
@@ -326,7 +393,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       );
       add(
         'similar-artist',
-        sampleWithRecentFallback(similarArtistTracks, recentIds, nz(CAP_SIMILAR_ARTIST)),
+        sampleWithRecentFallback(lean(similarArtistTracks), recentIds, nz(CAP_SIMILAR_ARTIST)),
       );
     } catch {}
   }
@@ -366,7 +433,21 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     cap: CANDIDATE_CAP,
   });
 
-  return { candidates: final, sources };
+  // Strict-genre diagnostics for the caller's never-starve log: how much of the
+  // final pool actually landed in-genre. `resolved` is null when the show's
+  // genre didn't map to any library tag (strict silently degraded to soft).
+  let strictInfo: { requested: string; resolved: string | null; matched: number; total: number } | null = null;
+  if (strict) {
+    const target = strictGenre ? normGenre(strictGenre) : '';
+    strictInfo = {
+      requested: showFilter!.genre!,
+      resolved: strictGenre,
+      matched: target ? final.filter((t: any) => genreMatches(t, target)).length : 0,
+      total: final.length,
+    };
+  }
+
+  return { candidates: final, sources, strictInfo };
 }
 
 function summariseRecent(queue: any) {
@@ -401,9 +482,9 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   // (below) and its brief steers the LLM pick (further down).
   const activeShow = settings.resolveActiveShow();
   const showFilter: ShowFilter = activeShow
-    ? { genre: activeShow.genre, fromYear: activeShow.fromYear, toYear: activeShow.toYear, energy: activeShow.energy }
+    ? { genre: activeShow.genre, fromYear: activeShow.fromYear, toYear: activeShow.toYear, energy: activeShow.energy, strict: activeShow.genreStrict }
     : null;
-  const { candidates, sources } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter);
+  const { candidates, sources, strictInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter);
 
   if (candidates.length === 0) {
     queue.log('picker', 'no candidates available, skipping LLM pick');
@@ -416,6 +497,20 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
       .map(([k, v]) => `${k}=${v}`)
       .join(' ')})`,
   );
+
+  // Strict-genre visibility — make the never-starve fallback audible in the log
+  // so a thin/misspelled genre isn't a silent mystery.
+  if (strictInfo) {
+    if (!strictInfo.resolved) {
+      queue.log('picker', `strict genre "${strictInfo.requested}" not found in library — falling back to unfiltered pool`);
+    } else if (strictInfo.matched === 0) {
+      queue.log('picker', `strict genre ${strictInfo.resolved}: 0 in-genre candidates — falling back to off-genre to keep the stream alive`);
+    } else if (strictInfo.matched < strictInfo.total) {
+      queue.log('picker', `strict genre ${strictInfo.resolved}: ${strictInfo.matched}/${strictInfo.total} in-genre (off-genre allowed as fallback)`);
+    } else {
+      queue.log('picker', `strict genre ${strictInfo.resolved}: ${strictInfo.matched}/${strictInfo.total} in-genre`);
+    }
+  }
 
   const recentPlays = summariseRecent(queue);
 
@@ -432,6 +527,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
             fromYear: activeShow.fromYear,
             toYear: activeShow.toYear,
             energy: activeShow.energy,
+            genreStrict: activeShow.genreStrict,
           }
         : null,
       candidates: candidates.map(c => {

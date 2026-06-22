@@ -61,6 +61,8 @@ router.post('/generate/show', requireAdmin, async (req, res) => {
     if (!draft.themeId || !themeIds.has(draft.themeId)) draft.themeId = null;
     if (!settings.SHOW_MOODS.includes(draft.mood)) draft.mood = settings.SHOW_MOODS[0];
     if (draft.energy && !settings.SHOW_ENERGY.includes(draft.energy)) draft.energy = '';
+    // Strict only makes sense with a genre to lock to.
+    if (draft.genreStrict && !draft.genre) draft.genreStrict = false;
 
     res.json({ ok: true, show: draft });
   } catch (err: any) {

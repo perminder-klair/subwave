@@ -52,6 +52,7 @@ const SHOW_SCHEMA = z.object({
   topic: z.string().max(1000).describe('the brief the AI DJ reads before the slot: genres, eras, moods, artists, time of day, listener type, host tone. 1-4 sentences, max 1000 chars.'),
   mood: z.enum(SHOW_MOODS as [string, ...string[]]).describe('the single closest music mood for this show'),
   genre: z.string().max(64).describe('a music genre lean if one fits (e.g. "jazz", "gospel", "lofi"); "" for no lean. Prefer a genre present in the supplied library list when relevant.'),
+  genreStrict: z.boolean().describe('true ONLY when the description demands genre exclusivity ("only plays hip-hop", "strictly jazz", "nothing but metal") — hard-locks every pick to the genre. false for a normal lean. Requires a genre; leave false when genre is "".'),
   fromYear: z.number().int().nullable().describe('start year of an era window if the show targets a decade (e.g. 1970), else null'),
   toYear: z.number().int().nullable().describe('end year of that era window (e.g. 1979), else null'),
   energy: z.enum(['', ...SHOW_ENERGY] as [string, ...string[]]).describe('soft energy steer: low, medium, high, or "" for any'),
@@ -59,7 +60,7 @@ const SHOW_SCHEMA = z.object({
   themeId: z.string().nullable().describe('the id of a per-show theme override chosen from the supplied theme list, or null for the station default'),
 });
 
-const SHOW_SYSTEM = `You design radio shows for a personal internet radio station. Given a free-text description, produce a single show definition: a name, a DJ brief (topic), a music mood, an optional genre lean and era window, an energy steer, and the best-matching persona and (optional) theme from the supplied lists. Pick personaId / themeId ONLY from the ids given; use null when nothing clearly fits. The mood MUST be one of the listed moods. Keep the topic concrete and useful as a brief — name the kind of music, the moment of day, and the tone.`;
+const SHOW_SYSTEM = `You design radio shows for a personal internet radio station. Given a free-text description, produce a single show definition: a name, a DJ brief (topic), a music mood, an optional genre lean and era window, an energy steer, and the best-matching persona and (optional) theme from the supplied lists. Pick personaId / themeId ONLY from the ids given; use null when nothing clearly fits. The mood MUST be one of the listed moods. Set genreStrict=true only when the description signals genre exclusivity ("only", "strictly", "nothing but", "pure <genre>") — otherwise keep the genre a soft lean (genreStrict=false). Keep the topic concrete and useful as a brief — name the kind of music, the moment of day, and the tone.`;
 
 export async function generateShow(description: string, ctx: ShowCtx = {}) {
   const lines: string[] = [];
