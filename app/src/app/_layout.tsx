@@ -19,7 +19,6 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import ErrorScreen from '@/components/ErrorScreen';
 import { StationProvider, useStation } from '@/config/StationContext';
@@ -66,22 +65,26 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <StationProvider>
           <ThemeProvider>
-            <BottomSheetModalProvider>
-              <SplashGate>
-                <StatusBar style="auto" />
-                <Stack
-                  screenOptions={{
-                    headerShown: false,
-                    animation: 'fade',
-                    contentStyle: { backgroundColor: 'transparent' },
-                  }}
-                >
-                  <Stack.Screen name="index" />
-                  <Stack.Screen name="onboarding" />
-                  <Stack.Screen name="stations" options={{ presentation: 'modal' }} />
-                </Stack>
-              </SplashGate>
-            </BottomSheetModalProvider>
+            {/* No BottomSheetModalProvider: the app's only sheet (Themes) uses
+                the *non-modal* <BottomSheet>, which doesn't need it. Wrapping the
+                whole tree in it left an Android touch-interceptor over the app on
+                the New Architecture and killed every tap (device-specific, no
+                crash) — see issue #458. GestureHandlerRootView stays (the
+                non-modal sheet's pan needs it). */}
+            <SplashGate>
+              <StatusBar style="auto" />
+              <Stack
+                screenOptions={{
+                  headerShown: false,
+                  animation: 'fade',
+                  contentStyle: { backgroundColor: 'transparent' },
+                }}
+              >
+                <Stack.Screen name="index" />
+                <Stack.Screen name="onboarding" />
+                <Stack.Screen name="stations" options={{ presentation: 'modal' }} />
+              </Stack>
+            </SplashGate>
           </ThemeProvider>
         </StationProvider>
       </SafeAreaProvider>
