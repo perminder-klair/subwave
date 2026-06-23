@@ -18,8 +18,13 @@ import { Stack, type ErrorBoundaryProps } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
+import { View } from 'react-native';
+// No GestureHandlerRootView / BottomSheetModalProvider: that gesture-handler +
+// bottom-sheet stack installed a root touch interceptor that swallowed every tap
+// across the app on the New Architecture on some Android devices (issue #458).
+// It existed only for the Themes sheet, which is now a core <Modal> (see
+// components/ui/Sheet.tsx). Bisection confirmed on-device: removing this stack
+// is what restores touch.
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import ErrorScreen from '@/components/ErrorScreen';
 import { StationProvider, useStation } from '@/config/StationContext';
@@ -62,29 +67,27 @@ export default function RootLayout() {
   if (!fontsLoaded) return null;
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <View style={{ flex: 1 }}>
       <SafeAreaProvider>
         <StationProvider>
           <ThemeProvider>
-            <BottomSheetModalProvider>
-              <SplashGate>
-                <StatusBar style="auto" />
-                <Stack
-                  screenOptions={{
-                    headerShown: false,
-                    animation: 'fade',
-                    contentStyle: { backgroundColor: 'transparent' },
-                  }}
-                >
-                  <Stack.Screen name="index" />
-                  <Stack.Screen name="onboarding" />
-                  <Stack.Screen name="stations" options={{ presentation: 'modal' }} />
-                </Stack>
-              </SplashGate>
-            </BottomSheetModalProvider>
+            <SplashGate>
+              <StatusBar style="auto" />
+              <Stack
+                screenOptions={{
+                  headerShown: false,
+                  animation: 'fade',
+                  contentStyle: { backgroundColor: 'transparent' },
+                }}
+              >
+                <Stack.Screen name="index" />
+                <Stack.Screen name="onboarding" />
+                <Stack.Screen name="stations" options={{ presentation: 'modal' }} />
+              </Stack>
+            </SplashGate>
           </ThemeProvider>
         </StationProvider>
       </SafeAreaProvider>
-    </GestureHandlerRootView>
+    </View>
   );
 }

@@ -1,19 +1,16 @@
 // One bottom sheet, content switched by the active drawer — mirrors the single
 // <Sheet> in web PlayerApp.
 //
-// Driven declaratively by a controlled `index` (0 = open, -1 = closed) rather
-// than imperative present()/dismiss() on a modal ref. The modal+ref+effect
-// approach proved flaky here (the sheet's state and the present() call could
-// race, so it took multiple taps to open); a controlled non-modal BottomSheet
-// animates straight to the target index and is reliable on the first tap.
+// Built on React Native's core <Modal>, NOT @gorhom/bottom-sheet. gorhom (and
+// the react-native-gesture-handler it rides on) installed a root touch
+// interceptor that swallowed every tap across the whole app on the New
+// Architecture on some Android devices — renders fine, no crash, just dead to
+// touch (issue #458). A core <Modal> renders in its own native window and
+// nothing at all when closed, so it can't intercept the app's touches. We lose
+// drag-to-dismiss; tap-the-scrim or the back button closes it.
 
-import BottomSheet, {
-  BottomSheetBackdrop,
-  BottomSheetScrollView,
-  type BottomSheetBackdropProps,
-} from '@gorhom/bottom-sheet';
-import { useCallback, useMemo, useRef } from 'react';
-import { Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/theme/ThemeContext';
 
 export interface SheetProps {
@@ -24,59 +21,52 @@ export interface SheetProps {
 }
 
 export function Sheet({ open, onClose, title, children }: SheetProps) {
-  const ref = useRef<BottomSheet>(null);
   const { colors } = useTheme();
-  const snapPoints = useMemo(() => ['60%', '92%'], []);
-
-  const renderBackdrop = useCallback(
-    (props: BottomSheetBackdropProps) => (
-      <BottomSheetBackdrop
-        {...props}
-        appearsOnIndex={0}
-        disappearsOnIndex={-1}
-        pressBehavior="close"
-        opacity={0.5}
-      />
-    ),
-    [],
-  );
-
-  // onClose() is the single source of truth for "user dismissed it" — fired
-  // when the sheet animates to index -1 (pan-down or backdrop press).
-  const handleChange = useCallback(
-    (index: number) => {
-      if (index === -1 && open) onClose();
-    },
-    [open, onClose],
-  );
+  const insets = useSafeAreaInsets();
 
   return (
-    <BottomSheet
-      ref={ref}
-      index={open ? 0 : -1}
-      snapPoints={snapPoints}
-      // Explicit snapPoints → dynamic content sizing must be OFF, or the first
-      // layout mis-measures the scroll view height.
-      enableDynamicSizing={false}
-      enablePanDownToClose
-      onChange={handleChange}
-      backdropComponent={renderBackdrop}
-      handleIndicatorStyle={{ backgroundColor: colors.muted }}
-      backgroundStyle={{ backgroundColor: colors.bg }}
+    <Modal
+      visible={open}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent
+      navigationBarTranslucent
     >
-      <BottomSheetScrollView
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 48 }}
-      >
-        {title ? (
-          <Text
-            className="font-display text-ink"
-            style={{ fontSize: 22, marginTop: 4, marginBottom: 16 }}
-          >
-            {title}
-          </Text>
-        ) : null}
-        <View>{children}</View>
-      </BottomSheetScrollView>
-    </BottomSheet>
+      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        {/* Dimmed scrim — tap to dismiss. Sits behind the panel. */}
+        <Pressable
+          style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)' }]}
+          onPress={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+        />
+        <View
+          style={{
+            maxHeight: '88%',
+            backgroundColor: colors.bg,
+            borderTopLeftRadius: 16,
+            borderTopRightRadius: 16,
+            paddingBottom: insets.bottom + 8,
+          }}
+        >
+          {/* Grabber */}
+          <View style={{ alignItems: 'center', paddingTop: 10, paddingBottom: 4 }}>
+            <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: colors.muted }} />
+          </View>
+          <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 48 }}>
+            {title ? (
+              <Text
+                className="font-display text-ink"
+                style={{ fontSize: 22, marginTop: 4, marginBottom: 16 }}
+              >
+                {title}
+              </Text>
+            ) : null}
+            <View>{children}</View>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
   );
 }
