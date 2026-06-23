@@ -40,6 +40,54 @@ function clampSpeed(speed: any, provider: string) {
   return Math.min(hi, Math.max(lo, n));
 }
 
+// Minimal language-name → ISO 639-1 map for the ElevenLabs `language` param
+// (its language_code). OpenAI's gpt-4o-mini-tts takes a free-text instruction
+// instead, so it needs no map. Best-effort — an unknown name falls through to
+// no code (the script text still carries the language); extend as needed.
+const LANG_ISO: Record<string, string> = {
+  english: 'en', french: 'fr', spanish: 'es', german: 'de', italian: 'it',
+  portuguese: 'pt', dutch: 'nl', polish: 'pl', russian: 'ru', turkish: 'tr',
+  arabic: 'ar', hindi: 'hi', japanese: 'ja', korean: 'ko', chinese: 'zh',
+  mandarin: 'zh', cantonese: 'zh', swedish: 'sv', norwegian: 'no',
+  danish: 'da', finnish: 'fi', greek: 'el', czech: 'cs', romanian: 'ro',
+  hungarian: 'hu', ukrainian: 'uk', indonesian: 'id', malay: 'ms',
+  filipino: 'fil', tagalog: 'tl', vietnamese: 'vi', thai: 'th', hebrew: 'he',
+  bulgarian: 'bg', croatian: 'hr', slovak: 'sk', tamil: 'ta', punjabi: 'pa',
+  bengali: 'bn', urdu: 'ur', persian: 'fa', farsi: 'fa',
+};
+
+function isoCodeFor(name: string): string | null {
+  const key = name.trim().toLowerCase();
+  if (LANG_ISO[key]) return LANG_ISO[key];
+  // "brazilian portuguese" / "latin american spanish" → match the last word.
+  const last = key.split(/\s+/).pop() || '';
+  return LANG_ISO[last] || null;
+}
+
+// Per-provider pronunciation hint from the persona's on-air language, so a
+// non-English script isn't read with English phonetics (issue #558). OpenAI's
+// gpt-4o-mini-tts honours a free-text `instructions` field (tts-1 / tts-1-hd
+// ignore it harmlessly); ElevenLabs honours an ISO `language` code. Both are
+// top-level generateSpeech params. openai-compatible servers vary on which
+// fields they accept (the same reason `speed` is skipped for them), so they get
+// no hint. Empty language → {} so the default English path stays byte-identical.
+function languageHint(language: string | undefined, provider: string, model: string): { instructions?: string; language?: string } {
+  const lang = String(language || '').trim();
+  if (!lang) return {};
+  if (provider === 'openai') {
+    // `instructions` only steers gpt-4o*-tts models; tts-1 / tts-1-hd ignore or
+    // reject it, so don't send it there (a 400 would drop us to an English
+    // local fallback — worse than no hint).
+    if (!/gpt-4o.*tts/i.test(String(model || ''))) return {};
+    return { instructions: `Speak entirely in ${lang}, using natural, native ${lang} pronunciation and accent. Do not read the text with an English accent.` };
+  }
+  if (provider === 'elevenlabs') {
+    const iso = isoCodeFor(lang);
+    return iso ? { language: iso } : {};
+  }
+  return {};
+}
+
 function cloudCfg() {
   return settings.get().tts?.cloud || {};
 }
@@ -107,7 +155,7 @@ export function isConfigured(providerOverride: string | null = null) {
 // provider + voice while still sharing the global model + apiKey from Settings.
 export async function speak(
   text: string,
-  { outPath, cloudOverride = null, speedScale }: { outPath?: string; cloudOverride?: any; speedScale?: number } = {},
+  { outPath, cloudOverride = null, speedScale, language }: { outPath?: string; cloudOverride?: any; speedScale?: number; language?: string } = {},
 ) {
   if (!text || !text.trim()) throw new Error('Empty TTS text');
   const base = cloudCfg();
@@ -142,6 +190,8 @@ export async function speak(
     text,
     voice: c.voice || undefined,
     ...(speed !== 1.0 ? { speed } : {}),
+    // Persona on-air language → provider-native pronunciation hint (issue #558).
+    ...languageHint(language, c.provider, c.model),
     // ElevenLabs gates 44.1 kHz PCM/WAV behind paid tiers — a free/lower-tier
     // key 403s ("Forbidden") on pcm_44100. mp3 is allowed on every tier and
     // OpenAI honours it too, so it's the safe cross-provider request.

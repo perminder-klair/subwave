@@ -253,7 +253,7 @@ function directorSystem(persona: any, caps: any[], freq: string, sfxCatalog: any
 Your job: decide whether to air ONE between-track segment, or stay silent. You are NOT choosing music. ${tone}
 
 Capabilities available this tick (pick one of these kinds, or stay silent):
-${capList}${sfxBlock(sfxCatalog)}`;
+${capList}${sfxBlock(sfxCatalog)}${settings.agentLanguageReminder(persona, 'the "text" line')}`;
 }
 
 // Wall-clock ceiling for a single segment-director run, resolved live so it
@@ -430,7 +430,7 @@ function forcedSystem(persona, cap, sfxCatalog) {
 
 The operator asked you to air ONE ${cap.kind} segment now — you must produce a line, silence is not an option. You are NOT choosing music.
 
-${cap.desc}${sfxBlock(sfxCatalog)}`;
+${cap.desc}${sfxBlock(sfxCatalog)}${settings.agentLanguageReminder(persona, 'the "text" line')}`;
 }
 
 // The operator-override variant of directorAgent — exactly one capability,
