@@ -32,7 +32,15 @@ function embeddingCfg() {
     enabled: s.enabled !== false,
     provider: s.provider || llm.provider || 'ollama',
     model: s.model || '',
-    apiKey: s.apiKey || llm.apiKey || '',
+    // Key precedence: the saved settings field wins, then a dedicated
+    // `EMBEDDING_API_KEY` env var (the env path most installs use -- keys live in
+    // state/secrets.env, not settings.json), then the chat key. This is a
+    // runtime env read like config.ts does for SEARCH_API_KEY, so the env value
+    // never gets baked into the persisted settings.json. It covers every
+    // provider uniformly -- including openai-compatible/locca, which can't safely
+    // grab a provider-conventional env var (createOpenAI would otherwise reach
+    // for OPENAI_API_KEY against an arbitrary self-hosted server).
+    apiKey: s.apiKey || process.env.EMBEDDING_API_KEY || llm.apiKey || '',
     ollamaUrl: s.ollamaUrl || llm.ollamaUrl || '',
     baseUrl: s.baseUrl || llm.baseUrl || '',
   };
