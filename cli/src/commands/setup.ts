@@ -61,13 +61,14 @@ import {
   probeOpenAI,
   probeAnthropic,
   probeOpenRouter,
+  probeRequesty,
   type ProbeResult,
 } from '../probes.ts';
 import { p, pc, accent, exitIfCancelled, banner, header, ok, warn, err, info, muted } from '../ui.ts';
 
 // LLM providers — kept in step with the controller's LLM_PROVIDERS list
 // (controller/src/settings.ts) and the admin Settings UI provider picker.
-type CloudProvider = 'anthropic' | 'openai' | 'google' | 'deepseek' | 'openrouter' | 'gateway';
+type CloudProvider = 'anthropic' | 'openai' | 'google' | 'deepseek' | 'openrouter' | 'requesty' | 'gateway';
 type LlmProvider = 'ollama' | 'openai-compatible' | CloudProvider;
 
 // Cloud providers whose API key the AI SDK reads from a process.env var.
@@ -79,6 +80,7 @@ const CLOUD_ENV_VAR: Record<CloudProvider, string> = {
   google: 'GOOGLE_GENERATIVE_AI_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+  requesty: 'REQUESTY_API_KEY',
   gateway: 'AI_GATEWAY_API_KEY',
 };
 
@@ -382,6 +384,7 @@ const LLM_PROVIDER_OPTIONS: Array<{ value: LlmProvider | 'later'; label: string;
   { value: 'google',            label: 'Google — Gemini',                  hint: 'needs GOOGLE_GENERATIVE_AI_API_KEY' },
   { value: 'deepseek',          label: 'DeepSeek',                         hint: 'needs DEEPSEEK_API_KEY' },
   { value: 'openrouter',        label: 'OpenRouter — multi-vendor',        hint: 'needs OPENROUTER_API_KEY' },
+  { value: 'requesty',          label: 'Requesty — multi-vendor',          hint: 'needs REQUESTY_API_KEY' },
   { value: 'gateway',           label: 'Vercel AI Gateway — multi-vendor', hint: 'needs AI_GATEWAY_API_KEY' },
   { value: 'later',             label: 'Other / configure later',          hint: 'set it up in the admin UI' },
 ];
@@ -394,6 +397,7 @@ const EXAMPLE_MODEL: Record<Exclude<LlmProvider, 'ollama'>, string> = {
   google: 'gemini-2.5-flash',
   deepseek: 'deepseek-v4-flash',
   openrouter: 'anthropic/claude-sonnet-4-5',
+  requesty: 'openai/gpt-4o-mini',
   gateway: 'anthropic/claude-sonnet-4-5',
 };
 
@@ -479,6 +483,7 @@ async function maybeProbeCloud(provider: CloudProvider, label: string, apiKey: s
   if (provider === 'openai') return reportProbe(label, () => probeOpenAI({ apiKey }));
   if (provider === 'anthropic') return reportProbe(label, () => probeAnthropic({ apiKey }));
   if (provider === 'openrouter') return reportProbe(label, () => probeOpenRouter({ apiKey }));
+  if (provider === 'requesty') return reportProbe(label, () => probeRequesty({ apiKey }));
 }
 
 // Ask whether to enable the optional tts-heavy sidecar (Chatterbox +

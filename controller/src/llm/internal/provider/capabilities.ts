@@ -110,6 +110,9 @@ const CAPS: Record<string, ProviderCapabilities> = {
   },
   // No first-class thinking knob — pass through to the underlying provider.
   openrouter: { objectStrategy: 'native', repeatPenaltyApplies: false, thinkingBlock: NONE },
+  // Requesty mirrors openrouter — an OpenAI-compatible hosted gateway with no
+  // first-class thinking knob, so reasoning passes through to the model verbatim.
+  requesty: { objectStrategy: 'native', repeatPenaltyApplies: false, thinkingBlock: NONE },
   gateway: { objectStrategy: 'native', repeatPenaltyApplies: false, thinkingBlock: NONE },
 };
 

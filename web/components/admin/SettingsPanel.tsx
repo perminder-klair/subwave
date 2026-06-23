@@ -48,6 +48,7 @@ const LLM_ENV_VARS: Record<string, string> = {
   google: 'GOOGLE_GENERATIVE_AI_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+  requesty: 'REQUESTY_API_KEY',
   gateway: 'AI_GATEWAY_API_KEY',
 };
 
@@ -60,6 +61,7 @@ const LLM_PROVIDER_LABELS: Record<string, string> = {
   google: 'Google (Gemini)',
   deepseek: 'DeepSeek',
   openrouter: 'OpenRouter (multi-vendor aggregator)',
+  requesty: 'Requesty (multi-vendor aggregator)',
   gateway: 'Vercel AI Gateway (multi-vendor aggregator)',
 };
 
@@ -84,6 +86,10 @@ const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = {
   ],
   google: [{ id: 'text-embedding-004', dim: 768 }],
   openrouter: [
+    { id: 'openai/text-embedding-3-small', dim: 1536 },
+    { id: 'openai/text-embedding-3-large', dim: 3072 },
+  ],
+  requesty: [
     { id: 'openai/text-embedding-3-small', dim: 1536 },
     { id: 'openai/text-embedding-3-large', dim: 3072 },
   ],
@@ -1810,7 +1816,9 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                   ? 'Gateway model id, e.g. “anthropic/claude-sonnet-4-5”.'
                   : form.llm.provider === 'openrouter'
                     ? 'OpenRouter model id, e.g. “google/gemini-2.5-flash”.'
-                    : form.llm.provider === 'google'
+                    : form.llm.provider === 'requesty'
+                      ? 'Requesty model id, e.g. “openai/gpt-4o-mini”.'
+                      : form.llm.provider === 'google'
                       ? 'Gemini model id, e.g. “gemini-2.5-flash”.'
                       : form.llm.provider === 'deepseek'
                         ? 'DeepSeek model id. Leave blank for the “deepseek-v4-flash” default.'
@@ -2367,7 +2375,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
   // embeddings endpoint so it's back in (#522); anthropic stays in too, routing
   // to OpenAI as flagged in the hint.
   const embedProviders = data.embedding?.providers ||
-    ['ollama', 'openai-compatible', 'locca', 'anthropic', 'openai', 'google', 'openrouter'];
+    ['ollama', 'openai-compatible', 'locca', 'anthropic', 'openai', 'google', 'openrouter', 'requesty'];
   // Keep a stale explicit choice (a chat-only provider saved before this list
   // shrank) visible so the Select isn't blank and the warning below makes sense.
   const providers = e.provider && !embedProviders.includes(e.provider)

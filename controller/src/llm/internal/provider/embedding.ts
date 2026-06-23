@@ -49,6 +49,10 @@ function defaultEmbeddingModelFor(provider: string): string {
       // OpenRouter proxies many embedding backends; default to the OpenAI model
       // since it's the most widely available and OpenAI-compatible (#522).
       return 'openai/text-embedding-3-small';
+    case 'requesty':
+      // Requesty is OpenAI-compatible and uses provider/model naming, so the
+      // OpenAI embedding model is the safe default — same as openrouter.
+      return 'openai/text-embedding-3-small';
     case 'anthropic':
       // No first-party Anthropic embedding API. We resolve via openai.
       return 'text-embedding-3-small';
@@ -164,6 +168,19 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
       });
       return provider.textEmbeddingModel(id);
     }
+    case 'requesty': {
+      // Requesty exposes an OpenAI-compatible embeddings endpoint
+      // (POST https://router.requesty.ai/v1/embeddings), so it routes through
+      // the same createOpenAI transport as openrouter — just a fixed base URL.
+      // A real key is required — a missing one 401s with the 'unauthorized'
+      // message.
+      const provider = createOpenAI({
+        baseURL: 'https://router.requesty.ai/v1',
+        apiKey: cfg.apiKey || 'unused',
+        name: 'requesty',
+      });
+      return provider.textEmbeddingModel(id);
+    }
     case 'ollama': {
       const provider = createOllama({ baseURL: ollamaBaseUrl(cfg as any) });
       return provider.textEmbeddingModel(id);
@@ -179,7 +196,7 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
       throw new Error(
         `Provider "${cfg.provider}" has no text-embedding support. Pick an ` +
           `embedding-capable provider in Settings → Library tagger → Embedding ` +
-          `(ollama, openai, google, openrouter, locca, or openai-compatible).`,
+          `(ollama, openai, google, openrouter, requesty, locca, or openai-compatible).`,
       );
   }
 }

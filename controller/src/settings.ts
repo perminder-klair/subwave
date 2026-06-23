@@ -171,6 +171,7 @@ export const LLM_PROVIDERS = [
   'openai-compatible',
   'locca',
   'openrouter',
+  'requesty',
   'anthropic',
   'openai',
   'google',
@@ -196,6 +197,7 @@ export const EMBEDDING_PROVIDERS = [
   'openai',
   'google',
   'openrouter',
+  'requesty',
 ];
 
 // Coerce a stored Ollama context-window value. 0 disables (use Ollama's own

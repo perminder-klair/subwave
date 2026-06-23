@@ -7,7 +7,8 @@
 //
 // The active provider/model lives in `settings.llm` (see settings.js):
 //   { provider:  'ollama' | 'openai-compatible' | 'locca' | 'anthropic' |
-//                'openai' | 'google' | 'deepseek' | 'openrouter' | 'gateway',
+//                'openai' | 'google' | 'deepseek' | 'openrouter' | 'requesty' |
+//                'gateway',
 //     model:     string,   // empty → provider default
 //     apiKey:    string,   // empty → read the provider's env var
 //     ollamaUrl: string,   // empty → config.ollama.url default (Ollama only)
@@ -113,6 +114,12 @@ export function loccaEmbedBaseUrl(cfg: any): string {
   return cfg.baseUrl || DEFAULT_LOCCA_EMBED_BASE_URL;
 }
 
+// Requesty is an OpenAI-compatible LLM gateway (provider/model naming, e.g.
+// openai/gpt-4o-mini). Like openrouter it's a fixed-endpoint aggregator — one
+// key, any vendor — so the base URL isn't operator-configurable; the chat path
+// goes through createOpenAI with this base, keyed by REQUESTY_API_KEY.
+export const DEFAULT_REQUESTY_BASE_URL = 'https://router.requesty.ai/v1';
+
 // Build a LanguageModel for any self-hosted OpenAI-compatible server (llama.cpp,
 // vLLM, LM Studio, locca). `.chat()` pins /v1/chat/completions — these servers
 // don't implement the Responses API the default `provider(id)` would target.
@@ -193,6 +200,24 @@ export function languageModel(cfg: any = llmCfg()) {
     case 'openrouter': {
       const provider = createOpenRouter({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
       model = provider(id);
+      break;
+    }
+    case 'requesty': {
+      // Requesty is an OpenAI-compatible gateway, so it reuses the same
+      // createOpenAI transport as openai-compatible — just a fixed base URL
+      // (router.requesty.ai/v1) instead of an operator-supplied one. Models use
+      // provider/model naming (e.g. openai/gpt-4o-mini). Like openrouter it's a
+      // hosted aggregator with no first-class thinking knob, so we pass through
+      // verbatim (debugFetch only — no enable_thinking injection, which only
+      // makes sense for self-hosted llama.cpp/vLLM). A real key is required; it
+      // comes from settings or REQUESTY_API_KEY.
+      const provider = createOpenAI({
+        baseURL: DEFAULT_REQUESTY_BASE_URL,
+        apiKey: cfg.apiKey || 'unused',
+        name: 'requesty',
+        fetch: debugFetch,
+      });
+      model = provider.chat(id);
       break;
     }
     case 'gateway': {
