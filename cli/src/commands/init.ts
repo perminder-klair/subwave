@@ -15,7 +15,7 @@ import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 import crypto from 'node:crypto';
 
-import { COMPOSE_YML, COMPOSE_BYO_YML, ENV_EXAMPLE } from '../assets.ts';
+import { COMPOSE_YML, COMPOSE_BYO_YML, COMPOSE_TTS_HEAVY_GPU_YML, ENV_EXAMPLE } from '../assets.ts';
 import { DEFAULT_SUBWAVE_HOME, writeHomeConfig } from '../home.ts';
 import { loadConfig, saveConfig } from '../config.ts';
 import { writeEnvFile } from '../util.ts';
@@ -225,10 +225,14 @@ async function scaffold(a: InitAnswers): Promise<void> {
   const composeMainSrc = a.mode === 'prod-byo' ? COMPOSE_BYO_YML : COMPOSE_YML;
   writeFileSync(resolve(a.home, 'docker-compose.yml'), composeMainSrc);
   writeFileSync(resolve(a.home, 'docker-compose.byo.yml'), COMPOSE_BYO_YML);
+  // Also drop the GPU opt-in overlay so operators can layer it on later
+  // (Chatterbox TTS on CUDA) without fetching a file from the repo. See
+  // docs/gpu-tts.md.
+  writeFileSync(resolve(a.home, 'docker-compose.tts-heavy-gpu.yml'), COMPOSE_TTS_HEAVY_GPU_YML);
   if (a.mode === 'prod-byo') {
-    ok('wrote docker-compose.yml (BYO-proxy variant) + docker-compose.byo.yml');
+    ok('wrote docker-compose.yml (BYO-proxy variant) + docker-compose.byo.yml + GPU overlay');
   } else {
-    ok('wrote docker-compose.yml (bundled Caddy) + docker-compose.byo.yml');
+    ok('wrote docker-compose.yml (bundled Caddy) + docker-compose.byo.yml + GPU overlay');
   }
 
   // 3. Write .env from the embedded template, filling in the operator's

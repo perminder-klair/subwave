@@ -213,6 +213,12 @@ services:
         # published image, defaulted on for source builds so they match. Source
         # build only; lazy-loaded at runtime.
         WITH_DEMUCS: \${WITH_DEMUCS:-1}
+        # GPU opt-in: point the Chatterbox venv's torch install at a CUDA wheel
+        # index to build a GPU-capable image. Defaults to CPU wheels; override
+        # with e.g. CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
+        # and layer on docker-compose.tts-heavy-gpu.yml (device reservation +
+        # TTS_HEAVY_DEVICE=cuda). Source build only. See docs/gpu-tts.md.
+        CHATTERBOX_TORCH_INDEX_URL: \${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     # amd64-only image (heavy PyTorch stack); pinned so it runs under emulation
     # on arm64 hosts. The other services are multi-arch and auto-select.
     platform: linux/amd64
@@ -429,6 +435,11 @@ services:
         # so it matches. Both lazy-load at runtime (disk cost only).
         WITH_CLAP: \${WITH_CLAP:-1}
         WITH_DEMUCS: \${WITH_DEMUCS:-1}
+        # GPU opt-in for Chatterbox — point torch at a CUDA wheel index (e.g.
+        # CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124) and
+        # layer on docker-compose.tts-heavy-gpu.yml. Defaults to CPU wheels.
+        # Source build only. See docs/gpu-tts.md.
+        CHATTERBOX_TORCH_INDEX_URL: \${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     # amd64-only image (heavy PyTorch stack); pinned so it runs under emulation
     # on arm64 hosts. The other services are multi-arch and auto-select.
     platform: linux/amd64
@@ -616,6 +627,11 @@ services:
         # only, defaulted on to match. Both lazy-load at runtime (disk cost only).
         WITH_CLAP: \${WITH_CLAP:-1}
         WITH_DEMUCS: \${WITH_DEMUCS:-1}
+        # GPU opt-in for Chatterbox — point torch at a CUDA wheel index (e.g.
+        # CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124) and
+        # layer on docker-compose.tts-heavy-gpu.yml. Defaults to CPU wheels.
+        # Source build only. See docs/gpu-tts.md.
+        CHATTERBOX_TORCH_INDEX_URL: \${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     platform: linux/amd64
     container_name: sub-wave-tts-heavy
     restart: unless-stopped
@@ -649,6 +665,44 @@ volumes:
   tts-heavy-chatterbox-cache:
   tts-heavy-pocket-cache:
   tts-heavy-analyzer-cache:
+`;
+
+// docker-compose.tts-heavy-gpu.yml
+export const COMPOSE_TTS_HEAVY_GPU_YML = `# GPU opt-in overlay for the tts-heavy sidecar — runs Chatterbox on CUDA.
+#
+# The default tts-heavy image is CPU-only on purpose: a GPU device reservation
+# can't live in the base compose because \`docker compose up\` errors on a host
+# without the NVIDIA runtime, which would break every CPU install. This overlay
+# adds the reservation, switches the engine to cuda, and forces a local build
+# (the published image ships CPU-only torch).
+#
+# Layer it on top of your prod compose file, with the CUDA wheel index set:
+#
+#   echo 'CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124' >> .env
+#   docker compose -f docker-compose.yml -f docker-compose.tts-heavy-gpu.yml \\
+#     --profile tts-heavy up -d --build
+#
+# (BYO reverse-proxy hosts: swap docker-compose.yml for docker-compose.byo.yml.)
+#
+# Requirements: an NVIDIA GPU with the driver + NVIDIA Container Toolkit
+# installed. Pick the cuXXX wheel tag that matches your driver — see
+# https://pytorch.org/get-started/locally/. Full guide: docs/gpu-tts.md.
+services:
+  tts-heavy:
+    # Build the CUDA image locally instead of pulling the published CPU one.
+    pull_policy: build
+    environment:
+      # Load the Chatterbox model onto the GPU. The worker falls back to cpu if
+      # CUDA isn't actually visible, so a misconfigured host degrades, not fails.
+      - TTS_HEAVY_DEVICE=cuda
+    # Hand the GPU into the container (needs the NVIDIA Container Toolkit).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 `;
 
 // .env.example
