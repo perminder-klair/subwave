@@ -373,7 +373,17 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             </span>
             <span className="caption basis-full !tracking-[0.04em] !normal-case">
               {analysisOff
-                ? 'No analysis engine running. Start the tts-heavy sidecar (docker compose --profile tts-heavy up -d) or configure a local librosa venv.'
+                ? <>
+                    No analysis engine running. Start the tts-heavy sidecar (docker compose --profile tts-heavy up -d) or configure a local librosa venv.{' '}
+                    <a
+                      href="https://github.com/perminder-klair/subwave/blob/main/docs/tts-heavy.md"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
+                    >
+                      How to turn it on ↗
+                    </a>
+                  </>
                 : 'Improves beat-matching between tracks; tagging works fine without it.'}
             </span>
           </div>
