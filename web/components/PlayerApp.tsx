@@ -328,6 +328,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
         llmTokens={llmTokens}
         feed={boothFeed}
         djLineOn={tickerOn}
+        boothBuddyOn={state.ui?.boothBuddy === true}
         onOpenBooth={openBooth}
         onOpenTimeline={openTimeline}
       />

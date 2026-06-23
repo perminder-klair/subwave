@@ -45,11 +45,14 @@ export interface CenterStageProps {
   llmTokens: number | null;
   feed: SessionTurn[];
   djLineOn: boolean;
+  /** Station-wide toggle for the Booth Sprite mascot; the DJ line falls back to
+   *  the classic ♪/◇ marker when off. */
+  boothBuddyOn: boolean;
   onOpenBooth: () => void;
   onOpenTimeline: () => void;
 }
 
-export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens, feed, djLineOn, onOpenBooth, onOpenTimeline }: CenterStageProps) {
+export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens, feed, djLineOn, boothBuddyOn, onOpenBooth, onOpenTimeline }: CenterStageProps) {
   const { apiUrl } = useStationOrigin();
   // The 1s elapsed tick lives here, in the component that displays it, so it
   // only re-renders this subtree — not the whole player (see useElapsed).
@@ -209,7 +212,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
       </div>
 
       {has && (
-        <DjThinkingLine feed={feed} enabled={djLineOn} onOpenBooth={onOpenBooth} />
+        <DjThinkingLine feed={feed} enabled={djLineOn} buddyOn={boothBuddyOn} onOpenBooth={onOpenBooth} />
       )}
     </div>
   );

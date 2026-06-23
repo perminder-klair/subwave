@@ -200,6 +200,18 @@ export default defineConfig([
     },
   },
 
+  // Exemption for the Booth Sprite — a pure-CSS mascot ported from a Claude
+  // Design prototype (docs/Booth-Sprite.html). Every span's geometry is computed
+  // per-mood and per-size (face/antenna dimensions, tilt, scale) over the theme
+  // tokens, so it's intrinsically inline-styled and can't be static Tailwind
+  // utilities — same dynamic-styling deal as the Observatory above.
+  {
+    files: ['components/BoothBuddy.tsx'],
+    rules: {
+      'react/forbid-dom-props': 'off',
+    },
+  },
+
   {
     rules: {
       // Prose noise — JSX renders apostrophes/quotes fine.

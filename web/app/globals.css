@@ -322,6 +322,52 @@ body::after {
     }
 }
 
+/* Booth Sprite ("the buddy") — the pure-CSS mascot leading the DJ thinking
+   line. Only the keyframes live here; all geometry/colour is inline in
+   components/BoothBuddy.tsx. Collapsed under reduced motion below. */
+@keyframes buddy-breathe {
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(-2px);
+    }
+}
+@keyframes buddy-pulse {
+    0% {
+        transform: translate(-50%, -50%) scale(1);
+        opacity: 0.55;
+    }
+    100% {
+        transform: translate(-50%, -50%) scale(3.2);
+        opacity: 0;
+    }
+}
+@keyframes buddy-blink {
+    0%,
+    92%,
+    100% {
+        transform: scaleY(1);
+    }
+    96% {
+        transform: scaleY(0.12);
+    }
+}
+@keyframes buddy-z {
+    0% {
+        transform: translateY(0) translateX(0);
+        opacity: 0;
+    }
+    20% {
+        opacity: 1;
+    }
+    100% {
+        transform: translateY(-14px) translateX(5px);
+        opacity: 0;
+    }
+}
+
 /* Magic UI ripple — concentric ink rings expanding behind the now-playing
    artwork. Each circle inherits its own --i so the breathing is staggered. */
 @keyframes sw-ripple {
@@ -694,7 +740,11 @@ body::after {
     .v3-drawer-overlay,
     .v3-blink,
     .v3-tunein-pulse,
-    .v3-connecting-pulse {
+    .v3-connecting-pulse,
+    /* The buddy animates via inline `animation:` styles, so override with
+       !important on the wrapper + every descendant span. */
+    .v3-buddy,
+    .v3-buddy * {
         animation: none !important;
     }
     /* Keep the cover calm: no channel ghosts, scanlines, jitter or lift —

@@ -477,6 +477,11 @@ const DEFAULTS = {
   // ${STATE_DIR}/themes/. Stored as id only; the actual token map lives with
   // the theme registry so it stays in sync with the file on disk.
   theme: { active: DEFAULT_THEME_ID },
+  // Listener-player UI toggles — purely presentational, station-wide. The web
+  // player reads these via GET /state (alongside the theme) and applies them
+  // live; no restart. `boothBuddy` gates the DJ-line mascot — OFF by default,
+  // so the line shows the classic ♪/◇ marker until an operator opts in.
+  ui: { boothBuddy: false },
   // Global DJ prompt template. '' means "use DEFAULT_DJ_PROMPT_TEMPLATE".
   djPrompt: '',
   // The persona roster. One persona is "active" at a time (activePersonaId);
@@ -1007,6 +1012,12 @@ export async function load() {
         typeof stored.theme?.active === 'string' && stored.theme.active.trim()
           ? stored.theme.active.trim()
           : DEFAULTS.theme.active,
+    },
+    ui: {
+      boothBuddy:
+        typeof stored.ui?.boothBuddy === 'boolean'
+          ? stored.ui.boothBuddy
+          : DEFAULTS.ui.boothBuddy,
     },
     personas,
     activePersonaId,
@@ -2067,6 +2078,12 @@ export async function update(patch) {
     const sx = patch.sfx || {};
     if (sx.enabled !== undefined) {
       next.sfx.enabled = !!sx.enabled;
+    }
+  }
+  if ('ui' in patch) {
+    const ui = patch.ui || {};
+    if (ui.boothBuddy !== undefined) {
+      next.ui.boothBuddy = !!ui.boothBuddy;
     }
   }
   if ('webhooks' in patch) {

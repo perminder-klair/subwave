@@ -174,6 +174,8 @@ export interface StationState {
   djLog: DjLogEntry[];
   timezone?: string;
   locale?: StationLocale;
+  /** Station-wide listener-player UI toggles (from GET /state). */
+  ui?: { boothBuddy?: boolean };
 }
 
 /** A single turn in the live DJ session — `voice` (spoken on-air), `dj` (the

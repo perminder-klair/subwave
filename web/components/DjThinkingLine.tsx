@@ -1,17 +1,64 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { turnClass, turnText, type TurnDisplayClass } from '@/lib/sessionFeed';
+import BoothBuddy, { type BuddyMood } from './BoothBuddy';
 import type { SessionTurn } from '@/lib/types';
 
 // Shows only the DJ's "thinking" — the latest thing said on-air ("voice") or
 // the latest pick/request reasoning ("dj"). Aired tracks and system turns
 // stay out. Renders under the track info as a small typed line; tapping it
-// opens the Booth drawer with the full transcript.
+// opens the Booth drawer with the full transcript. The Booth Sprite leads the
+// line, its mood reacting to DJ activity (see useBuddyMood).
 const THINKING_CLASSES = new Set<TurnDisplayClass>(['voice', 'dj']);
 
-const MARKER: Record<string, string> = { voice: '♪', dj: '◇' };
+// Booth-buddy mood loop, driven by the newest DJ turn: it perks up when the DJ
+// speaks ('onair') or picks ('curious'), settles back to 'content', then dozes
+// off after a long quiet stretch. A poke (tap on the buddy) interrupts with a
+// 'spooked' → 'curious' → 'content' startle sequence, mirroring the prototype.
+const REACTION_MS: Record<'voice' | 'dj', number> = { voice: 8000, dj: 6000 };
+const SLEEPY_MS = 90000;
+
+function useBuddyMood(latest: SessionTurn | null): [BuddyMood, () => void] {
+  const [mood, setMood] = useState<BuddyMood>('content');
+  // Two timer pools so a turn arriving mid-poke can't cancel the startle, and a
+  // `poked` lock so the turn effect doesn't overwrite 'spooked' while it plays.
+  const reactTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const pokeTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const poked = useRef(false);
+  const clear = (ref: typeof reactTimers) => {
+    ref.current.forEach(clearTimeout);
+    ref.current = [];
+  };
+
+  useEffect(() => {
+    if (!latest || poked.current) return;
+    const cls = turnClass(latest) === 'voice' ? 'voice' : 'dj';
+    setMood(cls === 'voice' ? 'onair' : 'curious');
+    clear(reactTimers);
+    reactTimers.current.push(
+      setTimeout(() => setMood('content'), REACTION_MS[cls]),
+      setTimeout(() => setMood('sleepy'), SLEEPY_MS),
+    );
+  }, [latest]);
+
+  // Clear every pending timer on unmount.
+  useEffect(() => () => { clear(reactTimers); clear(pokeTimers); }, []);
+
+  const poke = useCallback(() => {
+    poked.current = true;
+    clear(reactTimers);
+    clear(pokeTimers);
+    setMood('spooked');
+    pokeTimers.current.push(
+      setTimeout(() => setMood('curious'), 850),
+      setTimeout(() => { poked.current = false; setMood('content'); }, 2400),
+    );
+  }, []);
+
+  return [mood, poke];
+}
 
 function thinkingText(turn: SessionTurn): string {
   const cls = turnClass(turn);
@@ -30,16 +77,23 @@ function staggerFor(length: number): number {
 
 const cursorChar = '▍';
 
+// Classic leading glyph, shown in place of the buddy when the operator has the
+// mascot turned off (settings.ui.boothBuddy === false).
+const MARKER: Record<string, string> = { voice: '♪', dj: '◇' };
+
 export interface DjThinkingLineProps {
   /** Live session messages, oldest first. */
   feed: SessionTurn[] | undefined;
   enabled: boolean;
+  /** Station-wide Booth Sprite toggle; falls back to the classic marker when
+   *  false. Defaults off (operator opts in). */
+  buddyOn?: boolean;
   onOpenBooth?: () => void;
 }
 
 // `feed` is the live session's `messages` array — turns of
 // { t, role, kind, text, meta }, oldest first.
-export default function DjThinkingLine({ feed, enabled, onOpenBooth }: DjThinkingLineProps) {
+export default function DjThinkingLine({ feed, enabled, buddyOn = false, onOpenBooth }: DjThinkingLineProps) {
   // The newest voice/dj turn — what the DJ is currently "thinking".
   const latest = useMemo<SessionTurn | null>(() => {
     if (!feed?.length) return null;
@@ -49,6 +103,12 @@ export default function DjThinkingLine({ feed, enabled, onOpenBooth }: DjThinkin
     }
     return null;
   }, [feed]);
+
+  const [mood, poke] = useBuddyMood(latest);
+  // Hit-test taps against the buddy so poking it startles the sprite in place,
+  // while a tap on the text still opens the Booth (a drawer would otherwise
+  // cover the buddy, so you'd never see the reaction).
+  const buddyRef = useRef<HTMLSpanElement>(null);
 
   if (!enabled || !latest) return null;
 
@@ -63,7 +123,13 @@ export default function DjThinkingLine({ feed, enabled, onOpenBooth }: DjThinkin
     <div
       role="button"
       tabIndex={0}
-      onClick={open}
+      onClick={(e) => {
+        if (buddyRef.current?.contains(e.target as Node)) {
+          poke();
+          return;
+        }
+        open();
+      }}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
@@ -71,11 +137,20 @@ export default function DjThinkingLine({ feed, enabled, onOpenBooth }: DjThinkin
         }
       }}
       title="Open booth feed"
-      className="v3-focus mt-[22px] mb-[10px] flex w-full max-w-[82%] cursor-pointer items-baseline gap-2 font-mono text-[14px] leading-[1.6] text-muted sm:text-[15px]"
+      className="v3-focus mt-[22px] mb-[10px] flex w-full max-w-[82%] cursor-pointer items-start gap-2 font-mono text-[14px] leading-[1.6] text-muted sm:text-[15px]"
     >
-      <span className="opacity-70" aria-hidden="true">
-        {MARKER[cls] || '·'}
-      </span>
+      {/* The Booth Sprite leads the line; tap it to poke it (hit-test in
+          onClick above). When the operator turns the mascot off, fall back to
+          the classic ♪/◇ marker. */}
+      {buddyOn ? (
+        <span ref={buddyRef} aria-hidden="true" className="mt-[1px] shrink-0">
+          <BoothBuddy mood={mood} size={20} />
+        </span>
+      ) : (
+        <span className="shrink-0 opacity-70" aria-hidden="true">
+          {MARKER[cls] || '·'}
+        </span>
+      )}
       {/* Clamp the inline teaser so the long "extended" scripts can't grow the
           column and shove the artwork/title up under the header on mobile.
           The full text stays one tap away in the Booth (and in aria-label). */}

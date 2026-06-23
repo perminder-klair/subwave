@@ -293,6 +293,9 @@ router.get('/state', (req, res) => {
     ...snap,
     needsSetup: getSetupStatusSync().needsSetup,
     theme: { active: activeThemeId },
+    // Listener-player UI toggles ride along with /state like the theme does, so
+    // the player can flip them live on the next poll. Defaults off if unset.
+    ui: { boothBuddy: s?.ui?.boothBuddy ?? false },
     // Station zone for rendering djLog timestamps in station-local time (#418).
     timezone: getStationTimezone(),
     locale: s.locale,
