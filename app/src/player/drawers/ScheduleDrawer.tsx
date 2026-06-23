@@ -2,7 +2,7 @@
 // persona avatars. Ported from web ScheduleDrawer — same slot-collapsing logic.
 
 import { Image } from 'expo-image';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useAppActive } from '@/hooks/useAppActive';
 import type { StationApi } from '@/lib/api';
@@ -19,6 +19,32 @@ const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
+}
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// Day-of-week (0=Sun) and hour (0–23) in the station's IANA timezone, so the
+// "now" highlight matches the station clock shown in the header rather than the
+// viewer's local time. Falls back to the device's local time when no tz is set
+// or Hermes' Intl lacks timeZone support (same guard as the time formatter).
+function tzNow(now: Date, tz?: string | null): { day: number; hour: number } {
+  if (tz) {
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: tz,
+        weekday: 'short',
+        hour: '2-digit',
+        hour12: false,
+      }).formatToParts(now);
+      const day = WEEKDAYS.indexOf(parts.find((p) => p.type === 'weekday')?.value ?? '');
+      let hour = parseInt(parts.find((p) => p.type === 'hour')?.value ?? '', 10);
+      if (hour === 24) hour = 0; // some engines emit "24" at midnight
+      if (day >= 0 && Number.isFinite(hour)) return { day, hour };
+    } catch {
+      /* fall through to device-local */
+    }
+  }
+  return { day: now.getDay(), hour: now.getHours() };
 }
 
 interface Slot {
@@ -60,9 +86,9 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
   const appActive = useAppActive();
   const [data, setData] = useState<SchedulePayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const today = useMemo(() => new Date().getDay(), []);
-  const [day, setDay] = useState(today);
-  const currentHour = useMemo(() => new Date().getHours(), []);
+  // null until the user taps a day tab; before that the view follows the
+  // station's "today" (see todayTz below), so it's correct across timezones.
+  const [pickedDay, setPickedDay] = useState<number | null>(null);
   const [now, setNow] = useState(() => new Date());
   const location = context?.weather?.location ?? null;
 
@@ -88,6 +114,11 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
   if (!data) {
     return <Text className="font-body text-muted" style={{ fontSize: 13 }}>Loading schedule…</Text>;
   }
+
+  // "Today" and the current hour in the station's timezone — what drives the
+  // NOW highlight and the today marker, matching the station-time clock above.
+  const { day: todayTz, hour: currentHour } = tzNow(now, data.timezone);
+  const day = pickedDay ?? todayTz;
 
   const slots = collapseSlots(data.schedule?.[day] ?? [], data.shows || [], data.personas || []);
 
@@ -149,7 +180,7 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
             return (
               <Pressable
                 key={label}
-                onPress={() => setDay(d)}
+                onPress={() => setPickedDay(d)}
                 accessibilityRole="button"
                 accessibilityLabel={`Day ${label}`}
                 accessibilityState={{ selected: active }}
@@ -166,7 +197,7 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
                   style={{ fontSize: 10, letterSpacing: 1, color: active ? colors.bg : colors.muted }}
                 >
                   {label}
-                  {d === today ? ' ·' : ''}
+                  {d === todayTz ? ' ·' : ''}
                 </Text>
               </Pressable>
             );
@@ -175,7 +206,7 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
       </ScrollView>
 
       {slots.map((slot) => {
-        const isNow = day === today && currentHour >= slot.hour && currentHour <= slot.endHour;
+        const isNow = day === todayTz && currentHour >= slot.hour && currentHour <= slot.endHour;
         const range = `${pad2(slot.hour)}:00 – ${pad2((slot.endHour + 1) % 24)}:00`;
         return (
           <View
