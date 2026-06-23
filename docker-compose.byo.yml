@@ -163,6 +163,11 @@ services:
         # so it matches. Both lazy-load at runtime (disk cost only).
         WITH_CLAP: ${WITH_CLAP:-1}
         WITH_DEMUCS: ${WITH_DEMUCS:-1}
+        # GPU opt-in for Chatterbox — point torch at a CUDA wheel index (e.g.
+        # CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124) and
+        # layer on docker-compose.tts-heavy-gpu.yml. Defaults to CPU wheels.
+        # Source build only. See docs/gpu-tts.md.
+        CHATTERBOX_TORCH_INDEX_URL: ${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     # amd64-only image (heavy PyTorch stack); pinned so it runs under emulation
     # on arm64 hosts. The other services are multi-arch and auto-select.
     platform: linux/amd64

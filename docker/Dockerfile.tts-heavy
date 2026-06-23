@@ -72,11 +72,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # silently set to None because its module-level import failed). When pkg_resources
 # is gone, none of that is visible until you actually call the constructor.
 ENV CHATTERBOX_HF_HOME=/opt/chatterbox/hf-cache
+# GPU opt-in. The default is CPU-only torch wheels; point this at a CUDA wheel
+# index (e.g. https://download.pytorch.org/whl/cu124, matching the host driver)
+# to build a GPU-capable Chatterbox. Pair it with TTS_HEAVY_DEVICE=cuda + a GPU
+# device reservation — docker-compose.tts-heavy-gpu.yml wires both. Scoped to
+# the Chatterbox venv on purpose: PocketTTS (fast on CPU) and the analyzer don't
+# benefit and CUDA torch would add several GB to each. See docs/gpu-tts.md.
+ARG CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 RUN python3 -m venv /opt/chatterbox/venv && \
     /opt/chatterbox/venv/bin/pip install --no-cache-dir --upgrade pip "setuptools<81" wheel && \
     /opt/chatterbox/venv/bin/pip install --no-cache-dir numpy Cython && \
     /opt/chatterbox/venv/bin/pip install --no-cache-dir --no-build-isolation \
-      --index-url https://download.pytorch.org/whl/cpu \
+      --index-url ${CHATTERBOX_TORCH_INDEX_URL} \
       --extra-index-url https://pypi.org/simple \
       torch torchaudio onnxruntime chatterbox-tts && \
     /opt/chatterbox/venv/bin/python -c \

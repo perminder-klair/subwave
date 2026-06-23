@@ -204,6 +204,12 @@ services:
         # published image, defaulted on for source builds so they match. Source
         # build only; lazy-loaded at runtime.
         WITH_DEMUCS: ${WITH_DEMUCS:-1}
+        # GPU opt-in: point the Chatterbox venv's torch install at a CUDA wheel
+        # index to build a GPU-capable image. Defaults to CPU wheels; override
+        # with e.g. CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
+        # and layer on docker-compose.tts-heavy-gpu.yml (device reservation +
+        # TTS_HEAVY_DEVICE=cuda). Source build only. See docs/gpu-tts.md.
+        CHATTERBOX_TORCH_INDEX_URL: ${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     # amd64-only image (heavy PyTorch stack); pinned so it runs under emulation
     # on arm64 hosts. The other services are multi-arch and auto-select.
     platform: linux/amd64

@@ -8,7 +8,7 @@ to work.
 | | Easy route (OpenAI layer) | Native route (sidecar on GPU) |
 |---|---|---|
 | Image rebuild | **None** | Required (CUDA PyTorch) |
-| SUB/WAVE config | Admin UI only | Dockerfile + compose + env |
+| SUB/WAVE config | Admin UI only | one env var + a compose overlay |
 | Voice cloning | Yes, server-side, selected by **voice name** | Yes, per-persona reference WAVs in SUB/WAVE |
 | Drop a WAV into `state/voices/` per persona | No (register it on the server instead) | Yes |
 | Paralinguistic tags (`[laugh]`, `[sigh]`) | Depends on your server | Yes |
@@ -113,69 +113,43 @@ route.
 ## Native route: GPU-enable the bundled sidecar
 
 This keeps the full Chatterbox feature set (reference-WAV cloning,
-paralinguistic tags, speed) inside SUB/WAVE's own `tts-heavy` container, at the
-cost of a custom image build. You need the
+paralinguistic tags, speed) inside SUB/WAVE's own `tts-heavy` container. No
+Dockerfile editing: the Chatterbox torch wheel index is a build arg
+(`CHATTERBOX_TORCH_INDEX_URL`), and an opt-in compose overlay
+(`docker-compose.tts-heavy-gpu.yml`) carries the GPU device reservation, the
+`cuda` device flag, and a forced local build. You need the
 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 installed on the host so Docker can pass the GPU through.
 
-### 1. Build the image with CUDA PyTorch
+### 1. Point the build at CUDA wheels
 
-Edit `docker/Dockerfile.tts-heavy` and change the Chatterbox venv's torch
-install to a CUDA wheel index that matches your host's driver. Find:
-
-```dockerfile
-    /opt/chatterbox/venv/bin/pip install --no-cache-dir --no-build-isolation \
-      --index-url https://download.pytorch.org/whl/cpu \
-      --extra-index-url https://pypi.org/simple \
-      torch torchaudio onnxruntime chatterbox-tts && \
-```
-
-and swap the CPU index for a CUDA one, e.g. for CUDA 12.4:
-
-```dockerfile
-      --index-url https://download.pytorch.org/whl/cu124 \
-```
-
-(Pick the `cuXXX` tag that matches your driver; see
-<https://pytorch.org/get-started/locally/>. The image gets larger; the
-build-time `rm -rf "$SP/torch/test"` cleanup still applies.)
-
-### 2. Give the container the GPU
-
-Add a device reservation to the `tts-heavy` service in your compose file
-(`docker-compose.yml` or `docker-compose.byo.yml`):
-
-```yaml
-  tts-heavy:
-    # ...existing config...
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-```
-
-### 3. Select the GPU device and bring it up
-
-Set the device flag in your root `.env`:
+In your root `.env`, set the wheel index to a `cuXXX` tag that matches your host
+driver (see <https://pytorch.org/get-started/locally/>):
 
 ```bash
-echo TTS_HEAVY_DEVICE=cuda >> .env
-echo COMPOSE_PROFILES=tts-heavy >> .env
+echo 'CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124' >> .env
 ```
 
-Then build the local image (the service defaults to pulling the published
-CPU-only image, so you must build explicitly) and start the profile:
+This is scoped to the Chatterbox venv. PocketTTS and the analyzer stay on CPU
+wheels, so the image only grows by the one CUDA torch it actually needs.
+
+### 2. Build + start with the GPU overlay
+
+Layer `docker-compose.tts-heavy-gpu.yml` on top of your prod compose file. The
+overlay adds the GPU device reservation, sets `TTS_HEAVY_DEVICE=cuda`, and
+forces a local build (the published image ships CPU-only torch):
 
 ```bash
-docker compose build tts-heavy
-docker compose --profile tts-heavy up -d
+docker compose -f docker-compose.yml -f docker-compose.tts-heavy-gpu.yml \
+  --profile tts-heavy up -d --build
 ```
 
-Confirm the worker grabbed the card. The sidecar log should show
-`loading ChatterboxTurboTTS on device=cuda` with no fallback warning:
+(BYO reverse-proxy hosts: swap `docker-compose.yml` for `docker-compose.byo.yml`.)
+
+### 3. Confirm it grabbed the card
+
+The sidecar log should show `loading ChatterboxTurboTTS on device=cuda` with no
+fallback warning:
 
 ```bash
 docker compose logs -f tts-heavy
@@ -185,10 +159,11 @@ Voice cloning works exactly as on CPU: drop a reference WAV into
 `state/voices/` and select it on the Personas page (see the **Voices & TTS**
 page in the in-app manual for the cloning workflow).
 
-> The legacy in-process build (`--build-arg WITH_CHATTERBOX=1` in
-> `docker/Dockerfile.controller`) installs CPU PyTorch the same way. To run that
-> variant on a GPU, apply the identical CUDA-index swap there and add the same
-> device reservation to the `controller` service.
+> The overlay only covers the sidecar. The legacy in-process build
+> (`--build-arg WITH_CHATTERBOX=1` in `docker/Dockerfile.controller`) still
+> installs CPU PyTorch and has no equivalent build arg yet, so running *that*
+> variant on a GPU needs a manual torch-index swap there plus a device
+> reservation on the `controller` service.
 
 ---
 

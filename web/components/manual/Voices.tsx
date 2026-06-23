@@ -159,10 +159,12 @@ docker compose up -d`}</CodeBlock>
           The shipped <code className="bs-code-inline">tts-heavy</code> image installs
           CPU-only PyTorch wheels, so setting{' '}
           <code className="bs-code-inline">TTS_HEAVY_DEVICE=cuda</code> on its own silently
-          falls back to CPU. To drive the card natively (and keep reference-WAV cloning)
-          you rebuild the image with CUDA PyTorch and grant the container the GPU through
-          the NVIDIA Container Toolkit. This keeps the full Chatterbox feature set, cloning
-          and paralinguistic tags included, on the GPU, at the cost of a custom build.
+          falls back to CPU. To drive the card natively (and keep reference-WAV cloning),
+          point the <code className="bs-code-inline">CHATTERBOX_TORCH_INDEX_URL</code> build
+          arg at a CUDA wheel index and bring the sidecar up with the{' '}
+          <code className="bs-code-inline">docker-compose.tts-heavy-gpu.yml</code> overlay,
+          which carries the GPU reservation for you. No Dockerfile editing, just a local
+          build on a host with the NVIDIA Container Toolkit.
         </p>
         <p className="text-muted">
           The full step-by-step for both routes lives in{' '}
