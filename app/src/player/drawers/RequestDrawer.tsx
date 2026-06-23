@@ -88,6 +88,12 @@ export default function RequestDrawer({ api, nowPlaying, context, onClose }: Req
   const scheduleClose = () => {
     if (closeTimer.current) return;
     closeTimer.current = setTimeout(() => {
+      // Clear the ref the moment the timer fires. This drawer is a permanently
+      // mounted pager page (it never unmounts), so unlike the web version the
+      // ref isn't reset by a remount — leaving a stale id here turns the guard
+      // above into a no-op for every later request, so the second request's
+      // resolved card hangs on "Closing…" forever (user has to force-quit).
+      closeTimer.current = null;
       onClose();
       setTimeout(() => setResult(null), 300);
     }, SUCCESS_HOLD_MS);
