@@ -38,6 +38,16 @@ export function hasLastfmKey(): boolean {
   return !!resolveKey();
 }
 
+// Tri-state gate for whether to fetch Last.fm tags during enrichment, shared by
+// the bulk tagger (tag-library.phaseEnrich) and the single-track retag route so
+// they can't drift: explicit `true` always enriches; explicit `false` never
+// does; the default (null/undefined/unset) enriches only when a key is present.
+// A strict `=== true` here is what made retag skip enrichment for a
+// key-present-but-toggle-unset operator while the bulk path still ran it (#532).
+export function lastfmEnrichEnabled(cfgValue: unknown, hasKey: boolean): boolean {
+  return cfgValue === true || (cfgValue !== false && hasKey);
+}
+
 // Last.fm crowd tags for an artist, normalised to lowercase trimmed strings and
 // sliced to `count` (default 10, matching the legacy Navidrome path). Returns []
 // when no key is configured, the artist has no Last.fm coverage, or any request

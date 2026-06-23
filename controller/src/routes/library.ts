@@ -391,14 +391,12 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
 
     const embedCfg: any = (settings.get() as any).embedding ?? {};
     const enrichCfg = embedCfg.enrichment ?? {};
-    // Tri-state gate, identical to tag-library.phaseEnrich: explicit `true`
-    // always enriches; explicit `false` never does; the default (unset) enriches
-    // when a Last.fm key is present. Previously this was a strict `=== true`, so
-    // a key-present-but-toggle-unset operator got tags from the bulk tagger but
-    // not from single-track retag (issue #532).
-    const lastfmEnabled =
-      enrichCfg.lastfmTags === true ||
-      (enrichCfg.lastfmTags !== false && lastfm.hasLastfmKey());
+    // Tri-state gate, shared with tag-library.phaseEnrich via lastfmEnrichEnabled:
+    // explicit `true` always enriches; explicit `false` never does; the default
+    // (unset) enriches when a Last.fm key is present. Previously a strict
+    // `=== true` here, so a key-present-but-toggle-unset operator got tags from
+    // the bulk tagger but not from single-track retag (issue #532).
+    const lastfmEnabled = lastfm.lastfmEnrichEnabled(enrichCfg.lastfmTags, lastfm.hasLastfmKey());
     const lyricsEnabled = enrichCfg.lyrics !== false;
 
     // 1. Make sure the track row exists in library-db with current metadata so

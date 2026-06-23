@@ -28,6 +28,7 @@ import * as db from './library-db.js';
 import * as settings from '../settings.js';
 import * as embeddings from './embeddings.js';
 import { selectSeeds } from './seed-selector.js';
+import { selectEnrichIds } from './enrich-scope.js';
 import { vote } from './tag-propagator.js';
 import { config } from '../config.js';
 import { loadSecretsIntoEnv } from '../setup/secrets.js';
@@ -284,15 +285,18 @@ async function main() {
   // ---- Phase 0: ENRICH ---------------------------------------------------
   // Normal runs enrich only the in-scope untagged tracks. A --re-enrich pass is
   // an explicit "refresh metadata on the whole library" request (e.g. backfill
-  // Last.fm tags after upgrading), so it must widen scope to the full walked
-  // catalogue — not just untagged tracks, which is empty on a fully-tagged
+  // Last.fm tags after upgrading), so selectEnrichIds widens scope to the full
+  // walked catalogue — not just untagged tracks, which is empty on a fully-tagged
   // library and made re-enrich a silent no-op (issue #531). The per-track
   // enrichedAt cache is bypassed inside phaseEnrich when reEnrich is set; --limit
   // still caps the count so a partial refresh is possible.
   if (!flags.skipEnrich) {
-    const enrichIds = flags.reEnrich
-      ? (flags.limit === Infinity ? [...liveIds] : [...liveIds].slice(0, flags.limit))
-      : targetUntagged;
+    const enrichIds = selectEnrichIds({
+      reEnrich: flags.reEnrich,
+      limit: flags.limit,
+      liveIds,
+      targetUntagged,
+    });
     if (flags.reEnrich) {
       console.log(`[tag] --re-enrich: refreshing metadata for ${enrichIds.length} tracks`);
     }
@@ -521,13 +525,11 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
   const enrichCfg = (settings.get() as any).embedding?.enrichment ?? {};
   // A configured Last.fm api_key (LASTFM_API_KEY / scrobble.lastfm.apiKey) lets
   // us hit the Last.fm API directly (music/lastfm.ts), which actually returns
-  // tag[]. Tri-state gate: explicit `true` always enriches; explicit `false`
-  // never does; the default (null/unset) enriches only when a key is present —
-  // so keyless vanilla-Navidrome installs don't waste a round trip per artist
-  // on the tag-less getArtistInfo2 path.
+  // tag[]. The tri-state gate (shared with the retag route via
+  // lastfm.lastfmEnrichEnabled) keeps keyless vanilla-Navidrome installs from
+  // wasting a round trip per artist on the tag-less getArtistInfo2 path.
   const hasKey = lastfm.hasLastfmKey();
-  const lastfmEnabled =
-    enrichCfg.lastfmTags === true || (enrichCfg.lastfmTags !== false && hasKey);
+  const lastfmEnabled = lastfm.lastfmEnrichEnabled(enrichCfg.lastfmTags, hasKey);
   const lyricsEnabled = enrichCfg.lyrics !== false;
   if (!lastfmEnabled && !lyricsEnabled) {
     console.log('[tag] phase-0 skipped: both lastfmTags and lyrics disabled in settings.embedding.enrichment');
