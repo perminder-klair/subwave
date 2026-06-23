@@ -55,6 +55,14 @@ const isLocalHost = (h: string) =>
 // Cleartext-warning / http-scheme accent. Mirrors HealthCheck's local copy.
 const DANGER = '#c5302a';
 
+// Recognise a TLS "the server's CA isn't trusted" failure from the raw error
+// (Android: "Trust anchor for certification path not found" /
+// CertPathValidatorException; iOS: certificate invalid / not trusted). The app
+// trusts user-installed CAs (see plugins/withAndroidUserCaTrust.js), so when
+// this still fires the CA simply isn't installed/trusted on THIS device.
+const isUntrustedCa = (msg?: string) =>
+  !!msg && /trust anchor|certpathvalidator|certification path|certificate.*(invalid|not trusted)/i.test(msg);
+
 // Turn a failed health probe into a human diagnostic for the failure card. The
 // network case names the usual "works in the browser, fails in the app" culprit
 // (a TLS chain Android rejects but the browser tolerates) — the most common and
@@ -65,9 +73,23 @@ function describeFail(fail: HealthResult | null, candidates: string[]): string |
     return 'No response in time — the box may be asleep, on another network, or blocked by a firewall.';
   if (fail.kind === 'http')
     return `The server answered with HTTP ${fail.status ?? '?'}, so the address is reachable but the request never reached the controller. Check that your reverse proxy routes /api/* to the controller on port 7701.`;
+  // The device doesn't trust the station's cert. Two real-world causes, same
+  // error: (1) a public chain whose root is too NEW for an older phone's trust
+  // store — fixed server-side by serving a cross-signed intermediate back to an
+  // older trusted root (issue #458: Sectigo R46 unknown to Android 12); or (2) a
+  // private/self-signed CA. The app trusts user-installed CAs
+  // (plugins/withAndroidUserCaTrust.js), so installing the root on the device
+  // also works for either case.
+  if (isUntrustedCa(fail.message)) {
+    const install =
+      Platform.OS === 'ios'
+        ? 'install its root on the device, then enable it under Settings → General → About → Certificate Trust Settings'
+        : 'install its root on the device (Settings → Security → Encryption & credentials → Install a certificate → CA certificate)';
+    return `This device doesn't trust the station's certificate. On older phones this is usually a chain ending at a root too new for the device — set your reverse proxy to serve the full chain, including any cross-signed intermediate that links back to an older trusted root. If it's a private or self-signed CA, ${install} instead. A publicly-trusted certificate (e.g. Let's Encrypt) or plain http:// on your LAN also work.`;
+  }
   const triedHttps = candidates.some((c) => c.startsWith('https://'));
   return triedHttps
-    ? "Couldn't open a connection. If the same address works in your phone's browser, it's usually a TLS/certificate the app rejects but the browser tolerates — most often an incomplete certificate chain (set your reverse proxy to serve the full chain, including intermediates) or a private/self-signed CA Android doesn't trust. DNS or a firewall on this network can cause it too."
+    ? "Couldn't open a connection. If the same address works in your phone's browser, it's usually a TLS/certificate the app rejects but the browser tolerates — most often an incomplete certificate chain (set your reverse proxy to serve the full chain, including intermediates) or a private/self-signed CA the device doesn't trust. DNS or a firewall on this network can cause it too."
     : "Couldn't open a connection — check the address is right and the station is reachable from this network.";
 }
 

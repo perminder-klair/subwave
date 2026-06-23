@@ -77,7 +77,8 @@
         {
           "version": "8.14.3"
         }
-      ]
+      ],
+      "./plugins/withAndroidUserCaTrust"
     ],
     "experiments": {
       "typedRoutes": true

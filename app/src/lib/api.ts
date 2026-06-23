@@ -31,9 +31,11 @@ export interface RequestBody {
  *  of these into a single rejected promise with no detail, so we can't tell
  *  them apart from JS. The common "works in the browser, fails in the app" case
  *  is a TLS chain the browser tolerates (it fetches missing intermediates via
- *  AIA) but Android's OkHttp does not, and it lands here. `http` means we got a
- *  response but a non-2xx status (usually /api not routed to the controller).
- *  `timeout` is our own abort firing. */
+ *  AIA) but Android's OkHttp does not, and it lands here. The app trusts
+ *  user-installed CAs (plugins/withAndroidUserCaTrust.js), so a private-CA
+ *  station works once its root is installed on the device, like the browser.
+ *  `http` means we got a response but a non-2xx status (usually /api not routed
+ *  to the controller). `timeout` is our own abort firing. */
 export type HealthResult =
   | { ok: true }
   | { ok: false; kind: 'timeout' | 'http' | 'network'; status?: number; message?: string };
