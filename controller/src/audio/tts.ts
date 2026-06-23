@@ -158,6 +158,15 @@ export async function speak(
   const speakText = normalizeForSpeech(text);
   const personaTts = djPersonaTts(kind);
   const primary = resolveEngine(kind, personaTts);
+  // Persona on-air language (e.g. "French") rides along to the cloud engine as a
+  // pronunciation hint so a non-English script isn't read with English phonetics
+  // (issue #558). DJ-voiced kinds only — never jingles — and '' (ignored) for
+  // the default English persona. Local engines ignore the field; only
+  // cloud-speech.ts reads it (the voice model carries the language for piper /
+  // kokoro / pocket-tts).
+  const language = GLOBAL_VOICE_KINDS.has(kind)
+    ? ''
+    : String(settings.getEffectivePersona()?.language || '').trim();
   // Delivery pace tracks the daypart for live, persona-voiced segments.
   // `speedScale` is a MULTIPLIER on the engine's configured speech rate (1.0 =
   // unchanged), so it composes with — rather than overrides — an operator's
@@ -173,7 +182,7 @@ export async function speak(
   const started = Date.now();
   const chars = (speakText || '').length;
   try {
-    const result = await speakWith(primary, speakText, { outPath, speedScale: scale }, personaTts);
+    const result = await speakWith(primary, speakText, { outPath, speedScale: scale, language }, personaTts);
     recordTts({
       kind, engine: primary, requested: primary, fellBack: false,
       ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
@@ -194,7 +203,7 @@ export async function speak(
     }
     console.error(`[tts] ${primary} failed for kind=${kind}: ${err.message} — falling back to ${fallback}`);
     try {
-      const result = await speakWith(fallback, speakText, { outPath, speedScale: scale }, personaTts);
+      const result = await speakWith(fallback, speakText, { outPath, speedScale: scale, language }, personaTts);
       recordTts({
         kind, engine: fallback, requested: primary, fellBack: true,
         ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),

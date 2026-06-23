@@ -2249,6 +2249,25 @@ export function languageDirective(persona: any) {
   return `\n\nIMPORTANT: You speak and write exclusively in ${lang}. Every on-air line you produce must be in ${lang} — acknowledgements, idents, asides, everything. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them.`;
 }
 
+// A SECOND language reminder, anchored at the END of a tool-loop agent's system
+// prompt and naming the exact spoken output field(s). The preamble's
+// languageDirective sits at the TOP of a long, English-dominated tool-loop
+// prompt (tool descriptions, picker criteria, capability lists), and small /
+// cloud models drop it in favour of the English Zod field descriptions sitting
+// right next to the actual spoken output — so the picker `say`, request
+// `ack`/`intro`, and segment `text` came out English even with the directive
+// present (issue #558). Repeating the language LAST, by field name, is what
+// makes it stick — the same trick the request matcher already uses for its
+// `ack` field (see llm/internal/prompts/request.ts). Returns '' for English
+// personas so those prompts stay byte-identical. `fields` is a human phrase
+// naming the spoken field(s), e.g. 'the "say" link' or 'the "ack" and "intro"
+// lines'.
+export function agentLanguageReminder(persona: any, fields: string) {
+  const lang = String(persona?.language || '').trim();
+  if (!lang) return '';
+  return `\n\nLANGUAGE — this overrides the field descriptions below: you speak ${lang}. Write ${fields} entirely in ${lang}; that is the text the listener hears on air. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them. Internal fields (ids, reasons, kinds) stay in English.`;
+}
+
 // Render the DJ system prompt by substituting {name}, {soul}, {station},
 // {location}, {language}. {name}/{soul} come from the supplied persona; the
 // template is the global djPrompt (falling back to DEFAULT_DJ_PROMPT_TEMPLATE).

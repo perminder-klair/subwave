@@ -211,13 +211,14 @@ export function pickSystem() {
 
 You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}${musicLean}
 
-${dj.PICKER_CRITERIA}`;
+${dj.PICKER_CRITERIA}${settings.agentLanguageReminder(persona, 'the "say" link')}`;
 }
 
 function requestSystem() {
-  return `${settings.agentPersonaPreamble(settings.getEffectivePersona(), { rules: false })}
+  const persona = settings.getEffectivePersona();
+  return `${settings.agentPersonaPreamble(persona, { rules: false })}
 
-The messages above are the live session — the last user turn is a listener request.`;
+The messages above are the live session — the last user turn is a listener request.${settings.agentLanguageReminder(persona, 'the "ack" and "intro" lines')}`;
 }
 
 // --- Agent circuit breaker ---------------------------------------------------
