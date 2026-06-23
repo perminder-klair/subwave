@@ -285,7 +285,7 @@ class Queue {
     introKind?: string;
     aiPicked?: boolean;
   }) {
-    if (track?.id) {
+    if (aiPicked && track?.id) {
       const dominated = this.upcoming.some(i => i.track?.id === track.id)
         || (this.current?.track?.id === track.id);
       if (dominated) {
