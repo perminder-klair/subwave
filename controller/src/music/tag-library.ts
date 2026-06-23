@@ -282,8 +282,21 @@ async function main() {
   );
 
   // ---- Phase 0: ENRICH ---------------------------------------------------
+  // Normal runs enrich only the in-scope untagged tracks. A --re-enrich pass is
+  // an explicit "refresh metadata on the whole library" request (e.g. backfill
+  // Last.fm tags after upgrading), so it must widen scope to the full walked
+  // catalogue — not just untagged tracks, which is empty on a fully-tagged
+  // library and made re-enrich a silent no-op (issue #531). The per-track
+  // enrichedAt cache is bypassed inside phaseEnrich when reEnrich is set; --limit
+  // still caps the count so a partial refresh is possible.
   if (!flags.skipEnrich) {
-    await phaseEnrich(targetUntagged, flags.reEnrich);
+    const enrichIds = flags.reEnrich
+      ? (flags.limit === Infinity ? [...liveIds] : [...liveIds].slice(0, flags.limit))
+      : targetUntagged;
+    if (flags.reEnrich) {
+      console.log(`[tag] --re-enrich: refreshing metadata for ${enrichIds.length} tracks`);
+    }
+    await phaseEnrich(enrichIds, flags.reEnrich);
   } else {
     console.log('[tag] --skip-enrich: not fetching Last.fm tags or lyrics');
   }
@@ -542,22 +555,10 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
       if (artistTagCache.has(cacheKey)) {
         lastfmTags = artistTagCache.get(cacheKey) ?? null;
       } else {
-        try {
-          if (hasKey) {
-            // Direct Last.fm API — reuses the scrobbling api_key and actually
-            // returns crowd tags (artist.getTopTags). Returns [] on miss/error.
-            lastfmTags = await lastfm.getArtistTopTags(t.artist, { count: 10 });
-          } else {
-            // Fallback: route through Navidrome's getArtistInfo2. Only useful on
-            // a custom Navidrome whose agent exposes tag[]; empty on vanilla.
-            const matches = await subsonic.searchArtists(t.artist, { artistCount: 1 });
-            const artistId = matches?.[0]?.id;
-            if (artistId) {
-              const tags = await subsonic.getArtistLastfmTags(artistId, { count: 10 });
-              lastfmTags = tags;
-            }
-          }
-        } catch { /* ignore */ }
+        // Direct Last.fm API when a key is present (returns crowd tags on
+        // vanilla Navidrome), else Navidrome's getArtistInfo2. Shared with the
+        // single-track retag route so the two can't drift (see lastfm.ts).
+        lastfmTags = await lastfm.getArtistTags(t.artist, { count: 10 });
         artistTagCache.set(cacheKey, lastfmTags ?? []);
       }
     }

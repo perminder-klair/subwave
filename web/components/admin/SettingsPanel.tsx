@@ -2869,10 +2869,11 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
             <div>
               <div className="text-[13px] font-bold">Last.fm tags</div>
               <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
-                Vanilla Navidrome&apos;s <code>getArtistInfo2</code> doesn&apos;t
-                surface crowd tags. Leave off unless you&apos;re running a
-                custom Navidrome that does. Otherwise this just burns an HTTP
-                round trip per artist for nothing.
+                With a Last.fm API key configured (Scrobbling), crowd tags come
+                straight from the Last.fm API and work on vanilla Navidrome.
+                Without a key it falls back to Navidrome&apos;s{' '}
+                <code>getArtistInfo2</code>, which only surfaces tags on a custom
+                Navidrome — so leave off unless you have a key or that setup.
               </div>
             </div>
             <Seg

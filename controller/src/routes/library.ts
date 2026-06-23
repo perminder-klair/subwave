@@ -8,6 +8,7 @@ import * as library from '../music/library.js';
 import * as db from '../music/library-db.js';
 import * as coverage from '../music/library-coverage.js';
 import * as subsonic from '../music/subsonic.js';
+import * as lastfm from '../music/lastfm.js';
 import * as settings from '../settings.js';
 import * as embeddings from '../music/embeddings.js';
 import { tagBatch, TAGGER_BATCH_SYSTEM } from '../music/tagger-core.js';
@@ -390,7 +391,14 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
 
     const embedCfg: any = (settings.get() as any).embedding ?? {};
     const enrichCfg = embedCfg.enrichment ?? {};
-    const lastfmEnabled = enrichCfg.lastfmTags === true;
+    // Tri-state gate, identical to tag-library.phaseEnrich: explicit `true`
+    // always enriches; explicit `false` never does; the default (unset) enriches
+    // when a Last.fm key is present. Previously this was a strict `=== true`, so
+    // a key-present-but-toggle-unset operator got tags from the bulk tagger but
+    // not from single-track retag (issue #532).
+    const lastfmEnabled =
+      enrichCfg.lastfmTags === true ||
+      (enrichCfg.lastfmTags !== false && lastfm.hasLastfmKey());
     const lyricsEnabled = enrichCfg.lyrics !== false;
 
     // 1. Make sure the track row exists in library-db with current metadata so
@@ -408,11 +416,10 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     let lyricExcerpt: string | null = null;
     if (lastfmEnabled && song.artist) {
       try {
-        const matches = await subsonic.searchArtists(song.artist, { artistCount: 1 });
-        const artistId = matches?.[0]?.id;
-        if (artistId) {
-          lastfmTags = await subsonic.getArtistLastfmTags(artistId, { count: 10 });
-        }
+        // Direct Last.fm API when a key is present (works on vanilla Navidrome),
+        // else Navidrome's getArtistInfo2 — the same source the bulk tagger uses,
+        // so single-track retag surfaces the same tags it would (issue #532).
+        lastfmTags = await lastfm.getArtistTags(song.artist, { count: 10 });
       } catch (err: any) {
         queue.log('warn', `/library/retag enrich(lastfm) ${id}: ${err.message}`);
       }
