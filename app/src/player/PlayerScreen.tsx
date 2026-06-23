@@ -28,6 +28,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { type CastMeta, useCast } from '@/cast/useCast';
 import { Sheet } from '@/components/ui/Sheet';
 import { useStation } from '@/config/StationContext';
 import { useConnectivity } from '@/hooks/useConnectivity';
@@ -212,6 +213,33 @@ export default function PlayerScreen() {
   useEffect(() => {
     if (offline && tunedIn) stop();
   }, [offline, tunedIn, stop]);
+
+  // --- Google Cast (Phase-0 spike) ---------------------------------------
+  // SUB/WAVE streams plain MP3 and Google Home / Nest are Cast-for-Audio
+  // receivers, so casting is just handing the receiver the /stream.mp3 URL and
+  // letting it pull the stream itself — the phone becomes a remote you can walk
+  // away from. The native CastButton (TopBar) owns the picker + session; here we
+  // load the live stream once the receiver's media client is ready. Metadata is
+  // a best-effort snapshot at connect time; live metadata sync is Phase 1.
+  const { casting, ready: castReady, castLoad } = useCast();
+  const castMetaRef = useRef<CastMeta>({});
+  castMetaRef.current = {
+    title: nowPlaying?.title,
+    artist: nowPlaying?.artist,
+    album: nowPlaying?.album,
+    artwork: coverSrc ?? undefined,
+  };
+  useEffect(() => {
+    if (!castReady || !api) return;
+    castLoad(api.streamUrl(), castMetaRef.current);
+  }, [castReady, castLoad, api]);
+
+  // Spike-only: avoid double audio (phone + speaker) by stopping local playback
+  // once a Cast session is live. Proper local⇄cast arbitration (and resuming
+  // local on session end) lands in Phase 1 inside usePlayer.
+  useEffect(() => {
+    if (casting && tunedIn) stop();
+  }, [casting, tunedIn, stop]);
 
   // --- swipe pager -------------------------------------------------------
   // Animated.ScrollView forwards its ref to the inner ScrollView (RN ≥0.62),

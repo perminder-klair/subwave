@@ -7,6 +7,7 @@ import { router } from 'expo-router';
 import { Palette } from 'lucide-react-native';
 import { useMemo } from 'react';
 import { Pressable, Text, View } from 'react-native';
+import { CastButton } from 'react-native-google-cast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DiscMark from '@/components/DiscMark';
 import { buildTagline } from '@/lib/tagline';
@@ -68,6 +69,11 @@ export default function TopBar({
           ) : null}
         </Pressable>
         <View className="flex-row items-center" style={{ gap: 18, paddingLeft: 12 }}>
+          {/* Native Cast button — opens the device picker and owns the whole
+              session lifecycle itself. Auto-hides on Android when no receivers
+              are on the network; stays visible on iOS. The stream load on
+              connect is driven from PlayerScreen (useCast). */}
+          <CastButton style={{ width: 22, height: 22, tintColor: colors.muted }} />
           <Pressable onPress={onOpenThemes} hitSlop={10} accessibilityRole="button" accessibilityLabel="Theme">
             <Palette size={18} color={colors.muted} />
           </Pressable>

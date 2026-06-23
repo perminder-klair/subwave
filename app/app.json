@@ -26,7 +26,8 @@
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true,
           "NSAllowsLocalNetworking": true
-        }
+        },
+        "NSLocalNetworkUsageDescription": "SUB/WAVE uses your local network to find Chromecast and Google Home speakers to cast to."
       }
     },
     "android": {
@@ -76,6 +77,14 @@
         "./plugins/withGradleVersion",
         {
           "version": "8.14.3"
+        }
+      ],
+      [
+        "react-native-google-cast",
+        {
+          "receiverAppId": "CC1AD845",
+          "iosDisableDiscoveryAutostart": true,
+          "androidPlayServicesCastFrameworkVersion": "21.+"
         }
       ]
     ],
