@@ -68,11 +68,12 @@ function defaultEmbeddingDimFor(model: string): number {
   // live controller adopts whatever dim the tagger recorded (library-db
   // adoptStoredDim). So an unknown / arbitrarily-named embedding model still
   // works — this table just seeds the schema before the first tag run (#319).
-  if (model === 'nomic-embed-text') return 768;
-  if (model === 'mxbai-embed-large') return 1024;
-  if (model === 'text-embedding-3-small') return 1536;
-  if (model === 'text-embedding-3-large') return 3072;
-  if (model === 'text-embedding-004') return 768;
+  const bare = model.includes('/') ? model.split('/').pop()! : model;
+  if (bare === 'nomic-embed-text') return 768;
+  if (bare === 'mxbai-embed-large') return 1024;
+  if (bare === 'text-embedding-3-small') return 1536;
+  if (bare === 'text-embedding-3-large') return 3072;
+  if (bare === 'text-embedding-004') return 768;
   return 768; // homelab default until a probe says otherwise
 }
 
