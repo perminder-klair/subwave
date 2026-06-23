@@ -342,6 +342,7 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLin
   // catalogues keep the long anti-repeat guard, while small-artist libraries
   // do not exclude every real candidate before the picker sees it.
   const { ids: recentIds, keys: recentKeys } = queue.recentlyPlayed(windows.trackHours);
+  for (const id of queue.queuedIds()) recentIds.add(id);
   const recentArtists = queue.recentArtistsSince(windows.artistHours);
 
   const { object, steps, toolCalls, extras } = await pickerAgent.run({
@@ -521,6 +522,7 @@ async function runRequestViaAgent(queue: any, { requester }: { requester: string
     // song from earlier in the day. 2h covers the "don't repeat the song still
     // ringing in their ears" case and nothing more.
     const recentIds = queue.recentlyPlayedIds(2);
+    for (const id of queue.queuedIds()) recentIds.add(id);
 
     const { object, toolCalls, extras } = await requestAgent.run({
       messages: session.windowMessages(),

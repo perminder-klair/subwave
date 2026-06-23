@@ -247,6 +247,7 @@ async function resolveRequest(entry) {
     // Requests stay near-unfiltered — 2h is enough to skip the song still
     // ringing in their ears without blocking a re-request from earlier today.
     const recentIds = queue.recentlyPlayedIds(2);
+    for (const id of queue.queuedIds()) recentIds.add(id);
     // Try another track by the same artist first (the cheap, on-the-nose read),
     // then fall back to real track similarity so a one-off collab credit playing
     // now doesn't dead-end the request ("Couldn't find more from X in the crates").
@@ -344,6 +345,7 @@ async function resolveRequest(entry) {
 
   // Requests stay near-unfiltered — see /more-like-this comment above.
   const recentIds = queue.recentlyPlayedIds(2);
+  for (const id of queue.queuedIds()) recentIds.add(id);
   await library.load();
 
   // Helper: pick a fresh random item from a pool, preferring non-recents.
