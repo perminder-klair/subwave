@@ -15,14 +15,21 @@ import { djObject } from '../strategy/object.js';
 // Persona
 // ---------------------------------------------------------------------------
 
+// Every field is `.catch(...)`-wrapped on purpose. These generators are a
+// best-effort "draft the form, then you edit before saving" aid — a weaker model
+// that omits or botches a field should yield a partial draft, NOT a hard ZodError
+// the operator sees as a wall of validation issues (#492 follow-up). The model is
+// still told to fill everything via .describe(); .catch only supplies a sane
+// fallback when it doesn't, leaving the operator to fix it in the form. .catch
+// also subsumes the "field missing entirely" (undefined) case.
 const PERSONA_SCHEMA = z.object({
-  name: z.string().min(1).max(40).describe('the DJ name shown in the player — 1-3 words, evocative, never generic like "DJ" or "Host"'),
-  tagline: z.string().max(80).describe('a short one-line descriptor shown next to the name (e.g. "atmospheric & immersive"), 0-80 chars; "" if none fits'),
-  soul: z.string().min(1).max(400).describe('the personality/voice sketch the DJ speaks with — tone, sensibility, quirks, the kind of imagery they reach for. 1-3 sentences, max 400 chars. Concrete and specific, not a list of adjectives.'),
-  frequency: z.enum(FREQUENCIES as [string, ...string[]]).describe('how chatty: quiet (rarely talks), moderate, or aggressive (talks a lot)'),
-  scriptLength: z.enum(SCRIPT_LENGTHS as [string, ...string[]]).describe('concise (one or two lines) or extended (longer riffs)'),
-  djMode: z.boolean().describe('true if this host works the desk like a real radio DJ — back-announces tracks, teases what is coming, more present; false for a quieter selector'),
-  language: z.string().max(60).describe('the language the DJ speaks on air if the description implies a non-English host (e.g. "Turkish", "Punjabi"); "" for English'),
+  name: z.string().min(1).max(40).describe('the DJ name shown in the player — 1-3 words, evocative, never generic like "DJ" or "Host"').catch('New DJ'),
+  tagline: z.string().max(80).describe('a short one-line descriptor shown next to the name (e.g. "atmospheric & immersive"), 0-80 chars; "" if none fits').catch(''),
+  soul: z.string().min(1).max(400).describe('the personality/voice sketch the DJ speaks with — tone, sensibility, quirks, the kind of imagery they reach for. 1-3 sentences, max 400 chars. Concrete and specific, not a list of adjectives.').catch(''),
+  frequency: z.enum(FREQUENCIES as [string, ...string[]]).describe('how chatty: quiet (rarely talks), moderate, or aggressive (talks a lot)').catch('moderate'),
+  scriptLength: z.enum(SCRIPT_LENGTHS as [string, ...string[]]).describe('concise (one or two lines) or extended (longer riffs)').catch('concise'),
+  djMode: z.boolean().describe('true if this host works the desk like a real radio DJ — back-announces tracks, teases what is coming, more present; false for a quieter selector').catch(true),
+  language: z.string().max(60).describe('the language the DJ speaks on air if the description implies a non-English host (e.g. "Turkish", "Punjabi"); "" for English').catch(''),
 });
 
 const PERSONA_SYSTEM = `You design on-air radio DJ personalities for a personal internet radio station. Given a free-text description, produce a single coherent DJ persona: a memorable name, a short tagline, and a vivid "soul" (the voice and sensibility they present with). Match the requested vibe, era, and language. Keep the soul specific and human — no corporate filler, no "your number one source for hits". If the description names or implies a non-English host, set language to that language (in English, e.g. "Turkish"); otherwise leave it "".`;
@@ -47,17 +54,23 @@ interface ShowCtx {
   genres?: string[];
 }
 
+// `.catch(...)`-wrapped for the same reason as PERSONA_SCHEMA above: a partial
+// model response (the common failure on small / non-tool-tuned local models) must
+// degrade to an editable draft, not a thrown ZodError. The route then re-checks
+// personaId / themeId / mood / energy / genreStrict against the live lists
+// (routes/generate.ts) — that normalisation only runs because parse no longer
+// throws here.
 const SHOW_SCHEMA = z.object({
-  name: z.string().min(1).max(60).describe('the show name shown in the schedule — punchy, 1-4 words'),
-  topic: z.string().max(1000).describe('the brief the AI DJ reads before the slot: genres, eras, moods, artists, time of day, listener type, host tone. 1-4 sentences, max 1000 chars.'),
-  mood: z.enum(SHOW_MOODS as [string, ...string[]]).describe('the single closest music mood for this show'),
-  genre: z.string().max(64).describe('a music genre lean if one fits (e.g. "jazz", "gospel", "lofi"); "" for no lean. Prefer a genre present in the supplied library list when relevant.'),
-  genreStrict: z.boolean().describe('true ONLY when the description demands genre exclusivity ("only plays hip-hop", "strictly jazz", "nothing but metal") — hard-locks every pick to the genre. false for a normal lean. Requires a genre; leave false when genre is "".'),
-  fromYear: z.number().int().nullable().describe('start year of an era window if the show targets a decade (e.g. 1970), else null'),
-  toYear: z.number().int().nullable().describe('end year of that era window (e.g. 1979), else null'),
-  energy: z.enum(['', ...SHOW_ENERGY] as [string, ...string[]]).describe('soft energy steer: low, medium, high, or "" for any'),
-  personaId: z.string().nullable().describe('the id of the persona that best fits this show, chosen from the supplied persona list, or null if unsure'),
-  themeId: z.string().nullable().describe('the id of a per-show theme override chosen from the supplied theme list, or null for the station default'),
+  name: z.string().min(1).max(60).describe('the show name shown in the schedule — punchy, 1-4 words').catch('New show'),
+  topic: z.string().max(1000).describe('the brief the AI DJ reads before the slot: genres, eras, moods, artists, time of day, listener type, host tone. 1-4 sentences, max 1000 chars.').catch(''),
+  mood: z.enum(SHOW_MOODS as [string, ...string[]]).describe('the single closest music mood for this show').catch(SHOW_MOODS[0]),
+  genre: z.string().max(64).describe('a music genre lean if one fits (e.g. "jazz", "gospel", "lofi"); "" for no lean. Prefer a genre present in the supplied library list when relevant.').catch(''),
+  genreStrict: z.boolean().describe('true ONLY when the description demands genre exclusivity ("only plays hip-hop", "strictly jazz", "nothing but metal") — hard-locks every pick to the genre. false for a normal lean. Requires a genre; leave false when genre is "".').catch(false),
+  fromYear: z.number().int().nullable().describe('start year of an era window if the show targets a decade (e.g. 1970), else null').catch(null),
+  toYear: z.number().int().nullable().describe('end year of that era window (e.g. 1979), else null').catch(null),
+  energy: z.enum(['', ...SHOW_ENERGY] as [string, ...string[]]).describe('soft energy steer: low, medium, high, or "" for any').catch(''),
+  personaId: z.string().nullable().describe('the id of the persona that best fits this show, chosen from the supplied persona list, or null if unsure').catch(null),
+  themeId: z.string().nullable().describe('the id of a per-show theme override chosen from the supplied theme list, or null for the station default').catch(null),
 });
 
 const SHOW_SYSTEM = `You design radio shows for a personal internet radio station. Given a free-text description, produce a single show definition: a name, a DJ brief (topic), a music mood, an optional genre lean and era window, an energy steer, and the best-matching persona and (optional) theme from the supplied lists. Pick personaId / themeId ONLY from the ids given; use null when nothing clearly fits. The mood MUST be one of the listed moods. Set genreStrict=true only when the description signals genre exclusivity ("only", "strictly", "nothing but", "pure <genre>") — otherwise keep the genre a soft lean (genreStrict=false). Keep the topic concrete and useful as a brief — name the kind of music, the moment of day, and the tone.`;
