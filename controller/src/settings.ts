@@ -629,6 +629,7 @@ const DEFAULTS = {
     // e.g. Ollama). See issue #405.
     baseUrl: '',          // openai-compatible / locca embedding server URL (with /v1)
     ollamaUrl: '',        // Ollama embedding server URL (ollama provider)
+    apiKey: '',           // empty -> inherit settings.llm.apiKey
     seedCount: 0,         // 0 → auto max(200, ceil(sqrt(library)))
     knnNeighbours: 5,
     moodVoteThreshold: 0.6,
@@ -1155,6 +1156,10 @@ export async function load() {
         typeof stored.embedding?.ollamaUrl === 'string'
           ? stored.embedding.ollamaUrl.trim()
           : DEFAULTS.embedding.ollamaUrl,
+      apiKey:
+        typeof stored.embedding?.apiKey === 'string'
+          ? stored.embedding.apiKey.trim()
+          : DEFAULTS.embedding.apiKey,
       seedCount:
         Number.isFinite(stored.embedding?.seedCount) && stored.embedding.seedCount >= 0
           ? Math.floor(stored.embedding.seedCount)
@@ -1296,6 +1301,7 @@ export function getRedacted() {
   if (clone.llm?.fallback) clone.llm.fallback.apiKey = s.llm?.fallback?.apiKey ? 'set' : '';
   if (clone.tts?.cloud) clone.tts.cloud.apiKey = s.tts?.cloud?.apiKey ? 'set' : '';
   if (clone.search) clone.search.apiKey = s.search?.apiKey ? 'set' : '';
+  if (clone.embedding) clone.embedding.apiKey = s.embedding?.apiKey ? 'set' : '';
   if (Array.isArray(clone.webhooks)) {
     for (let i = 0; i < clone.webhooks.length; i++) {
       clone.webhooks[i].authHeader = s.webhooks?.[i]?.authHeader ? 'set' : '';
@@ -1983,6 +1989,11 @@ export async function update(patch) {
         throw new Error('embedding.ollamaUrl must start with http:// or https://');
       }
       next.embedding.ollamaUrl = v.replace(/\/+$/, '');
+    }
+    if (e.apiKey !== undefined && e.apiKey !== 'set') {
+      const v = String(e.apiKey).trim();
+      if (v.length > 200) throw new Error('embedding.apiKey must be 0-200 chars');
+      next.embedding.apiKey = v;
     }
     if (e.seedCount !== undefined) {
       const v = parseInt(e.seedCount, 10);
