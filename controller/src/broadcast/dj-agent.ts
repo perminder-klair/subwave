@@ -318,10 +318,13 @@ function trackFields(song) {
 // playing. It's attached to the queued item so the queue airs it at the
 // transition INTO this track (queue.airIntro), not over whatever is currently
 // on-air when the pick is made — which is one track earlier (issue #189).
-async function enqueuePick(queue, song, reason, source, link: string | null = null) {
-  queue.log('ai-pick', `${song.title} — ${song.artist}`, { reason, source });
-  recordPick({ song, reason, source });
-  await queue.push({
+// Returns the queue position, or -1 when push()'s dedup guard dropped the pick
+// because that track is already queued/on-air. On a drop we skip the ai-pick log
+// AND the durable picks-log record so neither reports a phantom pick that never
+// aired (push() has already logged the dedup-skip). Callers fall back on -1
+// (agent → pool → auto.m3u) instead of recording a session turn for a no-op.
+async function enqueuePick(queue, song, reason, source, link: string | null = null): Promise<number> {
+  const pos = await queue.push({
     track: trackFields(song),
     requestedBy: null,
     intent: reason || 'ai pick',
@@ -329,13 +332,17 @@ async function enqueuePick(queue, song, reason, source, link: string | null = nu
     introKind: 'link',
     aiPicked: true,
   });
+  if (pos === -1) return -1;
+  queue.log('ai-pick', `${song.title} — ${song.artist}`, { reason, source });
+  recordPick({ song, reason, source });
+  return pos;
 }
 
 // ---------------------------------------------------------------------------
 // Track event — a track started; pick the next one and maybe air a link.
 // ---------------------------------------------------------------------------
 
-async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLink: boolean; audioWaypoint?: number[] | null }) {
+async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLink: boolean; audioWaypoint?: number[] | null }): Promise<boolean> {
   await library.load();
   const windows = recencyWindowsForLibrary(library.stats().distinctArtists);
   // Scale the recency windows to the tagged library's artist diversity: dense
@@ -375,7 +382,11 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLin
   const say = (djMode && rawSay) ? dj.enforceIntroBudget(rawSay, introMsOf(song)) : rawSay;
   // Attach the link to the pick so it airs as the pick starts (back-announcing
   // the track on-air now), instead of immediately over that on-air track (#189).
-  await enqueuePick(queue, song, object.reason, 'agent', (wantLink && say) ? say : null);
+  const queued = await enqueuePick(queue, song, object.reason, 'agent', (wantLink && say) ? say : null);
+  // Pick was already queued/on-air and got deduped — don't record a session turn
+  // for a track that never airs. Returning false lets runTrackEvent fall through
+  // to the pool for a fresh pick.
+  if (queued === -1) return false;
   session.appendTurn({
     role: 'dj', kind: 'pick',
     text: object.reason || `Selected "${song.title}".`,
@@ -384,6 +395,7 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLin
       steps, toolCalls, say: say || null,
     },
   });
+  return true;
 }
 
 async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null) {
@@ -413,7 +425,11 @@ async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm:
       queue.log('error', `DJ link failed: ${err.message}`);
     }
   }
-  await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link);
+  const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link);
+  // Even the pool landed on an already-queued track (a tiny library whose pool
+  // collapsed to recents). Skip the session turn and let auto.m3u backstop the
+  // slot — the next track-start re-triggers runTrackEvent for a fresh pick.
+  if (queued === -1) return;
   // The reason text is concise on a successful pool pick and useful context for
   // the next turn — but on a failed pool LLM (picker.js returns the sentinel
   // 'fallback (LLM pick failed)'), recording it as the DJ's session turn primes
@@ -479,9 +495,14 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
 
     if (settings.get().llm?.pickerAgent && !breakerOpen()) {
       try {
-        await pickViaAgent(queue, { wantLink, audioWaypoint });
+        const queued = await pickViaAgent(queue, { wantLink, audioWaypoint });
         breakerSuccess();
-        return;
+        if (queued) return;
+        // The agent produced a valid pick but it was already queued/on-air, so
+        // push() dropped it. The agent itself is healthy — don't trip the
+        // breaker; fall through to the pool for a fresh pick (auto.m3u backstops
+        // if even the pool can only find an already-queued track).
+        queue.log('picker', 'agent pick already queued — falling back to pool');
       } catch (err) {
         queue.log('error', `DJ agent pick failed: ${err.message} — falling back to pool`);
         breakerFailure(queue);
