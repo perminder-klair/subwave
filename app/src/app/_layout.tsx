@@ -1,5 +1,9 @@
 import '../../global.css';
 
+// Side-effect import: initialises crash/error/ANR reporting (GlitchTip) before
+// anything else mounts. No-op unless EXPO_PUBLIC_GLITCHTIP_DSN is set.
+import { Sentry } from '@/lib/observability';
+
 import {
   Fraunces_400Regular,
   Fraunces_600SemiBold,
@@ -35,7 +39,10 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
 export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
   useEffect(() => {
     SplashScreen.hideAsync().catch(() => {});
-  }, []);
+    // Report render-time crashes that expo-router catches here (Sentry's
+    // global hook only sees *uncaught* errors). No-op when reporting is off.
+    Sentry.captureException(error);
+  }, [error]);
   return <ErrorScreen error={error} retry={retry} />;
 }
 

@@ -10,6 +10,7 @@
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/netinfo": "12.0.1",
     "@react-native-community/slider": "5.2.0",
+    "@sentry/react-native": "~7.11.0",
     "@shopify/react-native-skia": "2.6.2",
     "expo": "~56.0.9",
     "expo-blur": "~56.0.3",
