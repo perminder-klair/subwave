@@ -160,7 +160,7 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
       // key is required — a missing one 401s with the 'unauthorized' message.
       const provider = createOpenAI({
         baseURL: 'https://openrouter.ai/api/v1',
-        apiKey: cfg.apiKey || 'unused',
+        apiKey: cfg.apiKey || process.env.OPENROUTER_API_KEY || 'unused',
         name: 'openrouter',
       });
       return provider.textEmbeddingModel(id);
