@@ -149,6 +149,65 @@ where the ollama container publishes `11434`. (The one-click template adds the
 
 ---
 
+## Acoustic analysis & expressive voices: the tts-heavy sidecar
+
+The optional **`tts-heavy`** container powers two things: the expressive
+Chatterbox / PocketTTS voices, and **acoustic analysis** — the tempo, key,
+loudness, and "sounds-like" fingerprints behind the Library Observatory. It's
+**off by default** and profile-gated, so a normal start (or an Unraid reboot)
+leaves it down. If the **acoustic engine reads "off"** in admin → Library, this
+is why.
+
+On Unraid you can't pass `--profile tts-heavy` to the `up` Compose Manager runs
+for you, so activate the profile from the **.env** instead:
+
+```ini
+COMPOSE_PROFILES=tts-heavy
+```
+
+**Save**, then **Pull & Up** the stack. `COMPOSE_PROFILES` is read by Docker
+Compose directly, so the sidecar starts with no CLI flag — and survives reboots
+as long as it stays in `.env`. The controller is already wired to it
+(`TTS_HEAVY_URL`), so nothing else is needed. First pull adds ~1–2 GB.
+
+Verify with `docker ps --filter name=tts-heavy`, then run **admin → Library →
+Rescan** (tick *re-analyse*) to populate acoustic data. Full details, the
+opt-in `ANALYZE_AUDIO_EMBEDDING` flag, and troubleshooting are in
+[`tts-heavy.md`](tts-heavy.md).
+
+> The sidecar wants real CPU (or a GPU). Analysis on a low-power Unraid box
+> works but is slow — it's a one-time per-track pass cached in `library.db`, so
+> let it churn in the background.
+
+---
+
+## Don't lose your library on reboot: pin STATE_DIR
+
+A reboot that comes back pointing at a *different* `state/` path looks exactly
+like a wiped library: the controller finds no `library.db`, **silently creates a
+fresh empty one**, and your tags and analysis appear gone (they're not — they're
+still in the old path). The cause is almost always a `STATE_DIR` that wasn't
+pinned to a persistent array path, so it landed somewhere ephemeral.
+
+Avoid it by keeping `STATE_DIR` on an absolute appdata path — the same one every
+boot:
+
+```ini
+STATE_DIR=/mnt/user/appdata/subwave/state
+```
+
+This is the appdata path from [step 2](#2-create-the-stack) above; everything —
+settings, `library.db`, archives, voices — lives under it. Back that directory
+up and your library survives reboots, host moves, and reinstalls. If both
+`library.db` *and* `settings.json` are missing after a reboot, that confirms the
+whole `state/` dir moved rather than the library being wiped.
+
+> First-install note: a brand-new library shows a small **sample** in the
+> Observatory so the page isn't empty. That sample is replaced the moment you
+> run your first real scan — seeing it vanish is normal, not data loss.
+
+---
+
 ## Putting it behind your own reverse proxy
 
 Most Unraid boxes already run a reverse proxy — **Nginx Proxy Manager (NPM)**,
