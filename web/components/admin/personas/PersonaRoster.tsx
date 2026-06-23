@@ -11,7 +11,11 @@ import { cn } from '../../../lib/cn';
 
 interface PersonaRosterProps {
   personas: Persona[];
+  // The admin-selected default — gets the "default" pill.
   activePersonaId: string;
+  // The persona actually broadcasting now (show override aware) — gets the
+  // accent dot + "on air" pill. Equals activePersonaId unless a show overrides.
+  onAirPersonaId: string;
   focusedIdx: number;
   avatarTick: number;
   onSelect: (idx: number) => void;
@@ -19,7 +23,7 @@ interface PersonaRosterProps {
 }
 
 export function PersonaRoster({
-  personas, activePersonaId, focusedIdx, avatarTick, onSelect, onAdd,
+  personas, activePersonaId, onAirPersonaId, focusedIdx, avatarTick, onSelect, onAdd,
 }: PersonaRosterProps) {
   const atMax = personas.length >= PERSONA_MAX;
   return (
@@ -27,7 +31,8 @@ export function PersonaRoster({
       <span className="caption">roster · {personas.length} / {PERSONA_MAX}</span>
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
         {personas.map((p, i) => {
-          const isActive = p.id === activePersonaId;
+          const isOnAir = p.id === onAirPersonaId;
+          const isDefault = p.id === activePersonaId;
           const isFocused = i === focusedIdx;
           const valid = personaValid(p);
           const src = p.avatar
@@ -62,7 +67,7 @@ export function PersonaRoster({
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-1.5">
-                    {isActive && <span className="size-1.5 flex-none rounded-full bg-[var(--accent)]" />}
+                    {isOnAir && <span className="size-1.5 flex-none rounded-full bg-[var(--accent)]" />}
                     <span className="min-w-0 truncate text-[14px] font-extrabold tracking-[-0.01em] text-ink">
                       {p.name.trim() || `Persona ${i + 1}`}
                     </span>
@@ -73,7 +78,8 @@ export function PersonaRoster({
                 </div>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {isActive && <Pill tone="accent" className="text-[8px]">on air</Pill>}
+                {isOnAir && <Pill tone="accent" className="text-[8px]">on air</Pill>}
+                {isDefault && !isOnAir && <Pill className="text-[8px]">default</Pill>}
                 <Pill className="text-[8px]">{p.frequency}</Pill>
                 {p.scriptLength === 'extended' && <Pill className="text-[8px]">extended</Pill>}
                 <Pill className="text-[8px]">{p.tts.engine}</Pill>

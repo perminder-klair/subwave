@@ -6,9 +6,16 @@ import { engineLabel } from './helpers';
 import { Btn, Eyebrow } from '../ui';
 
 interface PersonaHeroProps {
-  activePersona: Persona | undefined;
+  // The persona actually broadcasting (show override aware) — what the live
+  // strip describes. Distinct from the default below.
+  onAirPersona: Persona | undefined;
+  // The admin-selected default — shown only when a show has overridden it, so
+  // the operator can see who'd be on air without the show.
+  defaultPersona: Persona | undefined;
+  // The show reassigning the hour, or null when the default is on air.
+  onAirShow: { id: string; name: string } | null;
   defaultEngine: string;
-  activeCloudIssue: string | null;
+  onAirCloudIssue: string | null;
   personaCount: number;
   showPrompt: boolean;
   onTogglePrompt: () => void;
@@ -16,8 +23,10 @@ interface PersonaHeroProps {
 }
 
 export function PersonaHero({
-  activePersona, defaultEngine, activeCloudIssue, personaCount, showPrompt, onTogglePrompt, onAdd,
+  onAirPersona, defaultPersona, onAirShow, defaultEngine, onAirCloudIssue,
+  personaCount, showPrompt, onTogglePrompt, onAdd,
 }: PersonaHeroProps) {
+  const overridden = !!onAirShow && defaultPersona?.id !== onAirPersona?.id;
   return (
     <section className="card">
       <div className="stack-mobile grid grid-cols-[1fr_auto] items-center gap-4 border-b border-ink p-4">
@@ -41,25 +50,30 @@ export function PersonaHero({
         </div>
       </div>
 
-      {/* Active strip */}
+      {/* On-air strip — describes the persona actually broadcasting now, which
+          a scheduled show can make different from the default selection. */}
       <div className="flex flex-wrap items-center gap-3 bg-[var(--ink-softer)] p-3.5">
-        <span className="caption text-vermilion">● live</span>
+        <span className="caption text-vermilion">● on air</span>
         <span className="text-[13px] font-bold">
-          {activePersona ? (activePersona.name.trim() || 'Persona') : '—'}
+          {onAirPersona ? (onAirPersona.name.trim() || 'Persona') : '—'}
         </span>
-        {activePersona?.tagline.trim() && (
-          <span className="text-[11px] text-muted">— {activePersona.tagline.trim()}</span>
+        {onAirPersona?.tagline.trim() && (
+          <span className="text-[11px] text-muted">— {onAirPersona.tagline.trim()}</span>
         )}
         <span className="caption ml-4">
-          frequency · {activePersona ? activePersona.frequency : '—'}
+          frequency · {onAirPersona ? onAirPersona.frequency : '—'}
         </span>
-        <span className="caption">voice · {activePersona ? engineLabel(activePersona) : '—'}</span>
-        {activeCloudIssue && (
+        <span className="caption">voice · {onAirPersona ? engineLabel(onAirPersona) : '—'}</span>
+        {onAirCloudIssue && (
           <span className="caption text-[var(--danger)]">
             ⚠ cloud voice inactive, speaking via {defaultEngine}
           </span>
         )}
-        <span className="caption">override · — (a scheduled show may reassign the hour)</span>
+        <span className="caption">
+          {overridden
+            ? `override · “${onAirShow!.name}” owns this hour · default ${defaultPersona ? (defaultPersona.name.trim() || 'Persona') : '—'}`
+            : 'override · none · default persona on air'}
+        </span>
       </div>
     </section>
   );

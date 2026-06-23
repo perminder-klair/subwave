@@ -55,6 +55,14 @@ export interface VoiceOption {
 }
 
 export interface SettingsResponse {
+  // The persona actually on air right now — resolves a scheduled show's owner
+  // when a show is live this hour, otherwise the admin-selected default. The
+  // roster/hero mark "on air" by this; `values.activePersonaId` is only the
+  // default. Optional so the UI degrades against older controllers.
+  onAir?: {
+    personaId?: string;
+    show?: { id: string; name: string } | null;
+  };
   values?: {
     personas?: Array<Partial<Persona> & { avatar?: string }>;
     activePersonaId?: string;

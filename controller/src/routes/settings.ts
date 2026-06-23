@@ -34,6 +34,19 @@ router.get('/settings', requireAdmin, async (req, res) => {
     // On-air status — a telnet failure must not 500 the whole settings load.
     let streamOnAir: boolean | null = null;
     try { streamOnAir = await streamStatus(); } catch {}
+    // The persona actually on air right now — the same resolution the listener
+    // side uses (getEffectivePersona): a scheduled show's owner when a show is
+    // live this hour, otherwise the admin-selected default. The roster marks
+    // "on air" by THIS, not by activePersonaId, so a show override surfaces the
+    // real voice instead of the static default.
+    const onAirPersona = settings.getEffectivePersona();
+    const activeShow = settings.resolveActiveShow();
+    const onAir = {
+      personaId: onAirPersona?.id || '',
+      // The show reassigning the hour, present only when a show actually owns a
+      // persona this hour — null means the default persona is on air.
+      show: activeShow?.persona?.id ? { id: activeShow.id, name: activeShow.name } : null,
+    };
     // Reference-WAV voices are shared by chatterbox + pocket-tts (issue #213);
     // read once and reuse for both dropdowns.
     const customVoices = await chatterbox.listReferenceVoices();
@@ -45,6 +58,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
       autoPick: queue.autoPick,
       pickerBusy: queue.pickerBusy,
       streamOnAir,
+      onAir,
       jingles: await jingles.list(),
       libraryStats: library.stats(),
       tagger: { ...tagger, lastLog: tagger.lastLog.slice(-30) },

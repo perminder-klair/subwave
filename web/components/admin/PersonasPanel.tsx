@@ -326,18 +326,26 @@ export default function PersonasPanel() {
   }
 
   const activePersona = form.personas.find(p => p.id === form.activePersonaId);
+  // Who's actually on air now: the controller's effective persona (a scheduled
+  // show can override the default). Fall back to the default selection when the
+  // controller predates the onAir field.
+  const onAirPersonaId = data?.onAir?.personaId || form.activePersonaId;
+  const onAirPersona = form.personas.find(p => p.id === onAirPersonaId) || activePersona;
+  const onAirShow = data?.onAir?.show || null;
   const focusedOk = personaValid(focused);
   const focusedCloudIssue = cloudIssue(focused, data);
-  const activeCloudIssue = activePersona ? cloudIssue(activePersona, data) : null;
+  const onAirCloudIssue = onAirPersona ? cloudIssue(onAirPersona, data) : null;
   const defaultEngine = data?.values?.tts?.defaultEngine || 'piper';
   const skillCatalog = data?.skills?.catalog || [];
 
   return (
     <div className="grid gap-4">
       <PersonaHero
-        activePersona={activePersona}
+        onAirPersona={onAirPersona}
+        defaultPersona={activePersona}
+        onAirShow={onAirShow}
         defaultEngine={defaultEngine}
-        activeCloudIssue={activeCloudIssue}
+        onAirCloudIssue={onAirCloudIssue}
         personaCount={form.personas.length}
         showPrompt={showPrompt}
         onTogglePrompt={() => setShowPrompt(s => !s)}
@@ -361,6 +369,7 @@ export default function PersonasPanel() {
       <PersonaRoster
         personas={form.personas}
         activePersonaId={form.activePersonaId}
+        onAirPersonaId={onAirPersonaId}
         focusedIdx={safeIdx}
         avatarTick={avatarTick}
         onSelect={setFocusIdx}
@@ -372,6 +381,7 @@ export default function PersonasPanel() {
         index={safeIdx}
         personaCount={form.personas.length}
         activePersonaId={form.activePersonaId}
+        onAirPersonaId={onAirPersonaId}
         data={data}
         adminFetch={adminFetch}
         avatarTick={avatarTick}

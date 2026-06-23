@@ -17,6 +17,7 @@ interface PersonaEditorProps {
   index: number;
   personaCount: number;
   activePersonaId: string;
+  onAirPersonaId: string;
   data: SettingsResponse | null;
   adminFetch: AdminAuth['adminFetch'];
   avatarTick: number;
@@ -43,7 +44,7 @@ interface PersonaEditorProps {
 }
 
 export function PersonaEditor({
-  persona, index, personaCount, activePersonaId, data, adminFetch, avatarTick, uploadingId,
+  persona, index, personaCount, activePersonaId, onAirPersonaId, data, adminFetch, avatarTick, uploadingId,
   defaultEngine, cloudIssueText, skillCatalog, editorRef,
   setPersona, setPersonaTts, setPersonaSkills,
   onUploadAvatar, onGenerateAvatar, onClearAvatar, onSetActive, onRemove,
@@ -60,6 +61,7 @@ export function PersonaEditor({
         index={index}
         personaCount={personaCount}
         isActive={persona.id === activePersonaId}
+        isOnAir={persona.id === onAirPersonaId}
         canRemove={personaCount > 1}
         adminFetch={adminFetch}
         avatarTick={avatarTick}

@@ -18,7 +18,10 @@ interface PersonaIdentityCardProps {
   persona: Persona;
   index: number;        // 0-based, for the "persona X of Y" sub
   personaCount: number;
+  // The admin-selected default. `isOnAir` is whether this persona is the one
+  // actually broadcasting right now (a scheduled show can override the default).
   isActive: boolean;
+  isOnAir: boolean;
   canRemove: boolean;
   adminFetch: AdminAuth['adminFetch'];
   avatarTick: number;
@@ -32,7 +35,7 @@ interface PersonaIdentityCardProps {
 }
 
 export function PersonaIdentityCard({
-  persona, index, personaCount, isActive, canRemove, adminFetch, avatarTick, uploading,
+  persona, index, personaCount, isActive, isOnAir, canRemove, adminFetch, avatarTick, uploading,
   update, onSetActive, onRemove, onPickAvatar, onGenerateAvatar, onClearAvatar,
 }: PersonaIdentityCardProps) {
   const soulLen = persona.soul.trim().length;
@@ -43,9 +46,10 @@ export function PersonaIdentityCard({
       sub={`persona ${index + 1} of ${personaCount}`}
       right={
         <>
+          {isOnAir && <Pill tone="accent" className="text-[8px]">on air</Pill>}
           {isActive
-            ? <Pill tone="accent" className="text-[8px]">on air</Pill>
-            : <Btn sm onClick={onSetActive}>Set on air</Btn>}
+            ? <Pill className="text-[8px]">default</Pill>
+            : <Btn sm onClick={onSetActive}>Set as default</Btn>}
           <Btn
             sm
             tone="danger"
