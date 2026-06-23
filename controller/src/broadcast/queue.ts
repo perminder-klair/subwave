@@ -285,6 +285,14 @@ class Queue {
     introKind?: string;
     aiPicked?: boolean;
   }) {
+    if (track?.id) {
+      const dominated = this.upcoming.some(i => i.track?.id === track.id)
+        || (this.current?.track?.id === track.id);
+      if (dominated) {
+        this.log('dedup-skip', `${track.title} -- ${track.artist} (already queued)`);
+        return -1;
+      }
+    }
     const item = {
       track, requestedBy, intent, introScript, introKind, aiPicked,
       introWav: null as string | null,
@@ -704,6 +712,15 @@ class Queue {
   // picker pool path that filters its own results) can keep calling this.
   recentlyPlayedIds(hours = 12): Set<string> {
     return this.recentlyPlayed(hours).ids;
+  }
+
+  queuedIds(): Set<string> {
+    const ids = new Set<string>();
+    if (this.current?.track?.id) ids.add(this.current.track.id);
+    for (const item of this.upcoming) {
+      if (item.track?.id) ids.add(item.track.id);
+    }
+    return ids;
   }
 
   // Lowercased artist names heard in the last `hours` hours — used by the
