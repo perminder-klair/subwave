@@ -256,12 +256,24 @@ Capabilities available this tick (pick one of these kinds, or stay silent):
 ${capList}${sfxBlock(sfxCatalog)}`;
 }
 
+// Wall-clock ceiling for a single segment-director run, resolved live so it
+// tracks the admin-tunable setting. Same source/default as the picker's
+// agentDeadline (dj-agent.ts) — segments shouldn't hang longer than picks.
+function segmentDeadline(): number {
+  return settings.get().llm?.agentTimeoutMs ?? 45000;
+}
+
 // The autonomous segment director — runs every 5 min, decides to air one
 // segment or stay silent. Schema, prompt, and tool builder bundled here; the
 // caller (agenticTick) only feeds the dynamic per-tick state.
 export const directorAgent = defineAgent({
   kind: 'djAgentSegment',
   schema: SEGMENT_SCHEMA,
+  // Wall-clock ceiling, mirroring the picker (dj-agent.ts). Without it a
+  // gemma-class model that ignores toolChoice can drive the done-tool recovery
+  // into a multi-step stall (86s observed in issue #555) and hang the tick;
+  // the deadline turns that into a clean throw → handled as silence below.
+  timeoutMs: segmentDeadline,
   buildSystem: ({ persona, caps, freq, sfxCatalog }) =>
     directorSystem(persona, caps, freq, sfxCatalog),
   buildTools: ({ ctx, segmentState, caps }) => ({
@@ -380,11 +392,20 @@ export async function agenticTick(ctx) {
 // JSON, not that the network or provider is broken. Used by agenticTick (not
 // by runCapability — the operator override demands real output, so a parse
 // failure there IS a failure).
+//
+// `did not call the done tool` (issue #555) is included for the same reason:
+// gemma-class models on the forced done-tool path occasionally emit prose
+// instead of the `done` call — even through the recovery — and throw. On the
+// autonomous tick the schema allows {segment: null} and the prompt encourages
+// silence, so a botched done call is overwhelmingly the model either staying
+// silent in prose or fumbling a segment; either way the listener gets silence.
+// (The operator-forced path doesn't use this classifier, so it still errors.)
 function isSilentFailure(err) {
   const msg = String(err?.message || err || '').toLowerCase();
   return msg.includes('no object generated')
       || msg.includes('no output generated')
-      || msg.includes('did not match schema');
+      || msg.includes('did not match schema')
+      || msg.includes('did not call the done tool');
 }
 
 // Detect the specific "model emitted bare `null`" failure pattern (observed on
@@ -417,6 +438,8 @@ ${cap.desc}${sfxBlock(sfxCatalog)}`;
 export const forcedDirectorAgent = defineAgent({
   kind: 'djAgentSegment',
   schema: FORCED_SCHEMA,
+  // Same wall-clock ceiling as the autonomous director (issue #555).
+  timeoutMs: segmentDeadline,
   buildSystem: ({ persona, cap, sfxCatalog }) => forcedSystem(persona, cap, sfxCatalog),
   buildTools: ({ ctx, segmentState, cap }) => ({
     tools: buildSegmentTools(ctx, segmentState, [cap]),

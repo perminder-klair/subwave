@@ -219,7 +219,17 @@ export async function djAgent({
           const recoveryMessages = priorMessages.length ? [...messages, ...priorMessages] : messages;
           const recoveryAgent = new ToolLoopAgent({
             model: leg.model,
-            instructions: system,
+            // Append an explicit terminal instruction at the exact point
+            // gemma-class models stall (issue #555): after a negative tool
+            // result (`available:false`) they tend to emit prose instead of
+            // obeying toolChoice:'required', and the bare done-only re-run
+            // sometimes does the same. activeTools is already pinned to
+            // done-only; this plain-language line in the recovery system prompt
+            // tells the model the ONLY valid move is the done call. Put in
+            // `instructions` (not a trailing user turn) so it can't create two
+            // consecutive user messages and trip providers that require strict
+            // role alternation (Anthropic). Harmless on the picker path.
+            instructions: `${system}\n\nYou now have everything you need. Respond ONLY by calling the \`done\` tool with your final answer — do not write a normal text message.`,
             tools: allTools,
             stopWhen: [stepCountIs(2), hasToolCall('done')],
             temperature,
