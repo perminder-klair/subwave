@@ -231,6 +231,7 @@ export const WIZARD_SECRET_KEYS = [
   'AI_GATEWAY_API_KEY',
   'ELEVENLABS_API_KEY',
   'SEARCH_API_KEY',
+  'EMBEDDING_API_KEY',
 ] as const;
 
 // Merge a batch of API keys into state/secrets.env (mode 0600), preserving

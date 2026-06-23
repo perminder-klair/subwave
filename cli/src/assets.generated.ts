@@ -731,6 +731,10 @@ SITE_URL=
 # AI_GATEWAY_API_KEY=
 # ELEVENLABS_API_KEY=
 # SEARCH_API_KEY=tvly-...
+# Embedding key — only when embeddings use a different provider/key than chat
+# (e.g. OpenRouter for embeddings, a local proxy for chat). Blank → inherit the
+# chat key. OpenRouter embeddings also fall back to OPENROUTER_API_KEY above.
+# EMBEDDING_API_KEY=
 
 # ───────── Acoustic analysis (CLAP audio-similarity + Demucs vocals) ─────────
 # The analysis pass (npm run analyze / admin "Analyze audio") computes bpm, key,
