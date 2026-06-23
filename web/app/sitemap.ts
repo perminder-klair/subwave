@@ -16,6 +16,7 @@ const ROUTES = [
   '/manual/shortcuts',
   '/manual/cli',
   '/manual/llm',
+  '/manual/voices',
   '/manual/mcp',
   '/manual/clients',
   '/manual/skills',

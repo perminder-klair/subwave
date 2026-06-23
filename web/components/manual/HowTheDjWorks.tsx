@@ -1,5 +1,5 @@
+import Link from 'next/link';
 import ManualPage from './ManualPage';
-import CodeBlock from "@/components/CodeBlock";
 
 export default function HowTheDjWorks() {
   return (
@@ -42,104 +42,18 @@ export default function HowTheDjWorks() {
         <h2>Local voices, or the cloud.</h2>
         <p>
           The DJ's words are written by the language model, but turning them into speech
-          is a separate job — handled by one of five text-to-speech engines the operator
-          chooses under <strong>Admin &rarr; TTS voice</strong>. Four run on your own
-          hardware, one is hosted.
+          is a separate job. Five text-to-speech engines render the voice: Piper and
+          Kokoro run locally, Chatterbox and PocketTTS in an optional sidecar, and a Cloud
+          engine reaches OpenAI, ElevenLabs, or any self-hosted server. The operator can
+          mix them <em>per kind</em> of segment, and if one ever fails the station drops
+          to a local voice automatically, so the DJ never goes silent.
         </p>
-        <ul className="bs-list">
-          <li>
-            <strong>Piper</strong> — a local engine, and the default. It's compact, runs
-            on practically any hardware, and renders speech faster than real time. The
-            voice is clear but a little synthetic. Piper is also the station's safety
-            net; see below.
-          </li>
-          <li>
-            <strong>Kokoro</strong> — a local neural model that sounds markedly more
-            natural, closer to a real broadcaster. It's heavier: it loads a model into
-            memory and takes longer per line, so it's happiest with a bit of CPU and RAM
-            headroom. It offers a range of voices, with a British selection surfaced in
-            the console.
-          </li>
-          <li>
-            <strong>Chatterbox</strong> — a local model that clones a voice from a short
-            reference clip, so each persona can have its own distinct sound, and voices
-            paralinguistic cues like <em>[laugh]</em> and <em>[sigh]</em> as real sounds.
-            The most capable local engine, and the heaviest: comfortable on a GPU, slow
-            on CPU. Lives in the optional <code className="bs-code-inline">tts-heavy</code>{' '}
-            sidecar.
-          </li>
-          <li>
-            <strong>PocketTTS</strong> — a small, multilingual model from kyutai-labs
-            that runs about six times faster than real time on CPU, with built-in voices
-            in English, French, German, Italian, Spanish and Portuguese. Sits between
-            Piper (fast, robotic) and Chatterbox (heavy, expressive). Lives in the same{' '}
-            <code className="bs-code-inline">tts-heavy</code> sidecar as Chatterbox.
-          </li>
-          <li>
-            <strong>Cloud</strong> — hosted text-to-speech through OpenAI or ElevenLabs,
-            using an API key. The most lifelike and expressive of the five, but it costs
-            per use and depends on the network being up.
-          </li>
-        </ul>
-        <p>
-          You don't have to commit to one. The operator can assign a different engine{' '}
-          <em>per kind</em> of segment (a rich cloud voice for station IDs, say, but a
-          fast local voice for routine time checks), with everything else falling through
-          to a default engine.
+        <p className="text-muted">
+          The full rundown is on the{' '}
+          <Link href="/manual/voices">Voices &amp; TTS</Link> page: every engine, enabling
+          the <code className="bs-code-inline">tts-heavy</code> sidecar, voice cloning, and
+          running Chatterbox on a GPU.
         </p>
-        <div className="bs-callout">
-          <div className="bs-eyebrow">THE DJ NEVER GOES SILENT</div>
-          <p>
-            If a voice ever fails (a cloud outage, a model that isn't installed), the
-            station drops to a local engine automatically. Piper is always there as the
-            last resort, so a spoken segment is never lost to a missing voice.
-          </p>
-        </div>
-        <div className="bs-callout">
-          <div className="bs-eyebrow">ENABLING THE TTS-HEAVY SIDECAR</div>
-          <p>
-            Piper and Kokoro ship inside the controller image, and the cloud engine just
-            needs an API key. Chatterbox and PocketTTS are the exceptions: they drag in a
-            few GB of PyTorch and model weights between them, so they live in a separate,
-            opt-in <code className="bs-code-inline">tts-heavy</code> container rather than
-            being bundled into every install.
-          </p>
-          <p>
-            To enable, set <code className="bs-code-inline">COMPOSE_PROFILES=tts-heavy</code>{' '}
-            in your <code className="bs-code-inline">.env</code> and bring the stack up:
-          </p>
-          <CodeBlock>{`echo COMPOSE_PROFILES=tts-heavy >> .env
-docker compose up -d`}</CodeBlock>
-          <p>
-            For a one-off start without persisting the choice, run{' '}
-            <code className="bs-code-inline">docker compose --profile tts-heavy up -d</code>{' '}
-            instead. The setup wizard at <code className="bs-code-inline">/onboarding</code>{' '}
-            also writes the env var for you if you tick &ldquo;Enable Chatterbox +
-            PocketTTS&rdquo;.
-          </p>
-          <p>
-            Once the sidecar is up, both engines show as available under{' '}
-            <strong>Admin &rarr; TTS voice</strong>. For voice cloning (Chatterbox or
-            PocketTTS), drop a short reference WAV into{' '}
-            <code className="bs-code-inline">state/voices/</code>{' '}
-            (legacy <code className="bs-code-inline">state/chatterbox-voices/</code> is
-            still read) and pick it on the Personas page; without one, both engines
-            use their built-in default voice. PocketTTS also exposes a curated set of
-            built-in voice ids (<code className="bs-code-inline">alba</code>,{' '}
-            <code className="bs-code-inline">anna</code>,{' '}
-            <code className="bs-code-inline">charles</code>, …) alongside any cloned
-            voices. Until the sidecar is started, selecting either engine silently falls
-            back to Piper.
-          </p>
-          <p className="text-muted">
-            For backwards compatibility, the older{' '}
-            <code className="bs-code-inline">--build-arg WITH_CHATTERBOX=1</code> /{' '}
-            <code className="bs-code-inline">WITH_POCKETTTS=1</code> paths in{' '}
-            <code className="bs-code-inline">docker/Dockerfile.controller</code> still
-            work; they bundle the engines inside the controller image instead. The
-            sidecar is the recommended path for fresh installs.
-          </p>
-        </div>
       </section>
 
       <section className="bs-section">
