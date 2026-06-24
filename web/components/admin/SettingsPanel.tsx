@@ -708,7 +708,7 @@ export default function SettingsPanel() {
             {activeSection === 'search' && (
               <SearchSection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveSettings={saveSettings}
+                saveSettings={saveSettings} adminFetch={adminFetch}
               />
             )}
             {activeSection === 'library' && (
@@ -2225,7 +2225,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
 
 /* ── Web search ──────────────────────────────────────────────────────── */
 
-function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
+function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: SectionProps & { adminFetch: (path: string, init?: RequestInit) => Promise<Response> }) {
   const [testingSearxng, setTestingSearxng] = useState(false);
   const [searxngTestResult, setSearxngTestResult] = useState<{ ok: boolean; results?: number; error?: string } | null>(null);
 
@@ -2233,7 +2233,7 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
     setTestingSearxng(true);
     setSearxngTestResult(null);
     try {
-      const res = await fetch('/api/settings/search/test-searxng', {
+      const res = await adminFetch('/settings/search/test-searxng', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ baseUrl: form.search.baseUrl }),
