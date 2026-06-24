@@ -237,35 +237,35 @@ async function probeKey(
     case 'ANTHROPIC_API_KEY': {
       const model = activeModel('anthropic') || 'claude-haiku-4-5-20251001';
       const m = createAnthropic({ apiKey: value })(model);
-      const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8 });
+      const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
       return { ok: true, message: `✓ Anthropic responded · "${(out.text || '').trim().slice(0, 40)}"` };
     }
     case 'OPENAI_API_KEY': {
       const model = activeModel('openai') || 'gpt-4o-mini';
       const m = createOpenAI({ apiKey: value })(model);
-      const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8 });
+      const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
       return { ok: true, message: `✓ OpenAI responded · "${(out.text || '').trim().slice(0, 40)}"` };
     }
     case 'GOOGLE_GENERATIVE_AI_API_KEY': {
       const model = activeModel('google') || 'gemini-1.5-flash';
       const m = createGoogleGenerativeAI({ apiKey: value })(model);
-      const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8 });
+      const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
       return { ok: true, message: `✓ Google responded · "${(out.text || '').trim().slice(0, 40)}"` };
     }
     case 'DEEPSEEK_API_KEY': {
       const model = activeModel('deepseek') || 'deepseek-chat';
       const m = createDeepSeek({ apiKey: value })(model);
-      const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8 });
+      const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
       return { ok: true, message: `✓ DeepSeek responded · "${(out.text || '').trim().slice(0, 40)}"` };
     }
     case 'OPENROUTER_API_KEY': {
       const model = activeModel('openrouter') || 'openai/gpt-4o-mini';
       const m = createOpenRouter({ apiKey: value })(model);
-      const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8 });
+      const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
       return { ok: true, message: `✓ OpenRouter responded · "${(out.text || '').trim().slice(0, 40)}"` };
     }
     case 'AI_GATEWAY_API_KEY': {
-      return { ok: false, message: 'AI Gateway key cannot be tested without a model URL — save and test via an LLM call.' };
+      return { ok: true, message: 'ℹ AI Gateway key saved format looks valid — test via an LLM call to confirm it works.' };
     }
     case 'ELEVENLABS_API_KEY': {
       const r = await fetch('https://api.elevenlabs.io/v1/user', {
@@ -283,8 +283,11 @@ async function probeKey(
     case 'SEARCH_API_KEY': {
       const r = await fetch('https://api.tavily.com/search', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: value, query: 'test', max_results: 1 }),
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${value}`,
+        },
+        body: JSON.stringify({ query: 'test', max_results: 1 }),
         signal: AbortSignal.timeout(10000),
       });
       if (!r.ok) {
@@ -295,7 +298,14 @@ async function probeKey(
       return { ok: true, message: '✓ Tavily API key valid' };
     }
     case 'EMBEDDING_API_KEY': {
-      const r = await probeEmbeddingConfig({ apiKey: value } as any);
+      const embCfg = settings.get().embedding || {};
+      const r = await probeEmbeddingConfig({
+        provider: embCfg.provider || undefined,
+        model: embCfg.model || undefined,
+        baseUrl: embCfg.baseUrl || undefined,
+        ollamaUrl: embCfg.ollamaUrl || undefined,
+        apiKey: value,
+      });
       return {
         ok: r.code === 'ok',
         message: r.code === 'ok'

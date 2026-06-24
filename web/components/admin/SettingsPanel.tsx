@@ -2464,6 +2464,9 @@ interface SearchSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: SearchSectionProps) {
+  const [tavilyKeyTest, setTavilyKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [tavilyKeyTesting, setTavilyKeyTesting] = useState(false);
+
   const save = () => saveSettings({
     search: {
       provider: form.search.provider,
@@ -2484,8 +2487,6 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
         && form.search.apiKey !== 'set'
         && form.search.apiKey !== (savedSearch.apiKey || ''));
   const tavilyKeySet = form.search.apiKey === 'set' || !!data.env?.SEARCH_API_KEY;
-  const [tavilyKeyTest, setTavilyKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
-  const [tavilyKeyTesting, setTavilyKeyTesting] = useState(false);
 
   const testTavilyKey = async () => {
     const value = form.search.apiKey === 'set' ? '' : form.search.apiKey;
