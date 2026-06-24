@@ -1792,9 +1792,15 @@ interface LlmSectionProps extends SectionProps {
 function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: LlmSectionProps) {
   const [primaryKeyInput, setPrimaryKeyInput] = useState('');
   const [fallbackKeyInput, setFallbackKeyInput] = useState('');
+  const [primaryKeyTest, setPrimaryKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [primaryKeyTesting, setPrimaryKeyTesting] = useState(false);
+  const [fallbackKeyTest, setFallbackKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [fallbackKeyTesting, setFallbackKeyTesting] = useState(false);
 
   useEffect(() => { setPrimaryKeyInput(''); }, [form.llm.provider]);
   useEffect(() => { setFallbackKeyInput(''); }, [form.llm.fallback.provider]);
+  useEffect(() => { setPrimaryKeyTest(null); }, [form.llm.provider]);
+  useEffect(() => { setFallbackKeyTest(null); }, [form.llm.fallback.provider]);
 
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
@@ -1813,6 +1819,30 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     } catch (e) {
       notify.err(errorMessage(e));
       return false;
+    }
+  };
+
+  const testKey = async (
+    envVar: string,
+    value: string,
+    setTesting: (v: boolean) => void,
+    setResult: (r: { ok: boolean; message: string; latencyMs: number } | null) => void,
+  ) => {
+    if (!value.trim()) return;
+    setTesting(true);
+    setResult(null);
+    try {
+      const r = await adminFetch('/settings/secrets/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: envVar, value: value.trim() }),
+      });
+      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
+      setResult(j);
+    } catch (e) {
+      setResult({ ok: false, message: errorMessage(e), latencyMs: 0 });
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -2058,6 +2088,16 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   </div>
                 </div>
                 <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
+                <div className="mt-2 flex items-center gap-2">
+                  <Btn
+                    sm
+                    onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest)}
+                    disabled={primaryKeyTesting || !primaryKeyInput.trim()}
+                  >
+                    {primaryKeyTesting ? 'Testing…' : 'Test key'}
+                  </Btn>
+                </div>
+                {primaryKeyTest && <KeyTestResult result={primaryKeyTest} />}
               </>
             );
           })()}
@@ -2236,6 +2276,16 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                       </div>
                     </div>
                     <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
+                    <div className="mt-2 flex items-center gap-2">
+                      <Btn
+                        sm
+                        onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest)}
+                        disabled={fallbackKeyTesting || !fallbackKeyInput.trim()}
+                      >
+                        {fallbackKeyTesting ? 'Testing…' : 'Test key'}
+                      </Btn>
+                    </div>
+                    {fallbackKeyTest && <KeyTestResult result={fallbackKeyTest} />}
                   </>
                 );
               })()}
