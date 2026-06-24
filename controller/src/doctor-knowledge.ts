@@ -42,6 +42,28 @@ synthesised by a TTS engine; Liquidsoap mixes it and feeds Icecast.
   model to pick one. Cheaper and more forgiving. **Recommend turning the agent OFF**
   for small models (≤9B) or constrained hardware.
 
+## Structured output & model class (the silent feature-breaker)
+- Several features ask the model for **strict JSON** (a fixed shape): the request
+  matcher, the candidate-pool picker, the library mood-tagger, and this very health
+  report. A weak model "responds" but returns the wrong shape, the call fails schema
+  validation, and the feature **silently degrades or falls back** — the station still
+  plays, but requests mis-match, picks get worse, tagging stalls.
+- The report exposes this as an **LLM → "structured output"** finding (a count of
+  recent schema-validation failures). If you see it, the model choice is almost
+  certainly the cause. **Recommend a general instruction-tuned model** (a ~12B+ local
+  or a capable cloud model) and suggest turning **reasoning OFF** — "thinking" tokens
+  can corrupt the JSON.
+- **Code-specialised models** (names containing \`code\`/\`coder\`/\`codestral\`) are tuned
+  for programming, not natural-language DJ links or structured output. They write
+  stiff intros and routinely fail the JSON shape. Steer the operator to a general
+  model even if the code model is "bigger".
+- The report also exposes an **LLM → "model class"** finding when the chosen model
+  looks code-specialised, or is small (≤~9–11B) while the agentic picker is ON. Pair
+  this with the picker-agent and reasoning guidance below.
+- Important: a model broken enough to fail structured output **also breaks this AI
+  review** (it's a structured call too). So when these deterministic findings fire,
+  trust them over the absence of a review — they're the signal that survives.
+
 ## Agent deadline (settings.llm.agentTimeoutMs, default 45000ms)
 - Wall-clock budget for the agentic picker before it gives up and falls back to the
   pool. **Reasoning-heavy or cloud models routinely need 20–40s**, so keep the

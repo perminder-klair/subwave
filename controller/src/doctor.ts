@@ -183,6 +183,46 @@ async function checkLlm(s: any): Promise<Finding[]> {
     out.push({ label: 'recent calls', status: 'skip', detail: 'no calls yet' });
   }
 
+  // Structured-output health — the silent failure mode behind "the model
+  // responds but features quietly break". djObject calls (DJ Doc's own AI review,
+  // the request matcher, the pool picker, the library tagger) need the model to
+  // emit JSON matching a strict shape; a weak model returns the wrong shape, the
+  // call fails Zod validation and the feature degrades or falls back unnoticed.
+  // We catch it deterministically here precisely because a model this broken ALSO
+  // breaks the AI review that would otherwise explain it to the operator.
+  const schemaFails = recentCalls.filter(isSchemaFailure);
+  if (schemaFails.length) {
+    const kinds = [...new Set(schemaFails.map((c: any) => c.kind).filter(Boolean))];
+    out.push({
+      label: 'structured output',
+      status: schemaFails.length >= 3 ? 'fail' : 'warn',
+      detail: `${schemaFails.length} schema-validation failure(s)${kinds.length ? ` · ${kinds.join(', ')}` : ''}`,
+      hint:
+        'The model is returning JSON that does not match the required shape, so these features fall back or go silent (DJ Doc’s own AI review is one of them). It’s the classic sign of a model that’s weak at schema-constrained output — usually a code-specialised or very small model. Switch Settings → LLM to a general instruction-tuned model (a ~12B+ local or a capable cloud model), and try turning reasoning OFF — “thinking” output can corrupt the JSON.',
+    });
+  }
+
+  // Model class — weigh the chosen model's *name* against how it's being used.
+  // Heuristic only (name-based), so it never fails, only warns: a code-specialised
+  // model is tuned for programming rather than DJ links / structured picks, and a
+  // small model paired with the agentic picker tends to time out into the pool.
+  const cls = classifyModel(activeModelLabel());
+  if (cls.code) {
+    out.push({
+      label: 'model class',
+      status: 'warn',
+      detail: `${activeModelLabel()} looks code-specialised`,
+      hint: 'Code models are tuned for programming, not natural-language DJ links or schema-constrained JSON — they tend to write stiff intros and fail structured picks (the request matcher, pool picker and this very report). Prefer a general instruction-tuned model in Settings → LLM.',
+    });
+  } else if (cls.sizeB !== null && cls.sizeB < 11 && s?.llm?.pickerAgent !== false) {
+    out.push({
+      label: 'model class',
+      status: 'warn',
+      detail: `~${cls.sizeB}B model with the agentic picker on`,
+      hint: 'The agentic picker wants a ~12B-class (or good cloud) model; smaller models often time out into the pool fallback or fail structured picks. Either pick a larger model, or turn the agentic picker OFF (Settings → LLM) to use the simpler, more forgiving pool picker.',
+    });
+  }
+
   // Picker agent toggle — off is valid (stateless picker) but worth surfacing.
   // DJ Doc weighs this against the model size + host resources in its review.
   out.push({
@@ -612,8 +652,38 @@ export async function reviewReport(report: DoctorReport): Promise<DoctorReview> 
     });
     return { available: true, ...review };
   } catch (err: any) {
-    return { available: false, reason: err?.message || 'review failed' };
+    // A schema/shape mismatch here is itself a diagnosis: the review model can't
+    // do structured output. Say so plainly instead of dumping the Zod error, and
+    // point at the deterministic finding that survives a broken model.
+    const reason = isSchemaErrorMessage(err)
+      ? 'The review model returned output that doesn’t match the required shape — a sign the selected model is weak at structured output. See the LLM → “structured output” finding above; switching to a general instruction-tuned model fixes it.'
+      : err?.message || 'review failed';
+    return { available: false, reason };
   }
+}
+
+// A failed LLM call whose error is a schema/shape mismatch (Zod) rather than a
+// host being unreachable — the fingerprint of a model that can't reliably produce
+// structured output. Matched on message text so it works across providers.
+function isSchemaFailure(c: any): boolean {
+  return !!c && c.ok === false && isSchemaErrorMessage(c.error);
+}
+
+function isSchemaErrorMessage(err: any): boolean {
+  if (!err) return false;
+  const s = typeof err === 'string' ? err : err.message || JSON.stringify(err);
+  return /invalid_type|invalid_value|invalid_enum|unrecognized_keys|Invalid (option|input)|received undefined|No object generated|did not match (the )?schema|Type validation failed/i.test(s);
+}
+
+// Cheap name-based model classification — drives warnings only. `code` flags a
+// code-specialised model (poor at DJ links / structured output); `sizeB` is the
+// parameter count parsed from the tag (e.g. "gemma2:9b" → 9), null when absent.
+function classifyModel(label: string): { code: boolean; sizeB: number | null } {
+  const m = (label || '').toLowerCase();
+  const code = /coder|codestral|\bcode\b|[-_:]code/.test(m);
+  const sizeMatch = m.match(/(\d+(?:\.\d+)?)\s*b(?:[^a-z0-9]|$)/);
+  const sizeB = sizeMatch ? parseFloat(sizeMatch[1]) : null;
+  return { code, sizeB };
 }
 
 // Compact, prompt-friendly rendering of the report — labels/status/detail/hint

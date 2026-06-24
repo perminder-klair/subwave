@@ -283,8 +283,7 @@ export default function DoctorPanel() {
             </span>
           }
         >
-          <div className="flex items-start gap-4">
-            <BoothBuddy mood={buddyMood} size={34} />
+          <div>
             <div className="min-w-0 flex-1">
               <p className="text-[14px] leading-[1.6] text-muted">
                 Full assessment of the station — the LLM, Navidrome &amp; library, the broadcast chain,
@@ -292,11 +291,8 @@ export default function DoctorPanel() {
                 apply it in one click.
               </p>
               <div className="mt-4 flex flex-wrap items-center gap-2">
-                <Btn tone="solid" onClick={run} disabled={running}>
-                  {running ? 'Running…' : 'Re-run Doctor'}
-                </Btn>
-                <Btn tone="accent" onClick={() => askReview()} disabled={reviewing}>
-                  {reviewing ? 'DJ Doc is listening…' : 'Ask DJ Doc to review'}
+                <Btn tone="accent" onClick={letsGo} disabled={running || reviewing}>
+                  {running ? 'Running…' : reviewing ? 'DJ Doc is listening…' : 'Re-run Doctor'}
                 </Btn>
                 <Btn onClick={copyMarkdown}>Copy report as Markdown</Btn>
                 <Btn
@@ -315,8 +311,32 @@ export default function DoctorPanel() {
         </Card>
       )}
 
-      {/* Buddy review — spotlighted so the producer's verdict reads first. */}
-      {review && (
+      {/* Spotlight slot — a live "listening" indicator while DJ Doc runs the
+          report past the LLM (a 20–60s call on a local model), then his verdict.
+          The animated indicator is the primary signal the action is working: a
+          button-label change alone read as stalled on the long call. */}
+      {reviewing ? (
+        <div role="status" aria-live="polite">
+          <Card className="is-spotlight mt-6" title="DJ Doc says" sub="running the levels…">
+            <div className="flex items-start gap-4">
+              <BoothBuddy mood="onair" size={40} />
+              <div className="min-w-0 flex-1">
+                <p className="text-[15px] leading-[1.65] font-bold">DJ Doc is listening…</p>
+                <p className="mt-1 text-[13px] leading-[1.55] text-muted">
+                  Playing your whole health report past the LLM and writing up what&apos;s clean,
+                  what&apos;s muddy, and the one thing to fix first. On a local model this can take
+                  20–60s — hang tight.
+                </p>
+                <div className="mt-4 flex flex-col gap-2.5" aria-hidden="true">
+                  <div className="sw-pulse h-3 w-[90%] rounded bg-[color:var(--separator-strong)]" />
+                  <div className="sw-pulse h-3 w-[76%] rounded bg-[color:var(--separator-strong)]" />
+                  <div className="sw-pulse h-3 w-[60%] rounded bg-[color:var(--separator-strong)]" />
+                </div>
+              </div>
+            </div>
+          </Card>
+        </div>
+      ) : review ? (
         <Card
           className="is-spotlight mt-6"
           title="DJ Doc says"
@@ -366,7 +386,7 @@ export default function DoctorPanel() {
             </p>
           )}
         </Card>
-      )}
+      ) : null}
 
       {/* Findings by section */}
       {report?.sections.map((sec) => (
