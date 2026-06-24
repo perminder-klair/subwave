@@ -784,7 +784,8 @@ SITE_URL=
 # DEEPSEEK_API_KEY=
 # AI_GATEWAY_API_KEY=
 # ELEVENLABS_API_KEY=
-# SEARCH_API_KEY=tvly-...
+# SEARCH_API_KEY=tvly-...           # Tavily key (optional, paid)
+# SearXNG: no env var. Configure base URL in admin UI → Settings → Search.
 # Embedding key — only when embeddings use a different provider/key than chat
 # (e.g. OpenRouter for embeddings, a local proxy for chat). Blank → inherit the
 # chat key. OpenRouter embeddings also fall back to OPENROUTER_API_KEY above.
