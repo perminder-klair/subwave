@@ -122,6 +122,32 @@ export async function duckduckgoSearch(query: string): Promise<SearchResponse> {
   return { answer, results: results.slice(0, 5) };
 }
 
+// SearXNG meta-search backend. Self-hosted, no API key — needs only a
+// reachable base URL stored in settings.search.baseUrl. Threads optional
+// recency through to SearXNG's time_range param (artist-news callsite
+// passes 'week' to bias toward fresh content).
+export async function searxngSearch(
+  query: string,
+  recency?: 'day' | 'week' | 'month',
+): Promise<SearchResponse> {
+  const baseUrl = (settings.get().search?.baseUrl || '').trim();
+  if (!baseUrl) throw new Error('SearXNG baseUrl not configured');
+
+  const url = new URL('/search', baseUrl);
+  url.searchParams.set('q', query);
+  url.searchParams.set('format', 'json');
+  if (recency) url.searchParams.set('time_range', recency);
+
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'SUB-WAVE radio controller (https://github.com/perminder-klair/subwave)',
+    },
+  });
+  if (!res.ok) throw new Error(`SearXNG HTTP ${res.status}`);
+  const data = await res.json();
+  return parseSearxngResponse(data);
+}
+
 // Pure parser for SearXNG's JSON response. Maps the SearXNG shape
 // (results[], answers[], infoboxes[]) onto SubWave's SearchResponse contract.
 // Exported separately from searxngSearch() so fixture-based tests can pin
