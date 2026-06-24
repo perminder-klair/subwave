@@ -317,3 +317,43 @@ router.post('/themes', requireAdmin, async (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+
+// ---------------------------------------------------------------------------
+// POST /search/test-searxng — verifies the supplied SearXNG instance answers
+// a JSON query. Used by the admin UI's "Test" button so the operator gets
+// immediate feedback instead of waiting for a segment tick to fail.
+// Body { baseUrl: string }. Does not persist anything.
+// ---------------------------------------------------------------------------
+router.post('/search/test-searxng', requireAdmin, async (req, res) => {
+  try {
+    const baseUrl = String(req.body?.baseUrl || '').trim();
+    if (!baseUrl) return res.status(400).json({ ok: false, error: 'baseUrl required' });
+    if (!/^https?:\/\//i.test(baseUrl)) {
+      return res.status(400).json({ ok: false, error: 'baseUrl must start with http:// or https://' });
+    }
+
+    const url = new URL('/search', baseUrl);
+    url.searchParams.set('q', 'subwave connectivity probe');
+    url.searchParams.set('format', 'json');
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    let r: Response;
+    try {
+      r = await fetch(url, {
+        headers: { 'User-Agent': 'SUB-WAVE radio controller (probe)' },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!r.ok) return res.json({ ok: false, error: `HTTP ${r.status}` });
+    const data: any = await r.json();
+    const count = Array.isArray(data?.results) ? data.results.length : 0;
+    return res.json({ ok: true, results: count });
+  } catch (err: any) {
+    const msg = err?.name === 'AbortError' ? 'request timed out after 8s' : err?.message || 'fetch failed';
+    return res.json({ ok: false, error: msg });
+  }
+});
