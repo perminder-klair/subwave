@@ -44,7 +44,7 @@ async function memo(
 }
 
 export async function tavilySearch(query: string): Promise<SearchResponse> {
-  const apiKey = settings.get().search?.apiKey || config.search.apiKey;
+  const apiKey = settings.get().search?.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey;
   const res = await fetch(TAVILY_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -141,5 +141,5 @@ export async function searchWeb(query: string): Promise<SearchResponse> {
 export function searchReady(): boolean {
   const s = settings.get().search;
   if (!s || s.provider === 'duckduckgo') return true;
-  return !!(s.apiKey || config.search.apiKey);
+  return !!(s.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey);
 }

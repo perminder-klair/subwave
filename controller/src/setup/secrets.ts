@@ -86,7 +86,17 @@ export async function saveSecrets(patch: Record<string, string>): Promise<void> 
       const eq = line.indexOf('=');
       if (eq < 0) continue;
       const key = line.slice(0, eq).trim();
-      if (SECRET_ENV_KEYS.includes(key)) current[key] = line.slice(eq + 1);
+      if (SECRET_ENV_KEYS.includes(key)) {
+        let value = line.slice(eq + 1).trim();
+        if (
+          value.length >= 2 &&
+          ((value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'")))
+        ) {
+          value = value.slice(1, -1);
+        }
+        current[key] = value;
+      }
     }
   }
   for (const [key, value] of Object.entries(patch)) {
