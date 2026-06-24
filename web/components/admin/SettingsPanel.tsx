@@ -2622,11 +2622,8 @@ interface LibrarySectionProps extends SectionProps {
 function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: LibrarySectionProps) {
   const e = form.embedding;
   const [embeddingKeyInput, setEmbeddingKeyInput] = useState('');
-  const [embeddingKeyTest, setEmbeddingKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
-  const [embeddingKeyTesting, setEmbeddingKeyTesting] = useState(false);
 
   useEffect(() => { setEmbeddingKeyInput(''); }, [form.embedding.provider]);
-  useEffect(() => { setEmbeddingKeyTest(null); }, [form.embedding.provider]);
 
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
@@ -2645,25 +2642,6 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
     } catch (e) {
       notify.err(errorMessage(e));
       return false;
-    }
-  };
-
-  const testEmbeddingKey = async () => {
-    if (!embeddingKeyInput.trim()) return;
-    setEmbeddingKeyTesting(true);
-    setEmbeddingKeyTest(null);
-    try {
-      const r = await adminFetch('/settings/secrets/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: 'EMBEDDING_API_KEY', value: embeddingKeyInput.trim() }),
-      });
-      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
-      setEmbeddingKeyTest(j);
-    } catch (e) {
-      setEmbeddingKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
-    } finally {
-      setEmbeddingKeyTesting(false);
     }
   };
 
@@ -3036,16 +3014,6 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
                 </div>
               </div>
               <KeyStatus envVar="EMBEDDING_API_KEY" present={!!data.env?.['EMBEDDING_API_KEY']} />
-              <div className="mt-2 flex items-center gap-2">
-                <Btn
-                  sm
-                  onClick={testEmbeddingKey}
-                  disabled={embeddingKeyTesting || !embeddingKeyInput.trim()}
-                >
-                  {embeddingKeyTesting ? 'Testing…' : 'Test key'}
-                </Btn>
-              </div>
-              {embeddingKeyTest && <KeyTestResult result={embeddingKeyTest} />}
             </>
           )}
 
