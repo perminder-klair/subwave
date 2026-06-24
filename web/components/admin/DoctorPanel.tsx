@@ -67,6 +67,15 @@ const MOOD_BY_OVERALL: Record<NonNullable<DoctorReview['overall']>, BuddyMood> =
   critical: 'spooked',
 };
 
+// "Headquarters" = the upstream SUB/WAVE repo. Bug reports about the software
+// itself go here regardless of who runs the station, so this is intentionally
+// the project repo, not a per-station setting.
+const HQ_ISSUES_NEW = 'https://github.com/perminder-klair/subwave/issues/new';
+// GitHub's prefilled-issue form is a GET, so the whole report rides in the URL.
+// Past ~8KB the request 414s / silently truncates; stay well under and fall
+// back to the clipboard when the report is too big to prefill safely.
+const HQ_URL_LIMIT = 7000;
+
 export default function DoctorPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [report, setReport] = useState<DoctorReport | null>(null);
@@ -78,7 +87,7 @@ export default function DoctorPanel() {
 
   const ready = hydrated && !needsAuth;
 
-  const run = async () => {
+  const run = async (): Promise<DoctorReport | null> => {
     setRunning(true);
     setErr(null);
     // A fresh run invalidates the previous review (it described the old report).
@@ -90,21 +99,27 @@ export default function DoctorPanel() {
         throw new Error((j as { error?: string })?.error || `failed (${r.status})`);
       }
       setReport(j);
+      return j;
     } catch (e) {
       setErr(errorMessage(e));
+      return null;
     } finally {
       setRunning(false);
     }
   };
 
-  const askReview = async () => {
-    if (!report) return;
+  // `rep` lets a caller pass the just-fetched report directly — `run()` sets it
+  // via setState, which isn't visible in the same tick, so the "Let's go" chain
+  // hands it through rather than reading stale `report` from the closure.
+  const askReview = async (rep?: DoctorReport) => {
+    const target = rep ?? report;
+    if (!target) return;
     setReviewing(true);
     try {
       const r = await adminFetch('/doctor/review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ report }),
+        body: JSON.stringify({ report: target }),
       });
       const j = (await r.json().catch(() => null)) as DoctorReview | { error?: string } | null;
       if (!r.ok || !j) throw new Error((j as { error?: string })?.error || `failed (${r.status})`);
@@ -117,6 +132,13 @@ export default function DoctorPanel() {
     } finally {
       setReviewing(false);
     }
+  };
+
+  // The one-press init flow: run the full assessment, then immediately hand the
+  // fresh report to DJ Doc for his read — no separate "review" click needed.
+  const letsGo = async () => {
+    const rep = await run();
+    if (rep) await askReview(rep);
   };
 
   const runFix = async (fix: FixAction) => {
@@ -148,65 +170,46 @@ export default function DoctorPanel() {
     }
   };
 
+  // Open a GitHub "new issue" form prefilled with the diagnostics. This only
+  // opens the form — nothing is filed until the operator hits Submit on GitHub.
+  const sendToHQ = async () => {
+    if (!report) return;
+    const title = `Station diagnostics — ${report.counts.fail} fail · ${report.counts.warn} warn · ${report.counts.skip} skip`;
+    const body = `_Filed from DJ Doc (Admin → DJ Doc → station health)._\n\n${toMarkdown(report, review)}`;
+    const full = `${HQ_ISSUES_NEW}?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
+    // Too long to ride in the URL — copy the full report and prefill a pointer
+    // so the operator just pastes it into the issue body.
+    if (full.length > HQ_URL_LIMIT) {
+      try {
+        await navigator.clipboard.writeText(body);
+      } catch {
+        /* clipboard may be blocked; the short form still opens */
+      }
+      const note =
+        `_Filed from DJ Doc._\n\n` +
+        `**${report.counts.ok} ok · ${report.counts.warn} warn · ${report.counts.fail} fail · ${report.counts.skip} skip**\n\n` +
+        `> The full report was too long to prefill — it's on your clipboard, paste it below.`;
+      window.open(
+        `${HQ_ISSUES_NEW}?title=${encodeURIComponent(title)}&body=${encodeURIComponent(note)}`,
+        '_blank',
+        'noopener,noreferrer',
+      );
+      notify.info('report copied — paste it into the issue body');
+      return;
+    }
+    window.open(full, '_blank', 'noopener,noreferrer');
+  };
+
   const buddyMood: BuddyMood = review?.available && review.overall ? MOOD_BY_OVERALL[review.overall] : 'content';
 
   return (
     <div className="mx-auto max-w-[1100px] px-7 py-8">
-      {/* Intro + controls */}
-      <Card
-        title="DJ Doc"
-        sub="station health"
-        right={
-          report ? (
-            <span className="flex items-center gap-1.5">
-              <Pill tone="ink">{report.counts.ok} ok</Pill>
-              {report.counts.warn > 0 && <Pill tone="accent">{report.counts.warn} warn</Pill>}
-              {report.counts.fail > 0 && (
-                <Pill tone="accent" className="border-[var(--accent)] bg-[var(--accent)] text-white">
-                  {report.counts.fail} fail
-                </Pill>
-              )}
-              {report.counts.skip > 0 && <Pill>{report.counts.skip} skip</Pill>}
-            </span>
-          ) : undefined
-        }
-      >
-        <div className="flex items-start gap-4">
-          <BoothBuddy mood={buddyMood} size={34} />
-          <div className="min-w-0 flex-1">
-            <p className="text-[14px] leading-[1.6] text-muted">
-              Run a full assessment of the station — the LLM, Navidrome &amp; library, the broadcast
-              chain, voices, capabilities, content, resources and storage. Each finding suggests what
-              to do; where a safe fix exists you can apply it in one click. Then let DJ Doc review the
-              mix and call what to fix first.
-            </p>
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <Btn tone="solid" onClick={run} disabled={running}>
-                {running ? 'Running…' : report ? 'Re-run Doctor' : 'Run Doctor'}
-              </Btn>
-              <Btn tone="accent" onClick={askReview} disabled={!report || reviewing}>
-                {reviewing ? 'DJ Doc is listening…' : 'Ask DJ Doc to review'}
-              </Btn>
-              <Btn onClick={copyMarkdown} disabled={!report}>
-                Copy report as Markdown
-              </Btn>
-              {report && (
-                <span className="font-mono text-[11px] text-muted">
-                  last run {new Date(report.t).toLocaleTimeString()}
-                </span>
-              )}
-            </div>
-            {err && <p className="mt-3 text-[13px] text-[var(--accent)]">{err}</p>}
-            {!report && !running && !ready && (
-              <p className="mt-3 text-[13px] text-muted">Sign in to run the Doctor.</p>
-            )}
-          </div>
-        </div>
-      </Card>
-
-      {/* Empty state — DJ Doc introduces himself before the first run. */}
-      {ready && !report && !running && (
-        <Card className="mt-6" title="Station health" sub="booth's open">
+      {/* Init hero — DJ Doc introduces himself and the whole run is one press.
+          The booth's-open pitch is the primary content; "Let's go" runs the
+          full assessment AND his review together. Stays up through the first
+          run so the CTA can show progress. */}
+      {ready && !report && (
+        <Card title="DJ Doc" sub="booth's open">
           <div className="flex items-start gap-4">
             <BoothBuddy mood="curious" size={52} />
             <div className="min-w-0 flex-1">
@@ -239,18 +242,83 @@ export default function DoctorPanel() {
                 </li>
               </ul>
               <p className="mt-4 text-[14px] leading-[1.6]">
-                Hit <span className="font-bold">Run Doctor</span> and I&apos;ll run the levels on all of it —
+                Hit <span className="font-bold">Let&apos;s go</span> and I&apos;ll run the levels on all of it,
                 then tell you straight what&apos;s clean, what&apos;s muddy, and the one thing to fix first. No fluff.
               </p>
+              <div className="mt-5 flex flex-wrap items-center gap-3">
+                <Btn
+                  tone="accent"
+                  lg
+                  onClick={letsGo}
+                  disabled={running || reviewing}
+                  className="px-9 py-3.5 text-[13px]"
+                >
+                  {running ? 'Running the levels…' : reviewing ? 'DJ Doc is listening…' : "Let's go"}
+                </Btn>
+                <span className="text-[12px] leading-[1.5] text-muted">
+                  Runs the full check and gets DJ Doc&apos;s read in one go.
+                </span>
+              </div>
+              {err && <p className="mt-3 text-[13px] text-[var(--accent)]">{err}</p>}
             </div>
           </div>
         </Card>
       )}
 
-      {/* Buddy review */}
+      {/* Controls — once a report exists: counts + re-run / review / copy. */}
+      {report && (
+        <Card
+          title="DJ Doc"
+          sub="station health"
+          right={
+            <span className="flex items-center gap-1.5">
+              <Pill tone="ink">{report.counts.ok} ok</Pill>
+              {report.counts.warn > 0 && <Pill tone="accent">{report.counts.warn} warn</Pill>}
+              {report.counts.fail > 0 && (
+                <Pill tone="accent" className="border-[var(--accent)] bg-[var(--accent)] text-white">
+                  {report.counts.fail} fail
+                </Pill>
+              )}
+              {report.counts.skip > 0 && <Pill>{report.counts.skip} skip</Pill>}
+            </span>
+          }
+        >
+          <div className="flex items-start gap-4">
+            <BoothBuddy mood={buddyMood} size={34} />
+            <div className="min-w-0 flex-1">
+              <p className="text-[14px] leading-[1.6] text-muted">
+                Full assessment of the station — the LLM, Navidrome &amp; library, the broadcast chain,
+                voices, capabilities, content, resources and storage. Where a safe fix exists you can
+                apply it in one click.
+              </p>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <Btn tone="solid" onClick={run} disabled={running}>
+                  {running ? 'Running…' : 'Re-run Doctor'}
+                </Btn>
+                <Btn tone="accent" onClick={() => askReview()} disabled={reviewing}>
+                  {reviewing ? 'DJ Doc is listening…' : 'Ask DJ Doc to review'}
+                </Btn>
+                <Btn onClick={copyMarkdown}>Copy report as Markdown</Btn>
+                <Btn
+                  onClick={sendToHQ}
+                  title="Open a prefilled GitHub issue with this report (you submit it)"
+                >
+                  Send report to Headquarters
+                </Btn>
+                <span className="font-mono text-[11px] text-muted">
+                  last run {new Date(report.t).toLocaleTimeString()}
+                </span>
+              </div>
+              {err && <p className="mt-3 text-[13px] text-[var(--accent)]">{err}</p>}
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Buddy review — spotlighted so the producer's verdict reads first. */}
       {review && (
         <Card
-          className="mt-6"
+          className="is-spotlight mt-6"
           title="DJ Doc says"
           right={
             review.available && review.overall ? (

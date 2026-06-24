@@ -129,6 +129,9 @@ export default defineConfig([
             '^l$',
             '^accent$',
             '^active$',
+            // .is-spotlight — accent-rail card modifier (.admin-root
+            // .card.is-spotlight) used by DJ Doc's verdict card.
+            '^is-spotlight$',
             '^strip-mobile$',
             // bare state / descendant classes used with .lib-* parents
             '^on$',
