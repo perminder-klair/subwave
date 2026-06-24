@@ -15,6 +15,7 @@ import { queue } from '../broadcast/queue.js';
 import { restartLiquidsoap, startStream, stopStream, streamStatus } from '../broadcast/liquidsoap-control.js';
 import { invalidateWeatherCache } from '../context.js';
 import { requireAdmin } from '../middleware/auth.js';
+import { saveSecrets, SECRET_ENV_KEYS } from '../setup/secrets.js';
 import { tagger } from '../broadcast/tagger.js';
 import { skillCatalog } from '../skills/_agent.js';
 import { clearUserThemeCache, loadUserThemes, listThemes, saveUserTheme } from '../themes.js';
@@ -140,6 +141,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         OPENROUTER_API_KEY: !!process.env.OPENROUTER_API_KEY,
         AI_GATEWAY_API_KEY: !!process.env.AI_GATEWAY_API_KEY,
         SEARCH_API_KEY: !!process.env.SEARCH_API_KEY,
+        EMBEDDING_API_KEY: !!process.env.EMBEDDING_API_KEY,
         LASTFM_API_KEY: !!process.env.LASTFM_API_KEY,
         LASTFM_API_SECRET: !!process.env.LASTFM_API_SECRET,
         LASTFM_SESSION_KEY: !!process.env.LASTFM_SESSION_KEY,
@@ -178,6 +180,36 @@ router.post('/settings', requireAdmin, async (req, res) => {
     }
     res.json(result);
   } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /settings/secrets — write one or more API keys to state/secrets.env.
+// Only keys listed in SECRET_ENV_KEYS are accepted; blank values are skipped
+// (blank = "leave existing key in place"). Takes effect in-process immediately
+// via saveSecrets(); no controller restart needed.
+// ---------------------------------------------------------------------------
+router.post('/settings/secrets', requireAdmin, async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (typeof body !== 'object' || Array.isArray(body)) {
+      return res.status(400).json({ error: 'Body must be a key-value object' });
+    }
+    const patch: Record<string, string> = {};
+    for (const [key, value] of Object.entries(body)) {
+      if (!SECRET_ENV_KEYS.includes(key as any)) continue;
+      if (typeof value !== 'string') continue;
+      const trimmed = value.trim();
+      if (!trimmed) continue;
+      patch[key] = trimmed;
+    }
+    if (Object.keys(patch).length === 0) {
+      return res.json({ saved: [] });
+    }
+    await saveSecrets(patch);
+    res.json({ saved: Object.keys(patch) });
+  } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
 });
