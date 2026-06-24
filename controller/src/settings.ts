@@ -278,7 +278,7 @@ export const TTS_CLOUD_PROVIDERS = ['openai', 'elevenlabs', 'openai-compatible']
 // silence otherwise (which the segment director already treats as a valid
 // outcome). `tavily` is the paid option for operators who want richer web
 // results; it reads its key from SEARCH_API_KEY.
-export const SEARCH_PROVIDERS = ['duckduckgo', 'tavily'];
+export const SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'searxng'] as const;
 
 // Canonical mood vocabulary. Shared by the library tagger (music/tag-library.js
 // imports this as MOOD_VOCAB) and the Shows scheduler — a show's `mood`
@@ -664,6 +664,7 @@ const DEFAULTS = {
   search: {
     provider: 'duckduckgo',
     apiKey: '',
+    baseUrl: '',
   },
   skills: {
     enabled: {},
@@ -1145,6 +1146,7 @@ export async function load() {
         ? stored.search.provider
         : DEFAULTS.search.provider,
       apiKey: typeof stored.search?.apiKey === 'string' ? stored.search.apiKey : '',
+      baseUrl: typeof stored.search?.baseUrl === 'string' ? stored.search.baseUrl : DEFAULTS.search.baseUrl,
     },
     embedding: {
       enabled:
@@ -1964,6 +1966,15 @@ export async function update(patch) {
       const v = String(sr.apiKey);
       if (v.length > 200) throw new Error('search.apiKey must be 0-200 chars');
       next.search.apiKey = v;
+    }
+    if (sr.baseUrl !== undefined) {
+      if (typeof sr.baseUrl !== 'string') throw new Error('search.baseUrl must be a string');
+      const trimmed = sr.baseUrl.trim();
+      if (trimmed.length > 500) throw new Error('search.baseUrl too long');
+      if (trimmed && !/^https?:\/\//i.test(trimmed)) {
+        throw new Error('search.baseUrl must start with http:// or https://');
+      }
+      next.search.baseUrl = trimmed;
     }
   }
   if ('embedding' in patch) {
