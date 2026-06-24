@@ -262,7 +262,7 @@ async function probeKey(
       try {
         const model = activeModel('anthropic') || 'claude-haiku-4-5-20251001';
         const m = createAnthropic({ apiKey: value })(model);
-        const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
+        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
         return { ok: true, message: `✓ Anthropic key valid · model responded` };
       } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
@@ -270,7 +270,7 @@ async function probeKey(
       try {
         const model = activeModel('openai') || 'gpt-4o-mini';
         const m = createOpenAI({ apiKey: value })(model);
-        const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
+        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
         return { ok: true, message: `✓ OpenAI key valid · model responded` };
       } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
@@ -278,7 +278,7 @@ async function probeKey(
       try {
         const model = activeModel('google') || 'gemini-1.5-flash';
         const m = createGoogleGenerativeAI({ apiKey: value })(model);
-        const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
+        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
         return { ok: true, message: `✓ Google key valid · model responded` };
       } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
@@ -286,7 +286,7 @@ async function probeKey(
       try {
         const model = activeModel('deepseek') || 'deepseek-chat';
         const m = createDeepSeek({ apiKey: value })(model);
-        const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
+        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
         return { ok: true, message: `✓ DeepSeek key valid · model responded` };
       } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
@@ -294,7 +294,7 @@ async function probeKey(
       try {
         const model = activeModel('openrouter') || 'openai/gpt-4o-mini';
         const m = createOpenRouter({ apiKey: value })(model);
-        const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
+        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
         return { ok: true, message: `✓ OpenRouter key valid · model responded` };
       } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
