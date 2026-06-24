@@ -1294,8 +1294,11 @@ interface TtsSectionProps extends SectionProps {
 
 function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: TtsSectionProps) {
   const [cloudKeyInput, setCloudKeyInput] = useState('');
+  const [cloudKeyTest, setCloudKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [cloudKeyTesting, setCloudKeyTesting] = useState(false);
 
   useEffect(() => { setCloudKeyInput(''); }, [form.tts.cloud.provider]);
+  useEffect(() => { setCloudKeyTest(null); }, [form.tts.cloud.provider]);
 
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
@@ -1314,6 +1317,25 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     } catch (e) {
       notify.err(errorMessage(e));
       return false;
+    }
+  };
+  const testCloudKey = async () => {
+    const cloudKeyVar = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
+    if (!cloudKeyInput.trim()) return;
+    setCloudKeyTesting(true);
+    setCloudKeyTest(null);
+    try {
+      const r = await adminFetch('/settings/secrets/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: cloudKeyVar, value: cloudKeyInput.trim() }),
+      });
+      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
+      setCloudKeyTest(j);
+    } catch (e) {
+      setCloudKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
+    } finally {
+      setCloudKeyTesting(false);
     }
   };
   const engines = data.tts?.engines || ['piper'];
@@ -1755,6 +1777,16 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                     </div>
                   </div>
                   <KeyStatus envVar={cloudKeyVar} present={!!data.env?.[cloudKeyVar]} />
+                  <div className="mt-2 flex items-center gap-2">
+                    <Btn
+                      sm
+                      onClick={testCloudKey}
+                      disabled={cloudKeyTesting || !cloudKeyInput.trim()}
+                    >
+                      {cloudKeyTesting ? 'Testing…' : 'Test key'}
+                    </Btn>
+                  </div>
+                  {cloudKeyTest && <KeyTestResult result={cloudKeyTest} />}
                 </>
               );
             })()}
