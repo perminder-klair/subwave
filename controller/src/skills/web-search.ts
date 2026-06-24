@@ -122,6 +122,38 @@ export async function duckduckgoSearch(query: string): Promise<SearchResponse> {
   return { answer, results: results.slice(0, 5) };
 }
 
+// Pure parser for SearXNG's JSON response. Maps the SearXNG shape
+// (results[], answers[], infoboxes[]) onto SubWave's SearchResponse contract.
+// Exported separately from searxngSearch() so fixture-based tests can pin
+// the mapping without mocking fetch. Tolerant of malformed input — any
+// shape mismatch yields { answer: '', results: [] }.
+export function parseSearxngResponse(data: unknown): SearchResponse {
+  if (!data || typeof data !== 'object') return { answer: '', results: [] };
+  const d = data as Record<string, unknown>;
+
+  // answer slot: prefer first infobox content, else empty.
+  let answer = '';
+  const infoboxes = Array.isArray(d.infoboxes) ? d.infoboxes : [];
+  if (infoboxes.length > 0 && infoboxes[0] && typeof infoboxes[0] === 'object') {
+    const ib = infoboxes[0] as Record<string, unknown>;
+    if (typeof ib.content === 'string') answer = ib.content.trim();
+  }
+
+  const rawResults = Array.isArray(d.results) ? d.results : [];
+  const results: SearchResult[] = [];
+  for (const r of rawResults) {
+    if (!r || typeof r !== 'object') continue;
+    const rec = r as Record<string, unknown>;
+    const title = typeof rec.title === 'string' ? rec.title.trim() : '';
+    const content = typeof rec.content === 'string' ? rec.content.trim().slice(0, 300) : '';
+    if (!title || !content) continue;
+    results.push({ title, content });
+    if (results.length >= 10) break;
+  }
+
+  return { answer, results };
+}
+
 // Provider dispatcher — reads the active provider from live settings on every
 // call so admin-UI changes take effect immediately. Wraps the backend in a
 // 30-min memo so two ticks on the same artist don't issue two outbound calls.
