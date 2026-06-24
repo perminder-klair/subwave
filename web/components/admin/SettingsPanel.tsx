@@ -2754,27 +2754,6 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
             )}
           </div>
 
-          {/* Embedding API key override -- only for cloud providers that need one */}
-          {e.provider && !['', 'ollama', 'openai-compatible', 'locca'].includes(e.provider) && (
-            <>
-              <div className="field">
-                <Label>Embedding API key override</Label>
-                <Input
-                  type="password"
-                  value={embeddingKeyInput}
-                  placeholder={data.env?.['EMBEDDING_API_KEY'] ? '•••••• (on file)' : 'optional -- defaults to chat key'}
-                  onChange={(ev: ChangeEvent<HTMLInputElement>) => setEmbeddingKeyInput(ev.target.value)}
-                  className="max-w-[360px]"
-                />
-                <div className="field-hint">
-                  Only needed when the embedding provider uses a different API key than the chat provider.
-                  Stored in <code>state/secrets.env</code>.
-                </div>
-              </div>
-              <KeyStatus envVar="EMBEDDING_API_KEY" present={!!data.env?.['EMBEDDING_API_KEY']} />
-            </>
-          )}
-
           <div className="field">
             <Label>Model</Label>
             <Input
@@ -2873,6 +2852,27 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
                 different Ollama host.
               </div>
             </div>
+          )}
+
+          {/* Embedding API key override -- only for cloud providers that need one */}
+          {e.provider && !['', 'ollama', 'openai-compatible', 'locca'].includes(e.provider) && (
+            <>
+              <div className="field">
+                <Label>Embedding API key override</Label>
+                <Input
+                  type="password"
+                  value={embeddingKeyInput}
+                  placeholder={data.env?.['EMBEDDING_API_KEY'] ? '•••••• (on file)' : 'optional -- defaults to chat key'}
+                  onChange={(ev: ChangeEvent<HTMLInputElement>) => setEmbeddingKeyInput(ev.target.value)}
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">
+                  Only needed when the embedding provider uses a different API key than the chat provider.
+                  Stored in <code>state/secrets.env</code>.
+                </div>
+              </div>
+              <KeyStatus envVar="EMBEDDING_API_KEY" present={!!data.env?.['EMBEDDING_API_KEY']} />
+            </>
           )}
 
           {/* Detect a locca embed server + test the endpoint BEFORE a long run. */}
