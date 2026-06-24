@@ -1139,6 +1139,26 @@ function KeyStatus({ envVar, present }: KeyStatusProps) {
   );
 }
 
+interface KeyTestResultProps {
+  result: { ok: boolean; message: string; latencyMs: number };
+}
+
+function KeyTestResult({ result }: KeyTestResultProps) {
+  return (
+    <div
+      className={cn(
+        'mt-2 max-w-[560px] rounded border px-3 py-2 text-[11px] leading-[1.6]',
+        result.ok
+          ? 'border-[var(--accent)] text-[color:var(--accent)]'
+          : 'border-red-400/50 text-red-300',
+      )}
+    >
+      {result.message}
+      {result.ok && result.latencyMs > 0 && ` · ${result.latencyMs}ms`}
+    </div>
+  );
+}
+
 /* ── TTS ─────────────────────────────────────────────────────────────── */
 
 type FormUpdater = (updater: (f: FormState) => FormState) => void;
