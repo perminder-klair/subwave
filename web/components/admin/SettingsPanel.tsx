@@ -32,7 +32,6 @@ const SECTIONS = [
   { id: 'search',   label: 'Web search', hint: 'live-facts backend' },
   { id: 'jingles',  label: 'Jingles', hint: 'stingers' },
   { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers' },
-  { id: 'api-keys', label: 'API Keys', hint: 'provider credentials' },
   { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz' },
   { id: 'archives', label: 'Archives', hint: 'hourly recordings' },
   { id: 'webhooks', label: 'Webhooks', hint: 'outbound events' },
@@ -50,6 +49,17 @@ const LLM_ENV_VARS: Record<string, string> = {
   deepseek: 'DEEPSEEK_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
   gateway: 'AI_GATEWAY_API_KEY',
+};
+
+const KEY_HINTS: Record<string, string> = {
+  ANTHROPIC_API_KEY: 'sk-ant-...',
+  OPENAI_API_KEY: 'sk-...',
+  GOOGLE_GENERATIVE_AI_API_KEY: 'AIza...',
+  DEEPSEEK_API_KEY: 'sk-...',
+  OPENROUTER_API_KEY: 'sk-or-v1-...',
+  AI_GATEWAY_API_KEY: 'gateway API key',
+  ELEVENLABS_API_KEY: 'el_...',
+  EMBEDDING_API_KEY: 'optional — defaults to chat key',
 };
 
 const LLM_PROVIDER_LABELS: Record<string, string> = {
@@ -700,7 +710,7 @@ export default function SettingsPanel() {
             {activeSection === 'llm' && data.llm && (
               <LlmSection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveSettings={saveSettings}
+                saveSettings={saveSettings} adminFetch={adminFetch} refresh={refresh}
               />
             )}
             {activeSection === 'search' && (
@@ -734,13 +744,6 @@ export default function SettingsPanel() {
                 createJingle={createJingle} uploadJingle={uploadJingle}
                 saveSettings={saveSettings}
                 onDelete={setConfirmDelete} adminFetch={adminFetch}
-              />
-            )}
-            {activeSection === 'api-keys' && data && (
-              <ApiKeysSection
-                data={data}
-                adminFetch={adminFetch}
-                onSaved={refresh}
               />
             )}
             {activeSection === 'scrobble' && (
@@ -1710,30 +1713,70 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
 
 /* ── LLM ─────────────────────────────────────────────────────────────── */
 
-function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
-  const save = () => saveSettings({
-    llm: {
-      provider: form.llm.provider,
-      model: form.llm.model,
-      ollamaUrl: form.llm.ollamaUrl,
-      numCtx: form.llm.numCtx,
-      baseUrl: form.llm.baseUrl,
-      reasoning: form.llm.reasoning,
-      pickerAgent: form.llm.pickerAgent,
-      requestWebResolve: form.llm.requestWebResolve,
-      agentTimeoutMs: form.llm.agentTimeoutMs,
-      pauseWhenEmpty: form.llm.pauseWhenEmpty,
-      fallback: {
-        enabled: form.llm.fallback.enabled,
-        provider: form.llm.fallback.provider,
-        model: form.llm.fallback.model,
-        ollamaUrl: form.llm.fallback.ollamaUrl,
-        numCtx: form.llm.fallback.numCtx,
-        baseUrl: form.llm.fallback.baseUrl,
-        reasoning: form.llm.fallback.reasoning,
+interface LlmSectionProps extends SectionProps {
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  refresh: () => void;
+}
+function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: LlmSectionProps) {
+  const [primaryKeyInput, setPrimaryKeyInput] = useState('');
+  const [fallbackKeyInput, setFallbackKeyInput] = useState('');
+
+  const saveKey = async (envVar: string, value: string): Promise<boolean> => {
+    if (!value.trim()) return true;
+    try {
+      const r = await adminFetch('/settings/secrets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [envVar]: value.trim() }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({})) as { error?: string };
+        notify.err(j.error || `Key save failed (${r.status})`);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      notify.err(errorMessage(e));
+      return false;
+    }
+  };
+
+  const save = async () => {
+    saveSettings({
+      llm: {
+        provider: form.llm.provider,
+        model: form.llm.model,
+        ollamaUrl: form.llm.ollamaUrl,
+        numCtx: form.llm.numCtx,
+        baseUrl: form.llm.baseUrl,
+        reasoning: form.llm.reasoning,
+        pickerAgent: form.llm.pickerAgent,
+        requestWebResolve: form.llm.requestWebResolve,
+        agentTimeoutMs: form.llm.agentTimeoutMs,
+        pauseWhenEmpty: form.llm.pauseWhenEmpty,
+        fallback: {
+          enabled: form.llm.fallback.enabled,
+          provider: form.llm.fallback.provider,
+          model: form.llm.fallback.model,
+          ollamaUrl: form.llm.fallback.ollamaUrl,
+          numCtx: form.llm.fallback.numCtx,
+          baseUrl: form.llm.fallback.baseUrl,
+          reasoning: form.llm.fallback.reasoning,
+        },
       },
-    },
-  });
+    });
+    // Save API keys if typed — these go to secrets.env, not settings.json
+    const primaryKeyVar = LLM_ENV_VARS[form.llm.provider];
+    if (primaryKeyVar && primaryKeyInput.trim()) {
+      const ok = await saveKey(primaryKeyVar, primaryKeyInput);
+      if (ok) { setPrimaryKeyInput(''); refresh(); }
+    }
+    const fallbackKeyVar = LLM_ENV_VARS[form.llm.fallback.provider];
+    if (fallbackKeyVar && fallbackKeyInput.trim()) {
+      const ok = await saveKey(fallbackKeyVar, fallbackKeyInput);
+      if (ok) { setFallbackKeyInput(''); refresh(); }
+    }
+  };
 
   const savedLlm = data.values?.llm || {};
   const activeLabel = data.llm?.active || '';
@@ -1922,12 +1965,27 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
             </div>
           )}
 
-          {LLM_ENV_VARS[form.llm.provider] && (
-            <KeyStatus
-              envVar={LLM_ENV_VARS[form.llm.provider]!}
-              present={!!data.env?.[LLM_ENV_VARS[form.llm.provider]!]}
-            />
-          )}
+          {LLM_ENV_VARS[form.llm.provider] && (() => {
+            const keyVar = LLM_ENV_VARS[form.llm.provider]!;
+            return (
+              <>
+                <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
+                <div className="field">
+                  <Label>{llmProviderLabel(form.llm.provider)} API key</Label>
+                  <Input
+                    type="password"
+                    value={primaryKeyInput}
+                    placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
+                    className="max-w-[360px]"
+                  />
+                  <div className="field-hint">
+                    Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
+                  </div>
+                </div>
+              </>
+            );
+          })()}
         </div>
       </Card>
 
@@ -2085,12 +2143,27 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                 />
               </div>
 
-              {LLM_ENV_VARS[form.llm.fallback.provider] && (
-                <KeyStatus
-                  envVar={LLM_ENV_VARS[form.llm.fallback.provider]!}
-                  present={!!data.env?.[LLM_ENV_VARS[form.llm.fallback.provider]!]}
-                />
-              )}
+              {LLM_ENV_VARS[form.llm.fallback.provider] && (() => {
+                const keyVar = LLM_ENV_VARS[form.llm.fallback.provider]!;
+                return (
+                  <>
+                    <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
+                    <div className="field">
+                      <Label>{llmProviderLabel(form.llm.fallback.provider)} API key</Label>
+                      <Input
+                        type="password"
+                        value={fallbackKeyInput}
+                        placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setFallbackKeyInput(e.target.value)}
+                        className="max-w-[360px]"
+                      />
+                      <div className="field-hint">
+                        Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
             </>
           )}
         </div>
@@ -3958,112 +4031,6 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
             </div>
           </div>
         ))}
-      </Card>
-    </>
-  );
-}
-
-/* ── API Keys ────────────────────────────────────────────────────────── */
-// Write provider keys to state/secrets.env via POST /settings/secrets.
-// Values are never read back; only presence is shown via data.env booleans.
-// Pattern mirrors ScrobbleSection exactly: password inputs, blank = no-op,
-// KeyStatus badge, save clears the typed values and refreshes presence flags.
-
-interface ApiKeysSectionProps {
-  data: SettingsData;
-  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
-  onSaved: () => void;
-}
-
-const API_KEY_DEFS: { key: string; label: string; hint: string }[] = [
-  { key: 'ANTHROPIC_API_KEY',            label: 'Anthropic (Claude)',          hint: 'sk-ant-...' },
-  { key: 'OPENAI_API_KEY',               label: 'OpenAI',                      hint: 'sk-...' },
-  { key: 'GOOGLE_GENERATIVE_AI_API_KEY', label: 'Google Generative AI (Gemini)', hint: 'AIza...' },
-  { key: 'OPENROUTER_API_KEY',           label: 'OpenRouter',                  hint: 'sk-or-v1-...' },
-  { key: 'DEEPSEEK_API_KEY',             label: 'DeepSeek',                    hint: 'sk-...' },
-  { key: 'AI_GATEWAY_API_KEY',           label: 'AI Gateway',                  hint: 'gateway API key' },
-  { key: 'ELEVENLABS_API_KEY',           label: 'ElevenLabs (TTS)',            hint: 'el_...' },
-  { key: 'SEARCH_API_KEY',               label: 'Tavily (web search)',         hint: 'tvly-...' },
-  { key: 'EMBEDDING_API_KEY',            label: 'Embedding (override)',        hint: 'optional — defaults to chat key' },
-];
-
-function ApiKeysSection({ data, adminFetch, onSaved }: ApiKeysSectionProps) {
-  const env = (data.env || {}) as Record<string, unknown>;
-  const [form, setForm] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-
-  const inputValue = (key: string) => form[key] || '';
-  const placeholder = (key: string, hint: string) =>
-    env[key] ? '•••••• (on file)' : hint;
-
-  const keysSet = API_KEY_DEFS.filter(d => !!env[d.key]).length;
-  const hasInput = API_KEY_DEFS.some(d => (form[d.key] || '').trim().length > 0);
-
-  const save = async () => {
-    const patch: Record<string, string> = {};
-    for (const { key } of API_KEY_DEFS) {
-      const v = (form[key] || '').trim();
-      if (v) patch[key] = v;
-    }
-    if (Object.keys(patch).length === 0) return;
-    setSaving(true);
-    try {
-      const r = await adminFetch('/settings/secrets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      });
-      const j = (await r.json().catch(() => ({}))) as { saved?: string[]; error?: string };
-      if (!r.ok) throw new Error(j.error || `Save failed (${r.status})`);
-      setForm({});
-      onSaved();
-      notify.ok(`Saved ${(j.saved || []).length} key(s)`);
-    } catch (e) {
-      notify.err(errorMessage(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <>
-      <SectionHeader
-        eyebrow="api keys"
-        title="Provider credentials — stored securely in state/secrets.env."
-        sub={<>
-          Paste a key to store it. Stored values are never shown — only whether a key
-          is present. Leave a field blank to keep the existing key unchanged.
-          Keys set via <code>.env</code> or Docker <code>env_file</code> always take
-          precedence over values stored here. Last.fm and ListenBrainz tokens are
-          managed in the <strong>Scrobbling</strong> section.
-        </>}
-        metrics={[
-          { n: `${keysSet}/${API_KEY_DEFS.length}`, l: 'configured', accent: keysSet > 0 },
-        ]}
-      />
-      <Card title="Provider keys">
-        <div className="grid gap-[18px]">
-          {API_KEY_DEFS.map(({ key, label, hint }) => (
-            <div key={key} className="field">
-              <Label>{label}</Label>
-              <Input
-                type="password"
-                value={inputValue(key)}
-                placeholder={placeholder(key, hint)}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({ ...f, [key]: e.target.value }))
-                }
-                className="max-w-[360px]"
-              />
-              <KeyStatus envVar={key} present={!!env[key]} />
-            </div>
-          ))}
-          <div className="mt-1">
-            <Btn tone="accent" onClick={save} disabled={saving || !hasInput}>
-              {saving ? 'Saving…' : 'Save keys'}
-            </Btn>
-          </div>
-        </div>
       </Card>
     </>
   );
