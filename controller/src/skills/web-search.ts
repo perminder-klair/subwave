@@ -138,11 +138,19 @@ export async function searxngSearch(
   url.searchParams.set('format', 'json');
   if (recency) url.searchParams.set('time_range', recency);
 
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': 'SUB-WAVE radio controller (https://github.com/perminder-klair/subwave)',
-    },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: {
+        'User-Agent': 'SUB-WAVE radio controller (https://github.com/perminder-klair/subwave)',
+      },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!res.ok) throw new Error(`SearXNG HTTP ${res.status}`);
   const data = await res.json();
   return parseSearxngResponse(data);

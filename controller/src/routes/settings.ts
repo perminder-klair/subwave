@@ -324,6 +324,7 @@ router.post('/themes', requireAdmin, async (req, res) => {
 // immediate feedback instead of waiting for a segment tick to fail.
 // Body { baseUrl: string }. Does not persist anything.
 // ---------------------------------------------------------------------------
+// Intentionally permits RFC-1918 targets — SearXNG is typically on the homelab LAN.
 router.post('/search/test-searxng', requireAdmin, async (req, res) => {
   try {
     const baseUrl = String(req.body?.baseUrl || '').trim();
