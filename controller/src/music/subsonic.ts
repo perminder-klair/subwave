@@ -121,6 +121,21 @@ async function call(endpoint, params = {}) {
   }
 }
 
+// Lightweight connectivity + auth check for the admin Doctor. Hits the cheapest
+// Subsonic endpoint (`ping`) with the controller's own salt+token creds — mirrors
+// the CLI wizard's probeSubsonic but against config.navidrome. Never throws.
+export async function ping(): Promise<{ ok: boolean; reason?: string }> {
+  if (!config.navidrome.url || !config.navidrome.user || !config.navidrome.password) {
+    return { ok: false, reason: 'Navidrome URL / username / password not configured' };
+  }
+  try {
+    await call('ping');
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, reason: err?.message || 'unreachable' };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Station-archive guard
 // ---------------------------------------------------------------------------
