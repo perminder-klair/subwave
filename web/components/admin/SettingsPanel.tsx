@@ -1105,7 +1105,7 @@ interface KeyStatusProps {
 
 function KeyStatus({ envVar, present }: KeyStatusProps) {
   const toneClass = present
-    ? 'border-[var(--accent)] text-vermilion'
+    ? 'border-[var(--accent)] text-[color:var(--accent)]'
     : 'border-[var(--danger)] text-[var(--danger)]';
   return (
     <div
@@ -1117,7 +1117,7 @@ function KeyStatus({ envVar, present }: KeyStatusProps) {
       <span
         className={cn(
           'mt-1 size-1.5 flex-none rounded-full',
-          present ? 'bg-vermilion' : 'bg-[var(--danger)]',
+          present ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
         )}
       />
       <div className="grid gap-0.5">
@@ -1147,10 +1147,10 @@ function KeyTestResult({ result }: KeyTestResultProps) {
   return (
     <div
       className={cn(
-        'mt-2 max-w-[560px] rounded border px-3 py-2 text-[11px] leading-[1.6]',
+        'mt-2 max-w-[560px] rounded border bg-[var(--ink-softer)] px-3 py-2 text-[11px] leading-[1.6]',
         result.ok
           ? 'border-[var(--accent)] text-[color:var(--accent)]'
-          : 'border-red-400/50 text-red-300',
+          : 'border-[var(--danger)] text-[var(--danger)]',
       )}
     >
       {result.message}
@@ -3064,10 +3064,10 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
             {probe && (
               <div
                 className={cn(
-                  'mt-2 max-w-[560px] rounded border px-3 py-2 text-[11px] leading-[1.6] whitespace-pre-wrap',
+                  'mt-2 max-w-[560px] rounded border bg-[var(--ink-softer)] px-3 py-2 text-[11px] leading-[1.6] whitespace-pre-wrap',
                   probe.ok
                     ? 'border-[var(--accent)] text-[color:var(--accent)]'
-                    : 'border-red-400/50 text-red-300',
+                    : 'border-[var(--danger)] text-[var(--danger)]',
                 )}
               >
                 {probe.ok
