@@ -1721,7 +1721,6 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               const cloudKeyVar = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
               return (
                 <>
-                  <KeyStatus envVar={cloudKeyVar} present={!!data.env?.[cloudKeyVar]} />
                   <div className="field">
                     <Label>{form.tts.cloud.provider === 'elevenlabs' ? 'ElevenLabs' : 'OpenAI'} API key</Label>
                     <Input
@@ -1735,6 +1734,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                       Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
                     </div>
                   </div>
+                  <KeyStatus envVar={cloudKeyVar} present={!!data.env?.[cloudKeyVar]} />
                 </>
               );
             })()}
@@ -2024,7 +2024,6 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             const keyVar = LLM_ENV_VARS[form.llm.provider]!;
             return (
               <>
-                <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
                 <div className="field">
                   <Label>{llmProviderLabel(form.llm.provider)} API key</Label>
                   <Input
@@ -2038,6 +2037,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                     Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
                   </div>
                 </div>
+                <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
               </>
             );
           })()}
@@ -2202,7 +2202,6 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 const keyVar = LLM_ENV_VARS[form.llm.fallback.provider]!;
                 return (
                   <>
-                    <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
                     <div className="field">
                       <Label>{llmProviderLabel(form.llm.fallback.provider)} API key</Label>
                       <Input
@@ -2216,6 +2215,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                         Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
                       </div>
                     </div>
+                    <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
                   </>
                 );
               })()}
