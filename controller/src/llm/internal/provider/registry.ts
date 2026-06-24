@@ -213,7 +213,7 @@ export function languageModel(cfg: any = llmCfg()) {
       // comes from settings or REQUESTY_API_KEY.
       const provider = createOpenAI({
         baseURL: DEFAULT_REQUESTY_BASE_URL,
-        apiKey: cfg.apiKey || 'unused',
+        apiKey: cfg.apiKey || process.env.REQUESTY_API_KEY || 'unused',
         name: 'requesty',
         fetch: debugFetch,
       });

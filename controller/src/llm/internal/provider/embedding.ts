@@ -176,7 +176,7 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
       // message.
       const provider = createOpenAI({
         baseURL: 'https://router.requesty.ai/v1',
-        apiKey: cfg.apiKey || 'unused',
+        apiKey: cfg.apiKey || process.env.REQUESTY_API_KEY || 'unused',
         name: 'requesty',
       });
       return provider.textEmbeddingModel(id);
