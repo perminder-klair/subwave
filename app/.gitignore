@@ -42,3 +42,6 @@ secrets/
 # generated native folders
 /ios
 /android
+
+# local EAS build output (eas build --local --output)
+/build/

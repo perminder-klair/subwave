@@ -112,6 +112,57 @@ on its own.
 > `eas submit --platform android --profile production --non-interactive` pushes to
 > the `internal` track as a `draft`. Until that file exists, upload manually.
 
+## Local build — when the EAS cloud Android quota is exhausted (`--local`)
+
+The EAS **Free plan caps Android cloud builds per calendar month** (resets on the
+1st; iOS has a separate quota). When it's used up, `eas build -p android --profile
+production` fails at queue time with *"used its Android builds from the Free
+plan this month."* Build the `.aab` **locally** instead — it bypasses the cloud
+quota entirely and still signs with the EAS-managed keystore, so the bundle is
+Play-valid. Same artifact, same signing, just compiled on this Mac.
+
+```bash
+cd "$APP"
+export ANDROID_HOME="$HOME/Library/Android/sdk"
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home  # JDK 17 (Expo SDK 56)
+export PATH="$JAVA_HOME/bin:$PATH"
+eas build --platform android --profile production --local --non-interactive \
+  --output "$APP/build/subwave-android-<ver>.aab"
+```
+
+`versionCode` still auto-increments remotely. When it finishes, verify and upload
+exactly as in the Play Store section above:
+
+```bash
+"$JAVA_HOME/bin/jarsigner" -verify "$APP/build/subwave-android-<ver>.aab"   # expect: "jar verified."
+```
+
+**Prereqs on this machine** (all in place as of the 1.3.0 release): Android SDK at
+`~/Library/Android/sdk` (build-tools 35/36, platform-tools), JDK 17 via Homebrew
+(`brew install openjdk@17`), and a logged-in `eas whoami`. The `withGradleMemory`
+config plugin (`app/plugins/`) raises the Gradle/Kotlin JVM metaspace during
+prebuild, so the local build no longer needs a manual `~/.gradle/gradle.properties`
+tweak.
+
+**Three failure modes, each fixed once** (learned cutting 1.3.0):
+
+1. **Disk.** Needs **~15+ GB free** — native compile across ABIs is hungry. A run
+   that dies on `ENOSPC` leaves a ~2 GB stale temp at
+   `$TMPDIR/eas-build-local-nodejs`; `rm -rf` it before retrying.
+2. **Corrupt NDK.** A disk-interrupted NDK download leaves a partial
+   `~/Library/Android/sdk/ndk/27.0.12077973` with no `source.properties`, and the
+   next run dies with `[CXX1101] … did not have a source.properties file`. Fix:
+   `rm -rf` that NDK dir so Gradle re-downloads it clean.
+3. **KSP Metaspace OOM** (only if the `withGradleMemory` plugin is somehow absent).
+   `:expo-updates:kspReleaseKotlin` throws `OutOfMemoryError: Metaspace` and the
+   Gradle daemon dies. The plugin fixes this in-repo; the manual fallback is a
+   `~/.gradle/gradle.properties` with `org.gradle.jvmargs=-Xmx3072m
+   -XX:MaxMetaspaceSize=1536m` + `kotlin.daemon.jvmargs=-Xmx2048m
+   -XX:MaxMetaspaceSize=1024m` (user-home wins over the regenerated project file).
+
+A full clean local build is ~20 min. If the cloud quota has reset, prefer the
+plain cloud `production` build above — it's simpler and offloads the compile.
+
 ## Quick sideload test (skip the store) — `preview`
 
 For handing a build straight to a tester without the Play Store:
