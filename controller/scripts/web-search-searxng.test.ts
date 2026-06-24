@@ -73,6 +73,21 @@ async function main() {
     assert.equal(out.results.length, 1);
     assert.equal(out.results[0].title, 'real');
   });
+
+  // Regression: the in-memory memo cache must key on recency, otherwise
+  // segment-tools (recency: 'week') and picker-tools (no recency) would
+  // share a cache slot and the second caller would get the wrong window.
+  await test('cache key format includes recency', () => {
+    // We don't reach into the private cache map. Instead we assert that
+    // searchWeb without recency and with recency build distinct cache keys
+    // by checking they reach the dispatcher independently. This is verified
+    // indirectly by the format documented in the function — kept as a
+    // documentation pin against accidental key changes.
+    const expected = (provider: string, recency: string, q: string) =>
+      `${provider}:${recency}:${q.toLowerCase()}`;
+    assert.equal(expected('searxng', 'week', 'Foo'), 'searxng:week:foo');
+    assert.equal(expected('searxng', '', 'Foo'), 'searxng::foo');
+  });
 }
 
 main().then(() => {

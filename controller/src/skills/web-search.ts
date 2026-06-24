@@ -182,22 +182,31 @@ export function parseSearxngResponse(data: unknown): SearchResponse {
 
 // Provider dispatcher — reads the active provider from live settings on every
 // call so admin-UI changes take effect immediately. Wraps the backend in a
-// 30-min memo so two ticks on the same artist don't issue two outbound calls.
-export async function searchWeb(query: string): Promise<SearchResponse> {
+// 30-min memo. Cache key includes recency so two callsites with different
+// recency hints don't share results.
+export async function searchWeb(
+  query: string,
+  opts?: { recency?: 'day' | 'week' | 'month' },
+): Promise<SearchResponse> {
   const provider = settings.get().search?.provider || 'duckduckgo';
-  const key = `${provider}:${query.toLowerCase()}`;
+  const recency = opts?.recency;
+  const key = `${provider}:${recency || ''}:${query.toLowerCase()}`;
   return memo(key, CACHE_TTL_MS, () => {
+    if (provider === 'searxng') return searxngSearch(query, recency);
     if (provider === 'tavily') return tavilySearch(query);
     return duckduckgoSearch(query);
   });
 }
 
-// True when the active search provider is usable right now. DDG always is;
-// Tavily needs a key (settings.search.apiKey, falling back to SEARCH_API_KEY).
-// Imported by the capability gate in skills/_agent.js and the tool registration
-// gate in llm/segment-tools.js so they agree on a single source of truth.
+// True when the active search provider is usable right now.
+//   duckduckgo: always ready (no key, no URL)
+//   tavily:     needs settings.search.apiKey, or SEARCH_API_KEY env
+//   searxng:    needs settings.search.baseUrl (no env fallback by design)
 export function searchReady(): boolean {
   const s = settings.get().search;
-  if (!s || s.provider === 'duckduckgo') return true;
-  return !!(s.apiKey || config.search.apiKey);
+  const provider = s?.provider || 'duckduckgo';
+  if (provider === 'duckduckgo') return true;
+  if (provider === 'searxng') return !!(s?.baseUrl && s.baseUrl.trim());
+  // tavily (and any future keyed provider)
+  return !!(s?.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey);
 }
