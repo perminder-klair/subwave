@@ -173,7 +173,7 @@ export function buildSegmentTools(ctx: any, state: any, caps: any[]) {
         if (!artist || /^unknown/i.test(artist)) return { available: false };
         const alreadySearched = artist === state.lastSearchedArtist;
         try {
-          const data = await searchWeb(`${artist} musician latest news`);
+          const data = await searchWeb(`${artist} musician latest news`, { recency: 'week' });
           state.lastSearchedArtist = artist;
           const answer = (data.answer || '').trim();
           const sources = (data.results || [])
