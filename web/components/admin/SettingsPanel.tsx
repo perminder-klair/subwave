@@ -1721,6 +1721,9 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   const [primaryKeyInput, setPrimaryKeyInput] = useState('');
   const [fallbackKeyInput, setFallbackKeyInput] = useState('');
 
+  useEffect(() => { setPrimaryKeyInput(''); }, [form.llm.provider]);
+  useEffect(() => { setFallbackKeyInput(''); }, [form.llm.fallback.provider]);
+
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
@@ -1742,7 +1745,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   };
 
   const save = async () => {
-    saveSettings({
+    await saveSettings({
       llm: {
         provider: form.llm.provider,
         model: form.llm.model,
