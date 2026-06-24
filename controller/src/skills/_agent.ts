@@ -37,6 +37,7 @@ import { defineAgent } from '../llm/agent.js';
 import { buildContextLines, CONTEXT_FIELDS } from '../llm/dj.js';
 import { buildSegmentTools } from '../llm/segment-tools.js';
 import { searchReady } from './web-search.js';
+import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { customCapabilities, getBuiltinOverrides } from './loader.js';
 import * as sfx from '../broadcast/sfx.js';
 
@@ -194,9 +195,10 @@ let tickBusy = false;
 const lastFired = new Map<string, number>(); // kind → ms timestamp of last aired segment
 
 // Dedup memory carried across ticks — passed straight into the segment tools.
+// Curiosity dedup is NOT here anymore: it lives in the durable ledger in
+// skills/curiosity.js (issue #577) so it survives a controller restart.
 const segmentState: any = {
   seenHeadlines: new Set<string>(),
-  seenCuriosity: new Set<string>(),
   lastWeatherCondition: null,
   lastSearchedArtist: null,
   lastAnySegment: 0,
@@ -284,7 +286,7 @@ export const directorAgent = defineAgent({
 // The concrete situation handed to the agent as its single user turn. Built
 // from what is on air and queue.getDjRecap() (what actually aired recently) —
 // NOT the track-pick session history, which derails small models.
-function buildSituation(ctx: any, { forced = false, contextFields }: { forced?: boolean; contextFields?: string[] } = {}) {
+function buildSituation(ctx: any, { forced = false, contextFields, recentCuriosity }: { forced?: boolean; contextFields?: string[]; recentCuriosity?: string[] } = {}) {
   const lines = ['The current moment:'];
   const ctxLines = buildContextLines(ctx, { contextFields });
   if (ctxLines.length) lines.push(...ctxLines);
@@ -293,6 +295,14 @@ function buildSituation(ctx: any, { forced = false, contextFields }: { forced?: 
   const recap = queue.getDjRecap();
   if (recap) {
     lines.push(`\nWhat you have already said on air recently (do NOT repeat these topics or phrasing):\n${recap}`);
+  }
+  // Durable curiosity history (issue #577) — when the Wikipedia pool is
+  // exhausted the agent falls back to free generation, which otherwise has no
+  // memory of what it already aired and repeats the same factoid (sometimes
+  // reworded). Surface the recent aired curiosity lines so it steers clear.
+  if (recentCuriosity && recentCuriosity.length) {
+    const list = recentCuriosity.map(t => `- ${t}`).join('\n');
+    lines.push(`\nCuriosity facts already aired in the last few days (if you air a curiosity segment, pick something genuinely different — do NOT repeat any of these, even reworded):\n${list}`);
   }
   lines.push(forced
     ? '\nWrite the segment the operator has asked for now.'
@@ -328,8 +338,11 @@ export async function agenticTick(ctx) {
   try {
     // Empty catalogue when SFX are disabled — the agent is never offered effects.
     const sfxCatalog = settings.get().sfx?.enabled === false ? [] : await sfx.catalog();
+    // When curiosity is on offer, brief the agent with what it already aired so
+    // a pool-exhausted fallback doesn't repeat itself (issue #577).
+    const recentCuriosity = caps.some(c => c.kind === 'curiosity') ? recentAiredCuriosity() : undefined;
     const { object } = await directorAgent.run({
-      messages: [{ role: 'user', content: buildSituation(ctx, { contextFields: unionContextFields(caps) }) }],
+      messages: [{ role: 'user', content: buildSituation(ctx, { contextFields: unionContextFields(caps), recentCuriosity }) }],
       persona, caps, freq, sfxCatalog,
       ctx, segmentState,
     });
@@ -355,6 +368,10 @@ export async function agenticTick(ctx) {
 
     // queue.announce appends the segment turn into the live session.
     await queue.announce(seg.text.trim(), seg.kind);
+
+    // Record what actually aired so the durable ledger can keep both the tool
+    // and the fallback path from repeating it after a restart (issue #577).
+    if (seg.kind === 'curiosity') recordCuriosity(seg.text.trim(), { aired: true });
 
     // Optional sound effect mixed under the voice. Only honour a name the
     // agent was actually offered — anything else is dropped, like an
@@ -468,8 +485,9 @@ export async function runCapability(which, ctx) {
   const persona = settings.getEffectivePersona(new Date());
   // Empty catalogue when SFX are disabled — the agent is never offered effects.
   const sfxCatalog = settings.get().sfx?.enabled === false ? [] : await sfx.catalog();
+  const recentCuriosity = cap.kind === 'curiosity' ? recentAiredCuriosity() : undefined;
   const { object } = await forcedDirectorAgent.run({
-    messages: [{ role: 'user', content: buildSituation(ctx, { forced: true, contextFields: effectiveContextFields(cap) }) }],
+    messages: [{ role: 'user', content: buildSituation(ctx, { forced: true, contextFields: effectiveContextFields(cap), recentCuriosity }) }],
     persona, cap, sfxCatalog,
     ctx, segmentState,
   });
@@ -486,6 +504,10 @@ export async function runCapability(which, ctx) {
   }
 
   await queue.announce(text, cap.kind);
+
+  // Record an operator-fired curiosity line in the durable ledger too, so a
+  // later autonomous tick doesn't repeat it (issue #577).
+  if (cap.kind === 'curiosity') recordCuriosity(text, { aired: true });
 
   // Optional sound effect under the voice — only a name the agent was offered.
   const pick = object?.sfx;

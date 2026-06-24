@@ -10,6 +10,7 @@ import * as sfx from './broadcast/sfx.js';
 import { queue } from './broadcast/queue.js';
 import * as session from './broadcast/session.js';
 import { getFullContext } from './context.js';
+import { loadCuriosityLedger } from './skills/curiosity.js';
 import { startScheduler } from './broadcast/scheduler.js';
 import { startListenerMonitor } from './broadcast/listeners.js';
 import { startAudienceMonitor } from './broadcast/audience.js';
@@ -170,6 +171,15 @@ app.listen(config.server.port, async () => {
   // Reload the persisted queue before the watcher starts so tracks already
   // handed to Liquidsoap stay tracked across a controller restart.
   queue.recover();
+
+  // Reload the durable curiosity dedup ledger so a restart doesn't re-air the
+  // same "on this day" fact (issue #577).
+  try {
+    const n = loadCuriosityLedger();
+    console.log(`[curiosity] ledger loaded: ${n} entries`);
+  } catch (err: any) {
+    console.error('[curiosity] ledger load failed:', err.message);
+  }
 
   queue.startWatcher();
   startListenerMonitor();
