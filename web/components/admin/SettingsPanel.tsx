@@ -1129,8 +1129,8 @@ function KeyStatus({ envVar, present }: KeyStatusProps) {
             <>The controller has <code>{envVar}</code> set, so this provider is ready to use.</>
           ) : (
             <>
-              Set <code>{envVar}</code> in <code>.env</code> and restart the controller.
-              API keys are configured through the environment, not the admin UI.
+              <code>{envVar}</code> is not set. Paste the key in the field above and save,
+              or set it in <code>.env</code> and restart.
             </>
           )}
         </span>
