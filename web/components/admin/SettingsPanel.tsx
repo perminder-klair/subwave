@@ -716,7 +716,7 @@ export default function SettingsPanel() {
             {activeSection === 'search' && (
               <SearchSection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveSettings={saveSettings}
+                saveSettings={saveSettings} adminFetch={adminFetch}
               />
             )}
             {activeSection === 'library' && (
@@ -2460,7 +2460,10 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
 
 /* ── Web search ──────────────────────────────────────────────────────── */
 
-function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
+interface SearchSectionProps extends SectionProps {
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+}
+function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: SearchSectionProps) {
   const save = () => saveSettings({
     search: {
       provider: form.search.provider,
@@ -2481,6 +2484,28 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
         && form.search.apiKey !== 'set'
         && form.search.apiKey !== (savedSearch.apiKey || ''));
   const tavilyKeySet = form.search.apiKey === 'set' || !!data.env?.SEARCH_API_KEY;
+  const [tavilyKeyTest, setTavilyKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [tavilyKeyTesting, setTavilyKeyTesting] = useState(false);
+
+  const testTavilyKey = async () => {
+    const value = form.search.apiKey === 'set' ? '' : form.search.apiKey;
+    if (!value.trim()) return;
+    setTavilyKeyTesting(true);
+    setTavilyKeyTest(null);
+    try {
+      const r = await adminFetch('/settings/secrets/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'SEARCH_API_KEY', value: value.trim() }),
+      });
+      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
+      setTavilyKeyTest(j);
+    } catch (e) {
+      setTavilyKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
+    } finally {
+      setTavilyKeyTesting(false);
+    }
+  };
 
   return (
     <>
@@ -2557,6 +2582,20 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
                 </div>
               </div>
               <KeyStatus envVar="SEARCH_API_KEY" present={tavilyKeySet} />
+              <div className="mt-2 flex items-center gap-2">
+                <Btn
+                  sm
+                  onClick={testTavilyKey}
+                  disabled={
+                    tavilyKeyTesting ||
+                    !form.search.apiKey.trim() ||
+                    form.search.apiKey === 'set'
+                  }
+                >
+                  {tavilyKeyTesting ? 'Testing…' : 'Test key'}
+                </Btn>
+              </div>
+              {tavilyKeyTest && <KeyTestResult result={tavilyKeyTest} />}
             </>
           )}
         </div>
