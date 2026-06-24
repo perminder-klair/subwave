@@ -8,7 +8,7 @@
 
 import { generateText, tool, stepCountIs } from 'ai';
 import { usageOf } from '../core/pure.js';
-import { providerOptions } from '../provider/capabilities.js';
+import { providerOptions, forcedToolChoice } from '../provider/capabilities.js';
 
 export async function objectViaToolCall(
   leg: any,
@@ -27,7 +27,11 @@ export async function objectViaToolCall(
     temperature,
     maxOutputTokens,
     tools: { emit },
-    toolChoice: 'required',
+    // 'required' by default; an operator can downgrade to 'auto' per leg for a
+    // server whose forced-tool backend crashes (issue #570). With one tool
+    // visible + the "call it exactly once" instruction, a capable model still
+    // emits via the tool; a miss throws below → caller's fallback.
+    toolChoice: forcedToolChoice(leg.cfg),
     stopWhen: stepCountIs(1),
     providerOptions: providerOptions(leg.cfg, { forceNoThink: true }),
   } as any);

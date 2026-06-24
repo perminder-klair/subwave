@@ -157,6 +157,7 @@ interface LlmForm {
   numCtx: number;
   baseUrl: string;
   reasoning: boolean;
+  toolChoice: string;
   pickerAgent: boolean;
   requestWebResolve: boolean;
   agentTimeoutMs: number;
@@ -439,6 +440,7 @@ export default function SettingsPanel() {
         numCtx: typeof v.llm?.numCtx === 'number' ? v.llm.numCtx : 16384,
         baseUrl: v.llm?.baseUrl ?? '',
         reasoning: !!v.llm?.reasoning,
+        toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
         pickerAgent: !!v.llm?.pickerAgent,
         requestWebResolve: !!v.llm?.requestWebResolve,
         agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
@@ -1894,6 +1896,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         numCtx: form.llm.numCtx,
         baseUrl: form.llm.baseUrl,
         reasoning: form.llm.reasoning,
+        toolChoice: form.llm.toolChoice,
         pickerAgent: form.llm.pickerAgent,
         requestWebResolve: form.llm.requestWebResolve,
         agentTimeoutMs: form.llm.agentTimeoutMs,
@@ -2034,6 +2037,32 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 including the <code>/v1</code> suffix. Must be reachable from the
                 controller container. Use the host’s LAN or Tailscale IP, not
                 <code>127.0.0.1</code>.
+              </div>
+            </div>
+          )}
+
+          {form.llm.provider === 'openai-compatible' && (
+            <div className="field">
+              <Label>Forced tool calls</Label>
+              <Seg
+                accent
+                value={form.llm.toolChoice === 'auto' ? 'auto' : 'required'}
+                options={[
+                  { id: 'required', label: 'Required' },
+                  { id: 'auto', label: 'Auto' },
+                ]}
+                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, toolChoice: v } }))}
+              />
+              <div className="field-hint">
+                How the picker forces the model to return a structured pick.
+                <code>Required</code> (default) sends{' '}
+                <code>tool_choice:&quot;required&quot;</code> — the reliable path for
+                local models. Switch to <code>Auto</code> only if your server
+                <strong> crashes</strong> on a tool call: some newer vLLM images
+                (notably Intel/XPU builds) mishandle the guided-decoding backend
+                that <code>required</code> engages, while <code>auto</code> never
+                does. On <code>Auto</code> a capable model still calls the tool;
+                misses fall back to the stateless picker.
               </div>
             </div>
           )}
