@@ -225,6 +225,30 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
 // Builds a one-off provider client using the supplied value; never writes to
 // process.env or secrets.env. Always resolves (never rejects).
 // ---------------------------------------------------------------------------
+// Distill a raw provider/SDK error into a one-line actionable message.
+function briefLlmError(err: any): string {
+  const msg: string = (err?.message || err?.toString() || '').toLowerCase();
+  if (msg.includes('401') || msg.includes('unauthorized') || msg.includes('invalid') && msg.includes('key') || msg.includes('incorrect api key')) {
+    return 'Key rejected — check it\'s correct and hasn\'t expired';
+  }
+  if (msg.includes('403') || msg.includes('forbidden')) {
+    return 'Access denied — your key may not have permission for this model';
+  }
+  if (msg.includes('429') || msg.includes('rate limit') || msg.includes('quota')) {
+    return 'Rate limited or quota exceeded — try again shortly';
+  }
+  if (msg.includes('model') && (msg.includes('not found') || msg.includes('does not exist'))) {
+    return 'Model not found — switch to a supported model in LLM settings';
+  }
+  if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('aborted')) {
+    return 'Timed out — provider may be slow or unreachable';
+  }
+  // Fallback: first sentence or first 80 chars of the original message
+  const raw: string = (err?.message || '').trim();
+  const sentence = raw.split(/[.\n]/)[0].trim();
+  return sentence.slice(0, 80) || 'Request failed';
+}
+
 async function probeKey(
   key: (typeof SECRET_ENV_KEYS)[number],
   value: string,
@@ -235,37 +259,47 @@ async function probeKey(
 
   switch (key) {
     case 'ANTHROPIC_API_KEY': {
-      const model = activeModel('anthropic') || 'claude-haiku-4-5-20251001';
-      const m = createAnthropic({ apiKey: value })(model);
-      const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
-      return { ok: true, message: `✓ Anthropic responded · "${(out.text || '').trim().slice(0, 40)}"` };
+      try {
+        const model = activeModel('anthropic') || 'claude-haiku-4-5-20251001';
+        const m = createAnthropic({ apiKey: value })(model);
+        const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
+        return { ok: true, message: `✓ Anthropic key valid · model responded` };
+      } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
     case 'OPENAI_API_KEY': {
-      const model = activeModel('openai') || 'gpt-4o-mini';
-      const m = createOpenAI({ apiKey: value })(model);
-      const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
-      return { ok: true, message: `✓ OpenAI responded · "${(out.text || '').trim().slice(0, 40)}"` };
+      try {
+        const model = activeModel('openai') || 'gpt-4o-mini';
+        const m = createOpenAI({ apiKey: value })(model);
+        const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
+        return { ok: true, message: `✓ OpenAI key valid · model responded` };
+      } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
     case 'GOOGLE_GENERATIVE_AI_API_KEY': {
-      const model = activeModel('google') || 'gemini-1.5-flash';
-      const m = createGoogleGenerativeAI({ apiKey: value })(model);
-      const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
-      return { ok: true, message: `✓ Google responded · "${(out.text || '').trim().slice(0, 40)}"` };
+      try {
+        const model = activeModel('google') || 'gemini-1.5-flash';
+        const m = createGoogleGenerativeAI({ apiKey: value })(model);
+        const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
+        return { ok: true, message: `✓ Google key valid · model responded` };
+      } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
     case 'DEEPSEEK_API_KEY': {
-      const model = activeModel('deepseek') || 'deepseek-chat';
-      const m = createDeepSeek({ apiKey: value })(model);
-      const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
-      return { ok: true, message: `✓ DeepSeek responded · "${(out.text || '').trim().slice(0, 40)}"` };
+      try {
+        const model = activeModel('deepseek') || 'deepseek-chat';
+        const m = createDeepSeek({ apiKey: value })(model);
+        const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
+        return { ok: true, message: `✓ DeepSeek key valid · model responded` };
+      } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
     case 'OPENROUTER_API_KEY': {
-      const model = activeModel('openrouter') || 'openai/gpt-4o-mini';
-      const m = createOpenRouter({ apiKey: value })(model);
-      const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
-      return { ok: true, message: `✓ OpenRouter responded · "${(out.text || '').trim().slice(0, 40)}"` };
+      try {
+        const model = activeModel('openrouter') || 'openai/gpt-4o-mini';
+        const m = createOpenRouter({ apiKey: value })(model);
+        const out = await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
+        return { ok: true, message: `✓ OpenRouter key valid · model responded` };
+      } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
     case 'AI_GATEWAY_API_KEY': {
-      return { ok: true, message: 'ℹ AI Gateway key saved format looks valid — test via an LLM call to confirm it works.' };
+      return { ok: true, message: 'Key format looks valid — confirm via a live LLM call' };
     }
     case 'ELEVENLABS_API_KEY': {
       const r = await fetch('https://api.elevenlabs.io/v1/user', {
@@ -274,28 +308,23 @@ async function probeKey(
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({})) as { detail?: { message?: string } | string };
-        const msg = typeof j?.detail === 'string' ? j.detail : (j?.detail as any)?.message || `HTTP ${r.status}`;
-        return { ok: false, message: `ElevenLabs: ${msg}` };
+        const msg = typeof j?.detail === 'string' ? j.detail : (j?.detail as any)?.message || '';
+        return { ok: false, message: r.status === 401 ? 'Key rejected — check it\'s correct and active' : (msg || `Request failed (${r.status})`) };
       }
       const u = await r.json() as { first_name?: string };
-      return { ok: true, message: `✓ ElevenLabs account verified${u.first_name ? ` (${u.first_name})` : ''}` };
+      return { ok: true, message: `✓ ElevenLabs key valid${u.first_name ? ` · account: ${u.first_name}` : ''}` };
     }
     case 'SEARCH_API_KEY': {
       const r = await fetch('https://api.tavily.com/search', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${value}`,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${value}` },
         body: JSON.stringify({ query: 'test', max_results: 1 }),
         signal: AbortSignal.timeout(10000),
       });
       if (!r.ok) {
-        const j = await r.json().catch(() => ({})) as { detail?: string | { message?: string } };
-        const detail = typeof j?.detail === 'string' ? j.detail : (j?.detail as any)?.message || '';
-        return { ok: false, message: `Tavily: ${detail || `HTTP ${r.status}`}` };
+        return { ok: false, message: r.status === 401 || r.status === 403 ? 'Key rejected — check it\'s correct and active' : `Request failed (${r.status})` };
       }
-      return { ok: true, message: '✓ Tavily API key valid' };
+      return { ok: true, message: '✓ Tavily key valid' };
     }
     case 'EMBEDDING_API_KEY': {
       const embCfg = settings.get().embedding || {};
@@ -318,7 +347,7 @@ async function probeKey(
       const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
       const j = await r.json().catch(() => null) as { error?: number; message?: string } | null;
       if (!r.ok || j?.error) {
-        return { ok: false, message: `Last.fm: ${j?.message || `HTTP ${r.status}`}` };
+        return { ok: false, message: j?.error === 10 ? 'Invalid API key — check your Last.fm developer credentials' : (j?.message || `Request failed (${r.status})`) };
       }
       return { ok: true, message: '✓ Last.fm API key valid' };
     }
@@ -329,9 +358,9 @@ async function probeKey(
       });
       const j = await r.json().catch(() => ({})) as { valid?: boolean; user_name?: string; message?: string };
       if (!j.valid) {
-        return { ok: false, message: `ListenBrainz: ${j.message || 'token not valid'}` };
+        return { ok: false, message: 'Token not valid — check your ListenBrainz user token' };
       }
-      return { ok: true, message: `✓ ListenBrainz token valid${j.user_name ? ` (${j.user_name})` : ''}` };
+      return { ok: true, message: `✓ ListenBrainz token valid${j.user_name ? ` · user: ${j.user_name}` : ''}` };
     }
     default:
       return { ok: false, message: `No probe defined for ${key}` };

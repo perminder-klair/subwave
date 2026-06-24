@@ -1144,21 +1144,18 @@ interface KeyTestResultProps {
 }
 
 function KeyTestResult({ result }: KeyTestResultProps) {
-  const toneClass = result.ok
-    ? 'border-[var(--accent)] text-[color:var(--accent)]'
-    : 'border-[var(--danger)] text-[var(--danger)]';
   return (
-    <div className={cn('field mt-2 flex items-start gap-2.5 border bg-[var(--ink-softer)] p-3', toneClass)}>
-      <span className={cn('mt-1 size-1.5 flex-none rounded-full', result.ok ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]')} />
-      <div className="grid gap-0.5">
-        <span className={cn('text-[11px] font-bold tracking-[0.12em] uppercase', toneClass)}>
-          {result.ok ? 'Key valid' : 'Key test failed'}
-        </span>
-        <span className="text-[11px] leading-[1.5] text-muted">
-          {result.message}
-          {result.ok && result.latencyMs > 0 && ` · ${result.latencyMs}ms`}
-        </span>
-      </div>
+    <div
+      className={cn(
+        'mt-2 max-w-[560px] rounded border bg-[var(--ink-softer)] px-3 py-2 text-[11px] leading-[1.6]',
+        result.ok
+          ? 'border-[var(--accent)] text-[color:var(--accent)]'
+          : 'border-[var(--danger)] text-[var(--danger)]',
+      )}
+    >
+      {result.ok
+        ? `${result.message}${result.latencyMs > 0 ? ` · ${result.latencyMs}ms` : ''}`
+        : result.message}
     </div>
   );
 }
