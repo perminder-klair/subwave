@@ -338,12 +338,8 @@ export function buildPickerTools({
               if (a) songs = await subsonic.search(`${a.name} ${guess.title}`, { songCount: 25 });
             }
             if (songs.length === 0) songs = await subsonic.search(guess.title, { songCount: 25 });
-            // Romanisation drift fallback: web snippets often return expanded titles
-            // ("Sajde Kiye Hai Lakho") for songs stored under a short title ("Sajde").
-            // Try progressively shorter prefixes until we get a hit or reach 1 word.
-            const titleWords = guess.title.trim().split(/\s+/);
-            for (let n = Math.min(titleWords.length - 1, 3); songs.length === 0 && n >= 1; n--) {
-              songs = await subsonic.search(titleWords.slice(0, n).join(' '), { songCount: 25 });
+            if (songs.length === 0 && guess.keyword && guess.keyword !== guess.title) {
+              songs = await subsonic.search(guess.keyword, { songCount: 25 });
             }
             return { identified: guess, candidates: collect(songs) };
           } catch (err) { return { error: err.message }; }

@@ -112,18 +112,19 @@ export async function matchRequest(
 const IDENTIFY_SCHEMA = z.object({
   title: z.string().nullable().describe('the one specific song title the description points to, or null if the web text does not pin down a single song'),
   artist: z.string().nullable().describe('the primary performing artist for that song, or null if the text does not make it clear'),
+  keyword: z.string().nullable().describe('the shortest 1-2 word search keyword a music library would file this track under (e.g. "Sajde" not "Sajde Kiye Hai Lakho", "Espresso" not "Espresso by Sabrina Carpenter"), or null'),
 });
 
 export async function identifyTrackFromText(
   reference: string,
   webText: string,
-): Promise<{ title: string; artist: string | null } | null> {
+): Promise<{ title: string; artist: string | null; keyword: string | null } | null> {
   const out = await djObject({
-    system: 'You map a vague description of a song to the ONE specific track it refers to, using only the web snippets provided. Return the exact song title and primary performing artist. If the snippets do not clearly point to a single song, return nulls — never guess.',
+    system: 'You map a vague description of a song to the ONE specific track it refers to, using only the web snippets provided. Return the exact song title, primary performing artist, and the shortest 1-2 word keyword a personal music library would file the track under (often just the first word of the title). If the snippets do not clearly point to a single song, return nulls — never guess.',
     prompt: `Listener's description: "${reference}"\n\nWeb context:\n${webText}\n\nWhich single song does this most likely mean?`,
     schema: IDENTIFY_SCHEMA,
     temperature: 0.2,
     kind: 'identifyRequest',
   });
-  return out?.title ? { title: String(out.title), artist: out.artist ? String(out.artist) : null } : null;
+  return out?.title ? { title: String(out.title), artist: out.artist ? String(out.artist) : null, keyword: out.keyword ? String(out.keyword) : null } : null;
 }
