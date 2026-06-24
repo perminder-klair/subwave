@@ -338,12 +338,12 @@ export function buildPickerTools({
               if (a) songs = await subsonic.search(`${a.name} ${guess.title}`, { songCount: 25 });
             }
             if (songs.length === 0) songs = await subsonic.search(guess.title, { songCount: 25 });
-            // Romanisation drift fallback: web snippets often drop trailing vowels
-            // ("Lakho" vs "Lakhon", "Hai" vs "Hain"). First 2 words are stable
-            // across transliterations and broad enough to surface the right track.
+            // Romanisation drift fallback: web snippets often return expanded titles
+            // ("Sajde Kiye Hai Lakho") for songs stored under a short title ("Sajde").
+            // Try progressively shorter prefixes until we get a hit or reach 1 word.
             const titleWords = guess.title.trim().split(/\s+/);
-            if (songs.length === 0 && titleWords.length > 2) {
-              songs = await subsonic.search(titleWords.slice(0, 2).join(' '), { songCount: 25 });
+            for (let n = Math.min(titleWords.length - 1, 3); songs.length === 0 && n >= 1; n--) {
+              songs = await subsonic.search(titleWords.slice(0, n).join(' '), { songCount: 25 });
             }
             return { identified: guess, candidates: collect(songs) };
           } catch (err) { return { error: err.message }; }
