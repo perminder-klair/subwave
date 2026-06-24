@@ -3978,7 +3978,7 @@ interface ApiKeysSectionProps {
 const API_KEY_DEFS: { key: string; label: string; hint: string }[] = [
   { key: 'ANTHROPIC_API_KEY',            label: 'Anthropic (Claude)',          hint: 'sk-ant-...' },
   { key: 'OPENAI_API_KEY',               label: 'OpenAI',                      hint: 'sk-...' },
-  { key: 'GOOGLE_GENERATIVE_AI_API_KEY', label: 'Google Generative AI',        hint: 'AIza...' },
+  { key: 'GOOGLE_GENERATIVE_AI_API_KEY', label: 'Google Generative AI (Gemini)', hint: 'AIza...' },
   { key: 'OPENROUTER_API_KEY',           label: 'OpenRouter',                  hint: 'sk-or-v1-...' },
   { key: 'DEEPSEEK_API_KEY',             label: 'DeepSeek',                    hint: 'sk-...' },
   { key: 'AI_GATEWAY_API_KEY',           label: 'AI Gateway',                  hint: 'gateway API key' },
@@ -3988,7 +3988,7 @@ const API_KEY_DEFS: { key: string; label: string; hint: string }[] = [
 ];
 
 function ApiKeysSection({ data, adminFetch, onSaved }: ApiKeysSectionProps) {
-  const env = (data.env || {}) as Record<string, boolean>;
+  const env = (data.env || {}) as Record<string, unknown>;
   const [form, setForm] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
