@@ -704,7 +704,7 @@ export default function SettingsPanel() {
             {activeSection === 'tts' && data.tts && (
               <TtsSection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveSettings={saveSettings}
+                saveSettings={saveSettings} adminFetch={adminFetch} refresh={refresh}
               />
             )}
             {activeSection === 'llm' && data.llm && (
@@ -722,7 +722,7 @@ export default function SettingsPanel() {
             {activeSection === 'library' && (
               <LibrarySection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveSettings={saveSettings}
+                saveSettings={saveSettings} adminFetch={adminFetch} refresh={refresh}
               />
             )}
             {activeSection === 'station' && (
@@ -1267,30 +1267,67 @@ function HeavyEngineSetupGuide({ engine, buildArg }: { engine: 'Chatterbox' | 'P
   );
 }
 
-function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
+interface TtsSectionProps extends SectionProps {
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  refresh: () => void;
+}
+
+function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: TtsSectionProps) {
+  const [cloudKeyInput, setCloudKeyInput] = useState('');
+
+  useEffect(() => { setCloudKeyInput(''); }, [form.tts.cloud.provider]);
+
+  const saveKey = async (envVar: string, value: string): Promise<boolean> => {
+    if (!value.trim()) return true;
+    try {
+      const r = await adminFetch('/settings/secrets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [envVar]: value.trim() }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({})) as { error?: string };
+        notify.err(j.error || `Key save failed (${r.status})`);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      notify.err(errorMessage(e));
+      return false;
+    }
+  };
   const engines = data.tts?.engines || ['piper'];
   const available = data.tts?.available || {};
   const ENGINE_LABELS: Record<string, string> = { piper: 'Piper', kokoro: 'Kokoro', chatterbox: 'Chatterbox', 'pocket-tts': 'PocketTTS', cloud: 'Cloud' };
   const engineOptions = engines.map(e => ({ id: e, label: ENGINE_LABELS[e] || e }));
 
-  const save = () => saveSettings({
-    tts: {
-      defaultEngine: form.tts.defaultEngine,
-      kokoro: { voice: form.tts.kokoro?.voice },
-      chatterbox: { referenceVoice: form.tts.chatterbox?.referenceVoice ?? '' },
-      pocketTts: { voice: form.tts.pocketTts?.voice ?? 'alba' },
-      cloud: {
-        enabled: true,
-        provider: form.tts.cloud.provider,
-        model: form.tts.cloud.model,
-        voice: form.tts.cloud.voice,
-        baseUrl: form.tts.cloud.baseUrl,
+  const save = async () => {
+    await saveSettings({
+      tts: {
+        defaultEngine: form.tts.defaultEngine,
+        kokoro: { voice: form.tts.kokoro?.voice },
+        chatterbox: { referenceVoice: form.tts.chatterbox?.referenceVoice ?? '' },
+        pocketTts: { voice: form.tts.pocketTts?.voice ?? 'alba' },
+        cloud: {
+          enabled: true,
+          provider: form.tts.cloud.provider,
+          model: form.tts.cloud.model,
+          voice: form.tts.cloud.voice,
+          baseUrl: form.tts.cloud.baseUrl,
+        },
+        // Per-engine voice-level trim. Always sent (server clamps + drops unknown
+        // keys); keyed by engine id, `pocket-tts` with the hyphen.
+        gainDb: form.tts.gainDb,
       },
-      // Per-engine voice-level trim. Always sent (server clamps + drops unknown
-      // keys); keyed by engine id, `pocket-tts` with the hyphen.
-      gainDb: form.tts.gainDb,
-    },
-  });
+    });
+    // Save cloud API key if typed -- goes to secrets.env, not settings.json
+    const isCompat = form.tts.cloud.provider === 'openai-compatible';
+    if (!isCompat && cloudKeyInput.trim()) {
+      const cloudKeyVar = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
+      const ok = await saveKey(cloudKeyVar, cloudKeyInput);
+      if (ok) { notify.ok('API key saved'); setCloudKeyInput(''); refresh(); }
+    }
+  };
 
   const selectCloudProvider = (f: FormState, provider: string): FormState => {
     const provVoices = CLOUD_VOICES[provider as keyof typeof CLOUD_VOICES] || [];
@@ -1680,12 +1717,27 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                 );
               })()}
             </div>
-            {!isCompat && (
-              <KeyStatus
-                envVar={form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY'}
-                present={!!data.env?.[form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY']}
-              />
-            )}
+            {!isCompat && (() => {
+              const cloudKeyVar = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
+              return (
+                <>
+                  <KeyStatus envVar={cloudKeyVar} present={!!data.env?.[cloudKeyVar]} />
+                  <div className="field">
+                    <Label>{form.tts.cloud.provider === 'elevenlabs' ? 'ElevenLabs' : 'OpenAI'} API key</Label>
+                    <Input
+                      type="password"
+                      value={cloudKeyInput}
+                      placeholder={data.env?.[cloudKeyVar] ? '•••••• (on file)' : (KEY_HINTS[cloudKeyVar] ?? '')}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setCloudKeyInput(e.target.value)}
+                      className="max-w-[360px]"
+                    />
+                    <div className="field-hint">
+                      Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
             {isCompat && (
               <div className="field-hint mt-3.5">
                 Most self-hosted servers accept any non-empty API key, so no env
@@ -2420,26 +2472,64 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
 
 /* ── Library tagger ──────────────────────────────────────────────────── */
 
-function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProps) {
+interface LibrarySectionProps extends SectionProps {
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  refresh: () => void;
+}
+
+function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: LibrarySectionProps) {
   const e = form.embedding;
-  const save = () => saveSettings({
-    embedding: {
-      enabled: e.enabled,
-      provider: e.provider,
-      model: e.model,
-      baseUrl: e.baseUrl,
-      ollamaUrl: e.ollamaUrl,
-      seedCount: parseInt(e.seedCount, 10) || 0,
-      knnNeighbours: parseInt(e.knnNeighbours, 10) || 5,
-      moodVoteThreshold: parseFloat(e.moodVoteThreshold) || 0.6,
-      confidenceThreshold: parseFloat(e.confidenceThreshold) || 0.6,
-      maxActiveLearningRounds: parseInt(e.maxActiveLearningRounds, 10) || 0,
-      enrichment: {
-        lastfmTags: e.enrichment.lastfmTags,
-        lyrics: e.enrichment.lyrics,
+  const [embeddingKeyInput, setEmbeddingKeyInput] = useState('');
+
+  useEffect(() => { setEmbeddingKeyInput(''); }, [form.embedding.provider]);
+
+  const saveKey = async (envVar: string, value: string): Promise<boolean> => {
+    if (!value.trim()) return true;
+    try {
+      const r = await adminFetch('/settings/secrets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [envVar]: value.trim() }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({})) as { error?: string };
+        notify.err(j.error || `Key save failed (${r.status})`);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      notify.err(errorMessage(e));
+      return false;
+    }
+  };
+
+  const save = async () => {
+    await saveSettings({
+      embedding: {
+        enabled: e.enabled,
+        provider: e.provider,
+        model: e.model,
+        baseUrl: e.baseUrl,
+        ollamaUrl: e.ollamaUrl,
+        seedCount: parseInt(e.seedCount, 10) || 0,
+        knnNeighbours: parseInt(e.knnNeighbours, 10) || 5,
+        moodVoteThreshold: parseFloat(e.moodVoteThreshold) || 0.6,
+        confidenceThreshold: parseFloat(e.confidenceThreshold) || 0.6,
+        maxActiveLearningRounds: parseInt(e.maxActiveLearningRounds, 10) || 0,
+        enrichment: {
+          lastfmTags: e.enrichment.lastfmTags,
+          lyrics: e.enrichment.lyrics,
+        },
       },
-    },
-  });
+    });
+    // Save embedding API key if typed
+    const embeddingNeedsKey = e.provider &&
+      !['', 'ollama', 'openai-compatible', 'locca'].includes(e.provider);
+    if (embeddingNeedsKey && embeddingKeyInput.trim()) {
+      const ok = await saveKey('EMBEDDING_API_KEY', embeddingKeyInput);
+      if (ok) { notify.ok('API key saved'); setEmbeddingKeyInput(''); refresh(); }
+    }
+  };
 
   const savedEmbedding = data.values?.embedding || {};
   const llmProvider = data.values?.llm?.provider || 'ollama';
@@ -2464,7 +2554,6 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
 
   // --- Guided setup: probe the endpoint up front, detect a locca embed server,
   // and kick the tagger from here, instead of failing mid-run (#405 follow-up).
-  const { adminFetch } = useAdminAuth();
   const [probe, setProbe] = useState<
     { ok: boolean; dim: number | null; code: string; message: string } | null
   >(null);
@@ -2664,6 +2753,27 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
               </div>
             )}
           </div>
+
+          {/* Embedding API key override -- only for cloud providers that need one */}
+          {e.provider && !['', 'ollama', 'openai-compatible', 'locca'].includes(e.provider) && (
+            <>
+              <div className="field">
+                <Label>Embedding API key override</Label>
+                <Input
+                  type="password"
+                  value={embeddingKeyInput}
+                  placeholder={data.env?.['EMBEDDING_API_KEY'] ? '•••••• (on file)' : 'optional -- defaults to chat key'}
+                  onChange={(ev: ChangeEvent<HTMLInputElement>) => setEmbeddingKeyInput(ev.target.value)}
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">
+                  Only needed when the embedding provider uses a different API key than the chat provider.
+                  Stored in <code>state/secrets.env</code>.
+                </div>
+              </div>
+              <KeyStatus envVar="EMBEDDING_API_KEY" present={!!data.env?.['EMBEDDING_API_KEY']} />
+            </>
+          )}
 
           <div className="field">
             <Label>Model</Label>
