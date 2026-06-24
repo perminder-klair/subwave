@@ -228,11 +228,14 @@ export function buildPickerTools({
     }),
 
     // Only registered when the controller's own text/mood embedding index has
-    // been built (withEmbedding > 0) AND a text-embedding provider is live.
-    // When both are missing every call returns [] — and the old description
-    // said "Prefer this to similarSongs", actively steering the model into a
-    // dead tool. Gate it off entirely so the model never sees an unusable option.
-    ...(hasTextEmbeddings && hasEmbeddingProvider ? {
+    // been built (withEmbedding > 0). This tool does KNN over the seed track's
+    // STORED vector (library.tracksLikeThis -> db.knnById) and never calls the
+    // embedding provider at query time, so it works whenever the index exists —
+    // mirroring how tracksThatSoundLikeThis gates on hasAudioEmbeddings. Without
+    // an index every call returns [], and the old description said "Prefer this
+    // to similarSongs", actively steering the model into a dead tool — so gate it
+    // off entirely rather than offer an unusable option.
+    ...(hasTextEmbeddings ? {
       tracksLikeThis: tool({
         description: 'Tracks whose mood + lyrics + metadata embed closest to a seed track — the controller\'s own semantic similarity over the actual library. Requires the mood/lyric embedding index to be built. Pass the currently-playing song id (best) OR a track title — a title is resolved to the matching track.',
         inputSchema: z.object({
