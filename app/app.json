@@ -78,7 +78,8 @@
           "version": "8.14.3"
         }
       ],
-      "./plugins/withAndroidUserCaTrust"
+      "./plugins/withAndroidUserCaTrust",
+      "./plugins/withGradleMemory"
     ],
     "experiments": {
       "typedRoutes": true
