@@ -319,13 +319,13 @@ router.post('/themes', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /search/test-searxng — verifies the supplied SearXNG instance answers
-// a JSON query. Used by the admin UI's "Test" button so the operator gets
-// immediate feedback instead of waiting for a segment tick to fail.
+// POST /settings/search/test-searxng — verifies the supplied SearXNG instance
+// answers a JSON query. Used by the admin UI's "Test" button so the operator
+// gets immediate feedback instead of waiting for a segment tick to fail.
 // Body { baseUrl: string }. Does not persist anything.
 // ---------------------------------------------------------------------------
 // Intentionally permits RFC-1918 targets — SearXNG is typically on the homelab LAN.
-router.post('/search/test-searxng', requireAdmin, async (req, res) => {
+router.post('/settings/search/test-searxng', requireAdmin, async (req, res) => {
   try {
     const baseUrl = String(req.body?.baseUrl || '').trim();
     if (!baseUrl) return res.status(400).json({ ok: false, error: 'baseUrl required' });
