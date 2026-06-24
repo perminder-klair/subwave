@@ -1772,12 +1772,12 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     const primaryKeyVar = LLM_ENV_VARS[form.llm.provider];
     if (primaryKeyVar && primaryKeyInput.trim()) {
       const ok = await saveKey(primaryKeyVar, primaryKeyInput);
-      if (ok) { setPrimaryKeyInput(''); refresh(); }
+      if (ok) { notify.ok('API key saved'); setPrimaryKeyInput(''); refresh(); }
     }
     const fallbackKeyVar = LLM_ENV_VARS[form.llm.fallback.provider];
     if (fallbackKeyVar && fallbackKeyInput.trim()) {
       const ok = await saveKey(fallbackKeyVar, fallbackKeyInput);
-      if (ok) { setFallbackKeyInput(''); refresh(); }
+      if (ok) { notify.ok('API key saved'); setFallbackKeyInput(''); refresh(); }
     }
   };
 
