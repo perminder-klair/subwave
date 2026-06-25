@@ -25,6 +25,19 @@ archive_bitrate = ref(128)
 opus_enabled = ref(false)
 station_name = ref("SUB/WAVE")
 
+# DJ filter sweep state. The music passes through a getter-controlled lowpass
+# (see below, before `cross`); idle state is sweep_wet=0 so the filter is fully
+# bypassed and normal playout is untouched. On a transition the controller flags
+# `liq_sweep` (annotate:, via subsonic.getAnnotatedUri, driven by the DJ agent's
+# transition:'sweep' choice); dj_transition then ramps these refs to muffle the
+# music closed then open across the crossfade. NB: this `filter` goes unstable
+# near sr/4 (~11 kHz @ 44.1 k) and collapses the signal to near-silence, so the
+# "open" cutoff is capped at 9 kHz; the sweep is driven mainly by `sweep_wet`
+# (wetness=0 is bit-transparent dry, so idle playout is untouched and the sweep
+# ends seamlessly). Verified on liquidsoap v2.2.5.
+sweep_cutoff = ref(9000.)
+sweep_wet = ref(0.)
+
 if file.exists("/var/sub-wave/liquidsoap_jingle_ratio.txt") then
   raw = string.trim(file.contents("/var/sub-wave/liquidsoap_jingle_ratio.txt"))
   v = int_of_string(default=30, raw)
@@ -167,15 +180,16 @@ music = fallback(
 # The function receives records `a` and `b` with fields `.source`,
 # `.metadata`, `.db_level`. Reach into `.source` for the audio.
 #
-# WHY NO FILTER-KILL HERE: an earlier revision low-pass-filtered the
-# outgoing track for a "DJ filter sweep" feel. That triggered a runtime
-# error — `Early computation of source content-type detected for source
-# iir_filter!` — because `cross` invokes the transition callback before
-# the content-type is fully negotiated, and IIR filters on a not-yet-typed
-# `request.queue`-backed source fail the same way that the HPF on the mic
-# chain does (see comment above mic_chain). The fix would be to put a
-# getter-controlled filter on the music source BEFORE `cross` and modulate
-# its cutoff from a transition trigger. Parked until needed.
+# DJ FILTER SWEEP: an earlier revision low-pass-filtered the outgoing track
+# from INSIDE this callback for a sweep feel. That triggered a runtime error —
+# `Early computation of source content-type detected for source iir_filter!` —
+# because `cross` invokes the callback before the content-type is negotiated,
+# and IIR filters on a not-yet-typed `request.queue`-backed source fail the same
+# way the HPF on the mic chain does. The fix (now implemented): a getter-
+# controlled `filter` sits on the music source BEFORE `cross` (so it's typed at
+# graph-up, no early-computation error), and the callback only nudges the shared
+# sweep_cutoff/sweep_wet refs — it never instantiates a filter. Verified to come
+# up clean on liquidsoap v2.2.5.
 # DJ-mode adaptive blend: the controller may stamp `liq_cross_duration` on a
 # track (annotate:, via subsonic.getAnnotatedUri) to size its transition from
 # tempo/harmonic compatibility. CRITICAL: `cross` reads `liq_cross_duration` to
@@ -188,8 +202,46 @@ music = fallback(
 # fade shorter than the buffer sums to +6 dB (doubling). Reading `a` keeps
 # fade == buffer — the invariant the whole section depends on.
 # Absent / unparseable → crossfade_duration(), i.e. the global startup default.
+# Ramp the music lowpass closed then open across `dur` seconds, then bypass the
+# filter again (sweep_wet := 0). A triangle envelope: open → closed at the
+# midpoint → open. The outgoing track's tail is already buffered pre-filter
+# inside `cross`, so the sweep mostly shapes the INCOMING track — i.e. the new
+# track surfaces muffled then opens up. Self-stopping via thread.run.recurrent
+# (the tick returns the next delay; a negative value stops the thread).
+def start_filter_sweep(d) =
+  dur = if d < 1.0 then 1.0 else d end
+  steps = 48
+  step_dt = dur / float_of_int(steps)
+  i = ref(0)
+  sweep_cutoff := 9000.0
+  sweep_wet := 0.0
+  def tick() =
+    n = i()
+    i := n + 1
+    frac = float_of_int(n) / float_of_int(steps)
+    depth = if frac < 0.5 then frac * 2.0 else (1.0 - frac) * 2.0 end   # 0..1..0
+    # Wetness rides the envelope so both ends are fully DRY (seamless with
+    # playout); the cutoff glides alongside. Both peak-muffle at the midpoint.
+    sweep_wet := depth                          # 0→1→0 (0 = dry passthrough)
+    sweep_cutoff := 9000.0 - depth * 8600.0     # 9000→400→9000 Hz (stay below sr/4)
+    if n >= steps then
+      sweep_cutoff := 9000.0
+      sweep_wet := 0.0
+      (-1.0)        # stop the recurrent thread
+    else
+      step_dt
+    end
+  end
+  thread.run.recurrent(delay=0.0, tick)
+end
+
 def dj_transition(a, b) =
   d = float_of_string(default=crossfade_duration(), a.metadata["liq_cross_duration"])
+  # Fire the sweep when the INCOMING track is the one the DJ flagged.
+  if b.metadata["liq_sweep"] == "true" then
+    log("DJ filter sweep on this transition")
+    start_filter_sweep(d)
+  end
   a_source = fade.out(duration=d, initial_metadata=a.metadata, a.source)
   b_source = fade.in(duration=d, initial_metadata=b.metadata, b.source)
   add(normalize=false, [a_source, b_source])
@@ -212,6 +264,14 @@ music_meta = music
 # on_metadata hook still sees clean pre-cross metadata. No master-bus normaliser
 # is involved — the broadcast bus stays the brick-wall limiter only.
 music = amplify(override="liq_amplify", 1., music)
+
+# DJ filter sweep — a getter-controlled lowpass on the music BEFORE the cross,
+# so it's content-typed at graph-up (no "Early computation" error; placing an
+# IIR filter inside the cross callback fails — see dj_transition note above).
+# Idle wetness=0 → the filter is fully bypassed and playout is bit-for-bit the
+# dry signal; dj_transition ramps sweep_cutoff/sweep_wet only on a flagged
+# transition. `filter` freq/wetness are getters, read live from the refs.
+music = filter(freq={sweep_cutoff()}, mode="low", q=1., wetness={sweep_wet()}, music)
 
 music = cross(
   duration=crossfade_duration(),

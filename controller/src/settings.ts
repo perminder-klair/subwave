@@ -117,6 +117,14 @@ export function effectiveFrequency(persona: any = getEffectivePersona()) {
   return FREQUENCIES[Math.min(i + 1, FREQUENCIES.length - 1)];
 }
 
+// Single gate for the transition music sweep: it's on whenever the on-air
+// persona is in DJ mode — no separate toggle. The picker schema/prompt builders
+// use this to decide whether to offer the DJ the `transition: "sweep"` choice;
+// when off, the field is never shown and nothing is applied.
+export function effectsActive(persona: any = getEffectivePersona()): boolean {
+  return !!persona?.djMode;
+}
+
 // TTS engines. Every spoken segment is voiced by the on-air persona's own
 // `tts` config (see audio/tts.js); only jingle rendering falls back to the
 // global defaultEngine.

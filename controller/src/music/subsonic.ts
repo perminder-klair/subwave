@@ -594,5 +594,11 @@ export function getAnnotatedUri(song) {
   // tracks play at even perceived volume — masters untouched, no bus
   // normaliser. Absent → no gain applied, i.e. unity / today's behaviour.
   if (song.gainDb != null) fields.push(`liq_amplify="${escAnnotate(song.gainDb)} dB"`);
+  // DJ filter sweep: the DJ agent may flag a pick (transition:'sweep') on a big
+  // mood/energy jump; the queue stamps `sweep` on the track. radio.liq's
+  // dj_transition reads `liq_sweep` on the INCOMING track and ramps the music
+  // lowpass closed→open across the crossfade so the new track "surfaces from
+  // far away". Absent → no sweep, i.e. a normal crossfade.
+  if (song.sweep) fields.push('liq_sweep="true"');
   return `annotate:${fields.join(',')}:${getPlayableUri(song)}`;
 }

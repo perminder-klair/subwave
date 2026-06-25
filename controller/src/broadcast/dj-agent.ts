@@ -167,6 +167,8 @@ export const PICK_SCHEMA = z.object({
   id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
   reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just label (e.g. "flow from previous, new artist")'),
   say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice (back-announce what just played, ease into what is coming, vary your opener); when the event says stay silent, set this to null'),
+  // Music filter-sweep (only honoured when the system prompt offers it — DJ mode + effects on).
+  transition: z.enum(['normal', 'sweep']).nullable().describe('"sweep" muffles the music with a lowpass filter that opens up across the crossfade into your pick — use ONLY on a big mood/energy jump; "normal" or null otherwise'),
 });
 
 const REQUEST_SCHEMA = z.object({
@@ -184,6 +186,14 @@ const REQUEST_SCHEMA = z.object({
 // competes with the framework's structural signals and derails smaller
 // models. PICKER_CRITERIA stays because it's editorial preference (flow,
 // context, variety, interest) — that's not in any tool or schema.
+// Guidance for the music filter-sweep (PICK_SCHEMA.transition), appended to the
+// picker system prompt ONLY when effects are active (global toggle + on-air
+// persona djMode). Invisible otherwise, so the model leaves "transition" null.
+function sweepGuidance(): string {
+  if (!settings.effectsActive()) return '';
+  return `\n\nMUSIC SWEEP ("transition"): set "sweep" ONLY when this pick is a big mood/energy jump from what's on air — it muffles the music under a lowpass that opens back up across the crossfade, so the new track surfaces from far away. Otherwise "normal" or null. Use it rarely.`;
+}
+
 export function pickSystem() {
   const persona = settings.getEffectivePersona();
   // In DJ mode, lean on the live session history: a working DJ runs threads
@@ -212,7 +222,7 @@ export function pickSystem() {
 
 You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}${musicLean}
 
-${dj.PICKER_CRITERIA}${settings.agentLanguageReminder(persona, 'the "say" link')}`;
+${dj.PICKER_CRITERIA}${sweepGuidance()}${settings.agentLanguageReminder(persona, 'the "say" link')}`;
 }
 
 function requestSystem() {
@@ -329,9 +339,17 @@ function trackFields(song) {
 // AND the durable picks-log record so neither reports a phantom pick that never
 // aired (push() has already logged the dedup-skip). Callers fall back on -1
 // (agent → pool → auto.m3u) instead of recording a session turn for a no-op.
-async function enqueuePick(queue, song, reason, source, link: string | null = null): Promise<number> {
+async function enqueuePick(
+  queue, song, reason, source,
+  link: string | null = null,
+  { sweep = false }: { sweep?: boolean } = {},
+): Promise<number> {
+  const track: any = trackFields(song);
+  // Flag the music filter sweep on the crossfade INTO this pick (DJ mode + big
+  // mood jump). subsonic.getAnnotatedUri stamps liq_sweep; radio.liq ramps it.
+  if (sweep) track.sweep = true;
   const pos = await queue.push({
-    track: trackFields(song),
+    track,
     requestedBy: null,
     intent: reason || 'ai pick',
     introScript: link,
@@ -386,9 +404,13 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLin
   // talking over them. No-op when the pick is un-analysed or not in DJ mode.
   const djMode = !!settings.getEffectivePersona()?.djMode;
   const say = (djMode && rawSay) ? dj.enforceIntroBudget(rawSay, introMsOf(song)) : rawSay;
+  // Music filter sweep on the crossfade into the pick (DJ mode + effects toggle),
+  // independent of whether a link airs.
+  const link = (wantLink && say) ? say : null;
+  const sweep = settings.effectsActive() && object.transition === 'sweep';
   // Attach the link to the pick so it airs as the pick starts (back-announcing
   // the track on-air now), instead of immediately over that on-air track (#189).
-  const queued = await enqueuePick(queue, song, object.reason, 'agent', (wantLink && say) ? say : null);
+  const queued = await enqueuePick(queue, song, object.reason, 'agent', link, { sweep });
   // Pick was already queued/on-air and got deduped — don't record a session turn
   // for a track that never airs. Returning false lets runTrackEvent fall through
   // to the pool for a fresh pick.
