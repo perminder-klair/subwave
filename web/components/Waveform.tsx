@@ -90,7 +90,12 @@ export default memo(function Waveform({ audioRef, tunedIn, trackStartedAt, durat
   return (
     <div
       ref={containerRef}
-      className="pointer-events-none absolute inset-x-3 bottom-24 flex h-[110px] items-center gap-px px-1 opacity-[0.22] sm:right-24 sm:bottom-[128px] sm:left-0 sm:h-40 sm:gap-0.5 sm:px-8"
+      // Horizontal footprint is width-based (sm:). The tall band, however, is
+      // gated on viewport HEIGHT too — a short/wide window kept the full-height
+      // band and left no room above it, so the now-playing block overlapped it
+      // (issue #576). Below 760px tall we fall back to the compact band so the
+      // CenterStage region has room to clear it.
+      className="pointer-events-none absolute inset-x-3 bottom-24 flex h-[110px] items-center gap-px px-1 opacity-[0.22] sm:right-24 sm:left-0 sm:gap-0.5 sm:px-8 [@media(min-width:640px)_and_(min-height:760px)]:bottom-[128px] [@media(min-width:640px)_and_(min-height:760px)]:h-40"
       aria-hidden="true"
     >
       {Array.from({ length: BARS }).map((_, i) => {

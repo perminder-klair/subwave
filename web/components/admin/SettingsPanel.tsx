@@ -48,7 +48,19 @@ const LLM_ENV_VARS: Record<string, string> = {
   google: 'GOOGLE_GENERATIVE_AI_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+  requesty: 'REQUESTY_API_KEY',
   gateway: 'AI_GATEWAY_API_KEY',
+};
+
+const KEY_HINTS: Record<string, string> = {
+  ANTHROPIC_API_KEY: 'sk-ant-...',
+  OPENAI_API_KEY: 'sk-...',
+  GOOGLE_GENERATIVE_AI_API_KEY: 'AIza...',
+  DEEPSEEK_API_KEY: 'sk-...',
+  OPENROUTER_API_KEY: 'sk-or-v1-...',
+  AI_GATEWAY_API_KEY: 'gateway API key',
+  ELEVENLABS_API_KEY: 'el_...',
+  EMBEDDING_API_KEY: 'optional — defaults to chat key',
 };
 
 const LLM_PROVIDER_LABELS: Record<string, string> = {
@@ -60,6 +72,7 @@ const LLM_PROVIDER_LABELS: Record<string, string> = {
   google: 'Google (Gemini)',
   deepseek: 'DeepSeek',
   openrouter: 'OpenRouter (multi-vendor aggregator)',
+  requesty: 'Requesty (multi-vendor aggregator)',
   gateway: 'Vercel AI Gateway (multi-vendor aggregator)',
 };
 
@@ -87,11 +100,16 @@ const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = {
     { id: 'openai/text-embedding-3-small', dim: 1536 },
     { id: 'openai/text-embedding-3-large', dim: 3072 },
   ],
+  requesty: [
+    { id: 'openai/text-embedding-3-small', dim: 1536 },
+    { id: 'openai/text-embedding-3-large', dim: 3072 },
+  ],
 };
 
 const SEARCH_PROVIDER_LABELS: Record<string, string> = {
   duckduckgo: 'DuckDuckGo (free, no key)',
   tavily: 'Tavily (paid web search)',
+  searxng: 'SearXNG (self-hosted)',
 };
 
 const searchProviderLabel = (id: string | undefined): string =>
@@ -140,6 +158,7 @@ interface LlmForm {
   numCtx: number;
   baseUrl: string;
   reasoning: boolean;
+  toolChoice: string;
   pickerAgent: boolean;
   requestWebResolve: boolean;
   agentTimeoutMs: number;
@@ -153,6 +172,7 @@ interface LlmForm {
 interface SearchForm {
   provider: string;
   apiKey: string;
+  baseUrl: string;
 }
 
 interface EmbeddingEnrichmentForm {
@@ -425,6 +445,7 @@ export default function SettingsPanel() {
         numCtx: typeof v.llm?.numCtx === 'number' ? v.llm.numCtx : 16384,
         baseUrl: v.llm?.baseUrl ?? '',
         reasoning: !!v.llm?.reasoning,
+        toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
         pickerAgent: !!v.llm?.pickerAgent,
         requestWebResolve: !!v.llm?.requestWebResolve,
         agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
@@ -447,6 +468,7 @@ export default function SettingsPanel() {
         // GET /settings returns the apiKey redacted to 'set' | '' — that
         // round-trips through POST harmlessly (settings.update ignores 'set').
         apiKey: v.search?.apiKey ?? '',
+        baseUrl: v.search?.baseUrl ?? '',
       },
       embedding: {
         enabled: v.embedding?.enabled ?? true,
@@ -699,25 +721,25 @@ export default function SettingsPanel() {
             {activeSection === 'tts' && data.tts && (
               <TtsSection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveSettings={saveSettings}
+                saveSettings={saveSettings} adminFetch={adminFetch} refresh={refresh}
               />
             )}
             {activeSection === 'llm' && data.llm && (
               <LlmSection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveSettings={saveSettings}
+                saveSettings={saveSettings} adminFetch={adminFetch} refresh={refresh}
               />
             )}
             {activeSection === 'search' && (
               <SearchSection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveSettings={saveSettings}
+                saveSettings={saveSettings} adminFetch={adminFetch}
               />
             )}
             {activeSection === 'library' && (
               <LibrarySection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveSettings={saveSettings}
+                saveSettings={saveSettings} adminFetch={adminFetch} refresh={refresh}
               />
             )}
             {activeSection === 'station' && (
@@ -1100,7 +1122,7 @@ interface KeyStatusProps {
 
 function KeyStatus({ envVar, present }: KeyStatusProps) {
   const toneClass = present
-    ? 'border-[var(--accent)] text-vermilion'
+    ? 'border-[var(--accent)] text-[color:var(--accent)]'
     : 'border-[var(--danger)] text-[var(--danger)]';
   return (
     <div
@@ -1112,7 +1134,7 @@ function KeyStatus({ envVar, present }: KeyStatusProps) {
       <span
         className={cn(
           'mt-1 size-1.5 flex-none rounded-full',
-          present ? 'bg-vermilion' : 'bg-[var(--danger)]',
+          present ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
         )}
       />
       <div className="grid gap-0.5">
@@ -1124,12 +1146,33 @@ function KeyStatus({ envVar, present }: KeyStatusProps) {
             <>The controller has <code>{envVar}</code> set, so this provider is ready to use.</>
           ) : (
             <>
-              Set <code>{envVar}</code> in <code>.env</code> and restart the controller.
-              API keys are configured through the environment, not the admin UI.
+              <code>{envVar}</code> is not set. Paste the key in the field above and save,
+              or set it in <code>.env</code> and restart.
             </>
           )}
         </span>
       </div>
+    </div>
+  );
+}
+
+interface KeyTestResultProps {
+  result: { ok: boolean; message: string; latencyMs: number };
+}
+
+function KeyTestResult({ result }: KeyTestResultProps) {
+  return (
+    <div
+      className={cn(
+        'mt-2 max-w-[560px] rounded border bg-[var(--ink-softer)] px-3 py-2 text-[11px] leading-[1.6]',
+        result.ok
+          ? 'border-[var(--accent)] text-[color:var(--accent)]'
+          : 'border-[var(--danger)] text-[var(--danger)]',
+      )}
+    >
+      {result.ok
+        ? `${result.message}${result.latencyMs > 0 ? ` · ${result.latencyMs}ms` : ''}`
+        : result.message}
     </div>
   );
 }
@@ -1262,30 +1305,89 @@ function HeavyEngineSetupGuide({ engine, buildArg }: { engine: 'Chatterbox' | 'P
   );
 }
 
-function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
+interface TtsSectionProps extends SectionProps {
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  refresh: () => void;
+}
+
+function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: TtsSectionProps) {
+  const [cloudKeyInput, setCloudKeyInput] = useState('');
+  const [cloudKeyTest, setCloudKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [cloudKeyTesting, setCloudKeyTesting] = useState(false);
+
+  useEffect(() => { setCloudKeyInput(''); }, [form.tts.cloud.provider]);
+  useEffect(() => { setCloudKeyTest(null); }, [form.tts.cloud.provider]);
+
+  const saveKey = async (envVar: string, value: string): Promise<boolean> => {
+    if (!value.trim()) return true;
+    try {
+      const r = await adminFetch('/settings/secrets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [envVar]: value.trim() }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({})) as { error?: string };
+        notify.err(j.error || `Key save failed (${r.status})`);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      notify.err(errorMessage(e));
+      return false;
+    }
+  };
+  const testCloudKey = async () => {
+    const cloudKeyVar = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
+    if (!cloudKeyInput.trim()) return;
+    setCloudKeyTesting(true);
+    setCloudKeyTest(null);
+    try {
+      const r = await adminFetch('/settings/secrets/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: cloudKeyVar, value: cloudKeyInput.trim() }),
+      });
+      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
+      setCloudKeyTest(j);
+    } catch (e) {
+      setCloudKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
+    } finally {
+      setCloudKeyTesting(false);
+    }
+  };
   const engines = data.tts?.engines || ['piper'];
   const available = data.tts?.available || {};
   const ENGINE_LABELS: Record<string, string> = { piper: 'Piper', kokoro: 'Kokoro', chatterbox: 'Chatterbox', 'pocket-tts': 'PocketTTS', cloud: 'Cloud' };
   const engineOptions = engines.map(e => ({ id: e, label: ENGINE_LABELS[e] || e }));
 
-  const save = () => saveSettings({
-    tts: {
-      defaultEngine: form.tts.defaultEngine,
-      kokoro: { voice: form.tts.kokoro?.voice },
-      chatterbox: { referenceVoice: form.tts.chatterbox?.referenceVoice ?? '' },
-      pocketTts: { voice: form.tts.pocketTts?.voice ?? 'alba' },
-      cloud: {
-        enabled: true,
-        provider: form.tts.cloud.provider,
-        model: form.tts.cloud.model,
-        voice: form.tts.cloud.voice,
-        baseUrl: form.tts.cloud.baseUrl,
+  const save = async () => {
+    await saveSettings({
+      tts: {
+        defaultEngine: form.tts.defaultEngine,
+        kokoro: { voice: form.tts.kokoro?.voice },
+        chatterbox: { referenceVoice: form.tts.chatterbox?.referenceVoice ?? '' },
+        pocketTts: { voice: form.tts.pocketTts?.voice ?? 'alba' },
+        cloud: {
+          enabled: true,
+          provider: form.tts.cloud.provider,
+          model: form.tts.cloud.model,
+          voice: form.tts.cloud.voice,
+          baseUrl: form.tts.cloud.baseUrl,
+        },
+        // Per-engine voice-level trim. Always sent (server clamps + drops unknown
+        // keys); keyed by engine id, `pocket-tts` with the hyphen.
+        gainDb: form.tts.gainDb,
       },
-      // Per-engine voice-level trim. Always sent (server clamps + drops unknown
-      // keys); keyed by engine id, `pocket-tts` with the hyphen.
-      gainDb: form.tts.gainDb,
-    },
-  });
+    });
+    // Save cloud API key if typed -- goes to secrets.env, not settings.json
+    const isCompat = form.tts.cloud.provider === 'openai-compatible';
+    if (!isCompat && cloudKeyInput.trim()) {
+      const cloudKeyVar = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
+      const ok = await saveKey(cloudKeyVar, cloudKeyInput);
+      if (ok) { notify.ok('API key saved'); setCloudKeyInput(''); refresh(); }
+    }
+  };
 
   const selectCloudProvider = (f: FormState, provider: string): FormState => {
     const provVoices = CLOUD_VOICES[provider as keyof typeof CLOUD_VOICES] || [];
@@ -1675,12 +1777,42 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                 );
               })()}
             </div>
-            {!isCompat && (
-              <KeyStatus
-                envVar={form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY'}
-                present={!!data.env?.[form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY']}
-              />
-            )}
+            {!isCompat && (() => {
+              const cloudKeyVar = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
+              return (
+                <>
+                  <div className="field">
+                    <Label>{form.tts.cloud.provider === 'elevenlabs' ? 'ElevenLabs' : 'OpenAI'} API key</Label>
+                    <Input
+                      type="password"
+                      value={cloudKeyInput}
+                      placeholder={data.env?.[cloudKeyVar] ? '•••••• (on file)' : (KEY_HINTS[cloudKeyVar] ?? '')}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setCloudKeyInput(e.target.value)}
+                      className="max-w-[360px]"
+                    />
+                    <div className="field-hint">
+                      Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
+                    </div>
+                    {cloudKeyVar === 'OPENAI_API_KEY' && (
+                      <div className="field-hint">
+                        This key is shared across LLM and Cloud TTS.
+                      </div>
+                    )}
+                  </div>
+                  <KeyStatus envVar={cloudKeyVar} present={!!data.env?.[cloudKeyVar]} />
+                  <div className="mt-2 flex items-center gap-2">
+                    <Btn
+                      sm
+                      onClick={testCloudKey}
+                      disabled={cloudKeyTesting || !cloudKeyInput.trim()}
+                    >
+                      {cloudKeyTesting ? 'Testing…' : 'Test key'}
+                    </Btn>
+                  </div>
+                  {cloudKeyTest && <KeyTestResult result={cloudKeyTest} />}
+                </>
+              );
+            })()}
             {isCompat && (
               <div className="field-hint mt-3.5">
                 Most self-hosted servers accept any non-empty API key, so no env
@@ -1708,33 +1840,154 @@ function TtsSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
 
 /* ── LLM ─────────────────────────────────────────────────────────────── */
 
-function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
-  const save = () => saveSettings({
-    llm: {
-      provider: form.llm.provider,
-      model: form.llm.model,
-      ollamaUrl: form.llm.ollamaUrl,
-      numCtx: form.llm.numCtx,
-      baseUrl: form.llm.baseUrl,
-      reasoning: form.llm.reasoning,
-      pickerAgent: form.llm.pickerAgent,
-      requestWebResolve: form.llm.requestWebResolve,
-      agentTimeoutMs: form.llm.agentTimeoutMs,
-      pauseWhenEmpty: form.llm.pauseWhenEmpty,
-      dailyTokenCap: form.llm.dailyTokenCap,
-      budgetSoftPct: form.llm.budgetSoftPct,
-      exemptRequests: form.llm.exemptRequests,
-      fallback: {
-        enabled: form.llm.fallback.enabled,
-        provider: form.llm.fallback.provider,
-        model: form.llm.fallback.model,
-        ollamaUrl: form.llm.fallback.ollamaUrl,
-        numCtx: form.llm.fallback.numCtx,
-        baseUrl: form.llm.fallback.baseUrl,
-        reasoning: form.llm.fallback.reasoning,
+interface LlmSectionProps extends SectionProps {
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  refresh: () => void;
+}
+function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: LlmSectionProps) {
+  const [primaryKeyInput, setPrimaryKeyInput] = useState('');
+  const [fallbackKeyInput, setFallbackKeyInput] = useState('');
+  const [primaryKeyTest, setPrimaryKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [primaryKeyTesting, setPrimaryKeyTesting] = useState(false);
+  const [fallbackKeyTest, setFallbackKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [fallbackKeyTesting, setFallbackKeyTesting] = useState(false);
+
+  useEffect(() => { setPrimaryKeyInput(''); }, [form.llm.provider]);
+  useEffect(() => { setFallbackKeyInput(''); }, [form.llm.fallback.provider]);
+  useEffect(() => { setPrimaryKeyTest(null); }, [form.llm.provider]);
+  useEffect(() => { setFallbackKeyTest(null); }, [form.llm.fallback.provider]);
+
+  const [compatKeyInput, setCompatKeyInput] = useState('');
+  const [compatFallbackKeyInput, setCompatFallbackKeyInput] = useState('');
+  const [compatKeyTest, setCompatKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [compatFallbackKeyTest, setCompatFallbackKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [compatKeyTesting, setCompatKeyTesting] = useState(false);
+  const [compatFallbackKeyTesting, setCompatFallbackKeyTesting] = useState(false);
+  useEffect(() => { setCompatKeyInput(''); setCompatKeyTest(null); }, [form.llm.provider]);
+  useEffect(() => { setCompatFallbackKeyInput(''); setCompatFallbackKeyTest(null); }, [form.llm.fallback.provider]);
+
+  const saveKey = async (envVar: string, value: string): Promise<boolean> => {
+    if (!value.trim()) return true;
+    try {
+      const r = await adminFetch('/settings/secrets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [envVar]: value.trim() }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({})) as { error?: string };
+        notify.err(j.error || `Key save failed (${r.status})`);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      notify.err(errorMessage(e));
+      return false;
+    }
+  };
+
+  const testKey = async (
+    envVar: string,
+    value: string,
+    setTesting: (v: boolean) => void,
+    setResult: (r: { ok: boolean; message: string; latencyMs: number } | null) => void,
+  ) => {
+    if (!value.trim()) return;
+    setTesting(true);
+    setResult(null);
+    try {
+      const r = await adminFetch('/settings/secrets/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: envVar, value: value.trim() }),
+      });
+      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
+      setResult(j);
+    } catch (e) {
+      setResult({ ok: false, message: errorMessage(e), latencyMs: 0 });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const testCompatKey = async (
+    apiKey: string,
+    baseUrl: string,
+    model: string,
+    setTesting: (v: boolean) => void,
+    setResult: (r: { ok: boolean; message: string; latencyMs: number } | null) => void,
+  ) => {
+    if (!baseUrl.trim()) { setResult({ ok: false, message: 'Set a Base URL first', latencyMs: 0 }); return; }
+    if (!model.trim()) { setResult({ ok: false, message: 'Set a Model first', latencyMs: 0 }); return; }
+    setTesting(true);
+    setResult(null);
+    try {
+      const r = await adminFetch('/settings/llm/probe-compat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: apiKey.trim(), baseUrl: baseUrl.trim(), model: model.trim() }),
+      });
+      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
+      setResult(j);
+    } catch (e) {
+      setResult({ ok: false, message: errorMessage(e), latencyMs: 0 });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const save = async () => {
+    await saveSettings({
+      llm: {
+        provider: form.llm.provider,
+        model: form.llm.model,
+        ollamaUrl: form.llm.ollamaUrl,
+        numCtx: form.llm.numCtx,
+        baseUrl: form.llm.baseUrl,
+        reasoning: form.llm.reasoning,
+        toolChoice: form.llm.toolChoice,
+        pickerAgent: form.llm.pickerAgent,
+        requestWebResolve: form.llm.requestWebResolve,
+        agentTimeoutMs: form.llm.agentTimeoutMs,
+        pauseWhenEmpty: form.llm.pauseWhenEmpty,
+        dailyTokenCap: form.llm.dailyTokenCap,
+        budgetSoftPct: form.llm.budgetSoftPct,
+        exemptRequests: form.llm.exemptRequests,
+        ...(form.llm.provider === 'openai-compatible' && compatKeyInput.trim()
+          ? { apiKey: compatKeyInput.trim() }
+          : {}),
+        fallback: {
+          enabled: form.llm.fallback.enabled,
+          provider: form.llm.fallback.provider,
+          model: form.llm.fallback.model,
+          ollamaUrl: form.llm.fallback.ollamaUrl,
+          numCtx: form.llm.fallback.numCtx,
+          baseUrl: form.llm.fallback.baseUrl,
+          reasoning: form.llm.fallback.reasoning,
+          ...(form.llm.fallback.provider === 'openai-compatible' && compatFallbackKeyInput.trim()
+            ? { apiKey: compatFallbackKeyInput.trim() }
+            : {}),
+        },
       },
-    },
-  });
+    });
+    // Save API keys if typed — these go to secrets.env, not settings.json
+    const primaryKeyVar = LLM_ENV_VARS[form.llm.provider];
+    if (primaryKeyVar && primaryKeyInput.trim()) {
+      const ok = await saveKey(primaryKeyVar, primaryKeyInput);
+      if (ok) { notify.ok('API key saved'); setPrimaryKeyInput(''); refresh(); }
+    }
+    const fallbackKeyVar = LLM_ENV_VARS[form.llm.fallback.provider];
+    if (fallbackKeyVar && fallbackKeyInput.trim()) {
+      const ok = await saveKey(fallbackKeyVar, fallbackKeyInput);
+      if (ok) { notify.ok('API key saved'); setFallbackKeyInput(''); refresh(); }
+    }
+    if (form.llm.provider === 'openai-compatible' && compatKeyInput.trim()) {
+      setCompatKeyInput('');
+    }
+    if (form.llm.fallback.provider === 'openai-compatible' && compatFallbackKeyInput.trim()) {
+      setCompatFallbackKeyInput('');
+    }
+  };
 
   const savedLlm = data.values?.llm || {};
   const activeLabel = data.llm?.active || '';
@@ -1820,7 +2073,9 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                   ? 'Gateway model id, e.g. “anthropic/claude-sonnet-4-5”.'
                   : form.llm.provider === 'openrouter'
                     ? 'OpenRouter model id, e.g. “google/gemini-2.5-flash”.'
-                    : form.llm.provider === 'google'
+                    : form.llm.provider === 'requesty'
+                      ? 'Requesty model id, e.g. “openai/gpt-4o-mini”.'
+                      : form.llm.provider === 'google'
                       ? 'Gemini model id, e.g. “gemini-2.5-flash”.'
                       : form.llm.provider === 'deepseek'
                         ? 'DeepSeek model id. Leave blank for the “deepseek-v4-flash” default.'
@@ -1846,6 +2101,69 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                 including the <code>/v1</code> suffix. Must be reachable from the
                 controller container. Use the host’s LAN or Tailscale IP, not
                 <code>127.0.0.1</code>.
+              </div>
+            </div>
+          )}
+
+          {form.llm.provider === 'openai-compatible' && (
+            <>
+              <div className="field">
+                <Label>Bearer token</Label>
+                <Input
+                  type="password"
+                  value={compatKeyInput}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
+                  placeholder={(data.values?.llm as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">
+                  Optional — only needed when the server requires bearer authentication.
+                  Saved to <code>settings.json</code>, takes effect on next save.
+                </div>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <Btn
+                  sm
+                  onClick={() =>
+                    testCompatKey(
+                      compatKeyInput || '',
+                      form.llm.baseUrl,
+                      form.llm.model,
+                      setCompatKeyTesting,
+                      setCompatKeyTest,
+                    )
+                  }
+                  disabled={compatKeyTesting || !form.llm.baseUrl.trim()}
+                >
+                  {compatKeyTesting ? 'Testing…' : 'Test connection'}
+                </Btn>
+              </div>
+              {compatKeyTest && <KeyTestResult result={compatKeyTest} />}
+            </>
+          )}
+
+          {form.llm.provider === 'openai-compatible' && (
+            <div className="field">
+              <Label>Forced tool calls</Label>
+              <Seg
+                accent
+                value={form.llm.toolChoice === 'auto' ? 'auto' : 'required'}
+                options={[
+                  { id: 'required', label: 'Required' },
+                  { id: 'auto', label: 'Auto' },
+                ]}
+                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, toolChoice: v } }))}
+              />
+              <div className="field-hint">
+                How the picker forces the model to return a structured pick.
+                <code>Required</code> (default) sends{' '}
+                <code>tool_choice:&quot;required&quot;</code> — the reliable path for
+                local models. Switch to <code>Auto</code> only if your server
+                <strong> crashes</strong> on a tool call: some newer vLLM images
+                (notably Intel/XPU builds) mishandle the guided-decoding backend
+                that <code>required</code> engages, while <code>auto</code> never
+                does. On <code>Auto</code> a capable model still calls the tool;
+                misses fall back to the stateless picker.
               </div>
             </div>
           )}
@@ -1923,12 +2241,42 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
             </div>
           )}
 
-          {LLM_ENV_VARS[form.llm.provider] && (
-            <KeyStatus
-              envVar={LLM_ENV_VARS[form.llm.provider]!}
-              present={!!data.env?.[LLM_ENV_VARS[form.llm.provider]!]}
-            />
-          )}
+          {LLM_ENV_VARS[form.llm.provider] && (() => {
+            const keyVar = LLM_ENV_VARS[form.llm.provider]!;
+            return (
+              <>
+                <div className="field">
+                  <Label>{llmProviderLabel(form.llm.provider)} API key</Label>
+                  <Input
+                    type="password"
+                    value={primaryKeyInput}
+                    placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
+                    className="max-w-[360px]"
+                  />
+                  <div className="field-hint">
+                    Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
+                  </div>
+                  {keyVar === 'OPENAI_API_KEY' && (
+                    <div className="field-hint">
+                      This key is shared across LLM and Cloud TTS.
+                    </div>
+                  )}
+                </div>
+                <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
+                <div className="mt-2 flex items-center gap-2">
+                  <Btn
+                    sm
+                    onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest)}
+                    disabled={primaryKeyTesting || !primaryKeyInput.trim()}
+                  >
+                    {primaryKeyTesting ? 'Testing…' : 'Test key'}
+                  </Btn>
+                </div>
+                {primaryKeyTest && <KeyTestResult result={primaryKeyTest} />}
+              </>
+            );
+          })()}
         </div>
       </Card>
 
@@ -2025,6 +2373,44 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                 </div>
               )}
 
+              {form.llm.fallback.provider === 'openai-compatible' && (
+                <>
+                  <div className="field">
+                    <Label>Bearer token</Label>
+                    <Input
+                      type="password"
+                      value={compatFallbackKeyInput}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatFallbackKeyInput(e.target.value)}
+                      placeholder={(data.values?.llm?.fallback as unknown as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                      className="max-w-[360px]"
+                    />
+                    <div className="field-hint">
+                      Optional — only needed when the backup server requires bearer
+                      authentication. Saved to <code>settings.json</code>, takes effect on
+                      next save.
+                    </div>
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <Btn
+                      sm
+                      onClick={() =>
+                        testCompatKey(
+                          compatFallbackKeyInput || '',
+                          form.llm.fallback.baseUrl,
+                          form.llm.fallback.model,
+                          setCompatFallbackKeyTesting,
+                          setCompatFallbackKeyTest,
+                        )
+                      }
+                      disabled={compatFallbackKeyTesting || !form.llm.fallback.baseUrl.trim()}
+                    >
+                      {compatFallbackKeyTesting ? 'Testing…' : 'Test connection'}
+                    </Btn>
+                  </div>
+                  {compatFallbackKeyTest && <KeyTestResult result={compatFallbackKeyTest} />}
+                </>
+              )}
+
               {form.llm.fallback.provider === 'ollama' && (
                 <div className="field">
                   <Label>Backup Ollama server URL</Label>
@@ -2086,12 +2472,37 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
                 />
               </div>
 
-              {LLM_ENV_VARS[form.llm.fallback.provider] && (
-                <KeyStatus
-                  envVar={LLM_ENV_VARS[form.llm.fallback.provider]!}
-                  present={!!data.env?.[LLM_ENV_VARS[form.llm.fallback.provider]!]}
-                />
-              )}
+              {LLM_ENV_VARS[form.llm.fallback.provider] && (() => {
+                const keyVar = LLM_ENV_VARS[form.llm.fallback.provider]!;
+                return (
+                  <>
+                    <div className="field">
+                      <Label>{llmProviderLabel(form.llm.fallback.provider)} API key</Label>
+                      <Input
+                        type="password"
+                        value={fallbackKeyInput}
+                        placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setFallbackKeyInput(e.target.value)}
+                        className="max-w-[360px]"
+                      />
+                      <div className="field-hint">
+                        Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
+                      </div>
+                    </div>
+                    <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
+                    <div className="mt-2 flex items-center gap-2">
+                      <Btn
+                        sm
+                        onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest)}
+                        disabled={fallbackKeyTesting || !fallbackKeyInput.trim()}
+                      >
+                        {fallbackKeyTesting ? 'Testing…' : 'Test key'}
+                      </Btn>
+                    </div>
+                    {fallbackKeyTest && <KeyTestResult result={fallbackKeyTest} />}
+                  </>
+                );
+              })()}
             </>
           )}
         </div>
@@ -2302,7 +2713,33 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
 
 /* ── Web search ──────────────────────────────────────────────────────── */
 
-function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
+interface SearchSectionProps extends SectionProps {
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+}
+function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: SearchSectionProps) {
+  const [tavilyKeyTest, setTavilyKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [tavilyKeyTesting, setTavilyKeyTesting] = useState(false);
+  const [testingSearxng, setTestingSearxng] = useState(false);
+  const [searxngTestResult, setSearxngTestResult] = useState<{ ok: boolean; results?: number; error?: string } | null>(null);
+
+  const handleTestSearxng = async () => {
+    setTestingSearxng(true);
+    setSearxngTestResult(null);
+    try {
+      const res = await adminFetch('/settings/search/test-searxng', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseUrl: form.search.baseUrl }),
+      });
+      const j = await res.json();
+      setSearxngTestResult(j);
+    } catch (err: any) {
+      setSearxngTestResult({ ok: false, error: err?.message || 'request failed' });
+    } finally {
+      setTestingSearxng(false);
+    }
+  };
+
   const save = () => saveSettings({
     search: {
       provider: form.search.provider,
@@ -2311,18 +2748,43 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
       ...(form.search.apiKey && form.search.apiKey !== 'set'
         ? { apiKey: form.search.apiKey }
         : {}),
+      ...(form.search.provider === 'searxng'
+        ? { baseUrl: form.search.baseUrl ?? '' }
+        : {}),
     },
   });
 
   const savedSearch = data.values?.search || {};
-  const providers = data.search?.providers || ['duckduckgo', 'tavily'];
+  const providers = data.search?.providers || ['duckduckgo', 'tavily', 'searxng'];
   const provider = form.search.provider;
   const searchDirty = provider !== savedSearch.provider
     || (provider === 'tavily'
         && form.search.apiKey
         && form.search.apiKey !== 'set'
-        && form.search.apiKey !== (savedSearch.apiKey || ''));
+        && form.search.apiKey !== (savedSearch.apiKey || ''))
+    || (provider === 'searxng'
+        && (form.search.baseUrl ?? '') !== (savedSearch.baseUrl || ''));
   const tavilyKeySet = form.search.apiKey === 'set' || !!data.env?.SEARCH_API_KEY;
+
+  const testTavilyKey = async () => {
+    const value = form.search.apiKey === 'set' ? '' : form.search.apiKey;
+    if (!value.trim()) return;
+    setTavilyKeyTesting(true);
+    setTavilyKeyTest(null);
+    try {
+      const r = await adminFetch('/settings/secrets/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'SEARCH_API_KEY', value: value.trim() }),
+      });
+      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
+      setTavilyKeyTest(j);
+    } catch (e) {
+      setTavilyKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
+    } finally {
+      setTavilyKeyTesting(false);
+    }
+  };
 
   return (
     <>
@@ -2375,7 +2837,9 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
             <div className="field-hint">
               {provider === 'duckduckgo'
                 ? 'DuckDuckGo Instant Answer, free and keyless. Useful for definitions and well-known entities; silent otherwise. The segment director treats silence as a valid outcome.'
-                : 'Tavily, paid web search with full results and an answer summary. Needs an API key.'}
+                : provider === 'tavily'
+                ? 'Tavily, paid web search with full results and an answer summary. Needs an API key.'
+                : 'SearXNG, self-hosted meta-search aggregating Google, Brave, DDG and more. No API key needed — just a running SearXNG instance.'}
             </div>
           </div>
 
@@ -2399,6 +2863,53 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
                 </div>
               </div>
               <KeyStatus envVar="SEARCH_API_KEY" present={tavilyKeySet} />
+              <div className="mt-2 flex items-center gap-2">
+                <Btn
+                  sm
+                  onClick={testTavilyKey}
+                  disabled={
+                    tavilyKeyTesting ||
+                    !form.search.apiKey.trim() ||
+                    form.search.apiKey === 'set'
+                  }
+                >
+                  {tavilyKeyTesting ? 'Testing…' : 'Test key'}
+                </Btn>
+              </div>
+              {tavilyKeyTest && <KeyTestResult result={tavilyKeyTest} />}
+            </>
+          )}
+
+          {provider === 'searxng' && (
+            <>
+              <div className="field">
+                <Label>SearXNG URL</Label>
+                <div className="flex gap-2">
+                  <Input
+                    type="url"
+                    placeholder="http://192.168.0.112:8888"
+                    value={form.search.baseUrl ?? ''}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, search: { ...f.search, baseUrl: e.target.value } }))
+                    }
+                    className="max-w-[360px]"
+                  />
+                  <Btn sm onClick={handleTestSearxng} disabled={!form.search?.baseUrl || testingSearxng}>
+                    {testingSearxng ? 'Testing…' : 'Test'}
+                  </Btn>
+                </div>
+                {searxngTestResult && (
+                  <p className={`text-sm ${searxngTestResult.ok ? 'text-green-600' : 'text-destructive'}`}>
+                    {searxngTestResult.ok
+                      ? `Connected · ${searxngTestResult.results} results`
+                      : `Failed: ${searxngTestResult.error}`}
+                  </p>
+                )}
+                <div className="field-hint">
+                  Self-hosted SearXNG instance. No API key required. Ensure JSON format is
+                  enabled in your SearXNG <code>settings.yml</code>.
+                </div>
+              </div>
             </>
           )}
         </div>
@@ -2416,26 +2927,64 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
 
 /* ── Library tagger ──────────────────────────────────────────────────── */
 
-function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProps) {
+interface LibrarySectionProps extends SectionProps {
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  refresh: () => void;
+}
+
+function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: LibrarySectionProps) {
   const e = form.embedding;
-  const save = () => saveSettings({
-    embedding: {
-      enabled: e.enabled,
-      provider: e.provider,
-      model: e.model,
-      baseUrl: e.baseUrl,
-      ollamaUrl: e.ollamaUrl,
-      seedCount: parseInt(e.seedCount, 10) || 0,
-      knnNeighbours: parseInt(e.knnNeighbours, 10) || 5,
-      moodVoteThreshold: parseFloat(e.moodVoteThreshold) || 0.6,
-      confidenceThreshold: parseFloat(e.confidenceThreshold) || 0.6,
-      maxActiveLearningRounds: parseInt(e.maxActiveLearningRounds, 10) || 0,
-      enrichment: {
-        lastfmTags: e.enrichment.lastfmTags,
-        lyrics: e.enrichment.lyrics,
+  const [embeddingKeyInput, setEmbeddingKeyInput] = useState('');
+
+  useEffect(() => { setEmbeddingKeyInput(''); }, [form.embedding.provider]);
+
+  const saveKey = async (envVar: string, value: string): Promise<boolean> => {
+    if (!value.trim()) return true;
+    try {
+      const r = await adminFetch('/settings/secrets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [envVar]: value.trim() }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({})) as { error?: string };
+        notify.err(j.error || `Key save failed (${r.status})`);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      notify.err(errorMessage(e));
+      return false;
+    }
+  };
+
+  const save = async () => {
+    await saveSettings({
+      embedding: {
+        enabled: e.enabled,
+        provider: e.provider,
+        model: e.model,
+        baseUrl: e.baseUrl,
+        ollamaUrl: e.ollamaUrl,
+        seedCount: parseInt(e.seedCount, 10) || 0,
+        knnNeighbours: parseInt(e.knnNeighbours, 10) || 5,
+        moodVoteThreshold: parseFloat(e.moodVoteThreshold) || 0.6,
+        confidenceThreshold: parseFloat(e.confidenceThreshold) || 0.6,
+        maxActiveLearningRounds: parseInt(e.maxActiveLearningRounds, 10) || 0,
+        enrichment: {
+          lastfmTags: e.enrichment.lastfmTags,
+          lyrics: e.enrichment.lyrics,
+        },
       },
-    },
-  });
+    });
+    // Save embedding API key if typed
+    const embeddingNeedsKey = e.provider &&
+      !['', 'ollama', 'openai-compatible', 'locca'].includes(e.provider);
+    if (embeddingNeedsKey && embeddingKeyInput.trim()) {
+      const ok = await saveKey('EMBEDDING_API_KEY', embeddingKeyInput);
+      if (ok) { notify.ok('API key saved'); setEmbeddingKeyInput(''); refresh(); }
+    }
+  };
 
   const savedEmbedding = data.values?.embedding || {};
   const llmProvider = data.values?.llm?.provider || 'ollama';
@@ -2448,7 +2997,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
   // embeddings endpoint so it's back in (#522); anthropic stays in too, routing
   // to OpenAI as flagged in the hint.
   const embedProviders = data.embedding?.providers ||
-    ['ollama', 'openai-compatible', 'locca', 'anthropic', 'openai', 'google', 'openrouter'];
+    ['ollama', 'openai-compatible', 'locca', 'anthropic', 'openai', 'google', 'openrouter', 'requesty'];
   // Keep a stale explicit choice (a chat-only provider saved before this list
   // shrank) visible so the Select isn't blank and the warning below makes sense.
   const providers = e.provider && !embedProviders.includes(e.provider)
@@ -2460,7 +3009,6 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
 
   // --- Guided setup: probe the endpoint up front, detect a locca embed server,
   // and kick the tagger from here, instead of failing mid-run (#405 follow-up).
-  const { adminFetch } = useAdminAuth();
   const [probe, setProbe] = useState<
     { ok: boolean; dim: number | null; code: string; message: string } | null
   >(null);
@@ -2761,6 +3309,27 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
             </div>
           )}
 
+          {/* Embedding API key override -- only for cloud providers that need one */}
+          {e.provider && !['', 'ollama', 'openai-compatible', 'locca'].includes(e.provider) && (
+            <>
+              <div className="field">
+                <Label>Embedding API key override</Label>
+                <Input
+                  type="password"
+                  value={embeddingKeyInput}
+                  placeholder={data.env?.['EMBEDDING_API_KEY'] ? '•••••• (on file)' : 'optional -- defaults to chat key'}
+                  onChange={(ev: ChangeEvent<HTMLInputElement>) => setEmbeddingKeyInput(ev.target.value)}
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">
+                  Only needed when the embedding provider uses a different API key than the chat provider.
+                  Stored in <code>state/secrets.env</code>.
+                </div>
+              </div>
+              <KeyStatus envVar="EMBEDDING_API_KEY" present={!!data.env?.['EMBEDDING_API_KEY']} />
+            </>
+          )}
+
           {/* Detect a locca embed server + test the endpoint BEFORE a long run. */}
           <div className="field">
             <div className="flex flex-wrap items-center gap-2">
@@ -2776,10 +3345,10 @@ function LibrarySection({ data, form, setForm, busy, saveSettings }: SectionProp
             {probe && (
               <div
                 className={cn(
-                  'mt-2 max-w-[560px] rounded border px-3 py-2 text-[11px] leading-[1.6] whitespace-pre-wrap',
+                  'mt-2 max-w-[560px] rounded border bg-[var(--ink-softer)] px-3 py-2 text-[11px] leading-[1.6] whitespace-pre-wrap',
                   probe.ok
                     ? 'border-[var(--accent)] text-[color:var(--accent)]'
-                    : 'border-red-400/50 text-red-300',
+                    : 'border-[var(--danger)] text-[var(--danger)]',
                 )}
               >
                 {probe.ok

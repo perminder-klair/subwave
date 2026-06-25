@@ -160,6 +160,7 @@ export function useWizard() {
         data.llm.provider === 'google' ? 'GOOGLE_GENERATIVE_AI_API_KEY' :
         data.llm.provider === 'deepseek' ? 'DEEPSEEK_API_KEY' :
         data.llm.provider === 'openrouter' ? 'OPENROUTER_API_KEY' :
+        data.llm.provider === 'requesty' ? 'REQUESTY_API_KEY' :
         data.llm.provider === 'gateway' ? 'AI_GATEWAY_API_KEY' : '';
       if (k) apiKeys[k] = data.llm.apiKey;
     }

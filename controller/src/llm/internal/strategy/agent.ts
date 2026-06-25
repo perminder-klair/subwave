@@ -30,7 +30,7 @@ import { Output, stepCountIs, hasToolCall, ToolLoopAgent, tool } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
 import { stripThinking, extractJson, usageOf, flattenToolCalls, failureDiagnostics } from '../core/pure.js';
-import { needsToolCallObject, providerOptions, samplingWithNumCtx } from '../provider/capabilities.js';
+import { needsToolCallObject, providerOptions, samplingWithNumCtx, forcedToolChoice } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { agentPlan } from './plan.js';
 
@@ -59,13 +59,16 @@ function buildDoneTool(schema: any) {
 // hallucinated id before seeing any library results. Step >= COMMIT_AFTER_STEPS
 // forces `done`: with only `done` active the model cannot keep exploring and
 // must emit its final answer, guaranteeing a `done` call before the step cap.
-function gatedDiscoveryPrepareStep(discoveryToolNames: string[]) {
+// `toolChoice` is the leg's forced value ('required', or 'auto' when the operator
+// downgrades it for a crash-prone server — issue #570); the activeTools pinning
+// holds either way, so on 'auto' the single visible tool is still the strong nudge.
+function gatedDiscoveryPrepareStep(discoveryToolNames: string[], toolChoice: 'required' | 'auto') {
   return async ({ stepNumber }: { stepNumber: number }) => {
     if (stepNumber === 0) {
-      return { activeTools: discoveryToolNames, toolChoice: 'required' };
+      return { activeTools: discoveryToolNames, toolChoice };
     }
     if (stepNumber >= COMMIT_AFTER_STEPS) {
-      return { activeTools: ['done'], toolChoice: 'required' };
+      return { activeTools: ['done'], toolChoice };
     }
     return {};
   };
@@ -172,10 +175,14 @@ export async function djAgent({
         // free-text (no schema). useDoneTool is the original predicate, kept verbatim.
         const useDoneTool = schema != null && (needsToolCallObject(leg.cfg) || toolCount > 0);
         const allTools = useDoneTool ? { ...tools, done: buildDoneTool(schema) } : tools;
+        // 'required' by default; 'auto' when the operator downgrades this leg for
+        // a server whose forced-tool backend crashes (issue #570). Applies to the
+        // agent-level choice, the gated prepareStep, and the recovery run below.
+        const forcedChoice = forcedToolChoice(leg.cfg);
 
         const discoveryToolNames = tools ? Object.keys(tools) : [];
         const useGatedDiscovery = useDoneTool && discoveryToolNames.length > 0;
-        const prepareStep = useGatedDiscovery ? gatedDiscoveryPrepareStep(discoveryToolNames) : undefined;
+        const prepareStep = useGatedDiscovery ? gatedDiscoveryPrepareStep(discoveryToolNames, forcedChoice) : undefined;
 
         const agent = new ToolLoopAgent({
           model: leg.model,
@@ -190,7 +197,7 @@ export async function djAgent({
           // useDoneTool forces tool calls every step — suppress thinking on the
           // providers that reject forced tools mid-reasoning (Anthropic/DeepSeek).
           providerOptions: providerOptions(leg.cfg, { forceNoThink: useDoneTool }),
-          ...(useDoneTool ? { toolChoice: 'required' } : {}),
+          ...(useDoneTool ? { toolChoice: forcedChoice } : {}),
           ...(prepareStep ? { prepareStep } : {}),
           // Native path: structured output via Output.object. Done-tool path: the
           // schema lives on the `done` tool, so no agent-level output.
@@ -237,8 +244,8 @@ export async function djAgent({
             // Recovery forces done-only every step, so it has the same
             // Anthropic/DeepSeek thinking conflict as the main run — suppress here too.
             providerOptions: providerOptions(leg.cfg, { forceNoThink: true }),
-            toolChoice: 'required',
-            prepareStep: async () => ({ activeTools: ['done'], toolChoice: 'required' }),
+            toolChoice: forcedChoice,
+            prepareStep: async () => ({ activeTools: ['done'], toolChoice: forcedChoice }),
           } as any);
           result = await runDeadlined(timeoutMs, kind, 'agent recovery', recoveryAgent, recoveryMessages);
           steps = result.steps?.length ?? 0;

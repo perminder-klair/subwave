@@ -19,12 +19,15 @@ import {
   BookOpen,
   Apple,
   Smartphone,
+  Users,
+  Headphones,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
 import OdometerNumber from '../OdometerNumber';
+import BoothBuddy from '../BoothBuddy';
 import ThemeSwitcher from '../ThemeSwitcher';
 import { Toaster } from '../ui/toaster';
 import { animate as motionAnimate } from 'motion/react';
@@ -219,6 +222,14 @@ export default function AdminShell({ children }: AdminShellProps) {
             sub / wave
             <br />
             admin console
+            {process.env.NEXT_PUBLIC_APP_VERSION ? (
+              <>
+                <br />
+                <span className="nav-foot-version">
+                  v{process.env.NEXT_PUBLIC_APP_VERSION}
+                </span>
+              </>
+            ) : null}
           </div>
         </nav>
         <main className="min-w-0">
@@ -251,7 +262,11 @@ interface ShellHeaderProps {
 
 // Header — wordmark, breadcrumb, and (when signed in) the live station strip.
 function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
-  const current = NAV.find(n => pathname?.startsWith(n.href))?.label || 'Admin';
+  // DJ Doc isn't in the sidebar nav (it's reached from the header strip), so the
+  // nav lookup can't resolve its breadcrumb label — special-case it.
+  const current =
+    NAV.find(n => pathname?.startsWith(n.href))?.label ||
+    (pathname?.startsWith('/admin/doctor') ? 'DJ Doc' : 'Admin');
   const { nowPlaying, listeners } = useStationFeed();
   const onAir = !!nowPlaying?.title;
   const listenersObj =
@@ -289,24 +304,48 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
       </span>
       {signedIn && (
         <span className="right">
-          <span ref={dotRef} className="live-dot" />
-          <span>{onAir ? 'on air' : 'off air'}</span>
+          {/* Live dot only — the on-air/off-air word is dropped; the dot's colour
+              (accent when live, muted when not) already carries the state. */}
+          <span
+            ref={dotRef}
+            className="live-dot"
+            aria-label={onAir ? 'on air' : 'off air'}
+            title={onAir ? 'on air' : 'off air'}
+          />
           {count != null && (
             <>
               <span className="w-px self-stretch bg-separator-strong" />
-              <span className="inline-flex items-baseline gap-1">
-                <OdometerNumber value={count} /> listening
+              <span
+                className="inline-flex items-center gap-1"
+                aria-label={`${count} listening`}
+                title={`${count} listening`}
+              >
+                <OdometerNumber value={count} />
+                <Users size={13} strokeWidth={2} aria-hidden="true" />
               </span>
             </>
           )}
+          {/* DJ Doc — the primary entry point lives here in the header, right
+              after the listener count, with the booth buddy in its on-air mood. */}
+          <span className="w-px self-stretch bg-separator-strong" />
+          <Link
+            href="/admin/doctor"
+            className="inline-flex items-center gap-1.5 text-[var(--accent)] no-underline"
+            title="DJ Doc — run a station health check and get the producer's review"
+          >
+            <BoothBuddy mood="onair" size={16} />
+            <span className="caption">DJ Doc</span>
+          </Link>
           <ThemeSwitcher variant="admin" />
           <Link
             href="/listen"
             target="_blank"
             rel="noopener noreferrer"
-            className="caption text-muted no-underline"
+            className="caption inline-flex items-center text-muted no-underline"
+            aria-label="Open the player"
+            title="Listen"
           >
-            listen ↗
+            <Headphones size={15} strokeWidth={2} aria-hidden="true" />
           </Link>
           {onSignOut && (
             <button className="sign-out" onClick={onSignOut}>
@@ -322,9 +361,11 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
             href="/listen"
             target="_blank"
             rel="noopener noreferrer"
-            className="caption text-muted no-underline"
+            className="caption inline-flex items-center text-muted no-underline"
+            aria-label="Open the player"
+            title="Listen"
           >
-            listen ↗
+            <Headphones size={15} strokeWidth={2} aria-hidden="true" />
           </Link>
         </span>
       )}

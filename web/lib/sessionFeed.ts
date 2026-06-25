@@ -46,3 +46,30 @@ export function turnText(turn: SessionTurn | null | undefined): string {
   if (turnClass(turn) === 'track') return text.replace(/^▶\s*/, '');
   return text;
 }
+
+// The single voice/dj turn to surface as the DJ "thinking" line under the
+// now-playing block. Walk newest→oldest and skip `dj`/pick turns whose
+// `meta.trackId` is for a track other than what's on air: a pick turn is
+// written at the *previous* track's start, so its trackId is the track to play
+// NEXT, not the one playing now — showing it under now-playing reads as "this
+// song's reasoning" when it isn't (#546). Voice/segment turns (aired links,
+// station IDs, weather) carry no trackId and are whatever was last spoken on
+// air, so they always qualify — meaning the back-announce link that aired as
+// this track started wins, falling back to this track's own pick reason on a
+// silent transition. A null/unknown currentTrackId yields the latest voice turn
+// (no pick can be confirmed as "this song").
+export function selectThinkingTurn(
+  feed: SessionTurn[] | null | undefined,
+  currentTrackId: string | null = null,
+): SessionTurn | null {
+  if (!feed?.length) return null;
+  for (let i = feed.length - 1; i >= 0; i--) {
+    const turn = feed[i];
+    const cls = turnClass(turn);
+    if (!turn?.text || (cls !== 'voice' && cls !== 'dj')) continue;
+    const trackId = turn.meta?.trackId as string | undefined;
+    if (cls === 'dj' && trackId && trackId !== currentTrackId) continue;
+    return turn;
+  }
+  return null;
+}

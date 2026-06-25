@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError } from '../src/llm/internal/core/pure.js';
 import { withDeadline } from '../src/llm/internal/core/retry.js';
-import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx } from '../src/llm/internal/provider/capabilities.js';
+import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
 import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
@@ -144,6 +144,20 @@ async function main() {
     assert.equal(appliedNumCtx({ provider: 'ollama', model: 'qwen3', numCtx: 8192 }), 8192);
     assert.equal(appliedNumCtx({ provider: 'openai', model: 'gpt-4.1-mini', numCtx: 8192 }), null);
     assert.equal(appliedNumCtx({ provider: 'locca', model: 'qwen3', numCtx: 8192 }), null);
+  });
+
+  await test('forcedToolChoice: only the literal "auto" downgrades; everything else is "required" (issue #570)', () => {
+    // Opt-in downgrade for crash-prone forced-tool servers (newer Intel vLLM).
+    assert.equal(forcedToolChoice({ provider: 'openai-compatible', toolChoice: 'auto' }), 'auto');
+    // Default + explicit 'required' both force the tool call.
+    assert.equal(forcedToolChoice({ provider: 'openai-compatible', toolChoice: 'required' }), 'required');
+    assert.equal(forcedToolChoice({ provider: 'openai-compatible' }), 'required');
+    // Provider-agnostic: it's a per-leg knob, not a per-provider trait.
+    assert.equal(forcedToolChoice({ provider: 'ollama', toolChoice: 'auto' }), 'auto');
+    assert.equal(forcedToolChoice({ provider: 'anthropic' }), 'required');
+    // Garbage / missing cfg never accidentally weakens the default.
+    assert.equal(forcedToolChoice({ toolChoice: 'whatever' }), 'required');
+    assert.equal(forcedToolChoice(undefined), 'required');
   });
 
   // ---- embedding base URL (the relative-/embeddings crash, #405 follow-up) ----
