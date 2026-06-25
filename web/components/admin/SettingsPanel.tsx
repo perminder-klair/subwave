@@ -2273,7 +2273,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   <SelectContent>
                     <SelectGroup>
                       {form.llm.model && !primaryDiscovery.models.includes(form.llm.model) && (
-                        <SelectItem value="__current__">{form.llm.model} (current)</SelectItem>
+                        <SelectItem value="__current__" disabled>{form.llm.model} (current)</SelectItem>
                       )}
                       {primaryDiscovery.models.map(m => (
                         <SelectItem key={m} value={m}>{m}</SelectItem>
@@ -2558,7 +2558,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                       <SelectContent>
                         <SelectGroup>
                           {form.llm.fallback.model && !fallbackDiscovery.models.includes(form.llm.fallback.model) && (
-                            <SelectItem value="__current__">{form.llm.fallback.model} (current)</SelectItem>
+                            <SelectItem value="__current__" disabled>{form.llm.fallback.model} (current)</SelectItem>
                           )}
                           {fallbackDiscovery.models.map(m => (
                             <SelectItem key={m} value={m}>{m}</SelectItem>
@@ -2584,7 +2584,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                           : form.llm.fallback.provider === 'ollama'
                             ? 'llama3.2:3b'
                             : form.llm.fallback.provider === 'deepseek'
-                              ? 'deepseek-v4-flash'
+                              ? 'deepseek-chat'
                               : form.llm.fallback.provider === 'openai-compatible' || form.llm.fallback.provider === 'locca'
                                 ? 'Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf'
                                 : 'model id'
