@@ -3073,6 +3073,24 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
   // and Ollama providers serve embeddings on the same endpoint as chat.
   const needsServerUrl = effectiveProvider === 'locca' || effectiveProvider === 'openai-compatible';
 
+  const embedKeyVar = LLM_ENV_VARS[effectiveProvider];
+  const embedKeySet = !!(embedKeyVar && data.env?.[embedKeyVar]);
+
+  const embedDiscoveryEnabled =
+    effectiveProvider === 'ollama'
+    || effectiveProvider === 'locca'
+    || (effectiveProvider === 'openai-compatible' && !!(e.baseUrl || form.llm.baseUrl).trim())
+    || (effectiveProvider === 'openrouter')
+    || (!!embedKeyVar && embedKeySet);
+
+  const embedDiscovery = useModelDiscovery({
+    provider: effectiveProvider,
+    baseUrl: e.baseUrl || form.llm.baseUrl,
+    ollamaUrl: e.ollamaUrl || form.llm.ollamaUrl,
+    enabled: embedDiscoveryEnabled,
+    adminFetch,
+  });
+
   const probeQuery = () => {
     const p = new URLSearchParams();
     if (e.provider) p.set('provider', e.provider);
@@ -3262,23 +3280,76 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
           </div>
 
           <div className="field">
-            <Label>Model</Label>
-            <Input
-              value={e.model}
-              onChange={(ev: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, embedding: { ...f.embedding, model: ev.target.value } }))
-              }
-              placeholder={
-                effectiveProvider === 'ollama' || effectiveProvider === 'locca'
-                  ? 'nomic-embed-text'
-                  : effectiveProvider === 'openai' || effectiveProvider === 'openai-compatible'
-                    ? 'text-embedding-3-small'
-                    : effectiveProvider === 'google'
-                      ? 'text-embedding-004'
-                      : 'model id'
-              }
-              className="max-w-[360px]"
-            />
+            <div className="flex items-center gap-2">
+              <Label>Model</Label>
+              {embedDiscovery.loading && (
+                <span className="animate-pulse text-[11px] text-muted">discovering…</span>
+              )}
+              {embedDiscovery.models.length > 0 && !embedDiscovery.loading && (
+                <Btn sm onClick={embedDiscovery.refresh} title="Refresh model list">↻</Btn>
+              )}
+            </div>
+            {embedDiscovery.models.length > 0 ? (
+              <>
+                <Select
+                  value={
+                    embedDiscovery.models.includes(e.model)
+                      ? e.model
+                      : e.model
+                        ? `__current__`
+                        : ''
+                  }
+                  onValueChange={v => {
+                    if (v !== '__current__') setForm(f => ({ ...f, embedding: { ...f.embedding, model: v } }));
+                  }}
+                >
+                  <SelectTrigger className="max-w-[360px]"><SelectValue placeholder="Select a model" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {e.model && !embedDiscovery.models.includes(e.model) && (
+                        <SelectItem value="__current__" disabled>{e.model} (current)</SelectItem>
+                      )}
+                      {embedDiscovery.models.map(m => (
+                        <SelectItem key={m} value={m}>{m}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <div className="field-hint">
+                  {embedDiscovery.models.length} model{embedDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.
+                </div>
+              </>
+            ) : (
+              <>
+                <Input
+                  value={e.model}
+                  onChange={(ev: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({ ...f, embedding: { ...f.embedding, model: ev.target.value } }))
+                  }
+                  placeholder={
+                    effectiveProvider === 'ollama' || effectiveProvider === 'locca'
+                      ? 'nomic-embed-text'
+                      : effectiveProvider === 'openai' || effectiveProvider === 'openai-compatible'
+                        ? 'text-embedding-3-small'
+                        : effectiveProvider === 'google'
+                          ? 'text-embedding-004'
+                          : 'model id'
+                  }
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">
+                  {!embedDiscoveryEnabled
+                    ? (effectiveProvider === 'openai-compatible'
+                        ? 'Set a base URL above to discover available models.'
+                        : 'Set an API key above to discover and select a model.')
+                    : embedDiscovery.error
+                      ? `Discovery failed: ${embedDiscovery.error}. Type a model ID manually.`
+                      : embedDiscovery.loading
+                        ? 'Discovering models…'
+                        : 'No models discovered. Type a model ID manually.'}
+                </div>
+              </>
+            )}
             <div className="field-hint">
               Leave blank for the sensible default per provider. If you change
               this on a tagged library, the next run will reject the new dim.
