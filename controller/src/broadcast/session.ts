@@ -210,7 +210,7 @@ function softShift(ctx: any, nextKey: string): any {
 // Consecutive same-role turns are coalesced because some providers (Anthropic)
 // require strictly alternating user/assistant messages.
 //
-// Three turn kinds get filtered out of the window because they derail the
+// Four turn kinds get filtered out of the window because they derail the
 // picker agent in long sessions:
 //
 // - `scenario` events (controller restart notes, session boundaries) — infra
@@ -223,6 +223,11 @@ function softShift(ctx: any, nextKey: string): any {
 //   Pick the next track (after Y)..."), and the picker can't choose recent
 //   artists anyway because they're filtered at the tool layer (recentArtists
 //   in buildPickerTools).
+//
+// - `kind: 'sfx'` cue turns (queue.playSfx records the effect NAME as a turn) —
+//   an audio-production cue, not conversation. Left in, a bare effect name like
+//   "whoosh" coalesces into the assistant block and reads as a word the DJ
+//   spoke; the effect already aired, so the picker gains nothing from seeing it.
 //
 // - OLD `kind: 'pick'` events (role='event') — the "Now playing X. Pick the
 //   next track" user-side instruction is kept only for the LATEST pick.
@@ -263,10 +268,19 @@ export function windowMessages() {
     if (!m.text) continue;
     if (m.kind === 'scenario') continue;  // infra noise
     if (m.kind === 'play') continue;       // redundant — current track is in the pick event
+    if (m.kind === 'sfx') continue;        // audio-production cue, not conversation — bare effect name reads as spoken
     if (m.role === 'event' && m.kind === 'pick' && i !== lastPickEventIdx) continue;  // old pick asks
     if (m.role === 'dj' && m.kind === 'pick' && !keepRationaleIdx.has(i)) continue;   // stale pick rationales
     const role = (m.role === 'dj' || m.role === 'segment') ? 'assistant' : 'user';
-    raw.push({ role, content: m.text });
+    // A dj/pick turn's text is the agent's private pick rationale (object.reason),
+    // not words it spoke on air. Coalescing (below) would otherwise glue it into
+    // the same assistant block as real spoken segments, leaving the picker unable
+    // to tell its own scratchpad from its broadcast voice. Mark it so the role of
+    // each line stays unambiguous even after coalescing.
+    const content = (m.role === 'dj' && m.kind === 'pick')
+      ? `(pick note to self — not aired) ${m.text}`
+      : m.text;
+    raw.push({ role, content });
   }
   const out: any[] = [];
   for (const msg of raw) {
