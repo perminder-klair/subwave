@@ -118,6 +118,7 @@ export default defineConfig([
             '^nav-icon$',
             '^nav-label$',
             '^nav-foot$',
+            '^nav-foot-version$',
             '^pill$',
             '^paper$',
             '^danger$',
