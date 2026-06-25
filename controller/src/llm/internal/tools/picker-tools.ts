@@ -112,6 +112,11 @@ export function buildPickerTools({
       maxPerArtist: MAX_PER_ARTIST,
       cap,
       maxDurationSec,
+      // Per-tool, never relax the recent-artist guard: a single-artist tool
+      // result (topSongsByArtist / similarSongs narrowed to a just-played
+      // artist) returns empty so the agent uses a different tool, instead of the
+      // cascade handing that artist right back (the artist-fixation bypass).
+      allowArtistRelaxation: false,
     });
     const out: any[] = [];
     for (const s of accepted) {

@@ -11,7 +11,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { durationSeconds } from '../music/recency.js';
+import { durationSeconds, artistKey } from '../music/recency.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
 import * as session from './session.js';
@@ -28,6 +28,7 @@ const PLAYLIST_WEIGHT = 6;       // mood-matched Navidrome playlists
 const RECENT_WEIGHT = 4;         // recently-added albums
 const FREQUENT_WEIGHT = 4;       // frequent / scrobble-favourite albums
 const STARRED_WEIGHT = 6;        // hand-starred tracks
+const AUTO_MAX_PER_ARTIST = 2;   // cap any one artist's share of the fallback pool
 
 function shuffle<T>(arr: T[]): T[] {
   return [...arr].sort(() => Math.random() - 0.5);
@@ -67,17 +68,25 @@ async function refreshAutoPlaylistInner() {
 
   const pool: any[] = [];
   const fromSource: Record<string, number> = { mood: 0, playlist: 0, recent: 0, frequent: 0, starred: 0, random: 0 };
+  // Cap each artist's share of the pool. Without this, a deep-catalogue artist
+  // (many mood-tagged / starred / frequent tracks) can dominate the fallback
+  // playlist, so whenever Liquidsoap coasts on auto.m3u the same artist clusters
+  // on air — e.g. one artist's tracks airing 7× purely from this source.
+  const artistInPool = new Map<string, number>();
   const take = (label: string, items: any[], cap: number) => {
     let n = 0;
     for (const t of items) {
       if (n >= cap || pool.length >= TARGET_POOL) break;
       if (!t?.id || recent.has(t.id) || pool.find((p: any) => p.id === t.id)) continue;
+      const ak = artistKey(t);
+      if (ak && (artistInPool.get(ak) || 0) >= AUTO_MAX_PER_ARTIST) continue;
       if (maxDurationSec) {
         const d = durationSeconds(t);
         if (d != null && d > maxDurationSec) continue;
       }
       pool.push({ ...t, _source: label });
       fromSource[label]++;
+      if (ak) artistInPool.set(ak, (artistInPool.get(ak) || 0) + 1);
       n++;
     }
   };

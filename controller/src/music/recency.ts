@@ -32,6 +32,15 @@ export interface CandidateFilterState {
   // recency relaxation below, so an over-length track never airs even when the
   // pool is starved.
   maxDurationSec?: number | null;
+  // Whether a starved result may relax the recent-ARTIST guard. Default true
+  // preserves the pool picker's "never return empty" behaviour. The agent's
+  // per-tool collect() passes false: a single-artist tool (topSongsByArtist /
+  // similarSongs narrowed to one recent artist) then returns empty instead of
+  // handing the just-played artist straight back — the agent reaches for one of
+  // its other six discovery tools. This closes the artist-fixation bypass that
+  // let one artist re-air every ~1.2h despite the 2h artist window. Tracks may
+  // still relax as a last resort, but only for FRESH (non-recent) artists.
+  allowArtistRelaxation?: boolean;
 }
 
 // Track length in seconds from whichever field the source carries, or null when
@@ -85,6 +94,7 @@ export function filterPickerCandidates<T extends CandidateLike>(
     maxPerArtist = Infinity,
     cap = Infinity,
     maxDurationSec = null,
+    allowArtistRelaxation = true,
   }: CandidateFilterState = {},
 ): T[] {
   // Length cap first, outside the recency loop: a too-long track is never an
@@ -97,11 +107,20 @@ export function filterPickerCandidates<T extends CandidateLike>(
       })
     : (list || []);
 
-  const modes = [
-    { recentTracks: true, recentArtists: true },
-    { recentTracks: true, recentArtists: false },
-    { recentTracks: false, recentArtists: false },
-  ];
+  // Relaxation cascade: each mode drops a guard so a starved pool still yields
+  // something rather than nothing. When artist relaxation is disabled the artist
+  // guard stays ON in every mode — only the track guard may drop, and only for
+  // fresh artists — so the agent is never handed an artist it just played.
+  const modes = allowArtistRelaxation
+    ? [
+        { recentTracks: true, recentArtists: true },
+        { recentTracks: true, recentArtists: false },
+        { recentTracks: false, recentArtists: false },
+      ]
+    : [
+        { recentTracks: true, recentArtists: true },
+        { recentTracks: false, recentArtists: true },
+      ];
 
   for (const mode of modes) {
     const nextSeen = new Set(seenIds);
