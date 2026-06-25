@@ -428,6 +428,37 @@ router.get('/settings/llm/discover', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /settings/llm/probe-compat — live probe for an openai-compatible key.
+// Body: { apiKey: string, baseUrl: string, model: string }
+// Always 200s with { ok, message, latencyMs }. The key is NOT saved.
+// ---------------------------------------------------------------------------
+router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
+  const { apiKey, baseUrl, model } = req.body || {};
+  if (!baseUrl || typeof baseUrl !== 'string' || !baseUrl.trim()) {
+    return res.status(400).json({ ok: false, message: 'baseUrl is required', latencyMs: 0 });
+  }
+  if (!model || typeof model !== 'string' || !model.trim()) {
+    return res.status(400).json({ ok: false, message: 'model is required', latencyMs: 0 });
+  }
+  const t0 = Date.now();
+  try {
+    const m = createOpenAI({
+      apiKey: (typeof apiKey === 'string' && apiKey.trim()) ? apiKey.trim() : 'no-key',
+      baseURL: baseUrl.trim().replace(/\/+$/, ''),
+    }).chat(model.trim());
+    await generateText({
+      model: m,
+      prompt: 'Reply with the single word OK.',
+      maxOutputTokens: 8,
+      abortSignal: AbortSignal.timeout(15000),
+    });
+    res.json({ ok: true, message: '✓ Bearer token accepted · model responded', latencyMs: Date.now() - t0 });
+  } catch (err: any) {
+    res.json({ ok: false, message: briefLlmError(err), latencyMs: Date.now() - t0 });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /settings/embedding/probe — test whether the configured (or supplied)
 // embedding endpoint can actually produce embeddings, surfacing the result
 // in the admin UI BEFORE a long tagging run instead of failing mid-job.

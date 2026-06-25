@@ -1851,6 +1851,15 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   useEffect(() => { setPrimaryKeyTest(null); }, [form.llm.provider]);
   useEffect(() => { setFallbackKeyTest(null); }, [form.llm.fallback.provider]);
 
+  const [compatKeyInput, setCompatKeyInput] = useState('');
+  const [compatFallbackKeyInput, setCompatFallbackKeyInput] = useState('');
+  const [compatKeyTest, setCompatKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [compatFallbackKeyTest, setCompatFallbackKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [compatKeyTesting, setCompatKeyTesting] = useState(false);
+  const [compatFallbackKeyTesting, setCompatFallbackKeyTesting] = useState(false);
+  useEffect(() => { setCompatKeyInput(''); setCompatKeyTest(null); }, [form.llm.provider]);
+  useEffect(() => { setCompatFallbackKeyInput(''); setCompatFallbackKeyTest(null); }, [form.llm.fallback.provider]);
+
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
@@ -1895,6 +1904,32 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     }
   };
 
+  const testCompatKey = async (
+    apiKey: string,
+    baseUrl: string,
+    model: string,
+    setTesting: (v: boolean) => void,
+    setResult: (r: { ok: boolean; message: string; latencyMs: number } | null) => void,
+  ) => {
+    if (!baseUrl.trim()) { setResult({ ok: false, message: 'Set a Base URL first', latencyMs: 0 }); return; }
+    if (!model.trim()) { setResult({ ok: false, message: 'Set a Model first', latencyMs: 0 }); return; }
+    setTesting(true);
+    setResult(null);
+    try {
+      const r = await adminFetch('/settings/llm/probe-compat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: apiKey.trim(), baseUrl: baseUrl.trim(), model: model.trim() }),
+      });
+      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
+      setResult(j);
+    } catch (e) {
+      setResult({ ok: false, message: errorMessage(e), latencyMs: 0 });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const save = async () => {
     await saveSettings({
       llm: {
@@ -1909,6 +1944,9 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         requestWebResolve: form.llm.requestWebResolve,
         agentTimeoutMs: form.llm.agentTimeoutMs,
         pauseWhenEmpty: form.llm.pauseWhenEmpty,
+        ...(form.llm.provider === 'openai-compatible' && compatKeyInput.trim()
+          ? { apiKey: compatKeyInput.trim() }
+          : {}),
         fallback: {
           enabled: form.llm.fallback.enabled,
           provider: form.llm.fallback.provider,
@@ -1917,6 +1955,9 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
           numCtx: form.llm.fallback.numCtx,
           baseUrl: form.llm.fallback.baseUrl,
           reasoning: form.llm.fallback.reasoning,
+          ...(form.llm.fallback.provider === 'openai-compatible' && compatFallbackKeyInput.trim()
+            ? { apiKey: compatFallbackKeyInput.trim() }
+            : {}),
         },
       },
     });
@@ -1930,6 +1971,12 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     if (fallbackKeyVar && fallbackKeyInput.trim()) {
       const ok = await saveKey(fallbackKeyVar, fallbackKeyInput);
       if (ok) { notify.ok('API key saved'); setFallbackKeyInput(''); refresh(); }
+    }
+    if (form.llm.provider === 'openai-compatible' && compatKeyInput.trim()) {
+      setCompatKeyInput('');
+    }
+    if (form.llm.fallback.provider === 'openai-compatible' && compatFallbackKeyInput.trim()) {
+      setCompatFallbackKeyInput('');
     }
   };
 
@@ -2047,6 +2094,43 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 <code>127.0.0.1</code>.
               </div>
             </div>
+          )}
+
+          {form.llm.provider === 'openai-compatible' && (
+            <>
+              <div className="field">
+                <Label>Bearer token</Label>
+                <Input
+                  type="password"
+                  value={compatKeyInput}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
+                  placeholder={(data.values?.llm as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">
+                  Optional — only needed when the server requires bearer authentication.
+                  Saved to <code>settings.json</code>, takes effect on next save.
+                </div>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <Btn
+                  sm
+                  onClick={() =>
+                    testCompatKey(
+                      compatKeyInput || '',
+                      form.llm.baseUrl,
+                      form.llm.model,
+                      setCompatKeyTesting,
+                      setCompatKeyTest,
+                    )
+                  }
+                  disabled={compatKeyTesting || !form.llm.baseUrl.trim()}
+                >
+                  {compatKeyTesting ? 'Testing…' : 'Test connection'}
+                </Btn>
+              </div>
+              {compatKeyTest && <KeyTestResult result={compatKeyTest} />}
+            </>
           )}
 
           {form.llm.provider === 'openai-compatible' && (
@@ -2278,6 +2362,44 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                     suffix, required for this provider.
                   </div>
                 </div>
+              )}
+
+              {form.llm.fallback.provider === 'openai-compatible' && (
+                <>
+                  <div className="field">
+                    <Label>Bearer token</Label>
+                    <Input
+                      type="password"
+                      value={compatFallbackKeyInput}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatFallbackKeyInput(e.target.value)}
+                      placeholder={(data.values?.llm?.fallback as unknown as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                      className="max-w-[360px]"
+                    />
+                    <div className="field-hint">
+                      Optional — only needed when the backup server requires bearer
+                      authentication. Saved to <code>settings.json</code>, takes effect on
+                      next save.
+                    </div>
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <Btn
+                      sm
+                      onClick={() =>
+                        testCompatKey(
+                          compatFallbackKeyInput || '',
+                          form.llm.fallback.baseUrl,
+                          form.llm.fallback.model,
+                          setCompatFallbackKeyTesting,
+                          setCompatFallbackKeyTest,
+                        )
+                      }
+                      disabled={compatFallbackKeyTesting || !form.llm.fallback.baseUrl.trim()}
+                    >
+                      {compatFallbackKeyTesting ? 'Testing…' : 'Test connection'}
+                    </Btn>
+                  </div>
+                  {compatFallbackKeyTest && <KeyTestResult result={compatFallbackKeyTest} />}
+                </>
               )}
 
               {form.llm.fallback.provider === 'ollama' && (
