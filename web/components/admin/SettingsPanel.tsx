@@ -1879,6 +1879,26 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     adminFetch,
   });
 
+  const fallbackKeyVar = LLM_ENV_VARS[form.llm.fallback.provider];
+  const fallbackKeySet = !!(fallbackKeyVar && data.env?.[fallbackKeyVar]);
+
+  const fallbackDiscoveryEnabled =
+    form.llm.fallback.enabled && (
+      form.llm.fallback.provider === 'ollama'
+      || form.llm.fallback.provider === 'locca'
+      || (form.llm.fallback.provider === 'openai-compatible' && !!form.llm.fallback.baseUrl.trim())
+      || (form.llm.fallback.provider === 'openrouter')
+      || (!!fallbackKeyVar && fallbackKeySet)
+    );
+
+  const fallbackDiscovery = useModelDiscovery({
+    provider: form.llm.fallback.provider,
+    baseUrl: form.llm.fallback.baseUrl,
+    ollamaUrl: form.llm.fallback.ollamaUrl,
+    enabled: fallbackDiscoveryEnabled,
+    adminFetch,
+  });
+
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
@@ -2382,27 +2402,45 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 </div>
               </div>
 
-              <div className="field">
-                <Label>Backup model</Label>
-                <Input
-                  value={form.llm.fallback.model}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, model: e.target.value } } }))
-                  }
-                  placeholder={
-                    form.llm.fallback.provider === 'ollama'
-                      ? 'llama3.2:3b'
-                      : form.llm.fallback.provider === 'openai-compatible'
-                        ? 'model id as the server reports it'
-                        : 'model id'
-                  }
-                  className="max-w-[360px]"
-                />
-                <div className="field-hint">
-                  Model id for the backup provider. Leave blank only for Ollama
-                  (uses its default).
+              {form.llm.fallback.provider === 'ollama' && (
+                <div className="field">
+                  <Label>Backup Ollama server URL</Label>
+                  <Input
+                    value={form.llm.fallback.ollamaUrl}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, ollamaUrl: e.target.value } } }))
+                    }
+                    placeholder="http://localhost:11434"
+                    className="max-w-[360px]"
+                  />
+                  <div className="field-hint">
+                    Where the backup Ollama server runs. Leave blank for the
+                    default (<code>http://localhost:11434</code>).
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {form.llm.fallback.provider === 'ollama' && (
+                <div className="field">
+                  <Label>Backup context window (num_ctx)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1024}
+                    value={form.llm.fallback.numCtx}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, numCtx: Number(e.target.value) } } }))
+                    }
+                    placeholder="16384"
+                    className="max-w-[200px]"
+                  />
+                  <div className="field-hint">
+                    Tokens of context for a <strong>local</strong> backup Ollama
+                    model. Set 0 for Ollama&apos;s default. Ignored for
+                    <code>:cloud</code> models.
+                  </div>
+                </div>
+              )}
 
               {form.llm.fallback.provider === 'openai-compatible' && (
                 <div className="field">
@@ -2460,67 +2498,6 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 </>
               )}
 
-              {form.llm.fallback.provider === 'ollama' && (
-                <div className="field">
-                  <Label>Backup Ollama server URL</Label>
-                  <Input
-                    value={form.llm.fallback.ollamaUrl}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, ollamaUrl: e.target.value } } }))
-                    }
-                    placeholder="http://localhost:11434"
-                    className="max-w-[360px]"
-                  />
-                  <div className="field-hint">
-                    Where the backup Ollama server runs. Leave blank for the
-                    default (<code>http://localhost:11434</code>).
-                  </div>
-                </div>
-              )}
-
-              {form.llm.fallback.provider === 'ollama' && (
-                <div className="field">
-                  <Label>Backup context window (num_ctx)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    step={1024}
-                    value={form.llm.fallback.numCtx}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, numCtx: Number(e.target.value) } } }))
-                    }
-                    placeholder="16384"
-                    className="max-w-[200px]"
-                  />
-                  <div className="field-hint">
-                    Tokens of context for a <strong>local</strong> backup Ollama
-                    model. Set 0 for Ollama&apos;s default. Ignored for
-                    <code>:cloud</code> models.
-                  </div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-[1fr_auto] items-center gap-4">
-                <div>
-                  <div className="text-[13px] font-bold">Backup chain-of-thought</div>
-                  <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
-                    Whether the backup model may emit a reasoning step. Off by
-                    default, like the primary.
-                  </div>
-                </div>
-                <Seg
-                  accent
-                  value={form.llm.fallback.reasoning ? 'on' : 'off'}
-                  options={[
-                    { id: 'off', label: 'Off' },
-                    { id: 'on', label: 'On' },
-                  ]}
-                  onChange={v =>
-                    setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, reasoning: v === 'on' } } }))
-                  }
-                />
-              </div>
-
               {LLM_ENV_VARS[form.llm.fallback.provider] && (() => {
                 const keyVar = LLM_ENV_VARS[form.llm.fallback.provider]!;
                 return (
@@ -2552,6 +2529,103 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   </>
                 );
               })()}
+
+              <div className="field">
+                <div className="flex items-center gap-2">
+                  <Label>Backup model</Label>
+                  {fallbackDiscovery.loading && (
+                    <span className="animate-pulse text-[11px] text-muted">discovering…</span>
+                  )}
+                  {fallbackDiscovery.models.length > 0 && !fallbackDiscovery.loading && (
+                    <Btn sm onClick={fallbackDiscovery.refresh} title="Refresh model list">↻</Btn>
+                  )}
+                </div>
+                {fallbackDiscovery.models.length > 0 ? (
+                  <>
+                    <Select
+                      value={
+                        fallbackDiscovery.models.includes(form.llm.fallback.model)
+                          ? form.llm.fallback.model
+                          : form.llm.fallback.model
+                            ? `__current__`
+                            : ''
+                      }
+                      onValueChange={v => {
+                        if (v !== '__current__') setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, model: v } } }));
+                      }}
+                    >
+                      <SelectTrigger className="max-w-[360px]"><SelectValue placeholder="Select a model" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {form.llm.fallback.model && !fallbackDiscovery.models.includes(form.llm.fallback.model) && (
+                            <SelectItem value="__current__">{form.llm.fallback.model} (current)</SelectItem>
+                          )}
+                          {fallbackDiscovery.models.map(m => (
+                            <SelectItem key={m} value={m}>{m}</SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <div className="field-hint">
+                      {fallbackDiscovery.models.length} model{fallbackDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <Input
+                      value={form.llm.fallback.model}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, model: e.target.value } } }))
+                      }
+                      disabled={!fallbackDiscoveryEnabled && form.llm.fallback.provider !== 'ollama'}
+                      placeholder={
+                        !fallbackDiscoveryEnabled
+                          ? (form.llm.fallback.provider === 'openai-compatible' ? 'Set a base URL first' : 'Set an API key above to discover and select a model')
+                          : form.llm.fallback.provider === 'ollama'
+                            ? 'llama3.2:3b'
+                            : form.llm.fallback.provider === 'deepseek'
+                              ? 'deepseek-v4-flash'
+                              : form.llm.fallback.provider === 'openai-compatible' || form.llm.fallback.provider === 'locca'
+                                ? 'Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf'
+                                : 'model id'
+                      }
+                      className="max-w-[360px]"
+                    />
+                    <div className="field-hint">
+                      {!fallbackDiscoveryEnabled
+                        ? (form.llm.fallback.provider === 'openai-compatible'
+                            ? 'Set a base URL above to discover available models.'
+                            : 'Set an API key above to discover and select a model.')
+                        : fallbackDiscovery.error
+                          ? `Discovery failed: ${fallbackDiscovery.error}. Type a model ID manually.`
+                          : fallbackDiscovery.loading
+                            ? 'Discovering models…'
+                            : 'No models discovered. Type a model ID manually.'}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+                <div>
+                  <div className="text-[13px] font-bold">Backup chain-of-thought</div>
+                  <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+                    Whether the backup model may emit a reasoning step. Off by
+                    default, like the primary.
+                  </div>
+                </div>
+                <Seg
+                  accent
+                  value={form.llm.fallback.reasoning ? 'on' : 'off'}
+                  options={[
+                    { id: 'off', label: 'Off' },
+                    { id: 'on', label: 'On' },
+                  ]}
+                  onChange={v =>
+                    setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, reasoning: v === 'on' } } }))
+                  }
+                />
+              </div>
             </>
           )}
         </div>
