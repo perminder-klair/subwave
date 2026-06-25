@@ -16,6 +16,7 @@ import * as session from './session.js';
 import { cleanupOldVoices } from '../audio/tts.js';
 import { shouldFire } from './dj-gate.js';
 import { djCallsAllowed } from './listeners.js';
+import { optionalSegmentsAllowed } from './dj-budget.js';
 import { agenticTick, skillCatalog } from '../skills/_agent.js';
 import { withTrace } from '../observability/events.js';
 
@@ -169,6 +170,7 @@ async function hourlyCheck() {
   }
   if (!shouldFire('hourly')) return;
   if (!djCallsAllowed()) return;  // nobody listening — stay on the auto playlist
+  if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments
   try {
     await runHourlyCheck();
   } catch (err) {
@@ -208,6 +210,7 @@ export async function runLink() {
 
 async function skillsTick() {
   if (!djCallsAllowed()) return;  // nobody listening — skip the segment director
+  if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments
   try {
     await withTrace({ kind: 'segment' }, async () => {
       const ctx = await getFullContext();
@@ -240,6 +243,7 @@ export async function runStationId() {
 async function stationId() {
   if (!shouldFire('stationId')) return;
   if (!djCallsAllowed()) return;  // nobody listening — skip the ident
+  if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments
   try {
     await runStationId();
   } catch (err) {

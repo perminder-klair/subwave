@@ -144,6 +144,9 @@ interface LlmForm {
   requestWebResolve: boolean;
   agentTimeoutMs: number;
   pauseWhenEmpty: boolean;
+  dailyTokenCap: number;
+  budgetSoftPct: number;
+  exemptRequests: boolean;
   fallback: LlmFallbackForm;
 }
 
@@ -426,6 +429,9 @@ export default function SettingsPanel() {
         requestWebResolve: !!v.llm?.requestWebResolve,
         agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
         pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
+        dailyTokenCap: typeof v.llm?.dailyTokenCap === 'number' ? v.llm.dailyTokenCap : 0,
+        budgetSoftPct: typeof v.llm?.budgetSoftPct === 'number' ? v.llm.budgetSoftPct : 80,
+        exemptRequests: v.llm?.exemptRequests !== false,
         fallback: {
           enabled: !!v.llm?.fallback?.enabled,
           provider: v.llm?.fallback?.provider ?? 'ollama',
@@ -1715,6 +1721,9 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
       requestWebResolve: form.llm.requestWebResolve,
       agentTimeoutMs: form.llm.agentTimeoutMs,
       pauseWhenEmpty: form.llm.pauseWhenEmpty,
+      dailyTokenCap: form.llm.dailyTokenCap,
+      budgetSoftPct: form.llm.budgetSoftPct,
+      exemptRequests: form.llm.exemptRequests,
       fallback: {
         enabled: form.llm.fallback.enabled,
         provider: form.llm.fallback.provider,
@@ -2208,6 +2217,77 @@ function LlmSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
             onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, pauseWhenEmpty: v === 'on' } }))}
           />
         </div>
+      </Card>
+
+      <Card title="Daily token budget" sub="cap LLM spend per day">
+        <div className="field">
+          <Label>Daily token cap</Label>
+          <Input
+            type="number"
+            min={0}
+            step={10000}
+            value={form.llm.dailyTokenCap}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setForm(f => ({ ...f, llm: { ...f.llm, dailyTokenCap: Math.max(0, Number(e.target.value)) } }))
+            }
+            placeholder="0"
+            className="max-w-[200px]"
+          />
+          <div className="field-hint">
+            Hard ceiling on tokens the DJ may spend per day (UTC), counted from
+            the same usage stats as the token ticker. <strong>0 = unlimited</strong>
+            {' '}(the default &mdash; leave it off for a free local model). When set,
+            the DJ drops to the cheap picker and mutes optional segments as it
+            nears the cap, then stops calling the model entirely and coasts on the
+            auto playlist once it&rsquo;s hit &mdash; music never stops.
+          </div>
+        </div>
+
+        {form.llm.dailyTokenCap > 0 && (
+          <div className="field mt-4">
+            <Label>Soft threshold (%)</Label>
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              step={5}
+              value={form.llm.budgetSoftPct}
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({ ...f, llm: { ...f.llm, budgetSoftPct: Math.min(100, Math.max(0, Number(e.target.value))) } }))
+              }
+              placeholder="80"
+              className="max-w-[200px]"
+            />
+            <div className="field-hint">
+              At this percent of the cap the DJ enters the cheap tier: stateless
+              pool picks, no links or station IDs, no weather/news/etc. 0 or 100
+              disables the soft tier (straight to the hard cap).
+            </div>
+          </div>
+        )}
+
+        {form.llm.dailyTokenCap > 0 && (
+          <div className="mt-4 grid grid-cols-[1fr_auto] items-center gap-4">
+            <div>
+              <div className="text-[13px] font-bold">Always answer requests</div>
+              <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+                When on, listener requests are still answered by the AI DJ even
+                over the cap &mdash; a human asked, so honour it. When off,
+                requests over the cap fall back to plain library matching like
+                everything else.
+              </div>
+            </div>
+            <Seg
+              accent
+              value={form.llm.exemptRequests ? 'on' : 'off'}
+              options={[
+                { id: 'off', label: 'Off' },
+                { id: 'on', label: 'On' },
+              ]}
+              onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, exemptRequests: v === 'on' } }))}
+            />
+          </div>
+        )}
       </Card>
 
       <SaveBar

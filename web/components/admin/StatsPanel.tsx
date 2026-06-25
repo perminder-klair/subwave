@@ -83,6 +83,14 @@ interface LlmStats {
   byKind: ByKindRow[];
   byModel: ByModelRow[];
   activeModel?: string;
+  budget?: {
+    enabled: boolean;
+    cap: number;
+    softPct: number;
+    usedToday: number;
+    remaining: number | null;
+    mode: 'normal' | 'soft' | 'hard';
+  };
 }
 
 interface TtsStats {
@@ -700,6 +708,28 @@ export default function StatsPanel() {
               ) : null
             }
           >
+            {/* Daily token budget — durable per-UTC-day tally (seeded from the
+                event log), shown regardless of the since-boot call count above,
+                and only when a cap is set. */}
+            {llm.budget?.enabled && (
+              <div className="flex items-center justify-between gap-3 border-b border-separator-strong p-3.5">
+                <span className="caption">
+                  Daily token budget<span className="text-muted"> · resets 00:00 UTC</span>
+                </span>
+                <span className="flex items-center gap-2.5">
+                  <span className={cn(
+                    'mono-num text-[15px] font-bold',
+                    llm.budget.mode === 'hard' ? 'text-[var(--danger)]'
+                      : llm.budget.mode === 'soft' ? 'text-vermilion' : '',
+                  )}>
+                    {fmtTokens(llm.budget.usedToday)} / {fmtTokens(llm.budget.cap)}
+                  </span>
+                  <Pill tone={llm.budget.mode === 'normal' ? undefined : 'accent'}>
+                    {llm.budget.mode}
+                  </Pill>
+                </span>
+              </div>
+            )}
             {llm.count === 0 ? (
               <span className="field-hint italic">
                 no model calls recorded yet

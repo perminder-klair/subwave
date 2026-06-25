@@ -122,6 +122,18 @@ app.listen(config.server.port, async () => {
     console.error('[settings] load failed:', err.message);
   }
 
+  // Seed today's LLM token tally from the durable event log so a mid-day
+  // restart resumes the daily budget count instead of resetting it. Must run
+  // once, before any new model call records (re-seeding would double-count).
+  // Best-effort: a missing log (fresh install) just leaves the tally at 0.
+  try {
+    const { seedDailyUsageFromLog } = await import('./llm/log.js');
+    const seeded = await seedDailyUsageFromLog();
+    if (seeded > 0) console.log(`[budget] resumed today's LLM usage: ${seeded} tokens`);
+  } catch (err: any) {
+    console.error('[budget] seed failed:', err.message);
+  }
+
   // Scaffold the built-in skills as editable files under state/skills/<kind>/
   // (idempotent — never clobbers operator edits) so loadCustomSkills below picks
   // them up as overrides. Must run before the load. Never fatal.

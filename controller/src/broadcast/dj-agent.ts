@@ -23,6 +23,7 @@ import { energyForDaypart } from '../context.js';
 import { defineAgent } from '../llm/agent.js';
 import { buildPickerTools } from '../llm/tools.js';
 import { recordPick } from '../llm/log.js';
+import * as budget from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { recencyWindowsForLibrary } from '../music/recency.js';
 
@@ -453,6 +454,17 @@ async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm:
 // optional between-track link) via the agent, falling back to the pool.
 export async function runTrackEvent(queue, ctx, { wantLink }) {
   return withTrace({ kind: 'track-event', wantLink }, async () => {
+    // Daily token cap. At the hard cap we make NO model call: skip the pick and
+    // let Liquidsoap fall through to the LLM-free auto playlist (music keeps
+    // playing). In the soft tier we still pick — the stream needs a next track —
+    // but cheaply: the stateless pool picker, and no link.
+    if (!budget.picksAllowed()) {
+      queue.log('budget', 'daily LLM token cap reached — coasting on the auto playlist');
+      return;
+    }
+    const cheap = budget.preferCheapPicker();
+    wantLink = wantLink && !cheap;
+
     const current = queue.current?.track || null;
     const previous = queue.history[0]?.track || null;
     const djMode = !!settings.getEffectivePersona()?.djMode;
@@ -494,7 +506,9 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
       + journeyClause;
     session.appendTurn({ role: 'event', kind: 'pick', text: eventText });
 
-    if (settings.get().llm?.pickerAgent && !breakerOpen()) {
+    // `!cheap`: in the soft budget tier we skip the multi-step agent tool-loop
+    // and go straight to the one-call pool picker below to stretch the budget.
+    if (settings.get().llm?.pickerAgent && !cheap && !breakerOpen()) {
       try {
         const queued = await pickViaAgent(queue, { wantLink, audioWaypoint });
         breakerSuccess();
@@ -527,6 +541,10 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
 // for every request path, so the agent only appends its own `dj` reply here.
 export async function runRequest(queue: any, ctx: any, { requester, text: _text }: { requester: string; text: string }) {
   if (!settings.get().llm?.pickerAgent || breakerOpen()) return null;
+  // Over the hard token cap the request agent only runs when requests are
+  // exempt (llm.exemptRequests, on by default); otherwise return null and let
+  // the caller's stateless matcher cascade handle it without a model call.
+  if (!budget.requestsAllowed()) return null;
 
   try {
     const out = await runRequestViaAgent(queue, { requester });

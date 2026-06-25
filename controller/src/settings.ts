@@ -217,6 +217,23 @@ function clampAgentTimeout(raw: any, def: number): number {
   return Math.min(180_000, Math.max(5_000, Math.floor(raw)));
 }
 
+// Daily LLM token cap. 0 disables (the default — never cap a free local box);
+// otherwise floored to a non-negative integer. No upper bound: a cloud quota
+// can legitimately be in the tens of millions of tokens/day. Non-numeric/NaN
+// falls back to `def`.
+function clampDailyTokenCap(raw: any, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  return Math.max(0, Math.floor(raw));
+}
+
+// Soft-tier threshold as a percent of the cap. Clamped to [0, 100]; 0 or 100
+// disables the soft tier (straight to hard at the cap). Non-numeric/NaN falls
+// back to `def`.
+function clampBudgetSoftPct(raw: any, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  return Math.min(100, Math.max(0, Math.floor(raw)));
+}
+
 // Validate + apply the connection fields shared by the primary LLM leg and its
 // optional fallback (provider/model/apiKey/ollamaUrl/baseUrl/reasoning/numCtx).
 // `target` is the live settings sub-object to mutate; `patch` is the incoming
@@ -584,6 +601,26 @@ const DEFAULTS = {
     // reports zero listeners — the stream coasts on the auto playlist — and
     // resume as soon as someone tunes in. Off by default.
     pauseWhenEmpty: false,
+    // Daily LLM token budget — a safety net against bill-shock on a metered
+    // provider (the DJ calls the model on essentially every track transition,
+    // 24/7). 0 = unlimited (the default — most installs run free local Ollama
+    // and must be unaffected). When set, the day's token usage (UTC, summed
+    // from the same usage stats as the lifetime ticker) drives a two-tier
+    // degradation: at `budgetSoftPct` of the cap the DJ drops to the cheap pool
+    // picker and mutes optional segments (links, station IDs, hourly, weather/
+    // news/etc.); at the cap it stops calling the model entirely and the stream
+    // coasts on the LLM-free auto playlist — music never stops. Enforced in
+    // broadcast/dj-budget.ts; see llm/internal/core/pure.ts `budgetMode`.
+    dailyTokenCap: 0,
+    // When the day's usage crosses this percent of dailyTokenCap, enter the
+    // "soft" tier (cheap picker, no optional segments). 0 or 100 disables the
+    // soft tier and goes straight from normal to hard at the cap.
+    budgetSoftPct: 80,
+    // When on (the default), listener requests are still answered by the agent
+    // even over the hard cap — a human asked, so honour it. When off, requests
+    // over the cap fall through to the stateless matcher cascade like every
+    // other LLM path. No effect until dailyTokenCap is set.
+    exemptRequests: true,
     // When on (or when LLM_DEBUG_RAW is set in the env), every outbound model
     // request's exact body is captured to ${STATE_DIR}/logs/llm-debug.log (the
     // last 10, newest first) and dumped to stderr — a copy-pasteable view of
@@ -1116,6 +1153,14 @@ export async function load() {
         typeof stored.llm?.pauseWhenEmpty === 'boolean'
           ? stored.llm.pauseWhenEmpty
           : DEFAULTS.llm.pauseWhenEmpty,
+      // Budget cap — settings.json files from before these fields existed pick
+      // up the defaults (0 = disabled, so they behave exactly as before).
+      dailyTokenCap: clampDailyTokenCap(stored.llm?.dailyTokenCap, DEFAULTS.llm.dailyTokenCap),
+      budgetSoftPct: clampBudgetSoftPct(stored.llm?.budgetSoftPct, DEFAULTS.llm.budgetSoftPct),
+      exemptRequests:
+        typeof stored.llm?.exemptRequests === 'boolean'
+          ? stored.llm.exemptRequests
+          : DEFAULTS.llm.exemptRequests,
       debugRawRequests:
         typeof stored.llm?.debugRawRequests === 'boolean'
           ? stored.llm.debugRawRequests
@@ -1922,6 +1967,15 @@ export async function update(patch) {
     }
     if (l.pauseWhenEmpty !== undefined) {
       next.llm.pauseWhenEmpty = !!l.pauseWhenEmpty;
+    }
+    if (l.dailyTokenCap !== undefined) {
+      next.llm.dailyTokenCap = clampDailyTokenCap(Number(l.dailyTokenCap), next.llm.dailyTokenCap);
+    }
+    if (l.budgetSoftPct !== undefined) {
+      next.llm.budgetSoftPct = clampBudgetSoftPct(Number(l.budgetSoftPct), next.llm.budgetSoftPct);
+    }
+    if (l.exemptRequests !== undefined) {
+      next.llm.exemptRequests = !!l.exemptRequests;
     }
     if (l.debugRawRequests !== undefined) {
       next.llm.debugRawRequests = !!l.debugRawRequests;

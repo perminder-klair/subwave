@@ -47,6 +47,34 @@ export function usageOf(result: any): { input: number; output: number; total: nu
 }
 
 // ---------------------------------------------------------------------------
+// Daily LLM token budget
+// ---------------------------------------------------------------------------
+//
+// The DJ runs 24/7 and calls the model on essentially every track transition
+// (plus links/segments), so on a metered provider it can quietly accumulate. A
+// daily token cap is a safety net against bill-shock: when the day's usage
+// approaches the cap we drop to a cheaper picker and mute optional segments
+// ('soft'); when it hits the cap we stop calling the model entirely ('hard')
+// and the station coasts on the LLM-free auto playlist — music never stops.
+//
+// Pure so the policy is unit-pinned (scripts/llm-pure.test.ts). The caller owns
+// reading the running token count (telemetry/budget.ts) and the cap/threshold
+// (settings.llm); this just maps them to a mode.
+//   cap <= 0            → disabled, always 'normal' (the default — most installs
+//                         run free local Ollama and must be unaffected).
+//   used >= cap         → 'hard'
+//   used >= cap*soft%   → 'soft' (only when 0 < softPct < 100; softPct 0 or 100
+//                         disables the soft tier and goes straight to hard).
+export function budgetMode(
+  { used, cap, softPct }: { used: number; cap: number; softPct: number },
+): 'normal' | 'soft' | 'hard' {
+  if (!Number.isFinite(cap) || cap <= 0) return 'normal';
+  if (used >= cap) return 'hard';
+  if (softPct > 0 && softPct < 100 && used >= cap * (softPct / 100)) return 'soft';
+  return 'normal';
+}
+
+// ---------------------------------------------------------------------------
 // Transient vs unreachable error classification
 // ---------------------------------------------------------------------------
 //

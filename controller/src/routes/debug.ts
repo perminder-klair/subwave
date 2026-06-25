@@ -17,6 +17,7 @@ import { getFullContext } from '../context.js';
 import * as settings from '../settings.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
+import { budgetStatus } from '../broadcast/dj-budget.js';
 import * as requestLog from '../broadcast/request-log.js';
 import { getStationTimezone } from '../time.js';
 import { requireAdmin } from '../middleware/auth.js';
@@ -132,6 +133,9 @@ router.get('/debug', requireAdmin, async (req, res) => {
     provider: llmProvider.providerName(),
     activeModel: llmProvider.activeModelLabel(),
     ollamaUrl: llmProvider.activeOllamaUrl(),
+    // Daily token budget — today's usage vs the cap and the resulting tier
+    // (normal / soft / hard). `enabled:false` when no cap is set.
+    budget: (() => { try { return budgetStatus(); } catch (err: any) { return { error: err.message }; } })(),
     recentCalls: dj.recentCalls,
     // Raw-request capture status — the admin UI shows the toggle + the file path
     // so operators know where to look. `viaEnv` means LLM_DEBUG_RAW forces it on
