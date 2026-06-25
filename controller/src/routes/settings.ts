@@ -459,6 +459,175 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /settings/llm/models — discover available models for any LLM provider.
+// Query: provider (required), baseUrl (optional), ollamaUrl (optional).
+// Always 200s with { ok, models, provider, error? }.
+// ---------------------------------------------------------------------------
+router.get('/settings/llm/models', requireAdmin, async (req, res) => {
+  const provider = String(req.query.provider || '').trim();
+  if (!provider) {
+    return res.json({ ok: false, models: [], provider: '', error: 'provider is required' });
+  }
+  const baseUrl = String(req.query.baseUrl || '').trim().replace(/\/+$/, '');
+  const ollamaUrl = String(req.query.ollamaUrl || '').trim().replace(/\/+$/, '');
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 3000);
+
+  try {
+    let models: string[] = [];
+
+    switch (provider) {
+      case 'ollama': {
+        const url = ollamaUrl || config.ollama.url || 'http://localhost:11434';
+        const r = await fetch(`${url}/api/tags`, { signal: ctrl.signal });
+        if (!r.ok) throw new Error(`Ollama HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.models)
+          ? data.models.map((m: any) => m?.name).filter((n: any): n is string => typeof n === 'string')
+          : [];
+        break;
+      }
+
+      case 'openai-compatible':
+      case 'locca': {
+        const url = baseUrl
+          || (provider === 'locca' ? llmProvider.DEFAULT_LOCCA_BASE_URL : '');
+        if (!url) throw new Error('baseUrl is required for openai-compatible');
+        await settings.load();
+        const s = settings.get();
+        const apiKey = (s.llm?.apiKey && typeof s.llm.apiKey === 'string') ? s.llm.apiKey : '';
+        const headers: Record<string, string> = {};
+        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+        const r = await fetch(`${url}/models`, { signal: ctrl.signal, headers });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.data)
+          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string')
+          : [];
+        break;
+      }
+
+      case 'openai': {
+        const apiKey = process.env.OPENAI_API_KEY;
+        if (!apiKey) throw new Error('OPENAI_API_KEY not set');
+        const r = await fetch('https://api.openai.com/v1/models', {
+          signal: ctrl.signal,
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        });
+        if (!r.ok) throw new Error(`OpenAI HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.data)
+          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
+          : [];
+        break;
+      }
+
+      case 'anthropic': {
+        const apiKey = process.env.ANTHROPIC_API_KEY;
+        if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
+        const r = await fetch('https://api.anthropic.com/v1/models?limit=100', {
+          signal: ctrl.signal,
+          headers: {
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+        });
+        if (!r.ok) throw new Error(`Anthropic HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.data)
+          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
+          : [];
+        break;
+      }
+
+      case 'google': {
+        const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+        if (!apiKey) throw new Error('GOOGLE_GENERATIVE_AI_API_KEY not set');
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`, {
+          signal: ctrl.signal,
+        });
+        if (!r.ok) throw new Error(`Google HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.models)
+          ? data.models
+              .filter((m: any) => Array.isArray(m?.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+              .map((m: any) => String(m?.name || '').replace(/^models\//, ''))
+              .filter(Boolean)
+              .sort()
+          : [];
+        break;
+      }
+
+      case 'deepseek': {
+        const apiKey = process.env.DEEPSEEK_API_KEY;
+        if (!apiKey) throw new Error('DEEPSEEK_API_KEY not set');
+        const r = await fetch('https://api.deepseek.com/v1/models', {
+          signal: ctrl.signal,
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        });
+        if (!r.ok) throw new Error(`DeepSeek HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.data)
+          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
+          : [];
+        break;
+      }
+
+      case 'openrouter': {
+        const r = await fetch('https://openrouter.ai/api/v1/models', {
+          signal: ctrl.signal,
+        });
+        if (!r.ok) throw new Error(`OpenRouter HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.data)
+          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
+          : [];
+        break;
+      }
+
+      case 'requesty': {
+        const apiKey = process.env.REQUESTY_API_KEY;
+        if (!apiKey) throw new Error('REQUESTY_API_KEY not set');
+        const r = await fetch('https://router.requesty.ai/v1/models', {
+          signal: ctrl.signal,
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        });
+        if (!r.ok) throw new Error(`Requesty HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.data)
+          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
+          : [];
+        break;
+      }
+
+      case 'gateway': {
+        const apiKey = process.env.AI_GATEWAY_API_KEY;
+        if (!apiKey) throw new Error('AI_GATEWAY_API_KEY not set');
+        const r = await fetch('https://gateway.ai.cloudflare.com/v1/models', {
+          signal: ctrl.signal,
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        });
+        if (!r.ok) throw new Error(`Gateway HTTP ${r.status}`);
+        const data: any = await r.json();
+        models = Array.isArray(data?.data)
+          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
+          : [];
+        break;
+      }
+
+      default:
+        return res.json({ ok: false, models: [], provider, error: `unknown provider: ${provider}` });
+    }
+
+    res.json({ ok: true, models, provider });
+  } catch (err: any) {
+    res.json({ ok: false, models: [], provider, error: err?.message || 'discovery failed' });
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /settings/embedding/probe — test whether the configured (or supplied)
 // embedding endpoint can actually produce embeddings, surfacing the result
 // in the admin UI BEFORE a long tagging run instead of failing mid-job.
