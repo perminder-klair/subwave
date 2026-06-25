@@ -7,6 +7,7 @@ import { m } from 'motion/react';
 import { notify, errorMessage } from '../../lib/notify';
 import { fmtClockMinute, fmtSize, normalizeStationLocale, type StationLocale } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { applyTheme, cacheTheme } from '../../lib/theme';
 import { CLOUD_VOICES, CLOUD_MODELS } from '../../lib/cloudVoices';
 import { V3AlertDialog } from '../ui/alert-dialog';
@@ -1860,6 +1861,24 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   useEffect(() => { setCompatKeyInput(''); setCompatKeyTest(null); }, [form.llm.provider]);
   useEffect(() => { setCompatFallbackKeyInput(''); setCompatFallbackKeyTest(null); }, [form.llm.fallback.provider]);
 
+  const primaryKeyVar = LLM_ENV_VARS[form.llm.provider];
+  const primaryKeySet = !!(primaryKeyVar && data.env?.[primaryKeyVar]);
+
+  const primaryDiscoveryEnabled =
+    form.llm.provider === 'ollama'
+    || form.llm.provider === 'locca'
+    || (form.llm.provider === 'openai-compatible' && !!form.llm.baseUrl.trim())
+    || (form.llm.provider === 'openrouter')
+    || (!!primaryKeyVar && primaryKeySet);
+
+  const primaryDiscovery = useModelDiscovery({
+    provider: form.llm.provider,
+    baseUrl: form.llm.baseUrl,
+    ollamaUrl: form.llm.ollamaUrl,
+    enabled: primaryDiscoveryEnabled,
+    adminFetch,
+  });
+
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
@@ -2039,42 +2058,49 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             </div>
           </div>
 
-          <div className="field">
-            <Label>Model</Label>
-            <Input
-              value={form.llm.model}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, llm: { ...f.llm, model: e.target.value } }))
-              }
-              placeholder={
-                form.llm.provider === 'ollama'
-                  ? 'nemotron-3-super:cloud'
-                  : form.llm.provider === 'deepseek'
-                    ? 'deepseek-v4-flash'
-                    : form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca'
-                      ? 'Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf'
-                      : 'model id'
-              }
-              className="max-w-[360px]"
-            />
-            <div className="field-hint">
-              {form.llm.provider === 'ollama'
-                ? 'Ollama model tag, e.g. “nemotron-3-super:cloud”. Leave blank for the default.'
-                : form.llm.provider === 'gateway'
-                  ? 'Gateway model id, e.g. “anthropic/claude-sonnet-4-5”.'
-                  : form.llm.provider === 'openrouter'
-                    ? 'OpenRouter model id, e.g. “google/gemini-2.5-flash”.'
-                    : form.llm.provider === 'requesty'
-                      ? 'Requesty model id, e.g. “openai/gpt-4o-mini”.'
-                      : form.llm.provider === 'google'
-                      ? 'Gemini model id, e.g. “gemini-2.5-flash”.'
-                      : form.llm.provider === 'deepseek'
-                        ? 'DeepSeek model id. Leave blank for the “deepseek-v4-flash” default.'
-                        : form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca'
-                          ? 'Model id exactly as the server reports it at /v1/models, required.'
-                          : 'Model id for the chosen provider, required.'}
+          {form.llm.provider === 'ollama' && (
+            <div className="field">
+              <Label>Ollama server URL</Label>
+              <Input
+                value={form.llm.ollamaUrl}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, llm: { ...f.llm, ollamaUrl: e.target.value } }))
+                }
+                placeholder="http://localhost:11434"
+                className="max-w-[360px]"
+              />
+              <div className="field-hint">
+                Where the Ollama server runs. Leave blank for the default
+                (<code>http://localhost:11434</code>).
+              </div>
             </div>
-          </div>
+          )}
+
+          {form.llm.provider === 'ollama' && (
+            <div className="field">
+              <Label>Context window (num_ctx)</Label>
+              <Input
+                type="number"
+                min={0}
+                step={1024}
+                value={form.llm.numCtx}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, llm: { ...f.llm, numCtx: Number(e.target.value) } }))
+                }
+                placeholder="16384"
+                className="max-w-[200px]"
+              />
+              <div className="field-hint">
+                Tokens of context for <strong>local</strong> Ollama models.
+                Ollama&apos;s own default is 4096, which is too small for the DJ
+                agent: the prompt gets truncated and the model fails to pick a
+                track (the &ldquo;agent did not call the done tool&rdquo; error).
+                16384 is a safe default for a 7&ndash;9B model on a 12GB GPU;
+                raise it for reasoning models, lower it on tight VRAM. Set 0 to
+                use Ollama&apos;s default. Ignored for <code>:cloud</code> models.
+              </div>
+            </div>
+          )}
 
           {form.llm.provider === 'openai-compatible' && (
             <div className="field">
@@ -2133,32 +2159,6 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             </>
           )}
 
-          {form.llm.provider === 'openai-compatible' && (
-            <div className="field">
-              <Label>Forced tool calls</Label>
-              <Seg
-                accent
-                value={form.llm.toolChoice === 'auto' ? 'auto' : 'required'}
-                options={[
-                  { id: 'required', label: 'Required' },
-                  { id: 'auto', label: 'Auto' },
-                ]}
-                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, toolChoice: v } }))}
-              />
-              <div className="field-hint">
-                How the picker forces the model to return a structured pick.
-                <code>Required</code> (default) sends{' '}
-                <code>tool_choice:&quot;required&quot;</code> — the reliable path for
-                local models. Switch to <code>Auto</code> only if your server
-                <strong> crashes</strong> on a tool call: some newer vLLM images
-                (notably Intel/XPU builds) mishandle the guided-decoding backend
-                that <code>required</code> engages, while <code>auto</code> never
-                does. On <code>Auto</code> a capable model still calls the tool;
-                misses fall back to the stateless picker.
-              </div>
-            </div>
-          )}
-
           {form.llm.provider === 'locca' && (
             <div className="field">
               <Label>locca server base URL</Label>
@@ -2184,50 +2184,6 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 >
                   locca on GitHub ↗
                 </a>
-              </div>
-            </div>
-          )}
-
-          {form.llm.provider === 'ollama' && (
-            <div className="field">
-              <Label>Ollama server URL</Label>
-              <Input
-                value={form.llm.ollamaUrl}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({ ...f, llm: { ...f.llm, ollamaUrl: e.target.value } }))
-                }
-                placeholder="http://localhost:11434"
-                className="max-w-[360px]"
-              />
-              <div className="field-hint">
-                Where the Ollama server runs. Leave blank for the default
-                (<code>http://localhost:11434</code>).
-              </div>
-            </div>
-          )}
-
-          {form.llm.provider === 'ollama' && (
-            <div className="field">
-              <Label>Context window (num_ctx)</Label>
-              <Input
-                type="number"
-                min={0}
-                step={1024}
-                value={form.llm.numCtx}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({ ...f, llm: { ...f.llm, numCtx: Number(e.target.value) } }))
-                }
-                placeholder="16384"
-                className="max-w-[200px]"
-              />
-              <div className="field-hint">
-                Tokens of context for <strong>local</strong> Ollama models.
-                Ollama&apos;s own default is 4096, which is too small for the DJ
-                agent: the prompt gets truncated and the model fails to pick a
-                track (the &ldquo;agent did not call the done tool&rdquo; error).
-                16384 is a safe default for a 7&ndash;9B model on a 12GB GPU;
-                raise it for reasoning models, lower it on tight VRAM. Set 0 to
-                use Ollama&apos;s default. Ignored for <code>:cloud</code> models.
               </div>
             </div>
           )}
@@ -2268,6 +2224,108 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               </>
             );
           })()}
+
+          <div className="field">
+            <div className="flex items-center gap-2">
+              <Label>Model</Label>
+              {primaryDiscovery.loading && (
+                <span className="animate-pulse text-[11px] text-muted">discovering…</span>
+              )}
+              {primaryDiscovery.models.length > 0 && !primaryDiscovery.loading && (
+                <Btn sm onClick={primaryDiscovery.refresh} title="Refresh model list">↻</Btn>
+              )}
+            </div>
+            {primaryDiscovery.models.length > 0 ? (
+              <>
+                <Select
+                  value={
+                    primaryDiscovery.models.includes(form.llm.model)
+                      ? form.llm.model
+                      : form.llm.model
+                        ? `__current__`
+                        : ''
+                  }
+                  onValueChange={v => {
+                    if (v !== '__current__') setForm(f => ({ ...f, llm: { ...f.llm, model: v } }));
+                  }}
+                >
+                  <SelectTrigger className="max-w-[360px]"><SelectValue placeholder="Select a model" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {form.llm.model && !primaryDiscovery.models.includes(form.llm.model) && (
+                        <SelectItem value="__current__">{form.llm.model} (current)</SelectItem>
+                      )}
+                      {primaryDiscovery.models.map(m => (
+                        <SelectItem key={m} value={m}>{m}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <div className="field-hint">
+                  {primaryDiscovery.models.length} model{primaryDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.
+                </div>
+              </>
+            ) : (
+              <>
+                <Input
+                  value={form.llm.model}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({ ...f, llm: { ...f.llm, model: e.target.value } }))
+                  }
+                  disabled={!primaryDiscoveryEnabled && form.llm.provider !== 'ollama'}
+                  placeholder={
+                    !primaryDiscoveryEnabled
+                      ? (form.llm.provider === 'openai-compatible' ? 'Set a base URL first' : 'Set an API key above to discover and select a model')
+                      : form.llm.provider === 'ollama'
+                        ? 'nemotron-3-super:cloud'
+                        : form.llm.provider === 'deepseek'
+                          ? 'deepseek-v4-flash'
+                          : form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca'
+                            ? 'Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf'
+                            : 'model id'
+                  }
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">
+                  {!primaryDiscoveryEnabled
+                    ? (form.llm.provider === 'openai-compatible'
+                        ? 'Set a base URL above to discover available models.'
+                        : 'Set an API key above to discover and select a model.')
+                    : primaryDiscovery.error
+                      ? `Discovery failed: ${primaryDiscovery.error}. Type a model ID manually.`
+                      : primaryDiscovery.loading
+                        ? 'Discovering models…'
+                        : 'No models discovered. Type a model ID manually.'}
+                </div>
+              </>
+            )}
+          </div>
+
+          {form.llm.provider === 'openai-compatible' && (
+            <div className="field">
+              <Label>Forced tool calls</Label>
+              <Seg
+                accent
+                value={form.llm.toolChoice === 'auto' ? 'auto' : 'required'}
+                options={[
+                  { id: 'required', label: 'Required' },
+                  { id: 'auto', label: 'Auto' },
+                ]}
+                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, toolChoice: v } }))}
+              />
+              <div className="field-hint">
+                How the picker forces the model to return a structured pick.
+                <code>Required</code> (default) sends{' '}
+                <code>tool_choice:&quot;required&quot;</code> — the reliable path for
+                local models. Switch to <code>Auto</code> only if your server
+                <strong> crashes</strong> on a tool call: some newer vLLM images
+                (notably Intel/XPU builds) mishandle the guided-decoding backend
+                that <code>required</code> engages, while <code>auto</code> never
+                does. On <code>Auto</code> a capable model still calls the tool;
+                misses fall back to the stateless picker.
+              </div>
+            </div>
+          )}
         </div>
       </Card>
 
