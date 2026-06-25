@@ -110,6 +110,9 @@ const CAPS: Record<string, ProviderCapabilities> = {
   },
   // No first-class thinking knob — pass through to the underlying provider.
   openrouter: { objectStrategy: 'native', repeatPenaltyApplies: false, thinkingBlock: NONE },
+  // Requesty mirrors openrouter — an OpenAI-compatible hosted gateway with no
+  // first-class thinking knob, so reasoning passes through to the model verbatim.
+  requesty: { objectStrategy: 'native', repeatPenaltyApplies: false, thinkingBlock: NONE },
   gateway: { objectStrategy: 'native', repeatPenaltyApplies: false, thinkingBlock: NONE },
 };
 
@@ -129,6 +132,21 @@ export function capabilitiesFor(provider: string | undefined): ProviderCapabilit
 // True when the active provider needs the tool-call structured-output path.
 export function needsToolCallObject(cfg: any): boolean {
   return capabilitiesFor(cfg?.provider).objectStrategy === 'tool';
+}
+
+// The tool_choice value to send when SUB/WAVE wants to FORCE a tool call (the
+// structured-output emit/done paths). Defaults to 'required' — every local-model
+// structured-output path depends on it, and forced tool calling is the AI SDK's
+// documented pattern for it. An operator can set llm.toolChoice = 'auto' per leg
+// to downgrade it: recent vLLM implements tool_choice:"required" via a
+// guided-decoding backend that some images (newer Intel/XPU builds) crash on,
+// while "auto" never engages it (issue #570). On 'auto' the done-tool harness
+// keeps its prepareStep activeTools pinning + explicit instructions, so a capable
+// model usually still calls the single visible tool; misses fall through to the
+// stateless pool picker. Reads cfg.toolChoice (primary or fallback leg); any
+// value other than the literal 'auto' is treated as 'required'.
+export function forcedToolChoice(cfg: any): 'required' | 'auto' {
+  return cfg?.toolChoice === 'auto' ? 'auto' : 'required';
 }
 
 // True when repeat_penalty actually reaches the model — gates the sampling log

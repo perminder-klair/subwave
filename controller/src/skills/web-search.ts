@@ -44,7 +44,7 @@ async function memo(
 }
 
 export async function tavilySearch(query: string): Promise<SearchResponse> {
-  const apiKey = settings.get().search?.apiKey || config.search.apiKey;
+  const apiKey = settings.get().search?.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey;
   const res = await fetch(TAVILY_ENDPOINT, {
     method: 'POST',
     headers: {

@@ -111,7 +111,14 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
   useDynamicStyle(coverRef, { '--cover': coverSrc ? `url("${coverSrc}")` : null });
 
   return (
-    <div className="absolute top-1/2 right-24 left-4 flex -translate-y-[64%] flex-col items-start sm:left-8">
+    // Bounded region between the header and the waveform band, with the content
+    // centred inside it (justify-center). Previously this was centred in the
+    // whole viewport (top-1/2 -translate-y-[64%]) and grew downward freely, so a
+    // long DJ line — or any line on a short/wide window — spilled over the
+    // bottom-pinned Waveform (issue #576). The bottom reserve clears the
+    // compact waveform (top ≈ 206px from bottom); on tall desktop windows the
+    // waveform grows to its full band, so the reserve grows to match it.
+    <div className="absolute top-[72px] right-24 bottom-[220px] left-4 flex flex-col items-start justify-center sm:left-8 [@media(min-width:640px)_and_(min-height:760px)]:bottom-[300px]">
       <div className="isolate flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-6">
         {coverSrc && (
           <button

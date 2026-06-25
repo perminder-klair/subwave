@@ -64,22 +64,32 @@ function isoCodeFor(name: string): string | null {
   return LANG_ISO[last] || null;
 }
 
-// Per-provider pronunciation hint from the persona's on-air language, so a
-// non-English script isn't read with English phonetics (issue #558). OpenAI's
-// gpt-4o-mini-tts honours a free-text `instructions` field (tts-1 / tts-1-hd
-// ignore it harmlessly); ElevenLabs honours an ISO `language` code. Both are
-// top-level generateSpeech params. openai-compatible servers vary on which
-// fields they accept (the same reason `speed` is skipped for them), so they get
-// no hint. Empty language → {} so the default English path stays byte-identical.
-function languageHint(language: string | undefined, provider: string, model: string): { instructions?: string; language?: string } {
+// Per-provider delivery hint built from the on-air persona's character (`soul`)
+// and language. OpenAI's gpt-4o*-tts honours a free-text `instructions` field
+// (tts-1 / tts-1-hd ignore or reject it): the soul shapes vocal tone/pacing the
+// same way it shapes the writing (issue #579), and the language is layered on as
+// a pronunciation directive so a non-English script isn't read with English
+// phonetics (issue #558). ElevenLabs has no free-text field — it honours only an
+// ISO `language` code, so the soul can't ride there. openai-compatible servers
+// vary on which fields they accept (the same reason `speed` is skipped for
+// them), so they get no hint. No soul and no language → {} so the bare default
+// path stays byte-identical.
+function deliveryHint(
+  { language, soul }: { language?: string; soul?: string },
+  provider: string,
+  model: string,
+): { instructions?: string; language?: string } {
   const lang = String(language || '').trim();
-  if (!lang) return {};
+  const character = String(soul || '').trim();
   if (provider === 'openai') {
     // `instructions` only steers gpt-4o*-tts models; tts-1 / tts-1-hd ignore or
     // reject it, so don't send it there (a 400 would drop us to an English
     // local fallback — worse than no hint).
     if (!/gpt-4o.*tts/i.test(String(model || ''))) return {};
-    return { instructions: `Speak entirely in ${lang}, using natural, native ${lang} pronunciation and accent. Do not read the text with an English accent.` };
+    const parts: string[] = [];
+    if (character) parts.push(`Convey this character in your tone and delivery: ${character}.`);
+    if (lang) parts.push(`Speak entirely in ${lang}, using natural, native ${lang} pronunciation and accent. Do not read the text with an English accent.`);
+    return parts.length ? { instructions: parts.join(' ') } : {};
   }
   if (provider === 'elevenlabs') {
     const iso = isoCodeFor(lang);
@@ -155,7 +165,7 @@ export function isConfigured(providerOverride: string | null = null) {
 // provider + voice while still sharing the global model + apiKey from Settings.
 export async function speak(
   text: string,
-  { outPath, cloudOverride = null, speedScale, language }: { outPath?: string; cloudOverride?: any; speedScale?: number; language?: string } = {},
+  { outPath, cloudOverride = null, speedScale, language, soul }: { outPath?: string; cloudOverride?: any; speedScale?: number; language?: string; soul?: string } = {},
 ) {
   if (!text || !text.trim()) throw new Error('Empty TTS text');
   const base = cloudCfg();
@@ -190,8 +200,9 @@ export async function speak(
     text,
     voice: c.voice || undefined,
     ...(speed !== 1.0 ? { speed } : {}),
-    // Persona on-air language → provider-native pronunciation hint (issue #558).
-    ...languageHint(language, c.provider, c.model),
+    // Persona character (soul) + language → provider-native delivery hint
+    // (issues #579 / #558).
+    ...deliveryHint({ language, soul }, c.provider, c.model),
     // ElevenLabs gates 44.1 kHz PCM/WAV behind paid tiers — a free/lower-tier
     // key 403s ("Forbidden") on pcm_44100. mp3 is allowed on every tier and
     // OpenAI honours it too, so it's the safe cross-provider request.

@@ -2796,6 +2796,17 @@ body::after {
 .admin-root .card-body.loose {
     padding: 18px;
 }
+/* Spotlight — lifts a card above the plain stack with an accent rail + faint
+   wash. Used for DJ Doc's verdict ("DJ Doc says") so the operator's eye lands
+   on the producer's read before the raw findings. */
+.admin-root .card.is-spotlight {
+    border-color: var(--accent);
+    box-shadow: inset 3px 0 0 0 var(--accent);
+    background: color-mix(in srgb, var(--accent) 4%, var(--card-bg));
+}
+.admin-root .card.is-spotlight > .card-head {
+    border-bottom-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
 
 /* Buttons, inputs, the segmented control and the toggle are now shadcn/ui
    components (components/ui/*), retuned to this newsprint look — the legacy
