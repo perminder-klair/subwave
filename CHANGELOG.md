@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.29.0](https://github.com/perminder-klair/subwave/compare/v0.28.0...v0.29.0) (2026-06-25)
+
+
+### Features
+
+* add Requesty as an OpenAI-compatible LLM provider ([#539](https://github.com/perminder-klair/subwave/issues/539)) ([ebd4521](https://github.com/perminder-klair/subwave/commit/ebd4521281cc74dc6789faa3f8f4fccd54291b54))
+* **admin:** DJ Doc — station diagnostics + LLM review ([#582](https://github.com/perminder-klair/subwave/issues/582)) ([379ca1d](https://github.com/perminder-klair/subwave/commit/379ca1df1b37beef67543ae2193815a8fe726db0))
+* **doctor:** catch weak-model structured-output failures + sharpen DJ Doc UX ([#592](https://github.com/perminder-klair/subwave/issues/592)) ([004bbac](https://github.com/perminder-klair/subwave/commit/004bbac88e057987c323222235f11f2ed23c4607))
+* **llm:** opt-in tool_choice knob for forced-tool servers ([#570](https://github.com/perminder-klair/subwave/issues/570)) ([#588](https://github.com/perminder-klair/subwave/issues/588)) ([ec1498f](https://github.com/perminder-klair/subwave/commit/ec1498fe9daf6fbc98b1859121c7fe1a51603b78))
+* **stations:** add WHIG, The Hig ([#581](https://github.com/perminder-klair/subwave/issues/581)) ([b40cfea](https://github.com/perminder-klair/subwave/commit/b40cfeaccc00a47b5db7f1305cb0a043c29b3119))
+* **stations:** add WHIG, The Hig ([#591](https://github.com/perminder-klair/subwave/issues/591)) ([0461d00](https://github.com/perminder-klair/subwave/commit/0461d001f3121f9a6867966a00ea55c3f3053569))
+* **tts:** pass persona soul to OpenAI TTS instructions ([#579](https://github.com/perminder-klair/subwave/issues/579)) ([#586](https://github.com/perminder-klair/subwave/issues/586)) ([0dd5a09](https://github.com/perminder-klair/subwave/commit/0dd5a093f4003d28de8168b8009690f09be5141e))
+
+
+### Bug Fixes
+
+* **controller:** persist curiosity dedup across restarts ([#577](https://github.com/perminder-klair/subwave/issues/577)) ([#587](https://github.com/perminder-klair/subwave/issues/587)) ([a95c987](https://github.com/perminder-klair/subwave/commit/a95c9871ab74c21f7d8a8cc686afd8ef01533eee))
+* **picker:** gate embedding-backed discovery tools when the index is empty ([8f16d20](https://github.com/perminder-klair/subwave/commit/8f16d202a93aa8debc162d60402257d4112972ee))
+* **web:** keep the DJ announcement clear of the visualizer ([#576](https://github.com/perminder-klair/subwave/issues/576)) ([#589](https://github.com/perminder-klair/subwave/issues/589)) ([f58abbf](https://github.com/perminder-klair/subwave/commit/f58abbffc8a8a1ddbb1530ccbc404159761d375c))
+
 ## [0.28.0](https://github.com/perminder-klair/subwave/compare/v0.27.0...v0.28.0) (2026-06-23)
 
 
