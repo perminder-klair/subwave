@@ -917,20 +917,6 @@ export default function ShowsPanel() {
                   </SelectContent>
                 </Select>
               </Field>
-              <Field>
-                <Label>max length</Label>
-                <Input
-                  type="number"
-                  min={0}
-                  max={600}
-                  placeholder="inherit"
-                  value={draft.maxTrackMinutes ?? ''}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                    const raw = e.target.value.trim();
-                    setDraftField({ maxTrackMinutes: raw === '' ? null : Math.max(0, parseInt(raw, 10) || 0) });
-                  }}
-                />
-              </Field>
             </div>
 
             <div className="flex items-start gap-3">
@@ -956,10 +942,31 @@ export default function ShowsPanel() {
               Optional soft music steer for this show: a genre, an era, an energy
               band, or any mix. The DJ leans toward these but can break them for
               flow; leave blank to let the topic and mood drive selection.
-              {' '}<b>Max length</b> (minutes) caps how long a picked track can be —
-              leave blank to inherit the station limit, set 0 to allow any length
-              (e.g. a long-form mix show), or a number for this show&rsquo;s own cap.
             </span>
+
+            <Field>
+              <Label htmlFor="show-maxlen">max track length (minutes)</Label>
+              <Input
+                id="show-maxlen"
+                type="number"
+                min={0}
+                max={600}
+                placeholder="inherit"
+                value={draft.maxTrackMinutes ?? ''}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                  const raw = e.target.value.trim();
+                  setDraftField({ maxTrackMinutes: raw === '' ? null : Math.max(0, parseInt(raw, 10) || 0) });
+                }}
+              />
+              <span className="field-hint">
+                The longest a single track can run while this show is on air. The
+                DJ skips anything longer when it picks, so this is a hard limit,
+                not a lean like the fields above. Leave it blank to use the
+                station limit, enter 0 to allow any length (good for a show built
+                around long mixes or DJ sets), or set a number to cap it just for
+                this show.
+              </span>
+            </Field>
 
             <Field>
               <Label htmlFor="show-topic">topic (fed to the DJ as the show theme)</Label>
