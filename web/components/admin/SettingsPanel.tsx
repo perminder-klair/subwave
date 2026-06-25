@@ -336,7 +336,14 @@ interface SettingsData {
     locale?: StationLocale;
   };
   jingles?: JingleEntry[];
-  libraryStats?: { total?: number };
+  libraryStats?: {
+    total?: number;
+    withEmbedding?: number;
+    // Provenance of the text-embedding index: the model it was built with
+    // ("provider:model") and its vector dim. Null when the library was never
+    // embedded. Drives the chat-provider-switch warning in LlmSection.
+    embeddingMeta?: { model: string; dim: number } | null;
+  };
   tagger?: { running?: boolean };
   env?: Record<string, unknown>;
   streamOnAir?: boolean;
@@ -1906,6 +1913,36 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   useEffect(() => { setCompatKeyInput(''); setCompatKeyTest(null); }, [form.llm.provider]);
   useEffect(() => { setCompatFallbackKeyInput(''); setCompatFallbackKeyTest(null); }, [form.llm.fallback.provider]);
 
+  // Embeddings inherit settings.llm by default (embedding.provider === ''), so
+  // switching the CHAT provider silently changes the EMBEDDING model too — which
+  // invalidates an already-embedded library and breaks vector search until a
+  // re-embed (#dimension-mismatch). When the library is embedded and embeddings
+  // are inheriting, pin them to the index's actual model on a provider switch and
+  // surface a notice so the operator understands what happened (and can opt to
+  // re-embed on the new provider instead).
+  const [embedPinNotice, setEmbedPinNotice] = useState<{ model: string; dim: number; newProvider: string } | null>(null);
+  const changeLlmProvider = (v: string) => {
+    if (v === form.llm.provider) return;
+    const inheriting = (form.embedding.provider ?? '') === '';
+    const meta = data.libraryStats?.embeddingMeta;
+    const pin = inheriting && !!meta?.model;
+    setForm(f => {
+      if (!f) return f;
+      const next = { ...f, llm: { ...f.llm, provider: v } };
+      if (pin && meta) {
+        // Stored as "provider:model" (e.g. "ollama:nomic-embed-text"); split on
+        // the FIRST colon so ollama tags with their own colon (bge-m3:latest)
+        // keep the tag intact in the model field.
+        const i = meta.model.indexOf(':');
+        const pinProvider = i > 0 ? meta.model.slice(0, i) : '';
+        const pinModel = i > 0 ? meta.model.slice(i + 1) : meta.model;
+        if (pinProvider) next.embedding = { ...f.embedding, provider: pinProvider, model: pinModel };
+      }
+      return next;
+    });
+    if (pin && meta) setEmbedPinNotice({ model: meta.model, dim: meta.dim, newProvider: v });
+  };
+
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
@@ -2070,7 +2107,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             </div>
             <Select
               value={form.llm.provider}
-              onValueChange={v => setForm(f => ({ ...f, llm: { ...f.llm, provider: v } }))}
+              onValueChange={changeLlmProvider}
             >
               <SelectTrigger className="max-w-[360px]"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -2746,6 +2783,36 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         busy={busy}
         onSave={save}
         saveLabel="Save LLM provider"
+      />
+
+      {/* Chat-provider switch would otherwise drag the inherited embedding model
+          with it and invalidate the already-embedded library. We pinned
+          embeddings to the index's model; this notice explains it and lets the
+          operator instead opt to re-embed on the new provider. The SAFE outcome
+          (keep the pin) is the default — only the explicit confirm switches. */}
+      <V3AlertDialog
+        open={embedPinNotice != null}
+        onOpenChange={(o) => { if (!o) setEmbedPinNotice(null); }}
+        title="Embeddings kept on your library's model"
+        description={embedPinNotice ? (
+          <>
+            Your library is embedded with <code>{embedPinNotice.model}</code> ({embedPinNotice.dim}-d
+            vectors). Embeddings were following the chat provider, so switching to{' '}
+            <strong>{llmProviderLabel(embedPinNotice.newProvider)}</strong> would have changed the
+            embedding model too — and a different model produces incompatible vectors, breaking
+            library / vibe search until you re-embed every track.
+            {' '}To keep search working, embeddings are now <strong>pinned</strong> to{' '}
+            <code>{embedPinNotice.model}</code> (Library tagger → Embedding). Switch embeddings to
+            the new provider instead? You’ll need to re-embed the whole library afterwards.
+          </>
+        ) : ''}
+        confirmLabel="switch embeddings too"
+        cancelLabel="keep pinned"
+        danger
+        onConfirm={() => {
+          setForm(f => (f ? { ...f, embedding: { ...f.embedding, provider: '', model: '' } } : f));
+          setEmbedPinNotice(null);
+        }}
       />
     </>
   );
