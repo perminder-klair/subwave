@@ -2,7 +2,9 @@
 // explore the library before choosing the next track.
 //
 // Each tool returns a slim song list ({ id, title, artist, album, year,
-// genre }) so the model has stable ids to reference. `buildPickerTools`
+// genre } plus editorial tags — moods, energy, duration_sec, instrumental —
+// and measured acoustics when analysed) so the model has stable ids to
+// reference and enough signal to reason about flow. `buildPickerTools`
 // returns a `seen` Map that accumulates every song any tool surfaced, so the
 // picker can resolve the agent's chosen id back to a full track object.
 
@@ -11,7 +13,7 @@ import { z } from 'zod';
 import * as subsonic from '../../../music/subsonic.js';
 import * as library from '../../../music/library.js';
 import * as embeddings from '../../../music/embeddings.js';
-import { filterPickerCandidates } from '../../../music/recency.js';
+import { filterPickerCandidates, durationSeconds } from '../../../music/recency.js';
 import { searchWeb, searchReady } from '../../../skills/web-search.js';
 import { identifyTrackFromText } from '../prompts/request.js';
 
@@ -24,17 +26,32 @@ function slim(s: any) {
     year: s.year || null,
     genre: s.genre || null,
   };
-  // Surface measured acoustic facts when known — from the song itself (library
-  // sources, via slimTrack) or a library lookup (Subsonic sources). Each field
-  // is omitted when un-analysed so the agent only ever sees real values.
-  // `pace` (0..1 perceptual energy) and `sections` (structural-part count over
-  // the opening) feed FLOW reasoning per PICKER_CRITERIA in llm/dj.ts.
+  // Surface the editorial tags + measured acoustic facts when known — from the
+  // song itself (library sources, via slimTrack) or a library lookup (Subsonic
+  // sources). Each field is omitted when absent so the agent only ever sees real
+  // values. `moods`/`energy` are the station's tagging vocabulary; `instrumental`
+  // is derived from vocalRanges; `pace` (0..1 perceptual energy) and `sections`
+  // (structural-part count over the opening) feed FLOW reasoning per
+  // PICKER_CRITERIA in llm/dj.ts.
   const src = (s.bpm != null || s.musicalKey != null || s.introMs != null)
     ? s
     : (s.id ? library.get(s.id) : null);
-  if (!src) return base;
+  // Length reads from whichever field the raw candidate carries (Subsonic
+  // `duration`, library `durationSec`), so it's present even for an un-tagged
+  // Subsonic track whose library lookup came back empty.
+  const durationSec = durationSeconds(s) ?? durationSeconds(src);
+  if (!src) {
+    return durationSec != null ? { ...base, duration_sec: durationSec } : base;
+  }
+  // vocalRanges: [] = no vocal regions (instrumental), null/undefined = not
+  // computed (unknown — omit rather than guess "has vocals").
+  const instrumental = Array.isArray(src.vocalRanges) ? src.vocalRanges.length === 0 : null;
   return {
     ...base,
+    ...(Array.isArray(src.moods) && src.moods.length ? { moods: src.moods } : {}),
+    ...(src.energy != null ? { energy: src.energy } : {}),
+    ...(durationSec != null ? { duration_sec: durationSec } : {}),
+    ...(instrumental != null ? { instrumental } : {}),
     ...(src.bpm != null ? { bpm: src.bpm } : {}),
     ...(src.musicalKey != null ? { key: src.musicalKey } : {}),
     ...(src.introMs != null ? { intro_ms: src.introMs } : {}),
