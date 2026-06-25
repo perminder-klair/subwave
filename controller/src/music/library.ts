@@ -66,7 +66,9 @@ export function get(songId: string): any {
     // Phase 2/4 acoustic surface for the agent picker's Subsonic-fallback path
     // (slim() in llm/tools.ts). Library-sourced candidates already carry these
     // via slimTrack; this keeps Subsonic-sourced candidates symmetric.
+    durationSec: t.durationSec,
     structure: t.structure,
+    vocalRanges: t.vocalRanges, // [] = instrumental, null = not computed
     paceMean: paceMeanOf(t.pace),
   };
 }
@@ -141,6 +143,10 @@ export function songsByMood(mood: string | null | undefined): any[] {
       genre: r.genre,
       moods: r.moods,
       energy: r.energy,
+      // Length (seconds) for the max-track-length cap (issue #447) — without it
+      // a locally mood-tagged long mix would read as "unknown length" and slip
+      // past the cap.
+      durationSec: r.durationSec,
     }));
 
   const exact = flatten(db.songsByMood(mood));
@@ -180,6 +186,10 @@ function slimTrack(r: db.TrackRecord) {
     genre: r.genre,
     moods: r.moods,
     energy: r.energy,
+    // Track length (seconds) so the max-track-length cap (issue #447) can act on
+    // library-sourced candidates too — keeps them symmetric with Subsonic's
+    // `duration`. null on rows without it; the cap treats null as "unknown".
+    durationSec: r.durationSec,
     // Acoustic analysis — null on un-analysed tracks. Consumers (picker
     // re-rank, LLM candidate surface) treat null as "no signal".
     bpm: r.bpm,

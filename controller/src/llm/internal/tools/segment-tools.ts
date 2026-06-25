@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { queue } from '../../../broadcast/queue.js';
 import { fetchHeadlines, hashHeadline } from '../../../skills/news.js';
 import { searchWeb, searchReady } from '../../../skills/web-search.js';
-import { fetchOnThisDay, hashCuriosity } from '../../../skills/curiosity.js';
+import { fetchOnThisDay, curiositySeen, recordCuriosity } from '../../../skills/curiosity.js';
 import { getArtist, searchArtists } from '../../../music/subsonic.js';
 
 // `caps` is the list of capabilities offered this tick (see skills/_agent.js).
@@ -78,13 +78,13 @@ export function buildSegmentTools(ctx: any, state: any, caps: any[]) {
       execute: async () => {
         try {
           const items = await fetchOnThisDay();
-          const fresh = items.filter((it: any) => !state.seenCuriosity.has(hashCuriosity(it.text)));
+          const fresh = items.filter((it: any) => !curiositySeen(it.text));
           if (!fresh.length) return { available: false };
-          // Burn-on-read: claim what we surface so a later tick doesn't re-offer it.
-          for (const it of fresh.slice(0, 3) as any[]) state.seenCuriosity.add(hashCuriosity(it.text));
-          if (state.seenCuriosity.size > 200) {
-            state.seenCuriosity = new Set(Array.from(state.seenCuriosity).slice(-100));
-          }
+          // Burn-on-read into the durable ledger so a later tick — or a tick
+          // after a controller restart — doesn't re-offer the same Wikipedia
+          // event (issue #577). Recorded as aired=false: surfaced, not yet
+          // spoken. The aired line is recorded separately when it airs.
+          for (const it of fresh.slice(0, 3) as any[]) recordCuriosity(it.text);
           return {
             available: true,
             items: fresh.slice(0, 3).map((it: any) => ({ year: it.year, text: it.text })),
@@ -173,7 +173,7 @@ export function buildSegmentTools(ctx: any, state: any, caps: any[]) {
         if (!artist || /^unknown/i.test(artist)) return { available: false };
         const alreadySearched = artist === state.lastSearchedArtist;
         try {
-          const data = await searchWeb(`${artist} musician latest news`);
+          const data = await searchWeb(`${artist} musician latest news`, { recency: 'week' });
           state.lastSearchedArtist = artist;
           const answer = (data.answer || '').trim();
           const sources = (data.results || [])

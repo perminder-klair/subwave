@@ -20,6 +20,7 @@ export const SECRET_ENV_KEYS = [
   'OPENAI_API_KEY',
   'GOOGLE_GENERATIVE_AI_API_KEY',
   'OPENROUTER_API_KEY',
+  'REQUESTY_API_KEY',
   'DEEPSEEK_API_KEY',
   'AI_GATEWAY_API_KEY',
   'ELEVENLABS_API_KEY',
@@ -85,15 +86,22 @@ export async function saveSecrets(patch: Record<string, string>): Promise<void> 
       const eq = line.indexOf('=');
       if (eq < 0) continue;
       const key = line.slice(0, eq).trim();
-      if (SECRET_ENV_KEYS.includes(key)) current[key] = line.slice(eq + 1);
+      if (SECRET_ENV_KEYS.includes(key)) {
+        let value = line.slice(eq + 1).trim();
+        if (
+          value.length >= 2 &&
+          ((value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'")))
+        ) {
+          value = value.slice(1, -1);
+        }
+        current[key] = value;
+      }
     }
   }
   for (const [key, value] of Object.entries(patch)) {
     if (!SECRET_ENV_KEYS.includes(key)) continue;
     current[key] = value;
-    // Take effect immediately for any subsequent AI SDK call this process
-    // makes. Restart isn't required for the keys collected via the wizard.
-    if (value) process.env[key] = value;
   }
   const body = [
     '# SUB/WAVE secrets — written by the first-run wizard.',
@@ -104,6 +112,15 @@ export async function saveSecrets(patch: Record<string, string>): Promise<void> 
   ].join('\n');
   await writeFile(PATH, body);
   await chmod(PATH, 0o600);
+  // Only now — after the file is safely on disk — mutate the live process env,
+  // so any subsequent AI SDK call sees the new key without a restart. Doing this
+  // after the write (rather than in the merge loop above) means a value rejected
+  // by envEscape (newline/quote) never takes effect in-process while being absent
+  // from the file: the live env and disk stay in lockstep.
+  for (const [key, value] of Object.entries(patch)) {
+    if (!SECRET_ENV_KEYS.includes(key) || !value) continue;
+    process.env[key] = value;
+  }
 }
 
 // Same shape as cli/src/util.ts:envEscape — keep them in sync. We single-quote
@@ -113,6 +130,9 @@ export async function saveSecrets(patch: Record<string, string>): Promise<void> 
 // defence-in-depth here; it matters more when the same file ever gets read by
 // something that does interpolate.
 function envEscape(value: string): string {
+  if (value.includes('\n') || value.includes('\r')) {
+    throw new Error('Secret value contains a newline; refuse to persist (would corrupt line-based parser)');
+  }
   if (/^[A-Za-z0-9_./:@,+\-]*$/.test(value)) return value;
   if (value.includes("'")) {
     throw new Error(

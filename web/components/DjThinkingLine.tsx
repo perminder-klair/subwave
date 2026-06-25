@@ -2,16 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
-import { turnClass, turnText, type TurnDisplayClass } from '@/lib/sessionFeed';
+import { selectThinkingTurn, turnClass, turnText } from '@/lib/sessionFeed';
 import BoothBuddy, { type BuddyMood } from './BoothBuddy';
 import type { SessionTurn } from '@/lib/types';
 
 // Shows only the DJ's "thinking" — the latest thing said on-air ("voice") or
-// the latest pick/request reasoning ("dj"). Aired tracks and system turns
-// stay out. Renders under the track info as a small typed line; tapping it
-// opens the Booth drawer with the full transcript. The Booth Sprite leads the
-// line, its mood reacting to DJ activity (see useBuddyMood).
-const THINKING_CLASSES = new Set<TurnDisplayClass>(['voice', 'dj']);
+// the pick/request reasoning ("dj") for the track ON AIR. Aired tracks and
+// system turns stay out. Renders under the track info as a small typed line;
+// tapping it opens the Booth drawer with the full transcript. The Booth Sprite
+// leads the line, its mood reacting to DJ activity (see useBuddyMood).
 
 // Booth-buddy mood loop, driven by the newest DJ turn: it perks up when the DJ
 // speaks ('onair') or picks ('curious'), settles back to 'content', then dozes
@@ -85,6 +84,11 @@ export interface DjThinkingLineProps {
   /** Live session messages, oldest first. */
   feed: SessionTurn[] | undefined;
   enabled: boolean;
+  /** Subsonic id of the track on air. A `dj`/pick turn's `meta.trackId` is the
+   *  *picked* song — which, because picks run at the previous track's start, is
+   *  the track to play NEXT, not the one playing now. Used to skip pick
+   *  reasoning that isn't about the current track (#546). */
+  currentTrackId?: string | null;
   /** Station-wide Booth Sprite toggle; falls back to the classic marker when
    *  false. Defaults off (operator opts in). */
   buddyOn?: boolean;
@@ -93,16 +97,12 @@ export interface DjThinkingLineProps {
 
 // `feed` is the live session's `messages` array — turns of
 // { t, role, kind, text, meta }, oldest first.
-export default function DjThinkingLine({ feed, enabled, buddyOn = false, onOpenBooth }: DjThinkingLineProps) {
-  // The newest voice/dj turn — what the DJ is currently "thinking".
-  const latest = useMemo<SessionTurn | null>(() => {
-    if (!feed?.length) return null;
-    for (let i = feed.length - 1; i >= 0; i--) {
-      const turn = feed[i];
-      if (turn && THINKING_CLASSES.has(turnClass(turn)) && turn.text) return turn;
-    }
-    return null;
-  }, [feed]);
+export default function DjThinkingLine({ feed, enabled, currentTrackId = null, buddyOn = false, onOpenBooth }: DjThinkingLineProps) {
+  // The DJ turn relevant to what's ON AIR now — see selectThinkingTurn (#546).
+  const latest = useMemo<SessionTurn | null>(
+    () => selectThinkingTurn(feed, currentTrackId),
+    [feed, currentTrackId],
+  );
 
   const [mood, poke] = useBuddyMood(latest);
   // Hit-test taps against the buddy so poking it startles the sprite in place,
@@ -152,9 +152,11 @@ export default function DjThinkingLine({ feed, enabled, buddyOn = false, onOpenB
         </span>
       )}
       {/* Clamp the inline teaser so the long "extended" scripts can't grow the
-          column and shove the artwork/title up under the header on mobile.
-          The full text stays one tap away in the Booth (and in aria-label). */}
-      <span className="line-clamp-5 min-w-0 flex-1 [overflow-wrap:anywhere] sm:line-clamp-10">
+          column and shove the artwork/title up under the header, or spill the
+          line down over the waveform (issue #576). The clamp is tighter on
+          short windows; the full text stays one tap away in the Booth (and in
+          aria-label). */}
+      <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere] [@media(min-height:760px)]:line-clamp-6">
         <AnimatePresence mode="wait">
           <m.span
             key={turnId}

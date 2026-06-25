@@ -36,3 +36,25 @@ export function turnText(turn: SessionTurn | null | undefined): string {
   if (turnClass(turn) === 'track') return text.replace(/^▶\s*/, '');
   return text;
 }
+
+// The single voice/dj turn to surface as the DJ "thinking" line under the
+// now-playing block. Skips `dj`/pick turns whose meta.trackId is for a track
+// other than what's on air — a pick turn is written at the previous track's
+// start, so its trackId is the NEXT track, not the one playing now (#546).
+// Voice turns carry no trackId, so the aired back-announce link wins, falling
+// back to this track's own pick reason on a silent transition.
+export function selectThinkingTurn(
+  feed: SessionTurn[] | null | undefined,
+  currentTrackId: string | null = null,
+): SessionTurn | null {
+  if (!feed?.length) return null;
+  for (let i = feed.length - 1; i >= 0; i--) {
+    const turn = feed[i];
+    const cls = turnClass(turn);
+    if (!turn?.text || (cls !== 'voice' && cls !== 'dj')) continue;
+    const trackId = turn.meta?.trackId as string | undefined;
+    if (cls === 'dj' && trackId && trackId !== currentTrackId) continue;
+    return turn;
+  }
+  return null;
+}

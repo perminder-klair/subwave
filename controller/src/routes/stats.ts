@@ -13,6 +13,7 @@ import * as settings from '../settings.js';
 import { ttsCalls, summarizeLlm, summarizeTts, summarizeDjLog, summarizeRequests } from '../stats.js';
 import { queue } from '../broadcast/queue.js';
 import { recentRequests } from '../broadcast/request-log.js';
+import { budgetStatus } from '../broadcast/dj-budget.js';
 
 export const router = express.Router();
 
@@ -26,6 +27,10 @@ router.get('/stats', requireAdmin, (req, res) => {
     // anchors its redline to this so "red" means "hitting fallbacks", not an
     // arbitrary ceiling. Mirror of agentDeadline() in broadcast/dj-agent.ts.
     llm.agentTimeoutMs = settings.get().llm?.agentTimeoutMs ?? 45000;
+    // Daily token budget — today's usage vs the cap + the resulting tier. Unlike
+    // the rollups above (the 120-call ring, lost on restart) this is the durable
+    // per-UTC-day tally. `enabled:false` when no cap is set.
+    llm.budget = budgetStatus();
 
     res.json({
       t: new Date().toISOString(),

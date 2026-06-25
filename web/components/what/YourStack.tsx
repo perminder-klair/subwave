@@ -24,6 +24,7 @@ const BRAINS = [
   'Google',
   'DeepSeek',
   'OpenRouter',
+  'Requesty',
   'Vercel Gateway',
   'OpenAI-compatible',
 ];

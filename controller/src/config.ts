@@ -192,6 +192,16 @@ export const config = {
     recentPlaysFile: `${STATE_DIR}/recent-plays.json`,
     recentPlaysMax: 300,
   },
+  curiosity: {
+    // Durable dedup ledger for the `curiosity` segment capability. Holds every
+    // "on this day" item surfaced to the agent and every curiosity line aired,
+    // so a controller restart no longer wipes the in-memory dedup set and
+    // re-airs the same fact (issue #577). Pruned to `maxAgeDays` on load.
+    seenFile: `${STATE_DIR}/seen-curiosity.json`,
+    maxAgeDays: 7,
+    // Hard cap on persisted entries — a belt to the 7-day prune.
+    maxEntries: 400,
+  },
   weather: {
     // Punjab (Chandigarh) — your home location
     lat: 30.7333,

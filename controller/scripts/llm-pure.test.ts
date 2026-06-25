@@ -7,9 +7,9 @@
 // node:assert-via-tsx style of scripts/picker-recency-regression.ts.
 
 import assert from 'node:assert/strict';
-import { stripThinking, extractJson, usageOf, isUnreachable, isTransient, isQuotaOrAuthError } from '../src/llm/internal/core/pure.js';
+import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError } from '../src/llm/internal/core/pure.js';
 import { withDeadline } from '../src/llm/internal/core/retry.js';
-import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx } from '../src/llm/internal/provider/capabilities.js';
+import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
 import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
@@ -146,6 +146,20 @@ async function main() {
     assert.equal(appliedNumCtx({ provider: 'locca', model: 'qwen3', numCtx: 8192 }), null);
   });
 
+  await test('forcedToolChoice: only the literal "auto" downgrades; everything else is "required" (issue #570)', () => {
+    // Opt-in downgrade for crash-prone forced-tool servers (newer Intel vLLM).
+    assert.equal(forcedToolChoice({ provider: 'openai-compatible', toolChoice: 'auto' }), 'auto');
+    // Default + explicit 'required' both force the tool call.
+    assert.equal(forcedToolChoice({ provider: 'openai-compatible', toolChoice: 'required' }), 'required');
+    assert.equal(forcedToolChoice({ provider: 'openai-compatible' }), 'required');
+    // Provider-agnostic: it's a per-leg knob, not a per-provider trait.
+    assert.equal(forcedToolChoice({ provider: 'ollama', toolChoice: 'auto' }), 'auto');
+    assert.equal(forcedToolChoice({ provider: 'anthropic' }), 'required');
+    // Garbage / missing cfg never accidentally weakens the default.
+    assert.equal(forcedToolChoice({ toolChoice: 'whatever' }), 'required');
+    assert.equal(forcedToolChoice(undefined), 'required');
+  });
+
   // ---- embedding base URL (the relative-/embeddings crash, #405 follow-up) ----
   console.log('embeddingBaseUrl(cfg):');
   await test('locca blank → dedicated EMBED default, never chat or a relative URL', () => {
@@ -196,6 +210,30 @@ async function main() {
     assert.deepEqual(usageOf({ totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } }), { input: 10, output: 5, total: 15 });
     assert.deepEqual(usageOf({ usage: { promptTokens: 3, completionTokens: 2 } }), { input: 3, output: 2, total: 5 });
     assert.deepEqual(usageOf({}), { input: 0, output: 0, total: 0 });
+  });
+
+  // ---- daily token budget mode ----
+  console.log('budgetMode (daily LLM token cap → normal/soft/hard):');
+  await test('cap <= 0 (or non-finite) is always normal — the disabled default', () => {
+    assert.equal(budgetMode({ used: 9_999_999, cap: 0, softPct: 80 }), 'normal');
+    assert.equal(budgetMode({ used: 1, cap: -5, softPct: 80 }), 'normal');
+    assert.equal(budgetMode({ used: 1, cap: NaN, softPct: 80 }), 'normal');
+  });
+  await test('used below soft threshold is normal', () => {
+    assert.equal(budgetMode({ used: 700, cap: 1000, softPct: 80 }), 'normal');
+  });
+  await test('used at/above soft threshold but below cap is soft', () => {
+    assert.equal(budgetMode({ used: 800, cap: 1000, softPct: 80 }), 'soft');
+    assert.equal(budgetMode({ used: 999, cap: 1000, softPct: 80 }), 'soft');
+  });
+  await test('used at/above cap is hard', () => {
+    assert.equal(budgetMode({ used: 1000, cap: 1000, softPct: 80 }), 'hard');
+    assert.equal(budgetMode({ used: 5000, cap: 1000, softPct: 80 }), 'hard');
+  });
+  await test('softPct 0 or 100 disables the soft tier (straight to hard at cap)', () => {
+    assert.equal(budgetMode({ used: 999, cap: 1000, softPct: 0 }), 'normal');
+    assert.equal(budgetMode({ used: 999, cap: 1000, softPct: 100 }), 'normal');
+    assert.equal(budgetMode({ used: 1000, cap: 1000, softPct: 0 }), 'hard');
   });
 
   // ---- talk-within-the-intro budget ----

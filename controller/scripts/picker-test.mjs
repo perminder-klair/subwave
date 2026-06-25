@@ -202,7 +202,7 @@ async function main() {
 
   if (!provider || !model || !['short', 'long'].includes(messagesMode)) {
     console.error('Usage: node scripts/picker-test.mjs <provider> <model> [iterations] [short|long]');
-    console.error('Providers: ollama | openrouter | deepseek | openai | anthropic | google | gateway | openai-compatible');
+    console.error('Providers: ollama | openrouter | requesty | deepseek | openai | anthropic | google | gateway | openai-compatible');
     console.error('Messages:  short (3 clean turns) | long (~25 realistic session turns)');
     process.exit(2);
   }

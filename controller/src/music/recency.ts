@@ -13,6 +13,10 @@ export interface CandidateLike {
   id?: string | null;
   title?: string | null;
   artist?: string | null;
+  // Track length. Subsonic songs carry `duration`; library-db rows carry
+  // `durationSec`. Both optional — unknown length is never grounds to drop.
+  duration?: number | null;
+  durationSec?: number | null;
 }
 
 export interface CandidateFilterState {
@@ -23,6 +27,29 @@ export interface CandidateFilterState {
   artistCounts?: Map<string, number>;
   maxPerArtist?: number;
   cap?: number;
+  // Hard length cap in seconds (station/show max-track-length, issue #447).
+  // null / 0 means "no cap". Tracks longer than this are dropped before the
+  // recency relaxation below, so an over-length track never airs even when the
+  // pool is starved.
+  maxDurationSec?: number | null;
+  // Whether a starved result may relax the recent-ARTIST guard. Default true
+  // preserves the pool picker's "never return empty" behaviour. The agent's
+  // per-tool collect() passes false: a single-artist tool (topSongsByArtist /
+  // similarSongs narrowed to one recent artist) then returns empty instead of
+  // handing the just-played artist straight back — the agent reaches for one of
+  // its other six discovery tools. This closes the artist-fixation bypass that
+  // let one artist re-air every ~1.2h despite the 2h artist window. Tracks may
+  // still relax as a last resort, but only for FRESH (non-recent) artists.
+  allowArtistRelaxation?: boolean;
+}
+
+// Track length in seconds from whichever field the source carries, or null when
+// unknown. Zero/negative/non-finite all read as unknown — we only ever act on a
+// positive, trustworthy duration (the hour-long album mixes #447 targets report
+// one reliably).
+export function durationSeconds(song: CandidateLike): number | null {
+  const d = song?.duration ?? song?.durationSec;
+  return Number.isFinite(d) && (d as number) > 0 ? Number(d) : null;
 }
 
 export function artistKey(song: CandidateLike): string {
@@ -66,20 +93,41 @@ export function filterPickerCandidates<T extends CandidateLike>(
     artistCounts = new Map<string, number>(),
     maxPerArtist = Infinity,
     cap = Infinity,
+    maxDurationSec = null,
+    allowArtistRelaxation = true,
   }: CandidateFilterState = {},
 ): T[] {
-  const modes = [
-    { recentTracks: true, recentArtists: true },
-    { recentTracks: true, recentArtists: false },
-    { recentTracks: false, recentArtists: false },
-  ];
+  // Length cap first, outside the recency loop: a too-long track is never an
+  // acceptable autonomous pick, so it must not survive even the fully-relaxed
+  // third mode. Unknown-duration tracks pass through untouched.
+  const pool = maxDurationSec && maxDurationSec > 0
+    ? (list || []).filter((s) => {
+        const d = durationSeconds(s);
+        return d == null || d <= maxDurationSec;
+      })
+    : (list || []);
+
+  // Relaxation cascade: each mode drops a guard so a starved pool still yields
+  // something rather than nothing. When artist relaxation is disabled the artist
+  // guard stays ON in every mode — only the track guard may drop, and only for
+  // fresh artists — so the agent is never handed an artist it just played.
+  const modes = allowArtistRelaxation
+    ? [
+        { recentTracks: true, recentArtists: true },
+        { recentTracks: true, recentArtists: false },
+        { recentTracks: false, recentArtists: false },
+      ]
+    : [
+        { recentTracks: true, recentArtists: true },
+        { recentTracks: false, recentArtists: true },
+      ];
 
   for (const mode of modes) {
     const nextSeen = new Set(seenIds);
     const nextArtistCounts = new Map(artistCounts);
     const out: T[] = [];
 
-    for (const song of list || []) {
+    for (const song of pool) {
       if (!song?.id || nextSeen.has(song.id)) continue;
       if (mode.recentTracks && recentIds.has(song.id)) continue;
       if (mode.recentTracks && recentKeys.has(trackKey(song))) continue;

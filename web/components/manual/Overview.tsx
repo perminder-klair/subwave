@@ -64,6 +64,12 @@ const GUIDE = [
   },
 ];
 
+const NUMBER_WORDS = [
+  'No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight',
+  'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen',
+];
+const guideCount = NUMBER_WORDS[GUIDE.length] ?? String(GUIDE.length);
+
 export default function Overview() {
   return (
     <ManualPage
@@ -74,7 +80,7 @@ export default function Overview() {
     >
       <section className="bs-section">
         <p className="bs-eyebrow">WHAT'S INSIDE</p>
-        <h2>Eleven short guides.</h2>
+        <h2>{guideCount} short guides.</h2>
         <p>
           Start at the top if you're new. Each page links to the next, so you can read
           straight through, or jump to whatever you need from the contents on the left.

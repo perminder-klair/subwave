@@ -171,6 +171,7 @@ export const LLM_PROVIDERS = [
   'openai-compatible',
   'locca',
   'openrouter',
+  'requesty',
   'anthropic',
   'openai',
   'google',
@@ -196,6 +197,7 @@ export const EMBEDDING_PROVIDERS = [
   'openai',
   'google',
   'openrouter',
+  'requesty',
 ];
 
 // Coerce a stored Ollama context-window value. 0 disables (use Ollama's own
@@ -215,6 +217,23 @@ function clampNumCtx(raw: any, def: number): number {
 function clampAgentTimeout(raw: any, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   return Math.min(180_000, Math.max(5_000, Math.floor(raw)));
+}
+
+// Daily LLM token cap. 0 disables (the default — never cap a free local box);
+// otherwise floored to a non-negative integer. No upper bound: a cloud quota
+// can legitimately be in the tens of millions of tokens/day. Non-numeric/NaN
+// falls back to `def`.
+function clampDailyTokenCap(raw: any, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  return Math.max(0, Math.floor(raw));
+}
+
+// Soft-tier threshold as a percent of the cap. Clamped to [0, 100]; 0 or 100
+// disables the soft tier (straight to hard at the cap). Non-numeric/NaN falls
+// back to `def`.
+function clampBudgetSoftPct(raw: any, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  return Math.min(100, Math.max(0, Math.floor(raw)));
 }
 
 // Validate + apply the connection fields shared by the primary LLM leg and its
@@ -264,6 +283,15 @@ function applyLlmLegPatch(target: any, patch: any, label: string): void {
   if (l.numCtx !== undefined) {
     target.numCtx = clampNumCtx(Number(l.numCtx), target.numCtx);
   }
+  // Forced-tool tool_choice: 'required' (default) or 'auto'. Only those two are
+  // legal; anything else is a config error. See forcedToolChoice() / issue #570.
+  if (l.toolChoice !== undefined) {
+    const v = String(l.toolChoice).trim();
+    if (v !== 'required' && v !== 'auto') {
+      throw new Error(`${label}.toolChoice must be "required" or "auto"`);
+    }
+    target.toolChoice = v;
+  }
 }
 
 // Cloud TTS vendors usable by the `cloud` engine. `openai-compatible` targets
@@ -278,7 +306,7 @@ export const TTS_CLOUD_PROVIDERS = ['openai', 'elevenlabs', 'openai-compatible']
 // silence otherwise (which the segment director already treats as a valid
 // outcome). `tavily` is the paid option for operators who want richer web
 // results; it reads its key from SEARCH_API_KEY.
-export const SEARCH_PROVIDERS = ['duckduckgo', 'tavily'];
+export const SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'searxng'] as const;
 
 // Canonical mood vocabulary. Shared by the library tagger (music/tag-library.js
 // imports this as MOOD_VOCAB) and the Shows scheduler — a show's `mood`
@@ -382,6 +410,47 @@ function clamp01(n: number): number {
   return n;
 }
 
+// Coerce a stored/per-show max-track-length to a clean integer SECOND count.
+// `allowNull` distinguishes the two callers: the station default has no "unset"
+// state (missing → 0 = off), whereas a per-show value uses null to mean "inherit
+// the station default" (vs 0 = "unlimited override"). Out-of-band values clamp
+// into [0, max] rather than throw — load() stays lenient.
+function coerceMaxTrackSeconds(raw: any, allowNull: boolean): number | null {
+  if (raw == null || raw === '') return allowNull ? null : 0;
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n)) return allowNull ? null : 0;
+  return Math.min(BOUNDS.maxTrackSeconds.max, Math.max(0, n));
+}
+
+// Back-compat: this cap was stored and sent in MINUTES (`maxTrackMinutes`) before
+// it moved to seconds. Prefer the new `maxTrackSeconds` key; fall back to a legacy
+// minutes value ×60 so an existing settings.json / show and any stale client keep
+// working. Returns the raw seconds value (leaving null/''/undefined untouched) for
+// coerceMaxTrackSeconds to clamp.
+function rawMaxTrackSec(o: any): any {
+  if (o == null) return o;
+  if (o.maxTrackSeconds != null && o.maxTrackSeconds !== '') return o.maxTrackSeconds;
+  if (o.maxTrackMinutes != null && o.maxTrackMinutes !== '') return Number(o.maxTrackMinutes) * 60;
+  return o.maxTrackSeconds;
+}
+
+// Effective track-length cap in SECONDS for the moment a pick is made, or null
+// for "no cap". A scheduled show's maxTrackSeconds (when set) overrides the
+// station default; 0 at the winning level means unlimited. This is the single
+// resolver both picker paths and the auto-playlist call so the precedence rule
+// lives in exactly one place.
+export function effectiveMaxTrackSec(
+  show: any = resolveActiveShow(),
+  s: any = get(),
+): number | null {
+  const station = coerceMaxTrackSeconds(s?.maxTrackSeconds, false) ?? 0;
+  const showSec = show && show.maxTrackSeconds != null
+    ? coerceMaxTrackSeconds(show.maxTrackSeconds, false)
+    : null;
+  const sec = showSec != null ? showSec : station;
+  return sec && sec > 0 ? sec : null;
+}
+
 function mintId(prefix) {
   return prefix + randomBytes(3).toString('hex');
 }
@@ -444,6 +513,13 @@ export const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
 const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
   crossfadeDuration: 10.0, // seconds
+  // Station-wide cap (seconds) on how long a single autonomously-picked track
+  // may be — keeps hour-long album mixes and DJ sets out of normal rotation
+  // (issue #447). 0 = no cap (default, unchanged behaviour). A scheduled show
+  // can override this with its own `maxTrackSeconds` (0 there = "unlimited",
+  // i.e. opt back out of the station cap for a long-form show). Listener
+  // requests bypass the cap entirely — an explicit ask always plays.
+  maxTrackSeconds: 0,
   // Hourly archive output. Enabled by default to preserve existing behaviour.
   // The second MP3 encoder is the largest constant CPU cost in the broadcast
   // container — operators who don't use the archives can switch this off to
@@ -550,6 +626,16 @@ const DEFAULTS = {
     // <think> block on a small model balloons every call (see llm/sdk.js
     // token caps + llm/provider.js no-think fetch).
     reasoning: false,
+    // How SUB/WAVE forces a tool call in the structured-output paths (the emit /
+    // done-tool harness). 'required' (default) makes the model call the tool —
+    // the reliable path for local models that ignore JSON mode. Switch to 'auto'
+    // ONLY if your server crashes on tool_choice:"required": recent vLLM
+    // implements it via a guided-decoding backend that some images (newer
+    // Intel/XPU builds) mishandle, while "auto" never engages it (issue #570).
+    // On 'auto' the done-tool path keeps its activeTools pinning + instructions,
+    // so a capable model still calls the tool; misses fall back to the pool
+    // picker. Leave on 'required' unless you hit that crash.
+    toolChoice: 'required',
     // Ollama context window (num_ctx), local Ollama only. Ollama's own default
     // is 4096, but the session DJ agent feeds ~8k+ (the 40-turn session window
     // + tool schemas + discovery results), so the default silently truncates
@@ -584,6 +670,26 @@ const DEFAULTS = {
     // reports zero listeners — the stream coasts on the auto playlist — and
     // resume as soon as someone tunes in. Off by default.
     pauseWhenEmpty: false,
+    // Daily LLM token budget — a safety net against bill-shock on a metered
+    // provider (the DJ calls the model on essentially every track transition,
+    // 24/7). 0 = unlimited (the default — most installs run free local Ollama
+    // and must be unaffected). When set, the day's token usage (UTC, summed
+    // from the same usage stats as the lifetime ticker) drives a two-tier
+    // degradation: at `budgetSoftPct` of the cap the DJ drops to the cheap pool
+    // picker and mutes optional segments (links, station IDs, hourly, weather/
+    // news/etc.); at the cap it stops calling the model entirely and the stream
+    // coasts on the LLM-free auto playlist — music never stops. Enforced in
+    // broadcast/dj-budget.ts; see llm/internal/core/pure.ts `budgetMode`.
+    dailyTokenCap: 0,
+    // When the day's usage crosses this percent of dailyTokenCap, enter the
+    // "soft" tier (cheap picker, no optional segments). 0 or 100 disables the
+    // soft tier and goes straight from normal to hard at the cap.
+    budgetSoftPct: 80,
+    // When on (the default), listener requests are still answered by the agent
+    // even over the hard cap — a human asked, so honour it. When off, requests
+    // over the cap fall through to the stateless matcher cascade like every
+    // other LLM path. No effect until dailyTokenCap is set.
+    exemptRequests: true,
     // When on (or when LLM_DEBUG_RAW is set in the env), every outbound model
     // request's exact body is captured to ${STATE_DIR}/logs/llm-debug.log (the
     // last 10, newest first) and dumped to stderr — a copy-pasteable view of
@@ -609,6 +715,7 @@ const DEFAULTS = {
       ollamaUrl: '',
       baseUrl: '',
       reasoning: false,
+      toolChoice: 'required',
       numCtx: 16384,
     },
   },
@@ -664,6 +771,7 @@ const DEFAULTS = {
   search: {
     provider: 'duckduckgo',
     apiKey: '',
+    baseUrl: '',
   },
   skills: {
     enabled: {},
@@ -719,6 +827,9 @@ const DEFAULTS = {
 const BOUNDS = {
   jingleRatio: { min: 1, max: 1000, type: 'int' },
   crossfadeDuration: { min: 0, max: 30, type: 'float' },
+  // 0 = off; 36000 s (10h) is a generous ceiling that still leaves room for
+  // long-form mix shows without letting a typo set an absurd value.
+  maxTrackSeconds: { min: 0, max: 36000, type: 'int' },
 };
 
 const ARCHIVE_BITRATE_SET = new Set<number>(ARCHIVE_BITRATES);
@@ -873,6 +984,10 @@ function normalizeShows(raw: any, personaIds: string[]) {
     // lean. Only meaningful when a genre is set; defaults off so existing shows
     // and soft shows are byte-for-byte unchanged.
     const genreStrict = item.genreStrict === true;
+    // Per-show track-length override (seconds). null = inherit the station-wide
+    // maxTrackSeconds; 0 = unlimited (opt this show back out of the cap so a
+    // long-form mix show can air hour-long sets); >0 = this show's own cap.
+    const maxTrackSeconds = coerceMaxTrackSeconds(rawMaxTrackSec(item), true);
     out.push({
       id,
       name,
@@ -885,6 +1000,7 @@ function normalizeShows(raw: any, personaIds: string[]) {
       toYear,
       energy,
       genreStrict,
+      maxTrackSeconds,
     });
     if (out.length >= SHOWS_LIMIT) break;
   }
@@ -966,6 +1082,7 @@ export async function load() {
   cache = {
     jingleRatio: stored.jingleRatio ?? DEFAULTS.jingleRatio,
     crossfadeDuration: stored.crossfadeDuration ?? DEFAULTS.crossfadeDuration,
+    maxTrackSeconds: coerceMaxTrackSeconds(rawMaxTrackSec(stored), false) ?? DEFAULTS.maxTrackSeconds,
     archive: {
       enabled:
         typeof stored.archive?.enabled === 'boolean'
@@ -1098,6 +1215,9 @@ export async function load() {
         typeof stored.llm?.baseUrl === 'string' ? stored.llm.baseUrl.trim() : DEFAULTS.llm.baseUrl,
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
+      // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
+      // pre-field settings.json) lands on the 'required' default. See issue #570.
+      toolChoice: stored.llm?.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.toolChoice,
       // Clamp to a sane band: 0 disables (Ollama default), else [2048, 131072].
       // Non-numeric/NaN falls back to the default. Floored to an integer.
       numCtx: clampNumCtx(stored.llm?.numCtx, DEFAULTS.llm.numCtx),
@@ -1116,6 +1236,14 @@ export async function load() {
         typeof stored.llm?.pauseWhenEmpty === 'boolean'
           ? stored.llm.pauseWhenEmpty
           : DEFAULTS.llm.pauseWhenEmpty,
+      // Budget cap — settings.json files from before these fields existed pick
+      // up the defaults (0 = disabled, so they behave exactly as before).
+      dailyTokenCap: clampDailyTokenCap(stored.llm?.dailyTokenCap, DEFAULTS.llm.dailyTokenCap),
+      budgetSoftPct: clampBudgetSoftPct(stored.llm?.budgetSoftPct, DEFAULTS.llm.budgetSoftPct),
+      exemptRequests:
+        typeof stored.llm?.exemptRequests === 'boolean'
+          ? stored.llm.exemptRequests
+          : DEFAULTS.llm.exemptRequests,
       debugRawRequests:
         typeof stored.llm?.debugRawRequests === 'boolean'
           ? stored.llm.debugRawRequests
@@ -1136,6 +1264,7 @@ export async function load() {
             typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl,
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
+          toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
           numCtx: clampNumCtx(fb.numCtx, DEFAULTS.llm.fallback.numCtx),
         };
       })(),
@@ -1145,6 +1274,7 @@ export async function load() {
         ? stored.search.provider
         : DEFAULTS.search.provider,
       apiKey: typeof stored.search?.apiKey === 'string' ? stored.search.apiKey : '',
+      baseUrl: typeof stored.search?.baseUrl === 'string' ? stored.search.baseUrl : DEFAULTS.search.baseUrl,
     },
     embedding: {
       enabled:
@@ -1556,10 +1686,24 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     if (fromYear != null && toYear != null && fromYear > toYear) {
       throw new Error(`shows[${i}].fromYear must be <= toYear`);
     }
+    // Per-show track-length override (seconds): null = inherit station default,
+    // 0 = unlimited, >0 = own cap. Empty/missing → inherit. A legacy minutes
+    // value from a stale client is migrated (×60) before bounds-checking.
+    let maxTrackSeconds: number | null = null;
+    const rawSec = rawMaxTrackSec(item);
+    if (rawSec != null && rawSec !== '') {
+      const n = Number(rawSec);
+      if (!Number.isInteger(n) || n < BOUNDS.maxTrackSeconds.min || n > BOUNDS.maxTrackSeconds.max) {
+        throw new Error(
+          `shows[${i}].maxTrackSeconds must be an integer between ${BOUNDS.maxTrackSeconds.min} and ${BOUNDS.maxTrackSeconds.max}`,
+        );
+      }
+      maxTrackSeconds = n;
+    }
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId, genre, fromYear, toYear, energy, genreStrict };
+    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId, genre, fromYear, toYear, energy, genreStrict, maxTrackSeconds };
   });
 }
 
@@ -1672,6 +1816,17 @@ export async function update(patch) {
       next.crossfadeDuration = v;
       restart = true;
     }
+  }
+  if ('maxTrackSeconds' in patch || 'maxTrackMinutes' in patch) {
+    const v = parseInt(rawMaxTrackSec(patch), 10);
+    if (!Number.isFinite(v) || v < BOUNDS.maxTrackSeconds.min || v > BOUNDS.maxTrackSeconds.max) {
+      throw new Error(
+        `maxTrackSeconds must be int in [${BOUNDS.maxTrackSeconds.min}, ${BOUNDS.maxTrackSeconds.max}]`,
+      );
+    }
+    // Picker-only knob (read live by music/picker + the auto-playlist refresh);
+    // no Liquidsoap file is written, so no restart.
+    next.maxTrackSeconds = v;
   }
   if ('archive' in patch) {
     const a = patch.archive || {};
@@ -1923,6 +2078,15 @@ export async function update(patch) {
     if (l.pauseWhenEmpty !== undefined) {
       next.llm.pauseWhenEmpty = !!l.pauseWhenEmpty;
     }
+    if (l.dailyTokenCap !== undefined) {
+      next.llm.dailyTokenCap = clampDailyTokenCap(Number(l.dailyTokenCap), next.llm.dailyTokenCap);
+    }
+    if (l.budgetSoftPct !== undefined) {
+      next.llm.budgetSoftPct = clampBudgetSoftPct(Number(l.budgetSoftPct), next.llm.budgetSoftPct);
+    }
+    if (l.exemptRequests !== undefined) {
+      next.llm.exemptRequests = !!l.exemptRequests;
+    }
     if (l.debugRawRequests !== undefined) {
       next.llm.debugRawRequests = !!l.debugRawRequests;
     }
@@ -1964,6 +2128,15 @@ export async function update(patch) {
       const v = String(sr.apiKey);
       if (v.length > 200) throw new Error('search.apiKey must be 0-200 chars');
       next.search.apiKey = v;
+    }
+    if (sr.baseUrl !== undefined) {
+      if (typeof sr.baseUrl !== 'string') throw new Error('search.baseUrl must be a string');
+      const trimmed = sr.baseUrl.trim();
+      if (trimmed.length > 500) throw new Error('search.baseUrl too long');
+      if (trimmed && !/^https?:\/\//i.test(trimmed)) {
+        throw new Error('search.baseUrl must start with http:// or https://');
+      }
+      next.search.baseUrl = trimmed;
     }
   }
   if ('embedding' in patch) {
@@ -2217,6 +2390,9 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     // genre instead of softly leaned; off-genre tracks only survive as a
     // never-starve fallback. Defaults off.
     genreStrict: show.genreStrict === true,
+    // Per-show track-length cap override (seconds). null = inherit the station
+    // default; 0 = unlimited; >0 = own cap. See effectiveMaxTrackSec().
+    maxTrackSeconds: show.maxTrackSeconds != null ? show.maxTrackSeconds : null,
     // Empty string means "fall back to the station-wide default". The route
     // layer is responsible for resolving an empty/stale id against the live
     // theme registry; we just surface what the show declares.
