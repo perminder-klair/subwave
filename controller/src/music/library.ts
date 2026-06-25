@@ -272,6 +272,21 @@ export function tracksLikeThisAudio(seed: string, k: number): any[] {
 // words.
 export function tracksByVector(vec: number[] | Float32Array, k: number): any[] {
   if (!loaded) return [];
+  // Guard against an embedding model/provider drift: if the live query vector's
+  // length no longer matches the dim the index was built at, knnByVector would
+  // throw a raw "Dimension mismatch" from sqlite-vec (surfaced to the DJ agent
+  // as a tool error). Degrade to an empty semantic result instead — the picker
+  // falls through to its lexical/other sources — and log an actionable hint.
+  const meta = db.getEmbeddingMeta();
+  const got = (vec as { length?: number }).length;
+  if (meta?.dim && got && meta.dim !== got) {
+    console.warn(
+      `[library] vector search skipped: query vector is ${got}-d but the index ` +
+        `is ${meta.dim}-d (model: ${meta.model}). The embedding model changed — ` +
+        `re-embed the library or pin settings.embedding back to the index's model.`,
+    );
+    return [];
+  }
   const hits = db.knnByVector(vec, k);
   const out: any[] = [];
   for (const hit of hits) {
@@ -298,7 +313,7 @@ export function tracksByAudioVector(vec: number[] | Float32Array, k: number): an
 
 export function stats() {
   if (!loaded) {
-    return { total: 0, distinctArtists: 0, byMood: {}, byEnergy: {}, byGenre: {}, updatedAt: null };
+    return { total: 0, distinctArtists: 0, byMood: {}, byEnergy: {}, byGenre: {}, updatedAt: null, embeddingMeta: null };
   }
   const s = db.stats();
   return {
@@ -311,6 +326,10 @@ export function stats() {
     withEmbedding: s.withEmbedding,
     withAudioEmbedding: s.withAudioEmbedding,
     updatedAt: s.updatedAt,
+    // Provenance of the text-embedding index ({model, dim} or null) so the admin
+    // UI can warn before a chat-provider switch silently changes the embedding
+    // model out from under an existing index.
+    embeddingMeta: db.getEmbeddingMeta(),
   };
 }
 
