@@ -229,7 +229,7 @@ const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
 interface FormState {
   jingleRatio: string;
   crossfadeDuration: string;
-  maxTrackMinutes: string;
+  maxTrackSeconds: string;
   archive: ArchiveForm;
   stream: StreamForm;
   station: string;
@@ -270,7 +270,7 @@ interface SettingsData {
   values?: {
     jingleRatio?: number;
     crossfadeDuration?: number;
-    maxTrackMinutes?: number;
+    maxTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number };
     stream?: { opusEnabled?: boolean };
     station?: string;
@@ -401,7 +401,7 @@ export default function SettingsPanel() {
     setForm({
       jingleRatio: String(v.jingleRatio ?? ''),
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
-      maxTrackMinutes: String(v.maxTrackMinutes ?? 0),
+      maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
       archive: {
         enabled: v.archive?.enabled ?? true,
         bitrate: String(v.archive?.bitrate ?? 128),
@@ -868,17 +868,17 @@ export default function SettingsPanel() {
                       type="number"
                       step={1}
                       min={0}
-                      max={600}
-                      value={form.maxTrackMinutes}
+                      max={36000}
+                      value={form.maxTrackSeconds}
                       onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setForm(f => (f ? { ...f, maxTrackMinutes: e.target.value } : f))
+                        setForm(f => (f ? { ...f, maxTrackSeconds: e.target.value } : f))
                       }
                     />
-                    <span className="text-[12px] text-muted">min (0 = no limit)</span>
+                    <span className="text-[12px] text-muted">sec (0 = no limit)</span>
                     <Btn
                       sm
                       onClick={() =>
-                        saveSettings({ maxTrackMinutes: parseInt(form.maxTrackMinutes, 10) || 0 })
+                        saveSettings({ maxTrackSeconds: parseInt(form.maxTrackSeconds, 10) || 0 })
                       }
                       disabled={busy}
                     >

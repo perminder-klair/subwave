@@ -410,20 +410,32 @@ function clamp01(n: number): number {
   return n;
 }
 
-// Coerce a stored/per-show max-track-length to a clean integer minute count.
+// Coerce a stored/per-show max-track-length to a clean integer SECOND count.
 // `allowNull` distinguishes the two callers: the station default has no "unset"
 // state (missing → 0 = off), whereas a per-show value uses null to mean "inherit
 // the station default" (vs 0 = "unlimited override"). Out-of-band values clamp
 // into [0, max] rather than throw — load() stays lenient.
-function coerceMaxTrackMinutes(raw: any, allowNull: boolean): number | null {
+function coerceMaxTrackSeconds(raw: any, allowNull: boolean): number | null {
   if (raw == null || raw === '') return allowNull ? null : 0;
   const n = Math.round(Number(raw));
   if (!Number.isFinite(n)) return allowNull ? null : 0;
-  return Math.min(BOUNDS.maxTrackMinutes.max, Math.max(0, n));
+  return Math.min(BOUNDS.maxTrackSeconds.max, Math.max(0, n));
+}
+
+// Back-compat: this cap was stored and sent in MINUTES (`maxTrackMinutes`) before
+// it moved to seconds. Prefer the new `maxTrackSeconds` key; fall back to a legacy
+// minutes value ×60 so an existing settings.json / show and any stale client keep
+// working. Returns the raw seconds value (leaving null/''/undefined untouched) for
+// coerceMaxTrackSeconds to clamp.
+function rawMaxTrackSec(o: any): any {
+  if (o == null) return o;
+  if (o.maxTrackSeconds != null && o.maxTrackSeconds !== '') return o.maxTrackSeconds;
+  if (o.maxTrackMinutes != null && o.maxTrackMinutes !== '') return Number(o.maxTrackMinutes) * 60;
+  return o.maxTrackSeconds;
 }
 
 // Effective track-length cap in SECONDS for the moment a pick is made, or null
-// for "no cap". A scheduled show's maxTrackMinutes (when set) overrides the
+// for "no cap". A scheduled show's maxTrackSeconds (when set) overrides the
 // station default; 0 at the winning level means unlimited. This is the single
 // resolver both picker paths and the auto-playlist call so the precedence rule
 // lives in exactly one place.
@@ -431,12 +443,12 @@ export function effectiveMaxTrackSec(
   show: any = resolveActiveShow(),
   s: any = get(),
 ): number | null {
-  const station = coerceMaxTrackMinutes(s?.maxTrackMinutes, false) ?? 0;
-  const showMin = show && show.maxTrackMinutes != null
-    ? coerceMaxTrackMinutes(show.maxTrackMinutes, false)
+  const station = coerceMaxTrackSeconds(s?.maxTrackSeconds, false) ?? 0;
+  const showSec = show && show.maxTrackSeconds != null
+    ? coerceMaxTrackSeconds(show.maxTrackSeconds, false)
     : null;
-  const mins = showMin != null ? showMin : station;
-  return mins && mins > 0 ? mins * 60 : null;
+  const sec = showSec != null ? showSec : station;
+  return sec && sec > 0 ? sec : null;
 }
 
 function mintId(prefix) {
@@ -501,13 +513,13 @@ export const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
 const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
   crossfadeDuration: 10.0, // seconds
-  // Station-wide cap (minutes) on how long a single autonomously-picked track
+  // Station-wide cap (seconds) on how long a single autonomously-picked track
   // may be — keeps hour-long album mixes and DJ sets out of normal rotation
   // (issue #447). 0 = no cap (default, unchanged behaviour). A scheduled show
-  // can override this with its own `maxTrackMinutes` (0 there = "unlimited",
+  // can override this with its own `maxTrackSeconds` (0 there = "unlimited",
   // i.e. opt back out of the station cap for a long-form show). Listener
   // requests bypass the cap entirely — an explicit ask always plays.
-  maxTrackMinutes: 0,
+  maxTrackSeconds: 0,
   // Hourly archive output. Enabled by default to preserve existing behaviour.
   // The second MP3 encoder is the largest constant CPU cost in the broadcast
   // container — operators who don't use the archives can switch this off to
@@ -815,9 +827,9 @@ const DEFAULTS = {
 const BOUNDS = {
   jingleRatio: { min: 1, max: 1000, type: 'int' },
   crossfadeDuration: { min: 0, max: 30, type: 'float' },
-  // 0 = off; 600 min (10h) is a generous ceiling that still leaves room for
+  // 0 = off; 36000 s (10h) is a generous ceiling that still leaves room for
   // long-form mix shows without letting a typo set an absurd value.
-  maxTrackMinutes: { min: 0, max: 600, type: 'int' },
+  maxTrackSeconds: { min: 0, max: 36000, type: 'int' },
 };
 
 const ARCHIVE_BITRATE_SET = new Set<number>(ARCHIVE_BITRATES);
@@ -972,10 +984,10 @@ function normalizeShows(raw: any, personaIds: string[]) {
     // lean. Only meaningful when a genre is set; defaults off so existing shows
     // and soft shows are byte-for-byte unchanged.
     const genreStrict = item.genreStrict === true;
-    // Per-show track-length override (minutes). null = inherit the station-wide
-    // maxTrackMinutes; 0 = unlimited (opt this show back out of the cap so a
+    // Per-show track-length override (seconds). null = inherit the station-wide
+    // maxTrackSeconds; 0 = unlimited (opt this show back out of the cap so a
     // long-form mix show can air hour-long sets); >0 = this show's own cap.
-    const maxTrackMinutes = coerceMaxTrackMinutes(item.maxTrackMinutes, true);
+    const maxTrackSeconds = coerceMaxTrackSeconds(rawMaxTrackSec(item), true);
     out.push({
       id,
       name,
@@ -988,7 +1000,7 @@ function normalizeShows(raw: any, personaIds: string[]) {
       toYear,
       energy,
       genreStrict,
-      maxTrackMinutes,
+      maxTrackSeconds,
     });
     if (out.length >= SHOWS_LIMIT) break;
   }
@@ -1070,7 +1082,7 @@ export async function load() {
   cache = {
     jingleRatio: stored.jingleRatio ?? DEFAULTS.jingleRatio,
     crossfadeDuration: stored.crossfadeDuration ?? DEFAULTS.crossfadeDuration,
-    maxTrackMinutes: coerceMaxTrackMinutes(stored.maxTrackMinutes, false) ?? DEFAULTS.maxTrackMinutes,
+    maxTrackSeconds: coerceMaxTrackSeconds(rawMaxTrackSec(stored), false) ?? DEFAULTS.maxTrackSeconds,
     archive: {
       enabled:
         typeof stored.archive?.enabled === 'boolean'
@@ -1674,22 +1686,24 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     if (fromYear != null && toYear != null && fromYear > toYear) {
       throw new Error(`shows[${i}].fromYear must be <= toYear`);
     }
-    // Per-show track-length override (minutes): null = inherit station default,
-    // 0 = unlimited, >0 = own cap. Empty/missing → inherit.
-    let maxTrackMinutes: number | null = null;
-    if (item.maxTrackMinutes != null && item.maxTrackMinutes !== '') {
-      const n = Number(item.maxTrackMinutes);
-      if (!Number.isInteger(n) || n < BOUNDS.maxTrackMinutes.min || n > BOUNDS.maxTrackMinutes.max) {
+    // Per-show track-length override (seconds): null = inherit station default,
+    // 0 = unlimited, >0 = own cap. Empty/missing → inherit. A legacy minutes
+    // value from a stale client is migrated (×60) before bounds-checking.
+    let maxTrackSeconds: number | null = null;
+    const rawSec = rawMaxTrackSec(item);
+    if (rawSec != null && rawSec !== '') {
+      const n = Number(rawSec);
+      if (!Number.isInteger(n) || n < BOUNDS.maxTrackSeconds.min || n > BOUNDS.maxTrackSeconds.max) {
         throw new Error(
-          `shows[${i}].maxTrackMinutes must be an integer between ${BOUNDS.maxTrackMinutes.min} and ${BOUNDS.maxTrackMinutes.max}`,
+          `shows[${i}].maxTrackSeconds must be an integer between ${BOUNDS.maxTrackSeconds.min} and ${BOUNDS.maxTrackSeconds.max}`,
         );
       }
-      maxTrackMinutes = n;
+      maxTrackSeconds = n;
     }
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId, genre, fromYear, toYear, energy, genreStrict, maxTrackMinutes };
+    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId, genre, fromYear, toYear, energy, genreStrict, maxTrackSeconds };
   });
 }
 
@@ -1803,16 +1817,16 @@ export async function update(patch) {
       restart = true;
     }
   }
-  if ('maxTrackMinutes' in patch) {
-    const v = parseInt(patch.maxTrackMinutes, 10);
-    if (!Number.isFinite(v) || v < BOUNDS.maxTrackMinutes.min || v > BOUNDS.maxTrackMinutes.max) {
+  if ('maxTrackSeconds' in patch || 'maxTrackMinutes' in patch) {
+    const v = parseInt(rawMaxTrackSec(patch), 10);
+    if (!Number.isFinite(v) || v < BOUNDS.maxTrackSeconds.min || v > BOUNDS.maxTrackSeconds.max) {
       throw new Error(
-        `maxTrackMinutes must be int in [${BOUNDS.maxTrackMinutes.min}, ${BOUNDS.maxTrackMinutes.max}]`,
+        `maxTrackSeconds must be int in [${BOUNDS.maxTrackSeconds.min}, ${BOUNDS.maxTrackSeconds.max}]`,
       );
     }
     // Picker-only knob (read live by music/picker + the auto-playlist refresh);
     // no Liquidsoap file is written, so no restart.
-    next.maxTrackMinutes = v;
+    next.maxTrackSeconds = v;
   }
   if ('archive' in patch) {
     const a = patch.archive || {};
@@ -2376,9 +2390,9 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     // genre instead of softly leaned; off-genre tracks only survive as a
     // never-starve fallback. Defaults off.
     genreStrict: show.genreStrict === true,
-    // Per-show track-length cap override (minutes). null = inherit the station
+    // Per-show track-length cap override (seconds). null = inherit the station
     // default; 0 = unlimited; >0 = own cap. See effectiveMaxTrackSec().
-    maxTrackMinutes: show.maxTrackMinutes != null ? show.maxTrackMinutes : null,
+    maxTrackSeconds: show.maxTrackSeconds != null ? show.maxTrackSeconds : null,
     // Empty string means "fall back to the station-wide default". The route
     // layer is responsible for resolving an empty/stale id against the live
     // theme registry; we just surface what the show declares.

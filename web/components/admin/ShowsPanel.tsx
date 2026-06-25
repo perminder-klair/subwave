@@ -73,10 +73,10 @@ interface Show {
    *  pool instead of a soft lean — off-genre tracks only play as a last resort
    *  to avoid silence. Defaults off. */
   genreStrict: boolean;
-  /** Per-show track-length cap (minutes). null = inherit the station default;
+  /** Per-show track-length cap (seconds). null = inherit the station default;
    *  0 = unlimited (opt this show out of the cap so it can air long mixes);
    *  >0 = this show's own cap. */
-  maxTrackMinutes: number | null;
+  maxTrackSeconds: number | null;
 }
 
 // Decade presets for the era dropdown → fromYear/toYear. 'any' clears the window.
@@ -184,9 +184,9 @@ function NowCard({ label, accent, slotHour, show, color, personaLabel }: NowCard
 // Compact " · genre · 80s · high" suffix for the show summary lines, omitting
 // whatever the show doesn't pin. A strict genre is flagged inline so the hard
 // lock is visible at a glance.
-function showFilterSummary(s: { genre: string; fromYear: number | null; toYear: number | null; energy: string; genreStrict?: boolean; maxTrackMinutes?: number | null }): string {
+function showFilterSummary(s: { genre: string; fromYear: number | null; toYear: number | null; energy: string; genreStrict?: boolean; maxTrackSeconds?: number | null }): string {
   const genre = s.genre ? (s.genreStrict ? `${s.genre} (strict)` : s.genre) : '';
-  const len = s.maxTrackMinutes == null ? '' : s.maxTrackMinutes === 0 ? 'any length' : `≤${s.maxTrackMinutes}m`;
+  const len = s.maxTrackSeconds == null ? '' : s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s`;
   const bits = [genre, decadeLabelOf(s), s.energy, len].filter(Boolean);
   return bits.length ? ` · ${bits.join(' · ')}` : '';
 }
@@ -295,7 +295,7 @@ export default function ShowsPanel() {
           toYear: s.toYear ?? null,
           energy: s.energy ?? '',
           genreStrict: s.genreStrict ?? false,
-          maxTrackMinutes: s.maxTrackMinutes ?? null,
+          maxTrackSeconds: s.maxTrackSeconds ?? null,
         }));
         setForm({ shows, schedule: week });
         // Arm the first valid show as the brush so the grid is paintable at once.
@@ -357,7 +357,7 @@ export default function ShowsPanel() {
       personaId: personas[0]?.id || '', mood: moods[0] || '',
       themeId: '',
       genre: '', fromYear: null, toYear: null, energy: '', genreStrict: false,
-      maxTrackMinutes: null,
+      maxTrackSeconds: null,
     });
   };
   const openEdit = (i: number) => {
@@ -371,7 +371,7 @@ export default function ShowsPanel() {
       themeId: s.themeId || '',
       genre: s.genre || '', fromYear: s.fromYear ?? null, toYear: s.toYear ?? null, energy: s.energy || '',
       genreStrict: s.genreStrict ?? false,
-      maxTrackMinutes: s.maxTrackMinutes ?? null,
+      maxTrackSeconds: s.maxTrackSeconds ?? null,
     });
   };
   const closeModal = () => { setEditIndex(null); setDraft(null); };
@@ -385,7 +385,7 @@ export default function ShowsPanel() {
       genre: draft.genre.trim(), fromYear: draft.fromYear, toYear: draft.toYear, energy: draft.energy || '',
       // Strict is only meaningful with a genre to lock to — drop it otherwise.
       genreStrict: !!draft.genre.trim() && draft.genreStrict,
-      maxTrackMinutes: draft.maxTrackMinutes,
+      maxTrackSeconds: draft.maxTrackSeconds,
     };
     if (editIndex === -1) {
       const id = clientMintId();
@@ -523,7 +523,7 @@ export default function ShowsPanel() {
             themeId: s.themeId || '',
             genre: s.genre.trim(), fromYear: s.fromYear, toYear: s.toYear, energy: s.energy || '',
             genreStrict: !!s.genre.trim() && s.genreStrict,
-            maxTrackMinutes: s.maxTrackMinutes,
+            maxTrackSeconds: s.maxTrackSeconds,
           })),
           schedule: form.schedule,
         }),
@@ -945,17 +945,17 @@ export default function ShowsPanel() {
             </span>
 
             <Field>
-              <Label htmlFor="show-maxlen">max track length (minutes)</Label>
+              <Label htmlFor="show-maxlen">max track length (seconds)</Label>
               <Input
                 id="show-maxlen"
                 type="number"
                 min={0}
-                max={600}
+                max={36000}
                 placeholder="inherit"
-                value={draft.maxTrackMinutes ?? ''}
+                value={draft.maxTrackSeconds ?? ''}
                 onChange={(e: ChangeEvent<HTMLInputElement>) => {
                   const raw = e.target.value.trim();
-                  setDraftField({ maxTrackMinutes: raw === '' ? null : Math.max(0, parseInt(raw, 10) || 0) });
+                  setDraftField({ maxTrackSeconds: raw === '' ? null : Math.max(0, parseInt(raw, 10) || 0) });
                 }}
               />
               <span className="field-hint">
