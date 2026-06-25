@@ -167,6 +167,14 @@ export async function speak(
   const language = GLOBAL_VOICE_KINDS.has(kind)
     ? ''
     : String(settings.getEffectivePersona()?.language || '').trim();
+  // The persona's soul (e.g. "thoughtful and a little wistful") rides the same
+  // path so the voice delivery carries the same character as the writing (issue
+  // #579). DJ-voiced kinds only, like `language`; only the OpenAI gpt-4o*-tts
+  // path in cloud-speech.ts reads it (its free-text `instructions` field), every
+  // other engine ignores it.
+  const soul = GLOBAL_VOICE_KINDS.has(kind)
+    ? ''
+    : String(settings.getEffectivePersona()?.soul || '').trim();
   // Delivery pace tracks the daypart for live, persona-voiced segments.
   // `speedScale` is a MULTIPLIER on the engine's configured speech rate (1.0 =
   // unchanged), so it composes with — rather than overrides — an operator's
@@ -182,7 +190,7 @@ export async function speak(
   const started = Date.now();
   const chars = (speakText || '').length;
   try {
-    const result = await speakWith(primary, speakText, { outPath, speedScale: scale, language }, personaTts);
+    const result = await speakWith(primary, speakText, { outPath, speedScale: scale, language, soul }, personaTts);
     recordTts({
       kind, engine: primary, requested: primary, fellBack: false,
       ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
@@ -203,7 +211,7 @@ export async function speak(
     }
     console.error(`[tts] ${primary} failed for kind=${kind}: ${err.message} — falling back to ${fallback}`);
     try {
-      const result = await speakWith(fallback, speakText, { outPath, speedScale: scale, language }, personaTts);
+      const result = await speakWith(fallback, speakText, { outPath, speedScale: scale, language, soul }, personaTts);
       recordTts({
         kind, engine: fallback, requested: primary, fellBack: true,
         ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
