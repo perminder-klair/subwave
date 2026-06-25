@@ -146,7 +146,7 @@ export default function CenterStage({
       )}
 
       {has ? (
-        <DjThinkingLine feed={feed} enabled={djLineOn} onOpenBooth={onOpenBooth} />
+        <DjThinkingLine feed={feed} enabled={djLineOn} currentTrackId={subsonicId} onOpenBooth={onOpenBooth} />
       ) : null}
     </View>
   );
