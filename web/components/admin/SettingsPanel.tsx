@@ -1784,6 +1784,11 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                     <div className="field-hint">
                       Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
                     </div>
+                    {cloudKeyVar === 'OPENAI_API_KEY' && (
+                      <div className="field-hint">
+                        This key is shared across LLM and Cloud TTS.
+                      </div>
+                    )}
                   </div>
                   <KeyStatus envVar={cloudKeyVar} present={!!data.env?.[cloudKeyVar]} />
                   <div className="mt-2 flex items-center gap-2">
@@ -2156,6 +2161,11 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   <div className="field-hint">
                     Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
                   </div>
+                  {keyVar === 'OPENAI_API_KEY' && (
+                    <div className="field-hint">
+                      This key is shared across LLM and Cloud TTS.
+                    </div>
+                  )}
                 </div>
                 <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
                 <div className="mt-2 flex items-center gap-2">
