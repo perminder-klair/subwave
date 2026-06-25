@@ -124,6 +124,9 @@ export async function saveSecrets(patch: Record<string, string>): Promise<void> 
 // defence-in-depth here; it matters more when the same file ever gets read by
 // something that does interpolate.
 function envEscape(value: string): string {
+  if (value.includes('\n') || value.includes('\r')) {
+    throw new Error('Secret value contains a newline; refuse to persist (would corrupt line-based parser)');
+  }
   if (/^[A-Za-z0-9_./:@,+\-]*$/.test(value)) return value;
   if (value.includes("'")) {
     throw new Error(

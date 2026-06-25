@@ -209,6 +209,7 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
       if (typeof value !== 'string') continue;
       const trimmed = value.trim();
       if (!trimmed) continue;
+      if (trimmed.length > 4096) continue;
       patch[key] = trimmed;
     }
     if (Object.keys(patch).length === 0) {
@@ -217,7 +218,8 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
     await saveSecrets(patch);
     res.json({ saved: Object.keys(patch) });
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    console.error('[settings/secrets]', err);
+    res.status(400).json({ error: 'Failed to save secrets' });
   }
 });
 
