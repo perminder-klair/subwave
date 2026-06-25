@@ -1313,6 +1313,23 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   useEffect(() => { setCloudKeyInput(''); }, [form.tts.cloud.provider]);
   useEffect(() => { setCloudKeyTest(null); }, [form.tts.cloud.provider]);
 
+  const isCloudEngine = form.tts.defaultEngine === 'cloud';
+  const isCompat = form.tts.cloud.provider === 'openai-compatible';
+  const ttsKeyVar = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
+  const ttsKeySet = !!data.env?.[ttsKeyVar];
+
+  const ttsDiscoveryEnabled = isCloudEngine && (
+    (isCompat && !!form.tts.cloud.baseUrl.trim())
+    || (!isCompat && ttsKeySet)
+  );
+
+  const ttsDiscovery = useModelDiscovery({
+    provider: isCompat ? 'openai-compatible' : form.tts.cloud.provider,
+    baseUrl: form.tts.cloud.baseUrl,
+    enabled: ttsDiscoveryEnabled,
+    adminFetch,
+  });
+
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
@@ -1507,7 +1524,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             />
             <div className="field-hint">
               {ttsDirty
-                ? <>Engine changed. Hit “Save TTS settings” below to make <strong>{formEngineLabel}</strong> the new default.</>
+                ? <>Engine changed. Hit "Save TTS settings" below to make <strong>{formEngineLabel}</strong> the new default.</>
                 : <>The station default. Renders jingles and is the fallback when a persona’s own engine fails. Per-segment voice still comes from the persona on air.</>}
             </div>
           </div>
@@ -1656,7 +1673,6 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         )}
 
         {form.tts.defaultEngine === 'cloud' && (() => {
-          const isCompat = form.tts.cloud.provider === 'openai-compatible';
           return (
           <div className="mt-4">
             <div className="field">
@@ -1690,23 +1706,74 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             )}
             <div className="mt-3.5 grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-[18px]">
               <div className="field">
-                <Label>Model</Label>
-                <Input
-                  value={form.tts.cloud.model}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))
-                  }
-                  placeholder={
-                    isCompat
-                      ? 'chatterbox'
-                      : (CLOUD_MODELS[form.tts.cloud.provider as keyof typeof CLOUD_MODELS]?.[0] || 'gpt-4o-mini-tts')
-                  }
-                />
-                <div className="field-hint">
-                  {isCompat
-                    ? <>Model id exactly as the server reports it at <code>/v1/models</code>, required.</>
-                    : <>e.g. “gpt-4o-mini-tts” (OpenAI) or “eleven_flash_v2_5” (ElevenLabs).</>}
+                <div className="flex items-center gap-2">
+                  <Label>Model</Label>
+                  {ttsDiscovery.loading && (
+                    <span className="animate-pulse text-[11px] text-muted">discovering…</span>
+                  )}
+                  {ttsDiscovery.models.length > 0 && !ttsDiscovery.loading && (
+                    <Btn sm onClick={ttsDiscovery.refresh} title="Refresh model list">↻</Btn>
+                  )}
                 </div>
+                {ttsDiscovery.models.length > 0 ? (
+                  <>
+                    <Select
+                      value={
+                        ttsDiscovery.models.includes(form.tts.cloud.model)
+                          ? form.tts.cloud.model
+                          : form.tts.cloud.model
+                            ? '__current__'
+                            : ''
+                      }
+                      onValueChange={v => {
+                        if (v !== '__current__') setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: v } } }));
+                      }}
+                    >
+                      <SelectTrigger className="max-w-[360px]"><SelectValue placeholder="Select a model" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {form.tts.cloud.model && !ttsDiscovery.models.includes(form.tts.cloud.model) && (
+                            <SelectItem value="__current__" disabled>{form.tts.cloud.model} (current)</SelectItem>
+                          )}
+                          {ttsDiscovery.models.map(m => (
+                            <SelectItem key={m} value={m}>{m}</SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <div className="field-hint">
+                      {ttsDiscovery.models.length} model{ttsDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <Input
+                      value={form.tts.cloud.model}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))
+                      }
+                      placeholder={
+                        isCompat
+                          ? 'chatterbox'
+                          : (CLOUD_MODELS[form.tts.cloud.provider as keyof typeof CLOUD_MODELS]?.[0] || 'gpt-4o-mini-tts')
+                      }
+                      className="max-w-[360px]"
+                    />
+                    <div className="field-hint">
+                      {!ttsDiscoveryEnabled
+                        ? (isCompat
+                            ? 'Set a base URL above to discover available models.'
+                            : 'Set an API key above to discover and select a model.')
+                        : ttsDiscovery.error
+                          ? `Discovery failed: ${ttsDiscovery.error}. Type a model ID manually.`
+                          : ttsDiscovery.loading
+                            ? 'Discovering models…'
+                            : (isCompat
+                                ? <>Model id exactly as the server reports it at <code>/v1/models</code>, required.</>
+                                : <>e.g. "gpt-4o-mini-tts" (OpenAI) or "eleven_flash_v2_5" (ElevenLabs).</>)}
+                    </div>
+                  </>
+                )}
               </div>
               {(() => {
                 const provVoices = CLOUD_VOICES[form.tts.cloud.provider as keyof typeof CLOUD_VOICES] || [];
@@ -2073,7 +2140,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             </Select>
             <div className="field-hint">
               {llmDirty
-                ? 'Provider changed. Hit “Save LLM provider” below to route every call here.'
+                ? 'Provider changed. Hit "Save LLM provider" below to route every call here.'
                 : 'The provider every LLM call routes through. Switching reroutes instantly on save, no redeploy.'}
             </div>
           </div>
@@ -3268,7 +3335,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
                   {e.provider ? (
                     <><code>{llmProviderLabel(effectiveProvider)}</code> is a chat-only provider, with no embeddings endpoint, so the tagger can’t use it.</>
                   ) : (
-                    <>“Follow LLM provider” resolves to <code>{llmProviderLabel(llmProvider)}</code>, which is chat-only and has no embeddings endpoint.</>
+                    <>"Follow LLM provider" resolves to <code>{llmProviderLabel(llmProvider)}</code>, which is chat-only and has no embeddings endpoint.</>
                   )}{' '}
                   Pick a real embedding provider above. <strong>Ollama</strong> is local
                   and free (<code>nomic-embed-text</code>, auto-pulled on first run), or
