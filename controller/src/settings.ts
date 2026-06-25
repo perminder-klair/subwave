@@ -171,6 +171,7 @@ export const LLM_PROVIDERS = [
   'openai-compatible',
   'locca',
   'openrouter',
+  'requesty',
   'anthropic',
   'openai',
   'google',
@@ -196,6 +197,7 @@ export const EMBEDDING_PROVIDERS = [
   'openai',
   'google',
   'openrouter',
+  'requesty',
 ];
 
 // Coerce a stored Ollama context-window value. 0 disables (use Ollama's own
@@ -263,6 +265,15 @@ function applyLlmLegPatch(target: any, patch: any, label: string): void {
   }
   if (l.numCtx !== undefined) {
     target.numCtx = clampNumCtx(Number(l.numCtx), target.numCtx);
+  }
+  // Forced-tool tool_choice: 'required' (default) or 'auto'. Only those two are
+  // legal; anything else is a config error. See forcedToolChoice() / issue #570.
+  if (l.toolChoice !== undefined) {
+    const v = String(l.toolChoice).trim();
+    if (v !== 'required' && v !== 'auto') {
+      throw new Error(`${label}.toolChoice must be "required" or "auto"`);
+    }
+    target.toolChoice = v;
   }
 }
 
@@ -550,6 +561,16 @@ const DEFAULTS = {
     // <think> block on a small model balloons every call (see llm/sdk.js
     // token caps + llm/provider.js no-think fetch).
     reasoning: false,
+    // How SUB/WAVE forces a tool call in the structured-output paths (the emit /
+    // done-tool harness). 'required' (default) makes the model call the tool —
+    // the reliable path for local models that ignore JSON mode. Switch to 'auto'
+    // ONLY if your server crashes on tool_choice:"required": recent vLLM
+    // implements it via a guided-decoding backend that some images (newer
+    // Intel/XPU builds) mishandle, while "auto" never engages it (issue #570).
+    // On 'auto' the done-tool path keeps its activeTools pinning + instructions,
+    // so a capable model still calls the tool; misses fall back to the pool
+    // picker. Leave on 'required' unless you hit that crash.
+    toolChoice: 'required',
     // Ollama context window (num_ctx), local Ollama only. Ollama's own default
     // is 4096, but the session DJ agent feeds ~8k+ (the 40-turn session window
     // + tool schemas + discovery results), so the default silently truncates
@@ -609,6 +630,7 @@ const DEFAULTS = {
       ollamaUrl: '',
       baseUrl: '',
       reasoning: false,
+      toolChoice: 'required',
       numCtx: 16384,
     },
   },
@@ -1098,6 +1120,9 @@ export async function load() {
         typeof stored.llm?.baseUrl === 'string' ? stored.llm.baseUrl.trim() : DEFAULTS.llm.baseUrl,
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
+      // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
+      // pre-field settings.json) lands on the 'required' default. See issue #570.
+      toolChoice: stored.llm?.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.toolChoice,
       // Clamp to a sane band: 0 disables (Ollama default), else [2048, 131072].
       // Non-numeric/NaN falls back to the default. Floored to an integer.
       numCtx: clampNumCtx(stored.llm?.numCtx, DEFAULTS.llm.numCtx),
@@ -1136,6 +1161,7 @@ export async function load() {
             typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl,
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
+          toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
           numCtx: clampNumCtx(fb.numCtx, DEFAULTS.llm.fallback.numCtx),
         };
       })(),

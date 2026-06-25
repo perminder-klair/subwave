@@ -152,9 +152,11 @@ export default function DjThinkingLine({ feed, enabled, buddyOn = false, onOpenB
         </span>
       )}
       {/* Clamp the inline teaser so the long "extended" scripts can't grow the
-          column and shove the artwork/title up under the header on mobile.
-          The full text stays one tap away in the Booth (and in aria-label). */}
-      <span className="line-clamp-5 min-w-0 flex-1 [overflow-wrap:anywhere] sm:line-clamp-10">
+          column and shove the artwork/title up under the header, or spill the
+          line down over the waveform (issue #576). The clamp is tighter on
+          short windows; the full text stays one tap away in the Booth (and in
+          aria-label). */}
+      <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere] [@media(min-height:760px)]:line-clamp-6">
         <AnimatePresence mode="wait">
           <m.span
             key={turnId}

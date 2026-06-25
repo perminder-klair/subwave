@@ -115,6 +115,17 @@ export function buildPickerTools({
     return out;
   };
 
+  // Snapshot the embedding index counts once at tool-build time (synchronous
+  // after library.load() — pickViaAgent awaits library.load() before reaching
+  // buildPickerTools, so stats() never returns its empty-sentinel zeros here).
+  // Tools whose backing index is empty are conditionally registered below:
+  // offering a dead tool steers the model into a ~75 s timeout before the
+  // pool-fallback rescues it (the "DJ Latency 75s" spike, 18% pick failure).
+  const _stats = library.stats();
+  const hasTextEmbeddings  = (_stats.withEmbedding      ?? 0) > 0;
+  const hasAudioEmbeddings = (_stats.withAudioEmbedding ?? 0) > 0;
+  const hasEmbeddingProvider = embeddings.isAvailable();
+
   const tools = {
     searchLibrary: tool({
       description: 'Search the music library. Matches a literal artist name, song title, or real genre (e.g. "jazz", "punjabi") first; if nothing matches it falls back to semantic / vibe search, so descriptive multi-word queries like "punjabi r&b romantic" also work. Returns matching songs.',
@@ -216,47 +227,69 @@ export function buildPickerTools({
       },
     }),
 
-    tracksLikeThis: tool({
-      description: 'Tracks whose mood + lyrics + metadata embed closest to a seed track — the controller\'s own semantic similarity over the actual library. Prefer this to similarSongs when "more of this vibe" matters more than "more by this artist". Pass the currently-playing song id (best) OR a track title — a title is resolved to the matching track. Returns [] only if neither a song id nor a title match anything embedded.',
-      inputSchema: z.object({
-        songId: z.string().describe('a song id (preferred) or a track title'),
-        k: z.number().int().min(1).max(50).default(20),
+    // Only registered when the controller's own text/mood embedding index has
+    // been built (withEmbedding > 0). This tool does KNN over the seed track's
+    // STORED vector (library.tracksLikeThis -> db.knnById) and never calls the
+    // embedding provider at query time, so it works whenever the index exists —
+    // mirroring how tracksThatSoundLikeThis gates on hasAudioEmbeddings. Without
+    // an index every call returns [], and the old description said "Prefer this
+    // to similarSongs", actively steering the model into a dead tool — so gate it
+    // off entirely rather than offer an unusable option.
+    ...(hasTextEmbeddings ? {
+      tracksLikeThis: tool({
+        description: 'Tracks whose mood + lyrics + metadata embed closest to a seed track — the controller\'s own semantic similarity over the actual library. Requires the mood/lyric embedding index to be built. Pass the currently-playing song id (best) OR a track title — a title is resolved to the matching track.',
+        inputSchema: z.object({
+          songId: z.string().describe('a song id (preferred) or a track title'),
+          k: z.number().int().min(1).max(50).default(20),
+        }),
+        execute: async ({ songId, k }) => {
+          try { await library.load(); return collect(library.tracksLikeThis(songId, k)); }
+          catch (err) { return { error: err.message }; }
+        },
       }),
-      execute: async ({ songId, k }) => {
-        try { await library.load(); return collect(library.tracksLikeThis(songId, k)); }
-        catch (err) { return { error: err.message }; }
-      },
-    }),
+    } : {}),
 
-    tracksThatSoundLikeThis: tool({
-      description: 'Tracks whose ACTUAL SOUND (timbre, instrumentation, production, energy — a CLAP audio embedding of the waveform) is closest to a seed track. Unlike tracksLikeThis (which compares mood/lyrics/metadata), this is blind to tags and metadata, so it shines for instrumentals, non-English tracks, or anything with thin Last.fm coverage. Pass the currently-playing song id (best) OR a track title. Returns [] only when neither matches anything with an audio embedding (audio analysis not enabled / not yet run).',
-      inputSchema: z.object({
-        songId: z.string().describe('a song id (preferred) or a track title'),
-        k: z.number().int().min(1).max(50).default(20),
+    // Only registered when the CLAP audio embedding index has been built
+    // (withAudioEmbedding > 0). Without audio vectors every call returns [] —
+    // gate it off so the model is never offered an option it cannot use.
+    ...(hasAudioEmbeddings ? {
+      tracksThatSoundLikeThis: tool({
+        description: 'Tracks whose ACTUAL SOUND (timbre, instrumentation, production, energy — a CLAP audio embedding of the waveform) is closest to a seed track. Blind to tags and metadata, so it shines for instrumentals, non-English tracks, or anything with thin Last.fm coverage. Requires the audio embedding index to be built. Pass the currently-playing song id (best) OR a track title.',
+        inputSchema: z.object({
+          songId: z.string().describe('a song id (preferred) or a track title'),
+          k: z.number().int().min(1).max(50).default(20),
+        }),
+        execute: async ({ songId, k }) => {
+          try { await library.load(); return collect(library.tracksLikeThisAudio(songId, k)); }
+          catch (err) { return { error: err.message }; }
+        },
       }),
-      execute: async ({ songId, k }) => {
-        try { await library.load(); return collect(library.tracksLikeThisAudio(songId, k)); }
-        catch (err) { return { error: err.message }; }
-      },
-    }),
+    } : {}),
 
-    searchByLyrics: tool({
-      description: 'Semantic lyric / theme search over the library. Embed the query and return tracks whose lyrics + metadata are closest to it. Use for thematic picks the mood vocab can\'t express — e.g. "songs about hometown", "tracks with hopeful lyrics", "feeling stuck". Tracks without lyrics or without embeddings simply rank low; the search still returns the best of what it has.',
-      inputSchema: z.object({
-        query: z.string().min(3),
-        k: z.number().int().min(1).max(50).default(20),
+    // Only registered when both the text embedding index (withEmbedding > 0)
+    // AND a text-embedding provider are available. Every code path inside
+    // requires both: embed the query, then KNN over stored track vectors.
+    // Without them the tool errors or returns nothing — hide it so the model
+    // uses searchLibrary (lexical) or similarSongs instead.
+    ...(hasTextEmbeddings && hasEmbeddingProvider ? {
+      searchByLyrics: tool({
+        description: 'Semantic lyric / theme search over the library. Embeds the query and returns tracks whose lyrics + metadata are closest to it. Use for thematic picks the mood vocab can\'t express — e.g. "songs about hometown", "tracks with hopeful lyrics", "feeling stuck". Requires the mood/lyric embedding index and a text-embedding provider.',
+        inputSchema: z.object({
+          query: z.string().min(3),
+          k: z.number().int().min(1).max(50).default(20),
+        }),
+        execute: async ({ query, k }) => {
+          try {
+            if (!embeddings.isAvailable()) return { error: 'embeddings not configured — set settings.embedding.enabled / provider' };
+            await library.load();
+            const [vec] = await embeddings.embedTexts([query.trim()]);
+            if (!vec) return { error: 'embedding query failed' };
+            return collect(library.tracksByVector(vec, k));
+          }
+          catch (err) { return { error: err.message }; }
+        },
       }),
-      execute: async ({ query, k }) => {
-        try {
-          if (!embeddings.isAvailable()) return { error: 'embeddings not configured — set settings.embedding.enabled / provider' };
-          await library.load();
-          const [vec] = await embeddings.embedTexts([query.trim()]);
-          if (!vec) return { error: 'embedding query failed' };
-          return collect(library.tracksByVector(vec, k));
-        }
-        catch (err) { return { error: err.message }; }
-      },
-    }),
+    } : {}),
 
     recentlyAdded: tool({
       description: 'A sample of tracks from recently-added albums — "new in the crates".',
@@ -295,7 +328,7 @@ export function buildPickerTools({
     // the agent when that is). Closes over the journey's current waypoint, so
     // calling it returns the tracks that carry the sound one step along the
     // arc toward the destination vibe.
-    ...(audioWaypoint && audioWaypoint.length ? {
+    ...(audioWaypoint && audioWaypoint.length && hasAudioEmbeddings ? {
       tracksTowardJourney: tool({
         description: 'Tracks nearest the active sonic journey\'s CURRENT waypoint — the station is mid-arc, drifting its sound toward a destination vibe over the next few picks. When the event says a journey is active, call this and strongly prefer one of its tracks: each one moves the sound a step along the arc. Takes no input.',
         inputSchema: z.object({}),

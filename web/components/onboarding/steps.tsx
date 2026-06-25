@@ -150,6 +150,7 @@ const LLM_PROVIDERS = [
   { id: 'google', label: 'Google Gemini' },
   { id: 'deepseek', label: 'DeepSeek' },
   { id: 'openrouter', label: 'OpenRouter' },
+  { id: 'requesty', label: 'Requesty' },
   { id: 'gateway', label: 'Vercel AI Gateway' },
   { id: 'openai-compatible', label: 'OpenAI-compatible (self-hosted)' },
 ];

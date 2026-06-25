@@ -23,7 +23,7 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 
 import { requireAdmin } from '../middleware/auth.js';
-import { DEFAULT_LOCCA_BASE_URL, noThinkFetch } from '../llm/provider.js';
+import { DEFAULT_LOCCA_BASE_URL, DEFAULT_REQUESTY_BASE_URL, noThinkFetch } from '../llm/provider.js';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as jingles from '../broadcast/jingles.js';
@@ -155,6 +155,12 @@ router.post('/onboarding/test-llm', requireAdmin, async (req, res) => {
         break;
       case 'openrouter':
         m = createOpenRouter(apiKey ? { apiKey } : {})(model);
+        break;
+      case 'requesty':
+        // Requesty is an OpenAI-compatible gateway at a fixed base URL; the test
+        // call goes through createOpenAI like openai-compatible, but with the
+        // hosted endpoint. Model ids use provider/model naming (openai/gpt-4o-mini).
+        m = createOpenAI({ baseURL: DEFAULT_REQUESTY_BASE_URL, apiKey: apiKey || 'unused' }).chat(model);
         break;
       case 'ollama':
       default: {

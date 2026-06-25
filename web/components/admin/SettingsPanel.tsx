@@ -48,6 +48,7 @@ const LLM_ENV_VARS: Record<string, string> = {
   google: 'GOOGLE_GENERATIVE_AI_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+  requesty: 'REQUESTY_API_KEY',
   gateway: 'AI_GATEWAY_API_KEY',
 };
 
@@ -71,6 +72,7 @@ const LLM_PROVIDER_LABELS: Record<string, string> = {
   google: 'Google (Gemini)',
   deepseek: 'DeepSeek',
   openrouter: 'OpenRouter (multi-vendor aggregator)',
+  requesty: 'Requesty (multi-vendor aggregator)',
   gateway: 'Vercel AI Gateway (multi-vendor aggregator)',
 };
 
@@ -95,6 +97,10 @@ const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = {
   ],
   google: [{ id: 'text-embedding-004', dim: 768 }],
   openrouter: [
+    { id: 'openai/text-embedding-3-small', dim: 1536 },
+    { id: 'openai/text-embedding-3-large', dim: 3072 },
+  ],
+  requesty: [
     { id: 'openai/text-embedding-3-small', dim: 1536 },
     { id: 'openai/text-embedding-3-large', dim: 3072 },
   ],
@@ -151,6 +157,7 @@ interface LlmForm {
   numCtx: number;
   baseUrl: string;
   reasoning: boolean;
+  toolChoice: string;
   pickerAgent: boolean;
   requestWebResolve: boolean;
   agentTimeoutMs: number;
@@ -433,6 +440,7 @@ export default function SettingsPanel() {
         numCtx: typeof v.llm?.numCtx === 'number' ? v.llm.numCtx : 16384,
         baseUrl: v.llm?.baseUrl ?? '',
         reasoning: !!v.llm?.reasoning,
+        toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
         pickerAgent: !!v.llm?.pickerAgent,
         requestWebResolve: !!v.llm?.requestWebResolve,
         agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
@@ -716,7 +724,7 @@ export default function SettingsPanel() {
             {activeSection === 'search' && (
               <SearchSection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveSettings={saveSettings}
+                saveSettings={saveSettings} adminFetch={adminFetch}
               />
             )}
             {activeSection === 'library' && (
@@ -1105,7 +1113,7 @@ interface KeyStatusProps {
 
 function KeyStatus({ envVar, present }: KeyStatusProps) {
   const toneClass = present
-    ? 'border-[var(--accent)] text-vermilion'
+    ? 'border-[var(--accent)] text-[color:var(--accent)]'
     : 'border-[var(--danger)] text-[var(--danger)]';
   return (
     <div
@@ -1117,7 +1125,7 @@ function KeyStatus({ envVar, present }: KeyStatusProps) {
       <span
         className={cn(
           'mt-1 size-1.5 flex-none rounded-full',
-          present ? 'bg-vermilion' : 'bg-[var(--danger)]',
+          present ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
         )}
       />
       <div className="grid gap-0.5">
@@ -1135,6 +1143,27 @@ function KeyStatus({ envVar, present }: KeyStatusProps) {
           )}
         </span>
       </div>
+    </div>
+  );
+}
+
+interface KeyTestResultProps {
+  result: { ok: boolean; message: string; latencyMs: number };
+}
+
+function KeyTestResult({ result }: KeyTestResultProps) {
+  return (
+    <div
+      className={cn(
+        'mt-2 max-w-[560px] rounded border bg-[var(--ink-softer)] px-3 py-2 text-[11px] leading-[1.6]',
+        result.ok
+          ? 'border-[var(--accent)] text-[color:var(--accent)]'
+          : 'border-[var(--danger)] text-[var(--danger)]',
+      )}
+    >
+      {result.ok
+        ? `${result.message}${result.latencyMs > 0 ? ` · ${result.latencyMs}ms` : ''}`
+        : result.message}
     </div>
   );
 }
@@ -1274,8 +1303,11 @@ interface TtsSectionProps extends SectionProps {
 
 function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: TtsSectionProps) {
   const [cloudKeyInput, setCloudKeyInput] = useState('');
+  const [cloudKeyTest, setCloudKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [cloudKeyTesting, setCloudKeyTesting] = useState(false);
 
   useEffect(() => { setCloudKeyInput(''); }, [form.tts.cloud.provider]);
+  useEffect(() => { setCloudKeyTest(null); }, [form.tts.cloud.provider]);
 
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
@@ -1294,6 +1326,25 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     } catch (e) {
       notify.err(errorMessage(e));
       return false;
+    }
+  };
+  const testCloudKey = async () => {
+    const cloudKeyVar = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
+    if (!cloudKeyInput.trim()) return;
+    setCloudKeyTesting(true);
+    setCloudKeyTest(null);
+    try {
+      const r = await adminFetch('/settings/secrets/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: cloudKeyVar, value: cloudKeyInput.trim() }),
+      });
+      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
+      setCloudKeyTest(j);
+    } catch (e) {
+      setCloudKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
+    } finally {
+      setCloudKeyTesting(false);
     }
   };
   const engines = data.tts?.engines || ['piper'];
@@ -1735,6 +1786,16 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                     </div>
                   </div>
                   <KeyStatus envVar={cloudKeyVar} present={!!data.env?.[cloudKeyVar]} />
+                  <div className="mt-2 flex items-center gap-2">
+                    <Btn
+                      sm
+                      onClick={testCloudKey}
+                      disabled={cloudKeyTesting || !cloudKeyInput.trim()}
+                    >
+                      {cloudKeyTesting ? 'Testing…' : 'Test key'}
+                    </Btn>
+                  </div>
+                  {cloudKeyTest && <KeyTestResult result={cloudKeyTest} />}
                 </>
               );
             })()}
@@ -1772,9 +1833,15 @@ interface LlmSectionProps extends SectionProps {
 function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: LlmSectionProps) {
   const [primaryKeyInput, setPrimaryKeyInput] = useState('');
   const [fallbackKeyInput, setFallbackKeyInput] = useState('');
+  const [primaryKeyTest, setPrimaryKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [primaryKeyTesting, setPrimaryKeyTesting] = useState(false);
+  const [fallbackKeyTest, setFallbackKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [fallbackKeyTesting, setFallbackKeyTesting] = useState(false);
 
   useEffect(() => { setPrimaryKeyInput(''); }, [form.llm.provider]);
   useEffect(() => { setFallbackKeyInput(''); }, [form.llm.fallback.provider]);
+  useEffect(() => { setPrimaryKeyTest(null); }, [form.llm.provider]);
+  useEffect(() => { setFallbackKeyTest(null); }, [form.llm.fallback.provider]);
 
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
@@ -1796,6 +1863,30 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     }
   };
 
+  const testKey = async (
+    envVar: string,
+    value: string,
+    setTesting: (v: boolean) => void,
+    setResult: (r: { ok: boolean; message: string; latencyMs: number } | null) => void,
+  ) => {
+    if (!value.trim()) return;
+    setTesting(true);
+    setResult(null);
+    try {
+      const r = await adminFetch('/settings/secrets/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: envVar, value: value.trim() }),
+      });
+      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
+      setResult(j);
+    } catch (e) {
+      setResult({ ok: false, message: errorMessage(e), latencyMs: 0 });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const save = async () => {
     await saveSettings({
       llm: {
@@ -1805,6 +1896,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         numCtx: form.llm.numCtx,
         baseUrl: form.llm.baseUrl,
         reasoning: form.llm.reasoning,
+        toolChoice: form.llm.toolChoice,
         pickerAgent: form.llm.pickerAgent,
         requestWebResolve: form.llm.requestWebResolve,
         agentTimeoutMs: form.llm.agentTimeoutMs,
@@ -1917,7 +2009,9 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   ? 'Gateway model id, e.g. “anthropic/claude-sonnet-4-5”.'
                   : form.llm.provider === 'openrouter'
                     ? 'OpenRouter model id, e.g. “google/gemini-2.5-flash”.'
-                    : form.llm.provider === 'google'
+                    : form.llm.provider === 'requesty'
+                      ? 'Requesty model id, e.g. “openai/gpt-4o-mini”.'
+                      : form.llm.provider === 'google'
                       ? 'Gemini model id, e.g. “gemini-2.5-flash”.'
                       : form.llm.provider === 'deepseek'
                         ? 'DeepSeek model id. Leave blank for the “deepseek-v4-flash” default.'
@@ -1943,6 +2037,32 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 including the <code>/v1</code> suffix. Must be reachable from the
                 controller container. Use the host’s LAN or Tailscale IP, not
                 <code>127.0.0.1</code>.
+              </div>
+            </div>
+          )}
+
+          {form.llm.provider === 'openai-compatible' && (
+            <div className="field">
+              <Label>Forced tool calls</Label>
+              <Seg
+                accent
+                value={form.llm.toolChoice === 'auto' ? 'auto' : 'required'}
+                options={[
+                  { id: 'required', label: 'Required' },
+                  { id: 'auto', label: 'Auto' },
+                ]}
+                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, toolChoice: v } }))}
+              />
+              <div className="field-hint">
+                How the picker forces the model to return a structured pick.
+                <code>Required</code> (default) sends{' '}
+                <code>tool_choice:&quot;required&quot;</code> — the reliable path for
+                local models. Switch to <code>Auto</code> only if your server
+                <strong> crashes</strong> on a tool call: some newer vLLM images
+                (notably Intel/XPU builds) mishandle the guided-decoding backend
+                that <code>required</code> engages, while <code>auto</code> never
+                does. On <code>Auto</code> a capable model still calls the tool;
+                misses fall back to the stateless picker.
               </div>
             </div>
           )}
@@ -2038,6 +2158,16 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   </div>
                 </div>
                 <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
+                <div className="mt-2 flex items-center gap-2">
+                  <Btn
+                    sm
+                    onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest)}
+                    disabled={primaryKeyTesting || !primaryKeyInput.trim()}
+                  >
+                    {primaryKeyTesting ? 'Testing…' : 'Test key'}
+                  </Btn>
+                </div>
+                {primaryKeyTest && <KeyTestResult result={primaryKeyTest} />}
               </>
             );
           })()}
@@ -2216,6 +2346,16 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                       </div>
                     </div>
                     <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
+                    <div className="mt-2 flex items-center gap-2">
+                      <Btn
+                        sm
+                        onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest)}
+                        disabled={fallbackKeyTesting || !fallbackKeyInput.trim()}
+                      >
+                        {fallbackKeyTesting ? 'Testing…' : 'Test key'}
+                      </Btn>
+                    </div>
+                    {fallbackKeyTest && <KeyTestResult result={fallbackKeyTest} />}
                   </>
                 );
               })()}
@@ -2358,7 +2498,13 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
 
 /* ── Web search ──────────────────────────────────────────────────────── */
 
-function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
+interface SearchSectionProps extends SectionProps {
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+}
+function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: SearchSectionProps) {
+  const [tavilyKeyTest, setTavilyKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [tavilyKeyTesting, setTavilyKeyTesting] = useState(false);
+
   const save = () => saveSettings({
     search: {
       provider: form.search.provider,
@@ -2379,6 +2525,26 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
         && form.search.apiKey !== 'set'
         && form.search.apiKey !== (savedSearch.apiKey || ''));
   const tavilyKeySet = form.search.apiKey === 'set' || !!data.env?.SEARCH_API_KEY;
+
+  const testTavilyKey = async () => {
+    const value = form.search.apiKey === 'set' ? '' : form.search.apiKey;
+    if (!value.trim()) return;
+    setTavilyKeyTesting(true);
+    setTavilyKeyTest(null);
+    try {
+      const r = await adminFetch('/settings/secrets/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'SEARCH_API_KEY', value: value.trim() }),
+      });
+      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
+      setTavilyKeyTest(j);
+    } catch (e) {
+      setTavilyKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
+    } finally {
+      setTavilyKeyTesting(false);
+    }
+  };
 
   return (
     <>
@@ -2455,6 +2621,20 @@ function SearchSection({ data, form, setForm, busy, saveSettings }: SectionProps
                 </div>
               </div>
               <KeyStatus envVar="SEARCH_API_KEY" present={tavilyKeySet} />
+              <div className="mt-2 flex items-center gap-2">
+                <Btn
+                  sm
+                  onClick={testTavilyKey}
+                  disabled={
+                    tavilyKeyTesting ||
+                    !form.search.apiKey.trim() ||
+                    form.search.apiKey === 'set'
+                  }
+                >
+                  {tavilyKeyTesting ? 'Testing…' : 'Test key'}
+                </Btn>
+              </div>
+              {tavilyKeyTest && <KeyTestResult result={tavilyKeyTest} />}
             </>
           )}
         </div>
@@ -2542,7 +2722,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
   // embeddings endpoint so it's back in (#522); anthropic stays in too, routing
   // to OpenAI as flagged in the hint.
   const embedProviders = data.embedding?.providers ||
-    ['ollama', 'openai-compatible', 'locca', 'anthropic', 'openai', 'google', 'openrouter'];
+    ['ollama', 'openai-compatible', 'locca', 'anthropic', 'openai', 'google', 'openrouter', 'requesty'];
   // Keep a stale explicit choice (a chat-only provider saved before this list
   // shrank) visible so the Select isn't blank and the warning below makes sense.
   const providers = e.provider && !embedProviders.includes(e.provider)
@@ -2890,10 +3070,10 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
             {probe && (
               <div
                 className={cn(
-                  'mt-2 max-w-[560px] rounded border px-3 py-2 text-[11px] leading-[1.6] whitespace-pre-wrap',
+                  'mt-2 max-w-[560px] rounded border bg-[var(--ink-softer)] px-3 py-2 text-[11px] leading-[1.6] whitespace-pre-wrap',
                   probe.ok
                     ? 'border-[var(--accent)] text-[color:var(--accent)]'
-                    : 'border-red-400/50 text-red-300',
+                    : 'border-[var(--danger)] text-[var(--danger)]',
                 )}
               >
                 {probe.ok
