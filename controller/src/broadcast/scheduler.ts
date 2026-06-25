@@ -10,6 +10,8 @@ import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
+import * as settings from '../settings.js';
+import { durationSeconds } from '../music/recency.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
 import * as session from './session.js';
@@ -57,6 +59,11 @@ async function refreshAutoPlaylistInner() {
   // Match the auto-DJ picker's window (dj-agent.pickViaAgent) — 12h.
   const recent = queue.recentlyPlayedIds(12);
 
+  // Station-level length cap (issue #447). The auto playlist is the coarse,
+  // slow-refreshing Liquidsoap fallback that airs whenever the live queue runs
+  // dry — show overrides don't apply here, so we use the station default only.
+  const maxDurationSec = settings.effectiveMaxTrackSec(null);
+
   const pool: any[] = [];
   const fromSource: Record<string, number> = { mood: 0, playlist: 0, recent: 0, frequent: 0, starred: 0, random: 0 };
   const take = (label: string, items: any[], cap: number) => {
@@ -64,6 +71,10 @@ async function refreshAutoPlaylistInner() {
     for (const t of items) {
       if (n >= cap || pool.length >= TARGET_POOL) break;
       if (!t?.id || recent.has(t.id) || pool.find((p: any) => p.id === t.id)) continue;
+      if (maxDurationSec) {
+        const d = durationSeconds(t);
+        if (d != null && d > maxDurationSec) continue;
+      }
       pool.push({ ...t, _source: label });
       fromSource[label]++;
       n++;

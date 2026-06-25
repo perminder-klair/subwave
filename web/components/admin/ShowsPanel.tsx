@@ -73,6 +73,10 @@ interface Show {
    *  pool instead of a soft lean — off-genre tracks only play as a last resort
    *  to avoid silence. Defaults off. */
   genreStrict: boolean;
+  /** Per-show track-length cap (minutes). null = inherit the station default;
+   *  0 = unlimited (opt this show out of the cap so it can air long mixes);
+   *  >0 = this show's own cap. */
+  maxTrackMinutes: number | null;
 }
 
 // Decade presets for the era dropdown → fromYear/toYear. 'any' clears the window.
@@ -180,9 +184,10 @@ function NowCard({ label, accent, slotHour, show, color, personaLabel }: NowCard
 // Compact " · genre · 80s · high" suffix for the show summary lines, omitting
 // whatever the show doesn't pin. A strict genre is flagged inline so the hard
 // lock is visible at a glance.
-function showFilterSummary(s: { genre: string; fromYear: number | null; toYear: number | null; energy: string; genreStrict?: boolean }): string {
+function showFilterSummary(s: { genre: string; fromYear: number | null; toYear: number | null; energy: string; genreStrict?: boolean; maxTrackMinutes?: number | null }): string {
   const genre = s.genre ? (s.genreStrict ? `${s.genre} (strict)` : s.genre) : '';
-  const bits = [genre, decadeLabelOf(s), s.energy].filter(Boolean);
+  const len = s.maxTrackMinutes == null ? '' : s.maxTrackMinutes === 0 ? 'any length' : `≤${s.maxTrackMinutes}m`;
+  const bits = [genre, decadeLabelOf(s), s.energy, len].filter(Boolean);
   return bits.length ? ` · ${bits.join(' · ')}` : '';
 }
 
@@ -290,6 +295,7 @@ export default function ShowsPanel() {
           toYear: s.toYear ?? null,
           energy: s.energy ?? '',
           genreStrict: s.genreStrict ?? false,
+          maxTrackMinutes: s.maxTrackMinutes ?? null,
         }));
         setForm({ shows, schedule: week });
         // Arm the first valid show as the brush so the grid is paintable at once.
@@ -351,6 +357,7 @@ export default function ShowsPanel() {
       personaId: personas[0]?.id || '', mood: moods[0] || '',
       themeId: '',
       genre: '', fromYear: null, toYear: null, energy: '', genreStrict: false,
+      maxTrackMinutes: null,
     });
   };
   const openEdit = (i: number) => {
@@ -364,6 +371,7 @@ export default function ShowsPanel() {
       themeId: s.themeId || '',
       genre: s.genre || '', fromYear: s.fromYear ?? null, toYear: s.toYear ?? null, energy: s.energy || '',
       genreStrict: s.genreStrict ?? false,
+      maxTrackMinutes: s.maxTrackMinutes ?? null,
     });
   };
   const closeModal = () => { setEditIndex(null); setDraft(null); };
@@ -377,6 +385,7 @@ export default function ShowsPanel() {
       genre: draft.genre.trim(), fromYear: draft.fromYear, toYear: draft.toYear, energy: draft.energy || '',
       // Strict is only meaningful with a genre to lock to — drop it otherwise.
       genreStrict: !!draft.genre.trim() && draft.genreStrict,
+      maxTrackMinutes: draft.maxTrackMinutes,
     };
     if (editIndex === -1) {
       const id = clientMintId();
@@ -514,6 +523,7 @@ export default function ShowsPanel() {
             themeId: s.themeId || '',
             genre: s.genre.trim(), fromYear: s.fromYear, toYear: s.toYear, energy: s.energy || '',
             genreStrict: !!s.genre.trim() && s.genreStrict,
+            maxTrackMinutes: s.maxTrackMinutes,
           })),
           schedule: form.schedule,
         }),
@@ -907,6 +917,20 @@ export default function ShowsPanel() {
                   </SelectContent>
                 </Select>
               </Field>
+              <Field>
+                <Label>max length</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={600}
+                  placeholder="inherit"
+                  value={draft.maxTrackMinutes ?? ''}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                    const raw = e.target.value.trim();
+                    setDraftField({ maxTrackMinutes: raw === '' ? null : Math.max(0, parseInt(raw, 10) || 0) });
+                  }}
+                />
+              </Field>
             </div>
 
             <div className="flex items-start gap-3">
@@ -932,6 +956,9 @@ export default function ShowsPanel() {
               Optional soft music steer for this show: a genre, an era, an energy
               band, or any mix. The DJ leans toward these but can break them for
               flow; leave blank to let the topic and mood drive selection.
+              {' '}<b>Max length</b> (minutes) caps how long a picked track can be —
+              leave blank to inherit the station limit, set 0 to allow any length
+              (e.g. a long-form mix show), or a number for this show&rsquo;s own cap.
             </span>
 
             <Field>

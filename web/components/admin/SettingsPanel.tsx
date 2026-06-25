@@ -206,6 +206,7 @@ const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
 interface FormState {
   jingleRatio: string;
   crossfadeDuration: string;
+  maxTrackMinutes: string;
   archive: ArchiveForm;
   stream: StreamForm;
   station: string;
@@ -246,6 +247,7 @@ interface SettingsData {
   values?: {
     jingleRatio?: number;
     crossfadeDuration?: number;
+    maxTrackMinutes?: number;
     archive?: { enabled?: boolean; bitrate?: number };
     stream?: { opusEnabled?: boolean };
     station?: string;
@@ -376,6 +378,7 @@ export default function SettingsPanel() {
     setForm({
       jingleRatio: String(v.jingleRatio ?? ''),
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
+      maxTrackMinutes: String(v.maxTrackMinutes ?? 0),
       archive: {
         enabled: v.archive?.enabled ?? true,
         bitrate: String(v.archive?.bitrate ?? 128),
@@ -822,6 +825,43 @@ export default function SettingsPanel() {
                   <div className="field-hint">
                     Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
                     Saving flags a pending restart. Apply it with the Mixer card below.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Max track length" sub="keep long mixes out of rotation">
+                <div className="field">
+                  <Label>Maximum track length</Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      className="mono-num w-28"
+                      type="number"
+                      step={1}
+                      min={0}
+                      max={600}
+                      value={form.maxTrackMinutes}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f => (f ? { ...f, maxTrackMinutes: e.target.value } : f))
+                      }
+                    />
+                    <span className="text-[12px] text-muted">min (0 = no limit)</span>
+                    <Btn
+                      sm
+                      onClick={() =>
+                        saveSettings({ maxTrackMinutes: parseInt(form.maxTrackMinutes, 10) || 0 })
+                      }
+                      disabled={busy}
+                    >
+                      Save limit
+                    </Btn>
+                  </div>
+                  <div className="field-hint">
+                    The DJ won&rsquo;t auto-pick tracks longer than this — handy for hour-long
+                    album mixes or DJ sets that keep landing in rotation. Listener requests still
+                    play any length, and a show can override this with its own limit (0 there means
+                    unlimited). Applies on the next pick; no restart needed.
                   </div>
                 </div>
               </Card>

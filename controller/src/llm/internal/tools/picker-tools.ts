@@ -72,10 +72,16 @@ export function buildPickerTools({
   recentArtists = new Set<string>(),
   audioWaypoint = null,
   resolveReferences = false,
+  maxDurationSec = null,
 }: {
   recentIds?: Set<string>;
   recentKeys?: Set<string>;        // lowercased "title|artist" — backfilled entries lack ids
   recentArtists?: Set<string>;
+  // Hard length cap (seconds) for autonomous picks — the active show's override
+  // or the station default (issue #447). null = no cap. Deliberately NOT set on
+  // the request path (djAgentRequest) so an explicit listener ask for a long
+  // mix still plays.
+  maxDurationSec?: number | null;
   // The active sonic journey's current waypoint vector (broadcast/dj-agent.ts).
   // When present, the tracksTowardJourney tool below is registered, closing
   // over it — the agent never sees the raw vector, only the tracks near it.
@@ -105,6 +111,7 @@ export function buildPickerTools({
       artistCounts,
       maxPerArtist: MAX_PER_ARTIST,
       cap,
+      maxDurationSec,
     });
     const out: any[] = [];
     for (const s of accepted) {

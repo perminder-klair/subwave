@@ -13,6 +13,10 @@ export interface CandidateLike {
   id?: string | null;
   title?: string | null;
   artist?: string | null;
+  // Track length. Subsonic songs carry `duration`; library-db rows carry
+  // `durationSec`. Both optional — unknown length is never grounds to drop.
+  duration?: number | null;
+  durationSec?: number | null;
 }
 
 export interface CandidateFilterState {
@@ -23,6 +27,20 @@ export interface CandidateFilterState {
   artistCounts?: Map<string, number>;
   maxPerArtist?: number;
   cap?: number;
+  // Hard length cap in seconds (station/show max-track-length, issue #447).
+  // null / 0 means "no cap". Tracks longer than this are dropped before the
+  // recency relaxation below, so an over-length track never airs even when the
+  // pool is starved.
+  maxDurationSec?: number | null;
+}
+
+// Track length in seconds from whichever field the source carries, or null when
+// unknown. Zero/negative/non-finite all read as unknown — we only ever act on a
+// positive, trustworthy duration (the hour-long album mixes #447 targets report
+// one reliably).
+export function durationSeconds(song: CandidateLike): number | null {
+  const d = song?.duration ?? song?.durationSec;
+  return Number.isFinite(d) && (d as number) > 0 ? Number(d) : null;
 }
 
 export function artistKey(song: CandidateLike): string {
@@ -66,8 +84,19 @@ export function filterPickerCandidates<T extends CandidateLike>(
     artistCounts = new Map<string, number>(),
     maxPerArtist = Infinity,
     cap = Infinity,
+    maxDurationSec = null,
   }: CandidateFilterState = {},
 ): T[] {
+  // Length cap first, outside the recency loop: a too-long track is never an
+  // acceptable autonomous pick, so it must not survive even the fully-relaxed
+  // third mode. Unknown-duration tracks pass through untouched.
+  const pool = maxDurationSec && maxDurationSec > 0
+    ? (list || []).filter((s) => {
+        const d = durationSeconds(s);
+        return d == null || d <= maxDurationSec;
+      })
+    : (list || []);
+
   const modes = [
     { recentTracks: true, recentArtists: true },
     { recentTracks: true, recentArtists: false },
@@ -79,7 +108,7 @@ export function filterPickerCandidates<T extends CandidateLike>(
     const nextArtistCounts = new Map(artistCounts);
     const out: T[] = [];
 
-    for (const song of list || []) {
+    for (const song of pool) {
       if (!song?.id || nextSeen.has(song.id)) continue;
       if (mode.recentTracks && recentIds.has(song.id)) continue;
       if (mode.recentTracks && recentKeys.has(trackKey(song))) continue;

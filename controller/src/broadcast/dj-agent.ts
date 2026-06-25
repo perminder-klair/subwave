@@ -280,7 +280,11 @@ export const pickerAgent = defineAgent({
   timeoutMs: agentDeadline,
   buildSystem: () => pickSystem(),
   buildTools: ({ recentIds, recentKeys, recentArtists, audioWaypoint }) => {
-    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, recentArtists, audioWaypoint });
+    // Length cap for autonomous picks: the active show's override or the
+    // station default (issue #447), resolved live at run time so a show that
+    // just came on air takes effect. null = no cap.
+    const maxDurationSec = settings.effectiveMaxTrackSec();
+    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, recentArtists, audioWaypoint, maxDurationSec });
     return { tools, extras: { seen } };
   },
 });

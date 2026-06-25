@@ -198,7 +198,7 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, maxDurationSec: number | null = null) {
   await library.load();
   const pool: any[] = [];
   const sources: Record<string, number> = {};
@@ -431,6 +431,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     artistCounts: perArtist,
     maxPerArtist: MAX_PER_ARTIST,
     cap: CANDIDATE_CAP,
+    maxDurationSec,
   });
 
   // Strict-genre diagnostics for the caller's never-starve log: how much of the
@@ -484,7 +485,10 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const showFilter: ShowFilter = activeShow
     ? { genre: activeShow.genre, fromYear: activeShow.fromYear, toYear: activeShow.toYear, energy: activeShow.energy, strict: activeShow.genreStrict }
     : null;
-  const { candidates, sources, strictInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter);
+  // Length cap for this pick: the active show's override or the station default
+  // (issue #447), resolved in seconds. null = no cap.
+  const maxDurationSec = settings.effectiveMaxTrackSec(activeShow);
+  const { candidates, sources, strictInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, maxDurationSec);
 
   if (candidates.length === 0) {
     queue.log('picker', 'no candidates available, skipping LLM pick');
