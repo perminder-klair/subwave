@@ -147,7 +147,6 @@ interface LlmFallbackForm {
   ollamaUrl: string;
   numCtx: number;
   baseUrl: string;
-  apiKey: string;
   reasoning: boolean;
 }
 
@@ -157,7 +156,6 @@ interface LlmForm {
   ollamaUrl: string;
   numCtx: number;
   baseUrl: string;
-  apiKey: string;
   reasoning: boolean;
   toolChoice: string;
   pickerAgent: boolean;
@@ -441,7 +439,6 @@ export default function SettingsPanel() {
         ollamaUrl: v.llm?.ollamaUrl ?? '',
         numCtx: typeof v.llm?.numCtx === 'number' ? v.llm.numCtx : 16384,
         baseUrl: v.llm?.baseUrl ?? '',
-        apiKey: v.llm?.apiKey ?? '',
         reasoning: !!v.llm?.reasoning,
         toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
         pickerAgent: !!v.llm?.pickerAgent,
@@ -455,7 +452,6 @@ export default function SettingsPanel() {
           ollamaUrl: v.llm?.fallback?.ollamaUrl ?? '',
           numCtx: typeof v.llm?.fallback?.numCtx === 'number' ? v.llm.fallback.numCtx : 16384,
           baseUrl: v.llm?.fallback?.baseUrl ?? '',
-          apiKey: v.llm?.fallback?.apiKey ?? '',
           reasoning: !!v.llm?.fallback?.reasoning,
         },
       },
@@ -2100,7 +2096,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   type="password"
                   value={compatKeyInput}
                   onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
-                  placeholder={data.values?.llm?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                  placeholder={(data.values?.llm as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
                   className="max-w-[360px]"
                 />
                 <div className="field-hint">
@@ -2363,7 +2359,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                       type="password"
                       value={compatFallbackKeyInput}
                       onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatFallbackKeyInput(e.target.value)}
-                      placeholder={data.values?.llm?.fallback?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                      placeholder={(data.values?.llm?.fallback as unknown as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
                       className="max-w-[360px]"
                     />
                     <div className="field-hint">

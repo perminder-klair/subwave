@@ -443,7 +443,7 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
     const m = createOpenAI({
       apiKey: (typeof apiKey === 'string' && apiKey.trim()) ? apiKey.trim() : 'no-key',
       baseURL: baseUrl.trim().replace(/\/+$/, ''),
-    })(model.trim());
+    }).chat(model.trim());
     await generateText({
       model: m,
       prompt: 'Reply with the single word OK.',
