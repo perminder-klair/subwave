@@ -1711,7 +1711,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   {ttsDiscovery.loading && (
                     <span className="animate-pulse text-[11px] text-muted">discovering…</span>
                   )}
-                  {ttsDiscovery.models.length > 0 && !ttsDiscovery.loading && (
+                  {ttsDiscoveryEnabled && !ttsDiscovery.loading && (
                     <Btn sm onClick={ttsDiscovery.refresh} title="Refresh model list">↻</Btn>
                   )}
                 </div>
@@ -2318,7 +2318,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               {primaryDiscovery.loading && (
                 <span className="animate-pulse text-[11px] text-muted">discovering…</span>
               )}
-              {primaryDiscovery.models.length > 0 && !primaryDiscovery.loading && (
+              {primaryDiscoveryEnabled && !primaryDiscovery.loading && (
                 <Btn sm onClick={primaryDiscovery.refresh} title="Refresh model list">↻</Btn>
               )}
             </div>
@@ -2603,7 +2603,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   {fallbackDiscovery.loading && (
                     <span className="animate-pulse text-[11px] text-muted">discovering…</span>
                   )}
-                  {fallbackDiscovery.models.length > 0 && !fallbackDiscovery.loading && (
+                  {fallbackDiscoveryEnabled && !fallbackDiscovery.loading && (
                     <Btn sm onClick={fallbackDiscovery.refresh} title="Refresh model list">↻</Btn>
                   )}
                 </div>
@@ -3352,7 +3352,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
               {embedDiscovery.loading && (
                 <span className="animate-pulse text-[11px] text-muted">discovering…</span>
               )}
-              {embedDiscovery.models.length > 0 && !embedDiscovery.loading && (
+              {embedDiscoveryEnabled && !embedDiscovery.loading && (
                 <Btn sm onClick={embedDiscovery.refresh} title="Refresh model list">↻</Btn>
               )}
             </div>
