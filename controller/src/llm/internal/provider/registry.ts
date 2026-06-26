@@ -207,20 +207,22 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
     case 'openrouter': {
       const provider = createOpenRouter({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
       // OpenRouter reads `reasoning` from construction settings, not per-call
-      // providerOptions — so the operator's reasoning toggle must be wired HERE
-      // or it's dead (we used to pass nothing → models reasoned by default).
-      // Reasoning models (e.g. xiaomi/mimo-v2.5) think by default, and thinking
-      // mode rejects forced tool_choice, breaking the picker's done-tool loop.
-      // When the toggle is off, disable reasoning via extraBody (merged into the
-      // body, overriding the default) so those models can emit forced tool calls.
-      // The cache sig already includes the reasoning flag, so toggling rebuilds.
-      // Disable reasoning when the operator toggle is off OR this is a forced-tool
-      // leg (constructionNoThink) — the latter lets reasoning stay ON for the DJ's
-      // free-text while the picker silently runs a no-think instance, so a
-      // reasoning model Just Works with no operator knowledge.
-      const disableReasoning = cfg.reasoning !== true || constructionNoThink;
-      model = disableReasoning
-        ? provider(id, { extraBody: { reasoning: { enabled: false } } })
+      // providerOptions — so the toggle must be wired HERE or it's dead (we used
+      // to pass nothing → models reasoned by default). We MINIMISE rather than
+      // disable reasoning when suppressing: some OpenRouter models mandate it —
+      // OpenAI gpt-5/o-series 400 with "Reasoning is mandatory for this endpoint"
+      // on `enabled:false` — but every model accepts `effort:'minimal'`, which
+      // both satisfies the mandate AND drops thinking low enough that
+      // reasoning-rejects-tools models (mimo) can still emit forced tool calls.
+      // Suppress on forced-tool legs (constructionNoThink) and when the operator
+      // turns reasoning off; otherwise leave the model's default reasoning. This
+      // lets the DJ's free-text keep full reasoning while the picker runs minimal,
+      // so a reasoning model Just Works with no operator knowledge. The cache sig
+      // includes both the reasoning flag and the no-think flag, so each variant is
+      // built once.
+      const suppressReasoning = cfg.reasoning !== true || constructionNoThink;
+      model = suppressReasoning
+        ? provider(id, { extraBody: { reasoning: { effort: 'minimal' } } })
         : provider(id);
       break;
     }
