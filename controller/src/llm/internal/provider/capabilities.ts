@@ -108,12 +108,38 @@ const CAPS: Record<string, ProviderCapabilities> = {
     thinkingBlock: ({ reasoning, forceNoThink }) =>
       ({ deepseek: { thinking: { type: reasoning && !forceNoThink ? 'enabled' : 'disabled' } } }),
   },
-  // No first-class thinking knob — pass through to the underlying provider.
+  // OpenRouter reads `reasoning` ONLY from model-construction settings, not
+  // per-call providerOptions, so the thinking knob can't live here — it's wired
+  // in registry.ts (languageModel) off cfg.reasoning. Reasoning models routed
+  // through OpenRouter (e.g. xiaomi/mimo-v2.5) think by default, and thinking
+  // mode rejects forced tool_choice, which breaks the picker — see that fix.
   openrouter: { objectStrategy: 'native', repeatPenaltyApplies: false, thinkingBlock: NONE },
-  // Requesty mirrors openrouter — an OpenAI-compatible hosted gateway with no
-  // first-class thinking knob, so reasoning passes through to the model verbatim.
-  requesty: { objectStrategy: 'native', repeatPenaltyApplies: false, thinkingBlock: NONE },
-  gateway: { objectStrategy: 'native', repeatPenaltyApplies: false, thinkingBlock: NONE },
+  // Requesty is an OpenAI-compatible gateway built via createOpenAI with
+  // name:'requesty', so the AI SDK reads providerOptions under the `requesty`
+  // namespace (providerOptionsName = provider.split('.')[0]) — validated against
+  // the OpenAI options schema, which carries reasoningEffort. Mirror the openai
+  // descriptor's suppression: minimal effort when reasoning is off or on a
+  // forced-tool leg, so a reasoning model behind Requesty can still emit forced
+  // tool calls. (Non-reasoning models ignore the field.)
+  requesty: {
+    objectStrategy: 'native',
+    repeatPenaltyApplies: false,
+    thinkingBlock: ({ reasoning, forceNoThink }) =>
+      reasoning && !forceNoThink ? {} : { requesty: { reasoningEffort: 'minimal' } },
+  },
+  // Vercel AI Gateway routes to an underlying provider by `provider/model` id and
+  // forwards provider-namespaced options through. We can't know the target's
+  // namespace from here, so emit the knob for the providers that need suppressing
+  // on forced-tool legs (anthropic + deepseek); the gateway passes through only
+  // the block matching the resolved model and ignores the rest.
+  gateway: {
+    objectStrategy: 'native',
+    repeatPenaltyApplies: false,
+    thinkingBlock: ({ reasoning, forceNoThink }) =>
+      reasoning && !forceNoThink
+        ? {}
+        : { anthropic: { thinking: { type: 'disabled' } }, deepseek: { thinking: { type: 'disabled' } } },
+  },
 };
 
 // Unknown provider id → native objects, no repeat penalty, no thinking block.

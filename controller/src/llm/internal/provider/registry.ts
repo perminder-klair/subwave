@@ -199,7 +199,17 @@ export function languageModel(cfg: any = llmCfg()) {
     }
     case 'openrouter': {
       const provider = createOpenRouter({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
-      model = provider(id);
+      // OpenRouter reads `reasoning` from construction settings, not per-call
+      // providerOptions — so the operator's reasoning toggle must be wired HERE
+      // or it's dead (we used to pass nothing → models reasoned by default).
+      // Reasoning models (e.g. xiaomi/mimo-v2.5) think by default, and thinking
+      // mode rejects forced tool_choice, breaking the picker's done-tool loop.
+      // When the toggle is off, disable reasoning via extraBody (merged into the
+      // body, overriding the default) so those models can emit forced tool calls.
+      // The cache sig already includes the reasoning flag, so toggling rebuilds.
+      model = cfg.reasoning === true
+        ? provider(id)
+        : provider(id, { extraBody: { reasoning: { enabled: false } } });
       break;
     }
     case 'requesty': {
