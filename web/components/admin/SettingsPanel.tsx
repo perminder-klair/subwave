@@ -1706,17 +1706,9 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             )}
             <div className="mt-3.5 grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-[18px]">
               <div className="field">
+                <Label>Model</Label>
                 <div className="flex items-center gap-2">
-                  <Label>Model</Label>
-                  {ttsDiscovery.loading && (
-                    <span className="animate-pulse text-[11px] text-muted">discovering…</span>
-                  )}
-                  {ttsDiscoveryEnabled && !ttsDiscovery.loading && (
-                    <Btn sm onClick={ttsDiscovery.refresh} title="Refresh model list">↻</Btn>
-                  )}
-                </div>
-                {ttsDiscovery.models.length > 0 ? (
-                  <>
+                  {ttsDiscovery.models.length > 0 ? (
                     <Select
                       value={
                         ttsDiscovery.models.includes(form.tts.cloud.model)
@@ -1741,12 +1733,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                         </SelectGroup>
                       </SelectContent>
                     </Select>
-                    <div className="field-hint">
-                      {ttsDiscovery.models.length} model{ttsDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.
-                    </div>
-                  </>
-                ) : (
-                  <>
+                  ) : (
                     <Input
                       value={form.tts.cloud.model}
                       onChange={(e: ChangeEvent<HTMLInputElement>) =>
@@ -1759,21 +1746,29 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                       }
                       className="max-w-[360px]"
                     />
-                    <div className="field-hint">
-                      {!ttsDiscoveryEnabled
-                        ? (isCompat
-                            ? 'Set a base URL above to discover available models.'
-                            : 'Set an API key above to discover and select a model.')
-                        : ttsDiscovery.error
-                          ? `Discovery failed: ${ttsDiscovery.error}. Type a model ID manually.`
-                          : ttsDiscovery.loading
-                            ? 'Discovering models…'
-                            : (isCompat
-                                ? <>Model id exactly as the server reports it at <code>/v1/models</code>, required.</>
-                                : <>e.g. "gpt-4o-mini-tts" (OpenAI) or "eleven_flash_v2_5" (ElevenLabs).</>)}
-                    </div>
-                  </>
-                )}
+                  )}
+                  {ttsDiscovery.loading
+                    ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
+                    : ttsDiscoveryEnabled && (
+                      <Btn sm onClick={ttsDiscovery.refresh} title="Refresh model list">↻</Btn>
+                    )
+                  }
+                </div>
+                <div className="field-hint">
+                  {ttsDiscovery.models.length > 0
+                    ? `${ttsDiscovery.models.length} model${ttsDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                    : !ttsDiscoveryEnabled
+                      ? (isCompat
+                          ? 'Set a base URL above to discover available models.'
+                          : 'Set an API key above to discover and select a model.')
+                      : ttsDiscovery.error
+                        ? `Discovery failed: ${ttsDiscovery.error}. Type a model ID manually.`
+                        : ttsDiscovery.loading
+                          ? 'Discovering models…'
+                          : (isCompat
+                              ? 'Model id exactly as the server reports it at /v1/models, required.'
+                              : 'e.g. "gpt-4o-mini-tts" (OpenAI) or "eleven_flash_v2_5" (ElevenLabs).')}
+                </div>
               </div>
               {(() => {
                 const provVoices = CLOUD_VOICES[form.tts.cloud.provider as keyof typeof CLOUD_VOICES] || [];
@@ -2313,17 +2308,9 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
           })()}
 
           <div className="field">
+            <Label>Model</Label>
             <div className="flex items-center gap-2">
-              <Label>Model</Label>
-              {primaryDiscovery.loading && (
-                <span className="animate-pulse text-[11px] text-muted">discovering…</span>
-              )}
-              {primaryDiscoveryEnabled && !primaryDiscovery.loading && (
-                <Btn sm onClick={primaryDiscovery.refresh} title="Refresh model list">↻</Btn>
-              )}
-            </div>
-            {primaryDiscovery.models.length > 0 ? (
-              <>
+              {primaryDiscovery.models.length > 0 ? (
                 <Select
                   value={
                     primaryDiscovery.models.includes(form.llm.model)
@@ -2348,12 +2335,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                     </SelectGroup>
                   </SelectContent>
                 </Select>
-                <div className="field-hint">
-                  {primaryDiscovery.models.length} model{primaryDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.
-                </div>
-              </>
-            ) : (
-              <>
+              ) : (
                 <Input
                   value={form.llm.model}
                   onChange={(e: ChangeEvent<HTMLInputElement>) =>
@@ -2373,19 +2355,27 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   }
                   className="max-w-[360px]"
                 />
-                <div className="field-hint">
-                  {!primaryDiscoveryEnabled
-                    ? (form.llm.provider === 'openai-compatible'
-                        ? 'Set a base URL above to discover available models.'
-                        : 'Set an API key above to discover and select a model.')
-                    : primaryDiscovery.error
-                      ? `Discovery failed: ${primaryDiscovery.error}. Type a model ID manually.`
-                      : primaryDiscovery.loading
-                        ? 'Discovering models…'
-                        : 'No models discovered. Type a model ID manually.'}
-                </div>
-              </>
-            )}
+              )}
+              {primaryDiscovery.loading
+                ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
+                : primaryDiscoveryEnabled && (
+                  <Btn sm onClick={primaryDiscovery.refresh} title="Refresh model list">↻</Btn>
+                )
+              }
+            </div>
+            <div className="field-hint">
+              {primaryDiscovery.models.length > 0
+                ? `${primaryDiscovery.models.length} model${primaryDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                : !primaryDiscoveryEnabled
+                  ? (form.llm.provider === 'openai-compatible'
+                      ? 'Set a base URL above to discover available models.'
+                      : 'Set an API key above to discover and select a model.')
+                  : primaryDiscovery.error
+                    ? `Discovery failed: ${primaryDiscovery.error}. Type a model ID manually.`
+                    : primaryDiscovery.loading
+                      ? 'Discovering models…'
+                      : 'No models discovered. Type a model ID manually.'}
+            </div>
           </div>
 
           {form.llm.provider === 'openai-compatible' && (
@@ -2598,17 +2588,9 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               })()}
 
               <div className="field">
+                <Label>Backup model</Label>
                 <div className="flex items-center gap-2">
-                  <Label>Backup model</Label>
-                  {fallbackDiscovery.loading && (
-                    <span className="animate-pulse text-[11px] text-muted">discovering…</span>
-                  )}
-                  {fallbackDiscoveryEnabled && !fallbackDiscovery.loading && (
-                    <Btn sm onClick={fallbackDiscovery.refresh} title="Refresh model list">↻</Btn>
-                  )}
-                </div>
-                {fallbackDiscovery.models.length > 0 ? (
-                  <>
+                  {fallbackDiscovery.models.length > 0 ? (
                     <Select
                       value={
                         fallbackDiscovery.models.includes(form.llm.fallback.model)
@@ -2633,12 +2615,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                         </SelectGroup>
                       </SelectContent>
                     </Select>
-                    <div className="field-hint">
-                      {fallbackDiscovery.models.length} model{fallbackDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.
-                    </div>
-                  </>
-                ) : (
-                  <>
+                  ) : (
                     <Input
                       value={form.llm.fallback.model}
                       onChange={(e: ChangeEvent<HTMLInputElement>) =>
@@ -2658,19 +2635,27 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                       }
                       className="max-w-[360px]"
                     />
-                    <div className="field-hint">
-                      {!fallbackDiscoveryEnabled
-                        ? (form.llm.fallback.provider === 'openai-compatible'
-                            ? 'Set a base URL above to discover available models.'
-                            : 'Set an API key above to discover and select a model.')
-                        : fallbackDiscovery.error
-                          ? `Discovery failed: ${fallbackDiscovery.error}. Type a model ID manually.`
-                          : fallbackDiscovery.loading
-                            ? 'Discovering models…'
-                            : 'No models discovered. Type a model ID manually.'}
-                    </div>
-                  </>
-                )}
+                  )}
+                  {fallbackDiscovery.loading
+                    ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
+                    : fallbackDiscoveryEnabled && (
+                      <Btn sm onClick={fallbackDiscovery.refresh} title="Refresh model list">↻</Btn>
+                    )
+                  }
+                </div>
+                <div className="field-hint">
+                  {fallbackDiscovery.models.length > 0
+                    ? `${fallbackDiscovery.models.length} model${fallbackDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                    : !fallbackDiscoveryEnabled
+                      ? (form.llm.fallback.provider === 'openai-compatible'
+                          ? 'Set a base URL above to discover available models.'
+                          : 'Set an API key above to discover and select a model.')
+                      : fallbackDiscovery.error
+                        ? `Discovery failed: ${fallbackDiscovery.error}. Type a model ID manually.`
+                        : fallbackDiscovery.loading
+                          ? 'Discovering models…'
+                          : 'No models discovered. Type a model ID manually.'}
+                </div>
               </div>
 
               <div className="grid grid-cols-[1fr_auto] items-center gap-4">
@@ -3347,17 +3332,9 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
           </div>
 
           <div className="field">
+            <Label>Model</Label>
             <div className="flex items-center gap-2">
-              <Label>Model</Label>
-              {embedDiscovery.loading && (
-                <span className="animate-pulse text-[11px] text-muted">discovering…</span>
-              )}
-              {embedDiscoveryEnabled && !embedDiscovery.loading && (
-                <Btn sm onClick={embedDiscovery.refresh} title="Refresh model list">↻</Btn>
-              )}
-            </div>
-            {embedDiscovery.models.length > 0 ? (
-              <>
+              {embedDiscovery.models.length > 0 ? (
                 <Select
                   value={
                     embedDiscovery.models.includes(e.model)
@@ -3382,12 +3359,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
                     </SelectGroup>
                   </SelectContent>
                 </Select>
-                <div className="field-hint">
-                  {embedDiscovery.models.length} model{embedDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.
-                </div>
-              </>
-            ) : (
-              <>
+              ) : (
                 <Input
                   value={e.model}
                   onChange={(ev: ChangeEvent<HTMLInputElement>) =>
@@ -3404,19 +3376,27 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
                   }
                   className="max-w-[360px]"
                 />
-                <div className="field-hint">
-                  {!embedDiscoveryEnabled
-                    ? (effectiveProvider === 'openai-compatible'
-                        ? 'Set a base URL above to discover available models.'
-                        : 'Set an API key above to discover and select a model.')
-                    : embedDiscovery.error
-                      ? `Discovery failed: ${embedDiscovery.error}. Type a model ID manually.`
-                      : embedDiscovery.loading
-                        ? 'Discovering models…'
-                        : 'No models discovered. Type a model ID manually.'}
-                </div>
-              </>
-            )}
+              )}
+              {embedDiscovery.loading
+                ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
+                : embedDiscoveryEnabled && (
+                  <Btn sm onClick={embedDiscovery.refresh} title="Refresh model list">↻</Btn>
+                )
+              }
+            </div>
+            <div className="field-hint">
+              {embedDiscovery.models.length > 0
+                ? `${embedDiscovery.models.length} model${embedDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                : !embedDiscoveryEnabled
+                  ? (effectiveProvider === 'openai-compatible'
+                      ? 'Set a base URL above to discover available models.'
+                      : 'Set an API key above to discover and select a model.')
+                  : embedDiscovery.error
+                    ? `Discovery failed: ${embedDiscovery.error}. Type a model ID manually.`
+                    : embedDiscovery.loading
+                      ? 'Discovering models…'
+                      : 'No models discovered. Type a model ID manually.'}
+            </div>
             <div className="field-hint">
               Leave blank for the sensible default per provider. If you change
               this on a tagged library, the next run will reject the new dim.

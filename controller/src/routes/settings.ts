@@ -471,7 +471,12 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
   const baseUrl = String(req.query.baseUrl || '').trim().replace(/\/+$/, '');
   const ollamaUrl = String(req.query.ollamaUrl || '').trim().replace(/\/+$/, '');
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 3000);
+  const timer = setTimeout(() => ctrl.abort(), 10_000);
+
+  await settings.load();
+  const s = settings.get();
+  const settingsKey = (s.llm?.apiKey && typeof s.llm.apiKey === 'string') ? s.llm.apiKey.trim() : '';
+  const resolveKey = (envName: string) => settingsKey || (process.env[envName] || '').trim() || '';
 
   try {
     let models: string[] = [];
@@ -508,7 +513,7 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
       }
 
       case 'openai': {
-        const apiKey = process.env.OPENAI_API_KEY;
+        const apiKey = resolveKey('OPENAI_API_KEY');
         if (!apiKey) throw new Error('OPENAI_API_KEY not set');
         const r = await fetch('https://api.openai.com/v1/models', {
           signal: ctrl.signal,
@@ -523,7 +528,7 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
       }
 
       case 'anthropic': {
-        const apiKey = process.env.ANTHROPIC_API_KEY;
+        const apiKey = resolveKey('ANTHROPIC_API_KEY');
         if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
         const r = await fetch('https://api.anthropic.com/v1/models?limit=100', {
           signal: ctrl.signal,
@@ -541,7 +546,7 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
       }
 
       case 'google': {
-        const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+        const apiKey = resolveKey('GOOGLE_GENERATIVE_AI_API_KEY');
         if (!apiKey) throw new Error('GOOGLE_GENERATIVE_AI_API_KEY not set');
         const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`, {
           signal: ctrl.signal,
@@ -559,7 +564,7 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
       }
 
       case 'deepseek': {
-        const apiKey = process.env.DEEPSEEK_API_KEY;
+        const apiKey = resolveKey('DEEPSEEK_API_KEY');
         if (!apiKey) throw new Error('DEEPSEEK_API_KEY not set');
         const r = await fetch('https://api.deepseek.com/v1/models', {
           signal: ctrl.signal,
@@ -586,7 +591,7 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
       }
 
       case 'requesty': {
-        const apiKey = process.env.REQUESTY_API_KEY;
+        const apiKey = resolveKey('REQUESTY_API_KEY');
         if (!apiKey) throw new Error('REQUESTY_API_KEY not set');
         const r = await fetch('https://router.requesty.ai/v1/models', {
           signal: ctrl.signal,
@@ -601,7 +606,7 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
       }
 
       case 'gateway': {
-        const apiKey = process.env.AI_GATEWAY_API_KEY;
+        const apiKey = resolveKey('AI_GATEWAY_API_KEY');
         if (!apiKey) throw new Error('AI_GATEWAY_API_KEY not set');
         const r = await fetch('https://gateway.ai.cloudflare.com/v1/models', {
           signal: ctrl.signal,
