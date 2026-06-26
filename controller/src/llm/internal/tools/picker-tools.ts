@@ -296,17 +296,19 @@ export function buildPickerTools({
     ...(hasTextEmbeddings && hasEmbeddingProvider ? {
       searchByLyrics: tool({
         description: 'Semantic lyric / theme search over the library. Embeds the query and returns tracks whose lyrics + metadata are closest to it. Use for thematic picks the mood vocab can\'t express — e.g. "songs about hometown", "tracks with hopeful lyrics", "feeling stuck". Requires the mood/lyric embedding index and a text-embedding provider.',
+        // No k input: the agent reliably picked a small k, and recency filtering
+        // then thins it further. Pull a wide fixed KNN (40) internally —
+        // collect() still caps to 8 fresh ones. Mirrors the seed-similarity tools.
         inputSchema: z.object({
           query: z.string().min(3),
-          k: z.number().int().min(1).max(50).default(20),
         }),
-        execute: async ({ query, k }) => {
+        execute: async ({ query }) => {
           try {
             if (!embeddings.isAvailable()) return { error: 'embeddings not configured — set settings.embedding.enabled / provider' };
             await library.load();
             const [vec] = await embeddings.embedTexts([query.trim()]);
             if (!vec) return { error: 'embedding query failed' };
-            return collect(library.tracksByVector(vec, k));
+            return collect(library.tracksByVector(vec, 40));
           }
           catch (err) { return { error: err.message }; }
         },
