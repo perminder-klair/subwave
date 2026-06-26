@@ -451,6 +451,18 @@ export function effectiveMaxTrackSec(
   return sec && sec > 0 ? sec : null;
 }
 
+// Smallest non-zero max-track-length (seconds) validation accepts and the
+// admin/show UI offers. The on-air cut fires a crossfade that BEGINS
+// crossfadeDuration before the cut point, so a cap below the crossfade is
+// degenerate and below 2× leaves the track no solo airtime. 0 (= unlimited) is
+// always allowed — this is only the floor for a POSITIVE cap. Surfaced to the UI
+// via /settings.values.minTrackSeconds so client and server share one rule.
+export function minTrackSeconds(s: any = get()): number {
+  const xf = Number(s?.crossfadeDuration);
+  const cross = Number.isFinite(xf) && xf > 0 ? xf : DEFAULTS.crossfadeDuration;
+  return Math.max(30, Math.ceil(2 * cross));
+}
+
 function mintId(prefix) {
   return prefix + randomBytes(3).toString('hex');
 }
@@ -1698,6 +1710,14 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
           `shows[${i}].maxTrackSeconds must be an integer between ${BOUNDS.maxTrackSeconds.min} and ${BOUNDS.maxTrackSeconds.max}`,
         );
       }
+      // Same crossfade-relative floor as the station cap (0 = inherit/unlimited
+      // stays allowed). Shows have no own crossfade, so it's the station value.
+      const floor = minTrackSeconds();
+      if (n !== 0 && n < floor) {
+        throw new Error(
+          `shows[${i}].maxTrackSeconds must be 0 (inherit/unlimited) or at least ${floor}s`,
+        );
+      }
       maxTrackSeconds = n;
     }
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
@@ -1824,8 +1844,18 @@ export async function update(patch) {
         `maxTrackSeconds must be int in [${BOUNDS.maxTrackSeconds.min}, ${BOUNDS.maxTrackSeconds.max}]`,
       );
     }
-    // Picker-only knob (read live by music/picker + the auto-playlist refresh);
-    // no Liquidsoap file is written, so no restart.
+    // Non-zero caps must clear the crossfade-relative floor (0 = unlimited stays
+    // allowed): the track crossfades out starting crossfadeDuration before the
+    // cap, so a shorter cap is degenerate / leaves no solo airtime. Uses next's
+    // crossfade, already applied above if this same patch changed it.
+    const floor = minTrackSeconds(next);
+    if (v !== 0 && v < floor) {
+      throw new Error(
+        `maxTrackSeconds must be 0 (no limit) or at least ${floor}s`,
+      );
+    }
+    // Read live by queue.drainToLiquidsoap + the auto-playlist refresh to stamp
+    // liq_cue_out; no Liquidsoap file is written, so no restart.
     next.maxTrackSeconds = v;
   }
   if ('archive' in patch) {

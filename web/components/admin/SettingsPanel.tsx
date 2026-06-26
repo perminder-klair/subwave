@@ -271,6 +271,7 @@ interface SettingsData {
     jingleRatio?: number;
     crossfadeDuration?: number;
     maxTrackSeconds?: number;
+    minTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number };
     stream?: { opusEnabled?: boolean };
     station?: string;
@@ -866,7 +867,7 @@ export default function SettingsPanel() {
             )}
 
             {form && (
-              <Card title="Max track length" sub="keep long mixes out of rotation">
+              <Card title="Max track length" sub="cut over-length tracks on air">
                 <div className="field">
                   <Label>Maximum track length</Label>
                   <div className="flex items-center gap-2">
@@ -881,7 +882,9 @@ export default function SettingsPanel() {
                         setForm(f => (f ? { ...f, maxTrackSeconds: e.target.value } : f))
                       }
                     />
-                    <span className="text-[12px] text-muted">sec (0 = no limit)</span>
+                    <span className="text-[12px] text-muted">
+                      sec · 0 = no limit · min {data?.values?.minTrackSeconds ?? 30}s
+                    </span>
                     <Btn
                       sm
                       onClick={() =>
