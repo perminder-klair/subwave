@@ -133,7 +133,10 @@ export async function djAgent({
           try {
             lastVia = 'ai-sdk:agent:native';
             const nativeAgent = new ToolLoopAgent({
-              model: leg.model,
+              // Native tool-using agent forces no-think (forceNoThink:true below),
+              // so use the no-think model — for OpenRouter that's the reasoning-
+              // disabled instance; identical to leg.model for every other provider.
+              model: leg.noThinkModel ?? leg.model,
               instructions: system,
               tools,
               stopWhen: [stepCountIs(maxSteps)],
@@ -185,7 +188,9 @@ export async function djAgent({
         const prepareStep = useGatedDiscovery ? gatedDiscoveryPrepareStep(discoveryToolNames, forcedChoice) : undefined;
 
         const agent = new ToolLoopAgent({
-          model: leg.model,
+          // useDoneTool legs force tool calls → no-think model; the schema-only
+          // native-no-tools / free-text legs keep the operator's reasoning choice.
+          model: useDoneTool ? (leg.noThinkModel ?? leg.model) : leg.model,
           instructions: system,
           tools: allTools,
           // The no-execute `done` tool already terminates the loop when called;
@@ -225,7 +230,8 @@ export async function djAgent({
           const priorMessages = (result as any).response?.messages || [];
           const recoveryMessages = priorMessages.length ? [...messages, ...priorMessages] : messages;
           const recoveryAgent = new ToolLoopAgent({
-            model: leg.model,
+            // Recovery forces done-only every step → no-think model (see above).
+            model: leg.noThinkModel ?? leg.model,
             // Append an explicit terminal instruction at the exact point
             // gemma-class models stall (issue #555): after a negative tool
             // result (`available:false`) they tend to emit prose instead of

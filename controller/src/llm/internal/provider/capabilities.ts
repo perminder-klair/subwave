@@ -30,6 +30,12 @@ export interface ProviderCapabilities {
   // The providerOptions fragment for this provider given the resolved model id +
   // reasoning/forceNoThink flags.
   thinkingBlock(a: ThinkingArgs): Record<string, unknown>;
+  // True when the provider reads `reasoning` ONLY from model-construction
+  // settings, not per-call providerOptions (OpenRouter). For these, forceNoThink
+  // can't be honoured via thinkingBlock — instead the registry builds a separate
+  // reasoning-disabled model instance for forced-tool legs (see languageModel's
+  // forceNoThink opt). Everyone else suppresses per-call and leaves this false.
+  reasoningConstructionOnly?: boolean;
 }
 
 const NONE = (): Record<string, unknown> => ({});
@@ -110,10 +116,11 @@ const CAPS: Record<string, ProviderCapabilities> = {
   },
   // OpenRouter reads `reasoning` ONLY from model-construction settings, not
   // per-call providerOptions, so the thinking knob can't live here — it's wired
-  // in registry.ts (languageModel) off cfg.reasoning. Reasoning models routed
-  // through OpenRouter (e.g. xiaomi/mimo-v2.5) think by default, and thinking
-  // mode rejects forced tool_choice, which breaks the picker — see that fix.
-  openrouter: { objectStrategy: 'native', repeatPenaltyApplies: false, thinkingBlock: NONE },
+  // in registry.ts (languageModel) off cfg.reasoning, and forced-tool legs get a
+  // separate reasoning-disabled instance (reasoningConstructionOnly). Reasoning
+  // models routed through OpenRouter (e.g. xiaomi/mimo-v2.5) think by default,
+  // and thinking mode rejects forced tool_choice, which breaks the picker.
+  openrouter: { objectStrategy: 'native', repeatPenaltyApplies: false, thinkingBlock: NONE, reasoningConstructionOnly: true },
   // Requesty is an OpenAI-compatible gateway built via createOpenAI with
   // name:'requesty', so the AI SDK reads providerOptions under the `requesty`
   // namespace (providerOptionsName = provider.split('.')[0]) — validated against

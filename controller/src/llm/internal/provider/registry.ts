@@ -27,6 +27,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
+import { capabilitiesFor } from './capabilities.js';
 
 // Memoise built clients so we don't reconstruct a provider on every call.
 // Keyed by a signature that changes whenever provider/model/key changes, so a
@@ -156,10 +157,16 @@ export function resolveModelId(cfg: any): string {
 // Returns an AI SDK LanguageModel for the given config (the active primary leg
 // by default). Passing an explicit cfg — the fallback leg — reuses the same
 // client cache, since the signature below already keys on every field.
-export function languageModel(cfg: any = llmCfg()) {
+export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolean } = {}) {
   const id = resolveModelId(cfg);
   const baseUrlSig = cfg.provider === 'locca' ? loccaBaseUrl(cfg) : (cfg.baseUrl || '');
-  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}`;
+  // Construction-time no-think: only providers whose reasoning is set at build
+  // time (OpenRouter) need a distinct reasoning-disabled instance for forced-tool
+  // legs; everyone else suppresses per-call via providerOptions, so the same
+  // cached model serves both. Keyed into the sig so the two variants don't collide.
+  const constructionNoThink = opts.forceNoThink === true
+    && capabilitiesFor(cfg.provider).reasoningConstructionOnly === true;
+  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${constructionNoThink ? 'nt1' : 'nt0'}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;
@@ -207,9 +214,14 @@ export function languageModel(cfg: any = llmCfg()) {
       // When the toggle is off, disable reasoning via extraBody (merged into the
       // body, overriding the default) so those models can emit forced tool calls.
       // The cache sig already includes the reasoning flag, so toggling rebuilds.
-      model = cfg.reasoning === true
-        ? provider(id)
-        : provider(id, { extraBody: { reasoning: { enabled: false } } });
+      // Disable reasoning when the operator toggle is off OR this is a forced-tool
+      // leg (constructionNoThink) — the latter lets reasoning stay ON for the DJ's
+      // free-text while the picker silently runs a no-think instance, so a
+      // reasoning model Just Works with no operator knowledge.
+      const disableReasoning = cfg.reasoning !== true || constructionNoThink;
+      model = disableReasoning
+        ? provider(id, { extraBody: { reasoning: { enabled: false } } })
+        : provider(id);
       break;
     }
     case 'requesty': {
