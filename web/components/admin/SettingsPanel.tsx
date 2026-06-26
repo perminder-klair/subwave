@@ -1486,7 +1486,8 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   };
   const testCloudKey = async () => {
     const cloudKeyVar = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
-    if (!cloudKeyInput.trim()) return;
+    const hasTyped = !!cloudKeyInput.trim();
+    if (!hasTyped && !data.env?.[cloudKeyVar]) return;
     setCloudKeyTesting(true);
     setCloudKeyTest(null);
     try {
@@ -1497,9 +1498,11 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
       setCloudKeyTest(j);
-      if (j.ok) {
+      if (j.ok && hasTyped) {
         const saved = await saveKey(cloudKeyVar, cloudKeyInput);
         if (saved) { notify.ok('Key verified and saved'); setCloudKeyInput(''); refresh(); }
+      } else if (j.ok) {
+        notify.ok('Key verified (on file)');
       }
     } catch (e) {
       setCloudKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
@@ -1971,7 +1974,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                       />
                       <Btn
                         onClick={testCloudKey}
-                        disabled={cloudKeyTesting || !cloudKeyInput.trim()}
+                        disabled={cloudKeyTesting || (!cloudKeyInput.trim() && !data.env?.[cloudKeyVar])}
                       >
                         {cloudKeyTesting ? 'Testing…' : 'Test key'}
                       </Btn>
@@ -2111,7 +2114,8 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     setResult: (r: { ok: boolean; message: string; latencyMs: number } | null) => void,
     clearInput?: () => void,
   ) => {
-    if (!value.trim()) return;
+    const hasTyped = !!value.trim();
+    if (!hasTyped && !data.env?.[envVar]) return;
     setTesting(true);
     setResult(null);
     try {
@@ -2122,9 +2126,11 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
       setResult(j);
-      if (j.ok) {
+      if (j.ok && hasTyped) {
         const saved = await saveKey(envVar, value);
         if (saved) { notify.ok('Key verified and saved'); clearInput?.(); refresh(); }
+      } else if (j.ok) {
+        notify.ok('Key verified (on file)');
       }
     } catch (e) {
       setResult({ ok: false, message: errorMessage(e), latencyMs: 0 });
@@ -2413,7 +2419,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                     />
                     <Btn
                       onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest, () => setPrimaryKeyInput(''))}
-                      disabled={primaryKeyTesting || !primaryKeyInput.trim()}
+                      disabled={primaryKeyTesting || (!primaryKeyInput.trim() && !data.env?.[keyVar])}
                     >
                       {primaryKeyTesting ? 'Testing…' : 'Test key'}
                     </Btn>
@@ -2681,7 +2687,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                         />
                         <Btn
                           onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest, () => setFallbackKeyInput(''))}
-                          disabled={fallbackKeyTesting || !fallbackKeyInput.trim()}
+                          disabled={fallbackKeyTesting || (!fallbackKeyInput.trim() && !data.env?.[keyVar])}
                         >
                           {fallbackKeyTesting ? 'Testing…' : 'Test key'}
                         </Btn>

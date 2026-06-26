@@ -377,19 +377,24 @@ async function probeKey(
 // ---------------------------------------------------------------------------
 router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
   const { key, value } = req.body || {};
-  if (!key || !value || typeof key !== 'string' || typeof value !== 'string') {
-    return res.status(400).json({ ok: false, message: 'key and value are required', latencyMs: 0 });
+  if (!key || typeof key !== 'string') {
+    return res.status(400).json({ ok: false, message: 'key is required', latencyMs: 0 });
   }
   if (!SECRET_ENV_KEYS.includes(key as any)) {
     return res.status(400).json({ ok: false, message: `Unknown key: ${key}`, latencyMs: 0 });
   }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return res.status(400).json({ ok: false, message: 'value must not be blank', latencyMs: 0 });
+  let targetValue = typeof value === 'string' ? value.trim() : '';
+  if (!targetValue) {
+    // If no value provided, check if key is already set in the environment
+    const envValue = (process.env[key] || '').trim();
+    if (!envValue) {
+      return res.status(400).json({ ok: false, message: 'value is required when key is not set in environment', latencyMs: 0 });
+    }
+    targetValue = envValue;
   }
   const t0 = Date.now();
   try {
-    const result = await probeKey(key as (typeof SECRET_ENV_KEYS)[number], trimmed);
+    const result = await probeKey(key as (typeof SECRET_ENV_KEYS)[number], targetValue);
     res.json({ ok: result.ok, message: result.message, latencyMs: Date.now() - t0 });
   } catch (err: any) {
     res.json({ ok: false, message: err?.message || 'probe failed', latencyMs: Date.now() - t0 });
