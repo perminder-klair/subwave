@@ -1258,7 +1258,11 @@ function ModelCombobox({ models, value, onChange, placeholder = 'Select a model'
   // Close on scroll/resize
   useEffect(() => {
     if (!open) return;
-    const close = () => { setOpen(false); setSearch(''); };
+    const close = (e: Event) => {
+      if (dropdownRef.current && dropdownRef.current.contains(e.target as Node)) return;
+      setOpen(false);
+      setSearch('');
+    };
     window.addEventListener('scroll', close, true);
     window.addEventListener('resize', close);
     return () => { window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close); };
