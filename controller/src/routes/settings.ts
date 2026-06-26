@@ -470,6 +470,7 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
   }
   const baseUrl = String(req.query.baseUrl || '').trim().replace(/\/+$/, '');
   const ollamaUrl = String(req.query.ollamaUrl || '').trim().replace(/\/+$/, '');
+  const scope = String(req.query.scope || '').trim(); // 'embedding' | '' (chat)
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 10_000);
 
@@ -519,7 +520,11 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
         if (!r.ok) throw new Error(`OpenAI HTTP ${r.status}`);
         const data: any = await r.json();
         models = Array.isArray(data?.data)
-          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
+          ? data.data
+              .map((m: any) => m?.id)
+              .filter((id: any): id is string => typeof id === 'string')
+              .filter((id: string) => scope === 'embedding' ? id.startsWith('text-embedding-') : !id.startsWith('text-embedding-'))
+              .sort()
           : [];
         break;
       }
@@ -552,7 +557,12 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
         const data: any = await r.json();
         models = Array.isArray(data?.models)
           ? data.models
-              .filter((m: any) => Array.isArray(m?.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+              .filter((m: any) => {
+                const methods: string[] = Array.isArray(m?.supportedGenerationMethods) ? m.supportedGenerationMethods : [];
+                return scope === 'embedding'
+                  ? methods.includes('embedContent')
+                  : methods.includes('generateContent');
+              })
               .map((m: any) => String(m?.name || '').replace(/^models\//, ''))
               .filter(Boolean)
               .sort()
@@ -576,9 +586,10 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
       }
 
       case 'openrouter': {
-        const r = await fetch('https://openrouter.ai/api/v1/models', {
-          signal: ctrl.signal,
-        });
+        const url = scope === 'embedding'
+          ? 'https://openrouter.ai/api/v1/models?output_modalities=embeddings'
+          : 'https://openrouter.ai/api/v1/models';
+        const r = await fetch(url, { signal: ctrl.signal });
         if (!r.ok) throw new Error(`OpenRouter HTTP ${r.status}`);
         const data: any = await r.json();
         models = Array.isArray(data?.data)

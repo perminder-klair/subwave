@@ -2,6 +2,7 @@
 
 import type { ChangeEvent, ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { m } from 'motion/react';
 import { notify, errorMessage } from '../../lib/notify';
@@ -1224,13 +1225,28 @@ interface ModelComboboxProps {
 function ModelCombobox({ models, value, onChange, placeholder = 'Select a model', disabled, className }: ModelComboboxProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  // Recompute position when opening
+  const openDropdown = () => {
+    if (triggerRef.current) {
+      const r = triggerRef.current.getBoundingClientRect();
+      setRect({ top: r.bottom + window.scrollY, left: r.left + window.scrollX, width: r.width });
+    }
+    setOpen(true);
+    setSearch('');
+  };
 
   // Close on outside click
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      if (
+        triggerRef.current && !triggerRef.current.contains(e.target as Node) &&
+        dropdownRef.current && !dropdownRef.current.contains(e.target as Node)
+      ) {
         setOpen(false);
         setSearch('');
       }
@@ -1239,18 +1255,69 @@ function ModelCombobox({ models, value, onChange, placeholder = 'Select a model'
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
+  // Close on scroll/resize
+  useEffect(() => {
+    if (!open) return;
+    const close = () => { setOpen(false); setSearch(''); };
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => { window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close); };
+  }, [open]);
+
   const filtered = search.trim()
     ? models.filter(m => m.toLowerCase().includes(search.toLowerCase()))
     : models;
 
   const displayValue = value || placeholder;
 
+  const dropdown = open && rect ? createPortal(
+    <div
+      ref={dropdownRef}
+      style={{ position: 'absolute', top: rect.top + 4, left: rect.left, width: Math.max(rect.width, 240), zIndex: 9999 }}
+      className="border border-ink bg-bg shadow-drawer"
+    >
+      <Command shouldFilter={false}>
+        <CommandInput
+          placeholder="Filter models…"
+          value={search}
+          onValueChange={setSearch}
+        />
+        <CommandList>
+          {filtered.length === 0
+            ? <CommandEmpty>No models match.</CommandEmpty>
+            : (
+              <CommandGroup>
+                {filtered.map(m => (
+                  <CommandItem
+                    key={m}
+                    value={m}
+                    onSelect={() => { onChange(m); setOpen(false); setSearch(''); }}
+                    data-selected={m === value}
+                  >
+                    <span className="truncate">{m}</span>
+                    {m === value && (
+                      <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
+                        <path d="M2 6.5l3.5 3.5 5.5-6" />
+                      </svg>
+                    )}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )
+          }
+        </CommandList>
+      </Command>
+    </div>,
+    document.body,
+  ) : null;
+
   return (
-    <div ref={ref} className={cn('relative w-full max-w-[360px]', className)}>
+    <div className={cn('w-full max-w-[360px]', className)}>
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
-        onClick={() => { setOpen(o => !o); setSearch(''); }}
+        onClick={() => open ? (setOpen(false), setSearch('')) : openDropdown()}
         className={cn(
           'flex h-9 w-full items-center justify-between gap-2 border border-ink bg-bg px-3 text-sm',
           'focus:outline-none disabled:cursor-not-allowed disabled:opacity-40',
@@ -1262,42 +1329,7 @@ function ModelCombobox({ models, value, onChange, placeholder = 'Select a model'
           <path d="M2 4l4 4 4-4" />
         </svg>
       </button>
-
-      {open && (
-        <div className="absolute top-full left-0 z-50 mt-1 w-full min-w-[240px] border border-ink bg-bg shadow-drawer">
-          <Command shouldFilter={false}>
-            <CommandInput
-              placeholder="Filter models…"
-              value={search}
-              onValueChange={setSearch}
-            />
-            <CommandList>
-              {filtered.length === 0
-                ? <CommandEmpty>No models match.</CommandEmpty>
-                : (
-                  <CommandGroup>
-                    {filtered.map(m => (
-                      <CommandItem
-                        key={m}
-                        value={m}
-                        onSelect={() => { onChange(m); setOpen(false); setSearch(''); }}
-                        data-selected={m === value}
-                      >
-                        <span className="truncate">{m}</span>
-                        {m === value && (
-                          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
-                            <path d="M2 6.5l3.5 3.5 5.5-6" />
-                          </svg>
-                        )}
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                )
-              }
-            </CommandList>
-          </Command>
-        </div>
-      )}
+      {dropdown}
     </div>
   );
 }
@@ -3196,6 +3228,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
     provider: effectiveProvider,
     baseUrl: e.baseUrl || form.llm.baseUrl,
     ollamaUrl: e.ollamaUrl || form.llm.ollamaUrl,
+    scope: 'embedding',
     enabled: embedDiscoveryEnabled,
     adminFetch,
   });

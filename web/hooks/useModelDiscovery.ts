@@ -4,6 +4,7 @@ interface UseModelDiscoveryOpts {
   provider: string;
   baseUrl?: string;
   ollamaUrl?: string;
+  scope?: 'embedding' | 'chat';
   enabled: boolean;
   adminFetch: (url: string, init?: RequestInit) => Promise<Response>;
 }
@@ -19,6 +20,7 @@ export function useModelDiscovery({
   provider,
   baseUrl,
   ollamaUrl,
+  scope,
   enabled,
   adminFetch,
 }: UseModelDiscoveryOpts): UseModelDiscoveryResult {
@@ -40,6 +42,7 @@ export function useModelDiscovery({
       const params = new URLSearchParams({ provider });
       if (baseUrl) params.set('baseUrl', baseUrl);
       if (ollamaUrl) params.set('ollamaUrl', ollamaUrl);
+      if (scope) params.set('scope', scope);
       const r = await adminFetch(`/settings/llm/models?${params}`);
       const data = await r.json() as { ok: boolean; models: string[]; error?: string };
       if (providerRef.current !== provider) return;
@@ -57,7 +60,7 @@ export function useModelDiscovery({
     } finally {
       setLoading(false);
     }
-  }, [provider, baseUrl, ollamaUrl, enabled, adminFetch]);
+  }, [provider, baseUrl, ollamaUrl, scope, enabled, adminFetch]);
 
   useEffect(() => {
     fetchModels();
