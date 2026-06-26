@@ -35,6 +35,41 @@ function pickLinkInterval() {
   return 1 + Math.floor(Math.random() * 9);
 }
 
+// Upper bound on how far a recordPlay end-stamp can sit after the play's start
+// for the events-backfill dedup (playAlreadyRecorded). recordPlay stamps
+// endedAt at the track's END; an event's `t` is its START, so the two differ by
+// the track length. 15 min comfortably covers normal tracks (a track longer
+// than this is rare and only costs one harmless duplicate sidecar row), while
+// staying short enough that a genuine replay — always spaced more than a track
+// length apart — keeps its own entry rather than being merged away.
+export const BACKFILL_DEDUP_MAX_GAP_MS = 15 * 60_000;
+
+// Has this events-log play already been recorded by recordPlay? The old dedup
+// keyed on `${endedAt}|${title}` — an EXACT timestamp match — but recordPlay's
+// end-stamp never equals the event's start `t`, so it never fired and every
+// play got a duplicate id-less copy, filling the 300-entry sidecar in ~5h
+// instead of ~12h (halving the real anti-repeat window). Match on title|artist
+// with an existing endedAt landing in [t, t + maxGapMs] instead: exactly the
+// window a recordPlay end-stamp falls in for the SAME play. Pure + exported so
+// the dedup logic is unit-pinned (scripts/recent-plays.test.ts) without disk.
+export function playAlreadyRecorded(
+  existing: { title: string | null; artist: string | null; endedAt: string }[],
+  ev: { title?: string | null; artist?: string | null; t: string },
+  maxGapMs: number,
+): boolean {
+  const keyOf = (title: string | null | undefined, artist: string | null | undefined) =>
+    `${(title || '').toLowerCase().trim()}|${(artist || '').toLowerCase().trim()}`;
+  const k = keyOf(ev.title, ev.artist);
+  const t = new Date(ev.t).getTime();
+  if (!Number.isFinite(t)) return false;
+  for (const p of existing) {
+    if (keyOf(p.title, p.artist) !== k) continue;
+    const at = new Date(p.endedAt).getTime();
+    if (Number.isFinite(at) && at >= t && at - t <= maxGapMs) return true;
+  }
+  return false;
+}
+
 class Queue {
   upcoming: any[] = [];        // request items pushed by listeners, not yet playing
   current: any = null;         // what's broadcasting right now (request or auto)
@@ -151,11 +186,10 @@ class Queue {
   backfillRecentPlaysFromEvents() {
     try {
       const cutoff = Date.now() - 24 * 3_600_000;
-      // Dedup by `t|title` against existing sidecar (which records endedAt
-      // close to the play.start time; near-enough that exact equality works).
-      const have = new Set(
-        this._recentPlays.map(p => `${p.endedAt}|${p.title || ''}`),
-      );
+      // Dedup against plays recordPlay already logged — matched on title|artist
+      // with the existing end-stamp inside a track-length window of the event's
+      // start (playAlreadyRecorded), NOT an exact-timestamp key. The old exact
+      // key never matched (end-stamp ≠ start `t`), so every play was duplicated.
       const filled: typeof this._recentPlays = [];
       const today = new Date().toISOString().slice(0, 10);
       const yest = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
@@ -170,7 +204,10 @@ class Queue {
             const e = JSON.parse(line);
             if (e.type !== 'track.play' || !e.t || !e.title) continue;
             if (new Date(e.t).getTime() < cutoff) continue;
-            if (have.has(`${e.t}|${e.title}`)) continue;
+            // Compare against both the existing sidecar AND plays already filled
+            // in this pass, so two events for one play can't both slip through.
+            if (playAlreadyRecorded(this._recentPlays, e, BACKFILL_DEDUP_MAX_GAP_MS)) continue;
+            if (playAlreadyRecorded(filled, e, BACKFILL_DEDUP_MAX_GAP_MS)) continue;
             filled.push({
               id: null,
               title: e.title || null,
