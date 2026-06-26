@@ -1246,14 +1246,14 @@ function ModelCombobox({ models, value, onChange, placeholder = 'Select a model'
   const displayValue = value || placeholder;
 
   return (
-    <div ref={ref} className={cn('relative max-w-[360px] w-full', className)}>
+    <div ref={ref} className={cn('relative w-full max-w-[360px]', className)}>
       <button
         type="button"
         disabled={disabled}
         onClick={() => { setOpen(o => !o); setSearch(''); }}
         className={cn(
           'flex h-9 w-full items-center justify-between gap-2 border border-ink bg-bg px-3 text-sm',
-          'focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed',
+          'focus:outline-none disabled:cursor-not-allowed disabled:opacity-40',
           open && 'ring-1 ring-ink',
         )}
       >
@@ -1264,7 +1264,7 @@ function ModelCombobox({ models, value, onChange, placeholder = 'Select a model'
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-full min-w-[240px] border border-ink bg-bg shadow-drawer">
+        <div className="absolute top-full left-0 z-50 mt-1 w-full min-w-[240px] border border-ink bg-bg shadow-drawer">
           <Command shouldFilter={false}>
             <CommandInput
               placeholder="Filter models…"
