@@ -11,7 +11,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { durationSeconds, artistKey } from '../music/recency.js';
+import { artistKey } from '../music/recency.js';
 import { normGenre, genreMatches, inYearRange, preferEnergy } from '../music/show-filter.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
@@ -120,10 +120,6 @@ async function refreshAutoPlaylistInner() {
       if (!t?.id || recent.has(t.id) || pool.find((p: any) => p.id === t.id)) continue;
       const ak = artistKey(t);
       if (ak && (artistInPool.get(ak) || 0) >= AUTO_MAX_PER_ARTIST) continue;
-      if (maxDurationSec) {
-        const d = durationSeconds(t);
-        if (d != null && d > maxDurationSec) continue;
-      }
       pool.push({ ...t, _source: label });
       fromSource[label] = (fromSource[label] || 0) + 1;
       if (ak) artistInPool.set(ak, (artistInPool.get(ak) || 0) + 1);
@@ -229,7 +225,10 @@ async function refreshAutoPlaylistInner() {
     }
   }
 
-  const lines = ['#EXTM3U', ...pool.map((t: any) => subsonic.getAnnotatedUri(t))];
+  // Stamp the station cap on every fallback entry (#447). max-track-length is a
+  // pure on-air cue_out cut, not a selection filter, so over-length tracks stay
+  // in the pool and simply crossfade out at the cap when the queue runs dry.
+  const lines = ['#EXTM3U', ...pool.map((t: any) => subsonic.getAnnotatedUri(t, { maxDurationSec }))];
   await writeFile(config.liquidsoap.autoPlaylist, lines.join('\n'));
 
   // Make the show-scoping visible to the operator (acceptance criteria #629):

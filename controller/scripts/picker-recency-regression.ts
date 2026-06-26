@@ -64,37 +64,10 @@ assert.equal(durationSeconds({ id: 'x', durationSec: 180 }), 180);
 assert.equal(durationSeconds({ id: 'x' }), null);
 assert.equal(durationSeconds({ id: 'x', duration: 0 }), null);
 
-const mixedLengths = [
-  { id: 'short-1', title: 'Short', artist: 'A', duration: 200 },   // ~3m20
-  { id: 'long-1', title: 'Hour Mix', artist: 'B', duration: 3600 }, // 1h album mix
-  { id: 'unknown-1', title: 'No Meta', artist: 'C' },               // unknown length
-  { id: 'short-2', title: 'Brief', artist: 'D', durationSec: 250 }, // library-shaped field
-];
-
-// Cap at 10 minutes (600s): the hour-long mix is dropped, the short tracks and
-// the unknown-length track survive.
-const capped = filterPickerCandidates(mixedLengths, { maxDurationSec: 600 });
-assert.deepEqual(
-  capped.map((s) => s.id).sort(),
-  ['short-1', 'short-2', 'unknown-1'],
-  'expected the over-length track to be dropped while unknown-length is kept',
-);
-
-// The cap must survive the recency relaxation: even when every short track is
-// excluded as recently-played and the filter relaxes recency, the long track
-// must still never come back.
-const cappedUnderStarvation = filterPickerCandidates(mixedLengths, {
-  maxDurationSec: 600,
-  recentIds: new Set(['short-1', 'short-2', 'unknown-1']),
-});
-assert(
-  !cappedUnderStarvation.some((s) => s.id === 'long-1'),
-  'expected the over-length track to stay dropped even when the pool relaxes recency',
-);
-
-// No cap (null / 0) leaves every track — default behaviour is unchanged.
-assert.equal(filterPickerCandidates(mixedLengths, { maxDurationSec: null }).length, 4);
-assert.equal(filterPickerCandidates(mixedLengths, { maxDurationSec: 0 }).length, 4);
+// NOTE: max-track-length is no longer a pick-time filter. #636 moved it to a
+// hard on-air cut (Liquidsoap), so filterPickerCandidates no longer takes
+// maxDurationSec — the former over-length-drop assertions were removed when
+// develop merged in here. durationSeconds (above) is still the length reader.
 
 // ── count-based hard no-repeat guard (live-repeats fix) ─────────────────────
 

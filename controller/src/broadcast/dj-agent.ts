@@ -284,17 +284,17 @@ export const pickerAgent = defineAgent({
   buildSystem: () => pickSystem(),
   buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint }) => {
     // Resolve the active show live (a show that just came on air takes effect):
-    // its length override (issue #447) and, for a strict show, hard genre + era
-    // locks the discovery tools enforce on candidates — not just the prompt.
-    // Era rides the same genreStrict flag (no separate era-strict toggle).
+    // for a strict show, hard genre + era locks the discovery tools enforce on
+    // candidates — not just the prompt. Era rides the same genreStrict flag (no
+    // separate era-strict toggle). Track length is enforced as an on-air cut,
+    // NOT a pick filter (issue #447), so no length cap is passed here.
     const activeShow = settings.resolveActiveShow();
-    const maxDurationSec = settings.effectiveMaxTrackSec(activeShow);
     const strict = !!(activeShow?.genreStrict);
     const genreLock = strict && activeShow?.genre ? activeShow.genre : null;
     const eraLock = strict && (activeShow?.fromYear != null || activeShow?.toYear != null)
       ? { fromYear: activeShow.fromYear, toYear: activeShow.toYear }
       : null;
-    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, maxDurationSec, genreLock, eraLock });
+    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock });
     return { tools, extras: { seen } };
   },
 });

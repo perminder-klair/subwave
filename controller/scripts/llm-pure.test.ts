@@ -14,7 +14,7 @@ import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
 import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
 import { DEFAULT_LOCCA_EMBED_BASE_URL } from '../src/llm/internal/provider/registry.js';
-import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict } from '../src/settings.js';
+import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict, clampTtsSpeed, TTS_SPEED_DEFAULT } from '../src/settings.js';
 import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
 
 let failures = 0;
@@ -294,6 +294,42 @@ async function main() {
     assert.equal(bare.humour, DIAL_NEUTRAL);   // absent dials default to neutral
     assert.equal(bare.localColour, DIAL_NEUTRAL);
     assert.equal(bare.warmth, DIAL_NEUTRAL);
+  });
+
+  // ---- clampTtsSpeed: per-engine / per-persona speech-rate multiplier ----
+  // Defaults to 1.0 (NOT 0 like gain) so a stock station — and any older save
+  // with no tts.speed — composes to unity and is byte-for-byte unchanged.
+  console.log('clampTtsSpeed (speech-rate multiplier, default 1.0):');
+  await test('non-finite / missing → 1.0 (unity)', () => {
+    assert.equal(clampTtsSpeed(undefined), TTS_SPEED_DEFAULT);
+    assert.equal(clampTtsSpeed(null), 1.0);
+    assert.equal(clampTtsSpeed('abc'), 1.0);
+    assert.equal(clampTtsSpeed(NaN), 1.0);
+  });
+  await test('clamps to [0.5, 2.0]', () => {
+    assert.equal(clampTtsSpeed(0.1), 0.5);
+    assert.equal(clampTtsSpeed(-3), 0.5);
+    assert.equal(clampTtsSpeed(5), 2.0);
+    assert.equal(clampTtsSpeed(2.0), 2.0);
+    assert.equal(clampTtsSpeed(0.5), 0.5);
+  });
+  await test('rounds to 0.05 step', () => {
+    assert.equal(clampTtsSpeed(1.23), 1.25);
+    assert.equal(clampTtsSpeed(0.87), 0.85);
+    assert.equal(clampTtsSpeed(1.0), 1.0);
+  });
+
+  // The persona save path (validatePersonasStrict → validateTtsBlock) must carry
+  // tts.speed through, else the per-persona dial is silently dropped on every save.
+  await test('validatePersonasStrict carries tts.speed through the save path', () => {
+    const base = { name: 'Nova', soul: 'late-night', frequency: 'moderate',
+      tts: { engine: 'piper', cloudProvider: 'openai', voice: '' } };
+    const [fast] = validatePersonasStrict([{ ...base, tts: { ...base.tts, speed: 1.4 } }]);
+    assert.equal(fast.tts.speed, 1.4);
+    const [clamped] = validatePersonasStrict([{ ...base, tts: { ...base.tts, speed: 9 } }]);
+    assert.equal(clamped.tts.speed, 2.0);          // clamped to max
+    const [bare] = validatePersonasStrict([base]);
+    assert.equal(bare.tts.speed, TTS_SPEED_DEFAULT); // absent → unity
   });
 
   // ---- showMusicLean: soft lean vs strict genre lock (shared by both pick paths) ----
