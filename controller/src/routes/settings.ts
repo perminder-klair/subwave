@@ -447,8 +447,23 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
   }
   const t0 = Date.now();
   try {
+    let resolvedApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
+    if (!resolvedApiKey) {
+      await settings.load();
+      const s = settings.get();
+      const primaryUrl = (s.llm?.baseUrl || '').trim().replace(/\/+$/, '');
+      const fallbackUrl = (s.llm?.fallback?.baseUrl || '').trim().replace(/\/+$/, '');
+      const targetUrl = baseUrl.trim().replace(/\/+$/, '');
+
+      if (targetUrl === fallbackUrl && s.llm?.fallback?.apiKey) {
+        resolvedApiKey = s.llm.fallback.apiKey;
+      } else if (s.llm?.apiKey) {
+        resolvedApiKey = s.llm.apiKey;
+      }
+    }
+
     const m = createOpenAI({
-      apiKey: (typeof apiKey === 'string' && apiKey.trim()) ? apiKey.trim() : 'no-key',
+      apiKey: resolvedApiKey || 'no-key',
       baseURL: baseUrl.trim().replace(/\/+$/, ''),
     }).chat(model.trim());
     await generateText({
