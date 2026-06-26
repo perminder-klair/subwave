@@ -1,10 +1,9 @@
 'use client';
 
-import { memo, useEffect, useRef } from 'react';
+import { memo, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { animate as motionAnimate, m, useAnimate } from 'motion/react';
 import { ChevronDown, ChevronUp, Volume2 } from 'lucide-react';
 import { cn } from '@/lib/cn';
-import { Slider } from './ui/slider';
 import { useIsIOS } from '@/lib/hooks';
 import { useElapsed } from '@/hooks/useElapsed';
 import { SCALE_MAX, type SignalQuality } from '@/hooks/useSignal';
@@ -18,7 +17,7 @@ export interface TransportBarProps {
   offline?: boolean;
   volume: number;
   setVolume: (v: number) => void;
-  /** Increments on keyboard-only volume adjusts; slider drags don't tick it. */
+  /** Increments on keyboard-only volume adjusts; knob drags don't tick it. */
   volumePulse?: number;
   muted: boolean;
   onToggleMute: () => void;
@@ -33,6 +32,19 @@ export interface TransportBarProps {
 }
 
 const SCALE_NUMS = [0, 50, 100, 150, 200, 250];
+
+// Drag distance (px) that sweeps the volume knob across its full 0→1 range.
+// The gesture is *relative* to the press point — unbounded by the knob's ~40px
+// footprint — so this sets the dial's resolution: a comfortable thumb travel
+// for the whole range, with small nudges giving fine control.
+const KNOB_DRAG_RANGE_PX = 160;
+// Movement (px) before a press counts as a drag — swallows tap jitter so a
+// tap on the knob leaves the level untouched.
+const KNOB_DRAG_DEADZONE_PX = 4;
+
+const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+// Snap to whole-percent steps so the readout and rotation land on clean values.
+const quantizeVolume = (n: number) => Math.round(clamp01(n) * 100) / 100;
 
 const QUALITY_LABEL: Record<SignalQuality, string> = {
   offline: 'Offline',
@@ -141,6 +153,63 @@ export default memo(function TransportBar({
     }
   }, [volume]);
 
+  // ── Volume knob: relative vertical drag ───────────────────────────────
+  // Press anywhere on the knob and drag up to raise / down to lower — the
+  // standard hardware-knob gesture. Movement is measured relative to the
+  // press point, so the finger can roam the whole screen (pointer capture
+  // keeps tracking after it leaves the 40px target) and resolution isn't
+  // crushed into the knob's footprint the way the old horizontal slider was.
+  const dragRef = useRef<{ id: number; startY: number; startVolume: number; engaged: boolean } | null>(null);
+
+  const onKnobPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragRef.current) return; // a drag is already live — ignore a second finger
+    if (e.button !== 0 && e.pointerType === 'mouse') return; // primary button only
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.currentTarget.focus(); // tap focuses the slider for SR/keyboard, even with preventDefault
+    dragRef.current = { id: e.pointerId, startY: e.clientY, startVolume: volume, engaged: false };
+    e.preventDefault();
+  };
+
+  const onKnobPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.id !== e.pointerId) return;
+    const dy = drag.startY - e.clientY; // up = louder
+    // Dead-zone: a tap (or its incidental finger jitter) shouldn't jog the
+    // level — only engage once the press turns into a deliberate drag, then
+    // re-baseline so the first adjustment starts from the engagement point
+    // with no jump.
+    if (!drag.engaged) {
+      if (Math.abs(dy) < KNOB_DRAG_DEADZONE_PX) return;
+      drag.engaged = true;
+      drag.startY = e.clientY;
+      drag.startVolume = volume;
+      return;
+    }
+    setVolume(quantizeVolume(drag.startVolume + dy / KNOB_DRAG_RANGE_PX));
+  };
+
+  const endKnobDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.id !== e.pointerId) return;
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  };
+
+  // Keyboard a11y for the role="slider" knob. Up/Down are handled globally
+  // (PlayerApp's shortcuts) regardless of focus, so binding them here too would
+  // double-step — we only add the non-conflicting jump keys.
+  const onKnobKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    let next: number | null = null;
+    if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = 1;
+    else if (e.key === 'PageUp') next = volume + 0.1;
+    else if (e.key === 'PageDown') next = volume - 0.1;
+    if (next == null) return;
+    e.preventDefault();
+    setVolume(quantizeVolume(next));
+  };
+
   const handleTune = () => {
     if (offline) return;
     if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
@@ -247,7 +316,28 @@ export default memo(function TransportBar({
             </div>
           ) : (
             <div className="flex items-center gap-3 lg:gap-4">
-              <div ref={knobWrapRef} className="fz-knob-wrap h-10 w-10 lg:h-[48px] lg:w-[48px]">
+              {/* The knob is its own control: a role="slider" surface driving a
+                  relative vertical-drag gesture (see onKnobPointerDown). The
+                  ARIA value attrs keep it readable by screen readers; Up/Down
+                  come from PlayerApp's global shortcuts. touch-none stops the
+                  page scrolling out from under a drag. */}
+              <div
+                ref={knobWrapRef}
+                role="slider"
+                tabIndex={0}
+                aria-label="Volume"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(volume * 100)}
+                aria-valuetext={`${Math.round(volume * 100)}%`}
+                aria-orientation="vertical"
+                onPointerDown={onKnobPointerDown}
+                onPointerMove={onKnobPointerMove}
+                onPointerUp={endKnobDrag}
+                onPointerCancel={endKnobDrag}
+                onKeyDown={onKnobKeyDown}
+                className="fz-knob-wrap v3-focus h-10 w-10 cursor-ns-resize touch-none rounded-full select-none lg:h-[48px] lg:w-[48px]"
+              >
                 <div className="fz-knob-ticks" />
                 <div
                   className="fz-knob"
@@ -256,17 +346,6 @@ export default memo(function TransportBar({
                   <span className="fz-cap" />
                   <span className="fz-pointer" />
                 </div>
-                {/* Interaction layer only — the rotating knob above is the visible
-                    control, so the accessible Radix Slider is overlaid invisibly. */}
-                <Slider
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={[volume]}
-                  onValueChange={([v]) => setVolume(v ?? 0)}
-                  aria-label="Volume"
-                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                />
               </div>
 
               <button
