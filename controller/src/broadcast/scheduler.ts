@@ -12,6 +12,7 @@ import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { durationSeconds, artistKey } from '../music/recency.js';
+import { normGenre, genreMatches, inYearRange, preferEnergy } from '../music/show-filter.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
 import * as session from './session.js';
@@ -29,6 +30,12 @@ const RECENT_WEIGHT = 4;         // recently-added albums
 const FREQUENT_WEIGHT = 4;       // frequent / scrobble-favourite albums
 const STARRED_WEIGHT = 6;        // hand-starred tracks
 const AUTO_MAX_PER_ARTIST = 2;   // cap any one artist's share of the fallback pool
+// When a scheduled show pins a genre/era, a dedicated Navidrome-genre source
+// becomes the dominant pool contributor and the off-genre sources shrink by
+// SHOW_NARROW_FACTOR so the show's genre/era actually fills the fallback (#629).
+const SHOW_GENRE_WEIGHT = 14;        // dedicated show-genre source (soft lean)
+const SHOW_GENRE_STRICT_WEIGHT = 24; // strict: this source carries most of the pool
+const SHOW_NARROW_FACTOR = 0.5;      // shrink mood/playlist/recent/etc. for shows
 
 function shuffle<T>(arr: T[]): T[] {
   return [...arr].sort(() => Math.random() - 0.5);
@@ -61,13 +68,46 @@ async function refreshAutoPlaylistInner() {
   // Match the auto-DJ picker's window (dj-agent.pickViaAgent) — 12h.
   const recent = queue.recentlyPlayedIds(12);
 
-  // Station-level length cap (issue #447). The auto playlist is the coarse,
-  // slow-refreshing Liquidsoap fallback that airs whenever the live queue runs
-  // dry — show overrides don't apply here, so we use the station default only.
-  const maxDurationSec = settings.effectiveMaxTrackSec(null);
+  // The fallback is what airs when the live AI picks pause (e.g. pause-when-empty
+  // with zero listeners). When a show is scheduled for this hour, the fallback
+  // should stay on-brand exactly as the picker does — so we steer the pool by the
+  // active show's genre / era / energy, mirroring music/picker.ts (issue #629).
+  const show: any = settings.resolveActiveShow();
+  const showGenre: string = show?.genre || '';
+  const fromYear: number | null = show?.fromYear ?? null;
+  const toYear: number | null = show?.toYear ?? null;
+  const showEnergy: string = show?.energy || '';
+  // A genre or a year window narrows the pool; energy alone only soft-leans
+  // (mirrors picker.hasMusicFilter). Strict opts the GENRE into a hard filter.
+  const narrow = !!(show && (showGenre || fromYear != null || toYear != null));
+  const strict = !!(show?.genreStrict && showGenre);
+
+  // Resolve the show's free-text genre to the library's exact tag once, up front.
+  // A resolution failure / absent genre leaves genreName null, which disables the
+  // strict hard-filter and the genre-targeted fetches — the documented degrade
+  // path (a misspelled / library-absent genre falls back to the normal pool).
+  let genreName: string | null = null;
+  if (showGenre) {
+    try { genreName = await subsonic.resolveGenreName(showGenre); } catch {}
+  }
+  const strictGenreNorm = strict && genreName ? normGenre(genreName) : null;
+  // Strict: hard-drop off-genre tracks from every discovery source (even if that
+  // empties the source) — the auto playlist airs in full with no LLM gatekeeper,
+  // so never-starve off-genre filler would actually play. The dedicated genre
+  // source + genre-targeted random carry the pool; an unresolved genre disables
+  // this (genreName null → no filter). Soft mode is a no-op here.
+  const enforce = (items: any[]) =>
+    strictGenreNorm ? items.filter((t: any) => genreMatches(t, strictGenreNorm)) : items;
+  // Shrink the off-genre sources so the dedicated show-genre source dominates.
+  const nz = (cap: number) => (narrow ? Math.max(2, Math.ceil(cap * SHOW_NARROW_FACTOR)) : cap);
+
+  // Length cap: the active show's override or the station default (issue #447),
+  // resolved in seconds. null = no cap. Now that the fallback honours the show's
+  // genre/era it honours its track-length cap too.
+  const maxDurationSec = settings.effectiveMaxTrackSec(show);
 
   const pool: any[] = [];
-  const fromSource: Record<string, number> = { mood: 0, playlist: 0, recent: 0, frequent: 0, starred: 0, random: 0 };
+  const fromSource: Record<string, number> = { 'show-genre': 0, mood: 0, playlist: 0, recent: 0, frequent: 0, starred: 0, random: 0 };
   // Cap each artist's share of the pool. Without this, a deep-catalogue artist
   // (many mood-tagged / starred / frequent tracks) can dominate the fallback
   // playlist, so whenever Liquidsoap coasts on auto.m3u the same artist clusters
@@ -85,16 +125,43 @@ async function refreshAutoPlaylistInner() {
         if (d != null && d > maxDurationSec) continue;
       }
       pool.push({ ...t, _source: label });
-      fromSource[label]++;
+      fromSource[label] = (fromSource[label] || 0) + 1;
       if (ak) artistInPool.set(ak, (artistInPool.get(ak) || 0) + 1);
       n++;
     }
   };
 
-  // 1. Mood-tagged from the LLM-built library (only if tagger has run).
   await library.load();
+
+  // 0. Dedicated show-genre / era source — the dominant contributor whenever a
+  // show pins a genre or a year window. Both Navidrome queries filter server-side,
+  // so this source is inherently genre/era-pure (no never-starve pollution). Soft
+  // energy lean on top. Placed first so genre-native tracks fill the pool before
+  // the (shrunk) discovery sources add variety.
+  if (narrow) {
+    try {
+      const collected: any[] = [];
+      collected.push(...await subsonic.getRandomSongs({
+        size: strict ? 60 : 40,
+        genre: genreName || undefined,
+        fromYear: fromYear ?? undefined,
+        toYear: toYear ?? undefined,
+      }));
+      if (genreName) {
+        const g = await subsonic.getSongsByGenre(genreName, { count: strict ? 100 : 60 });
+        const ranged = inYearRange(g, { fromYear, toYear });
+        collected.push(...(ranged.length ? ranged : g));
+      }
+      const leaned = preferEnergy(collected, showEnergy);
+      take('show-genre', shuffle(leaned), strict ? SHOW_GENRE_STRICT_WEIGHT : SHOW_GENRE_WEIGHT);
+    } catch (err) {
+      queue.log('error', `Show-genre fetch failed: ${err.message}`);
+    }
+  }
+
+  // 1. Mood-tagged from the LLM-built library (only if tagger has run).
   if (mood) {
-    take('mood', shuffle(library.songsByMood(mood)), MOOD_WEIGHT);
+    take('mood', enforce(shuffle(preferEnergy(library.songsByMood(mood), showEnergy))), nz(MOOD_WEIGHT));
   }
 
   // 2. Navidrome playlists whose name matches the mood — operator's hand curation.
@@ -109,7 +176,7 @@ async function refreshAutoPlaylistInner() {
           tracks.push(...songs);
         } catch {}
       }
-      take('playlist', shuffle(tracks), PLAYLIST_WEIGHT);
+      take('playlist', enforce(shuffle(tracks)), nz(PLAYLIST_WEIGHT));
     } catch (err) {
       queue.log('error', `Playlist fetch failed: ${err.message}`);
     }
@@ -119,7 +186,7 @@ async function refreshAutoPlaylistInner() {
   try {
     const recentAlbums = await subsonic.getRecentlyAddedAlbums({ size: 8 });
     const tracks = await tracksFromAlbums(shuffle(recentAlbums).slice(0, 4), 2, RECENT_WEIGHT * 2);
-    take('recent', tracks, RECENT_WEIGHT);
+    take('recent', enforce(tracks), nz(RECENT_WEIGHT));
   } catch (err) {
     queue.log('error', `Recent-albums fetch failed: ${err.message}`);
   }
@@ -128,7 +195,7 @@ async function refreshAutoPlaylistInner() {
   try {
     const freqAlbums = await subsonic.getFrequentAlbums({ size: 8 });
     const tracks = await tracksFromAlbums(shuffle(freqAlbums).slice(0, 4), 2, FREQUENT_WEIGHT * 2);
-    take('frequent', tracks, FREQUENT_WEIGHT);
+    take('frequent', enforce(tracks), nz(FREQUENT_WEIGHT));
   } catch (err) {
     queue.log('error', `Frequent-albums fetch failed: ${err.message}`);
   }
@@ -136,27 +203,54 @@ async function refreshAutoPlaylistInner() {
   // 5. Starred — hand-curated.
   try {
     const starred = shuffle(await subsonic.getStarred());
-    take('starred', starred, STARRED_WEIGHT);
+    take('starred', enforce(starred), nz(STARRED_WEIGHT));
   } catch (err) {
     queue.log('error', `Starred fetch failed: ${err.message}`);
   }
 
-  // 6. Top up with random to TARGET_POOL.
+  // 6. Top up with random to TARGET_POOL. For a show, bias the fill toward its
+  // genre/era (Navidrome filters server-side, so it stays pure).
   if (pool.length < TARGET_POOL) {
     try {
-      const random = await subsonic.getRandomSongs({ size: TARGET_POOL });
-      take('random', random, TARGET_POOL);
+      const random = narrow
+        ? await subsonic.getRandomSongs({ size: TARGET_POOL, genre: genreName || undefined, fromYear: fromYear ?? undefined, toYear: toYear ?? undefined })
+        : await subsonic.getRandomSongs({ size: TARGET_POOL });
+      take('random', shuffle(random), TARGET_POOL);
     } catch (err) {
       queue.log('error', `Random fetch failed: ${err.message}`);
+    }
+    // Soft shows: if the genre/era-biased fill couldn't reach TARGET_POOL,
+    // never-starve with unfiltered random (variety over purity). Strict shows
+    // skip this — better a short, looping in-genre playlist than off-genre filler.
+    if (narrow && !strict && pool.length < TARGET_POOL) {
+      try {
+        take('random', shuffle(await subsonic.getRandomSongs({ size: TARGET_POOL })), TARGET_POOL);
+      } catch {}
     }
   }
 
   const lines = ['#EXTM3U', ...pool.map((t: any) => subsonic.getAnnotatedUri(t))];
   await writeFile(config.liquidsoap.autoPlaylist, lines.join('\n'));
+
+  // Make the show-scoping visible to the operator (acceptance criteria #629):
+  // a misspelled / absent strict genre that silently degraded, and a strict show
+  // whose genre is too thin to fill the pool, are both worth surfacing.
+  if (strict && !genreName) {
+    queue.log('scheduler', `Auto-playlist: strict genre "${showGenre}" not found in library — fallback left unfiltered`);
+  } else if (strict && genreName && pool.length < TARGET_POOL) {
+    queue.log('scheduler', `Auto-playlist: only ${pool.length} in-genre tracks for ${genreName} — looping a short genre-pure fallback`);
+  }
+
+  const showInfo = show
+    ? `, show=${show.name}` +
+      (showGenre ? ` genre=${genreName || showGenre} (${strict ? 'strict' : 'soft'})` : '') +
+      (fromYear != null || toYear != null ? ` year=${fromYear ?? ''}-${toYear ?? ''}` : '') +
+      (showEnergy ? ` energy=${showEnergy}` : '')
+    : '';
   queue.log('scheduler',
     `Auto-playlist refreshed: ${pool.length} tracks (` +
     Object.entries(fromSource).filter(([, v]) => v > 0).map(([k, v]) => `${k}=${v}`).join(' ') +
-    `, mood=${mood || 'none'})`);
+    `, mood=${mood || 'none'}${showInfo})`);
 }
 
 // ---------------------------------------------------------------------------

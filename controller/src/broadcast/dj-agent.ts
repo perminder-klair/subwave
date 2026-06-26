@@ -597,13 +597,26 @@ async function runRequestViaAgent(queue: any, { requester }: { requester: string
     }
 
     const intro = typeof object.intro === 'string' ? object.intro.trim() : '';
-    await queue.push({
+    const pos = await queue.push({
       track: trackFields(song),
       requestedBy: requester,
       intent: 'listener request',
       introScript: intro || null,
       introKind: 'dj-speak',
     });
+    // A concurrent request already queued this exact track — push() deduped it
+    // (#619). Acknowledge honestly (no second back-to-back play, no false
+    // "coming up", no intro to air) and still append the line as the session
+    // reply so the request event isn't left without one.
+    if (pos === -1) {
+      const ack = queue.dedupAck(song.id);
+      session.appendTurn({
+        role: 'dj', kind: 'request',
+        text: ack,
+        meta: { trackId: song.id, requester, toolCalls },
+      });
+      return { ack, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null };
+    }
     session.appendTurn({
       role: 'dj', kind: 'request',
       text: intro || object.ack || `Queued "${song.title}".`,

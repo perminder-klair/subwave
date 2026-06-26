@@ -210,7 +210,7 @@ export default defineConfig([
   // tokens, so it's intrinsically inline-styled and can't be static Tailwind
   // utilities — same dynamic-styling deal as the Observatory above.
   {
-    files: ['components/BoothBuddy.tsx'],
+    files: ['components/BoothBuddy.tsx', 'components/admin/SettingsPanel.tsx'],
     rules: {
       'react/forbid-dom-props': 'off',
     },
