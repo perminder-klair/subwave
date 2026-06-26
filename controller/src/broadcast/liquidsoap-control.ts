@@ -87,3 +87,59 @@ export async function streamStatus() {
   const res = await sendCommand('stream_status', 2000);
   return /\bon\b/i.test(res);
 }
+
+interface DjQueueCache {
+  timestamp: number;
+  ids: Set<string>;
+}
+let _djQueueCache: DjQueueCache | null = null;
+let _djQueueInflight: Promise<Set<string>> | null = null;
+
+// Query Liquidsoap's dj_queue using two telnet hops:
+// 1. dj_queue.queue returns space-separated request IDs.
+// 2. request.metadata <rid> returns metadata for each request ID.
+// Returns a Set of subsonic_ids currently in the queue.
+export async function getDjQueueIds(): Promise<Set<string>> {
+  if (_djQueueCache && Date.now() - _djQueueCache.timestamp < 4000) {
+    return _djQueueCache.ids;
+  }
+  if (_djQueueInflight) {
+    return _djQueueInflight;
+  }
+
+  _djQueueInflight = (async () => {
+    try {
+      const res = await sendCommand('dj_queue.queue', 2000);
+      const rids = res.trim().split(/\s+/).filter(Boolean);
+      const subsonicIds = new Set<string>();
+
+      for (const rid of rids) {
+        try {
+          const meta = await sendCommand(`request.metadata ${rid}`, 2000);
+          const match = /^subsonic_id="([^"]*)"/m.exec(meta);
+          if (match && match[1]) {
+            subsonicIds.add(match[1]);
+          }
+        } catch {
+          // Per-RID errors swallowed (RID may be consumed/played between calls)
+        }
+      }
+
+      const ids = subsonicIds;
+      _djQueueCache = {
+        timestamp: Date.now(),
+        ids
+      };
+      return ids;
+    } finally {
+      _djQueueInflight = null;
+    }
+  })();
+
+  return _djQueueInflight;
+}
+
+export function invalidateDjQueueCache() {
+  _djQueueCache = null;
+}
+
