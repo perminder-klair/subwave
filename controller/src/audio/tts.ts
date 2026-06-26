@@ -145,6 +145,39 @@ function normalizeForSpeech(text: string) {
   return text.replace(/\bSUB\s*(?:\/|slash)\s*WAVE\b/gi, 'Subwave');
 }
 
+// Admin voice-preview ("Play sample"). Renders a one-off sample WAV with an
+// EXPLICIT engine + voice, deliberately bypassing both the on-air persona
+// resolution and the silent fallback chain in speak() — the operator wants to
+// hear exactly the engine they picked, or get a real error if it's unavailable
+// (sidecar down, no cloud key). A synthetic persona-shaped object routes the
+// voice/provider through speakWith() the same way a live persona would. `speed`
+// is the final rate multiplier to audition, clamped to the playout [0.5,2.0]
+// band; gain (dB) is a playout-time mix trim and is intentionally NOT baked in.
+// Returns the path to the generated WAV — the caller serves and unlinks it.
+const PREVIEW_TEXT_MAX = 200;
+const DEFAULT_PREVIEW_TEXT = "You're listening to SUB/WAVE. This is a voice preview.";
+
+export async function synthesizeSample(
+  { engine, voice = '', cloudProvider = 'openai', speed, text }: {
+    engine: string;
+    voice?: string;
+    cloudProvider?: string;
+    speed?: number;
+    text?: string;
+  },
+): Promise<string> {
+  if (!ENGINES.includes(engine)) throw new Error(`Unknown engine: ${engine}`);
+  const raw = (typeof text === 'string' && text.trim()) ? text.trim() : DEFAULT_PREVIEW_TEXT;
+  const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX));
+  const scale = settings.clampTtsSpeed(speed);
+  // Synthetic persona so speakWith() picks up the requested voice/provider
+  // exactly (its per-engine branches key off personaTts.engine === <engine>).
+  const personaTts = { engine, voice, cloudProvider };
+  // No outPath → each engine self-generates a WAV path under config.piper.outDir
+  // (reaped by cleanupOldVoices) and returns it.
+  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '' }, personaTts);
+}
+
 // Public entry point. Tries the configured engine; on failure, falls back to
 // a local engine so the DJ never goes silent because a model (or the network)
 // failed. Piper is the universal fallback — local, keyless, fast.

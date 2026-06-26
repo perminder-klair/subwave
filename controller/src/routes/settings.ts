@@ -2,6 +2,8 @@
 // UI consumes, the matching write endpoint, plus the mixer-restart and
 // auto-pick toggles.
 import express from 'express';
+import { readFile, unlink } from 'node:fs/promises';
+import { extname } from 'node:path';
 import { config } from '../config.js';
 import * as library from '../music/library.js';
 import * as jingles from '../broadcast/jingles.js';
@@ -399,6 +401,41 @@ router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
     res.json({ ok: result.ok, message: result.message, latencyMs: Date.now() - t0 });
   } catch (err: any) {
     res.json({ ok: false, message: err?.message || 'probe failed', latencyMs: Date.now() - t0 });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /settings/tts/preview — synthesize a short sample in an EXPLICIT engine +
+// voice (not the on-air persona) so the admin "Play sample" button can audition
+// a voice/speed before saving. Body: { engine, voice?, cloudProvider?, speed?,
+// text? }. On success streams the rendered WAV (audio/wav). On a synth failure —
+// e.g. the tts-heavy sidecar is down or no cloud key — returns 422 with
+// { ok, message } instead of silently falling back to Piper, so the operator
+// sees why. The temp WAV is unlinked once sent.
+// ---------------------------------------------------------------------------
+router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
+  const body = req.body || {};
+  const engine = typeof body.engine === 'string' ? body.engine : '';
+  if (!engine || !tts.ENGINES.includes(engine)) {
+    return res.status(400).json({ ok: false, message: `Unknown engine: ${engine || '(none)'}` });
+  }
+  let filePath: string | null = null;
+  try {
+    filePath = await tts.synthesizeSample({
+      engine,
+      voice: typeof body.voice === 'string' ? body.voice : '',
+      cloudProvider: typeof body.cloudProvider === 'string' ? body.cloudProvider : 'openai',
+      speed: typeof body.speed === 'number' ? body.speed : undefined,
+      text: typeof body.text === 'string' ? body.text : undefined,
+    });
+    const buf = await readFile(filePath);
+    // Local engines render WAV; cloud (ElevenLabs) renders MP3. Set the type
+    // from the actual extension so the browser <audio> gets the right MIME.
+    res.type(extname(filePath) || '.wav').send(buf);
+  } catch (err: any) {
+    res.status(422).json({ ok: false, message: err?.message || 'Preview synthesis failed' });
+  } finally {
+    if (filePath) unlink(filePath).catch(() => {});
   }
 });
 

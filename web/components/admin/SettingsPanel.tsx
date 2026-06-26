@@ -22,6 +22,8 @@ import {
   Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem,
 } from '../ui/command';
 import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
+import { EngineSelector } from './tts/EngineSelector';
+import { VoicePreviewButton } from './tts/VoicePreviewButton';
 import { AiFill } from './AiFill';
 import { cn } from '../../lib/cn';
 import ArchivesPanel from './ArchivesPanel';
@@ -1663,7 +1665,6 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   const engines = data.tts?.engines || ['piper'];
   const available = data.tts?.available || {};
   const ENGINE_LABELS: Record<string, string> = { piper: 'Piper', kokoro: 'Kokoro', chatterbox: 'Chatterbox', 'pocket-tts': 'PocketTTS', cloud: 'Cloud' };
-  const engineOptions = engines.map(e => ({ id: e, label: ENGINE_LABELS[e] || e }));
 
   const save = async () => {
     await saveSettings({
@@ -1819,10 +1820,10 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               <Label>Engine</Label>
               {ttsDirty && <Pill tone="accent" dot>unsaved</Pill>}
             </div>
-            <Seg
-              accent
+            <EngineSelector
               value={form.tts.defaultEngine}
-              options={engineOptions}
+              engineIds={engines}
+              available={available}
               onChange={selectEngine}
             />
             <div className="field-hint">
@@ -2172,6 +2173,32 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
           </div>
           );
         })()}
+
+          {/* Audition the selected engine + its configured voice + speed. */}
+          {(() => {
+            const e = form.tts.defaultEngine;
+            const previewVoice =
+              e === 'kokoro' ? (form.tts.kokoro?.voice || '')
+              : e === 'chatterbox' ? (form.tts.chatterbox?.referenceVoice || '')
+              : e === 'pocket-tts' ? (form.tts.pocketTts?.voice || '')
+              : e === 'cloud' ? (form.tts.cloud.voice || '')
+              : '';
+            return (
+              <div className="field">
+                <VoicePreviewButton
+                  engine={e}
+                  voice={previewVoice}
+                  cloudProvider={form.tts.cloud.provider}
+                  speed={form.tts.speed?.[e] ?? 1}
+                  adminFetch={adminFetch}
+                />
+                <div className="field-hint">
+                  Plays a short sample in the selected engine &amp; voice. Reflects voice
+                  and speed; the dB trim is applied later, on air.
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </Card>
 
