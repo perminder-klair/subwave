@@ -2,11 +2,13 @@
 
 import type { ChangeEvent, ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { m } from 'motion/react';
 import { notify, errorMessage } from '../../lib/notify';
 import { fmtClockMinute, fmtSize, normalizeStationLocale, type StationLocale } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { applyTheme, cacheTheme } from '../../lib/theme';
 import { CLOUD_VOICES, CLOUD_MODELS } from '../../lib/cloudVoices';
 import { V3AlertDialog } from '../ui/alert-dialog';
@@ -16,6 +18,9 @@ import { Label } from '../ui/label';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../ui/select';
+import {
+  Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem,
+} from '../ui/command';
 import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
 import { AiFill } from './AiFill';
 import { cn } from '../../lib/cn';
@@ -1255,6 +1260,163 @@ function formatGainDb(v: number): string {
   return `${sign}${Math.abs(v).toFixed(1)} dB`;
 }
 
+/* ── ModelCombobox ───────────────────────────────────────────────────── */
+// Searchable model picker. Renders as a trigger button that shows the selected
+// model (or placeholder). Clicking opens an inline popover with a text filter
+// + scrollable list built on cmdk. Falls back to a plain Input when no models
+// are available (discovery hasn't run / returned nothing).
+
+interface ModelComboboxProps {
+  models: string[];
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  className?: string;
+}
+
+function ModelCombobox({ models, value, onChange, placeholder = 'Select a model', disabled, className }: ModelComboboxProps) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [direction, setDirection] = useState<'up' | 'down'>('down');
+
+  // Recompute position when opening
+  const openDropdown = () => {
+    if (triggerRef.current) {
+      const r = triggerRef.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - r.bottom;
+      const dir = spaceBelow < 300 ? 'up' : 'down';
+      setDirection(dir);
+
+      const top = dir === 'down'
+        ? r.bottom + window.scrollY + 4
+        : r.top + window.scrollY - 4;
+
+      setRect({ top, left: r.left + window.scrollX, width: r.width });
+    }
+    setOpen(true);
+    setSearch('');
+  };
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (
+        triggerRef.current && !triggerRef.current.contains(e.target as Node) &&
+        dropdownRef.current && !dropdownRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+        setSearch('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  // Close on scroll/resize
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => {
+      if (dropdownRef.current && dropdownRef.current.contains(e.target as Node)) return;
+      setOpen(false);
+      setSearch('');
+    };
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => { window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close); };
+  }, [open]);
+
+  const filtered = search.trim()
+    ? models.filter(m => m.toLowerCase().includes(search.toLowerCase()))
+    : models;
+
+  const displayValue = value || placeholder;
+
+  const dropdown = open && rect ? createPortal(
+    <div
+      ref={dropdownRef}
+      style={{
+        position: 'absolute',
+        top: rect.top,
+        left: rect.left,
+        width: Math.max(rect.width, 240),
+        zIndex: 9999,
+        transform: direction === 'up' ? 'translateY(-100%)' : undefined,
+      }}
+      className="border border-ink bg-bg shadow-drawer"
+    >
+      <Command shouldFilter={false}>
+        {direction === 'down' && (
+          <CommandInput
+            placeholder="Filter models…"
+            value={search}
+            onValueChange={setSearch}
+          />
+        )}
+        <CommandList>
+          {filtered.length === 0
+            ? <CommandEmpty>No models match.</CommandEmpty>
+            : (
+              <CommandGroup>
+                {filtered.map(m => (
+                  <CommandItem
+                    key={m}
+                    value={m}
+                    onSelect={() => { onChange(m); setOpen(false); setSearch(''); }}
+                    data-selected={m === value}
+                  >
+                    <span className="truncate">{m}</span>
+                    {m === value && (
+                      <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
+                        <path d="M2 6.5l3.5 3.5 5.5-6" />
+                      </svg>
+                    )}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )
+          }
+        </CommandList>
+        {direction === 'up' && (
+          <CommandInput
+            placeholder="Filter models…"
+            value={search}
+            onValueChange={setSearch}
+            wrapperClassName="border-t border-b-0"
+          />
+        )}
+      </Command>
+    </div>,
+    document.body,
+  ) : null;
+
+  return (
+    <div className={cn('w-full max-w-[360px]', className)}>
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={disabled}
+        onClick={() => open ? (setOpen(false), setSearch('')) : openDropdown()}
+        className={cn(
+          'flex h-9 w-full items-center justify-between gap-2 border border-ink bg-bg px-3 text-sm',
+          'focus:outline-none disabled:cursor-not-allowed disabled:opacity-40',
+          open && 'ring-1 ring-ink',
+        )}
+      >
+        <span className={cn('truncate', !value && 'text-muted')}>{displayValue}</span>
+        <svg width="12" height="12" viewBox="0 0 12 12" className="shrink-0 text-muted" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <path d="M2 4l4 4 4-4" />
+        </svg>
+      </button>
+      {dropdown}
+    </div>
+  );
+}
+
 // Compact per-engine voice-level control: a labelled range slider + live readout,
 // writing into form.tts.gainDb[engineId]. Dropped into each engine's config panel.
 function TtsGainField({
@@ -1365,6 +1527,23 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   useEffect(() => { setCloudKeyInput(''); }, [form.tts.cloud.provider]);
   useEffect(() => { setCloudKeyTest(null); }, [form.tts.cloud.provider]);
 
+  const isCloudEngine = form.tts.defaultEngine === 'cloud';
+  const isCompat = form.tts.cloud.provider === 'openai-compatible';
+  const ttsKeyVar = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
+  const ttsKeySet = !!data.env?.[ttsKeyVar];
+
+  const ttsDiscoveryEnabled = isCloudEngine && (
+    (isCompat && !!form.tts.cloud.baseUrl.trim())
+    || (!isCompat && ttsKeySet)
+  );
+
+  const ttsDiscovery = useModelDiscovery({
+    provider: isCompat ? 'openai-compatible' : form.tts.cloud.provider,
+    baseUrl: form.tts.cloud.baseUrl,
+    enabled: ttsDiscoveryEnabled,
+    adminFetch,
+  });
+
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
@@ -1386,7 +1565,8 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   };
   const testCloudKey = async () => {
     const cloudKeyVar = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
-    if (!cloudKeyInput.trim()) return;
+    const hasTyped = !!cloudKeyInput.trim();
+    if (!hasTyped && !data.env?.[cloudKeyVar]) return;
     setCloudKeyTesting(true);
     setCloudKeyTest(null);
     try {
@@ -1397,6 +1577,12 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
       setCloudKeyTest(j);
+      if (j.ok && hasTyped) {
+        const saved = await saveKey(cloudKeyVar, cloudKeyInput);
+        if (saved) { notify.ok('Key verified and saved'); setCloudKeyInput(''); refresh(); }
+      } else if (j.ok) {
+        notify.ok('Key verified (on file)');
+      }
     } catch (e) {
       setCloudKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
     } finally {
@@ -1559,7 +1745,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             />
             <div className="field-hint">
               {ttsDirty
-                ? <>Engine changed. Hit “Save TTS settings” below to make <strong>{formEngineLabel}</strong> the new default.</>
+                ? <>Engine changed. Hit "Save TTS settings" below to make <strong>{formEngineLabel}</strong> the new default.</>
                 : <>The station default. Renders jingles and is the fallback when a persona’s own engine fails. Per-segment voice still comes from the persona on air.</>}
             </div>
           </div>
@@ -1708,7 +1894,6 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         )}
 
         {form.tts.defaultEngine === 'cloud' && (() => {
-          const isCompat = form.tts.cloud.provider === 'openai-compatible';
           return (
           <div className="mt-4">
             <div className="field">
@@ -1743,21 +1928,49 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             <div className="mt-3.5 grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-[18px]">
               <div className="field">
                 <Label>Model</Label>
-                <Input
-                  value={form.tts.cloud.model}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))
+                <div className="flex items-stretch gap-2">
+                  {ttsDiscovery.models.length > 0 ? (
+                    <ModelCombobox
+                      models={ttsDiscovery.models}
+                      value={form.tts.cloud.model}
+                      onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: v } } }))}
+                      placeholder="Select a model"
+                    />
+                  ) : (
+                    <Input
+                      value={form.tts.cloud.model}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))
+                      }
+                      placeholder={
+                        isCompat
+                          ? 'chatterbox'
+                          : (CLOUD_MODELS[form.tts.cloud.provider as keyof typeof CLOUD_MODELS]?.[0] || 'gpt-4o-mini-tts')
+                      }
+                      className="max-w-[360px]"
+                    />
+                  )}
+                  {ttsDiscovery.loading
+                    ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
+                    : ttsDiscoveryEnabled && (
+                      <Btn onClick={ttsDiscovery.refresh} title="Refresh model list">↻</Btn>
+                    )
                   }
-                  placeholder={
-                    isCompat
-                      ? 'chatterbox'
-                      : (CLOUD_MODELS[form.tts.cloud.provider as keyof typeof CLOUD_MODELS]?.[0] || 'gpt-4o-mini-tts')
-                  }
-                />
+                </div>
                 <div className="field-hint">
-                  {isCompat
-                    ? <>Model id exactly as the server reports it at <code>/v1/models</code>, required.</>
-                    : <>e.g. “gpt-4o-mini-tts” (OpenAI) or “eleven_flash_v2_5” (ElevenLabs).</>}
+                  {ttsDiscovery.models.length > 0
+                    ? `${ttsDiscovery.models.length} model${ttsDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                    : !ttsDiscoveryEnabled
+                      ? (isCompat
+                          ? 'Set a base URL above to discover available models.'
+                          : 'Set an API key above to discover and select a model.')
+                      : ttsDiscovery.error
+                        ? `Discovery failed: ${ttsDiscovery.error}. Type a model ID manually.`
+                        : ttsDiscovery.loading
+                          ? 'Discovering models…'
+                          : (isCompat
+                              ? 'Model id exactly as the server reports it at /v1/models, required.'
+                              : 'e.g. "gpt-4o-mini-tts" (OpenAI) or "eleven_flash_v2_5" (ElevenLabs).')}
                 </div>
               </div>
               {(() => {
@@ -1830,13 +2043,21 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 <>
                   <div className="field">
                     <Label>{form.tts.cloud.provider === 'elevenlabs' ? 'ElevenLabs' : 'OpenAI'} API key</Label>
-                    <Input
-                      type="password"
-                      value={cloudKeyInput}
-                      placeholder={data.env?.[cloudKeyVar] ? '•••••• (on file)' : (KEY_HINTS[cloudKeyVar] ?? '')}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => setCloudKeyInput(e.target.value)}
-                      className="max-w-[360px]"
-                    />
+                    <div className="flex items-stretch gap-2">
+                      <Input
+                        type="password"
+                        value={cloudKeyInput}
+                        placeholder={data.env?.[cloudKeyVar] ? '•••••• (on file)' : (KEY_HINTS[cloudKeyVar] ?? '')}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setCloudKeyInput(e.target.value)}
+                        className="max-w-[360px]"
+                      />
+                      <Btn
+                        onClick={testCloudKey}
+                        disabled={cloudKeyTesting || (!cloudKeyInput.trim() && !data.env?.[cloudKeyVar])}
+                      >
+                        {cloudKeyTesting ? 'Testing…' : 'Test key'}
+                      </Btn>
+                    </div>
                     <div className="field-hint">
                       Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
                     </div>
@@ -1845,16 +2066,6 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                         This key is shared across LLM and Cloud TTS.
                       </div>
                     )}
-                  </div>
-                  <KeyStatus envVar={cloudKeyVar} present={!!data.env?.[cloudKeyVar]} />
-                  <div className="mt-2 flex items-center gap-2">
-                    <Btn
-                      sm
-                      onClick={testCloudKey}
-                      disabled={cloudKeyTesting || !cloudKeyInput.trim()}
-                    >
-                      {cloudKeyTesting ? 'Testing…' : 'Test key'}
-                    </Btn>
                   </div>
                   {cloudKeyTest && <KeyTestResult result={cloudKeyTest} />}
                 </>
@@ -1867,6 +2078,10 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               </div>
             )}
             <TtsGainField engineId="cloud" form={form} setForm={setForm} />
+            {!isCompat && (() => {
+              const kv = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
+              return <KeyStatus envVar={kv} present={!!data.env?.[kv]} />;
+            })()}
           </div>
           );
         })()}
@@ -1943,6 +2158,44 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     if (pin && meta) setEmbedPinNotice({ model: meta.model, dim: meta.dim, newProvider: v });
   };
 
+  const primaryKeyVar = LLM_ENV_VARS[form.llm.provider];
+  const primaryKeySet = !!(primaryKeyVar && data.env?.[primaryKeyVar]);
+
+  const primaryDiscoveryEnabled =
+    form.llm.provider === 'ollama'
+    || form.llm.provider === 'locca'
+    || (form.llm.provider === 'openai-compatible' && !!form.llm.baseUrl.trim())
+    || (form.llm.provider === 'openrouter')
+    || (!!primaryKeyVar && primaryKeySet);
+
+  const primaryDiscovery = useModelDiscovery({
+    provider: form.llm.provider,
+    baseUrl: form.llm.baseUrl,
+    ollamaUrl: form.llm.ollamaUrl,
+    enabled: primaryDiscoveryEnabled,
+    adminFetch,
+  });
+
+  const fallbackKeyVar = LLM_ENV_VARS[form.llm.fallback.provider];
+  const fallbackKeySet = !!(fallbackKeyVar && data.env?.[fallbackKeyVar]);
+
+  const fallbackDiscoveryEnabled =
+    form.llm.fallback.enabled && (
+      form.llm.fallback.provider === 'ollama'
+      || form.llm.fallback.provider === 'locca'
+      || (form.llm.fallback.provider === 'openai-compatible' && !!form.llm.fallback.baseUrl.trim())
+      || (form.llm.fallback.provider === 'openrouter')
+      || (!!fallbackKeyVar && fallbackKeySet)
+    );
+
+  const fallbackDiscovery = useModelDiscovery({
+    provider: form.llm.fallback.provider,
+    baseUrl: form.llm.fallback.baseUrl,
+    ollamaUrl: form.llm.fallback.ollamaUrl,
+    enabled: fallbackDiscoveryEnabled,
+    adminFetch,
+  });
+
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
@@ -1968,8 +2221,10 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     value: string,
     setTesting: (v: boolean) => void,
     setResult: (r: { ok: boolean; message: string; latencyMs: number } | null) => void,
+    clearInput?: () => void,
   ) => {
-    if (!value.trim()) return;
+    const hasTyped = !!value.trim();
+    if (!hasTyped && !data.env?.[envVar]) return;
     setTesting(true);
     setResult(null);
     try {
@@ -1980,6 +2235,12 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
       setResult(j);
+      if (j.ok && hasTyped) {
+        const saved = await saveKey(envVar, value);
+        if (saved) { notify.ok('Key verified and saved'); clearInput?.(); refresh(); }
+      } else if (j.ok) {
+        notify.ok('Key verified (on file)');
+      }
     } catch (e) {
       setResult({ ok: false, message: errorMessage(e), latencyMs: 0 });
     } finally {
@@ -2120,159 +2381,10 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             </Select>
             <div className="field-hint">
               {llmDirty
-                ? 'Provider changed. Hit “Save LLM provider” below to route every call here.'
+                ? 'Provider changed. Hit "Save LLM provider" below to route every call here.'
                 : 'The provider every LLM call routes through. Switching reroutes instantly on save, no redeploy.'}
             </div>
           </div>
-
-          <div className="field">
-            <Label>Model</Label>
-            <Input
-              value={form.llm.model}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, llm: { ...f.llm, model: e.target.value } }))
-              }
-              placeholder={
-                form.llm.provider === 'ollama'
-                  ? 'nemotron-3-super:cloud'
-                  : form.llm.provider === 'deepseek'
-                    ? 'deepseek-v4-flash'
-                    : form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca'
-                      ? 'Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf'
-                      : 'model id'
-              }
-              className="max-w-[360px]"
-            />
-            <div className="field-hint">
-              {form.llm.provider === 'ollama'
-                ? 'Ollama model tag, e.g. “nemotron-3-super:cloud”. Leave blank for the default.'
-                : form.llm.provider === 'gateway'
-                  ? 'Gateway model id, e.g. “anthropic/claude-sonnet-4-5”.'
-                  : form.llm.provider === 'openrouter'
-                    ? 'OpenRouter model id, e.g. “google/gemini-2.5-flash”.'
-                    : form.llm.provider === 'requesty'
-                      ? 'Requesty model id, e.g. “openai/gpt-4o-mini”.'
-                      : form.llm.provider === 'google'
-                      ? 'Gemini model id, e.g. “gemini-2.5-flash”.'
-                      : form.llm.provider === 'deepseek'
-                        ? 'DeepSeek model id. Leave blank for the “deepseek-v4-flash” default.'
-                        : form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca'
-                          ? 'Model id exactly as the server reports it at /v1/models, required.'
-                          : 'Model id for the chosen provider, required.'}
-            </div>
-          </div>
-
-          {form.llm.provider === 'openai-compatible' && (
-            <div className="field">
-              <Label>Server base URL</Label>
-              <Input
-                value={form.llm.baseUrl}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({ ...f, llm: { ...f.llm, baseUrl: e.target.value } }))
-                }
-                placeholder="http://192.168.1.101:8080/v1"
-                className="max-w-[360px]"
-              />
-              <div className="field-hint">
-                Any OpenAI-compatible server (llama.cpp, vLLM, LM Studio…),
-                including the <code>/v1</code> suffix. Must be reachable from the
-                controller container. Use the host’s LAN or Tailscale IP, not
-                <code>127.0.0.1</code>.
-              </div>
-            </div>
-          )}
-
-          {form.llm.provider === 'openai-compatible' && (
-            <>
-              <div className="field">
-                <Label>Bearer token</Label>
-                <Input
-                  type="password"
-                  value={compatKeyInput}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
-                  placeholder={(data.values?.llm as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
-                  className="max-w-[360px]"
-                />
-                <div className="field-hint">
-                  Optional — only needed when the server requires bearer authentication.
-                  Saved to <code>settings.json</code>, takes effect on next save.
-                </div>
-              </div>
-              <div className="mt-2 flex items-center gap-2">
-                <Btn
-                  sm
-                  onClick={() =>
-                    testCompatKey(
-                      compatKeyInput || '',
-                      form.llm.baseUrl,
-                      form.llm.model,
-                      setCompatKeyTesting,
-                      setCompatKeyTest,
-                    )
-                  }
-                  disabled={compatKeyTesting || !form.llm.baseUrl.trim()}
-                >
-                  {compatKeyTesting ? 'Testing…' : 'Test connection'}
-                </Btn>
-              </div>
-              {compatKeyTest && <KeyTestResult result={compatKeyTest} />}
-            </>
-          )}
-
-          {form.llm.provider === 'openai-compatible' && (
-            <div className="field">
-              <Label>Forced tool calls</Label>
-              <Seg
-                accent
-                value={form.llm.toolChoice === 'auto' ? 'auto' : 'required'}
-                options={[
-                  { id: 'required', label: 'Required' },
-                  { id: 'auto', label: 'Auto' },
-                ]}
-                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, toolChoice: v } }))}
-              />
-              <div className="field-hint">
-                How the picker forces the model to return a structured pick.
-                <code>Required</code> (default) sends{' '}
-                <code>tool_choice:&quot;required&quot;</code> — the reliable path for
-                local models. Switch to <code>Auto</code> only if your server
-                <strong> crashes</strong> on a tool call: some newer vLLM images
-                (notably Intel/XPU builds) mishandle the guided-decoding backend
-                that <code>required</code> engages, while <code>auto</code> never
-                does. On <code>Auto</code> a capable model still calls the tool;
-                misses fall back to the stateless picker.
-              </div>
-            </div>
-          )}
-
-          {form.llm.provider === 'locca' && (
-            <div className="field">
-              <Label>locca server base URL</Label>
-              <Input
-                value={form.llm.baseUrl}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({ ...f, llm: { ...f.llm, baseUrl: e.target.value } }))
-                }
-                placeholder="http://host.docker.internal:8080/v1"
-                className="max-w-[360px]"
-              />
-              <div className="field-hint">
-                Leave blank to use the locca server on the host
-                (<code>http://host.docker.internal:8080/v1</code>). Override only
-                for a non-default port or a remote host. Bring a model up with{' '}
-                <code>locca serve &lt;model&gt; --yes</code>; the model id below is
-                what locca reports at <code>/v1/models</code>.{' '}
-                <a
-                  href="https://github.com/perminder-klair/locca"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
-                >
-                  locca on GitHub ↗
-                </a>
-              </div>
-            </div>
-          )}
 
           {form.llm.provider === 'ollama' && (
             <div className="field">
@@ -2318,19 +2430,112 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             </div>
           )}
 
+          {form.llm.provider === 'openai-compatible' && (
+            <div className="field">
+              <Label>Server base URL</Label>
+              <Input
+                value={form.llm.baseUrl}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, llm: { ...f.llm, baseUrl: e.target.value } }))
+                }
+                placeholder="http://192.168.1.101:8080/v1"
+                className="max-w-[360px]"
+              />
+              <div className="field-hint">
+                Any OpenAI-compatible server (llama.cpp, vLLM, LM Studio…),
+                including the <code>/v1</code> suffix. Must be reachable from the
+                controller container. Use the host’s LAN or Tailscale IP, not
+                <code>127.0.0.1</code>.
+              </div>
+            </div>
+          )}
+
+          {form.llm.provider === 'openai-compatible' && (
+            <>
+              <div className="field">
+                <Label>Bearer token</Label>
+                <div className="flex items-stretch gap-2">
+                  <Input
+                    type="password"
+                    value={compatKeyInput}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
+                    placeholder={(data.values?.llm as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                    className="max-w-[360px]"
+                  />
+                  <Btn
+                    onClick={() =>
+                      testCompatKey(
+                        compatKeyInput || '',
+                        form.llm.baseUrl,
+                        form.llm.model,
+                        setCompatKeyTesting,
+                        setCompatKeyTest,
+                      )
+                    }
+                    disabled={compatKeyTesting || !form.llm.baseUrl.trim()}
+                  >
+                    {compatKeyTesting ? 'Testing…' : 'Test connection'}
+                  </Btn>
+                </div>
+                <div className="field-hint">
+                  Optional — only needed when the server requires bearer authentication.
+                  Saved to <code>settings.json</code>, takes effect on next save.
+                </div>
+              </div>
+              {compatKeyTest && <KeyTestResult result={compatKeyTest} />}
+            </>
+          )}
+
+          {form.llm.provider === 'locca' && (
+            <div className="field">
+              <Label>locca server base URL</Label>
+              <Input
+                value={form.llm.baseUrl}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, llm: { ...f.llm, baseUrl: e.target.value } }))
+                }
+                placeholder="http://host.docker.internal:8080/v1"
+                className="max-w-[360px]"
+              />
+              <div className="field-hint">
+                Leave blank to use the locca server on the host
+                (<code>http://host.docker.internal:8080/v1</code>). Override only
+                for a non-default port or a remote host. Bring a model up with{' '}
+                <code>locca serve &lt;model&gt; --yes</code>; the model id below is
+                what locca reports at <code>/v1/models</code>.{' '}
+                <a
+                  href="https://github.com/perminder-klair/locca"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
+                >
+                  locca on GitHub ↗
+                </a>
+              </div>
+            </div>
+          )}
+
           {LLM_ENV_VARS[form.llm.provider] && (() => {
             const keyVar = LLM_ENV_VARS[form.llm.provider]!;
             return (
               <>
                 <div className="field">
                   <Label>{llmProviderLabel(form.llm.provider)} API key</Label>
-                  <Input
-                    type="password"
-                    value={primaryKeyInput}
-                    placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
-                    className="max-w-[360px]"
-                  />
+                  <div className="flex items-stretch gap-2">
+                    <Input
+                      type="password"
+                      value={primaryKeyInput}
+                      placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
+                      className="max-w-[360px]"
+                    />
+                    <Btn
+                      onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest, () => setPrimaryKeyInput(''))}
+                      disabled={primaryKeyTesting || (!primaryKeyInput.trim() && !data.env?.[keyVar])}
+                    >
+                      {primaryKeyTesting ? 'Testing…' : 'Test key'}
+                    </Btn>
+                  </div>
                   <div className="field-hint">
                     Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
                   </div>
@@ -2340,20 +2545,93 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                     </div>
                   )}
                 </div>
-                <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
-                <div className="mt-2 flex items-center gap-2">
-                  <Btn
-                    sm
-                    onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest)}
-                    disabled={primaryKeyTesting || !primaryKeyInput.trim()}
-                  >
-                    {primaryKeyTesting ? 'Testing…' : 'Test key'}
-                  </Btn>
-                </div>
                 {primaryKeyTest && <KeyTestResult result={primaryKeyTest} />}
               </>
             );
           })()}
+
+          <div className="field">
+            <Label>Model</Label>
+            <div className="flex items-stretch gap-2">
+              {primaryDiscovery.models.length > 0 ? (
+                <ModelCombobox
+                  models={primaryDiscovery.models}
+                  value={form.llm.model}
+                  onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, model: v } }))}
+                  placeholder="Select a model"
+                />
+              ) : (
+                <Input
+                  value={form.llm.model}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({ ...f, llm: { ...f.llm, model: e.target.value } }))
+                  }
+                  disabled={!primaryDiscoveryEnabled && form.llm.provider !== 'ollama'}
+                  placeholder={
+                    !primaryDiscoveryEnabled
+                      ? (form.llm.provider === 'openai-compatible' ? 'Set a base URL first' : 'Set an API key above to discover and select a model')
+                      : form.llm.provider === 'ollama'
+                        ? 'nemotron-3-super:cloud'
+                        : form.llm.provider === 'deepseek'
+                          ? 'deepseek-v4-flash'
+                          : form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca'
+                            ? 'Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf'
+                            : 'model id'
+                  }
+                  className="max-w-[360px]"
+                />
+              )}
+              {primaryDiscovery.loading
+                ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
+                : primaryDiscoveryEnabled && (
+                  <Btn onClick={primaryDiscovery.refresh} title="Refresh model list">↻</Btn>
+                )
+              }
+            </div>
+            <div className="field-hint">
+              {primaryDiscovery.models.length > 0
+                ? `${primaryDiscovery.models.length} model${primaryDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                : !primaryDiscoveryEnabled
+                  ? (form.llm.provider === 'openai-compatible'
+                      ? 'Set a base URL above to discover available models.'
+                      : 'Set an API key above to discover and select a model.')
+                  : primaryDiscovery.error
+                    ? `Discovery failed: ${primaryDiscovery.error}. Type a model ID manually.`
+                    : primaryDiscovery.loading
+                      ? 'Discovering models…'
+                      : 'No models discovered. Type a model ID manually.'}
+            </div>
+          </div>
+
+          {primaryKeyVar && (
+            <KeyStatus envVar={primaryKeyVar} present={!!data.env?.[primaryKeyVar]} />
+          )}
+
+          {form.llm.provider === 'openai-compatible' && (
+            <div className="field">
+              <Label>Forced tool calls</Label>
+              <Seg
+                accent
+                value={form.llm.toolChoice === 'auto' ? 'auto' : 'required'}
+                options={[
+                  { id: 'required', label: 'Required' },
+                  { id: 'auto', label: 'Auto' },
+                ]}
+                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, toolChoice: v } }))}
+              />
+              <div className="field-hint">
+                How the picker forces the model to return a structured pick.
+                <code>Required</code> (default) sends{' '}
+                <code>tool_choice:&quot;required&quot;</code> — the reliable path for
+                local models. Switch to <code>Auto</code> only if your server
+                <strong> crashes</strong> on a tool call: some newer vLLM images
+                (notably Intel/XPU builds) mishandle the guided-decoding backend
+                that <code>required</code> engages, while <code>auto</code> never
+                does. On <code>Auto</code> a capable model still calls the tool;
+                misses fall back to the stateless picker.
+              </div>
+            </div>
+          )}
         </div>
       </Card>
 
@@ -2410,84 +2688,6 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 </div>
               </div>
 
-              <div className="field">
-                <Label>Backup model</Label>
-                <Input
-                  value={form.llm.fallback.model}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, model: e.target.value } } }))
-                  }
-                  placeholder={
-                    form.llm.fallback.provider === 'ollama'
-                      ? 'llama3.2:3b'
-                      : form.llm.fallback.provider === 'openai-compatible'
-                        ? 'model id as the server reports it'
-                        : 'model id'
-                  }
-                  className="max-w-[360px]"
-                />
-                <div className="field-hint">
-                  Model id for the backup provider. Leave blank only for Ollama
-                  (uses its default).
-                </div>
-              </div>
-
-              {form.llm.fallback.provider === 'openai-compatible' && (
-                <div className="field">
-                  <Label>Backup server base URL</Label>
-                  <Input
-                    value={form.llm.fallback.baseUrl}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, baseUrl: e.target.value } } }))
-                    }
-                    placeholder="http://192.168.1.101:8080/v1"
-                    className="max-w-[360px]"
-                  />
-                  <div className="field-hint">
-                    OpenAI-compatible server URL including the <code>/v1</code>
-                    suffix, required for this provider.
-                  </div>
-                </div>
-              )}
-
-              {form.llm.fallback.provider === 'openai-compatible' && (
-                <>
-                  <div className="field">
-                    <Label>Bearer token</Label>
-                    <Input
-                      type="password"
-                      value={compatFallbackKeyInput}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatFallbackKeyInput(e.target.value)}
-                      placeholder={(data.values?.llm?.fallback as unknown as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
-                      className="max-w-[360px]"
-                    />
-                    <div className="field-hint">
-                      Optional — only needed when the backup server requires bearer
-                      authentication. Saved to <code>settings.json</code>, takes effect on
-                      next save.
-                    </div>
-                  </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    <Btn
-                      sm
-                      onClick={() =>
-                        testCompatKey(
-                          compatFallbackKeyInput || '',
-                          form.llm.fallback.baseUrl,
-                          form.llm.fallback.model,
-                          setCompatFallbackKeyTesting,
-                          setCompatFallbackKeyTest,
-                        )
-                      }
-                      disabled={compatFallbackKeyTesting || !form.llm.fallback.baseUrl.trim()}
-                    >
-                      {compatFallbackKeyTesting ? 'Testing…' : 'Test connection'}
-                    </Btn>
-                  </div>
-                  {compatFallbackKeyTest && <KeyTestResult result={compatFallbackKeyTest} />}
-                </>
-              )}
-
               {form.llm.fallback.provider === 'ollama' && (
                 <div className="field">
                   <Label>Backup Ollama server URL</Label>
@@ -2528,6 +2728,148 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 </div>
               )}
 
+              {form.llm.fallback.provider === 'openai-compatible' && (
+                <div className="field">
+                  <Label>Backup server base URL</Label>
+                  <Input
+                    value={form.llm.fallback.baseUrl}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, baseUrl: e.target.value } } }))
+                    }
+                    placeholder="http://192.168.1.101:8080/v1"
+                    className="max-w-[360px]"
+                  />
+                  <div className="field-hint">
+                    OpenAI-compatible server URL including the <code>/v1</code>
+                    suffix, required for this provider.
+                  </div>
+                </div>
+              )}
+
+              {form.llm.fallback.provider === 'openai-compatible' && (
+                <>
+                  <div className="field">
+                    <Label>Bearer token</Label>
+                    <div className="flex items-stretch gap-2">
+                      <Input
+                        type="password"
+                        value={compatFallbackKeyInput}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatFallbackKeyInput(e.target.value)}
+                        placeholder={(data.values?.llm?.fallback as unknown as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                        className="max-w-[360px]"
+                      />
+                      <Btn
+                        onClick={() =>
+                          testCompatKey(
+                            compatFallbackKeyInput || '',
+                            form.llm.fallback.baseUrl,
+                            form.llm.fallback.model,
+                            setCompatFallbackKeyTesting,
+                            setCompatFallbackKeyTest,
+                          )
+                        }
+                        disabled={compatFallbackKeyTesting || !form.llm.fallback.baseUrl.trim()}
+                      >
+                        {compatFallbackKeyTesting ? 'Testing…' : 'Test connection'}
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      Optional — only needed when the backup server requires bearer
+                      authentication. Saved to <code>settings.json</code>, takes effect on
+                      next save.
+                    </div>
+                  </div>
+                  {compatFallbackKeyTest && <KeyTestResult result={compatFallbackKeyTest} />}
+                </>
+              )}
+
+              {LLM_ENV_VARS[form.llm.fallback.provider] && (() => {
+                const keyVar = LLM_ENV_VARS[form.llm.fallback.provider]!;
+                return (
+                  <>
+                    <div className="field">
+                      <Label>{llmProviderLabel(form.llm.fallback.provider)} API key</Label>
+                      <div className="flex items-stretch gap-2">
+                        <Input
+                          type="password"
+                          value={fallbackKeyInput}
+                          placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => setFallbackKeyInput(e.target.value)}
+                          className="max-w-[360px]"
+                        />
+                        <Btn
+                          onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest, () => setFallbackKeyInput(''))}
+                          disabled={fallbackKeyTesting || (!fallbackKeyInput.trim() && !data.env?.[keyVar])}
+                        >
+                          {fallbackKeyTesting ? 'Testing…' : 'Test key'}
+                        </Btn>
+                      </div>
+                      <div className="field-hint">
+                        Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
+                      </div>
+                    </div>
+                    {fallbackKeyTest && <KeyTestResult result={fallbackKeyTest} />}
+                  </>
+                );
+              })()}
+
+              <div className="field">
+                <Label>Backup model</Label>
+                <div className="flex items-stretch gap-2">
+                  {fallbackDiscovery.models.length > 0 ? (
+                    <ModelCombobox
+                      models={fallbackDiscovery.models}
+                      value={form.llm.fallback.model}
+                      onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, model: v } } }))}
+                      placeholder="Select a model"
+                    />
+                  ) : (
+                    <Input
+                      value={form.llm.fallback.model}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, model: e.target.value } } }))
+                      }
+                      disabled={!fallbackDiscoveryEnabled && form.llm.fallback.provider !== 'ollama'}
+                      placeholder={
+                        !fallbackDiscoveryEnabled
+                          ? (form.llm.fallback.provider === 'openai-compatible' ? 'Set a base URL first' : 'Set an API key above to discover and select a model')
+                          : form.llm.fallback.provider === 'ollama'
+                            ? 'llama3.2:3b'
+                            : form.llm.fallback.provider === 'deepseek'
+                              ? 'deepseek-chat'
+                              : form.llm.fallback.provider === 'openai-compatible' || form.llm.fallback.provider === 'locca'
+                                ? 'Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf'
+                                : 'model id'
+                      }
+                      className="max-w-[360px]"
+                    />
+                  )}
+                  {fallbackDiscovery.loading
+                    ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
+                    : fallbackDiscoveryEnabled && (
+                      <Btn onClick={fallbackDiscovery.refresh} title="Refresh model list">↻</Btn>
+                    )
+                  }
+                </div>
+                <div className="field-hint">
+                  {fallbackDiscovery.models.length > 0
+                    ? `${fallbackDiscovery.models.length} model${fallbackDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                    : !fallbackDiscoveryEnabled
+                      ? (form.llm.fallback.provider === 'openai-compatible'
+                          ? 'Set a base URL above to discover available models.'
+                          : 'Set an API key above to discover and select a model.')
+                      : fallbackDiscovery.error
+                        ? `Discovery failed: ${fallbackDiscovery.error}. Type a model ID manually.`
+                        : fallbackDiscovery.loading
+                          ? 'Discovering models…'
+                          : 'No models discovered. Type a model ID manually.'}
+                </div>
+              </div>
+
+              {fallbackKeyVar && (
+                <KeyStatus envVar={fallbackKeyVar} present={!!data.env?.[fallbackKeyVar]} />
+              )}
+
               <div className="grid grid-cols-[1fr_auto] items-center gap-4">
                 <div>
                   <div className="text-[13px] font-bold">Backup chain-of-thought</div>
@@ -2548,38 +2890,6 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   }
                 />
               </div>
-
-              {LLM_ENV_VARS[form.llm.fallback.provider] && (() => {
-                const keyVar = LLM_ENV_VARS[form.llm.fallback.provider]!;
-                return (
-                  <>
-                    <div className="field">
-                      <Label>{llmProviderLabel(form.llm.fallback.provider)} API key</Label>
-                      <Input
-                        type="password"
-                        value={fallbackKeyInput}
-                        placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
-                        onChange={(e: ChangeEvent<HTMLInputElement>) => setFallbackKeyInput(e.target.value)}
-                        className="max-w-[360px]"
-                      />
-                      <div className="field-hint">
-                        Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
-                      </div>
-                    </div>
-                    <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
-                    <div className="mt-2 flex items-center gap-2">
-                      <Btn
-                        sm
-                        onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest)}
-                        disabled={fallbackKeyTesting || !fallbackKeyInput.trim()}
-                      >
-                        {fallbackKeyTesting ? 'Testing…' : 'Test key'}
-                      </Btn>
-                    </div>
-                    {fallbackKeyTest && <KeyTestResult result={fallbackKeyTest} />}
-                  </>
-                );
-              })()}
             </>
           )}
         </div>
@@ -2840,8 +3150,8 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
       });
       const j = await res.json();
       setSearxngTestResult(j);
-    } catch (err: any) {
-      setSearxngTestResult({ ok: false, error: err?.message || 'request failed' });
+    } catch (err: unknown) {
+      setSearxngTestResult({ ok: false, error: err instanceof Error ? err.message : 'request failed' });
     } finally {
       setTestingSearxng(false);
     }
@@ -2954,15 +3264,27 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
             <>
               <div className="field">
                 <Label>Tavily API key</Label>
-                <Input
-                  type="password"
-                  value={form.search.apiKey === 'set' ? '' : form.search.apiKey}
-                  placeholder={form.search.apiKey === 'set' ? '•••••• (key on file)' : 'tvly-…'}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setForm(f => ({ ...f, search: { ...f.search, apiKey: e.target.value } }))
-                  }
-                  className="max-w-[360px]"
-                />
+                <div className="flex items-stretch gap-2">
+                  <Input
+                    type="password"
+                    value={form.search.apiKey === 'set' ? '' : form.search.apiKey}
+                    placeholder={form.search.apiKey === 'set' ? '•••••• (key on file)' : 'tvly-…'}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, search: { ...f.search, apiKey: e.target.value } }))
+                    }
+                    className="max-w-[360px]"
+                  />
+                  <Btn
+                    onClick={testTavilyKey}
+                    disabled={
+                      tavilyKeyTesting ||
+                      !form.search.apiKey.trim() ||
+                      form.search.apiKey === 'set'
+                    }
+                  >
+                    {tavilyKeyTesting ? 'Testing…' : 'Test key'}
+                  </Btn>
+                </div>
                 <div className="field-hint">
                   Stored alongside the other admin settings. Falls back to
                   <code> SEARCH_API_KEY</code> in <code>.env</code> when blank. Set
@@ -2970,19 +3292,6 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
                 </div>
               </div>
               <KeyStatus envVar="SEARCH_API_KEY" present={tavilyKeySet} />
-              <div className="mt-2 flex items-center gap-2">
-                <Btn
-                  sm
-                  onClick={testTavilyKey}
-                  disabled={
-                    tavilyKeyTesting ||
-                    !form.search.apiKey.trim() ||
-                    form.search.apiKey === 'set'
-                  }
-                >
-                  {tavilyKeyTesting ? 'Testing…' : 'Test key'}
-                </Btn>
-              </div>
               {tavilyKeyTest && <KeyTestResult result={tavilyKeyTest} />}
             </>
           )}
@@ -2991,7 +3300,7 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
             <>
               <div className="field">
                 <Label>SearXNG URL</Label>
-                <div className="flex gap-2">
+                <div className="flex items-stretch gap-2">
                   <Input
                     type="url"
                     placeholder="http://192.168.0.112:8888"
@@ -3001,7 +3310,7 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
                     }
                     className="max-w-[360px]"
                   />
-                  <Btn sm onClick={handleTestSearxng} disabled={!form.search?.baseUrl || testingSearxng}>
+                  <Btn onClick={handleTestSearxng} disabled={!form.search?.baseUrl || testingSearxng}>
                     {testingSearxng ? 'Testing…' : 'Test'}
                   </Btn>
                 </div>
@@ -3127,6 +3436,25 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
   // Local servers (llama.cpp/locca) need a dedicated embedding endpoint; cloud
   // and Ollama providers serve embeddings on the same endpoint as chat.
   const needsServerUrl = effectiveProvider === 'locca' || effectiveProvider === 'openai-compatible';
+
+  const embedKeyVar = LLM_ENV_VARS[effectiveProvider];
+  const embedKeySet = !!(embedKeyVar && data.env?.[embedKeyVar]);
+
+  const embedDiscoveryEnabled =
+    effectiveProvider === 'ollama'
+    || effectiveProvider === 'locca'
+    || (effectiveProvider === 'openai-compatible' && !!(e.baseUrl || form.llm.baseUrl).trim())
+    || (effectiveProvider === 'openrouter')
+    || (!!embedKeyVar && embedKeySet);
+
+  const embedDiscovery = useModelDiscovery({
+    provider: effectiveProvider,
+    baseUrl: e.baseUrl || form.llm.baseUrl,
+    ollamaUrl: e.ollamaUrl || form.llm.ollamaUrl,
+    scope: 'embedding',
+    enabled: embedDiscoveryEnabled,
+    adminFetch,
+  });
 
   const probeQuery = () => {
     const p = new URLSearchParams();
@@ -3305,7 +3633,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
                   {e.provider ? (
                     <><code>{llmProviderLabel(effectiveProvider)}</code> is a chat-only provider, with no embeddings endpoint, so the tagger can’t use it.</>
                   ) : (
-                    <>“Follow LLM provider” resolves to <code>{llmProviderLabel(llmProvider)}</code>, which is chat-only and has no embeddings endpoint.</>
+                    <>"Follow LLM provider" resolves to <code>{llmProviderLabel(llmProvider)}</code>, which is chat-only and has no embeddings endpoint.</>
                   )}{' '}
                   Pick a real embedding provider above. <strong>Ollama</strong> is local
                   and free (<code>nomic-embed-text</code>, auto-pulled on first run), or
@@ -3318,22 +3646,52 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
 
           <div className="field">
             <Label>Model</Label>
-            <Input
-              value={e.model}
-              onChange={(ev: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, embedding: { ...f.embedding, model: ev.target.value } }))
+            <div className="flex items-stretch gap-2">
+              {embedDiscovery.models.length > 0 ? (
+                <ModelCombobox
+                  models={embedDiscovery.models}
+                  value={e.model}
+                  onChange={v => setForm(f => ({ ...f, embedding: { ...f.embedding, model: v } }))}
+                  placeholder="Select a model"
+                />
+              ) : (
+                <Input
+                  value={e.model}
+                  onChange={(ev: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({ ...f, embedding: { ...f.embedding, model: ev.target.value } }))
+                  }
+                  placeholder={
+                    effectiveProvider === 'ollama' || effectiveProvider === 'locca'
+                      ? 'nomic-embed-text'
+                      : effectiveProvider === 'openai' || effectiveProvider === 'openai-compatible'
+                        ? 'text-embedding-3-small'
+                        : effectiveProvider === 'google'
+                          ? 'text-embedding-004'
+                          : 'model id'
+                  }
+                  className="max-w-[360px]"
+                />
+              )}
+              {embedDiscovery.loading
+                ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
+                : embedDiscoveryEnabled && (
+                  <Btn onClick={embedDiscovery.refresh} title="Refresh model list">↻</Btn>
+                )
               }
-              placeholder={
-                effectiveProvider === 'ollama' || effectiveProvider === 'locca'
-                  ? 'nomic-embed-text'
-                  : effectiveProvider === 'openai' || effectiveProvider === 'openai-compatible'
-                    ? 'text-embedding-3-small'
-                    : effectiveProvider === 'google'
-                      ? 'text-embedding-004'
-                      : 'model id'
-              }
-              className="max-w-[360px]"
-            />
+            </div>
+            <div className="field-hint">
+              {embedDiscovery.models.length > 0
+                ? `${embedDiscovery.models.length} model${embedDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                : !embedDiscoveryEnabled
+                  ? (effectiveProvider === 'openai-compatible'
+                      ? 'Set a base URL above to discover available models.'
+                      : 'Set an API key above to discover and select a model.')
+                  : embedDiscovery.error
+                    ? `Discovery failed: ${embedDiscovery.error}. Type a model ID manually.`
+                    : embedDiscovery.loading
+                      ? 'Discovering models…'
+                      : 'No models discovered. Type a model ID manually.'}
+            </div>
             <div className="field-hint">
               Leave blank for the sensible default per provider. If you change
               this on a tagged library, the next run will reject the new dim.
