@@ -1362,6 +1362,10 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
       setCloudKeyTest(j);
+      if (j.ok) {
+        const saved = await saveKey(cloudKeyVar, cloudKeyInput);
+        if (saved) { notify.ok('Key verified and saved'); setCloudKeyInput(''); refresh(); }
+      }
     } catch (e) {
       setCloudKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
     } finally {
@@ -1986,6 +1990,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     value: string,
     setTesting: (v: boolean) => void,
     setResult: (r: { ok: boolean; message: string; latencyMs: number } | null) => void,
+    clearInput?: () => void,
   ) => {
     if (!value.trim()) return;
     setTesting(true);
@@ -1998,6 +2003,10 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
       setResult(j);
+      if (j.ok) {
+        const saved = await saveKey(envVar, value);
+        if (saved) { notify.ok('Key verified and saved'); clearInput?.(); refresh(); }
+      }
     } catch (e) {
       setResult({ ok: false, message: errorMessage(e), latencyMs: 0 });
     } finally {
@@ -2296,7 +2305,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 <div className="mt-2 flex items-center gap-2">
                   <Btn
                     sm
-                    onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest)}
+                    onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest, () => setPrimaryKeyInput(''))}
                     disabled={primaryKeyTesting || !primaryKeyInput.trim()}
                   >
                     {primaryKeyTesting ? 'Testing…' : 'Test key'}
@@ -2576,7 +2585,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                     <div className="mt-2 flex items-center gap-2">
                       <Btn
                         sm
-                        onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest)}
+                        onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest, () => setFallbackKeyInput(''))}
                         disabled={fallbackKeyTesting || !fallbackKeyInput.trim()}
                       >
                         {fallbackKeyTesting ? 'Testing…' : 'Test key'}
