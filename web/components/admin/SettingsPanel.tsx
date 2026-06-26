@@ -1711,7 +1711,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             <div className="mt-3.5 grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-[18px]">
               <div className="field">
                 <Label>Model</Label>
-                <div className="flex items-center gap-2">
+                <div className="flex items-stretch gap-2">
                   {ttsDiscovery.models.length > 0 ? (
                     <Select
                       value={
@@ -1754,7 +1754,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   {ttsDiscovery.loading
                     ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
                     : ttsDiscoveryEnabled && (
-                      <Btn sm onClick={ttsDiscovery.refresh} title="Refresh model list">↻</Btn>
+                      <Btn onClick={ttsDiscovery.refresh} title="Refresh model list">↻</Btn>
                     )
                   }
                 </div>
@@ -1774,6 +1774,10 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                               : 'e.g. "gpt-4o-mini-tts" (OpenAI) or "eleven_flash_v2_5" (ElevenLabs).')}
                 </div>
               </div>
+              {!isCompat && (() => {
+                const kv = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
+                return <KeyStatus envVar={kv} present={!!data.env?.[kv]} />;
+              })()}
               {(() => {
                 const provVoices = CLOUD_VOICES[form.tts.cloud.provider as keyof typeof CLOUD_VOICES] || [];
                 const voice = form.tts.cloud.voice.trim();
@@ -1844,13 +1848,21 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 <>
                   <div className="field">
                     <Label>{form.tts.cloud.provider === 'elevenlabs' ? 'ElevenLabs' : 'OpenAI'} API key</Label>
-                    <Input
-                      type="password"
-                      value={cloudKeyInput}
-                      placeholder={data.env?.[cloudKeyVar] ? '•••••• (on file)' : (KEY_HINTS[cloudKeyVar] ?? '')}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => setCloudKeyInput(e.target.value)}
-                      className="max-w-[360px]"
-                    />
+                    <div className="flex items-stretch gap-2">
+                      <Input
+                        type="password"
+                        value={cloudKeyInput}
+                        placeholder={data.env?.[cloudKeyVar] ? '•••••• (on file)' : (KEY_HINTS[cloudKeyVar] ?? '')}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setCloudKeyInput(e.target.value)}
+                        className="max-w-[360px]"
+                      />
+                      <Btn
+                        onClick={testCloudKey}
+                        disabled={cloudKeyTesting || !cloudKeyInput.trim()}
+                      >
+                        {cloudKeyTesting ? 'Testing…' : 'Test key'}
+                      </Btn>
+                    </div>
                     <div className="field-hint">
                       Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
                     </div>
@@ -1859,16 +1871,6 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                         This key is shared across LLM and Cloud TTS.
                       </div>
                     )}
-                  </div>
-                  <KeyStatus envVar={cloudKeyVar} present={!!data.env?.[cloudKeyVar]} />
-                  <div className="mt-2 flex items-center gap-2">
-                    <Btn
-                      sm
-                      onClick={testCloudKey}
-                      disabled={cloudKeyTesting || !cloudKeyInput.trim()}
-                    >
-                      {cloudKeyTesting ? 'Testing…' : 'Test key'}
-                    </Btn>
                   </div>
                   {cloudKeyTest && <KeyTestResult result={cloudKeyTest} />}
                 </>
@@ -2217,34 +2219,33 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             <>
               <div className="field">
                 <Label>Bearer token</Label>
-                <Input
-                  type="password"
-                  value={compatKeyInput}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
-                  placeholder={(data.values?.llm as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
-                  className="max-w-[360px]"
-                />
+                <div className="flex items-stretch gap-2">
+                  <Input
+                    type="password"
+                    value={compatKeyInput}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
+                    placeholder={(data.values?.llm as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                    className="max-w-[360px]"
+                  />
+                  <Btn
+                    onClick={() =>
+                      testCompatKey(
+                        compatKeyInput || '',
+                        form.llm.baseUrl,
+                        form.llm.model,
+                        setCompatKeyTesting,
+                        setCompatKeyTest,
+                      )
+                    }
+                    disabled={compatKeyTesting || !form.llm.baseUrl.trim()}
+                  >
+                    {compatKeyTesting ? 'Testing…' : 'Test connection'}
+                  </Btn>
+                </div>
                 <div className="field-hint">
                   Optional — only needed when the server requires bearer authentication.
                   Saved to <code>settings.json</code>, takes effect on next save.
                 </div>
-              </div>
-              <div className="mt-2 flex items-center gap-2">
-                <Btn
-                  sm
-                  onClick={() =>
-                    testCompatKey(
-                      compatKeyInput || '',
-                      form.llm.baseUrl,
-                      form.llm.model,
-                      setCompatKeyTesting,
-                      setCompatKeyTest,
-                    )
-                  }
-                  disabled={compatKeyTesting || !form.llm.baseUrl.trim()}
-                >
-                  {compatKeyTesting ? 'Testing…' : 'Test connection'}
-                </Btn>
               </div>
               {compatKeyTest && <KeyTestResult result={compatKeyTest} />}
             </>
@@ -2285,13 +2286,21 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               <>
                 <div className="field">
                   <Label>{llmProviderLabel(form.llm.provider)} API key</Label>
-                  <Input
-                    type="password"
-                    value={primaryKeyInput}
-                    placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
-                    className="max-w-[360px]"
-                  />
+                  <div className="flex items-stretch gap-2">
+                    <Input
+                      type="password"
+                      value={primaryKeyInput}
+                      placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
+                      className="max-w-[360px]"
+                    />
+                    <Btn
+                      onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest, () => setPrimaryKeyInput(''))}
+                      disabled={primaryKeyTesting || !primaryKeyInput.trim()}
+                    >
+                      {primaryKeyTesting ? 'Testing…' : 'Test key'}
+                    </Btn>
+                  </div>
                   <div className="field-hint">
                     Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
                   </div>
@@ -2301,16 +2310,6 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                     </div>
                   )}
                 </div>
-                <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
-                <div className="mt-2 flex items-center gap-2">
-                  <Btn
-                    sm
-                    onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest, () => setPrimaryKeyInput(''))}
-                    disabled={primaryKeyTesting || !primaryKeyInput.trim()}
-                  >
-                    {primaryKeyTesting ? 'Testing…' : 'Test key'}
-                  </Btn>
-                </div>
                 {primaryKeyTest && <KeyTestResult result={primaryKeyTest} />}
               </>
             );
@@ -2318,7 +2317,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
 
           <div className="field">
             <Label>Model</Label>
-            <div className="flex items-center gap-2">
+            <div className="flex items-stretch gap-2">
               {primaryDiscovery.models.length > 0 ? (
                 <Select
                   value={
@@ -2368,7 +2367,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               {primaryDiscovery.loading
                 ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
                 : primaryDiscoveryEnabled && (
-                  <Btn sm onClick={primaryDiscovery.refresh} title="Refresh model list">↻</Btn>
+                  <Btn onClick={primaryDiscovery.refresh} title="Refresh model list">↻</Btn>
                 )
               }
             </div>
@@ -2386,6 +2385,10 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                       : 'No models discovered. Type a model ID manually.'}
             </div>
           </div>
+
+          {primaryKeyVar && (
+            <KeyStatus envVar={primaryKeyVar} present={!!data.env?.[primaryKeyVar]} />
+          )}
 
           {form.llm.provider === 'openai-compatible' && (
             <div className="field">
@@ -2530,35 +2533,34 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 <>
                   <div className="field">
                     <Label>Bearer token</Label>
-                    <Input
-                      type="password"
-                      value={compatFallbackKeyInput}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatFallbackKeyInput(e.target.value)}
-                      placeholder={(data.values?.llm?.fallback as unknown as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
-                      className="max-w-[360px]"
-                    />
+                    <div className="flex items-stretch gap-2">
+                      <Input
+                        type="password"
+                        value={compatFallbackKeyInput}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatFallbackKeyInput(e.target.value)}
+                        placeholder={(data.values?.llm?.fallback as unknown as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                        className="max-w-[360px]"
+                      />
+                      <Btn
+                        onClick={() =>
+                          testCompatKey(
+                            compatFallbackKeyInput || '',
+                            form.llm.fallback.baseUrl,
+                            form.llm.fallback.model,
+                            setCompatFallbackKeyTesting,
+                            setCompatFallbackKeyTest,
+                          )
+                        }
+                        disabled={compatFallbackKeyTesting || !form.llm.fallback.baseUrl.trim()}
+                      >
+                        {compatFallbackKeyTesting ? 'Testing…' : 'Test connection'}
+                      </Btn>
+                    </div>
                     <div className="field-hint">
                       Optional — only needed when the backup server requires bearer
                       authentication. Saved to <code>settings.json</code>, takes effect on
                       next save.
                     </div>
-                  </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    <Btn
-                      sm
-                      onClick={() =>
-                        testCompatKey(
-                          compatFallbackKeyInput || '',
-                          form.llm.fallback.baseUrl,
-                          form.llm.fallback.model,
-                          setCompatFallbackKeyTesting,
-                          setCompatFallbackKeyTest,
-                        )
-                      }
-                      disabled={compatFallbackKeyTesting || !form.llm.fallback.baseUrl.trim()}
-                    >
-                      {compatFallbackKeyTesting ? 'Testing…' : 'Test connection'}
-                    </Btn>
                   </div>
                   {compatFallbackKeyTest && <KeyTestResult result={compatFallbackKeyTest} />}
                 </>
@@ -2570,26 +2572,24 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   <>
                     <div className="field">
                       <Label>{llmProviderLabel(form.llm.fallback.provider)} API key</Label>
-                      <Input
-                        type="password"
-                        value={fallbackKeyInput}
-                        placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
-                        onChange={(e: ChangeEvent<HTMLInputElement>) => setFallbackKeyInput(e.target.value)}
-                        className="max-w-[360px]"
-                      />
+                      <div className="flex items-stretch gap-2">
+                        <Input
+                          type="password"
+                          value={fallbackKeyInput}
+                          placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => setFallbackKeyInput(e.target.value)}
+                          className="max-w-[360px]"
+                        />
+                        <Btn
+                          onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest, () => setFallbackKeyInput(''))}
+                          disabled={fallbackKeyTesting || !fallbackKeyInput.trim()}
+                        >
+                          {fallbackKeyTesting ? 'Testing…' : 'Test key'}
+                        </Btn>
+                      </div>
                       <div className="field-hint">
                         Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
                       </div>
-                    </div>
-                    <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
-                    <div className="mt-2 flex items-center gap-2">
-                      <Btn
-                        sm
-                        onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest, () => setFallbackKeyInput(''))}
-                        disabled={fallbackKeyTesting || !fallbackKeyInput.trim()}
-                      >
-                        {fallbackKeyTesting ? 'Testing…' : 'Test key'}
-                      </Btn>
                     </div>
                     {fallbackKeyTest && <KeyTestResult result={fallbackKeyTest} />}
                   </>
@@ -2598,7 +2598,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
 
               <div className="field">
                 <Label>Backup model</Label>
-                <div className="flex items-center gap-2">
+                <div className="flex items-stretch gap-2">
                   {fallbackDiscovery.models.length > 0 ? (
                     <Select
                       value={
@@ -2648,7 +2648,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   {fallbackDiscovery.loading
                     ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
                     : fallbackDiscoveryEnabled && (
-                      <Btn sm onClick={fallbackDiscovery.refresh} title="Refresh model list">↻</Btn>
+                      <Btn onClick={fallbackDiscovery.refresh} title="Refresh model list">↻</Btn>
                     )
                   }
                 </div>
@@ -2666,6 +2666,10 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                           : 'No models discovered. Type a model ID manually.'}
                 </div>
               </div>
+
+              {fallbackKeyVar && (
+                <KeyStatus envVar={fallbackKeyVar} present={!!data.env?.[fallbackKeyVar]} />
+              )}
 
               <div className="grid grid-cols-[1fr_auto] items-center gap-4">
                 <div>
@@ -2960,15 +2964,27 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
             <>
               <div className="field">
                 <Label>Tavily API key</Label>
-                <Input
-                  type="password"
-                  value={form.search.apiKey === 'set' ? '' : form.search.apiKey}
-                  placeholder={form.search.apiKey === 'set' ? '•••••• (key on file)' : 'tvly-…'}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setForm(f => ({ ...f, search: { ...f.search, apiKey: e.target.value } }))
-                  }
-                  className="max-w-[360px]"
-                />
+                <div className="flex items-stretch gap-2">
+                  <Input
+                    type="password"
+                    value={form.search.apiKey === 'set' ? '' : form.search.apiKey}
+                    placeholder={form.search.apiKey === 'set' ? '•••••• (key on file)' : 'tvly-…'}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, search: { ...f.search, apiKey: e.target.value } }))
+                    }
+                    className="max-w-[360px]"
+                  />
+                  <Btn
+                    onClick={testTavilyKey}
+                    disabled={
+                      tavilyKeyTesting ||
+                      !form.search.apiKey.trim() ||
+                      form.search.apiKey === 'set'
+                    }
+                  >
+                    {tavilyKeyTesting ? 'Testing…' : 'Test key'}
+                  </Btn>
+                </div>
                 <div className="field-hint">
                   Stored alongside the other admin settings. Falls back to
                   <code> SEARCH_API_KEY</code> in <code>.env</code> when blank. Set
@@ -2976,19 +2992,6 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
                 </div>
               </div>
               <KeyStatus envVar="SEARCH_API_KEY" present={tavilyKeySet} />
-              <div className="mt-2 flex items-center gap-2">
-                <Btn
-                  sm
-                  onClick={testTavilyKey}
-                  disabled={
-                    tavilyKeyTesting ||
-                    !form.search.apiKey.trim() ||
-                    form.search.apiKey === 'set'
-                  }
-                >
-                  {tavilyKeyTesting ? 'Testing…' : 'Test key'}
-                </Btn>
-              </div>
               {tavilyKeyTest && <KeyTestResult result={tavilyKeyTest} />}
             </>
           )}
@@ -2997,7 +3000,7 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
             <>
               <div className="field">
                 <Label>SearXNG URL</Label>
-                <div className="flex gap-2">
+                <div className="flex items-stretch gap-2">
                   <Input
                     type="url"
                     placeholder="http://192.168.0.112:8888"
@@ -3007,7 +3010,7 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
                     }
                     className="max-w-[360px]"
                   />
-                  <Btn sm onClick={handleTestSearxng} disabled={!form.search?.baseUrl || testingSearxng}>
+                  <Btn onClick={handleTestSearxng} disabled={!form.search?.baseUrl || testingSearxng}>
                     {testingSearxng ? 'Testing…' : 'Test'}
                   </Btn>
                 </div>
@@ -3342,7 +3345,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
 
           <div className="field">
             <Label>Model</Label>
-            <div className="flex items-center gap-2">
+            <div className="flex items-stretch gap-2">
               {embedDiscovery.models.length > 0 ? (
                 <Select
                   value={
@@ -3389,7 +3392,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
               {embedDiscovery.loading
                 ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
                 : embedDiscoveryEnabled && (
-                  <Btn sm onClick={embedDiscovery.refresh} title="Refresh model list">↻</Btn>
+                  <Btn onClick={embedDiscovery.refresh} title="Refresh model list">↻</Btn>
                 )
               }
             </div>
