@@ -420,7 +420,12 @@ class Queue {
         // tracks resolve to null → no liq_amplify → unity gain, i.e. today.
         this.applyLoudnessGain(item.track);
 
-        const uri = subsonic.getAnnotatedUri(item.track);
+        // Hard length cap (#447 max-track-length): stamp a cue_out so Liquidsoap
+        // cuts an over-length autonomous pick mid-air. Explicit listener requests
+        // (requestedBy set) stay exempt — a requested long mix plays in full,
+        // mirroring the request path's selection-cap exemption in picker-tools.
+        const maxDurationSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
+        const uri = subsonic.getAnnotatedUri(item.track, { maxDurationSec });
         await writeHandoff(config.liquidsoap.queueFile, uri);
         item.sent = true;
         this.persist();  // record the sent flag — these are now live in dj_queue

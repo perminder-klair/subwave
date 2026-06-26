@@ -151,7 +151,10 @@ async function refreshAutoPlaylistInner() {
     }
   }
 
-  const lines = ['#EXTM3U', ...pool.map((t: any) => subsonic.getAnnotatedUri(t))];
+  // Stamp the station cap on every fallback entry too (#447): the take() filter
+  // above already drops tracks with a KNOWN over-cap duration, but unknown-
+  // duration tracks slip through — cue_out cuts those at the limit on air.
+  const lines = ['#EXTM3U', ...pool.map((t: any) => subsonic.getAnnotatedUri(t, { maxDurationSec }))];
   await writeFile(config.liquidsoap.autoPlaylist, lines.join('\n'));
   queue.log('scheduler',
     `Auto-playlist refreshed: ${pool.length} tracks (` +
