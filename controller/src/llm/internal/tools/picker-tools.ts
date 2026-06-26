@@ -14,6 +14,7 @@ import * as subsonic from '../../../music/subsonic.js';
 import * as library from '../../../music/library.js';
 import * as embeddings from '../../../music/embeddings.js';
 import { filterPickerCandidates, durationSeconds } from '../../../music/recency.js';
+import { preferGenre } from '../../../music/genre-match.js';
 import { searchWeb, searchReady } from '../../../skills/web-search.js';
 import { identifyTrackFromText } from '../prompts/request.js';
 
@@ -85,9 +86,16 @@ export function buildPickerTools({
   audioWaypoint = null,
   resolveReferences = false,
   maxDurationSec = null,
+  genreLock = null,
 }: {
   recentIds?: Set<string>;
   recentKeys?: Set<string>;        // lowercased "title|artist" — backfilled entries lack ids
+  // Hard genre constraint for a strict-genre show (settings.genreStrict). When
+  // set, every tool's candidates are genre-filtered (preferGenre, never-starve)
+  // before recency + cap, so the agent path enforces the lock in code, not just
+  // the prompt — mirroring the pool picker's strict mode. null = no lock.
+  // Deliberately NOT set on the request path: an explicit listener ask wins.
+  genreLock?: string | null;
   // Hard length cap (seconds) for autonomous picks — the active show's override
   // or the station default (issue #447). null = no cap. Deliberately NOT set on
   // the request path (djAgentRequest) so an explicit listener ask for a long
@@ -113,7 +121,13 @@ export function buildPickerTools({
   // seen map still accumulates across the whole loop, so the agent's id space
   // grows with each tool call regardless.
   const collect = (list: any, cap = 8) => {
-    const accepted = filterPickerCandidates(shuffle((list || []) as any[]), {
+    // Strict-genre show: filter to in-genre tracks BEFORE recency + cap, so the
+    // 8 the agent sees are genre-pure. preferGenre never-starves (falls back to
+    // the full list when a tool returns no in-genre match), so a thin genre
+    // degrades to off-genre rather than dead air — same contract as the pool.
+    let pool = shuffle((list || []) as any[]);
+    if (genreLock) pool = preferGenre(pool, genreLock);
+    const accepted = filterPickerCandidates(pool, {
       recentIds,
       recentKeys,
       seenIds: new Set(seen.keys()),

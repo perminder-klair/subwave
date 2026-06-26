@@ -283,11 +283,13 @@ export const pickerAgent = defineAgent({
   timeoutMs: agentDeadline,
   buildSystem: () => pickSystem(),
   buildTools: ({ recentIds, recentKeys, audioWaypoint }) => {
-    // Length cap for autonomous picks: the active show's override or the
-    // station default (issue #447), resolved live at run time so a show that
-    // just came on air takes effect. null = no cap.
-    const maxDurationSec = settings.effectiveMaxTrackSec();
-    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, audioWaypoint, maxDurationSec });
+    // Resolve the active show live (a show that just came on air takes effect):
+    // its length override (issue #447) and, for a strict-genre show, a hard
+    // genre lock the discovery tools enforce on candidates — not just the prompt.
+    const activeShow = settings.resolveActiveShow();
+    const maxDurationSec = settings.effectiveMaxTrackSec(activeShow);
+    const genreLock = activeShow?.genreStrict && activeShow?.genre ? activeShow.genre : null;
+    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, audioWaypoint, maxDurationSec, genreLock });
     return { tools, extras: { seen } };
   },
 });
