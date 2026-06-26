@@ -50,10 +50,10 @@ export function useModelDiscovery({
         setModels([]);
         setError(data.error || 'Discovery failed');
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (providerRef.current !== provider) return;
       setModels([]);
-      setError(e?.message || 'Discovery failed');
+      setError(e instanceof Error ? e.message : 'Discovery failed');
     } finally {
       setLoading(false);
     }

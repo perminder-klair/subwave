@@ -2852,8 +2852,8 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
       });
       const j = await res.json();
       setSearxngTestResult(j);
-    } catch (err: any) {
-      setSearxngTestResult({ ok: false, error: err?.message || 'request failed' });
+    } catch (err: unknown) {
+      setSearxngTestResult({ ok: false, error: err instanceof Error ? err.message : 'request failed' });
     } finally {
       setTestingSearxng(false);
     }
