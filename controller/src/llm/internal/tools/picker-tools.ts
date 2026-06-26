@@ -254,7 +254,11 @@ export function buildPickerTools({
         description: 'Tracks whose mood + lyrics + metadata embed closest to a seed track — the controller\'s own semantic similarity over the actual library. Requires the mood/lyric embedding index to be built. Pass the currently-playing song id (best) OR a track title — a title is resolved to the matching track.',
         inputSchema: z.object({
           songId: z.string().describe('a song id (preferred) or a track title'),
-          k: z.number().int().min(1).max(50).default(20),
+          // Default 40 (not 20): the nearest neighbours cluster tightly and many
+          // will be recently-played, so a small k left ~1 survivor after recency
+          // filtering. collect() still caps to 8 fresh ones. Mirrors the journey
+          // tool's widened pull.
+          k: z.number().int().min(1).max(60).default(40),
         }),
         execute: async ({ songId, k }) => {
           try { await library.load(); return collect(library.tracksLikeThis(songId, k)); }
@@ -271,7 +275,11 @@ export function buildPickerTools({
         description: 'Tracks whose ACTUAL SOUND (timbre, instrumentation, production, energy — a CLAP audio embedding of the waveform) is closest to a seed track. Blind to tags and metadata, so it shines for instrumentals, non-English tracks, or anything with thin Last.fm coverage. Requires the audio embedding index to be built. Pass the currently-playing song id (best) OR a track title.',
         inputSchema: z.object({
           songId: z.string().describe('a song id (preferred) or a track title'),
-          k: z.number().int().min(1).max(50).default(20),
+          // Default 40 (not 20): audio neighbours cluster tightly and many will
+          // be recently-played, so a small k left ~1 survivor after recency
+          // filtering. collect() still caps to 8 fresh ones. Mirrors the journey
+          // tool's widened pull.
+          k: z.number().int().min(1).max(60).default(40),
         }),
         execute: async ({ songId, k }) => {
           try { await library.load(); return collect(library.tracksLikeThisAudio(songId, k)); }
