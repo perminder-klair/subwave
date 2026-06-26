@@ -70,30 +70,24 @@ function shuffle<T>(arr: T[]): T[] {
   return [...arr].sort(() => Math.random() - 0.5);
 }
 
-// Most songs by any one artist allowed across a whole pick. The recent-artists
-// window (passed by dj-agent.pickViaAgent) already blocks any artist heard in
-// the last 2h, so this cap only matters when multiple tools (searchLibrary +
-// topSongsByArtist + similarSongs) surface the same artist within one pick.
-// 2 is tighter than the previous 3 to reduce in-pool fixation on deep
-// catalogues — per-tool cap=8 still leaves plenty of candidates overall.
-const MAX_PER_ARTIST = 2;
-
-// Builds a fresh tool set scoped to one pick. `recentIds` (recently-played
-// song ids) and `recentArtists` (lowercased recently-played artist names) are
-// filtered out inside every tool so the agent never has to be told "avoid
-// these" — it simply can't see them. `recentArtists` is left empty on the
-// listener-request path so a request for a recent artist still resolves.
+// Builds a fresh tool set scoped to one pick. `recentIds`/`recentKeys`
+// (recently-played track ids + "title|artist" keys) are filtered out inside
+// every tool so the agent never has to be told "avoid these" — it simply can't
+// see them. We deliberately do NOT filter by recent *artist*: the similarity
+// tools (similarSongs, tracksTowardJourney, tracks*LikeThis) return tracks
+// clustered around what's currently playing — i.e. the just-played artist's
+// neighbours — so an artist-recency strip gutted them to ~1 result while the
+// 12h track guard already prevents literal repeats (issue: thin picker pools on
+// niche catalogues). Track-recency alone is enough.
 export function buildPickerTools({
   recentIds = new Set<string>(),
   recentKeys = new Set<string>(),
-  recentArtists = new Set<string>(),
   audioWaypoint = null,
   resolveReferences = false,
   maxDurationSec = null,
 }: {
   recentIds?: Set<string>;
   recentKeys?: Set<string>;        // lowercased "title|artist" — backfilled entries lack ids
-  recentArtists?: Set<string>;
   // Hard length cap (seconds) for autonomous picks — the active show's override
   // or the station default (issue #447). null = no cap. Deliberately NOT set on
   // the request path (djAgentRequest) so an explicit listener ask for a long
@@ -110,30 +104,21 @@ export function buildPickerTools({
   resolveReferences?: boolean;
 } = {}) {
   const seen = new Map<string, any>(); // id → slim song, accumulated across all tool calls
-  const artistCounts = new Map<string, number>(); // artist key → songs already accepted into `seen`
 
   // Filter recents, slim, and record into `seen` so the picker can resolve
-  // the agent's final id choice to a full track. Drops songs by an artist that
-  // played in the recent window, and caps any one artist's share of the pool.
-  // cap=8 (down from 12) keeps per-tool input tokens lower for the picker
-  // agent — see picker-latency notes in dj-agent.js. The seen map still
-  // accumulates across the whole loop, so the agent's id space grows with
-  // each tool call regardless.
+  // the agent's final id choice to a full track. Drops only recently-played
+  // tracks (by id/key) and tracks already surfaced this pick; artists are NOT
+  // filtered (see buildPickerTools note). cap=8 keeps per-tool input tokens
+  // lower for the picker agent — see picker-latency notes in dj-agent.js. The
+  // seen map still accumulates across the whole loop, so the agent's id space
+  // grows with each tool call regardless.
   const collect = (list: any, cap = 8) => {
     const accepted = filterPickerCandidates(shuffle((list || []) as any[]), {
       recentIds,
       recentKeys,
-      recentArtists,
       seenIds: new Set(seen.keys()),
-      artistCounts,
-      maxPerArtist: MAX_PER_ARTIST,
       cap,
       maxDurationSec,
-      // Per-tool, never relax the recent-artist guard: a single-artist tool
-      // result (topSongsByArtist / similarSongs narrowed to a just-played
-      // artist) returns empty so the agent uses a different tool, instead of the
-      // cascade handing that artist right back (the artist-fixation bypass).
-      allowArtistRelaxation: false,
     });
     const out: any[] = [];
     for (const s of accepted) {
@@ -208,9 +193,9 @@ export function buildPickerTools({
       description: 'A named artist\'s NEWEST releases, latest first — songs from their most recent albums/singles. Use this (not topSongsByArtist) when the listener asks for an artist\'s "latest", "newest", "new", or "most recent" song: topSongsByArtist ranks by popularity, so it cannot answer recency. Returns [] when the artist isn\'t in the library. Note: "latest in the library" — bounded by what has been added, not the artist\'s globally-newest release.',
       inputSchema: z.object({ artist: z.string() }),
       execute: async ({ artist }) => {
-        // Keep the pool tight (newest ~6 tracks): collect() shuffles and caps to
-        // MAX_PER_ARTIST per artist, and these are all one artist — a wide pool
-        // would let the shuffle drop the actual-newest tracks, defeating "latest".
+        // Keep the source list tight (newest ~6 tracks): collect() shuffles, so
+        // a wide pool would let the shuffle drop the actual-newest tracks,
+        // defeating "latest".
         try { return collect(await subsonic.getRecentSongsByArtist(artist, { albums: 2, count: 6 })); }
         catch (err) { return { error: err.message }; }
       },
@@ -362,7 +347,10 @@ export function buildPickerTools({
         description: 'Tracks nearest the active sonic journey\'s CURRENT waypoint — the station is mid-arc, drifting its sound toward a destination vibe over the next few picks. When the event says a journey is active, call this and strongly prefer one of its tracks: each one moves the sound a step along the arc. Takes no input.',
         inputSchema: z.object({}),
         execute: async () => {
-          try { await library.load(); return collect(library.tracksByAudioVector(audioWaypoint, 20)); }
+          // Pull a wide KNN (40) around the waypoint: the nearest neighbours
+          // cluster tightly and many will be recently-played, so a small k left
+          // the agent with ~1 candidate. collect() still caps to 8 fresh ones.
+          try { await library.load(); return collect(library.tracksByAudioVector(audioWaypoint, 40)); }
           catch (err) { return { error: err.message }; }
         },
       }),
