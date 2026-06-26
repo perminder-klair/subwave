@@ -214,7 +214,7 @@ You run the station as one continuous shift. The messages above are the live ses
 
 ${dj.PICKER_CRITERIA}
 
-Finding candidates: prefer tools backed by the local library — searchLibrary, songsByGenre, tracksByMood, tracksByEnergy, randomSongs, and the audio/embedding similarity tools. similarSongs and topSongsByArtist use external data and often return little, so try them second. If a tool returns nothing, switch tools rather than retrying.${settings.agentLanguageReminder(persona, 'the "say" link')}`;
+Finding candidates: prefer tools backed by the local library — searchLibrary, songsByGenre, tracksByMood, tracksByEnergy, randomSongs, and the audio/embedding similarity tools. similarSongs and topSongsByArtist use external data and often return little, so try them second. If a tool returns nothing, switch tools rather than retrying. If a tool returns only a few tracks (fewer than ~4), make one more discovery call with a different tool before choosing, so you pick from a real range rather than whatever the first call happened to surface.${settings.agentLanguageReminder(persona, 'the "say" link')}`;
 }
 
 function requestSystem() {

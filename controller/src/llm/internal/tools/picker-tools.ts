@@ -275,14 +275,14 @@ export function buildPickerTools({
         description: 'Tracks whose mood + lyrics + metadata embed closest to a seed track — the controller\'s own semantic similarity over the actual library. Requires the mood/lyric embedding index to be built. Pass the currently-playing song id (best) OR a track title — a title is resolved to the matching track.',
         // No k input: the agent reliably picked a small k (10–20), and the
         // nearest neighbours cluster tightly + many are recently-played, so that
-        // left ~1 survivor after recency filtering. Pull a wide fixed KNN (40)
+        // left ~1 survivor after recency filtering. Pull a wide fixed KNN (60)
         // internally — collect() still caps to 8 fresh ones. Mirrors the journey
         // tool, which also takes no args.
         inputSchema: z.object({
           songId: z.string().describe('a song id (preferred) or a track title'),
         }),
         execute: async ({ songId }) => {
-          try { await library.load(); return collect(library.tracksLikeThis(songId, 40)); }
+          try { await library.load(); return collect(library.tracksLikeThis(songId, 60)); }
           catch (err) { return { error: err.message }; }
         },
       }),
@@ -296,14 +296,14 @@ export function buildPickerTools({
         description: 'Tracks whose ACTUAL SOUND (timbre, instrumentation, production, energy — a CLAP audio embedding of the waveform) is closest to a seed track. Blind to tags and metadata, so it shines for instrumentals, non-English tracks, or anything with thin Last.fm coverage. Requires the audio embedding index to be built. Pass the currently-playing song id (best) OR a track title.',
         // No k input: the agent reliably picked a small k (10–20), and audio
         // neighbours cluster tightly + many are recently-played, so that left ~1
-        // survivor after recency filtering. Pull a wide fixed KNN (40) internally
+        // survivor after recency filtering. Pull a wide fixed KNN (60) internally
         // — collect() still caps to 8 fresh ones. Mirrors the journey tool, which
         // also takes no args.
         inputSchema: z.object({
           songId: z.string().describe('a song id (preferred) or a track title'),
         }),
         execute: async ({ songId }) => {
-          try { await library.load(); return collect(library.tracksLikeThisAudio(songId, 40)); }
+          try { await library.load(); return collect(library.tracksLikeThisAudio(songId, 60)); }
           catch (err) { return { error: err.message }; }
         },
       }),
@@ -318,7 +318,7 @@ export function buildPickerTools({
       searchByLyrics: tool({
         description: 'Semantic lyric / theme search over the library. Embeds the query and returns tracks whose lyrics + metadata are closest to it. Use for thematic picks the mood vocab can\'t express — e.g. "songs about hometown", "tracks with hopeful lyrics", "feeling stuck". Requires the mood/lyric embedding index and a text-embedding provider.',
         // No k input: the agent reliably picked a small k, and recency filtering
-        // then thins it further. Pull a wide fixed KNN (40) internally —
+        // then thins it further. Pull a wide fixed KNN (60) internally —
         // collect() still caps to 8 fresh ones. Mirrors the seed-similarity tools.
         inputSchema: z.object({
           query: z.string().min(3),
@@ -329,7 +329,7 @@ export function buildPickerTools({
             await library.load();
             const [vec] = await embeddings.embedTexts([query.trim()]);
             if (!vec) return { error: 'embedding query failed' };
-            return collect(library.tracksByVector(vec, 40));
+            return collect(library.tracksByVector(vec, 60));
           }
           catch (err) { return { error: err.message }; }
         },
@@ -378,10 +378,10 @@ export function buildPickerTools({
         description: 'Tracks nearest the active sonic journey\'s CURRENT waypoint — the station is mid-arc, drifting its sound toward a destination vibe over the next few picks. When the event says a journey is active, call this and strongly prefer one of its tracks: each one moves the sound a step along the arc. Takes no input.',
         inputSchema: z.object({}),
         execute: async () => {
-          // Pull a wide KNN (40) around the waypoint: the nearest neighbours
+          // Pull a wide KNN (60) around the waypoint: the nearest neighbours
           // cluster tightly and many will be recently-played, so a small k left
           // the agent with ~1 candidate. collect() still caps to 8 fresh ones.
-          try { await library.load(); return collect(library.tracksByAudioVector(audioWaypoint, 40)); }
+          try { await library.load(); return collect(library.tracksByAudioVector(audioWaypoint, 60)); }
           catch (err) { return { error: err.message }; }
         },
       }),
