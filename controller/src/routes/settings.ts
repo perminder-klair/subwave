@@ -473,10 +473,7 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 10_000);
 
-  await settings.load();
-  const s = settings.get();
-  const settingsKey = (s.llm?.apiKey && typeof s.llm.apiKey === 'string') ? s.llm.apiKey.trim() : '';
-  const resolveKey = (envName: string) => settingsKey || (process.env[envName] || '').trim() || '';
+  const resolveKey = (envName: string) => (process.env[envName] || '').trim() || '';
 
   try {
     let models: string[] = [];
