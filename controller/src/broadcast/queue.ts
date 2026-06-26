@@ -490,8 +490,14 @@ class Queue {
   // Writes the effect's file path straight to sfx.txt — no TTS, the audio is
   // already rendered. Liquidsoap's sfx_queue mixes it beneath the voice
   // channels (see liquidsoap/radio.liq). Used by the segment-director agent
-  // to garnish a spoken line.
-  async playSfx(name: string) {
+  // to garnish a spoken line, and by applyMixTransition for between-track
+  // stingers.
+  //
+  // `underVoice` offsets the write by the voice lead-in (VOICE_LEADIN_MS) so a
+  // stinger meant to sit under a spoken line lands with the DJ's first word
+  // instead of during the channel's silent pre-roll. Transition stingers leave
+  // it false — they have no voice to align to and must fire at the crossfade.
+  async playSfx(name: string, { underVoice = false }: { underVoice?: boolean } = {}) {
     if (!name) return;
     try {
       const path = await sfx.getPath(name);
@@ -499,6 +505,7 @@ class Queue {
         this.log('error', `Unknown sound effect: ${name}`);
         return;
       }
+      if (underVoice) await sleep(VOICE_LEADIN_MS);
       await writeHandoff(config.liquidsoap.sfxFile, path);
       this.log('sfx', name);
       session.appendTurn({ role: 'segment', kind: 'sfx', text: name });
