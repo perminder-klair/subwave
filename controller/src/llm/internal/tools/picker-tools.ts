@@ -252,16 +252,16 @@ export function buildPickerTools({
     ...(hasTextEmbeddings ? {
       tracksLikeThis: tool({
         description: 'Tracks whose mood + lyrics + metadata embed closest to a seed track — the controller\'s own semantic similarity over the actual library. Requires the mood/lyric embedding index to be built. Pass the currently-playing song id (best) OR a track title — a title is resolved to the matching track.',
+        // No k input: the agent reliably picked a small k (10–20), and the
+        // nearest neighbours cluster tightly + many are recently-played, so that
+        // left ~1 survivor after recency filtering. Pull a wide fixed KNN (40)
+        // internally — collect() still caps to 8 fresh ones. Mirrors the journey
+        // tool, which also takes no args.
         inputSchema: z.object({
           songId: z.string().describe('a song id (preferred) or a track title'),
-          // Default 40 (not 20): the nearest neighbours cluster tightly and many
-          // will be recently-played, so a small k left ~1 survivor after recency
-          // filtering. collect() still caps to 8 fresh ones. Mirrors the journey
-          // tool's widened pull.
-          k: z.number().int().min(1).max(60).default(40),
         }),
-        execute: async ({ songId, k }) => {
-          try { await library.load(); return collect(library.tracksLikeThis(songId, k)); }
+        execute: async ({ songId }) => {
+          try { await library.load(); return collect(library.tracksLikeThis(songId, 40)); }
           catch (err) { return { error: err.message }; }
         },
       }),
@@ -273,16 +273,16 @@ export function buildPickerTools({
     ...(hasAudioEmbeddings ? {
       tracksThatSoundLikeThis: tool({
         description: 'Tracks whose ACTUAL SOUND (timbre, instrumentation, production, energy — a CLAP audio embedding of the waveform) is closest to a seed track. Blind to tags and metadata, so it shines for instrumentals, non-English tracks, or anything with thin Last.fm coverage. Requires the audio embedding index to be built. Pass the currently-playing song id (best) OR a track title.',
+        // No k input: the agent reliably picked a small k (10–20), and audio
+        // neighbours cluster tightly + many are recently-played, so that left ~1
+        // survivor after recency filtering. Pull a wide fixed KNN (40) internally
+        // — collect() still caps to 8 fresh ones. Mirrors the journey tool, which
+        // also takes no args.
         inputSchema: z.object({
           songId: z.string().describe('a song id (preferred) or a track title'),
-          // Default 40 (not 20): audio neighbours cluster tightly and many will
-          // be recently-played, so a small k left ~1 survivor after recency
-          // filtering. collect() still caps to 8 fresh ones. Mirrors the journey
-          // tool's widened pull.
-          k: z.number().int().min(1).max(60).default(40),
         }),
-        execute: async ({ songId, k }) => {
-          try { await library.load(); return collect(library.tracksLikeThisAudio(songId, k)); }
+        execute: async ({ songId }) => {
+          try { await library.load(); return collect(library.tracksLikeThisAudio(songId, 40)); }
           catch (err) { return { error: err.message }; }
         },
       }),
