@@ -12,7 +12,7 @@ import * as dj from '../llm/dj.js';
 import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
-import { normGenre, genreMatches, preferGenre, inYearRange } from './show-filter.js';
+import { normGenre, genreMatches, preferGenre, inYearRange, preferEnergy } from './show-filter.js';
 
 const CANDIDATE_CAP = 18;
 const HISTORY_DEPTH = 4;
@@ -107,32 +107,11 @@ function hasMusicFilter(f: ShowFilter): boolean {
   return !!f && (!!f.genre || f.fromYear != null || f.toYear != null);
 }
 
-// Genre-matching helpers (normGenre / genreMatches / preferGenre) live in
-// ./show-filter.js — shared with the agent picker's discovery tools so both
-// paths agree on what "in-genre" means.
-
-// Per-track energy band — from the track itself (library sources carry it) or a
-// library lookup (Subsonic sources don't). null when un-analysed.
-function trackEnergy(t: any): string | null {
-  if (t?.energy) return t.energy;
-  const rec = t?.id ? library.get(t.id) : null;
-  return rec?.energy ?? null;
-}
-
-// inYearRange (decade window) lives in ./show-filter.js — shared with the agent
-// picker's discovery tools so both paths agree on what "in-era" means. Caller
-// here keeps its own never-starve fallback (the in-range-or-full pattern below).
-
-// Soft-prefer tracks matching the show's energy band; unknown-energy tracks
-// stay eligible. Falls back to the full set when no track matches.
-function preferEnergy(tracks: any[], energy?: string): any[] {
-  if (!energy) return tracks;
-  const match = tracks.filter((t: any) => {
-    const e = trackEnergy(t);
-    return e == null || e === energy;
-  });
-  return match.length ? match : tracks;
-}
+// Genre / energy / era helpers (normGenre / genreMatches / preferGenre /
+// preferEnergy / inYearRange) live in ./show-filter.js — shared with the agent
+// picker's discovery tools so every path agrees on what "in-genre" / "in-era" /
+// "in-energy" means. Caller here keeps its own never-starve fallback for the
+// year window (the in-range-or-full pattern below).
 
 function notRecent(recentIds: Set<string>) {
   return (t: any) => t && t.id && !recentIds.has(t.id);

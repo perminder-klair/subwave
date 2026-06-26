@@ -71,3 +71,25 @@ export function preferEra(tracks: any[], f: YearRange): any[] {
   const match = inYearRange(tracks, f);
   return match.length ? match : tracks;
 }
+
+// ── Energy band ──────────────────────────────────────────────────────────────
+
+// Per-track energy band — from the track itself (library sources carry it) or a
+// library lookup (Subsonic sources don't). null when un-analysed.
+export function trackEnergy(t: any): string | null {
+  if (t?.energy) return t.energy;
+  const rec = t?.id ? library.get(t.id) : null;
+  return rec?.energy ?? null;
+}
+
+// Soft-prefer tracks matching the show's energy band; unknown-energy tracks
+// stay eligible. Falls back to the full set when no track matches (never-starve,
+// mirrors preferEra). Energy stays soft even when the show's genre is strict.
+export function preferEnergy(tracks: any[], energy?: string | null): any[] {
+  if (!energy) return tracks;
+  const match = tracks.filter((t: any) => {
+    const e = trackEnergy(t);
+    return e == null || e === energy;
+  });
+  return match.length ? match : tracks;
+}
