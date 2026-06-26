@@ -34,6 +34,11 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
     ? '0 dB'
     : `${gain > 0 ? '+' : '−'}${Math.abs(gain).toFixed(1)} dB`;
 
+  const speed = persona.tts.speed ?? 1;
+  // Only Piper/Kokoro/cloud honour speed; chatterbox/pocket-tts workers ignore
+  // it, so the control is shown but disabled with a hint for those engines.
+  const speedSupported = persona.tts.engine !== 'chatterbox' && persona.tts.engine !== 'pocket-tts';
+
   return (
     <Card title="Voice" sub="text-to-speech engine">
       <div className="lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-8">
@@ -357,6 +362,38 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
           <div className="field-hint">
             Trim this persona’s loudness on top of the engine level. <code>0 dB</code> = no change.
             Drag the meter or use the arrow keys.
+          </div>
+
+          {/* Speech speed — per-persona rate multiplier (0.5–2.0×). */}
+          <div className="field mt-4">
+            <div className="flex items-baseline justify-between gap-3">
+              <Label>Speech speed</Label>
+              <span className="font-mono text-[15px] font-extrabold text-[var(--accent)] tabular-nums">{speed.toFixed(2)}×</span>
+            </div>
+            <input
+              type="range"
+              min={0.5}
+              max={2}
+              step={0.05}
+              value={speed}
+              disabled={!speedSupported}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => updateTts({ speed: Number(e.target.value) })}
+              aria-label="Speech speed multiplier"
+              className={cn(
+                'mt-1.5 w-full accent-[var(--accent)]',
+                !speedSupported && 'opacity-40',
+              )}
+            />
+            <div className="mt-1.5 flex justify-between text-[8px] font-bold tracking-[0.1em] text-muted tabular-nums">
+              <span>0.5× slower</span>
+              <span className="-translate-x-1/2">1.0×</span>
+              <span>2.0× faster</span>
+            </div>
+            <div className="field-hint">
+              {speedSupported
+                ? <>Slow down or speed up this persona on top of the engine pace. <code>1.00×</code> = no change.</>
+                : <>Not supported by this engine — only Piper, Kokoro and cloud honour speed.</>}
+            </div>
           </div>
         </div>
       </div>

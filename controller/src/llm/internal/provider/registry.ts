@@ -27,6 +27,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
+import { capabilitiesFor } from './capabilities.js';
 
 // Memoise built clients so we don't reconstruct a provider on every call.
 // Keyed by a signature that changes whenever provider/model/key changes, so a
@@ -156,10 +157,16 @@ export function resolveModelId(cfg: any): string {
 // Returns an AI SDK LanguageModel for the given config (the active primary leg
 // by default). Passing an explicit cfg — the fallback leg — reuses the same
 // client cache, since the signature below already keys on every field.
-export function languageModel(cfg: any = llmCfg()) {
+export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolean } = {}) {
   const id = resolveModelId(cfg);
   const baseUrlSig = cfg.provider === 'locca' ? loccaBaseUrl(cfg) : (cfg.baseUrl || '');
-  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}`;
+  // Construction-time no-think: only providers whose reasoning is set at build
+  // time (OpenRouter) need a distinct reasoning-disabled instance for forced-tool
+  // legs; everyone else suppresses per-call via providerOptions, so the same
+  // cached model serves both. Keyed into the sig so the two variants don't collide.
+  const constructionNoThink = opts.forceNoThink === true
+    && capabilitiesFor(cfg.provider).reasoningConstructionOnly === true;
+  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${constructionNoThink ? 'nt1' : 'nt0'}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;
@@ -199,7 +206,24 @@ export function languageModel(cfg: any = llmCfg()) {
     }
     case 'openrouter': {
       const provider = createOpenRouter({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
-      model = provider(id);
+      // OpenRouter reads `reasoning` from construction settings, not per-call
+      // providerOptions — so the toggle must be wired HERE or it's dead (we used
+      // to pass nothing → models reasoned by default). We MINIMISE rather than
+      // disable reasoning when suppressing: some OpenRouter models mandate it —
+      // OpenAI gpt-5/o-series 400 with "Reasoning is mandatory for this endpoint"
+      // on `enabled:false` — but every model accepts `effort:'minimal'`, which
+      // both satisfies the mandate AND drops thinking low enough that
+      // reasoning-rejects-tools models (mimo) can still emit forced tool calls.
+      // Suppress on forced-tool legs (constructionNoThink) and when the operator
+      // turns reasoning off; otherwise leave the model's default reasoning. This
+      // lets the DJ's free-text keep full reasoning while the picker runs minimal,
+      // so a reasoning model Just Works with no operator knowledge. The cache sig
+      // includes both the reasoning flag and the no-think flag, so each variant is
+      // built once.
+      const suppressReasoning = cfg.reasoning !== true || constructionNoThink;
+      model = suppressReasoning
+        ? provider(id, { extraBody: { reasoning: { effort: 'minimal' } } })
+        : provider(id);
       break;
     }
     case 'requesty': {

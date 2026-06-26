@@ -175,18 +175,33 @@ export async function speak(
   const soul = GLOBAL_VOICE_KINDS.has(kind)
     ? ''
     : String(settings.getEffectivePersona()?.soul || '').trim();
-  // Delivery pace tracks the daypart for live, persona-voiced segments.
-  // `speedScale` is a MULTIPLIER on the engine's configured speech rate (1.0 =
-  // unchanged), so it composes with — rather than overrides — an operator's
-  // global PIPER_SPEED/KOKORO_SPEED/CLOUD_TTS_SPEED. An explicit scale (e.g. a
-  // future talk-up-to-post line budget) always wins; otherwise persona-voiced
-  // kinds inherit the daypart energy. Persona-agnostic kinds (jingle/default)
-  // are skipped — jingles are pre-rendered offline, so a jingle cut at 2am must
-  // not carry 2am pacing into a noon playout. A daypart scale of 1.0
-  // (afternoon) composes to the config default, so the station is unchanged.
-  const scale = speedScale != null
+  // Delivery pace — a MULTIPLIER on the engine's configured speech rate (1.0 =
+  // unchanged), composed (not overridden) on top of an operator's global env
+  // base PIPER_SPEED/KOKORO_SPEED/CLOUD_TTS_SPEED. Three factors multiply:
+  //   engine base (settings.tts.speed[engine]) × persona (persona.tts.speed)
+  //   × daypart energy (energyForDaypart().speed)
+  // The engine base applies UNIVERSALLY — including jingles/default — mirroring
+  // how the env base already does; persona × daypart apply only to live,
+  // persona-voiced kinds (jingles are pre-rendered offline, so a jingle cut at
+  // 2am must not carry 2am pacing into a noon playout). An explicit `speedScale`
+  // (e.g. a future talk-up-to-post budget) replaces the persona/daypart live
+  // term but still composes with the engine base. Resolved-engine speed (post
+  // availability/key fallback) is used so the rate matches the engine that
+  // speaks — same approach as voiceGainDb(); the rare runtime-throw fallback
+  // reuses this scale. All factors default to 1.0, so a stock station is
+  // byte-for-byte unchanged. Final product clamped to [0.5, 2.0].
+  const ttsCfg: any = settings.get().tts || {};
+  const engineSpeed = settings.clampTtsSpeed(ttsCfg.speed?.[primary]);
+  const live = speedScale != null
     ? speedScale
-    : (GLOBAL_VOICE_KINDS.has(kind) ? undefined : energyForDaypart().speed);
+    : GLOBAL_VOICE_KINDS.has(kind)
+      ? 1
+      : (personaTts ? settings.clampTtsSpeed(personaTts.speed) : 1) * energyForDaypart().speed;
+  // Bounds-clamp the product but do NOT snap to the 0.05 grid — the daypart
+  // energy is a non-grid value, so at default knobs (all 1.0) the on-air scale
+  // stays exactly today's daypart figure. Snapping happens only on the stored
+  // per-engine / per-persona knobs (clampTtsSpeed above).
+  const scale = Math.min(settings.TTS_SPEED_MAX, Math.max(settings.TTS_SPEED_MIN, engineSpeed * live));
   const started = Date.now();
   const chars = (speakText || '').length;
   try {

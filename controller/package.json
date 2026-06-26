@@ -1,6 +1,6 @@
 {
   "name": "sub-wave-controller",
-  "version": "0.29.0",
+  "version": "0.30.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
     "lastfm-session": "tsx scripts/lastfm-session.ts",
     "test:embed": "tsx scripts/embedding-preflight-test.ts",
     "test:llm": "tsx scripts/llm-pure.test.ts",
-    "test": "tsx scripts/llm-pure.test.ts && tsx scripts/picker-recency-regression.ts && tsx scripts/listeners-status.test.ts && tsx scripts/lastfm-enrich.test.ts && tsx scripts/web-search-searxng.test.ts",
+    "test": "tsx scripts/llm-pure.test.ts && tsx scripts/picker-recency-regression.ts && tsx scripts/listeners-status.test.ts && tsx scripts/lastfm-enrich.test.ts && tsx scripts/web-search-searxng.test.ts && tsx scripts/request-dedup.test.ts",
     "lint": "eslint . && tsc --noEmit",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit"

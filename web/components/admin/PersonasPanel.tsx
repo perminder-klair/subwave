@@ -101,6 +101,7 @@ export default function PersonasPanel() {
               cloudProvider: p.tts?.cloudProvider ?? 'openai',
               voice: p.tts?.voice ?? 'bf_isabella',
               gainDb: typeof p.tts?.gainDb === 'number' ? p.tts.gainDb : 0,
+              speed: typeof p.tts?.speed === 'number' ? p.tts.speed : 1,
             },
             skills: Array.isArray(p.skills) ? p.skills : allSkills,
           })),
@@ -143,7 +144,7 @@ export default function PersonasPanel() {
           humour: DIAL_NEUTRAL, localColour: DIAL_NEUTRAL, warmth: DIAL_NEUTRAL, soul: '',
           language: '',
           avatar: '',
-          tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 0 },
+          tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 0, speed: 1 },
           skills: (data?.skills?.catalog || []).map(s => s.name),
         }],
       };
@@ -277,6 +278,8 @@ export default function PersonasPanel() {
               voice: voiceForSave(p.tts.engine, p.tts.voice.trim()),
               // Per-persona voice-level trim (dB). Server clamps to ±12.
               gainDb: p.tts.gainDb ?? 0,
+              // Per-persona speech-rate multiplier. Server clamps to 0.5–2.0×.
+              speed: p.tts.speed ?? 1,
             },
             skills: p.skills,
           })),

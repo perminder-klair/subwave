@@ -12,6 +12,7 @@ import * as dj from '../llm/dj.js';
 import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
+import { normGenre, genreMatches, preferGenre, inYearRange, preferEnergy } from './show-filter.js';
 
 const CANDIDATE_CAP = 18;
 const HISTORY_DEPTH = 4;
@@ -106,75 +107,11 @@ function hasMusicFilter(f: ShowFilter): boolean {
   return !!f && (!!f.genre || f.fromYear != null || f.toYear != null);
 }
 
-// Normalised genre token for fuzzy comparison — mirrors subsonic.resolveGenreName
-// so the show's resolved tag and a track's tag compare the same way.
-function normGenre(s: any): string {
-  return String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
-}
-
-// Per-track genre — from the track itself (Subsonic + slimTrack library sources
-// both carry it) or a library lookup. null when the track has no genre tag.
-function trackGenre(t: any): string | null {
-  if (t?.genre) return t.genre;
-  const rec = t?.id ? library.get(t.id) : null;
-  return rec?.genre ?? null;
-}
-
-// True when a track's genre matches the (already library-resolved) target genre.
-// Exact-normalised match, or substring either way — same shape as
-// subsonic.resolveGenreName, so "Hip-Hop" matches a "Hip Hop" tag etc.
-function genreMatches(t: any, targetNorm: string): boolean {
-  const g = trackGenre(t);
-  if (!g) return false;
-  const gn = normGenre(g);
-  return !!gn && (gn === targetNorm || gn.includes(targetNorm) || targetNorm.includes(gn));
-}
-
-// Hard-prefer tracks matching the show's genre (strict mode). Unlike the soft
-// energy/year leans, an untagged or off-genre track does NOT stay eligible —
-// the whole point of strict is a genre-pure pool. But it FALLS BACK to the
-// unfiltered set when no track matches, so a thin genre degrades to off-genre
-// rather than emptying the source (never-starve, mirrors preferEnergy/inYearRange).
-function preferGenre(tracks: any[], genreName?: string | null): any[] {
-  if (!genreName) return tracks;
-  const target = normGenre(genreName);
-  if (!target) return tracks;
-  const match = tracks.filter((t: any) => genreMatches(t, target));
-  return match.length ? match : tracks;
-}
-
-// Per-track energy band — from the track itself (library sources carry it) or a
-// library lookup (Subsonic sources don't). null when un-analysed.
-function trackEnergy(t: any): string | null {
-  if (t?.energy) return t.energy;
-  const rec = t?.id ? library.get(t.id) : null;
-  return rec?.energy ?? null;
-}
-
-// Soft-prefer tracks within [fromYear, toYear]. Unknown-year tracks are treated
-// as out-of-range here, but the caller falls back to the full set when the
-// in-range slice is empty, so it never hard-drops everything.
-function inYearRange(tracks: any[], f: { fromYear?: number | null; toYear?: number | null }): any[] {
-  if (f.fromYear == null && f.toYear == null) return tracks;
-  return tracks.filter((t: any) => {
-    const y = Number(t?.year);
-    if (!Number.isFinite(y)) return false;
-    if (f.fromYear != null && y < f.fromYear) return false;
-    if (f.toYear != null && y > f.toYear) return false;
-    return true;
-  });
-}
-
-// Soft-prefer tracks matching the show's energy band; unknown-energy tracks
-// stay eligible. Falls back to the full set when no track matches.
-function preferEnergy(tracks: any[], energy?: string): any[] {
-  if (!energy) return tracks;
-  const match = tracks.filter((t: any) => {
-    const e = trackEnergy(t);
-    return e == null || e === energy;
-  });
-  return match.length ? match : tracks;
-}
+// Genre / energy / era helpers (normGenre / genreMatches / preferGenre /
+// preferEnergy / inYearRange) live in ./show-filter.js — shared with the agent
+// picker's discovery tools so every path agrees on what "in-genre" / "in-era" /
+// "in-energy" means. Caller here keeps its own never-starve fallback for the
+// year window (the in-range-or-full pattern below).
 
 function notRecent(recentIds: Set<string>) {
   return (t: any) => t && t.id && !recentIds.has(t.id);

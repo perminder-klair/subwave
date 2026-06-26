@@ -360,7 +360,9 @@ router.post('/dj/queue-track', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'id and title are required' });
   }
   try {
-    const queuePosition = await queue.push({ track, requestedBy: 'studio' });
+    // Explicit operator action — bypass the request/AI dedup guard (#619) so a
+    // deliberate manual queue always fires, even for an already-queued track.
+    const queuePosition = await queue.push({ track, requestedBy: 'studio', allowDuplicate: true });
     res.json({
       ok: true,
       track: { title: track.title, artist: track.artist || null },

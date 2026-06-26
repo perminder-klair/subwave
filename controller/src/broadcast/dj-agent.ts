@@ -212,7 +212,9 @@ export function pickSystem() {
 
 You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}${musicLean}
 
-${dj.PICKER_CRITERIA}${settings.agentLanguageReminder(persona, 'the "say" link')}`;
+${dj.PICKER_CRITERIA}
+
+Finding candidates: prefer tools backed by the local library — searchLibrary, songsByGenre, tracksByMood, tracksByEnergy, randomSongs, and the audio/embedding similarity tools. similarSongs and topSongsByArtist use external data and often return little, so try them second. If a tool returns nothing, switch tools rather than retrying. If a tool returns only a few tracks (fewer than ~4), make one more discovery call with a different tool before choosing, so you pick from a real range rather than whatever the first call happened to surface.${settings.agentLanguageReminder(persona, 'the "say" link')}`;
 }
 
 function requestSystem() {
@@ -280,8 +282,19 @@ export const pickerAgent = defineAgent({
   maxSteps: 4,
   timeoutMs: agentDeadline,
   buildSystem: () => pickSystem(),
-  buildTools: ({ recentIds, recentKeys, recentArtists, audioWaypoint }) => {
-    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, recentArtists, audioWaypoint });
+  buildTools: ({ recentIds, recentKeys, audioWaypoint }) => {
+    // Resolve the active show live (a show that just came on air takes effect):
+    // for a strict show, hard genre + era locks the discovery tools enforce on
+    // candidates — not just the prompt. Era rides the same genreStrict flag (no
+    // separate era-strict toggle). Track length is enforced as an on-air cut,
+    // NOT a pick filter (issue #447), so no length cap is passed here.
+    const activeShow = settings.resolveActiveShow();
+    const strict = !!(activeShow?.genreStrict);
+    const genreLock = strict && activeShow?.genre ? activeShow.genre : null;
+    const eraLock = strict && (activeShow?.fromYear != null || activeShow?.toYear != null)
+      ? { fromYear: activeShow.fromYear, toYear: activeShow.toYear }
+      : null;
+    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, audioWaypoint, genreLock, eraLock });
     return { tools, extras: { seen } };
   },
 });
@@ -292,10 +305,11 @@ export const requestAgent = defineAgent({
   maxSteps: 4,
   timeoutMs: agentDeadline,
   buildSystem: () => requestSystem(),
-  // recentArtists deliberately empty — a request for a recently-played artist
-  // must still resolve. resolveReferences adds the web-backed reference resolver
-  // (request path only; no-op without a search provider) when the operator opts
-  // in via settings.llm.requestWebResolve.
+  // resolveReferences adds the web-backed reference resolver (request path only;
+  // no-op without a search provider) when the operator opts in via
+  // settings.llm.requestWebResolve. (Artists are no longer filtered on any pick
+  // path — see the buildPickerTools note — so a request for a recently-played
+  // artist resolves naturally.)
   buildTools: ({ recentIds }) => {
     const { tools, seen } = buildPickerTools({
       recentIds,
@@ -347,18 +361,19 @@ async function enqueuePick(queue, song, reason, source, link: string | null = nu
 async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLink: boolean; audioWaypoint?: number[] | null }): Promise<boolean> {
   await library.load();
   const windows = recencyWindowsForLibrary(library.stats().distinctArtists);
-  // Scale the recency windows to the tagged library's artist diversity: dense
-  // catalogues keep the long anti-repeat guard, while small-artist libraries
-  // do not exclude every real candidate before the picker sees it.
+  // Scale the track-recency window to the tagged library's artist diversity:
+  // dense catalogues keep the long anti-repeat guard, while small-artist
+  // libraries don't exclude every real candidate before the picker sees it.
+  // Artist-recency is intentionally NOT applied at the agent-tool layer — see
+  // the buildPickerTools note (the similarity tools cluster on the just-played
+  // artist, so an artist strip starved them).
   const { ids: recentIds, keys: recentKeys } = queue.recentlyPlayed(windows.trackHours);
   for (const id of queue.queuedIds()) recentIds.add(id);
-  const recentArtists = queue.recentArtistsSince(windows.artistHours);
 
   const { object, steps, toolCalls, extras } = await pickerAgent.run({
     messages: session.windowMessages(),
     recentIds,
     recentKeys,
-    recentArtists,
     // Sonic journey (Phase 2): registers the tracksTowardJourney tool, closed
     // over the run's current waypoint, so the agent path drifts the sound the
     // same way the pool path does. The event text tells the agent to use it.
@@ -492,7 +507,7 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     // state is already cleared (advanceRun) but the last waypoint — the
     // destination itself — is still the one to land on.
     const journeyClause = audioWaypoint && audioWaypoint.length
-      ? ' A sonic journey is active: call tracksTowardJourney and strongly prefer one of its tracks — each one carries the sound a step toward where this arc is heading. Never mention the journey on air.'
+      ? ' A sonic journey is active: call tracksTowardJourney and lean toward one of its tracks — each carries the sound a step toward where this arc is heading. If it comes back thin, pick via the library mood/genre/audio tools and keep the energy heading the same way. Never mention the journey on air.'
       : '';
     const linkClause = wantLink
       ? (djMode
@@ -582,13 +597,26 @@ async function runRequestViaAgent(queue: any, { requester }: { requester: string
     }
 
     const intro = typeof object.intro === 'string' ? object.intro.trim() : '';
-    await queue.push({
+    const pos = await queue.push({
       track: trackFields(song),
       requestedBy: requester,
       intent: 'listener request',
       introScript: intro || null,
       introKind: 'dj-speak',
     });
+    // A concurrent request already queued this exact track — push() deduped it
+    // (#619). Acknowledge honestly (no second back-to-back play, no false
+    // "coming up", no intro to air) and still append the line as the session
+    // reply so the request event isn't left without one.
+    if (pos === -1) {
+      const ack = queue.dedupAck(song.id);
+      session.appendTurn({
+        role: 'dj', kind: 'request',
+        text: ack,
+        meta: { trackId: song.id, requester, toolCalls },
+      });
+      return { ack, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null };
+    }
     session.appendTurn({
       role: 'dj', kind: 'request',
       text: intro || object.ack || `Queued "${song.title}".`,

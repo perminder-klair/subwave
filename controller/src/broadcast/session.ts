@@ -220,9 +220,9 @@ function softShift(ctx: any, nextKey: string): any {
 //
 // - `kind: 'play'` track turns ("▶ Title — Artist") — redundant. Every pick
 //   event already contains the current AND previous track ("Now playing X.
-//   Pick the next track (after Y)..."), and the picker can't choose recent
-//   artists anyway because they're filtered at the tool layer (recentArtists
-//   in buildPickerTools).
+//   Pick the next track (after Y)..."), and recently-played TRACKS are filtered
+//   at the tool layer (recentIds/recentKeys in buildPickerTools) so they can't
+//   be re-picked regardless.
 //
 // - `kind: 'sfx'` cue turns (queue.playSfx records the effect NAME as a turn) —
 //   an audio-production cue, not conversation. Left in, a bare effect name like
@@ -241,9 +241,9 @@ function softShift(ctx: any, nextKey: string): any {
 // thread continues, …"); left unbounded, ~15-20 accumulate in the window and the
 // agent reads its own running commentary as a mandate to keep the thread going
 // (one artist re-airing every ~1.2h). Keeping the last few preserves short-term
-// "what did I just play" memory without the momentum. Artist-recency is enforced
-// at the tool layer regardless (recentArtists in buildPickerTools), so trimming
-// these costs the picker no anti-repeat coverage.
+// "what did I just play" memory without the momentum. Track-recency is enforced
+// at the tool layer regardless (recentIds/recentKeys in buildPickerTools), so
+// trimming these costs the picker no track-level anti-repeat coverage.
 export function windowMessages() {
   if (!_session) return [];
   const raw: any[] = [];

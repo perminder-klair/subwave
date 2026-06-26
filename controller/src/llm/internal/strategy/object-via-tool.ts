@@ -21,7 +21,9 @@ export async function objectViaToolCall(
     execute: async (input: any) => { captured = input; return 'received'; },
   });
   const result = await generateText({
-    model: leg.model,
+    // Forced single-tool call — always no-think (the no-think model is identical
+    // to leg.model except for OpenRouter, where reasoning is fixed at build time).
+    model: leg.noThinkModel ?? leg.model,
     system,
     ...(messages ? { messages } : { prompt }),
     temperature,
