@@ -109,6 +109,7 @@ const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = {
 const SEARCH_PROVIDER_LABELS: Record<string, string> = {
   duckduckgo: 'DuckDuckGo (free, no key)',
   tavily: 'Tavily (paid web search)',
+  searxng: 'SearXNG (self-hosted)',
 };
 
 const searchProviderLabel = (id: string | undefined): string =>
@@ -162,12 +163,16 @@ interface LlmForm {
   requestWebResolve: boolean;
   agentTimeoutMs: number;
   pauseWhenEmpty: boolean;
+  dailyTokenCap: number;
+  budgetSoftPct: number;
+  exemptRequests: boolean;
   fallback: LlmFallbackForm;
 }
 
 interface SearchForm {
   provider: string;
   apiKey: string;
+  baseUrl: string;
 }
 
 interface EmbeddingEnrichmentForm {
@@ -224,6 +229,7 @@ const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
 interface FormState {
   jingleRatio: string;
   crossfadeDuration: string;
+  maxTrackSeconds: string;
   archive: ArchiveForm;
   stream: StreamForm;
   station: string;
@@ -264,6 +270,7 @@ interface SettingsData {
   values?: {
     jingleRatio?: number;
     crossfadeDuration?: number;
+    maxTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number };
     stream?: { opusEnabled?: boolean };
     station?: string;
@@ -329,7 +336,14 @@ interface SettingsData {
     locale?: StationLocale;
   };
   jingles?: JingleEntry[];
-  libraryStats?: { total?: number };
+  libraryStats?: {
+    total?: number;
+    withEmbedding?: number;
+    // Provenance of the text-embedding index: the model it was built with
+    // ("provider:model") and its vector dim. Null when the library was never
+    // embedded. Drives the chat-provider-switch warning in LlmSection.
+    embeddingMeta?: { model: string; dim: number } | null;
+  };
   tagger?: { running?: boolean };
   env?: Record<string, unknown>;
   streamOnAir?: boolean;
@@ -394,6 +408,7 @@ export default function SettingsPanel() {
     setForm({
       jingleRatio: String(v.jingleRatio ?? ''),
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
+      maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
       archive: {
         enabled: v.archive?.enabled ?? true,
         bitrate: String(v.archive?.bitrate ?? 128),
@@ -445,6 +460,9 @@ export default function SettingsPanel() {
         requestWebResolve: !!v.llm?.requestWebResolve,
         agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
         pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
+        dailyTokenCap: typeof v.llm?.dailyTokenCap === 'number' ? v.llm.dailyTokenCap : 0,
+        budgetSoftPct: typeof v.llm?.budgetSoftPct === 'number' ? v.llm.budgetSoftPct : 80,
+        exemptRequests: v.llm?.exemptRequests !== false,
         fallback: {
           enabled: !!v.llm?.fallback?.enabled,
           provider: v.llm?.fallback?.provider ?? 'ollama',
@@ -460,6 +478,7 @@ export default function SettingsPanel() {
         // GET /settings returns the apiKey redacted to 'set' | '' — that
         // round-trips through POST harmlessly (settings.update ignores 'set').
         apiKey: v.search?.apiKey ?? '',
+        baseUrl: v.search?.baseUrl ?? '',
       },
       embedding: {
         enabled: v.embedding?.enabled ?? true,
@@ -841,6 +860,43 @@ export default function SettingsPanel() {
                   <div className="field-hint">
                     Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
                     Saving flags a pending restart. Apply it with the Mixer card below.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Max track length" sub="keep long mixes out of rotation">
+                <div className="field">
+                  <Label>Maximum track length</Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      className="mono-num w-28"
+                      type="number"
+                      step={1}
+                      min={0}
+                      max={36000}
+                      value={form.maxTrackSeconds}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f => (f ? { ...f, maxTrackSeconds: e.target.value } : f))
+                      }
+                    />
+                    <span className="text-[12px] text-muted">sec (0 = no limit)</span>
+                    <Btn
+                      sm
+                      onClick={() =>
+                        saveSettings({ maxTrackSeconds: parseInt(form.maxTrackSeconds, 10) || 0 })
+                      }
+                      disabled={busy}
+                    >
+                      Save limit
+                    </Btn>
+                  </div>
+                  <div className="field-hint">
+                    The DJ won&rsquo;t auto-pick tracks longer than this — handy for hour-long
+                    album mixes or DJ sets that keep landing in rotation. Listener requests still
+                    play any length, and a show can override this with its own limit (0 there means
+                    unlimited). Applies on the next pick; no restart needed.
                   </div>
                 </div>
               </Card>
@@ -1784,6 +1840,11 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                     <div className="field-hint">
                       Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
                     </div>
+                    {cloudKeyVar === 'OPENAI_API_KEY' && (
+                      <div className="field-hint">
+                        This key is shared across LLM and Cloud TTS.
+                      </div>
+                    )}
                   </div>
                   <KeyStatus envVar={cloudKeyVar} present={!!data.env?.[cloudKeyVar]} />
                   <div className="mt-2 flex items-center gap-2">
@@ -1843,6 +1904,45 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   useEffect(() => { setPrimaryKeyTest(null); }, [form.llm.provider]);
   useEffect(() => { setFallbackKeyTest(null); }, [form.llm.fallback.provider]);
 
+  const [compatKeyInput, setCompatKeyInput] = useState('');
+  const [compatFallbackKeyInput, setCompatFallbackKeyInput] = useState('');
+  const [compatKeyTest, setCompatKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [compatFallbackKeyTest, setCompatFallbackKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [compatKeyTesting, setCompatKeyTesting] = useState(false);
+  const [compatFallbackKeyTesting, setCompatFallbackKeyTesting] = useState(false);
+  useEffect(() => { setCompatKeyInput(''); setCompatKeyTest(null); }, [form.llm.provider]);
+  useEffect(() => { setCompatFallbackKeyInput(''); setCompatFallbackKeyTest(null); }, [form.llm.fallback.provider]);
+
+  // Embeddings inherit settings.llm by default (embedding.provider === ''), so
+  // switching the CHAT provider silently changes the EMBEDDING model too — which
+  // invalidates an already-embedded library and breaks vector search until a
+  // re-embed (#dimension-mismatch). When the library is embedded and embeddings
+  // are inheriting, pin them to the index's actual model on a provider switch and
+  // surface a notice so the operator understands what happened (and can opt to
+  // re-embed on the new provider instead).
+  const [embedPinNotice, setEmbedPinNotice] = useState<{ model: string; dim: number; newProvider: string } | null>(null);
+  const changeLlmProvider = (v: string) => {
+    if (v === form.llm.provider) return;
+    const inheriting = (form.embedding.provider ?? '') === '';
+    const meta = data.libraryStats?.embeddingMeta;
+    const pin = inheriting && !!meta?.model;
+    setForm(f => {
+      if (!f) return f;
+      const next = { ...f, llm: { ...f.llm, provider: v } };
+      if (pin && meta) {
+        // Stored as "provider:model" (e.g. "ollama:nomic-embed-text"); split on
+        // the FIRST colon so ollama tags with their own colon (bge-m3:latest)
+        // keep the tag intact in the model field.
+        const i = meta.model.indexOf(':');
+        const pinProvider = i > 0 ? meta.model.slice(0, i) : '';
+        const pinModel = i > 0 ? meta.model.slice(i + 1) : meta.model;
+        if (pinProvider) next.embedding = { ...f.embedding, provider: pinProvider, model: pinModel };
+      }
+      return next;
+    });
+    if (pin && meta) setEmbedPinNotice({ model: meta.model, dim: meta.dim, newProvider: v });
+  };
+
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
@@ -1887,6 +1987,32 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     }
   };
 
+  const testCompatKey = async (
+    apiKey: string,
+    baseUrl: string,
+    model: string,
+    setTesting: (v: boolean) => void,
+    setResult: (r: { ok: boolean; message: string; latencyMs: number } | null) => void,
+  ) => {
+    if (!baseUrl.trim()) { setResult({ ok: false, message: 'Set a Base URL first', latencyMs: 0 }); return; }
+    if (!model.trim()) { setResult({ ok: false, message: 'Set a Model first', latencyMs: 0 }); return; }
+    setTesting(true);
+    setResult(null);
+    try {
+      const r = await adminFetch('/settings/llm/probe-compat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: apiKey.trim(), baseUrl: baseUrl.trim(), model: model.trim() }),
+      });
+      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
+      setResult(j);
+    } catch (e) {
+      setResult({ ok: false, message: errorMessage(e), latencyMs: 0 });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const save = async () => {
     await saveSettings({
       llm: {
@@ -1901,6 +2027,12 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         requestWebResolve: form.llm.requestWebResolve,
         agentTimeoutMs: form.llm.agentTimeoutMs,
         pauseWhenEmpty: form.llm.pauseWhenEmpty,
+        dailyTokenCap: form.llm.dailyTokenCap,
+        budgetSoftPct: form.llm.budgetSoftPct,
+        exemptRequests: form.llm.exemptRequests,
+        ...(form.llm.provider === 'openai-compatible' && compatKeyInput.trim()
+          ? { apiKey: compatKeyInput.trim() }
+          : {}),
         fallback: {
           enabled: form.llm.fallback.enabled,
           provider: form.llm.fallback.provider,
@@ -1909,6 +2041,9 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
           numCtx: form.llm.fallback.numCtx,
           baseUrl: form.llm.fallback.baseUrl,
           reasoning: form.llm.fallback.reasoning,
+          ...(form.llm.fallback.provider === 'openai-compatible' && compatFallbackKeyInput.trim()
+            ? { apiKey: compatFallbackKeyInput.trim() }
+            : {}),
         },
       },
     });
@@ -1922,6 +2057,12 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     if (fallbackKeyVar && fallbackKeyInput.trim()) {
       const ok = await saveKey(fallbackKeyVar, fallbackKeyInput);
       if (ok) { notify.ok('API key saved'); setFallbackKeyInput(''); refresh(); }
+    }
+    if (form.llm.provider === 'openai-compatible' && compatKeyInput.trim()) {
+      setCompatKeyInput('');
+    }
+    if (form.llm.fallback.provider === 'openai-compatible' && compatFallbackKeyInput.trim()) {
+      setCompatFallbackKeyInput('');
     }
   };
 
@@ -1966,7 +2107,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             </div>
             <Select
               value={form.llm.provider}
-              onValueChange={v => setForm(f => ({ ...f, llm: { ...f.llm, provider: v } }))}
+              onValueChange={changeLlmProvider}
             >
               <SelectTrigger className="max-w-[360px]"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -2039,6 +2180,43 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 <code>127.0.0.1</code>.
               </div>
             </div>
+          )}
+
+          {form.llm.provider === 'openai-compatible' && (
+            <>
+              <div className="field">
+                <Label>Bearer token</Label>
+                <Input
+                  type="password"
+                  value={compatKeyInput}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
+                  placeholder={(data.values?.llm as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">
+                  Optional — only needed when the server requires bearer authentication.
+                  Saved to <code>settings.json</code>, takes effect on next save.
+                </div>
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <Btn
+                  sm
+                  onClick={() =>
+                    testCompatKey(
+                      compatKeyInput || '',
+                      form.llm.baseUrl,
+                      form.llm.model,
+                      setCompatKeyTesting,
+                      setCompatKeyTest,
+                    )
+                  }
+                  disabled={compatKeyTesting || !form.llm.baseUrl.trim()}
+                >
+                  {compatKeyTesting ? 'Testing…' : 'Test connection'}
+                </Btn>
+              </div>
+              {compatKeyTest && <KeyTestResult result={compatKeyTest} />}
+            </>
           )}
 
           {form.llm.provider === 'openai-compatible' && (
@@ -2156,6 +2334,11 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   <div className="field-hint">
                     Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
                   </div>
+                  {keyVar === 'OPENAI_API_KEY' && (
+                    <div className="field-hint">
+                      This key is shared across LLM and Cloud TTS.
+                    </div>
+                  )}
                 </div>
                 <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
                 <div className="mt-2 flex items-center gap-2">
@@ -2265,6 +2448,44 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                     suffix, required for this provider.
                   </div>
                 </div>
+              )}
+
+              {form.llm.fallback.provider === 'openai-compatible' && (
+                <>
+                  <div className="field">
+                    <Label>Bearer token</Label>
+                    <Input
+                      type="password"
+                      value={compatFallbackKeyInput}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatFallbackKeyInput(e.target.value)}
+                      placeholder={(data.values?.llm?.fallback as unknown as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                      className="max-w-[360px]"
+                    />
+                    <div className="field-hint">
+                      Optional — only needed when the backup server requires bearer
+                      authentication. Saved to <code>settings.json</code>, takes effect on
+                      next save.
+                    </div>
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <Btn
+                      sm
+                      onClick={() =>
+                        testCompatKey(
+                          compatFallbackKeyInput || '',
+                          form.llm.fallback.baseUrl,
+                          form.llm.fallback.model,
+                          setCompatFallbackKeyTesting,
+                          setCompatFallbackKeyTest,
+                        )
+                      }
+                      disabled={compatFallbackKeyTesting || !form.llm.fallback.baseUrl.trim()}
+                    >
+                      {compatFallbackKeyTesting ? 'Testing…' : 'Test connection'}
+                    </Btn>
+                  </div>
+                  {compatFallbackKeyTest && <KeyTestResult result={compatFallbackKeyTest} />}
+                </>
               )}
 
               {form.llm.fallback.provider === 'ollama' && (
@@ -2486,11 +2707,112 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         </div>
       </Card>
 
+      <Card title="Daily token budget" sub="cap LLM spend per day">
+        <div className="field">
+          <Label>Daily token cap</Label>
+          <Input
+            type="number"
+            min={0}
+            step={10000}
+            value={form.llm.dailyTokenCap}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setForm(f => ({ ...f, llm: { ...f.llm, dailyTokenCap: Math.max(0, Number(e.target.value)) } }))
+            }
+            placeholder="0"
+            className="max-w-[200px]"
+          />
+          <div className="field-hint">
+            Hard ceiling on tokens the DJ may spend per day (UTC), counted from
+            the same usage stats as the token ticker. <strong>0 = unlimited</strong>
+            {' '}(the default &mdash; leave it off for a free local model). When set,
+            the DJ drops to the cheap picker and mutes optional segments as it
+            nears the cap, then stops calling the model entirely and coasts on the
+            auto playlist once it&rsquo;s hit &mdash; music never stops.
+          </div>
+        </div>
+
+        {form.llm.dailyTokenCap > 0 && (
+          <div className="field mt-4">
+            <Label>Soft threshold (%)</Label>
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              step={5}
+              value={form.llm.budgetSoftPct}
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({ ...f, llm: { ...f.llm, budgetSoftPct: Math.min(100, Math.max(0, Number(e.target.value))) } }))
+              }
+              placeholder="80"
+              className="max-w-[200px]"
+            />
+            <div className="field-hint">
+              At this percent of the cap the DJ enters the cheap tier: stateless
+              pool picks, no links or station IDs, no weather/news/etc. 0 or 100
+              disables the soft tier (straight to the hard cap).
+            </div>
+          </div>
+        )}
+
+        {form.llm.dailyTokenCap > 0 && (
+          <div className="mt-4 grid grid-cols-[1fr_auto] items-center gap-4">
+            <div>
+              <div className="text-[13px] font-bold">Always answer requests</div>
+              <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+                When on, listener requests are still answered by the AI DJ even
+                over the cap &mdash; a human asked, so honour it. When off,
+                requests over the cap fall back to plain library matching like
+                everything else.
+              </div>
+            </div>
+            <Seg
+              accent
+              value={form.llm.exemptRequests ? 'on' : 'off'}
+              options={[
+                { id: 'off', label: 'Off' },
+                { id: 'on', label: 'On' },
+              ]}
+              onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, exemptRequests: v === 'on' } }))}
+            />
+          </div>
+        )}
+      </Card>
+
       <SaveBar
         note={`Active model: ${data.llm?.active}. Applies to the next LLM call, no restart needed.`}
         busy={busy}
         onSave={save}
         saveLabel="Save LLM provider"
+      />
+
+      {/* Chat-provider switch would otherwise drag the inherited embedding model
+          with it and invalidate the already-embedded library. We pinned
+          embeddings to the index's model; this notice explains it and lets the
+          operator instead opt to re-embed on the new provider. The SAFE outcome
+          (keep the pin) is the default — only the explicit confirm switches. */}
+      <V3AlertDialog
+        open={embedPinNotice != null}
+        onOpenChange={(o) => { if (!o) setEmbedPinNotice(null); }}
+        title="Embeddings kept on your library's model"
+        description={embedPinNotice ? (
+          <>
+            Your library is embedded with <code>{embedPinNotice.model}</code> ({embedPinNotice.dim}-d
+            vectors). Embeddings were following the chat provider, so switching to{' '}
+            <strong>{llmProviderLabel(embedPinNotice.newProvider)}</strong> would have changed the
+            embedding model too — and a different model produces incompatible vectors, breaking
+            library / vibe search until you re-embed every track.
+            {' '}To keep search working, embeddings are now <strong>pinned</strong> to{' '}
+            <code>{embedPinNotice.model}</code> (Library tagger → Embedding). Switch embeddings to
+            the new provider instead? You’ll need to re-embed the whole library afterwards.
+          </>
+        ) : ''}
+        confirmLabel="switch embeddings too"
+        cancelLabel="keep pinned"
+        danger
+        onConfirm={() => {
+          setForm(f => (f ? { ...f, embedding: { ...f.embedding, provider: '', model: '' } } : f));
+          setEmbedPinNotice(null);
+        }}
       />
     </>
   );
@@ -2504,6 +2826,26 @@ interface SearchSectionProps extends SectionProps {
 function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: SearchSectionProps) {
   const [tavilyKeyTest, setTavilyKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
   const [tavilyKeyTesting, setTavilyKeyTesting] = useState(false);
+  const [testingSearxng, setTestingSearxng] = useState(false);
+  const [searxngTestResult, setSearxngTestResult] = useState<{ ok: boolean; results?: number; error?: string } | null>(null);
+
+  const handleTestSearxng = async () => {
+    setTestingSearxng(true);
+    setSearxngTestResult(null);
+    try {
+      const res = await adminFetch('/settings/search/test-searxng', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseUrl: form.search.baseUrl }),
+      });
+      const j = await res.json();
+      setSearxngTestResult(j);
+    } catch (err: any) {
+      setSearxngTestResult({ ok: false, error: err?.message || 'request failed' });
+    } finally {
+      setTestingSearxng(false);
+    }
+  };
 
   const save = () => saveSettings({
     search: {
@@ -2513,17 +2855,22 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
       ...(form.search.apiKey && form.search.apiKey !== 'set'
         ? { apiKey: form.search.apiKey }
         : {}),
+      ...(form.search.provider === 'searxng'
+        ? { baseUrl: form.search.baseUrl ?? '' }
+        : {}),
     },
   });
 
   const savedSearch = data.values?.search || {};
-  const providers = data.search?.providers || ['duckduckgo', 'tavily'];
+  const providers = data.search?.providers || ['duckduckgo', 'tavily', 'searxng'];
   const provider = form.search.provider;
   const searchDirty = provider !== savedSearch.provider
     || (provider === 'tavily'
         && form.search.apiKey
         && form.search.apiKey !== 'set'
-        && form.search.apiKey !== (savedSearch.apiKey || ''));
+        && form.search.apiKey !== (savedSearch.apiKey || ''))
+    || (provider === 'searxng'
+        && (form.search.baseUrl ?? '') !== (savedSearch.baseUrl || ''));
   const tavilyKeySet = form.search.apiKey === 'set' || !!data.env?.SEARCH_API_KEY;
 
   const testTavilyKey = async () => {
@@ -2597,7 +2944,9 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
             <div className="field-hint">
               {provider === 'duckduckgo'
                 ? 'DuckDuckGo Instant Answer, free and keyless. Useful for definitions and well-known entities; silent otherwise. The segment director treats silence as a valid outcome.'
-                : 'Tavily, paid web search with full results and an answer summary. Needs an API key.'}
+                : provider === 'tavily'
+                ? 'Tavily, paid web search with full results and an answer summary. Needs an API key.'
+                : 'SearXNG, self-hosted meta-search aggregating Google, Brave, DDG and more. No API key needed — just a running SearXNG instance.'}
             </div>
           </div>
 
@@ -2635,6 +2984,39 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
                 </Btn>
               </div>
               {tavilyKeyTest && <KeyTestResult result={tavilyKeyTest} />}
+            </>
+          )}
+
+          {provider === 'searxng' && (
+            <>
+              <div className="field">
+                <Label>SearXNG URL</Label>
+                <div className="flex gap-2">
+                  <Input
+                    type="url"
+                    placeholder="http://192.168.0.112:8888"
+                    value={form.search.baseUrl ?? ''}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, search: { ...f.search, baseUrl: e.target.value } }))
+                    }
+                    className="max-w-[360px]"
+                  />
+                  <Btn sm onClick={handleTestSearxng} disabled={!form.search?.baseUrl || testingSearxng}>
+                    {testingSearxng ? 'Testing…' : 'Test'}
+                  </Btn>
+                </div>
+                {searxngTestResult && (
+                  <p className={`text-sm ${searxngTestResult.ok ? 'text-green-600' : 'text-destructive'}`}>
+                    {searxngTestResult.ok
+                      ? `Connected · ${searxngTestResult.results} results`
+                      : `Failed: ${searxngTestResult.error}`}
+                  </p>
+                )}
+                <div className="field-hint">
+                  Self-hosted SearXNG instance. No API key required. Ensure JSON format is
+                  enabled in your SearXNG <code>settings.yml</code>.
+                </div>
+              </div>
             </>
           )}
         </div>

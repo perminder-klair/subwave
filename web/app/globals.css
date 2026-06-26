@@ -2676,6 +2676,10 @@ body::after {
     text-transform: uppercase;
     line-height: 1.7;
 }
+.admin-root .shell-nav .nav-foot .nav-foot-version {
+    opacity: 0.7;
+    letter-spacing: 0.12em;
+}
 
 @media (max-width: 860px) {
     .admin-root .shell-body {

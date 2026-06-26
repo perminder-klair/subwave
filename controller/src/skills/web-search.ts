@@ -122,24 +122,99 @@ export async function duckduckgoSearch(query: string): Promise<SearchResponse> {
   return { answer, results: results.slice(0, 5) };
 }
 
+// SearXNG meta-search backend. Self-hosted, no API key — needs only a
+// reachable base URL stored in settings.search.baseUrl. Threads optional
+// recency through to SearXNG's time_range param (artist-news callsite
+// passes 'week' to bias toward fresh content).
+export async function searxngSearch(
+  query: string,
+  recency?: 'day' | 'week' | 'month',
+): Promise<SearchResponse> {
+  const baseUrl = (settings.get().search?.baseUrl || '').trim();
+  if (!baseUrl) throw new Error('SearXNG baseUrl not configured');
+
+  const url = new URL('/search', baseUrl);
+  url.searchParams.set('q', query);
+  url.searchParams.set('format', 'json');
+  if (recency) url.searchParams.set('time_range', recency);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: {
+        'User-Agent': 'SUB-WAVE radio controller (https://github.com/perminder-klair/subwave)',
+      },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (!res.ok) throw new Error(`SearXNG HTTP ${res.status}`);
+  const data = await res.json();
+  return parseSearxngResponse(data);
+}
+
+// Pure parser for SearXNG's JSON response. Maps the SearXNG shape
+// (results[], answers[], infoboxes[]) onto SubWave's SearchResponse contract.
+// Exported separately from searxngSearch() so fixture-based tests can pin
+// the mapping without mocking fetch. Tolerant of malformed input — any
+// shape mismatch yields { answer: '', results: [] }.
+export function parseSearxngResponse(data: unknown): SearchResponse {
+  if (!data || typeof data !== 'object') return { answer: '', results: [] };
+  const d = data as Record<string, unknown>;
+
+  // answer slot: prefer first infobox content, else empty.
+  let answer = '';
+  const infoboxes = Array.isArray(d.infoboxes) ? d.infoboxes : [];
+  if (infoboxes.length > 0 && infoboxes[0] && typeof infoboxes[0] === 'object') {
+    const ib = infoboxes[0] as Record<string, unknown>;
+    if (typeof ib.content === 'string') answer = ib.content.trim();
+  }
+
+  const rawResults = Array.isArray(d.results) ? d.results : [];
+  const results: SearchResult[] = [];
+  for (const r of rawResults) {
+    if (!r || typeof r !== 'object') continue;
+    const rec = r as Record<string, unknown>;
+    const title = typeof rec.title === 'string' ? rec.title.trim() : '';
+    const content = typeof rec.content === 'string' ? rec.content.trim().slice(0, 300) : '';
+    if (!title || !content) continue;
+    results.push({ title, content });
+    if (results.length >= 10) break;
+  }
+
+  return { answer, results };
+}
+
 // Provider dispatcher — reads the active provider from live settings on every
 // call so admin-UI changes take effect immediately. Wraps the backend in a
-// 30-min memo so two ticks on the same artist don't issue two outbound calls.
-export async function searchWeb(query: string): Promise<SearchResponse> {
+// 30-min memo. Cache key includes recency so two callsites with different
+// recency hints don't share results.
+export async function searchWeb(
+  query: string,
+  opts?: { recency?: 'day' | 'week' | 'month' },
+): Promise<SearchResponse> {
   const provider = settings.get().search?.provider || 'duckduckgo';
-  const key = `${provider}:${query.toLowerCase()}`;
+  const recency = opts?.recency;
+  const key = `${provider}:${recency || ''}:${query.toLowerCase()}`;
   return memo(key, CACHE_TTL_MS, () => {
+    if (provider === 'searxng') return searxngSearch(query, recency);
     if (provider === 'tavily') return tavilySearch(query);
     return duckduckgoSearch(query);
   });
 }
 
-// True when the active search provider is usable right now. DDG always is;
-// Tavily needs a key (settings.search.apiKey, falling back to SEARCH_API_KEY).
-// Imported by the capability gate in skills/_agent.js and the tool registration
-// gate in llm/segment-tools.js so they agree on a single source of truth.
+// True when the active search provider is usable right now.
+//   duckduckgo: always ready (no key, no URL)
+//   tavily:     needs settings.search.apiKey, or SEARCH_API_KEY env
+//   searxng:    needs settings.search.baseUrl (no env fallback by design)
 export function searchReady(): boolean {
   const s = settings.get().search;
-  if (!s || s.provider === 'duckduckgo') return true;
-  return !!(s.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey);
+  const provider = s?.provider || 'duckduckgo';
+  if (provider === 'duckduckgo') return true;
+  if (provider === 'searxng') return !!(s?.baseUrl && s.baseUrl.trim());
+  // tavily (and any future keyed provider)
+  return !!(s?.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey);
 }

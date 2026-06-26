@@ -222,6 +222,14 @@ export default function AdminShell({ children }: AdminShellProps) {
             sub / wave
             <br />
             admin console
+            {process.env.NEXT_PUBLIC_APP_VERSION ? (
+              <>
+                <br />
+                <span className="nav-foot-version">
+                  v{process.env.NEXT_PUBLIC_APP_VERSION}
+                </span>
+              </>
+            ) : null}
           </div>
         </nav>
         <main className="min-w-0">

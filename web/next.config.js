@@ -1,7 +1,16 @@
+// Surface the package version (release-please bumps all three package.json
+// files in lockstep, so the web build version is the deployed station
+// version) to the client bundle for the admin console footer.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { version } = require('./package.json');
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
+  env: {
+    NEXT_PUBLIC_APP_VERSION: version,
+  },
   // The repo root carries its own package.json/package-lock.json (the
   // `sub-wave` CLI), so Next would otherwise infer the repo root as the
   // workspace root — destabilising module resolution and crashing the dev

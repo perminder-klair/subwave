@@ -23,6 +23,7 @@ import { energyForDaypart } from '../context.js';
 import { defineAgent } from '../llm/agent.js';
 import { buildPickerTools } from '../llm/tools.js';
 import { recordPick } from '../llm/log.js';
+import * as budget from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { recencyWindowsForLibrary } from '../music/recency.js';
 
@@ -164,7 +165,7 @@ export function runActive(): boolean {
 
 export const PICK_SCHEMA = z.object({
   id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
-  reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just label (e.g. "flow from previous, new artist")'),
+  reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just note what makes THIS pick a fresh step (new artist, a shift in energy/era/texture), not a vibe label you would recycle pick after pick (e.g. "new artist, lifts the energy", never a repeated "mellow reflective step")'),
   say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice (back-announce what just played, ease into what is coming, vary your opener); when the event says stay silent, set this to null'),
 });
 
@@ -280,7 +281,11 @@ export const pickerAgent = defineAgent({
   timeoutMs: agentDeadline,
   buildSystem: () => pickSystem(),
   buildTools: ({ recentIds, recentKeys, recentArtists, audioWaypoint }) => {
-    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, recentArtists, audioWaypoint });
+    // Length cap for autonomous picks: the active show's override or the
+    // station default (issue #447), resolved live at run time so a show that
+    // just came on air takes effect. null = no cap.
+    const maxDurationSec = settings.effectiveMaxTrackSec();
+    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, recentArtists, audioWaypoint, maxDurationSec });
     return { tools, extras: { seen } };
   },
 });
@@ -453,6 +458,17 @@ async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm:
 // optional between-track link) via the agent, falling back to the pool.
 export async function runTrackEvent(queue, ctx, { wantLink }) {
   return withTrace({ kind: 'track-event', wantLink }, async () => {
+    // Daily token cap. At the hard cap we make NO model call: skip the pick and
+    // let Liquidsoap fall through to the LLM-free auto playlist (music keeps
+    // playing). In the soft tier we still pick — the stream needs a next track —
+    // but cheaply: the stateless pool picker, and no link.
+    if (!budget.picksAllowed()) {
+      queue.log('budget', 'daily LLM token cap reached — coasting on the auto playlist');
+      return;
+    }
+    const cheap = budget.preferCheapPicker();
+    wantLink = wantLink && !cheap;
+
     const current = queue.current?.track || null;
     const previous = queue.history[0]?.track || null;
     const djMode = !!settings.getEffectivePersona()?.djMode;
@@ -467,8 +483,14 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     // the next track, they TEASE it — name the artist or capture its feel so
     // listeners know what's coming. The agent already knows its own pick when
     // it writes `say`, so this costs nothing extra.
+    // The "nod to it in the link" half only makes sense when a link is actually
+    // being written — gate it on wantLink so a silent mid-run pick ("Stay silent
+    // — no link this time.") doesn't also get told it may phrase something in a
+    // link that won't exist. The energy-direction guidance is pick selection, so
+    // it stays unconditional.
     const runClause = inRun
-      ? ` You're mid-run — keep the energy moving in the same direction (a touch ${energyForDaypart().speed >= 1 ? 'brisker' : 'mellower'}) and you may nod to it in the link, but never say tempo numbers.`
+      ? ` You're mid-run — keep the energy moving in the same direction (a touch ${energyForDaypart().speed >= 1 ? 'brisker' : 'mellower'}).`
+        + (wantLink ? ' You may nod to it in the link, but never say tempo numbers.' : '')
       : '';
     // Gated on the waypoint itself, not inRun: on a run's final pick the run
     // state is already cleared (advanceRun) but the last waypoint — the
@@ -494,7 +516,9 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
       + journeyClause;
     session.appendTurn({ role: 'event', kind: 'pick', text: eventText });
 
-    if (settings.get().llm?.pickerAgent && !breakerOpen()) {
+    // `!cheap`: in the soft budget tier we skip the multi-step agent tool-loop
+    // and go straight to the one-call pool picker below to stretch the budget.
+    if (settings.get().llm?.pickerAgent && !cheap && !breakerOpen()) {
       try {
         const queued = await pickViaAgent(queue, { wantLink, audioWaypoint });
         breakerSuccess();
@@ -527,6 +551,10 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
 // for every request path, so the agent only appends its own `dj` reply here.
 export async function runRequest(queue: any, ctx: any, { requester, text: _text }: { requester: string; text: string }) {
   if (!settings.get().llm?.pickerAgent || breakerOpen()) return null;
+  // Over the hard token cap the request agent only runs when requests are
+  // exempt (llm.exemptRequests, on by default); otherwise return null and let
+  // the caller's stateless matcher cascade handle it without a model call.
+  if (!budget.requestsAllowed()) return null;
 
   try {
     const out = await runRequestViaAgent(queue, { requester });

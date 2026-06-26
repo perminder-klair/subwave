@@ -76,6 +76,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
       values: {
         jingleRatio: s.jingleRatio,
         crossfadeDuration: s.crossfadeDuration,
+        maxTrackSeconds: s.maxTrackSeconds,
         archive: s.archive,
         stream: s.stream,
         station: s.station,
@@ -209,6 +210,7 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
       if (typeof value !== 'string') continue;
       const trimmed = value.trim();
       if (!trimmed) continue;
+      if (trimmed.length > 4096) continue;
       patch[key] = trimmed;
     }
     if (Object.keys(patch).length === 0) {
@@ -217,7 +219,8 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
     await saveSecrets(patch);
     res.json({ saved: Object.keys(patch) });
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    console.error('[settings/secrets]', err);
+    res.status(400).json({ error: 'Failed to save secrets' });
   }
 });
 
@@ -426,6 +429,37 @@ router.get('/settings/llm/discover', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /settings/llm/probe-compat — live probe for an openai-compatible key.
+// Body: { apiKey: string, baseUrl: string, model: string }
+// Always 200s with { ok, message, latencyMs }. The key is NOT saved.
+// ---------------------------------------------------------------------------
+router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
+  const { apiKey, baseUrl, model } = req.body || {};
+  if (!baseUrl || typeof baseUrl !== 'string' || !baseUrl.trim()) {
+    return res.status(400).json({ ok: false, message: 'baseUrl is required', latencyMs: 0 });
+  }
+  if (!model || typeof model !== 'string' || !model.trim()) {
+    return res.status(400).json({ ok: false, message: 'model is required', latencyMs: 0 });
+  }
+  const t0 = Date.now();
+  try {
+    const m = createOpenAI({
+      apiKey: (typeof apiKey === 'string' && apiKey.trim()) ? apiKey.trim() : 'no-key',
+      baseURL: baseUrl.trim().replace(/\/+$/, ''),
+    }).chat(model.trim());
+    await generateText({
+      model: m,
+      prompt: 'Reply with the single word OK.',
+      maxOutputTokens: 8,
+      abortSignal: AbortSignal.timeout(15000),
+    });
+    res.json({ ok: true, message: '✓ Bearer token accepted · model responded', latencyMs: Date.now() - t0 });
+  } catch (err: any) {
+    res.json({ ok: false, message: briefLlmError(err), latencyMs: Date.now() - t0 });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /settings/embedding/probe — test whether the configured (or supplied)
 // embedding endpoint can actually produce embeddings, surfacing the result
 // in the admin UI BEFORE a long tagging run instead of failing mid-job.
@@ -527,5 +561,46 @@ router.post('/themes', requireAdmin, async (req, res) => {
     res.json({ ok: true, themes });
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /settings/search/test-searxng — verifies the supplied SearXNG instance
+// answers a JSON query. Used by the admin UI's "Test" button so the operator
+// gets immediate feedback instead of waiting for a segment tick to fail.
+// Body { baseUrl: string }. Does not persist anything.
+// ---------------------------------------------------------------------------
+// Intentionally permits RFC-1918 targets — SearXNG is typically on the homelab LAN.
+router.post('/settings/search/test-searxng', requireAdmin, async (req, res) => {
+  try {
+    const baseUrl = String(req.body?.baseUrl || '').trim();
+    if (!baseUrl) return res.status(400).json({ ok: false, error: 'baseUrl required' });
+    if (!/^https?:\/\//i.test(baseUrl)) {
+      return res.status(400).json({ ok: false, error: 'baseUrl must start with http:// or https://' });
+    }
+
+    const url = new URL('/search', baseUrl);
+    url.searchParams.set('q', 'subwave connectivity probe');
+    url.searchParams.set('format', 'json');
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    let r: Response;
+    try {
+      r = await fetch(url, {
+        headers: { 'User-Agent': 'SUB-WAVE radio controller (probe)' },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!r.ok) return res.json({ ok: false, error: `HTTP ${r.status}` });
+    const data: any = await r.json();
+    const count = Array.isArray(data?.results) ? data.results.length : 0;
+    return res.json({ ok: true, results: count });
+  } catch (err: any) {
+    const msg = err?.name === 'AbortError' ? 'request timed out after 8s' : err?.message || 'fetch failed';
+    return res.json({ ok: false, error: msg });
   }
 });

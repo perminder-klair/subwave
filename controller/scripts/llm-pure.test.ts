@@ -7,7 +7,7 @@
 // node:assert-via-tsx style of scripts/picker-recency-regression.ts.
 
 import assert from 'node:assert/strict';
-import { stripThinking, extractJson, usageOf, isUnreachable, isTransient, isQuotaOrAuthError } from '../src/llm/internal/core/pure.js';
+import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError } from '../src/llm/internal/core/pure.js';
 import { withDeadline } from '../src/llm/internal/core/retry.js';
 import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
@@ -210,6 +210,30 @@ async function main() {
     assert.deepEqual(usageOf({ totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } }), { input: 10, output: 5, total: 15 });
     assert.deepEqual(usageOf({ usage: { promptTokens: 3, completionTokens: 2 } }), { input: 3, output: 2, total: 5 });
     assert.deepEqual(usageOf({}), { input: 0, output: 0, total: 0 });
+  });
+
+  // ---- daily token budget mode ----
+  console.log('budgetMode (daily LLM token cap → normal/soft/hard):');
+  await test('cap <= 0 (or non-finite) is always normal — the disabled default', () => {
+    assert.equal(budgetMode({ used: 9_999_999, cap: 0, softPct: 80 }), 'normal');
+    assert.equal(budgetMode({ used: 1, cap: -5, softPct: 80 }), 'normal');
+    assert.equal(budgetMode({ used: 1, cap: NaN, softPct: 80 }), 'normal');
+  });
+  await test('used below soft threshold is normal', () => {
+    assert.equal(budgetMode({ used: 700, cap: 1000, softPct: 80 }), 'normal');
+  });
+  await test('used at/above soft threshold but below cap is soft', () => {
+    assert.equal(budgetMode({ used: 800, cap: 1000, softPct: 80 }), 'soft');
+    assert.equal(budgetMode({ used: 999, cap: 1000, softPct: 80 }), 'soft');
+  });
+  await test('used at/above cap is hard', () => {
+    assert.equal(budgetMode({ used: 1000, cap: 1000, softPct: 80 }), 'hard');
+    assert.equal(budgetMode({ used: 5000, cap: 1000, softPct: 80 }), 'hard');
+  });
+  await test('softPct 0 or 100 disables the soft tier (straight to hard at cap)', () => {
+    assert.equal(budgetMode({ used: 999, cap: 1000, softPct: 0 }), 'normal');
+    assert.equal(budgetMode({ used: 999, cap: 1000, softPct: 100 }), 'normal');
+    assert.equal(budgetMode({ used: 1000, cap: 1000, softPct: 0 }), 'hard');
   });
 
   // ---- talk-within-the-intro budget ----

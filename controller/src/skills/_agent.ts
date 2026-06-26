@@ -378,7 +378,7 @@ export async function agenticTick(ctx) {
     // unoffered kind.
     if (seg.sfx) {
       if (sfxCatalog.some(s => s.name === seg.sfx)) {
-        await queue.playSfx(seg.sfx);
+        await queue.playSfx(seg.sfx, { underVoice: true });
       } else {
         queue.log('error', `Segment agent picked unknown sfx "${seg.sfx}" — dropping`);
       }
@@ -513,7 +513,7 @@ export async function runCapability(which, ctx) {
   const pick = object?.sfx;
   if (pick) {
     if (sfxCatalog.some(s => s.name === pick)) {
-      await queue.playSfx(pick);
+      await queue.playSfx(pick, { underVoice: true });
     } else {
       queue.log('error', `Segment agent picked unknown sfx "${pick}" — dropping`);
     }
@@ -533,10 +533,15 @@ export function skillCatalog() {
     // carry their requiresKey/keyUrl statically in CAPABILITIES (none today).
     let requiresKey = c.requiresKey || null;
     let keyUrl = c.keyUrl || null;
+    let hint: string | null = null;
     if (c.kind === 'web-search') {
       if (searchProvider === 'tavily') {
         requiresKey = 'SEARCH_API_KEY';
         keyUrl = 'https://app.tavily.com/home';
+      } else if (searchProvider === 'searxng') {
+        requiresKey = null;
+        keyUrl = null;
+        hint = 'SearXNG self-hosted meta-search. Configure base URL in admin → Settings → Search.';
       } else {
         requiresKey = null;
         keyUrl = null;
@@ -559,6 +564,7 @@ export function skillCatalog() {
       ready: typeof c.ready === 'function' ? !!c.ready() : true,
       requiresKey,
       keyUrl,
+      hint,
       // News feed surfaced so /admin/skills can show/edit the current feed
       // without a second fetch. Undefined on every other capability.
       feed: c.feed || null,

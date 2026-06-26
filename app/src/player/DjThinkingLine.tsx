@@ -4,29 +4,29 @@
 
 import { useMemo } from 'react';
 import { Pressable, Text } from 'react-native';
-import { turnClass, turnText, type TurnDisplayClass } from '@/lib/sessionFeed';
+import { selectThinkingTurn, turnClass, turnText } from '@/lib/sessionFeed';
 import type { SessionTurn } from '@/lib/types';
 import { useTheme } from '@/theme/ThemeContext';
 
-const THINKING_CLASSES = new Set<TurnDisplayClass>(['voice', 'dj']);
 const MARKER: Record<string, string> = { voice: '♪', dj: '◇' };
 
 export interface DjThinkingLineProps {
   feed: SessionTurn[] | undefined;
   enabled: boolean;
+  // Subsonic id of the track on air. A `dj`/pick turn's `meta.trackId` is the
+  // *picked* (next) song, so we skip pick reasoning that isn't about the
+  // current track — otherwise the line shows the upcoming pick (#546).
+  currentTrackId?: string | null;
   onOpenBooth: () => void;
 }
 
-export default function DjThinkingLine({ feed, enabled, onOpenBooth }: DjThinkingLineProps) {
+export default function DjThinkingLine({ feed, enabled, currentTrackId = null, onOpenBooth }: DjThinkingLineProps) {
   const { colors } = useTheme();
-  const latest = useMemo<SessionTurn | null>(() => {
-    if (!feed?.length) return null;
-    for (let i = feed.length - 1; i >= 0; i--) {
-      const turn = feed[i];
-      if (turn && THINKING_CLASSES.has(turnClass(turn)) && turn.text) return turn;
-    }
-    return null;
-  }, [feed]);
+  // The DJ turn relevant to what's ON AIR now — see selectThinkingTurn (#546).
+  const latest = useMemo<SessionTurn | null>(
+    () => selectThinkingTurn(feed, currentTrackId),
+    [feed, currentTrackId],
+  );
 
   if (!enabled || !latest) return null;
 

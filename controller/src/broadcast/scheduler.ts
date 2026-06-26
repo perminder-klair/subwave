@@ -10,12 +10,15 @@ import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
+import * as settings from '../settings.js';
+import { durationSeconds, artistKey } from '../music/recency.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
 import * as session from './session.js';
 import { cleanupOldVoices } from '../audio/tts.js';
 import { shouldFire } from './dj-gate.js';
 import { djCallsAllowed } from './listeners.js';
+import { optionalSegmentsAllowed } from './dj-budget.js';
 import { agenticTick, skillCatalog } from '../skills/_agent.js';
 import { withTrace } from '../observability/events.js';
 
@@ -25,6 +28,7 @@ const PLAYLIST_WEIGHT = 6;       // mood-matched Navidrome playlists
 const RECENT_WEIGHT = 4;         // recently-added albums
 const FREQUENT_WEIGHT = 4;       // frequent / scrobble-favourite albums
 const STARRED_WEIGHT = 6;        // hand-starred tracks
+const AUTO_MAX_PER_ARTIST = 2;   // cap any one artist's share of the fallback pool
 
 function shuffle<T>(arr: T[]): T[] {
   return [...arr].sort(() => Math.random() - 0.5);
@@ -57,15 +61,32 @@ async function refreshAutoPlaylistInner() {
   // Match the auto-DJ picker's window (dj-agent.pickViaAgent) — 12h.
   const recent = queue.recentlyPlayedIds(12);
 
+  // Station-level length cap (issue #447). The auto playlist is the coarse,
+  // slow-refreshing Liquidsoap fallback that airs whenever the live queue runs
+  // dry — show overrides don't apply here, so we use the station default only.
+  const maxDurationSec = settings.effectiveMaxTrackSec(null);
+
   const pool: any[] = [];
   const fromSource: Record<string, number> = { mood: 0, playlist: 0, recent: 0, frequent: 0, starred: 0, random: 0 };
+  // Cap each artist's share of the pool. Without this, a deep-catalogue artist
+  // (many mood-tagged / starred / frequent tracks) can dominate the fallback
+  // playlist, so whenever Liquidsoap coasts on auto.m3u the same artist clusters
+  // on air — e.g. one artist's tracks airing 7× purely from this source.
+  const artistInPool = new Map<string, number>();
   const take = (label: string, items: any[], cap: number) => {
     let n = 0;
     for (const t of items) {
       if (n >= cap || pool.length >= TARGET_POOL) break;
       if (!t?.id || recent.has(t.id) || pool.find((p: any) => p.id === t.id)) continue;
+      const ak = artistKey(t);
+      if (ak && (artistInPool.get(ak) || 0) >= AUTO_MAX_PER_ARTIST) continue;
+      if (maxDurationSec) {
+        const d = durationSeconds(t);
+        if (d != null && d > maxDurationSec) continue;
+      }
       pool.push({ ...t, _source: label });
       fromSource[label]++;
+      if (ak) artistInPool.set(ak, (artistInPool.get(ak) || 0) + 1);
       n++;
     }
   };
@@ -169,6 +190,7 @@ async function hourlyCheck() {
   }
   if (!shouldFire('hourly')) return;
   if (!djCallsAllowed()) return;  // nobody listening — stay on the auto playlist
+  if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments
   try {
     await runHourlyCheck();
   } catch (err) {
@@ -208,6 +230,7 @@ export async function runLink() {
 
 async function skillsTick() {
   if (!djCallsAllowed()) return;  // nobody listening — skip the segment director
+  if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments
   try {
     await withTrace({ kind: 'segment' }, async () => {
       const ctx = await getFullContext();
@@ -240,6 +263,7 @@ export async function runStationId() {
 async function stationId() {
   if (!shouldFire('stationId')) return;
   if (!djCallsAllowed()) return;  // nobody listening — skip the ident
+  if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments
   try {
     await runStationId();
   } catch (err) {

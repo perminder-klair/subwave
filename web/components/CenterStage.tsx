@@ -219,7 +219,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
       </div>
 
       {has && (
-        <DjThinkingLine feed={feed} enabled={djLineOn} buddyOn={boothBuddyOn} onOpenBooth={onOpenBooth} />
+        <DjThinkingLine feed={feed} enabled={djLineOn} currentTrackId={subsonicId} buddyOn={boothBuddyOn} onOpenBooth={onOpenBooth} />
       )}
     </div>
   );

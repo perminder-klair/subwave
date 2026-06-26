@@ -8,6 +8,7 @@
 import { appendFile } from 'node:fs/promises';
 import { STATE_DIR } from '../../../config.js';
 import { logEvent, cap } from '../../../observability/events.js';
+import { addDailyUsage } from './budget.js';
 
 const MAX_CALLS = 120;
 export const recentCalls: any[] = [];
@@ -25,7 +26,11 @@ export function record(call: any) {
   recentCalls.unshift(call);
   if (recentCalls.length > MAX_CALLS) recentCalls.length = MAX_CALLS;
   // Mirror summarizeLlm: only successful calls that report usage contribute.
-  if (call.ok && call.usage?.total) lifetimeTokens += call.usage.total;
+  if (call.ok && call.usage?.total) {
+    lifetimeTokens += call.usage.total;
+    // Same guard feeds today's tally — the number the daily token cap enforces.
+    addDailyUsage(call.usage.total);
+  }
 
   // Durable, trace-correlated event. The ring buffer above is lost on restart
   // and uncorrelated; this lands on the unified events.jsonl timeline.
