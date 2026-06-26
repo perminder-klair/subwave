@@ -17,6 +17,9 @@ import { Label } from '../ui/label';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../ui/select';
+import {
+  Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem,
+} from '../ui/command';
 import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
 import { AiFill } from './AiFill';
 import { cn } from '../../lib/cn';
@@ -1203,6 +1206,102 @@ function formatGainDb(v: number): string {
   return `${sign}${Math.abs(v).toFixed(1)} dB`;
 }
 
+/* ── ModelCombobox ───────────────────────────────────────────────────── */
+// Searchable model picker. Renders as a trigger button that shows the selected
+// model (or placeholder). Clicking opens an inline popover with a text filter
+// + scrollable list built on cmdk. Falls back to a plain Input when no models
+// are available (discovery hasn't run / returned nothing).
+
+interface ModelComboboxProps {
+  models: string[];
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  className?: string;
+}
+
+function ModelCombobox({ models, value, onChange, placeholder = 'Select a model', disabled, className }: ModelComboboxProps) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+        setSearch('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const filtered = search.trim()
+    ? models.filter(m => m.toLowerCase().includes(search.toLowerCase()))
+    : models;
+
+  const displayValue = value || placeholder;
+
+  return (
+    <div ref={ref} className={cn('relative max-w-[360px] w-full', className)}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => { setOpen(o => !o); setSearch(''); }}
+        className={cn(
+          'flex h-9 w-full items-center justify-between gap-2 border border-ink bg-bg px-3 text-sm',
+          'focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed',
+          open && 'ring-1 ring-ink',
+        )}
+      >
+        <span className={cn('truncate', !value && 'text-muted')}>{displayValue}</span>
+        <svg width="12" height="12" viewBox="0 0 12 12" className="shrink-0 text-muted" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <path d="M2 4l4 4 4-4" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-1 w-full min-w-[240px] border border-ink bg-bg shadow-drawer">
+          <Command shouldFilter={false}>
+            <CommandInput
+              placeholder="Filter models…"
+              value={search}
+              onValueChange={setSearch}
+            />
+            <CommandList>
+              {filtered.length === 0
+                ? <CommandEmpty>No models match.</CommandEmpty>
+                : (
+                  <CommandGroup>
+                    {filtered.map(m => (
+                      <CommandItem
+                        key={m}
+                        value={m}
+                        onSelect={() => { onChange(m); setOpen(false); setSearch(''); }}
+                        data-selected={m === value}
+                      >
+                        <span className="truncate">{m}</span>
+                        {m === value && (
+                          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
+                            <path d="M2 6.5l3.5 3.5 5.5-6" />
+                          </svg>
+                        )}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                )
+              }
+            </CommandList>
+          </Command>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Compact per-engine voice-level control: a labelled range slider + live readout,
 // writing into form.tts.gainDb[engineId]. Dropped into each engine's config panel.
 function TtsGainField({
@@ -1713,30 +1812,12 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 <Label>Model</Label>
                 <div className="flex items-stretch gap-2">
                   {ttsDiscovery.models.length > 0 ? (
-                    <Select
-                      value={
-                        ttsDiscovery.models.includes(form.tts.cloud.model)
-                          ? form.tts.cloud.model
-                          : form.tts.cloud.model
-                            ? '__current__'
-                            : ''
-                      }
-                      onValueChange={v => {
-                        if (v !== '__current__') setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: v } } }));
-                      }}
-                    >
-                      <SelectTrigger className="max-w-[360px]"><SelectValue placeholder="Select a model" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          {form.tts.cloud.model && !ttsDiscovery.models.includes(form.tts.cloud.model) && (
-                            <SelectItem value="__current__" disabled>{form.tts.cloud.model} (current)</SelectItem>
-                          )}
-                          {ttsDiscovery.models.map(m => (
-                            <SelectItem key={m} value={m}>{m}</SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
+                    <ModelCombobox
+                      models={ttsDiscovery.models}
+                      value={form.tts.cloud.model}
+                      onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: v } } }))}
+                      placeholder="Select a model"
+                    />
                   ) : (
                     <Input
                       value={form.tts.cloud.model}
@@ -1774,10 +1855,6 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                               : 'e.g. "gpt-4o-mini-tts" (OpenAI) or "eleven_flash_v2_5" (ElevenLabs).')}
                 </div>
               </div>
-              {!isCompat && (() => {
-                const kv = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
-                return <KeyStatus envVar={kv} present={!!data.env?.[kv]} />;
-              })()}
               {(() => {
                 const provVoices = CLOUD_VOICES[form.tts.cloud.provider as keyof typeof CLOUD_VOICES] || [];
                 const voice = form.tts.cloud.voice.trim();
@@ -1883,6 +1960,10 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               </div>
             )}
             <TtsGainField engineId="cloud" form={form} setForm={setForm} />
+            {!isCompat && (() => {
+              const kv = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
+              return <KeyStatus envVar={kv} present={!!data.env?.[kv]} />;
+            })()}
           </div>
           );
         })()}
@@ -2319,30 +2400,12 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             <Label>Model</Label>
             <div className="flex items-stretch gap-2">
               {primaryDiscovery.models.length > 0 ? (
-                <Select
-                  value={
-                    primaryDiscovery.models.includes(form.llm.model)
-                      ? form.llm.model
-                      : form.llm.model
-                        ? `__current__`
-                        : ''
-                  }
-                  onValueChange={v => {
-                    if (v !== '__current__') setForm(f => ({ ...f, llm: { ...f.llm, model: v } }));
-                  }}
-                >
-                  <SelectTrigger className="max-w-[360px]"><SelectValue placeholder="Select a model" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {form.llm.model && !primaryDiscovery.models.includes(form.llm.model) && (
-                        <SelectItem value="__current__" disabled>{form.llm.model} (current)</SelectItem>
-                      )}
-                      {primaryDiscovery.models.map(m => (
-                        <SelectItem key={m} value={m}>{m}</SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
+                <ModelCombobox
+                  models={primaryDiscovery.models}
+                  value={form.llm.model}
+                  onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, model: v } }))}
+                  placeholder="Select a model"
+                />
               ) : (
                 <Input
                   value={form.llm.model}
@@ -2600,30 +2663,12 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 <Label>Backup model</Label>
                 <div className="flex items-stretch gap-2">
                   {fallbackDiscovery.models.length > 0 ? (
-                    <Select
-                      value={
-                        fallbackDiscovery.models.includes(form.llm.fallback.model)
-                          ? form.llm.fallback.model
-                          : form.llm.fallback.model
-                            ? `__current__`
-                            : ''
-                      }
-                      onValueChange={v => {
-                        if (v !== '__current__') setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, model: v } } }));
-                      }}
-                    >
-                      <SelectTrigger className="max-w-[360px]"><SelectValue placeholder="Select a model" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          {form.llm.fallback.model && !fallbackDiscovery.models.includes(form.llm.fallback.model) && (
-                            <SelectItem value="__current__" disabled>{form.llm.fallback.model} (current)</SelectItem>
-                          )}
-                          {fallbackDiscovery.models.map(m => (
-                            <SelectItem key={m} value={m}>{m}</SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
+                    <ModelCombobox
+                      models={fallbackDiscovery.models}
+                      value={form.llm.fallback.model}
+                      onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, model: v } } }))}
+                      placeholder="Select a model"
+                    />
                   ) : (
                     <Input
                       value={form.llm.fallback.model}
@@ -3347,30 +3392,12 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
             <Label>Model</Label>
             <div className="flex items-stretch gap-2">
               {embedDiscovery.models.length > 0 ? (
-                <Select
-                  value={
-                    embedDiscovery.models.includes(e.model)
-                      ? e.model
-                      : e.model
-                        ? `__current__`
-                        : ''
-                  }
-                  onValueChange={v => {
-                    if (v !== '__current__') setForm(f => ({ ...f, embedding: { ...f.embedding, model: v } }));
-                  }}
-                >
-                  <SelectTrigger className="max-w-[360px]"><SelectValue placeholder="Select a model" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {e.model && !embedDiscovery.models.includes(e.model) && (
-                        <SelectItem value="__current__" disabled>{e.model} (current)</SelectItem>
-                      )}
-                      {embedDiscovery.models.map(m => (
-                        <SelectItem key={m} value={m}>{m}</SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
+                <ModelCombobox
+                  models={embedDiscovery.models}
+                  value={e.model}
+                  onChange={v => setForm(f => ({ ...f, embedding: { ...f.embedding, model: v } }))}
+                  placeholder="Select a model"
+                />
               ) : (
                 <Input
                   value={e.model}
