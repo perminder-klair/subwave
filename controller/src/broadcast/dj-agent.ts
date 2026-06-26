@@ -483,8 +483,14 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     // the next track, they TEASE it — name the artist or capture its feel so
     // listeners know what's coming. The agent already knows its own pick when
     // it writes `say`, so this costs nothing extra.
+    // The "nod to it in the link" half only makes sense when a link is actually
+    // being written — gate it on wantLink so a silent mid-run pick ("Stay silent
+    // — no link this time.") doesn't also get told it may phrase something in a
+    // link that won't exist. The energy-direction guidance is pick selection, so
+    // it stays unconditional.
     const runClause = inRun
-      ? ` You're mid-run — keep the energy moving in the same direction (a touch ${energyForDaypart().speed >= 1 ? 'brisker' : 'mellower'}) and you may nod to it in the link, but never say tempo numbers.`
+      ? ` You're mid-run — keep the energy moving in the same direction (a touch ${energyForDaypart().speed >= 1 ? 'brisker' : 'mellower'}).`
+        + (wantLink ? ' You may nod to it in the link, but never say tempo numbers.' : '')
       : '';
     // Gated on the waypoint itself, not inRun: on a run's final pick the run
     // state is already cleared (advanceRun) but the last waypoint — the
