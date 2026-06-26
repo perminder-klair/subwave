@@ -14,7 +14,7 @@ import * as subsonic from '../../../music/subsonic.js';
 import * as library from '../../../music/library.js';
 import * as embeddings from '../../../music/embeddings.js';
 import { filterPickerCandidates, durationSeconds } from '../../../music/recency.js';
-import { preferGenre } from '../../../music/genre-match.js';
+import { preferGenre, preferEra } from '../../../music/show-filter.js';
 import { searchWeb, searchReady } from '../../../skills/web-search.js';
 import { identifyTrackFromText } from '../prompts/request.js';
 
@@ -87,6 +87,7 @@ export function buildPickerTools({
   resolveReferences = false,
   maxDurationSec = null,
   genreLock = null,
+  eraLock = null,
 }: {
   recentIds?: Set<string>;
   recentKeys?: Set<string>;        // lowercased "title|artist" — backfilled entries lack ids
@@ -96,6 +97,11 @@ export function buildPickerTools({
   // the prompt — mirroring the pool picker's strict mode. null = no lock.
   // Deliberately NOT set on the request path: an explicit listener ask wins.
   genreLock?: string | null;
+  // Hard era (decade/year window) constraint, applied only for a strict show
+  // (gated on the same genreStrict flag — there's no separate era-strict toggle).
+  // When set, candidates are year-filtered (preferEra, never-starve) before
+  // recency + cap. null / both-bounds-null = no era lock.
+  eraLock?: { fromYear?: number | null; toYear?: number | null } | null;
   // Hard length cap (seconds) for autonomous picks — the active show's override
   // or the station default (issue #447). null = no cap. Deliberately NOT set on
   // the request path (djAgentRequest) so an explicit listener ask for a long
@@ -121,12 +127,13 @@ export function buildPickerTools({
   // seen map still accumulates across the whole loop, so the agent's id space
   // grows with each tool call regardless.
   const collect = (list: any, cap = 8) => {
-    // Strict-genre show: filter to in-genre tracks BEFORE recency + cap, so the
-    // 8 the agent sees are genre-pure. preferGenre never-starves (falls back to
-    // the full list when a tool returns no in-genre match), so a thin genre
-    // degrades to off-genre rather than dead air — same contract as the pool.
+    // Strict show: filter candidates BEFORE recency + cap, so the 8 the agent
+    // sees are genre-/era-pure. Both never-starve (fall back to the full list
+    // when a tool returns no match), so a thin genre/era degrades to off-target
+    // rather than dead air — same contract as the pool path.
     let pool = shuffle((list || []) as any[]);
     if (genreLock) pool = preferGenre(pool, genreLock);
+    if (eraLock) pool = preferEra(pool, eraLock);
     const accepted = filterPickerCandidates(pool, {
       recentIds,
       recentKeys,

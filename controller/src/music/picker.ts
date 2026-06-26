@@ -12,7 +12,7 @@ import * as dj from '../llm/dj.js';
 import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
-import { normGenre, genreMatches, preferGenre } from './genre-match.js';
+import { normGenre, genreMatches, preferGenre, inYearRange } from './show-filter.js';
 
 const CANDIDATE_CAP = 18;
 const HISTORY_DEPTH = 4;
@@ -108,7 +108,7 @@ function hasMusicFilter(f: ShowFilter): boolean {
 }
 
 // Genre-matching helpers (normGenre / genreMatches / preferGenre) live in
-// ./genre-match.js — shared with the agent picker's discovery tools so both
+// ./show-filter.js — shared with the agent picker's discovery tools so both
 // paths agree on what "in-genre" means.
 
 // Per-track energy band — from the track itself (library sources carry it) or a
@@ -119,19 +119,9 @@ function trackEnergy(t: any): string | null {
   return rec?.energy ?? null;
 }
 
-// Soft-prefer tracks within [fromYear, toYear]. Unknown-year tracks are treated
-// as out-of-range here, but the caller falls back to the full set when the
-// in-range slice is empty, so it never hard-drops everything.
-function inYearRange(tracks: any[], f: { fromYear?: number | null; toYear?: number | null }): any[] {
-  if (f.fromYear == null && f.toYear == null) return tracks;
-  return tracks.filter((t: any) => {
-    const y = Number(t?.year);
-    if (!Number.isFinite(y)) return false;
-    if (f.fromYear != null && y < f.fromYear) return false;
-    if (f.toYear != null && y > f.toYear) return false;
-    return true;
-  });
-}
+// inYearRange (decade window) lives in ./show-filter.js — shared with the agent
+// picker's discovery tools so both paths agree on what "in-era" means. Caller
+// here keeps its own never-starve fallback (the in-range-or-full pattern below).
 
 // Soft-prefer tracks matching the show's energy band; unknown-energy tracks
 // stay eligible. Falls back to the full set when no track matches.
