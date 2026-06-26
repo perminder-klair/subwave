@@ -159,6 +159,40 @@ function normalizeTtsGainMap(raw: any): Record<string, number> {
   return out;
 }
 
+// DJ-voice speech-rate multiplier. A per-engine speed corrects an engine's
+// out-of-the-box pace (Piper/Kokoro/cloud each read at a different default);
+// a per-persona speed stacks on top as a character trim (a laid-back host
+// slower than a hyper morning one). Both compose multiplicatively with the
+// daypart energy already carried in audio/tts.ts, on top of the env base
+// (PIPER_SPEED/KOKORO_SPEED/CLOUD_TTS_SPEED) — see audio/tts.ts:speak(). A
+// MULTIPLIER where 1.0 = no change (today's behaviour); lower = slower. Only
+// Piper/Kokoro/cloud honour it — chatterbox/pocket-tts workers ignore speed,
+// so their map entries are inert (kept for symmetry with the gain map).
+export const TTS_SPEED_MIN = 0.5;
+export const TTS_SPEED_MAX = 2.0;
+export const TTS_SPEED_DEFAULT = 1.0;
+
+// Coerce any value to a clean speed multiplier: finite number, clamped to
+// [TTS_SPEED_MIN, TTS_SPEED_MAX], rounded to 0.05. Garbage / non-finite →
+// 1.0 (unity, i.e. today's behaviour).
+export function clampTtsSpeed(v: any): number {
+  // Treat unset (null/undefined/'') as unity, NOT as 0 — unlike gain, 0 is not
+  // this dial's default and would clamp to the 0.5 floor instead of no-change.
+  if (v === null || v === undefined || v === '') return TTS_SPEED_DEFAULT;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return TTS_SPEED_DEFAULT;
+  const c = Math.max(TTS_SPEED_MIN, Math.min(TTS_SPEED_MAX, n));
+  return Math.round(c * 20) / 20;
+}
+
+// Normalise a per-engine speed map to exactly one clean multiplier per known
+// engine (default 1.0). Drops unknown keys, mirroring normalizeTtsGainMap.
+function normalizeTtsSpeedMap(raw: any): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const e of TTS_ENGINES) out[e] = clampTtsSpeed(raw?.[e]);
+  return out;
+}
+
 // LLM provider abstraction. `ollama` is the homelab default; the cloud
 // providers are opt-in and resolved by llm/provider.js. `openrouter` and
 // `gateway` are aggregators — one key, any vendor's models. `openai-compatible`
@@ -479,7 +513,7 @@ export const SEED_PERSONAS = [
     soul: DJ_SOULS[0],
     language: '',
     avatar: '',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_george', gainDb: 0 },
+    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_george', gainDb: 0, speed: 1 },
   },
   {
     id: 'p_default1',
@@ -490,7 +524,7 @@ export const SEED_PERSONAS = [
     soul: DJ_SOULS[1],
     language: '',
     avatar: '',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_alice', gainDb: 0 },
+    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_alice', gainDb: 0, speed: 1 },
   },
   {
     id: 'p_default2',
@@ -501,7 +535,7 @@ export const SEED_PERSONAS = [
     soul: DJ_SOULS[3],
     language: '',
     avatar: '',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_daniel', gainDb: 0 },
+    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_daniel', gainDb: 0, speed: 1 },
   },
 ];
 
@@ -608,6 +642,11 @@ const DEFAULTS = {
     // persona's own tts.gainDb. All 0 = unity = today's behaviour. See
     // TTS_GAIN_CLAMP_DB and audio/tts.ts:voiceGainDb().
     gainDb: { piper: 0, kokoro: 0, chatterbox: 0, 'pocket-tts': 0, cloud: 0 },
+    // Per-engine speech-rate multiplier (0.5–2.0×, 1.0 = no change), composed
+    // on top of the daypart energy and each persona's own tts.speed in
+    // audio/tts.ts:speak(). Only Piper/Kokoro/cloud honour it; chatterbox/
+    // pocket-tts ignore speed so their entries are inert. See clampTtsSpeed().
+    speed: { piper: 1, kokoro: 1, chatterbox: 1, 'pocket-tts': 1, cloud: 1 },
   },
   llm: {
     provider: 'ollama',
@@ -903,7 +942,7 @@ function normalizeTts(raw: any) {
   // field and the server picks its own.
   if (!voice && engine === 'cloud' && cloudProvider !== 'openai-compatible') voice = 'alloy';
   if (!voice && engine !== 'cloud' && engine !== 'chatterbox' && engine !== 'piper') voice = 'bf_isabella';
-  return { engine, cloudProvider, voice, gainDb: clampTtsGain(raw?.gainDb) };
+  return { engine, cloudProvider, voice, gainDb: clampTtsGain(raw?.gainDb), speed: clampTtsSpeed(raw?.speed) };
 }
 
 function normalizePersona(raw: any) {
@@ -1200,6 +1239,9 @@ export async function load() {
       // Per-engine gain map — one clean gain per known engine, missing keys → 0,
       // unknown keys dropped. So an older save (no gainDb) loads at unity.
       gainDb: normalizeTtsGainMap(stored.tts?.gainDb),
+      // Per-engine speed map — one clean multiplier per known engine, missing
+      // keys → 1.0, unknown keys dropped. An older save (no speed) loads at unity.
+      speed: normalizeTtsSpeedMap(stored.tts?.speed),
     },
     llm: {
       provider: LLM_PROVIDERS.includes(stored.llm?.provider)
@@ -1521,7 +1563,7 @@ function validateTtsBlock(raw, where) {
       );
     }
   }
-  return { engine: t.engine, cloudProvider: t.cloudProvider, voice, gainDb: clampTtsGain(t.gainDb) };
+  return { engine: t.engine, cloudProvider: t.cloudProvider, voice, gainDb: clampTtsGain(t.gainDb), speed: clampTtsSpeed(t.speed) };
 }
 
 export function validatePersonasStrict(raw) {
@@ -2060,6 +2102,17 @@ export async function update(patch) {
           throw new Error(`tts.gainDb has unknown engine "${key}"; must be one of: ${TTS_ENGINES.join(', ')}`);
         }
         next.tts.gainDb[key] = clampTtsGain(t.gainDb[key]);
+      }
+    }
+    if (t.speed !== undefined) {
+      if (typeof t.speed !== 'object' || t.speed === null || Array.isArray(t.speed)) {
+        throw new Error('tts.speed must be an object keyed by engine');
+      }
+      for (const key of Object.keys(t.speed)) {
+        if (!TTS_ENGINES.includes(key)) {
+          throw new Error(`tts.speed has unknown engine "${key}"; must be one of: ${TTS_ENGINES.join(', ')}`);
+        }
+        next.tts.speed[key] = clampTtsSpeed(t.speed[key]);
       }
     }
   }

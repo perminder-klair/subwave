@@ -139,6 +139,9 @@ interface TtsForm {
   // Per-engine voice-level trim in dB, keyed by engine id (note the hyphen in
   // `pocket-tts`). Always carries all 5 known engines, 0 = unity = no change.
   gainDb: Record<string, number>;
+  // Per-engine speech-rate multiplier, keyed by engine id. Always carries all 5
+  // known engines, 1.0 = unity = no change. Inert for chatterbox/pocket-tts.
+  speed: Record<string, number>;
 }
 
 interface LlmFallbackForm {
@@ -285,6 +288,7 @@ interface SettingsData {
       pocketTts?: { voice?: string };
       cloud?: Partial<CloudTtsCfg>;
       gainDb?: Record<string, number>;
+      speed?: Record<string, number>;
     };
     llm?: Partial<LlmForm>;
     search?: Partial<SearchForm>;
@@ -446,6 +450,16 @@ export default function SettingsPanel() {
           'pocket-tts': 0,
           cloud: 0,
           ...(v.tts?.gainDb || {}),
+        },
+        // Per-engine speech speed (×). Unity default for all 5, then overlay
+        // any saved values. Keyed by engine id — `pocket-tts` (hyphen).
+        speed: {
+          piper: 1,
+          kokoro: 1,
+          chatterbox: 1,
+          'pocket-tts': 1,
+          cloud: 1,
+          ...(v.tts?.speed || {}),
         },
       },
       llm: {
@@ -1296,6 +1310,63 @@ function TtsGainField({
   );
 }
 
+// Speech-rate trim. Range mirrors the server clamp (clampTtsSpeed: 0.5–2.0×).
+// Only Piper/Kokoro/cloud honour speed — chatterbox/pocket-tts ignore it.
+const TTS_SPEED_MIN = 0.5;
+const TTS_SPEED_MAX = 2;
+const TTS_SPEED_STEP = 0.05;
+const TTS_SPEED_UNSUPPORTED = new Set(['chatterbox', 'pocket-tts']);
+
+function formatSpeed(v: number): string {
+  return `${v.toFixed(2)}×`;
+}
+
+// Compact per-engine speech-speed control: a labelled range slider + live readout,
+// writing into form.tts.speed[engineId]. Disabled (with a hint) for the engines
+// whose workers ignore speed, so operators see why it has no effect there.
+function TtsSpeedField({
+  engineId,
+  form,
+  setForm,
+}: {
+  engineId: string;
+  form: FormState;
+  setForm: FormUpdater;
+}) {
+  const value = form.tts.speed?.[engineId] ?? 1;
+  const supported = !TTS_SPEED_UNSUPPORTED.has(engineId);
+  return (
+    <div className="field mt-4">
+      <div className="flex items-center justify-between gap-3">
+        <Label>Speech speed</Label>
+        <span className="font-mono text-[12px] text-ink tabular-nums">{formatSpeed(value)}</span>
+      </div>
+      <input
+        type="range"
+        min={TTS_SPEED_MIN}
+        max={TTS_SPEED_MAX}
+        step={TTS_SPEED_STEP}
+        value={value}
+        disabled={!supported}
+        onChange={(e: ChangeEvent<HTMLInputElement>) => {
+          const next = Number(e.target.value);
+          setForm(f => ({
+            ...f,
+            tts: { ...f.tts, speed: { ...f.tts.speed, [engineId]: next } },
+          }));
+        }}
+        aria-label="Speech speed multiplier"
+        className={cn('mt-1.5 w-full max-w-[360px] accent-[var(--accent)]', !supported && 'opacity-40')}
+      />
+      <div className="field-hint">
+        {supported
+          ? <>Slow down or speed up this engine. <code>1.00×</code> = no change.</>
+          : <>Not supported by this engine — only Piper, Kokoro and cloud honour speed.</>}
+      </div>
+    </div>
+  );
+}
+
 // Prominent, self-contained "engine not installed" callout with a step-by-step
 // setup guide. Chatterbox and PocketTTS both live in the optional `tts-heavy`
 // sidecar, so the recommended path is identical; only the engine label and the
@@ -1425,6 +1496,9 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         // Per-engine voice-level trim. Always sent (server clamps + drops unknown
         // keys); keyed by engine id, `pocket-tts` with the hyphen.
         gainDb: form.tts.gainDb,
+        // Per-engine speech speed (×). Same contract as gainDb; inert for the
+        // engines whose workers ignore speed (chatterbox/pocket-tts).
+        speed: form.tts.speed,
       },
     });
     // Save cloud API key if typed -- goes to secrets.env, not settings.json
@@ -1463,6 +1537,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     pocketTts?: { voice?: string };
     cloud?: SavedCloud;
     gainDb?: Record<string, number>;
+    speed?: Record<string, number>;
   } = data.values?.tts || {};
   const savedEngine: string = savedTts.defaultEngine || 'piper';
   const savedKokoroVoice: string = savedTts.kokoro?.voice || '';
@@ -1478,6 +1553,12 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     e => (form.tts.gainDb?.[e] ?? 0) !== (savedGainDb[e] ?? 0),
   );
 
+  const savedSpeed: Record<string, number> = savedTts.speed || {};
+  // Any engine whose form speed differs from its saved value (absent → 1.0 unity).
+  const speedDirty = TTS_GAIN_ENGINES.some(
+    e => (form.tts.speed?.[e] ?? 1) !== (savedSpeed[e] ?? 1),
+  );
+
   const ttsDirty =
     form.tts.defaultEngine !== savedEngine
     || (form.tts.kokoro?.voice || '') !== savedKokoroVoice
@@ -1487,7 +1568,8 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     || (form.tts.cloud.model || '').trim() !== (savedCloud.model || '').trim()
     || (form.tts.cloud.voice || '').trim() !== (savedCloud.voice || '').trim()
     || (form.tts.cloud.baseUrl || '').trim() !== (savedCloud.baseUrl || '').trim()
-    || gainDirty;
+    || gainDirty
+    || speedDirty;
 
   let activeDetail: ReactNode = null;
   if (savedEngine === 'piper') {
@@ -1573,6 +1655,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               </div>
             </div>
             <TtsGainField engineId="piper" form={form} setForm={setForm} />
+            <TtsSpeedField engineId="piper" form={form} setForm={setForm} />
           </>
         )}
 
@@ -1609,6 +1692,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               )}
             </div>
             <TtsGainField engineId="kokoro" form={form} setForm={setForm} />
+            <TtsSpeedField engineId="kokoro" form={form} setForm={setForm} />
           </>
         )}
 
@@ -1656,6 +1740,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               )}
             </div>
             <TtsGainField engineId="chatterbox" form={form} setForm={setForm} />
+            <TtsSpeedField engineId="chatterbox" form={form} setForm={setForm} />
           </>
         )}
 
@@ -1704,6 +1789,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               )}
             </div>
             <TtsGainField engineId="pocket-tts" form={form} setForm={setForm} />
+            <TtsSpeedField engineId="pocket-tts" form={form} setForm={setForm} />
           </>
         )}
 
@@ -1867,6 +1953,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               </div>
             )}
             <TtsGainField engineId="cloud" form={form} setForm={setForm} />
+            <TtsSpeedField engineId="cloud" form={form} setForm={setForm} />
           </div>
           );
         })()}
