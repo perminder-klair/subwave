@@ -277,15 +277,26 @@ class Queue {
   // `introKind` picks both the TTS engine routing and the duck channel:
   //   'dj-speak' → say.txt   (HEAVY duck — request intros)
   //   'link'     → intro.txt (LIGHT duck — between-track auto-DJ links)
-  async push({ track, requestedBy = null, intent = null, introScript = null, introKind = 'dj-speak', aiPicked = false }: {
+  async push({ track, requestedBy = null, intent = null, introScript = null, introKind = 'dj-speak', aiPicked = false, allowDuplicate = false }: {
     track: any;
     requestedBy?: string | null;
     intent?: string | null;
     introScript?: string | null;
     introKind?: string;
     aiPicked?: boolean;
+    allowDuplicate?: boolean;
   }) {
-    if (aiPicked && track?.id) {
+    // Dedup guard. Applies to AI picks AND listener requests: two listener
+    // requests resolving to the same song over the 25-45s identify/match window
+    // each read queuedIds() before either reaches push(), so the early read
+    // can't see the other (issue #619). This check is the only synchronous
+    // point where both are visible — there is no await between it and the
+    // upcoming.push() below, so within the single-threaded event loop it's
+    // atomic and closes the race. Returns -1 so the caller can acknowledge
+    // honestly ("already on the way") instead of queuing a second back-to-back
+    // play. `allowDuplicate` opts an explicit operator action (the studio
+    // queue-track route) out — a deliberate manual queue always fires.
+    if (!allowDuplicate && track?.id) {
       const dominated = this.upcoming.some(i => i.track?.id === track.id)
         || (this.current?.track?.id === track.id);
       if (dominated) {
@@ -728,6 +739,18 @@ class Queue {
       if (item.track?.id) ids.add(item.track.id);
     }
     return ids;
+  }
+
+  // Honest acknowledgement for a listener request whose resolved track is
+  // already queued or on air — used when push() dedups the request (issue
+  // #619). Lets the caller send a truthful line instead of a false "coming up"
+  // or a phantom second back-to-back play. Distinguishes the on-air case so the
+  // listener isn't told something is "on the way" when it's playing right now.
+  dedupAck(trackId: string | null | undefined): string {
+    const onAir = !!trackId && this.current?.track?.id === trackId;
+    return onAir
+      ? `That one's spinning right now — stay tuned.`
+      : `That track's already queued — it's on the way.`;
   }
 
   // Lowercased artist names heard in the last `hours` hours — used by the
