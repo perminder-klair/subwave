@@ -27,11 +27,6 @@ export interface CandidateFilterState {
   artistCounts?: Map<string, number>;
   maxPerArtist?: number;
   cap?: number;
-  // Hard length cap in seconds (station/show max-track-length, issue #447).
-  // null / 0 means "no cap". Tracks longer than this are dropped before the
-  // recency relaxation below, so an over-length track never airs even when the
-  // pool is starved.
-  maxDurationSec?: number | null;
   // Whether a starved result may relax the recent-ARTIST guard. Default true
   // preserves the pool picker's "never return empty" behaviour. The agent's
   // per-tool collect() passes false: a single-artist tool (topSongsByArtist /
@@ -93,19 +88,14 @@ export function filterPickerCandidates<T extends CandidateLike>(
     artistCounts = new Map<string, number>(),
     maxPerArtist = Infinity,
     cap = Infinity,
-    maxDurationSec = null,
     allowArtistRelaxation = true,
   }: CandidateFilterState = {},
 ): T[] {
-  // Length cap first, outside the recency loop: a too-long track is never an
-  // acceptable autonomous pick, so it must not survive even the fully-relaxed
-  // third mode. Unknown-duration tracks pass through untouched.
-  const pool = maxDurationSec && maxDurationSec > 0
-    ? (list || []).filter((s) => {
-        const d = durationSeconds(s);
-        return d == null || d <= maxDurationSec;
-      })
-    : (list || []);
+  // Track length is NOT a selection criterion: max-track-length (issue #447) is
+  // enforced as an on-air cue_out cut, so an over-length track stays eligible
+  // and simply crossfades out at the cap. Filtering it here would only starve
+  // the pool — e.g. a 60s cap leaving nothing but short skits/interludes.
+  const pool = list || [];
 
   // Relaxation cascade: each mode drops a guard so a starved pool still yields
   // something rather than nothing. When artist relaxation is disabled the artist
