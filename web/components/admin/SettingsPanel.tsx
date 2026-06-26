@@ -1228,12 +1228,21 @@ function ModelCombobox({ models, value, onChange, placeholder = 'Select a model'
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [direction, setDirection] = useState<'up' | 'down'>('down');
 
   // Recompute position when opening
   const openDropdown = () => {
     if (triggerRef.current) {
       const r = triggerRef.current.getBoundingClientRect();
-      setRect({ top: r.bottom + window.scrollY, left: r.left + window.scrollX, width: r.width });
+      const spaceBelow = window.innerHeight - r.bottom;
+      const dir = spaceBelow < 300 ? 'up' : 'down';
+      setDirection(dir);
+
+      const top = dir === 'down'
+        ? r.bottom + window.scrollY + 4
+        : r.top + window.scrollY - 4;
+
+      setRect({ top, left: r.left + window.scrollX, width: r.width });
     }
     setOpen(true);
     setSearch('');
@@ -1277,15 +1286,24 @@ function ModelCombobox({ models, value, onChange, placeholder = 'Select a model'
   const dropdown = open && rect ? createPortal(
     <div
       ref={dropdownRef}
-      style={{ position: 'absolute', top: rect.top + 4, left: rect.left, width: Math.max(rect.width, 240), zIndex: 9999 }}
+      style={{
+        position: 'absolute',
+        top: rect.top,
+        left: rect.left,
+        width: Math.max(rect.width, 240),
+        zIndex: 9999,
+        transform: direction === 'up' ? 'translateY(-100%)' : undefined,
+      }}
       className="border border-ink bg-bg shadow-drawer"
     >
       <Command shouldFilter={false}>
-        <CommandInput
-          placeholder="Filter models…"
-          value={search}
-          onValueChange={setSearch}
-        />
+        {direction === 'down' && (
+          <CommandInput
+            placeholder="Filter models…"
+            value={search}
+            onValueChange={setSearch}
+          />
+        )}
         <CommandList>
           {filtered.length === 0
             ? <CommandEmpty>No models match.</CommandEmpty>
@@ -1310,6 +1328,14 @@ function ModelCombobox({ models, value, onChange, placeholder = 'Select a model'
             )
           }
         </CommandList>
+        {direction === 'up' && (
+          <CommandInput
+            placeholder="Filter models…"
+            value={search}
+            onValueChange={setSearch}
+            wrapperClassName="border-t border-b-0"
+          />
+        )}
       </Command>
     </div>,
     document.body,
