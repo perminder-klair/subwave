@@ -16,7 +16,7 @@ import { restartLiquidsoap, startStream, stopStream, streamStatus } from '../bro
 import { invalidateWeatherCache } from '../context.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../setup/secrets.js';
-import { generateText } from 'ai';
+import { generateText, createGateway } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -519,7 +519,14 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
         if (!url) throw new Error('baseUrl is required for openai-compatible');
         await settings.load();
         const s = settings.get();
-        const apiKey = (s.llm?.apiKey && typeof s.llm.apiKey === 'string') ? s.llm.apiKey : '';
+        // Resolve the key the way probe-compat does: a discovery aimed at the
+        // fallback server's URL uses the fallback key; otherwise the primary's.
+        // `url` and `baseUrl` are already trailing-slash-stripped above.
+        const fallbackUrl = (s.llm?.fallback?.baseUrl || '').trim().replace(/\/+$/, '');
+        const apiKey =
+          (url === fallbackUrl && typeof s.llm?.fallback?.apiKey === 'string' && s.llm.fallback.apiKey)
+            ? s.llm.fallback.apiKey
+            : (typeof s.llm?.apiKey === 'string' ? s.llm.apiKey : '');
         const headers: Record<string, string> = {};
         if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
         const r = await fetch(`${url}/models`, { signal: ctrl.signal, headers });
@@ -622,7 +629,7 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
       case 'requesty': {
         const apiKey = resolveKey('REQUESTY_API_KEY');
         if (!apiKey) throw new Error('REQUESTY_API_KEY not set');
-        const r = await fetch('https://router.requesty.ai/v1/models', {
+        const r = await fetch(`${llmProvider.DEFAULT_REQUESTY_BASE_URL}/models`, {
           signal: ctrl.signal,
           headers: { 'Authorization': `Bearer ${apiKey}` },
         });
@@ -635,17 +642,25 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
       }
 
       case 'gateway': {
+        // Vercel AI Gateway. Use the SDK's getAvailableModels() rather than a
+        // hand-rolled URL — the gateway lives at ai-gateway.vercel.sh/v3/ai (not
+        // Cloudflare) and the SDK resolves the key / OIDC exactly as the registry's
+        // createGateway does. No apiKey → fall through to env / OIDC credentials.
         const apiKey = resolveKey('AI_GATEWAY_API_KEY');
-        if (!apiKey) throw new Error('AI_GATEWAY_API_KEY not set');
-        const r = await fetch('https://gateway.ai.cloudflare.com/v1/models', {
-          signal: ctrl.signal,
-          headers: { 'Authorization': `Bearer ${apiKey}` },
+        const gw = createGateway({
+          ...(apiKey ? { apiKey } : {}),
+          fetch: (u: any, init: any) => fetch(u, { ...init, signal: ctrl.signal }),
         });
-        if (!r.ok) throw new Error(`Gateway HTTP ${r.status}`);
-        const data: any = await r.json();
-        models = Array.isArray(data?.data)
-          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
-          : [];
+        const { models: gwModels } = await gw.getAvailableModels();
+        models = (Array.isArray(gwModels) ? gwModels : [])
+          .filter((m: any) => {
+            if (!scope) return true;
+            const t = m?.modelType;
+            return scope === 'embedding' ? t === 'embedding' : t !== 'embedding';
+          })
+          .map((m: any) => m?.id)
+          .filter((id: any): id is string => typeof id === 'string')
+          .sort();
         break;
       }
 
