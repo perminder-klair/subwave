@@ -6,7 +6,7 @@
 import { readFile, writeFile, unlink, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { STATE_DIR } from './config.js';
+import { STATE_DIR, config } from './config.js';
 import { DEFAULT_THEME_ID, isValidThemeId, listThemes } from './themes.js';
 import { isValidTimezone, setStationTimezone, zonedParts } from './time.js';
 
@@ -234,6 +234,16 @@ function clampDailyTokenCap(raw: any, def: number): number {
 function clampBudgetSoftPct(raw: any, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   return Math.min(100, Math.max(0, Math.floor(raw)));
+}
+
+// Count-based hard no-repeat window (distinct plays). Floored to an integer in
+// [0, 290]: 0 disables; the 290 ceiling stays under the 300-entry _recentPlays
+// cap so the requested window is never silently truncated by a too-short
+// sidecar. Library-size clamping happens separately at use time
+// (effectiveNoRepeatWindow). Non-numeric/NaN falls back to `def`.
+function clampNoRepeatWindow(raw: any, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  return Math.min(290, Math.max(0, Math.floor(raw)));
 }
 
 // Validate + apply the connection fields shared by the primary LLM leg and its
@@ -651,6 +661,14 @@ const DEFAULTS = {
     // dj-agent.js). When off, the stateless pool picker runs instead — still
     // inside a session, still logged, just without the conversational loop.
     pickerAgent: true,
+    // Count-based hard no-repeat window: the picker never re-airs any of the
+    // last N DISTINCT plays. Non-relaxable (survives the filterPickerCandidates
+    // starvation cascade), so it closes the hole where a thin mood cluster let
+    // the cascade re-serve a just-played song. Clamped to library size at use
+    // (effectiveNoRepeatWindow) so a small catalogue never fully blocks; 0
+    // disables. Seeded from config.queue.noRepeatWindow (env NO_REPEAT_WINDOW);
+    // listener requests stay exempt. See music/recency.ts + broadcast/queue.ts.
+    noRepeatWindow: config.queue.noRepeatWindow,
     // When on, the listener-request agent (djAgentRequest only — never the
     // per-track picker) gets an extra `identifyRequestedTrack` tool that resolves
     // a DESCRIBED track ("the song from the new Dune movie") via web search, then
@@ -1225,6 +1243,9 @@ export async function load() {
         typeof stored.llm?.pickerAgent === 'boolean'
           ? stored.llm.pickerAgent
           : DEFAULTS.llm.pickerAgent,
+      // Clamped to [0, 290] (≤ the 300-entry sidecar cap); pre-field
+      // settings.json picks up the config/env-seeded default.
+      noRepeatWindow: clampNoRepeatWindow(stored.llm?.noRepeatWindow, DEFAULTS.llm.noRepeatWindow),
       requestWebResolve:
         typeof stored.llm?.requestWebResolve === 'boolean'
           ? stored.llm.requestWebResolve

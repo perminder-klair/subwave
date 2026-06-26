@@ -25,7 +25,7 @@ import { buildPickerTools } from '../llm/tools.js';
 import { recordPick } from '../llm/log.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
-import { recencyWindowsForLibrary } from '../music/recency.js';
+import { recencyWindowsForLibrary, effectiveNoRepeatWindow } from '../music/recency.js';
 
 // --- Feature 4: DJ-mode mini-runs ------------------------------------------
 // A short, deliberate tempo/key journey across 2-3 consecutive picks. While a
@@ -282,7 +282,7 @@ export const pickerAgent = defineAgent({
   maxSteps: 4,
   timeoutMs: agentDeadline,
   buildSystem: () => pickSystem(),
-  buildTools: ({ recentIds, recentKeys, audioWaypoint }) => {
+  buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint }) => {
     // Resolve the active show live (a show that just came on air takes effect):
     // its length override (issue #447) and, for a strict show, hard genre + era
     // locks the discovery tools enforce on candidates — not just the prompt.
@@ -294,7 +294,7 @@ export const pickerAgent = defineAgent({
     const eraLock = strict && (activeShow?.fromYear != null || activeShow?.toYear != null)
       ? { fromYear: activeShow.fromYear, toYear: activeShow.toYear }
       : null;
-    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, audioWaypoint, maxDurationSec, genreLock, eraLock });
+    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, maxDurationSec, genreLock, eraLock });
     return { tools, extras: { seen } };
   },
 });
@@ -360,7 +360,8 @@ async function enqueuePick(queue, song, reason, source, link: string | null = nu
 
 async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLink: boolean; audioWaypoint?: number[] | null }): Promise<boolean> {
   await library.load();
-  const windows = recencyWindowsForLibrary(library.stats().distinctArtists);
+  const stats = library.stats();
+  const windows = recencyWindowsForLibrary(stats.distinctArtists);
   // Scale the track-recency window to the tagged library's artist diversity:
   // dense catalogues keep the long anti-repeat guard, while small-artist
   // libraries don't exclude every real candidate before the picker sees it.
@@ -368,12 +369,23 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLin
   // the buildPickerTools note (the similarity tools cluster on the just-played
   // artist, so an artist strip starved them).
   const { ids: recentIds, keys: recentKeys } = queue.recentlyPlayed(windows.trackHours);
+  // Queued-but-not-yet-aired ids belong in the RELAXABLE set — they're not
+  // "recently played", just in-flight, and shouldn't tighten the hard guard.
   for (const id of queue.queuedIds()) recentIds.add(id);
+
+  // Count-based HARD no-repeat guard: the last N distinct plays can't re-air,
+  // and (unlike recentIds/recentKeys above) this survives the tool-level
+  // starvation cascade. Clamped to library size so a small catalogue never
+  // fully blocks; 0 = off, leaving the relaxable window in sole charge.
+  const effN = effectiveNoRepeatWindow(settings.get().llm?.noRepeatWindow ?? 0, stats.total);
+  const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
 
   const { object, steps, toolCalls, extras } = await pickerAgent.run({
     messages: session.windowMessages(),
     recentIds,
     recentKeys,
+    hardRecentIds,
+    hardRecentKeys,
     // Sonic journey (Phase 2): registers the tracksTowardJourney tool, closed
     // over the run's current waypoint, so the agent path drifts the sound the
     // same way the pool path does. The event text tells the agent to use it.

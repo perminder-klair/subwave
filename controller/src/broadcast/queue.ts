@@ -732,6 +732,51 @@ class Queue {
     return this.recentlyPlayed(hours).ids;
   }
 
+  // The last `n` DISTINCT tracks played — the count-based HARD no-repeat guard
+  // (filterPickerCandidates hardRecent*; never relaxed). Clock-independent: it
+  // walks the rolling sidecar newest-first and stops once it has seen `n`
+  // distinct tracks, so a busy or a quiet hour blocks the same number of songs.
+  //
+  // Counts DISTINCT tracks, not raw rows: the sidecar can hold two entries for
+  // one play (recordPlay logs it with an id at track-end; the boot events
+  // backfill logs an id-less copy at track-start), and those collapse here —
+  // `n` means n songs, not n rows — so the guard's strength matches the
+  // configured number regardless of the double-write. Collapses an id-less
+  // (backfilled) row against an id'd row of the same track via the shared
+  // title|artist key. Returns BOTH ids and keys so a candidate is blocked by
+  // whichever identifier it carries; the current track is added on top so a
+  // mid-song pick can't re-pick it. Empty sets when n <= 0.
+  recentlyPlayedByCount(n = 0): { ids: Set<string>; keys: Set<string> } {
+    const ids = new Set<string>();
+    const keys = new Set<string>();
+    if (!Number.isFinite(n) || n <= 0) return { ids, keys };
+    const keyOf = (title: string | null | undefined, artist: string | null | undefined) =>
+      `${(title || '').toLowerCase().trim()}|${(artist || '').toLowerCase().trim()}`;
+    const cur = this.current?.track;
+    if (cur?.id) ids.add(cur.id);
+    if (cur?.title) keys.add(keyOf(cur.title, cur.artist));
+    const seenIds = new Set<string>();
+    const seenKeys = new Set<string>();
+    let distinct = 0;
+    for (const p of this._recentPlays) {
+      if (distinct >= n) break;
+      const k = keyOf(p.title, p.artist);
+      // Already counted this track (by id OR by title|artist key)? Skip — this
+      // is the duplicate sidecar row, not a second distinct play.
+      if ((p.id && seenIds.has(p.id)) || (k && seenKeys.has(k))) continue;
+      distinct++;
+      if (p.id) {
+        seenIds.add(p.id);
+        ids.add(p.id);
+      }
+      if (k) {
+        seenKeys.add(k);
+        keys.add(k);
+      }
+    }
+    return { ids, keys };
+  }
+
   queuedIds(): Set<string> {
     const ids = new Set<string>();
     if (this.current?.track?.id) ids.add(this.current.track.id);

@@ -83,6 +83,8 @@ function shuffle<T>(arr: T[]): T[] {
 export function buildPickerTools({
   recentIds = new Set<string>(),
   recentKeys = new Set<string>(),
+  hardRecentIds = new Set<string>(),
+  hardRecentKeys = new Set<string>(),
   audioWaypoint = null,
   resolveReferences = false,
   maxDurationSec = null,
@@ -91,6 +93,13 @@ export function buildPickerTools({
 }: {
   recentIds?: Set<string>;
   recentKeys?: Set<string>;        // lowercased "title|artist" — backfilled entries lack ids
+  // Count-based HARD no-repeat set (last N distinct plays). Non-relaxable — a
+  // track in here is filtered out of every tool's results and survives the
+  // starvation cascade, so the agent literally cannot re-pick a just-played
+  // song even when a thin similarity cluster is all it can see. Populated from
+  // queue.recentlyPlayedByCount(N); empty on the request path (requests exempt).
+  hardRecentIds?: Set<string>;
+  hardRecentKeys?: Set<string>;    // lowercased "title|artist" — blocks id-less backfilled plays
   // Hard genre constraint for a strict-genre show (settings.genreStrict). When
   // set, every tool's candidates are genre-filtered (preferGenre, never-starve)
   // before recency + cap, so the agent path enforces the lock in code, not just
@@ -137,6 +146,8 @@ export function buildPickerTools({
     const accepted = filterPickerCandidates(pool, {
       recentIds,
       recentKeys,
+      hardRecentIds,
+      hardRecentKeys,
       seenIds: new Set(seen.keys()),
       cap,
       maxDurationSec,

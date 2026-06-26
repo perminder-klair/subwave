@@ -11,7 +11,7 @@ import * as library from './library.js';
 import * as dj from '../llm/dj.js';
 import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
-import { filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
+import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
 import { normGenre, genreMatches, preferGenre, inYearRange, preferEnergy } from './show-filter.js';
 
 const CANDIDATE_CAP = 18;
@@ -135,7 +135,7 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, maxDurationSec: number | null = null) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, maxDurationSec: number | null = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set()) {
   await library.load();
   const pool: any[] = [];
   const sources: Record<string, number> = {};
@@ -365,6 +365,8 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   const final = filterPickerCandidates(softRankByCompat(pool, curAnalysis), {
     recentIds,
     recentArtists,
+    hardRecentIds,
+    hardRecentKeys,
     artistCounts: perArtist,
     maxPerArtist: MAX_PER_ARTIST,
     cap: CANDIDATE_CAP,
@@ -412,9 +414,15 @@ function summariseRecent(queue: any) {
 
 export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null) {
   await library.load();
-  const windows = recencyWindowsForLibrary(library.stats().distinctArtists);
+  const stats = library.stats();
+  const windows = recencyWindowsForLibrary(stats.distinctArtists);
   const recentIds = queue.recentlyPlayedIds(windows.trackHours);
   const recentArtists = queue.recentArtistsSince(windows.artistHours);
+  // Count-based HARD no-repeat guard (last N distinct plays) — non-relaxable,
+  // survives buildCandidates' starvation cascade. Clamped to library size so a
+  // small catalogue never fully blocks; 0 = off. Mirrors the agent path.
+  const effN = effectiveNoRepeatWindow(settings.get().llm?.noRepeatWindow ?? 0, stats.total);
+  const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
   const currentTrack = queue.current?.track || null;
   // Resolve the active show once: its music-steering filters shape the pool
   // (below) and its brief steers the LLM pick (further down).
@@ -425,7 +433,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   // Length cap for this pick: the active show's override or the station default
   // (issue #447), resolved in seconds. null = no cap.
   const maxDurationSec = settings.effectiveMaxTrackSec(activeShow);
-  const { candidates, sources, strictInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, maxDurationSec);
+  const { candidates, sources, strictInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, maxDurationSec, hardRecentIds, hardRecentKeys);
 
   if (candidates.length === 0) {
     queue.log('picker', 'no candidates available, skipping LLM pick');
@@ -436,7 +444,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     'picker',
     `pool ${candidates.length} (${Object.entries(sources)
       .map(([k, v]) => `${k}=${v}`)
-      .join(' ')})`,
+      .join(' ')})${effN > 0 ? ` no-repeat=${effN}` : ''}`,
   );
 
   // Strict-genre visibility — make the never-starve fallback audible in the log
