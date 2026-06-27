@@ -6,6 +6,7 @@ import { ProviderSelector } from '../admin/llm/ProviderSelector';
 import { ModelCombobox } from '../admin/llm/ModelCombobox';
 import { PROVIDER_IDS } from '../admin/llm/providerMeta';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
+import { LocationPicker } from '../LocationPicker';
 
 // Tiny presentation primitives kept local to the wizard — avoids dragging the
 // full admin UI library into a screen most operators see exactly once.
@@ -421,27 +422,32 @@ export function DjStep({ w }: { w: WizardController }) {
             onChange={e => w.patch(d => ({ dj: { ...d.dj, stationName: e.target.value } }))}
           />
         </Field>
-        <Field label="Location" hint="Used for weather + 'broadcasting from…' prompts">
-          <TextInput
-            value={w.data.dj.locationName}
-            onChange={e => w.patch(d => ({ dj: { ...d.dj, locationName: e.target.value } }))}
+        {/* Not a <Field>/<label> — the picker is a composite (combobox + buttons)
+            and shouldn't live inside a single <label>. */}
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium tracking-wide text-ink/60 uppercase">Location</span>
+          <LocationPicker
+            variant="onboarding"
+            value={{
+              locationName: w.data.dj.locationName,
+              lat: w.data.dj.lat,
+              lng: w.data.dj.lng,
+            }}
+            onChange={next => w.patch(d => ({ dj: { ...d.dj, ...next } }))}
+            onPick={r => {
+              const tz = r.timezone;
+              if (tz) w.patch(d => ({ dj: { ...d.dj, timezone: tz } }));
+            }}
           />
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Latitude" hint="-90 to 90">
-            <TextInput
-              inputMode="decimal"
-              value={w.data.dj.lat}
-              onChange={e => w.patch(d => ({ dj: { ...d.dj, lat: e.target.value } }))}
-            />
-          </Field>
-          <Field label="Longitude" hint="-180 to 180">
-            <TextInput
-              inputMode="decimal"
-              value={w.data.dj.lng}
-              onChange={e => w.patch(d => ({ dj: { ...d.dj, lng: e.target.value } }))}
-            />
-          </Field>
+          <span className="text-xs text-ink/50">
+            Search a city — coordinates and timezone fill in automatically. Used for weather +
+            “broadcasting from…” prompts.
+          </span>
+          {w.data.dj.timezone ? (
+            <span className="text-xs text-ink/50">
+              Timezone: {w.data.dj.timezone} (from your location)
+            </span>
+          ) : null}
         </div>
       </div>
     </div>

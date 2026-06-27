@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import * as subsonic from '../music/subsonic.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { getFullContext } from '../context.js';
+import { getFullContext, geocodePlace } from '../context.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
@@ -359,6 +359,25 @@ router.get('/session', (req, res) => {
     },
     messages: s.messages.filter(m => m.kind !== 'sfx').slice(-120),
   });
+});
+
+// ---------------------------------------------------------------------------
+// GET /geocode?q= — place-name lookup for the admin/onboarding location picker.
+// Thin proxy over Open-Meteo's free, keyless geocoding API (the web layer never
+// calls external hosts directly — the controller owns all external IO). Returns
+// { results: [...] } with coordinates + IANA timezone so the picker can fill
+// lat/lng/name and set the station clock in one tap. Unauthenticated: onboarding
+// runs pre-auth and this is harmless public reference data. On upstream failure
+// returns 502 so the client can fall back to manual coordinate entry.
+// ---------------------------------------------------------------------------
+router.get('/geocode', async (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q : '';
+  try {
+    const results = await geocodePlace(q);
+    res.json({ results });
+  } catch {
+    res.status(502).json({ error: 'geocode_unavailable' });
+  }
 });
 
 // ---------------------------------------------------------------------------

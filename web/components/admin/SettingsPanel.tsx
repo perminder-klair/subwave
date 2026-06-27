@@ -26,6 +26,7 @@ import { EmbeddingProviderSelector } from './embedding/EmbeddingProviderSelector
 import { ModelCombobox } from './llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from './llm/providerMeta';
 import { AiFill } from './AiFill';
+import { LocationPicker, type GeocodeResult } from '../LocationPicker';
 import { cn } from '../../lib/cn';
 import ArchivesPanel from './ArchivesPanel';
 import WebhooksPanel from './WebhooksPanel';
@@ -4067,6 +4068,18 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
   const preview = clockPreview(previewTz, form.locale);
   const localeLabel = form.locale === 'en-US' ? 'English (US)' : 'English (UK)';
 
+  // A picked city carries its IANA zone. We *suggest* it rather than overwrite —
+  // the operator may have deliberately set a different station clock. Cleared
+  // once applied or dismissed.
+  const [tzSuggestion, setTzSuggestion] = useState<string | null>(null);
+  const handleGeocodePick = (r: GeocodeResult) => {
+    const effective = form.timezone || data.serverTimezone || '';
+    setTzSuggestion(r.timezone && r.timezone !== effective ? r.timezone : null);
+  };
+  // A picked zone may not be one of TZ_GROUPS' items; Radix Select needs a
+  // matching <SelectItem> to render it, so the card adds a fallback item.
+  const tzInGroups = !form.timezone || TZ_GROUPS.some(g => g.zones.includes(form.timezone));
+
   return (
     <>
       <SectionHeader
@@ -4099,36 +4112,40 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
       <Card title="Station location" sub="DJ context + Open-Meteo weather">
         <div className="field">
           <Label>Location</Label>
-          <div className="flex flex-wrap gap-2">
-            <Input
-              placeholder="name"
-              value={form.weather.locationName}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, weather: { ...f.weather, locationName: e.target.value } }))
-              }
-              className="w-[200px]"
-            />
-            <Input
-              className="mono-num w-[132px]"
-              type="number"
-              step="any"
-              placeholder="lat"
-              value={form.weather.lat}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, weather: { ...f.weather, lat: e.target.value } }))
-              }
-            />
-            <Input
-              className="mono-num w-[132px]"
-              type="number"
-              step="any"
-              placeholder="lng"
-              value={form.weather.lng}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, weather: { ...f.weather, lng: e.target.value } }))
-              }
-            />
-          </div>
+          <LocationPicker
+            variant="admin"
+            value={{
+              locationName: form.weather.locationName,
+              lat: form.weather.lat,
+              lng: form.weather.lng,
+            }}
+            onChange={next =>
+              setForm(f => ({ ...f, weather: { ...f.weather, ...next } }))
+            }
+            onPick={handleGeocodePick}
+          />
+          {tzSuggestion ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px]">
+              <span className="text-muted-foreground">
+                Set station timezone to <span className="text-foreground">{tzSuggestion}</span>?
+              </span>
+              <Btn
+                onClick={() => {
+                  setForm(f => ({ ...f, timezone: tzSuggestion }));
+                  setTzSuggestion(null);
+                }}
+              >
+                Apply
+              </Btn>
+              <button
+                type="button"
+                className="text-xs text-muted-foreground hover:text-foreground"
+                onClick={() => setTzSuggestion(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : null}
           <div className="field-hint">
             Where the station broadcasts from. Sets the DJ’s {'{location}'} and the Open-Meteo
             weather it reads on air (current: {data.values?.weather?.locationName} @ {data.values?.weather?.lat}, {data.values?.weather?.lng}). Applies live.
@@ -4175,6 +4192,13 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
               <SelectGroup>
                 <SelectItem value="auto">Auto, server timezone ({serverTz})</SelectItem>
               </SelectGroup>
+              {/* Fallback for a zone picked via the location search that isn't in
+                  the enumerated groups — Radix needs an item to show it. */}
+              {!tzInGroups ? (
+                <SelectGroup>
+                  <SelectItem value={form.timezone}>{form.timezone}</SelectItem>
+                </SelectGroup>
+              ) : null}
               {TZ_GROUPS.map(g => (
                 <SelectGroup key={g.region}>
                   <SelectLabel>{g.region}</SelectLabel>

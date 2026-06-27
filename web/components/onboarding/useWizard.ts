@@ -40,6 +40,9 @@ export interface WizardData {
     // range-checked by the controller's settings.update() on save.
     lat: string;
     lng: string;
+    // IANA zone, auto-filled when a city is picked in the location step. '' =
+    // Auto (server zone), matching the admin sentinel.
+    timezone: string;
     frequency: 'quiet' | 'moderate' | 'aggressive';
   };
 
@@ -73,6 +76,7 @@ export const DEFAULT_DATA: WizardData = {
     locationName: 'Punjab',
     lat: '30.7333',
     lng: '76.7794',
+    timezone: '',
     frequency: 'moderate',
   },
   apiKeys: {},
@@ -191,6 +195,8 @@ export function useWizard() {
       },
       weather: { locationName: data.dj.locationName, lat: data.dj.lat, lng: data.dj.lng },
       station: data.dj.stationName,
+      // '' = Auto; only sent so a picked city's zone reaches settings.update().
+      timezone: data.dj.timezone,
       apiKeys,
     };
     const r = await auth.adminFetch('/onboarding/save', {
