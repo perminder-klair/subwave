@@ -77,6 +77,13 @@ function resolveEngine(kind: string, personaTts: any) {
   if (chosen === 'pocket-tts' && !pocketTts.isAvailable()) {
     return tts.defaultEngine && tts.defaultEngine !== 'pocket-tts' ? tts.defaultEngine : 'piper';
   }
+  // Kokoro ships in the default image, but its model/voices files are pulled at
+  // build time and can be missing if that download failed. isAvailable() now
+  // existsSyncs them, so route around a broken Kokoro install instead of
+  // spawning a worker that just dies on load and falls back per segment.
+  if (chosen === 'kokoro' && !kokoro.isAvailable()) {
+    return tts.defaultEngine && tts.defaultEngine !== 'kokoro' ? tts.defaultEngine : 'piper';
+  }
   return chosen;
 }
 
