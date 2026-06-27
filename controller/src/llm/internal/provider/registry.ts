@@ -35,8 +35,13 @@ import { capabilitiesFor } from './capabilities.js';
 const clientCache = new Map();
 
 export function llmCfg() {
-  return settings.get().llm
+  const llm = settings.get().llm
     || { provider: 'ollama', model: '', apiKey: '', ollamaUrl: '', baseUrl: '', reasoning: false };
+  // The stored `apiKey` slot is legacy (always '' after settings.load()); the
+  // active key is resolved per-provider from settings.llm.keys (issue #657).
+  // Empty → every provider case below falls through to its env var, as before.
+  // Embedding inheritance reads llm.apiKey from here too, so it stays correct.
+  return { ...llm, apiKey: settings.llmKeyFor(llm.provider) };
 }
 
 // When raw-request debug capture is enabled (LLM_DEBUG_RAW env flag or the
