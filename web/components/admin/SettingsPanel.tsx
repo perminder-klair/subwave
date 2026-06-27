@@ -21,6 +21,7 @@ import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
 import { EngineSelector } from './tts/EngineSelector';
 import { VoicePreviewButton } from './tts/VoicePreviewButton';
 import { ProviderSelector } from './llm/ProviderSelector';
+import { EmbeddingProviderSelector } from './embedding/EmbeddingProviderSelector';
 import { ModelCombobox } from './llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from './llm/providerMeta';
 import { AiFill } from './AiFill';
@@ -3544,27 +3545,16 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
         <div className="grid gap-[18px]">
           <div className="field">
             <Label>Provider</Label>
-            <Select
-              value={e.provider || '__follow__'}
-              onValueChange={v =>
-                setForm(f => ({
-                  ...f,
-                  embedding: { ...f.embedding, provider: v === '__follow__' ? '' : v },
-                }))
+            <EmbeddingProviderSelector
+              value={e.provider || ''}
+              providerIds={providers}
+              llmProvider={llmProvider}
+              env={data.env}
+              onChange={v =>
+                setForm(f => ({ ...f, embedding: { ...f.embedding, provider: v } }))
               }
-            >
-              <SelectTrigger className="max-w-[360px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="__follow__">
-                    Follow LLM provider — {llmProviderLabel(llmProvider)}
-                  </SelectItem>
-                  {providers.map(p => (
-                    <SelectItem key={p} value={p}>{llmProviderLabel(p)}</SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+              className="max-w-[560px]"
+            />
             <div className="field-hint">
               Where the text embeddings come from. Default follows your LLM
               provider, so Ollama-local users get <code>nomic-embed-text</code> free.
