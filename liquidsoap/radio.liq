@@ -245,30 +245,43 @@ music = cue_cut(music)
 # fade shorter than the buffer sums to +6 dB (doubling). Reading `a` keeps
 # fade == buffer — the invariant the whole section depends on.
 # Absent / unparseable → crossfade_duration(), i.e. the global startup default.
-# Ramp the music lowpass closed then open across `dur` seconds, then bypass the
-# filter again (sweep_wet := 0). A triangle envelope: open → closed at the
-# midpoint → open. The outgoing track's tail is already buffered pre-filter
-# inside `cross`, so the sweep mostly shapes the INCOMING track — i.e. the new
-# track surfaces muffled then opens up. Self-stopping via thread.run.recurrent
-# (the tick returns the next delay; a negative value stops the thread).
+# Envelope: a quick gesture AT the transition — ATTACK (dip into the muffle) →
+# HOLD (brief) → RELEASE (open back up). The filter is applied AFTER the cross
+# (see the music = filter.rc line below the cross), so this ramp shapes the
+# actual crossfade output in real time: the mix dips under the lowpass right as
+# the song changes and rises back out. (Pre-cross the muffle rode the incoming
+# track while it faded up under the still-dry outgoing track → only audible
+# mid-song, not at the transition — found while tuning.) Drives a 2-stage
+# filter.rc; SVF filter() is too weak and IIR filters crash with "Early
+# computation of source content-type" here. Self-stopping via
+# thread.run.recurrent (tick returns the next delay; <0 stops). `d` unused.
 def start_filter_sweep(d) =
-  dur = if d < 1.0 then 1.0 else d end
-  steps = 48
-  step_dt = dur / float_of_int(steps)
+  ignore(d)
+  attack  = 0.5              # dip into the muffle at the transition
+  hold    = 1.5             # brief hold at full muffle
+  release = 5.0             # open back up over ~5s
+  total = attack + hold + release
+  step_dt = 0.05
+  steps = int_of_float(total / step_dt)
+  open_cut  = 9000.0        # transparent (a 9kHz lowpass barely touches music)
+  floor_cut = 650.0         # peak muffle cutoff (2-stage filter.rc); higher = less muffled
+  max_wet   = 0.5           # cap wet/dry mix — ~half the dry signal always passes, so the dip darkens without dropping the level
   i = ref(0)
-  sweep_cutoff := 9000.0
+  sweep_cutoff := open_cut
   sweep_wet := 0.0
   def tick() =
     n = i()
     i := n + 1
-    frac = float_of_int(n) / float_of_int(steps)
-    depth = if frac < 0.5 then frac * 2.0 else (1.0 - frac) * 2.0 end   # 0..1..0
-    # Wetness rides the envelope so both ends are fully DRY (seamless with
-    # playout); the cutoff glides alongside. Both peak-muffle at the midpoint.
-    sweep_wet := depth                          # 0→1→0 (0 = dry passthrough)
-    sweep_cutoff := 9000.0 - depth * 8600.0     # 9000→400→9000 Hz (stay below sr/4)
+    e = float_of_int(n) * step_dt
+    depth =                                  # 0 (dry) → 1 (full muffle) → 0
+      if e < attack then e / attack
+      elsif e < attack + hold then 1.0
+      elsif e < total then 1.0 - (e - attack - hold) / release
+      else 0.0 end
+    sweep_wet := depth * max_wet
+    sweep_cutoff := open_cut - depth * (open_cut - floor_cut)
     if n >= steps then
-      sweep_cutoff := 9000.0
+      sweep_cutoff := open_cut
       sweep_wet := 0.0
       (-1.0)        # stop the recurrent thread
     else
@@ -347,13 +360,10 @@ music_meta = music
 # is involved — the broadcast bus stays the brick-wall limiter only.
 music = amplify(override="liq_amplify", 1., music)
 
-# DJ filter sweep — a getter-controlled lowpass on the music BEFORE the cross,
-# so it's content-typed at graph-up (no "Early computation" error; placing an
-# IIR filter inside the cross callback fails — see dj_transition note above).
-# Idle wetness=0 → the filter is fully bypassed and playout is bit-for-bit the
-# dry signal; dj_transition ramps sweep_cutoff/sweep_wet only on a flagged
-# transition. `filter` freq/wetness are getters, read live from the refs.
-music = filter(freq={sweep_cutoff()}, mode="low", q=1., wetness={sweep_wet()}, music)
+# DJ filter sweep is applied AFTER the cross (just below), not here — so the ramp
+# shapes the real crossfade output in real time and the dip is heard AT the
+# transition. (Pre-cross it rode the incoming track under the dry outgoing one →
+# audible only mid-song.)
 
 # DJ washout — a getter-controlled feedback delay (`comb`) on the music BEFORE
 # the cross. Idle feedback (-90 dB) keeps the taps below the noise floor so
@@ -371,6 +381,15 @@ music = cross(
   dj_transition,
   music
 )
+
+# DJ filter sweep — 2-stage filter.rc on the music bus AFTER the cross, so the
+# ramp (start_filter_sweep, fired from dj_transition on a flagged track) muffles
+# the actual crossfade output in real time and opens back up as the new track
+# settles — the dip is heard right at the transition. Idle wet=0 → transparent.
+# filter.rc works in this v2.2.5 build (SVF filter() too weak; IIR filters crash
+# "Early computation"). Before the jingle rotate so idents aren't swept.
+music = filter.rc(frequency={sweep_cutoff()}, mode="low", wetness={sweep_wet()},
+          filter.rc(frequency={sweep_cutoff()}, mode="low", wetness={sweep_wet()}, music))
 
 # ---------------------------------------------------------------------------
 # DJ VOICE — TTS intros that duck the music
