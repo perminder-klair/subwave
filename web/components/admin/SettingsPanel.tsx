@@ -2,7 +2,6 @@
 
 import type { ChangeEvent, ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { m } from 'motion/react';
 import { notify, errorMessage } from '../../lib/notify';
@@ -18,12 +17,12 @@ import { Label } from '../ui/label';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../ui/select';
-import {
-  Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem,
-} from '../ui/command';
 import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
 import { EngineSelector } from './tts/EngineSelector';
 import { VoicePreviewButton } from './tts/VoicePreviewButton';
+import { ProviderSelector } from './llm/ProviderSelector';
+import { ModelCombobox } from './llm/ModelCombobox';
+import { LLM_ENV_VARS, llmProviderLabel } from './llm/providerMeta';
 import { AiFill } from './AiFill';
 import { cn } from '../../lib/cn';
 import ArchivesPanel from './ArchivesPanel';
@@ -48,16 +47,9 @@ const SECTIONS = [
 
 type SectionId = (typeof SECTIONS)[number]['id'];
 
-// Cloud LLM providers read their key from this controller env var.
-const LLM_ENV_VARS: Record<string, string> = {
-  anthropic: 'ANTHROPIC_API_KEY',
-  openai: 'OPENAI_API_KEY',
-  google: 'GOOGLE_GENERATIVE_AI_API_KEY',
-  deepseek: 'DEEPSEEK_API_KEY',
-  openrouter: 'OPENROUTER_API_KEY',
-  requesty: 'REQUESTY_API_KEY',
-  gateway: 'AI_GATEWAY_API_KEY',
-};
+// LLM provider descriptors, the cloud-key env-var map and the badge logic live
+// in ./llm/providerMeta (imported above) — shared with the ProviderSelector card
+// grid and, later, the onboarding wizard. Don't redefine them here.
 
 const KEY_HINTS: Record<string, string> = {
   ANTHROPIC_API_KEY: 'sk-ant-...',
@@ -69,22 +61,6 @@ const KEY_HINTS: Record<string, string> = {
   ELEVENLABS_API_KEY: 'el_...',
   EMBEDDING_API_KEY: 'optional — defaults to chat key',
 };
-
-const LLM_PROVIDER_LABELS: Record<string, string> = {
-  ollama: 'Ollama (local/cloud)',
-  locca: 'locca (local llama.cpp, host)',
-  'openai-compatible': 'OpenAI-compatible (llama.cpp, vLLM, LM Studio)',
-  anthropic: 'Anthropic (Claude)',
-  openai: 'OpenAI (GPT)',
-  google: 'Google (Gemini)',
-  deepseek: 'DeepSeek',
-  openrouter: 'OpenRouter (multi-vendor aggregator)',
-  requesty: 'Requesty (multi-vendor aggregator)',
-  gateway: 'Vercel AI Gateway (multi-vendor aggregator)',
-};
-
-const llmProviderLabel = (id: string | undefined): string =>
-  (id && LLM_PROVIDER_LABELS[id]) || id || '—';
 
 // Suggested embedding model ids per provider — clickable chips under the Model
 // field so operators don't have to guess a valid name. The #1 trip-up is typing
@@ -1279,162 +1255,6 @@ function formatGainDb(v: number): string {
   return `${sign}${Math.abs(v).toFixed(1)} dB`;
 }
 
-/* ── ModelCombobox ───────────────────────────────────────────────────── */
-// Searchable model picker. Renders as a trigger button that shows the selected
-// model (or placeholder). Clicking opens an inline popover with a text filter
-// + scrollable list built on cmdk. Falls back to a plain Input when no models
-// are available (discovery hasn't run / returned nothing).
-
-interface ModelComboboxProps {
-  models: string[];
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  disabled?: boolean;
-  className?: string;
-}
-
-function ModelCombobox({ models, value, onChange, placeholder = 'Select a model', disabled, className }: ModelComboboxProps) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState('');
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
-  const [direction, setDirection] = useState<'up' | 'down'>('down');
-
-  // Recompute position when opening
-  const openDropdown = () => {
-    if (triggerRef.current) {
-      const r = triggerRef.current.getBoundingClientRect();
-      const spaceBelow = window.innerHeight - r.bottom;
-      const dir = spaceBelow < 300 ? 'up' : 'down';
-      setDirection(dir);
-
-      const top = dir === 'down'
-        ? r.bottom + window.scrollY + 4
-        : r.top + window.scrollY - 4;
-
-      setRect({ top, left: r.left + window.scrollX, width: r.width });
-    }
-    setOpen(true);
-    setSearch('');
-  };
-
-  // Close on outside click
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (
-        triggerRef.current && !triggerRef.current.contains(e.target as Node) &&
-        dropdownRef.current && !dropdownRef.current.contains(e.target as Node)
-      ) {
-        setOpen(false);
-        setSearch('');
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  // Close on scroll/resize
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: Event) => {
-      if (dropdownRef.current && dropdownRef.current.contains(e.target as Node)) return;
-      setOpen(false);
-      setSearch('');
-    };
-    window.addEventListener('scroll', close, true);
-    window.addEventListener('resize', close);
-    return () => { window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close); };
-  }, [open]);
-
-  const filtered = search.trim()
-    ? models.filter(m => m.toLowerCase().includes(search.toLowerCase()))
-    : models;
-
-  const displayValue = value || placeholder;
-
-  const dropdown = open && rect ? createPortal(
-    <div
-      ref={dropdownRef}
-      style={{
-        position: 'absolute',
-        top: rect.top,
-        left: rect.left,
-        width: Math.max(rect.width, 240),
-        zIndex: 9999,
-        transform: direction === 'up' ? 'translateY(-100%)' : undefined,
-      }}
-      className="border border-ink bg-bg shadow-drawer"
-    >
-      <Command shouldFilter={false}>
-        {direction === 'down' && (
-          <CommandInput
-            placeholder="Filter models…"
-            value={search}
-            onValueChange={setSearch}
-          />
-        )}
-        <CommandList>
-          {filtered.length === 0
-            ? <CommandEmpty>No models match.</CommandEmpty>
-            : (
-              <CommandGroup>
-                {filtered.map(m => (
-                  <CommandItem
-                    key={m}
-                    value={m}
-                    onSelect={() => { onChange(m); setOpen(false); setSearch(''); }}
-                    data-selected={m === value}
-                  >
-                    <span className="truncate">{m}</span>
-                    {m === value && (
-                      <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
-                        <path d="M2 6.5l3.5 3.5 5.5-6" />
-                      </svg>
-                    )}
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            )
-          }
-        </CommandList>
-        {direction === 'up' && (
-          <CommandInput
-            placeholder="Filter models…"
-            value={search}
-            onValueChange={setSearch}
-            wrapperClassName="border-t border-b-0"
-          />
-        )}
-      </Command>
-    </div>,
-    document.body,
-  ) : null;
-
-  return (
-    <div className={cn('w-full max-w-[360px]', className)}>
-      <button
-        ref={triggerRef}
-        type="button"
-        disabled={disabled}
-        onClick={() => open ? (setOpen(false), setSearch('')) : openDropdown()}
-        className={cn(
-          'flex h-9 w-full items-center justify-between gap-2 border border-ink bg-bg px-3 text-sm',
-          'focus:outline-none disabled:cursor-not-allowed disabled:opacity-40',
-          open && 'ring-1 ring-ink',
-        )}
-      >
-        <span className={cn('truncate', !value && 'text-muted')}>{displayValue}</span>
-        <svg width="12" height="12" viewBox="0 0 12 12" className="shrink-0 text-muted" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <path d="M2 4l4 4 4-4" />
-        </svg>
-      </button>
-      {dropdown}
-    </div>
-  );
-}
 
 // Compact per-engine voice-level control: a labelled range slider + live readout,
 // writing into form.tts.gainDb[engineId]. Dropped into each engine's config panel.
@@ -2483,19 +2303,12 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               <Label>Provider</Label>
               {llmDirty && <Pill tone="accent" dot>unsaved</Pill>}
             </div>
-            <Select
+            <ProviderSelector
               value={form.llm.provider}
-              onValueChange={changeLlmProvider}
-            >
-              <SelectTrigger className="max-w-[360px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {(data.llm?.providers || ['ollama']).map(p => (
-                    <SelectItem key={p} value={p}>{llmProviderLabel(p)}</SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+              providerIds={data.llm?.providers || ['ollama']}
+              env={data.env}
+              onChange={changeLlmProvider}
+            />
             <div className="field-hint">
               {llmDirty
                 ? 'Provider changed. Hit "Save LLM provider" below to route every call here.'
