@@ -792,7 +792,93 @@ export default function SettingsPanel() {
         )}
         {/* Self-contained panels — each re-calls useAdminAuth and owns its
             own data fetch, so they render outside the data && form guard. */}
-        {activeSection === 'archives' && <ArchivesPanel />}
+        {activeSection === 'archives' && (
+          <>
+            {form && (
+              <Card title="Hourly archive" sub="state/archive/%Y-%m-%d/%H-00.mp3">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>Record the broadcast to disk</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.archive.enabled ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, archive: { ...f.archive, enabled: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({ archive: { enabled: form.archive.enabled } })
+                        }
+                        disabled={busy}
+                      >
+                        Save
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      The archive runs a second MP3 encoder 24/7 and is the biggest constant
+                      CPU cost in the broadcast container. Turn it off if you don't replay
+                      the hourly tapes (issue #137).
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>Archive bitrate</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Select
+                        value={form.archive.bitrate}
+                        onValueChange={v =>
+                          setForm(f => (f ? { ...f, archive: { ...f.archive, bitrate: v } } : f))
+                        }
+                      >
+                        <SelectTrigger className="w-32" disabled={!form.archive.enabled}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ARCHIVE_BITRATES.map(br => (
+                            <SelectItem key={br} value={String(br)}>
+                              {br} kbps
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({
+                            archive: { bitrate: parseInt(form.archive.bitrate, 10) },
+                          })
+                        }
+                        disabled={busy || !form.archive.enabled}
+                      >
+                        Save bitrate
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      Lower bitrate = smaller archives, less encoder CPU
+                      (current: {data?.values?.archive?.bitrate ?? '—'} kbps). 128 kbps is the
+                      original default.
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            )}
+            <ArchivesPanel />
+          </>
+        )}
         {activeSection === 'webhooks' && <WebhooksPanel />}
         {activeSection === 'backup' && <BackupPanel />}
         {activeSection === 'danger' && (
@@ -899,89 +985,6 @@ export default function SettingsPanel() {
                     album mixes or DJ sets that keep landing in rotation. Listener requests still
                     play any length, and a show can override this with its own limit (0 there means
                     unlimited). Applies on the next pick; no restart needed.
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            {form && (
-              <Card title="Hourly archive" sub="state/archive/%Y-%m-%d/%H-00.mp3">
-                <div className="grid gap-3">
-                  <div className="field">
-                    <div className="flex items-center gap-2">
-                      <Label>Record the broadcast to disk</Label>
-                      <Pill tone="ink">restart required</Pill>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Seg
-                        options={[
-                          { id: 'on', label: 'On' },
-                          { id: 'off', label: 'Off' },
-                        ]}
-                        value={form.archive.enabled ? 'on' : 'off'}
-                        onChange={id =>
-                          setForm(f =>
-                            f ? { ...f, archive: { ...f.archive, enabled: id === 'on' } } : f,
-                          )
-                        }
-                      />
-                      <Btn
-                        sm
-                        onClick={() =>
-                          saveSettings({ archive: { enabled: form.archive.enabled } })
-                        }
-                        disabled={busy}
-                      >
-                        Save
-                      </Btn>
-                    </div>
-                    <div className="field-hint">
-                      The archive runs a second MP3 encoder 24/7 and is the biggest constant
-                      CPU cost in the broadcast container. Turn it off if you don't replay
-                      the hourly tapes (issue #137).
-                    </div>
-                  </div>
-
-                  <div className="field">
-                    <div className="flex items-center gap-2">
-                      <Label>Archive bitrate</Label>
-                      <Pill tone="ink">restart required</Pill>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Select
-                        value={form.archive.bitrate}
-                        onValueChange={v =>
-                          setForm(f => (f ? { ...f, archive: { ...f.archive, bitrate: v } } : f))
-                        }
-                      >
-                        <SelectTrigger className="w-32" disabled={!form.archive.enabled}>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {ARCHIVE_BITRATES.map(br => (
-                            <SelectItem key={br} value={String(br)}>
-                              {br} kbps
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Btn
-                        sm
-                        onClick={() =>
-                          saveSettings({
-                            archive: { bitrate: parseInt(form.archive.bitrate, 10) },
-                          })
-                        }
-                        disabled={busy || !form.archive.enabled}
-                      >
-                        Save bitrate
-                      </Btn>
-                    </div>
-                    <div className="field-hint">
-                      Lower bitrate = smaller archives, less encoder CPU
-                      (current: {data?.values?.archive?.bitrate ?? '—'} kbps). 128 kbps is the
-                      original default.
-                    </div>
                   </div>
                 </div>
               </Card>
