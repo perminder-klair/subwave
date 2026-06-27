@@ -347,9 +347,9 @@ async function main() {
   });
   await test('strict genre is a hard rule, not a soft lean', () => {
     const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Hip-Hop', genreStrict: true });
-    assert.match(out, /Genre lock/);
-    assert.match(out, /MUST be Hip-Hop/);
-    assert.match(out, /do not pick other genres/);
+    assert.match(out, /Hip-Hop-only/);                              // the strict "{genre}-only" lock (#618)
+    assert.match(out, /keep your picks and your talk in Hip-Hop/);  // stay-in-genre instruction
+    assert.match(out, /only step outside if there is genuinely no Hip-Hop track/); // hard rule + escape hatch
     assert.doesNotMatch(out, /lean toward Hip-Hop/);
     assert.doesNotMatch(out, /Music steer/);     // no soft line when only the genre is pinned
   });
@@ -361,12 +361,12 @@ async function main() {
     assert.equal(showMusicLean({ name: 'x', topic: 'y', genreStrict: true }), '');
     // energy still produces a soft line; no genre lock without a genre
     const out = showMusicLean({ name: 'x', topic: 'y', energy: 'high', genreStrict: true });
-    assert.doesNotMatch(out, /Genre lock/);
+    assert.doesNotMatch(out, /-only —/);   // no genre lock without a genre
     assert.match(out, /favour high-energy tracks/);
   });
   await test('strict genre coexists with soft era/energy steers', () => {
     const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Soul', genreStrict: true, fromYear: 1970, toYear: 1979, energy: 'medium' });
-    assert.match(out, /Genre lock for this show/);
+    assert.match(out, /Soul-only/);   // strict genre lock (#618)
     assert.match(out, /Music steer for this show — prefer tracks from 1970–1979; favour medium-energy tracks/);
     assert.doesNotMatch(out, /lean toward Soul/);  // genre is the hard rule, not a soft part
   });
