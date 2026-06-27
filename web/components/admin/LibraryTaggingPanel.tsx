@@ -54,6 +54,9 @@ export interface TaggerProgress {
   round?: number;        // active-learn round
   errors?: number;
   llm?: { legs: Record<string, number> };
+  // Cumulative ms per phase, attached to the terminal 'done' event so the panel
+  // can show where the last run spent its time.
+  timings?: Record<string, number>;
   updatedAt: string;
 }
 
@@ -134,6 +137,28 @@ const PHASE_HINT: Record<TaggerProgress['phase'], string> = {
   done: 'Wrapping up.',
 };
 
+// Short labels for the post-run phase breakdown (keys match the tagger's
+// timings map, which includes 'setup'/'walk' that aren't user-facing phases).
+const PHASE_LABEL: Record<string, string> = {
+  setup: 'setup',
+  walk: 'scan',
+  enrich: 'enrich',
+  embed: 'embed',
+  seed: 'seed-tag',
+  propagate: 'spread',
+  learn: 're-tag',
+  analyze: 'acoustics',
+};
+
+// ms → compact "2m 5s" / "40s" for the breakdown line.
+function fmtDur(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r ? `${m}m ${r}s` : `${m}m`;
+}
+
 export default function TaggingPanel(p: TaggingPanelProps) {
   const [maintOpen, setMaintOpen] = useState(false);
   const [confirmRescan, setConfirmRescan] = useState(false);
@@ -182,6 +207,16 @@ export default function TaggingPanel(p: TaggingPanelProps) {
     : null;
   const runIndeterminate = !!progress && progress.total == null && progress.phase !== 'done';
   const legEntries = progress?.llm ? Object.entries(progress.llm.legs) : [];
+
+  // After a run ends, the child's final 'done' event sticks around (broadcast/
+  // tagger.ts keeps it post-exit) — surface its per-phase breakdown when idle so
+  // the operator can see where the time went (usually the chat-model seed/re-tag
+  // phases, not embeddings) without scraping the log.
+  const lastTimings =
+    !running && p.tagger?.progress?.phase === 'done' ? p.tagger.progress.timings : undefined;
+  const lastTimingEntries = lastTimings
+    ? Object.entries(lastTimings).filter(([, ms]) => ms > 0).sort((a, b) => b[1] - a[1])
+    : [];
 
   useDynamicStyle(moodFillRef, { width: pct != null ? `${Math.min(100, pct)}%` : '0%' });
   useDynamicStyle(acousticFillRef, { width: !analysisOff && apct != null ? `${Math.min(100, apct)}%` : '0%' });
@@ -336,6 +371,17 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                   : 'The DJ is listening to each new track and deciding its mood & energy.')}
             {' '}You can keep browsing. This runs in the background.
           </div>
+        </div>
+      )}
+
+      {/* last-run phase breakdown — only when idle and the child reported timings */}
+      {lastTimingEntries.length > 0 && (
+        <div className="border-t border-dashed border-separator-strong px-6 py-3 text-[11px] text-muted">
+          <span className="font-bold text-ink">Last run</span>
+          <span className="!normal-case">
+            {' · '}
+            {lastTimingEntries.map(([ph, ms]) => `${PHASE_LABEL[ph] ?? ph} ${fmtDur(ms)}`).join(' · ')}
+          </span>
         </div>
       )}
 

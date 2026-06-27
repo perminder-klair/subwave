@@ -30,6 +30,11 @@ export interface TaggerProgress {
   errors?: number;
   // Per-leg tagged counts when dual-LLM mode is draining the batch queue.
   llm?: { legs: Record<string, number> };
+  // Cumulative wall-clock per phase, in milliseconds (e.g. { enrich: 12000,
+  // embed: 40000 }). Attached to the terminal 'done' event so the operator can
+  // see where a slow run actually spent its time (the chat-model tagging phases
+  // usually dominate, not embeddings). Absent on in-flight events.
+  timings?: Record<string, number>;
   updatedAt: string;
 }
 

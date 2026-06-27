@@ -183,6 +183,17 @@ async function main() {
   const flags = parseFlags();
   const startedAt = Date.now();
 
+  // Per-phase wall-clock. `lap(name)` attributes the time since the previous lap
+  // to `name`, so the breakdown in finish() shows where a slow run actually went
+  // (almost always the chat-model seed/learn phases, not embeddings).
+  const timings: Record<string, number> = {};
+  let phaseT0 = startedAt;
+  const lap = (name: string): void => {
+    const now = Date.now();
+    timings[name] = (timings[name] || 0) + (now - phaseT0);
+    phaseT0 = now;
+  };
+
   await applyWizardOverlay();
   await settings.load();
 
@@ -257,6 +268,7 @@ async function main() {
   // ---- Phase A: iterate Navidrome and upsert track metadata into DB ------
   // Cheap; ensures every Navidrome song is in the tracks table so subsequent
   // phases can operate purely off SQL.
+  lap('setup');
   console.log('[tag] walking Navidrome library...');
   const { walked, liveIds } = await walkNavidrome();
 
@@ -271,6 +283,7 @@ async function main() {
       console.log(`[tag] pruned ${pruned} orphaned tracks no longer in Navidrome`);
     }
   }
+  lap('walk');
 
   // Honour --limit by capping how many NEW tracks we work on this run.
   // We do this by selecting the first N untagged ids; ones beyond the cap
@@ -304,9 +317,11 @@ async function main() {
   } else {
     console.log('[tag] --skip-enrich: not fetching Last.fm tags or lyrics');
   }
+  lap('enrich');
 
   // ---- Phase 1: EMBED ----------------------------------------------------
   await phaseEmbed(targetUntagged, flags.batchSize);
+  lap('embed');
 
   // ---- Phase 2: SEED -----------------------------------------------------
   // CLI --seeds wins, then settings.embedding.seedCount, then sqrt(N) auto.
@@ -356,10 +371,11 @@ async function main() {
     mergeByLeg(tagged.byLeg);
     console.log(`[tag] phase-2 done: ${tagged.tagged}/${seedSelection.seeds.length} seeded`);
   }
+  lap('seed');
 
   if (flags.noPropagate) {
     console.log('[tag] --no-propagate: stopping after seed phase');
-    return finish(startedAt, llmCalls, llmTagged, byLeg);
+    return finish(startedAt, llmCalls, llmTagged, byLeg, timings);
   }
 
   // ---- Phase 3: PROPAGATE ------------------------------------------------
@@ -412,6 +428,7 @@ async function main() {
   }
   console.log(`[tag] phase-3 propagated ${propagated} tracks; ${uncertain.length} uncertain (in scope)`);
   reportProgress({ phase: 'propagate', label: 'Propagating tags to neighbours', done: targetUntagged.length, total: targetUntagged.length });
+  lap('propagate');
 
   // ---- Phase 4: ACTIVE-LEARN --------------------------------------------
   for (let round = 1; round <= maxRounds; round++) {
@@ -475,6 +492,7 @@ async function main() {
     }
     uncertain = stillUncertain;
   }
+  lap('learn');
 
   // ---- Phase 5: ANALYZE (acoustic bpm/key/intro) -------------------------
   // Independent of mood tagging — runs the same pass as `npm run analyze`.
@@ -490,24 +508,40 @@ async function main() {
       console.error(`[tag] analysis phase failed (non-fatal): ${err?.message || err}`);
     }
   }
+  lap('analyze');
 
-  finish(startedAt, llmCalls, llmTagged, byLeg);
+  finish(startedAt, llmCalls, llmTagged, byLeg, timings);
 }
 
 function autoSeedCount(librarySize: number): number {
   return Math.max(200, Math.ceil(Math.sqrt(librarySize)));
 }
 
-function finish(startedAt: number, llmCalls: number, llmTagged: number, byLeg: Record<string, number>) {
+function finish(
+  startedAt: number,
+  llmCalls: number,
+  llmTagged: number,
+  byLeg: Record<string, number>,
+  timings: Record<string, number> = {},
+) {
   const elapsed = (Date.now() - startedAt) / 1000;
   console.log(
     `\n[tag] done in ${elapsed.toFixed(0)}s. llm_calls=${llmCalls} llm_tagged=${llmTagged}`,
   );
+  // Phase breakdown, slowest first — turns "tagging is slow" into "phase X is
+  // 90% of the time" so the operator knows what to actually tune.
+  const timed = Object.entries(timings).filter(([, ms]) => ms > 0).sort((a, b) => b[1] - a[1]);
+  if (timed.length) {
+    console.log(
+      `[tag] phase breakdown: ${timed.map(([p, ms]) => `${p} ${(ms / 1000).toFixed(0)}s`).join(' · ')}`,
+    );
+  }
   reportProgress({
     phase: 'done',
     label: 'Finished',
     done: llmTagged,
     llm: Object.keys(byLeg).length ? { legs: byLeg } : undefined,
+    timings: timed.length ? Object.fromEntries(timed) : undefined,
   });
   const legs = Object.entries(byLeg);
   if (legs.length > 1) {
@@ -541,54 +575,83 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
     );
   }
   reportProgress({ phase: 'enrich', label: 'Enriching metadata', done: 0, total: ids.length });
-  const artistTagCache = new Map<string, string[]>();
+  // Per-artist Last.fm dedup: cache the in-flight PROMISE, not just the resolved
+  // value. With the concurrent worker pool below, several tracks by the same
+  // artist can be in flight at once; caching the promise means they share one
+  // API call instead of each firing its own before the first resolves.
+  const artistTagCache = new Map<string, Promise<string[]>>();
+  const artistTags = (artist: string): Promise<string[]> => {
+    let p = artistTagCache.get(artist);
+    if (!p) {
+      // Direct Last.fm API when a key is present (returns crowd tags on vanilla
+      // Navidrome), else Navidrome's getArtistInfo2. Shared with the single-track
+      // retag route so the two can't drift (see lastfm.ts).
+      p = lastfm.getArtistTags(artist, { count: 10 }).then(t => t ?? []).catch(() => []);
+      artistTagCache.set(artist, p);
+    }
+    return p;
+  };
+
   let enrichedTracks = 0;
   let enrichedLyrics = 0;
   let enrichedTags = 0;
 
-  for (const id of ids) {
-    const t = db.getTrack(id);
-    if (!t) continue;
-    if (!reEnrich && t.enrichedAt) continue;
+  // Enrichment is I/O-bound (Last.fm + Navidrome lyrics fetches), so a serial
+  // await-per-track loop spends almost all its time blocked on the network — on a
+  // large library that's the difference between minutes and an hour. Drain the id
+  // list with a small pool of workers instead. DB writes go through better-sqlite3
+  // (synchronous), so they're naturally serialised on the single-threaded event
+  // loop between awaits — no locking needed. `cursor++` is likewise atomic. Pool
+  // size is gentle by default (6) and tunable via TAG_ENRICH_CONCURRENCY so a
+  // small Navidrome / Last.fm budget can dial it down.
+  const concurrency = Math.max(
+    1,
+    Math.min(32, parseInt(process.env.TAG_ENRICH_CONCURRENCY || '', 10) || 6),
+  );
 
-    let lastfmTags: string[] | null = null;
-    if (lastfmEnabled && t.artist) {
-      const cacheKey = t.artist;
-      if (artistTagCache.has(cacheKey)) {
-        lastfmTags = artistTagCache.get(cacheKey) ?? null;
-      } else {
-        // Direct Last.fm API when a key is present (returns crowd tags on
-        // vanilla Navidrome), else Navidrome's getArtistInfo2. Shared with the
-        // single-track retag route so the two can't drift (see lastfm.ts).
-        lastfmTags = await lastfm.getArtistTags(t.artist, { count: 10 });
-        artistTagCache.set(cacheKey, lastfmTags ?? []);
+  let cursor = 0;
+  async function enrichWorker(): Promise<void> {
+    for (;;) {
+      const i = cursor++;
+      if (i >= ids.length) return;
+      const id = ids[i];
+      const t = db.getTrack(id);
+      if (!t) continue;
+      if (!reEnrich && t.enrichedAt) continue;
+
+      let lastfmTags: string[] | null = null;
+      if (lastfmEnabled && t.artist) {
+        const tags = await artistTags(t.artist);
+        lastfmTags = tags.length ? tags : null;
+      }
+
+      let lyricExcerpt: string | null = null;
+      if (lyricsEnabled) {
+        try {
+          const raw = await subsonic.getLyrics(id);
+          if (typeof raw === 'string' && raw.trim()) {
+            lyricExcerpt = raw.trim();
+          }
+        } catch { /* ignore */ }
+      }
+
+      db.upsertTrackEnrichment(id, { lastfmTags, lyricExcerpt });
+      enrichedTracks += 1;
+      if (lastfmTags && lastfmTags.length) enrichedTags += 1;
+      if (lyricExcerpt) enrichedLyrics += 1;
+      if (enrichedTracks % 100 === 0) {
+        console.log(
+          `[tag] enriched ${enrichedTracks}/${ids.length} (lastfm: ${enrichedTags}, lyrics: ${enrichedLyrics})`,
+        );
+        reportProgress({ phase: 'enrich', label: 'Enriching metadata', done: enrichedTracks, total: ids.length });
       }
     }
-
-    let lyricExcerpt: string | null = null;
-    if (lyricsEnabled) {
-      try {
-        const raw = await subsonic.getLyrics(id);
-        if (typeof raw === 'string' && raw.trim()) {
-          lyricExcerpt = raw.trim();
-        }
-      } catch { /* ignore */ }
-    }
-
-    db.upsertTrackEnrichment(id, {
-      lastfmTags: lastfmTags && lastfmTags.length ? lastfmTags : null,
-      lyricExcerpt,
-    });
-    enrichedTracks += 1;
-    if (lastfmTags && lastfmTags.length) enrichedTags += 1;
-    if (lyricExcerpt) enrichedLyrics += 1;
-    if (enrichedTracks % 100 === 0) {
-      console.log(
-        `[tag] enriched ${enrichedTracks}/${ids.length} (lastfm: ${enrichedTags}, lyrics: ${enrichedLyrics})`,
-      );
-      reportProgress({ phase: 'enrich', label: 'Enriching metadata', done: enrichedTracks, total: ids.length });
-    }
   }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, ids.length) }, () => enrichWorker()),
+  );
+
   console.log(
     `[tag] phase-0 done: enriched ${enrichedTracks} tracks (lastfm: ${enrichedTags}, lyrics: ${enrichedLyrics})`,
   );
