@@ -1,14 +1,15 @@
 'use client';
 
 // Archives — /admin/archives. The hourly broadcast recordings Liquidsoap
-// writes under state/archive/. Read-only: download or delete via the file
-// system, no playback controls here (these MP3s are an hour long each and
-// the browser audio element doesn't seek well into them).
+// writes under state/archive/. Download a single hour or clear the whole lot;
+// no playback controls here (these MP3s are an hour long each and the browser
+// audio element doesn't seek well into them).
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { fmtSize, relTime } from '../../lib/format';
 import { Card, Btn, Eyebrow, Pill } from './ui';
+import { V3AlertDialog } from '../ui/alert-dialog';
 
 interface ArchiveEntry {
   path: string;
@@ -32,25 +33,44 @@ export default function ArchivesPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [dlErr, setDlErr] = useState<string | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [clearErr, setClearErr] = useState<string | null>(null);
+
+  const load = useCallback(async (): Promise<void> => {
+    try {
+      const r = await adminFetch('/archives');
+      if (!r.ok) throw new Error(`failed (${r.status})`);
+      const j = (await r.json()) as ArchivesResponse;
+      setEntries(Array.isArray(j.archives) ? j.archives : []);
+      setErr(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }, [adminFetch]);
 
   useEffect(() => {
     if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/archives');
-        if (!r.ok) throw new Error(`failed (${r.status})`);
-        const j = (await r.json()) as ArchivesResponse;
-        if (cancelled) return;
-        setEntries(Array.isArray(j.archives) ? j.archives : []);
-        setErr(null);
-      } catch (e) {
-        if (cancelled) return;
-        setErr(e instanceof Error ? e.message : String(e));
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated, needsAuth, adminFetch]);
+    void load();
+  }, [hydrated, needsAuth, load]);
+
+  // Wipe every recording in one shot — the only delete affordance (per-file
+  // delete isn't worth the UI for hour-long mixdowns). Re-fetches the now-empty
+  // list on success so the panel reflects the freed disk immediately.
+  const clearArchive = async () => {
+    setClearing(true);
+    setClearErr(null);
+    try {
+      const r = await adminFetch('/archives', { method: 'DELETE' });
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      await load();
+    } catch (e) {
+      setClearErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setClearing(false);
+    }
+  };
 
   // Group by date — the operator's mental model is "let me grab yesterday's
   // 9am hour", not "give me a flat list of 720 mp3s sorted by mtime".
@@ -134,11 +154,23 @@ export default function ArchivesPanel() {
         <div className="flex items-center gap-4 bg-[var(--ink-softer)] p-3.5">
           <span className="caption">{entries.length} hour{entries.length === 1 ? '' : 's'}</span>
           <span className="caption text-vermilion">{fmtSize(totalBytes)} total</span>
+          <Btn
+            sm
+            tone="danger"
+            className="ml-auto"
+            onClick={() => setConfirmClear(true)}
+            disabled={clearing || entries.length === 0}
+          >
+            {clearing ? 'Clearing…' : 'Clear archive'}
+          </Btn>
         </div>
       </section>
 
       {dlErr && (
         <div className="text-[12px] text-[var(--danger)]">download error: {dlErr}</div>
+      )}
+      {clearErr && (
+        <div className="text-[12px] text-[var(--danger)]">clear failed: {clearErr}</div>
       )}
 
       {byDate.length === 0 && (
@@ -177,6 +209,22 @@ export default function ArchivesPanel() {
           </ul>
         </Card>
       ))}
+
+      <V3AlertDialog
+        open={confirmClear}
+        onOpenChange={setConfirmClear}
+        danger
+        title="Clear archive"
+        description={
+          <>
+            Permanently delete all {entries.length} recorded hour{entries.length === 1 ? '' : 's'}
+            {' '}({fmtSize(totalBytes)})? This frees the disk under <code>state/archive/</code> and
+            cannot be undone. The current hour keeps recording.
+          </>
+        }
+        confirmLabel="clear archive"
+        onConfirm={clearArchive}
+      />
     </div>
   );
 }

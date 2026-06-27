@@ -1,34 +1,40 @@
 'use client';
-// Radio-card grid for picking a TTS engine. Replaces the cramped 5-button
-// segmented control on both the Personas voice card and the Settings voice tab:
-// every engine is a selectable card showing its name, a one-line blurb and a
-// live status badge (ready / sidecar off / no key) so availability is visible
-// before you select. Styled on the newsprint RadioOption pattern. Tailwind-only
-// (no inline styles — issue #50).
+// Radio-card grid for picking the primary LLM provider. Replaces the plain
+// dropdown on the Settings LLM tab: every provider is a selectable card showing
+// its name, a one-line blurb and a live status badge (local / self-host / key
+// set / no key) so key availability is visible before you switch and save — the
+// #1 LLM misconfiguration is routing to a cloud provider whose key isn't set.
+// Styled to match the TTS EngineSelector (newsprint RadioOption pattern).
+// Tailwind-only, no inline styles (issue #50). The fallback leg keeps the
+// dropdown — cards there would double the tab's height for a secondary control.
 import { cn } from '../../../lib/cn';
-import { ENGINE_META, engineStatus } from './engineMeta';
+import { PROVIDER_META, providerStatus } from './providerMeta';
 
-interface EngineSelectorProps {
-  // Currently selected engine id.
+interface ProviderSelectorProps {
+  // Currently selected provider id.
   value: string;
-  // Which engines to show as cards (Personas: all 5; Settings: data.tts.engines).
-  engineIds: string[];
-  // SettingsResponse.tts.available — drives the per-card status badge.
-  available?: Record<string, boolean>;
+  // Which providers to show as cards — pass SettingsResponse.llm.providers so the
+  // grid stays server-authoritative (order + future additions).
+  providerIds: string[];
+  // SettingsResponse.env — which cloud key vars are present; drives the badge.
+  env?: Record<string, unknown>;
+  // false for the onboarding wizard, where there's no live env yet — cloud
+  // providers then read as a neutral "needs key" instead of a red "no key".
+  keyAware?: boolean;
   onChange: (id: string) => void;
   className?: string;
 }
 
-export function EngineSelector({ value, engineIds, available, onChange, className }: EngineSelectorProps) {
+export function ProviderSelector({ value, providerIds, env, keyAware = true, onChange, className }: ProviderSelectorProps) {
   return (
     <div
       role="radiogroup"
-      aria-label="Voice engine"
+      aria-label="LLM provider"
       className={cn('grid grid-cols-2 gap-2.5 md:grid-cols-3', className)}
     >
-      {engineIds.map(id => {
-        const meta = ENGINE_META[id];
-        const status = engineStatus(id, available);
+      {providerIds.map(id => {
+        const meta = PROVIDER_META[id];
+        const status = providerStatus(id, env, keyAware);
         const active = value === id;
         return (
           <button
@@ -45,8 +51,8 @@ export function EngineSelector({ value, engineIds, available, onChange, classNam
             )}
           >
             {/* Title row — dot + name only, full card width. The status badge
-                moved to the bottom row so it never crowds long engine names
-                (CHATTERBOX / POCKETTTS), matching the LLM ProviderSelector. */}
+                moved to the bottom row so it never crowds long names
+                (OPENROUTER / ANTHROPIC / OpenAI-compatible). */}
             <div className="flex items-center gap-1.5">
               <span
                 className={cn(

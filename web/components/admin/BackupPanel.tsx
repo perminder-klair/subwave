@@ -44,7 +44,7 @@ function fmtSize(bytes: number): string {
 }
 
 export default function BackupPanel() {
-  const { adminFetch } = useAdminAuth();
+  const { adminFetch, hydrated, needsAuth } = useAdminAuth();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [exporting, setExporting] = useState(false);
@@ -110,9 +110,14 @@ export default function BackupPanel() {
     }
   }, [adminFetch]);
 
+  // Wait for the cached token to hydrate before the first fetch. Firing it
+  // immediately sends an unauthenticated /backup/restorable, and the
+  // controller's 401 carries `WWW-Authenticate: Basic`, which makes the
+  // browser pop its native login dialog. Mirrors the gate in the other panels.
   useEffect(() => {
+    if (!hydrated || needsAuth) return;
     loadDiskFiles();
-  }, [loadDiskFiles]);
+  }, [hydrated, needsAuth, loadDiskFiles]);
 
   const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] || null;

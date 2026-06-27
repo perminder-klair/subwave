@@ -9,7 +9,7 @@
 // archive directory by hand, so we don't watch for changes; each /archives
 // GET re-scans. Two-level directory walk is cheap (one entry per hour).
 
-import { readdir, stat } from 'node:fs/promises';
+import { readdir, stat, rm } from 'node:fs/promises';
 import { createReadStream, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { config } from '../config.js';
@@ -86,4 +86,43 @@ export function resolveEntry(rel: string): string | null {
 
 export function openStream(abs: string) {
   return createReadStream(abs);
+}
+
+// Delete every hourly recording under the archive root. Only YYYY-MM-DD day
+// directories are removed — anything else in the tree (notably the `.ndignore`
+// the broadcast entrypoint drops here to keep these mixdowns out of a
+// co-located Navidrome scan) is left untouched. Returns how many hour files
+// were removed and the bytes freed, for the operator's confirmation toast.
+//
+// Safe to run while on air: if Liquidsoap currently holds this hour's file
+// open, the unlink just detaches the name — it keeps writing to the now-orphan
+// inode and reopens a fresh file at the next HH:00 (output.file reopen_when).
+export async function clearAll(): Promise<{ removed: number; bytes: number }> {
+  if (!existsSync(ARCHIVE_ROOT)) return { removed: 0, bytes: 0 };
+  let dayDirs: string[] = [];
+  try {
+    dayDirs = (await readdir(ARCHIVE_ROOT)).filter(d => DATE_RE.test(d));
+  } catch {
+    return { removed: 0, bytes: 0 };
+  }
+
+  let removed = 0;
+  let bytes = 0;
+  for (const date of dayDirs) {
+    const dir = join(ARCHIVE_ROOT, date);
+    // Tally the hour files before the directory goes, for the report.
+    try {
+      for (const f of await readdir(dir)) {
+        if (!HOUR_RE.test(f)) continue;
+        try {
+          const st = await stat(join(dir, f));
+          if (st.isFile()) { removed += 1; bytes += st.size; }
+        } catch {}
+      }
+    } catch {}
+    try {
+      await rm(dir, { recursive: true, force: true });
+    } catch {}
+  }
+  return { removed, bytes };
 }

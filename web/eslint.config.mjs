@@ -209,8 +209,13 @@ export default defineConfig([
   // per-mood and per-size (face/antenna dimensions, tilt, scale) over the theme
   // tokens, so it's intrinsically inline-styled and can't be static Tailwind
   // utilities — same dynamic-styling deal as the Observatory above.
+  //
+  // ModelCombobox is also here: its dropdown is portalled to <body> and
+  // absolutely positioned from a runtime getBoundingClientRect (top/left/width),
+  // so the position style is intrinsically dynamic. It was previously inline in
+  // SettingsPanel (already exempt) before being extracted for reuse.
   {
-    files: ['components/BoothBuddy.tsx', 'components/admin/SettingsPanel.tsx'],
+    files: ['components/BoothBuddy.tsx', 'components/admin/SettingsPanel.tsx', 'components/admin/llm/ModelCombobox.tsx'],
     rules: {
       'react/forbid-dom-props': 'off',
     },

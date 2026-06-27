@@ -2,7 +2,6 @@
 
 import type { ChangeEvent, ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { m } from 'motion/react';
 import { notify, errorMessage } from '../../lib/notify';
@@ -12,52 +11,51 @@ import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { applyTheme, cacheTheme } from '../../lib/theme';
 import { CLOUD_VOICES, CLOUD_MODELS } from '../../lib/cloudVoices';
 import { V3AlertDialog } from '../ui/alert-dialog';
+import { Modal } from '../ui/modal';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { Label } from '../ui/label';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../ui/select';
-import {
-  Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem,
-} from '../ui/command';
 import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
 import { EngineSelector } from './tts/EngineSelector';
 import { VoicePreviewButton } from './tts/VoicePreviewButton';
+import { ProviderSelector } from './llm/ProviderSelector';
+import { EmbeddingProviderSelector } from './embedding/EmbeddingProviderSelector';
+import { ModelCombobox } from './llm/ModelCombobox';
+import { LLM_ENV_VARS, llmProviderLabel } from './llm/providerMeta';
 import { AiFill } from './AiFill';
 import { cn } from '../../lib/cn';
 import ArchivesPanel from './ArchivesPanel';
 import WebhooksPanel from './WebhooksPanel';
 import BackupPanel from './BackupPanel';
+import {
+  Radio, Palette, Cpu, Mic, Library, Search, Music, AudioLines,
+  Activity, Archive, Webhook, Save, AlertTriangle,
+} from 'lucide-react';
 
 const SECTIONS = [
-  { id: 'station',  label: 'Station', hint: 'name · location · locale' },
-  { id: 'theme',    label: 'Theme', hint: 'station-wide palette' },
-  { id: 'llm',      label: 'LLM provider', hint: 'model routing' },
-  { id: 'tts',      label: 'TTS voice', hint: 'default engine' },
-  { id: 'library',  label: 'Library tagger', hint: 'embedding · propagation' },
-  { id: 'search',   label: 'Web search', hint: 'live-facts backend' },
-  { id: 'jingles',  label: 'Jingles', hint: 'stingers' },
-  { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers' },
-  { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz' },
-  { id: 'archives', label: 'Archives', hint: 'hourly recordings' },
-  { id: 'webhooks', label: 'Webhooks', hint: 'outbound events' },
-  { id: 'backup',   label: 'Backup', hint: 'export · restore' },
-  { id: 'danger',   label: 'Danger zone', hint: 'broadcast control' },
+  { id: 'station',  label: 'Station', hint: 'name · location · locale', icon: Radio },
+  { id: 'theme',    label: 'Theme', hint: 'station-wide palette', icon: Palette },
+  { id: 'llm',      label: 'LLM provider', hint: 'model routing', icon: Cpu },
+  { id: 'tts',      label: 'TTS voice', hint: 'default engine', icon: Mic },
+  { id: 'library',  label: 'Library tagger', hint: 'embedding · propagation', icon: Library },
+  { id: 'search',   label: 'Web search', hint: 'live-facts backend', icon: Search },
+  { id: 'jingles',  label: 'Jingles', hint: 'stingers', icon: Music },
+  { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers', icon: AudioLines },
+  { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz', icon: Activity },
+  { id: 'archives', label: 'Archives', hint: 'hourly recordings', icon: Archive },
+  { id: 'webhooks', label: 'Webhooks', hint: 'outbound events', icon: Webhook },
+  { id: 'backup',   label: 'Backup', hint: 'export · restore', icon: Save },
+  { id: 'danger',   label: 'Danger zone', hint: 'broadcast control', icon: AlertTriangle },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]['id'];
 
-// Cloud LLM providers read their key from this controller env var.
-const LLM_ENV_VARS: Record<string, string> = {
-  anthropic: 'ANTHROPIC_API_KEY',
-  openai: 'OPENAI_API_KEY',
-  google: 'GOOGLE_GENERATIVE_AI_API_KEY',
-  deepseek: 'DEEPSEEK_API_KEY',
-  openrouter: 'OPENROUTER_API_KEY',
-  requesty: 'REQUESTY_API_KEY',
-  gateway: 'AI_GATEWAY_API_KEY',
-};
+// LLM provider descriptors, the cloud-key env-var map and the badge logic live
+// in ./llm/providerMeta (imported above) — shared with the ProviderSelector card
+// grid and, later, the onboarding wizard. Don't redefine them here.
 
 const KEY_HINTS: Record<string, string> = {
   ANTHROPIC_API_KEY: 'sk-ant-...',
@@ -69,22 +67,6 @@ const KEY_HINTS: Record<string, string> = {
   ELEVENLABS_API_KEY: 'el_...',
   EMBEDDING_API_KEY: 'optional — defaults to chat key',
 };
-
-const LLM_PROVIDER_LABELS: Record<string, string> = {
-  ollama: 'Ollama (local/cloud)',
-  locca: 'locca (local llama.cpp, host)',
-  'openai-compatible': 'OpenAI-compatible (llama.cpp, vLLM, LM Studio)',
-  anthropic: 'Anthropic (Claude)',
-  openai: 'OpenAI (GPT)',
-  google: 'Google (Gemini)',
-  deepseek: 'DeepSeek',
-  openrouter: 'OpenRouter (multi-vendor aggregator)',
-  requesty: 'Requesty (multi-vendor aggregator)',
-  gateway: 'Vercel AI Gateway (multi-vendor aggregator)',
-};
-
-const llmProviderLabel = (id: string | undefined): string =>
-  (id && LLM_PROVIDER_LABELS[id]) || id || '—';
 
 // Suggested embedding model ids per provider — clickable chips under the Model
 // field so operators don't have to guess a valid name. The #1 trip-up is typing
@@ -603,8 +585,8 @@ export default function SettingsPanel() {
     } finally { setBusy(false); }
   };
 
-  const createJingle = async () => {
-    if (!jingleText.trim() || busy) return;
+  const createJingle = async (): Promise<boolean> => {
+    if (!jingleText.trim() || busy) return false;
     setBusy(true);
     try {
       const r = await adminFetch('/jingles', {
@@ -616,7 +598,8 @@ export default function SettingsPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setJingleText('');
       await refresh();
-    } catch (e) { notify.err(`Jingle creation failed: ${errorMessage(e)}`); }
+      return true;
+    } catch (e) { notify.err(`Jingle creation failed: ${errorMessage(e)}`); return false; }
     finally { setBusy(false); }
   };
 
@@ -650,8 +633,8 @@ export default function SettingsPanel() {
     finally { setBusy(false); }
   };
 
-  const createSfx = async () => {
-    if (!sfxForm.name.trim() || !sfxForm.prompt.trim() || busy) return;
+  const createSfx = async (): Promise<boolean> => {
+    if (!sfxForm.name.trim() || !sfxForm.prompt.trim() || busy) return false;
     setBusy(true);
     try {
       const r = await adminFetch('/sfx', {
@@ -668,7 +651,8 @@ export default function SettingsPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setSfxForm({ name: '', description: '', prompt: '', durationSec: '' });
       await refreshSfx();
-    } catch (e) { notify.err(`Sound effect creation failed: ${errorMessage(e)}`); }
+      return true;
+    } catch (e) { notify.err(`Sound effect creation failed: ${errorMessage(e)}`); return false; }
     finally { setBusy(false); }
   };
 
@@ -709,24 +693,28 @@ export default function SettingsPanel() {
         <span className="caption pb-2">settings</span>
         {SECTIONS.map(s => {
           const isActive = activeSection === s.id;
+          const Icon = s.icon;
           return (
             <button
               key={s.id}
               onClick={() => setActiveSection(s.id)}
               className={cn(
-                'grid cursor-pointer gap-1 border border-ink px-3 py-2.5 text-left font-[inherit]',
-                isActive ? 'bg-ink text-bg' : 'bg-transparent text-ink',
+                'flex cursor-pointer items-center gap-2.5 border border-ink px-3 py-2.5 text-left font-[inherit] transition-colors',
+                isActive ? 'bg-ink text-bg' : 'bg-[var(--ink-soft)] text-ink hover:bg-ink/10',
               )}
             >
-              <span className="text-[11px] font-bold tracking-[0.2em] uppercase">
-                {s.label}
-              </span>
-              <span className="text-[9px] tracking-[0.18em] uppercase opacity-70">
-                {s.id === 'jingles' && data
-                  ? `${data.jingles?.length ?? 0} file${(data.jingles?.length ?? 0) === 1 ? '' : 's'}`
-                  : s.id === 'sfx' && sfxData
-                    ? `${sfxData.sfx?.length ?? 0} effect${(sfxData.sfx?.length ?? 0) === 1 ? '' : 's'}`
-                    : s.hint}
+              <Icon className="size-4 shrink-0 opacity-80" strokeWidth={2} aria-hidden />
+              <span className="grid min-w-0 gap-1">
+                <span className="text-[11px] font-bold tracking-[0.2em] uppercase">
+                  {s.label}
+                </span>
+                <span className="text-[9px] tracking-[0.18em] uppercase opacity-70">
+                  {s.id === 'jingles' && data
+                    ? `${data.jingles?.length ?? 0} file${(data.jingles?.length ?? 0) === 1 ? '' : 's'}`
+                    : s.id === 'sfx' && sfxData
+                      ? `${sfxData.sfx?.length ?? 0} effect${(sfxData.sfx?.length ?? 0) === 1 ? '' : 's'}`
+                      : s.hint}
+                </span>
               </span>
             </button>
           );
@@ -816,7 +804,93 @@ export default function SettingsPanel() {
         )}
         {/* Self-contained panels — each re-calls useAdminAuth and owns its
             own data fetch, so they render outside the data && form guard. */}
-        {activeSection === 'archives' && <ArchivesPanel />}
+        {activeSection === 'archives' && (
+          <>
+            <ArchivesPanel />
+            {form && (
+              <Card title="Hourly archive" sub="state/archive/%Y-%m-%d/%H-00.mp3">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>Record the broadcast to disk</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.archive.enabled ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, archive: { ...f.archive, enabled: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({ archive: { enabled: form.archive.enabled } })
+                        }
+                        disabled={busy}
+                      >
+                        Save
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      The archive runs a second MP3 encoder 24/7 and is the biggest constant
+                      CPU cost in the broadcast container. Turn it off if you don't replay
+                      the hourly tapes (issue #137).
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>Archive bitrate</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Select
+                        value={form.archive.bitrate}
+                        onValueChange={v =>
+                          setForm(f => (f ? { ...f, archive: { ...f.archive, bitrate: v } } : f))
+                        }
+                      >
+                        <SelectTrigger className="w-32" disabled={!form.archive.enabled}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ARCHIVE_BITRATES.map(br => (
+                            <SelectItem key={br} value={String(br)}>
+                              {br} kbps
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({
+                            archive: { bitrate: parseInt(form.archive.bitrate, 10) },
+                          })
+                        }
+                        disabled={busy || !form.archive.enabled}
+                      >
+                        Save bitrate
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      Lower bitrate = smaller archives, less encoder CPU
+                      (current: {data?.values?.archive?.bitrate ?? '—'} kbps). 128 kbps is the
+                      original default.
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            )}
+          </>
+        )}
         {activeSection === 'webhooks' && <WebhooksPanel />}
         {activeSection === 'backup' && <BackupPanel />}
         {activeSection === 'danger' && (
@@ -923,89 +997,6 @@ export default function SettingsPanel() {
                     album mixes or DJ sets that keep landing in rotation. Listener requests still
                     play any length, and a show can override this with its own limit (0 there means
                     unlimited). Applies on the next pick; no restart needed.
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            {form && (
-              <Card title="Hourly archive" sub="state/archive/%Y-%m-%d/%H-00.mp3">
-                <div className="grid gap-3">
-                  <div className="field">
-                    <div className="flex items-center gap-2">
-                      <Label>Record the broadcast to disk</Label>
-                      <Pill tone="ink">restart required</Pill>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Seg
-                        options={[
-                          { id: 'on', label: 'On' },
-                          { id: 'off', label: 'Off' },
-                        ]}
-                        value={form.archive.enabled ? 'on' : 'off'}
-                        onChange={id =>
-                          setForm(f =>
-                            f ? { ...f, archive: { ...f.archive, enabled: id === 'on' } } : f,
-                          )
-                        }
-                      />
-                      <Btn
-                        sm
-                        onClick={() =>
-                          saveSettings({ archive: { enabled: form.archive.enabled } })
-                        }
-                        disabled={busy}
-                      >
-                        Save
-                      </Btn>
-                    </div>
-                    <div className="field-hint">
-                      The archive runs a second MP3 encoder 24/7 and is the biggest constant
-                      CPU cost in the broadcast container. Turn it off if you don't replay
-                      the hourly tapes (issue #137).
-                    </div>
-                  </div>
-
-                  <div className="field">
-                    <div className="flex items-center gap-2">
-                      <Label>Archive bitrate</Label>
-                      <Pill tone="ink">restart required</Pill>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Select
-                        value={form.archive.bitrate}
-                        onValueChange={v =>
-                          setForm(f => (f ? { ...f, archive: { ...f.archive, bitrate: v } } : f))
-                        }
-                      >
-                        <SelectTrigger className="w-32" disabled={!form.archive.enabled}>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {ARCHIVE_BITRATES.map(br => (
-                            <SelectItem key={br} value={String(br)}>
-                              {br} kbps
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Btn
-                        sm
-                        onClick={() =>
-                          saveSettings({
-                            archive: { bitrate: parseInt(form.archive.bitrate, 10) },
-                          })
-                        }
-                        disabled={busy || !form.archive.enabled}
-                      >
-                        Save bitrate
-                      </Btn>
-                    </div>
-                    <div className="field-hint">
-                      Lower bitrate = smaller archives, less encoder CPU
-                      (current: {data?.values?.archive?.bitrate ?? '—'} kbps). 128 kbps is the
-                      original default.
-                    </div>
                   </div>
                 </div>
               </Card>
@@ -1281,162 +1272,6 @@ function formatGainDb(v: number): string {
   return `${sign}${Math.abs(v).toFixed(1)} dB`;
 }
 
-/* ── ModelCombobox ───────────────────────────────────────────────────── */
-// Searchable model picker. Renders as a trigger button that shows the selected
-// model (or placeholder). Clicking opens an inline popover with a text filter
-// + scrollable list built on cmdk. Falls back to a plain Input when no models
-// are available (discovery hasn't run / returned nothing).
-
-interface ModelComboboxProps {
-  models: string[];
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  disabled?: boolean;
-  className?: string;
-}
-
-function ModelCombobox({ models, value, onChange, placeholder = 'Select a model', disabled, className }: ModelComboboxProps) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState('');
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
-  const [direction, setDirection] = useState<'up' | 'down'>('down');
-
-  // Recompute position when opening
-  const openDropdown = () => {
-    if (triggerRef.current) {
-      const r = triggerRef.current.getBoundingClientRect();
-      const spaceBelow = window.innerHeight - r.bottom;
-      const dir = spaceBelow < 300 ? 'up' : 'down';
-      setDirection(dir);
-
-      const top = dir === 'down'
-        ? r.bottom + window.scrollY + 4
-        : r.top + window.scrollY - 4;
-
-      setRect({ top, left: r.left + window.scrollX, width: r.width });
-    }
-    setOpen(true);
-    setSearch('');
-  };
-
-  // Close on outside click
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (
-        triggerRef.current && !triggerRef.current.contains(e.target as Node) &&
-        dropdownRef.current && !dropdownRef.current.contains(e.target as Node)
-      ) {
-        setOpen(false);
-        setSearch('');
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  // Close on scroll/resize
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: Event) => {
-      if (dropdownRef.current && dropdownRef.current.contains(e.target as Node)) return;
-      setOpen(false);
-      setSearch('');
-    };
-    window.addEventListener('scroll', close, true);
-    window.addEventListener('resize', close);
-    return () => { window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close); };
-  }, [open]);
-
-  const filtered = search.trim()
-    ? models.filter(m => m.toLowerCase().includes(search.toLowerCase()))
-    : models;
-
-  const displayValue = value || placeholder;
-
-  const dropdown = open && rect ? createPortal(
-    <div
-      ref={dropdownRef}
-      style={{
-        position: 'absolute',
-        top: rect.top,
-        left: rect.left,
-        width: Math.max(rect.width, 240),
-        zIndex: 9999,
-        transform: direction === 'up' ? 'translateY(-100%)' : undefined,
-      }}
-      className="border border-ink bg-bg shadow-drawer"
-    >
-      <Command shouldFilter={false}>
-        {direction === 'down' && (
-          <CommandInput
-            placeholder="Filter models…"
-            value={search}
-            onValueChange={setSearch}
-          />
-        )}
-        <CommandList>
-          {filtered.length === 0
-            ? <CommandEmpty>No models match.</CommandEmpty>
-            : (
-              <CommandGroup>
-                {filtered.map(m => (
-                  <CommandItem
-                    key={m}
-                    value={m}
-                    onSelect={() => { onChange(m); setOpen(false); setSearch(''); }}
-                    data-selected={m === value}
-                  >
-                    <span className="truncate">{m}</span>
-                    {m === value && (
-                      <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
-                        <path d="M2 6.5l3.5 3.5 5.5-6" />
-                      </svg>
-                    )}
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            )
-          }
-        </CommandList>
-        {direction === 'up' && (
-          <CommandInput
-            placeholder="Filter models…"
-            value={search}
-            onValueChange={setSearch}
-            wrapperClassName="border-t border-b-0"
-          />
-        )}
-      </Command>
-    </div>,
-    document.body,
-  ) : null;
-
-  return (
-    <div className={cn('w-full max-w-[360px]', className)}>
-      <button
-        ref={triggerRef}
-        type="button"
-        disabled={disabled}
-        onClick={() => open ? (setOpen(false), setSearch('')) : openDropdown()}
-        className={cn(
-          'flex h-9 w-full items-center justify-between gap-2 border border-ink bg-bg px-3 text-sm',
-          'focus:outline-none disabled:cursor-not-allowed disabled:opacity-40',
-          open && 'ring-1 ring-ink',
-        )}
-      >
-        <span className={cn('truncate', !value && 'text-muted')}>{displayValue}</span>
-        <svg width="12" height="12" viewBox="0 0 12 12" className="shrink-0 text-muted" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <path d="M2 4l4 4 4-4" />
-        </svg>
-      </button>
-      {dropdown}
-    </div>
-  );
-}
 
 // Compact per-engine voice-level control: a labelled range slider + live readout,
 // writing into form.tts.gainDb[engineId]. Dropped into each engine's config panel.
@@ -2486,19 +2321,12 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               <Label>Provider</Label>
               {llmDirty && <Pill tone="accent" dot>unsaved</Pill>}
             </div>
-            <Select
+            <ProviderSelector
               value={form.llm.provider}
-              onValueChange={changeLlmProvider}
-            >
-              <SelectTrigger className="max-w-[360px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {(data.llm?.providers || ['ollama']).map(p => (
-                    <SelectItem key={p} value={p}>{llmProviderLabel(p)}</SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+              providerIds={data.llm?.providers || ['ollama']}
+              env={data.env}
+              onChange={changeLlmProvider}
+            />
             <div className="field-hint">
               {llmDirty
                 ? 'Provider changed. Hit "Save LLM provider" below to route every call here.'
@@ -3731,27 +3559,16 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
         <div className="grid gap-[18px]">
           <div className="field">
             <Label>Provider</Label>
-            <Select
-              value={e.provider || '__follow__'}
-              onValueChange={v =>
-                setForm(f => ({
-                  ...f,
-                  embedding: { ...f.embedding, provider: v === '__follow__' ? '' : v },
-                }))
+            <EmbeddingProviderSelector
+              value={e.provider || ''}
+              providerIds={providers}
+              llmProvider={llmProvider}
+              env={data.env}
+              onChange={v =>
+                setForm(f => ({ ...f, embedding: { ...f.embedding, provider: v } }))
               }
-            >
-              <SelectTrigger className="max-w-[360px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="__follow__">
-                    Follow LLM provider — {llmProviderLabel(llmProvider)}
-                  </SelectItem>
-                  {providers.map(p => (
-                    <SelectItem key={p} value={p}>{llmProviderLabel(p)}</SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+              className="max-w-[560px]"
+            />
             <div className="field-hint">
               Where the text embeddings come from. Default follows your LLM
               provider, so Ollama-local users get <code>nomic-embed-text</code> free.
@@ -4451,6 +4268,9 @@ interface ThemeDef {
   description?: string;
   mode: 'light' | 'dark';
   tokens: Record<string, string>;
+  // Set by the controller's /themes responses. Built-ins ship in the image and
+  // can't be removed; only user themes (state/themes/*.json) show a Remove button.
+  builtin?: boolean;
 }
 
 // Swatch columns shown per theme card — chosen to read the palette at a
@@ -4542,7 +4362,7 @@ function ThemeCreator({
   }
 
   return (
-    <div className="grid gap-3 border border-ink p-3">
+    <div className="grid w-full basis-full gap-3 border border-ink p-3">
       <AiFill<{ name?: string; description?: string; mode?: 'light' | 'dark'; tokens?: Record<string, string> }>
         endpoint="/generate/theme"
         resultKey="theme"
@@ -4592,6 +4412,7 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
   const [themes, setThemes] = useState<ThemeDef[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState<ThemeDef | null>(null);
 
   const activeId = data.values?.theme?.active;
   const PUBLIC_API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
@@ -4640,6 +4461,23 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
     await saveSettings({ theme: { active: theme.id } });
   };
 
+  // Delete a user theme's state/themes/<id>.json. If it was the active theme,
+  // fall back to the first remaining one (built-ins lead the list) through the
+  // normal selection flow so nothing points at a now-missing id.
+  const remove = async (theme: ThemeDef) => {
+    try {
+      const r = await adminFetch(`/themes/${encodeURIComponent(theme.id)}`, { method: 'DELETE' });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; themes?: ThemeDef[] };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const next = j.themes ?? [];
+      setThemes(next);
+      notify.ok(`removed "${theme.name}"`);
+      if (theme.id === activeId && next[0]) await choose(next[0]);
+    } catch (e) {
+      notify.err(`Remove failed: ${errorMessage(e)}`);
+    }
+  };
+
   return (
     <>
       <SectionHeader
@@ -4656,6 +4494,23 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
         manualHref="/manual/themes"
       />
 
+      <Card title="Create theme" sub="state/themes/*.json">
+        <div className="grid gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <Btn sm onClick={refresh} disabled={refreshing || busy}>
+              {refreshing ? 'Refreshing…' : 'Refresh themes'}
+            </Btn>
+            <ThemeCreator adminFetch={adminFetch} onSaved={setThemes} />
+          </div>
+          <div className="field-hint">
+            Describe a look above and we&apos;ll draft the palette, or drop a JSON
+            theme file in <code>state/themes/</code> and click <em>Refresh</em>,
+            no controller restart needed. The folder includes a
+            <code>README.md</code> with the format and the allowed token keys.
+          </div>
+        </div>
+      </Card>
+
       <Card title="Picker" sub="active station theme">
         {error && (
           <div className="field-hint text-[var(--danger)]">
@@ -4670,55 +4525,64 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
             {themes.map(t => {
               const isActive = t.id === activeId;
               return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => choose(t)}
-                  disabled={busy}
-                  className={cn(
-                    'flex w-full items-center gap-3 border p-3 text-left disabled:cursor-not-allowed disabled:opacity-60',
-                    isActive
-                      ? 'border-vermilion bg-[var(--ink-softer)]'
-                      : 'border-ink bg-bg hover:bg-[var(--overlay)]',
+                <div key={t.id} className="flex items-stretch gap-2">
+                  <button
+                    type="button"
+                    onClick={() => choose(t)}
+                    disabled={busy}
+                    className={cn(
+                      'flex min-w-0 flex-1 items-center gap-3 border p-3 text-left disabled:cursor-not-allowed disabled:opacity-60',
+                      isActive
+                        ? 'border-vermilion bg-[var(--ink-softer)]'
+                        : 'border-ink bg-bg hover:bg-[var(--overlay)]',
+                    )}
+                  >
+                    <span className="inline-flex shrink-0 border border-ink" aria-hidden="true">
+                      {SWATCH_KEYS.map(k => (
+                        <Swatch key={k} color={t.tokens[k]} />
+                      ))}
+                    </span>
+                    <div className="grid min-w-0 flex-1 gap-0.5">
+                      <span className="text-[12px] font-bold tracking-[0.12em] uppercase">
+                        {t.name}
+                      </span>
+                      <span className="text-[11px] leading-[1.4] text-muted">
+                        {t.description || (t.mode === 'dark' ? 'Dark palette' : 'Light palette')}
+                      </span>
+                    </div>
+                    {isActive && <Pill tone="accent" dot>active</Pill>}
+                  </button>
+                  {!t.builtin && (
+                    <Btn
+                      sm
+                      tone="danger"
+                      onClick={() => setConfirmRemove(t)}
+                      disabled={busy}
+                      title="Remove this custom theme"
+                    >
+                      Remove
+                    </Btn>
                   )}
-                >
-                  <span className="inline-flex shrink-0 border border-ink" aria-hidden="true">
-                    {SWATCH_KEYS.map(k => (
-                      <Swatch key={k} color={t.tokens[k]} />
-                    ))}
-                  </span>
-                  <div className="grid min-w-0 flex-1 gap-0.5">
-                    <span className="text-[12px] font-bold tracking-[0.12em] uppercase">
-                      {t.name}
-                    </span>
-                    <span className="text-[11px] leading-[1.4] text-muted">
-                      {t.description || (t.mode === 'dark' ? 'Dark palette' : 'Light palette')}
-                    </span>
-                  </div>
-                  {isActive && <Pill tone="accent" dot>active</Pill>}
-                </button>
+                </div>
               );
             })}
           </div>
         )}
       </Card>
 
-      <Card title="Custom themes" sub="state/themes/*.json">
-        <div className="grid gap-3">
-          <ThemeCreator adminFetch={adminFetch} onSaved={setThemes} />
-          <div>
-            <Btn sm onClick={refresh} disabled={refreshing || busy}>
-              {refreshing ? 'Refreshing…' : 'Refresh themes'}
-            </Btn>
-          </div>
-          <div className="field-hint">
-            Describe a look above and we&apos;ll draft the palette, or drop a JSON
-            theme file in <code>state/themes/</code> and click <em>Refresh</em>,
-            no controller restart needed. The folder includes a
-            <code>README.md</code> with the format and the allowed token keys.
-          </div>
-        </div>
-      </Card>
+      <V3AlertDialog
+        open={confirmRemove != null}
+        onOpenChange={(o) => { if (!o) setConfirmRemove(null); }}
+        title="Remove theme"
+        description={
+          confirmRemove
+            ? `Remove the custom theme "${confirmRemove.name}"? This deletes state/themes/${confirmRemove.id}.json permanently.`
+            : ''
+        }
+        confirmLabel="remove"
+        danger
+        onConfirm={() => { if (confirmRemove) remove(confirmRemove); setConfirmRemove(null); }}
+      />
     </>
   );
 }
@@ -4798,7 +4662,7 @@ function PreviewButton({ path, adminFetch, label = 'Play' }: PreviewButtonProps)
 interface JinglesSectionProps extends SectionProps {
   jingleText: string;
   setJingleText: (s: string) => void;
-  createJingle: () => void;
+  createJingle: () => Promise<boolean>;
   uploadJingle: (file: File, label: string) => Promise<boolean>;
   onDelete: (filename: string | null) => void;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
@@ -4810,6 +4674,7 @@ function JinglesSection({
 }: JinglesSectionProps) {
   const ratioDirty = form.jingleRatio !== String(data.values?.jingleRatio);
   const jingles = data.jingles || [];
+  const [modal, setModal] = useState<null | 'create' | 'import'>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importLabel, setImportLabel] = useState('');
   const importRef = useRef<HTMLInputElement>(null);
@@ -4820,7 +4685,11 @@ function JinglesSection({
       setImportFile(null);
       setImportLabel('');
       if (importRef.current) importRef.current.value = '';
+      setModal(null);
     }
+  };
+  const doCreate = async () => {
+    if (await createJingle()) setModal(null);
   };
 
   return (
@@ -4867,65 +4736,20 @@ function JinglesSection({
         </div>
       </Card>
 
-      <Card title="Create jingle" sub="rendered via Piper TTS">
-        <div className="field">
-          <Label>Jingle text</Label>
-          <Textarea
-            rows={2}
-            value={jingleText}
-            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setJingleText(e.target.value)}
-            placeholder='e.g. "You are listening to SUB slash WAVE. Requests open all night."'
-          />
-          <div className="flex flex-wrap items-center gap-2.5">
-            <Btn tone="accent" onClick={createJingle} disabled={busy || !jingleText.trim()}>
-              {busy ? 'Generating…' : 'Create jingle'}
+      <Card
+        title="Jingles"
+        sub={`${jingles.length} file${jingles.length === 1 ? '' : 's'}`}
+        right={
+          <>
+            <Btn sm tone="accent" onClick={() => setModal('create')} disabled={busy}>
+              + Create
             </Btn>
-            <span className="text-[11px] text-muted">
-              {jingleText.length}/500 chars · Piper TTS
-            </span>
-          </div>
-        </div>
-      </Card>
-
-      <Card title="Import jingle" sub="bring your own mp3 / wav">
-        <div className="field">
-          <Label>Audio file</Label>
-          <input
-            ref={importRef}
-            type="file"
-            accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFile(e.target.files?.[0] ?? null)}
-            className="hidden"
-          />
-          <div className="flex flex-wrap items-center gap-2.5">
-            <Btn tone="solid" onClick={() => importRef.current?.click()} disabled={busy}>
-              {importFile ? 'Change file…' : 'Choose audio file…'}
+            <Btn sm tone="solid" onClick={() => setModal('import')} disabled={busy}>
+              Import
             </Btn>
-            {importFile && (
-              <span className="text-[12px] text-ink">{importFile.name}</span>
-            )}
-          </div>
-          <div className="field-hint">
-            mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB · converted and level-matched on import
-          </div>
-        </div>
-        <div className="field mt-3.5">
-          <Label>Label (optional)</Label>
-          <Input
-            value={importLabel}
-            maxLength={200}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportLabel(e.target.value)}
-            placeholder="shown in the list, defaults to the file name"
-          />
-        </div>
-        <div className="mt-3.5 flex items-center gap-2.5">
-          <Btn tone="accent" onClick={doImport} disabled={busy || !importFile}>
-            {busy ? 'Importing…' : 'Import jingle'}
-          </Btn>
-        </div>
-      </Card>
-
-      <Card title="Jingles" sub={`${jingles.length} file${jingles.length === 1 ? '' : 's'}`}>
+          </>
+        }
+      >
         {jingles.length === 0 && (
           <div className="py-2 text-[12px] text-muted italic">
             none yet
@@ -4966,6 +4790,78 @@ function JinglesSection({
           </div>
         ))}
       </Card>
+
+      <Modal
+        open={modal === 'create'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
+        title="Create jingle"
+        sub="rendered via Piper TTS"
+        footer={
+          <>
+            <Btn onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn tone="accent" onClick={doCreate} disabled={busy || !jingleText.trim()}>
+              {busy ? 'Generating…' : 'Create jingle'}
+            </Btn>
+          </>
+        }
+      >
+        <div className="field">
+          <Label>Jingle text</Label>
+          <Textarea
+            rows={3}
+            value={jingleText}
+            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setJingleText(e.target.value)}
+            placeholder='e.g. "You are listening to SUB slash WAVE. Requests open all night."'
+          />
+          <div className="field-hint">{jingleText.length}/500 chars · Piper TTS</div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={modal === 'import'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
+        title="Import jingle"
+        sub="bring your own mp3 / wav"
+        footer={
+          <>
+            <Btn onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn tone="accent" onClick={doImport} disabled={busy || !importFile}>
+              {busy ? 'Importing…' : 'Import jingle'}
+            </Btn>
+          </>
+        }
+      >
+        <div className="field">
+          <Label>Audio file</Label>
+          <input
+            ref={importRef}
+            type="file"
+            accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFile(e.target.files?.[0] ?? null)}
+            className="hidden"
+          />
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Btn tone="solid" onClick={() => importRef.current?.click()} disabled={busy}>
+              {importFile ? 'Change file…' : 'Choose audio file…'}
+            </Btn>
+            {importFile && (
+              <span className="text-[12px] text-ink">{importFile.name}</span>
+            )}
+          </div>
+          <div className="field-hint">
+            mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB · converted and level-matched on import
+          </div>
+        </div>
+        <div className="field mt-3.5">
+          <Label>Label (optional)</Label>
+          <Input
+            value={importLabel}
+            maxLength={200}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportLabel(e.target.value)}
+            placeholder="shown in the list, defaults to the file name"
+          />
+        </div>
+      </Modal>
     </>
   );
 }
@@ -4977,7 +4873,7 @@ interface SfxSectionProps {
   sfxForm: SfxForm;
   setSfxForm: (updater: (f: SfxForm) => SfxForm) => void;
   busy: boolean;
-  createSfx: () => void;
+  createSfx: () => Promise<boolean>;
   uploadSfx: (file: File, name: string, description: string) => Promise<boolean>;
   onDelete: (name: string | null) => void;
   data: SettingsData | null;
@@ -4987,6 +4883,7 @@ interface SfxSectionProps {
 
 function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, onDelete, data, saveSettings, adminFetch }: SfxSectionProps) {
   // Hooks must run before the early "loading…" return — keep them at the top.
+  const [modal, setModal] = useState<null | 'create' | 'import'>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importName, setImportName] = useState('');
   const [importDesc, setImportDesc] = useState('');
@@ -4999,7 +4896,11 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
       setImportName('');
       setImportDesc('');
       if (importRef.current) importRef.current.value = '';
+      setModal(null);
     }
+  };
+  const doCreate = async () => {
+    if (await createSfx()) setModal(null);
   };
 
   if (!sfxData) {
@@ -5055,7 +4956,87 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
         </div>
       )}
 
-      <Card title="Create sound effect" sub="rendered via ElevenLabs">
+      <Card
+        title="Effect library"
+        sub={`${list.length} effect${list.length === 1 ? '' : 's'}`}
+        right={
+          <>
+            <Btn sm tone="accent" onClick={() => setModal('create')} disabled={busy}>
+              + Create
+            </Btn>
+            <Btn sm tone="solid" onClick={() => setModal('import')} disabled={busy}>
+              Import
+            </Btn>
+          </>
+        }
+      >
+        {list.length === 0 && (
+          <div className="py-2 text-[12px] text-muted italic">
+            none yet
+          </div>
+        )}
+        {list.map(s => (
+          <div
+            key={s.name}
+            className="flex items-start gap-3 border-b border-dashed border-separator-strong py-3"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-bold text-ink">{s.name}</div>
+              {s.description && (
+                <div className="mt-0.5 text-[12px] break-words text-muted">
+                  {s.description}
+                </div>
+              )}
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <span className="caption">{fmtSize(s.size)}</span>
+                {s.durationSec && <span className="caption">{s.durationSec}s</span>}
+                {s.builtin && <Pill tone="accent">builtin</Pill>}
+                {s.source === 'upload' && <Pill tone="ink">uploaded</Pill>}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <PreviewButton
+                path={`/sfx/${encodeURIComponent(s.name)}/audio`}
+                adminFetch={adminFetch}
+              />
+              <Btn
+                sm
+                tone="danger"
+                onClick={() => onDelete(s.name)}
+                disabled={busy || s.builtin}
+                title={s.builtin ? "Can't delete a built-in effect" : 'Delete this effect'}
+              >
+                Delete
+              </Btn>
+            </div>
+          </div>
+        ))}
+      </Card>
+
+      <Modal
+        open={modal === 'create'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
+        title="Create sound effect"
+        sub="rendered via ElevenLabs"
+        footer={
+          <>
+            <Btn onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn
+              tone="accent"
+              onClick={doCreate}
+              disabled={busy || !ready || !sfxForm.name.trim() || !sfxForm.prompt.trim()}
+            >
+              {busy ? 'Generating…' : 'Create sound effect'}
+            </Btn>
+          </>
+        }
+      >
+        {!ready && (
+          <div className="field-hint mb-3.5">
+            An ElevenLabs API key is required to generate effects. Set <code>ELEVENLABS_API_KEY</code>{' '}
+            and restart the controller, or use Import instead.
+          </div>
+        )}
         <div className="field">
           <Label>Name</Label>
           <Input
@@ -5103,18 +5084,26 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
             <span className="text-[12px] text-muted">sec · 0.5–22, blank lets the model decide</span>
           </div>
         </div>
-        <div className="mt-3.5 flex items-center gap-2.5">
-          <Btn
-            tone="accent"
-            onClick={createSfx}
-            disabled={busy || !ready || !sfxForm.name.trim() || !sfxForm.prompt.trim()}
-          >
-            {busy ? 'Generating…' : 'Create sound effect'}
-          </Btn>
-        </div>
-      </Card>
+      </Modal>
 
-      <Card title="Import sound effect" sub="bring your own mp3 / wav, no ElevenLabs key needed">
+      <Modal
+        open={modal === 'import'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
+        title="Import sound effect"
+        sub="bring your own mp3 / wav, no ElevenLabs key needed"
+        footer={
+          <>
+            <Btn onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn
+              tone="accent"
+              onClick={doImport}
+              disabled={busy || !importFile || !importName.trim()}
+            >
+              {busy ? 'Importing…' : 'Import sound effect'}
+            </Btn>
+          </>
+        }
+      >
         <div className="field">
           <Label>Name</Label>
           <Input
@@ -5153,60 +5142,7 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
           </div>
           <div className="field-hint">mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB · converted to MP3 on import</div>
         </div>
-        <div className="mt-3.5 flex items-center gap-2.5">
-          <Btn
-            tone="accent"
-            onClick={doImport}
-            disabled={busy || !importFile || !importName.trim()}
-          >
-            {busy ? 'Importing…' : 'Import sound effect'}
-          </Btn>
-        </div>
-      </Card>
-
-      <Card title="Effect library" sub={`${list.length} effect${list.length === 1 ? '' : 's'}`}>
-        {list.length === 0 && (
-          <div className="py-2 text-[12px] text-muted italic">
-            none yet
-          </div>
-        )}
-        {list.map(s => (
-          <div
-            key={s.name}
-            className="flex items-start gap-3 border-b border-dashed border-separator-strong py-3"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-bold text-ink">{s.name}</div>
-              {s.description && (
-                <div className="mt-0.5 text-[12px] break-words text-muted">
-                  {s.description}
-                </div>
-              )}
-              <div className="mt-1 flex flex-wrap items-center gap-2">
-                <span className="caption">{fmtSize(s.size)}</span>
-                {s.durationSec && <span className="caption">{s.durationSec}s</span>}
-                {s.builtin && <Pill tone="accent">builtin</Pill>}
-                {s.source === 'upload' && <Pill tone="ink">uploaded</Pill>}
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <PreviewButton
-                path={`/sfx/${encodeURIComponent(s.name)}/audio`}
-                adminFetch={adminFetch}
-              />
-              <Btn
-                sm
-                tone="danger"
-                onClick={() => onDelete(s.name)}
-                disabled={busy || s.builtin}
-                title={s.builtin ? "Can't delete a built-in effect" : 'Delete this effect'}
-              >
-                Delete
-              </Btn>
-            </div>
-          </div>
-        ))}
-      </Card>
+      </Modal>
     </>
   );
 }

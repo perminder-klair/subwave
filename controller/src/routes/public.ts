@@ -13,7 +13,7 @@ import * as session from '../broadcast/session.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
 import { getStationTimezone } from '../time.js';
-import { listThemes, DEFAULT_THEME_ID } from '../themes.js';
+import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
 import { lifetimeTokenCount } from '../llm/log.js';
 
 export const router = express.Router();
@@ -321,7 +321,7 @@ router.get('/state', (req, res) => {
 router.get('/themes', async (req, res) => {
   try {
     const s = settings.get();
-    const themes = await listThemes();
+    const themes = await listThemesAnnotated();
     const stationDefault = s?.theme?.active || DEFAULT_THEME_ID;
     const activeShow = settings.resolveActiveShow();
     // Show override wins only if it still resolves to a known theme. A stale
