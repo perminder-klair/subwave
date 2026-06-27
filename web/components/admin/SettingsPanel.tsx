@@ -11,6 +11,7 @@ import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { applyTheme, cacheTheme } from '../../lib/theme';
 import { CLOUD_VOICES, CLOUD_MODELS } from '../../lib/cloudVoices';
 import { V3AlertDialog } from '../ui/alert-dialog';
+import { Modal } from '../ui/modal';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { Label } from '../ui/label';
@@ -579,8 +580,8 @@ export default function SettingsPanel() {
     } finally { setBusy(false); }
   };
 
-  const createJingle = async () => {
-    if (!jingleText.trim() || busy) return;
+  const createJingle = async (): Promise<boolean> => {
+    if (!jingleText.trim() || busy) return false;
     setBusy(true);
     try {
       const r = await adminFetch('/jingles', {
@@ -592,7 +593,8 @@ export default function SettingsPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setJingleText('');
       await refresh();
-    } catch (e) { notify.err(`Jingle creation failed: ${errorMessage(e)}`); }
+      return true;
+    } catch (e) { notify.err(`Jingle creation failed: ${errorMessage(e)}`); return false; }
     finally { setBusy(false); }
   };
 
@@ -626,8 +628,8 @@ export default function SettingsPanel() {
     finally { setBusy(false); }
   };
 
-  const createSfx = async () => {
-    if (!sfxForm.name.trim() || !sfxForm.prompt.trim() || busy) return;
+  const createSfx = async (): Promise<boolean> => {
+    if (!sfxForm.name.trim() || !sfxForm.prompt.trim() || busy) return false;
     setBusy(true);
     try {
       const r = await adminFetch('/sfx', {
@@ -644,7 +646,8 @@ export default function SettingsPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setSfxForm({ name: '', description: '', prompt: '', durationSec: '' });
       await refreshSfx();
-    } catch (e) { notify.err(`Sound effect creation failed: ${errorMessage(e)}`); }
+      return true;
+    } catch (e) { notify.err(`Sound effect creation failed: ${errorMessage(e)}`); return false; }
     finally { setBusy(false); }
   };
 
@@ -4611,7 +4614,7 @@ function PreviewButton({ path, adminFetch, label = 'Play' }: PreviewButtonProps)
 interface JinglesSectionProps extends SectionProps {
   jingleText: string;
   setJingleText: (s: string) => void;
-  createJingle: () => void;
+  createJingle: () => Promise<boolean>;
   uploadJingle: (file: File, label: string) => Promise<boolean>;
   onDelete: (filename: string | null) => void;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
@@ -4623,6 +4626,7 @@ function JinglesSection({
 }: JinglesSectionProps) {
   const ratioDirty = form.jingleRatio !== String(data.values?.jingleRatio);
   const jingles = data.jingles || [];
+  const [modal, setModal] = useState<null | 'create' | 'import'>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importLabel, setImportLabel] = useState('');
   const importRef = useRef<HTMLInputElement>(null);
@@ -4633,7 +4637,11 @@ function JinglesSection({
       setImportFile(null);
       setImportLabel('');
       if (importRef.current) importRef.current.value = '';
+      setModal(null);
     }
+  };
+  const doCreate = async () => {
+    if (await createJingle()) setModal(null);
   };
 
   return (
@@ -4680,65 +4688,20 @@ function JinglesSection({
         </div>
       </Card>
 
-      <Card title="Create jingle" sub="rendered via Piper TTS">
-        <div className="field">
-          <Label>Jingle text</Label>
-          <Textarea
-            rows={2}
-            value={jingleText}
-            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setJingleText(e.target.value)}
-            placeholder='e.g. "You are listening to SUB slash WAVE. Requests open all night."'
-          />
-          <div className="flex flex-wrap items-center gap-2.5">
-            <Btn tone="accent" onClick={createJingle} disabled={busy || !jingleText.trim()}>
-              {busy ? 'Generating…' : 'Create jingle'}
+      <Card
+        title="Jingles"
+        sub={`${jingles.length} file${jingles.length === 1 ? '' : 's'}`}
+        right={
+          <>
+            <Btn sm tone="accent" onClick={() => setModal('create')} disabled={busy}>
+              + Create
             </Btn>
-            <span className="text-[11px] text-muted">
-              {jingleText.length}/500 chars · Piper TTS
-            </span>
-          </div>
-        </div>
-      </Card>
-
-      <Card title="Import jingle" sub="bring your own mp3 / wav">
-        <div className="field">
-          <Label>Audio file</Label>
-          <input
-            ref={importRef}
-            type="file"
-            accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFile(e.target.files?.[0] ?? null)}
-            className="hidden"
-          />
-          <div className="flex flex-wrap items-center gap-2.5">
-            <Btn tone="solid" onClick={() => importRef.current?.click()} disabled={busy}>
-              {importFile ? 'Change file…' : 'Choose audio file…'}
+            <Btn sm tone="solid" onClick={() => setModal('import')} disabled={busy}>
+              Import
             </Btn>
-            {importFile && (
-              <span className="text-[12px] text-ink">{importFile.name}</span>
-            )}
-          </div>
-          <div className="field-hint">
-            mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB · converted and level-matched on import
-          </div>
-        </div>
-        <div className="field mt-3.5">
-          <Label>Label (optional)</Label>
-          <Input
-            value={importLabel}
-            maxLength={200}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportLabel(e.target.value)}
-            placeholder="shown in the list, defaults to the file name"
-          />
-        </div>
-        <div className="mt-3.5 flex items-center gap-2.5">
-          <Btn tone="accent" onClick={doImport} disabled={busy || !importFile}>
-            {busy ? 'Importing…' : 'Import jingle'}
-          </Btn>
-        </div>
-      </Card>
-
-      <Card title="Jingles" sub={`${jingles.length} file${jingles.length === 1 ? '' : 's'}`}>
+          </>
+        }
+      >
         {jingles.length === 0 && (
           <div className="py-2 text-[12px] text-muted italic">
             none yet
@@ -4779,6 +4742,78 @@ function JinglesSection({
           </div>
         ))}
       </Card>
+
+      <Modal
+        open={modal === 'create'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
+        title="Create jingle"
+        sub="rendered via Piper TTS"
+        footer={
+          <>
+            <Btn onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn tone="accent" onClick={doCreate} disabled={busy || !jingleText.trim()}>
+              {busy ? 'Generating…' : 'Create jingle'}
+            </Btn>
+          </>
+        }
+      >
+        <div className="field">
+          <Label>Jingle text</Label>
+          <Textarea
+            rows={3}
+            value={jingleText}
+            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setJingleText(e.target.value)}
+            placeholder='e.g. "You are listening to SUB slash WAVE. Requests open all night."'
+          />
+          <div className="field-hint">{jingleText.length}/500 chars · Piper TTS</div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={modal === 'import'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
+        title="Import jingle"
+        sub="bring your own mp3 / wav"
+        footer={
+          <>
+            <Btn onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn tone="accent" onClick={doImport} disabled={busy || !importFile}>
+              {busy ? 'Importing…' : 'Import jingle'}
+            </Btn>
+          </>
+        }
+      >
+        <div className="field">
+          <Label>Audio file</Label>
+          <input
+            ref={importRef}
+            type="file"
+            accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFile(e.target.files?.[0] ?? null)}
+            className="hidden"
+          />
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Btn tone="solid" onClick={() => importRef.current?.click()} disabled={busy}>
+              {importFile ? 'Change file…' : 'Choose audio file…'}
+            </Btn>
+            {importFile && (
+              <span className="text-[12px] text-ink">{importFile.name}</span>
+            )}
+          </div>
+          <div className="field-hint">
+            mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB · converted and level-matched on import
+          </div>
+        </div>
+        <div className="field mt-3.5">
+          <Label>Label (optional)</Label>
+          <Input
+            value={importLabel}
+            maxLength={200}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportLabel(e.target.value)}
+            placeholder="shown in the list, defaults to the file name"
+          />
+        </div>
+      </Modal>
     </>
   );
 }
@@ -4790,7 +4825,7 @@ interface SfxSectionProps {
   sfxForm: SfxForm;
   setSfxForm: (updater: (f: SfxForm) => SfxForm) => void;
   busy: boolean;
-  createSfx: () => void;
+  createSfx: () => Promise<boolean>;
   uploadSfx: (file: File, name: string, description: string) => Promise<boolean>;
   onDelete: (name: string | null) => void;
   data: SettingsData | null;
@@ -4800,6 +4835,7 @@ interface SfxSectionProps {
 
 function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, onDelete, data, saveSettings, adminFetch }: SfxSectionProps) {
   // Hooks must run before the early "loading…" return — keep them at the top.
+  const [modal, setModal] = useState<null | 'create' | 'import'>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importName, setImportName] = useState('');
   const [importDesc, setImportDesc] = useState('');
@@ -4812,7 +4848,11 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
       setImportName('');
       setImportDesc('');
       if (importRef.current) importRef.current.value = '';
+      setModal(null);
     }
+  };
+  const doCreate = async () => {
+    if (await createSfx()) setModal(null);
   };
 
   if (!sfxData) {
@@ -4868,7 +4908,87 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
         </div>
       )}
 
-      <Card title="Create sound effect" sub="rendered via ElevenLabs">
+      <Card
+        title="Effect library"
+        sub={`${list.length} effect${list.length === 1 ? '' : 's'}`}
+        right={
+          <>
+            <Btn sm tone="accent" onClick={() => setModal('create')} disabled={busy}>
+              + Create
+            </Btn>
+            <Btn sm tone="solid" onClick={() => setModal('import')} disabled={busy}>
+              Import
+            </Btn>
+          </>
+        }
+      >
+        {list.length === 0 && (
+          <div className="py-2 text-[12px] text-muted italic">
+            none yet
+          </div>
+        )}
+        {list.map(s => (
+          <div
+            key={s.name}
+            className="flex items-start gap-3 border-b border-dashed border-separator-strong py-3"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-bold text-ink">{s.name}</div>
+              {s.description && (
+                <div className="mt-0.5 text-[12px] break-words text-muted">
+                  {s.description}
+                </div>
+              )}
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <span className="caption">{fmtSize(s.size)}</span>
+                {s.durationSec && <span className="caption">{s.durationSec}s</span>}
+                {s.builtin && <Pill tone="accent">builtin</Pill>}
+                {s.source === 'upload' && <Pill tone="ink">uploaded</Pill>}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <PreviewButton
+                path={`/sfx/${encodeURIComponent(s.name)}/audio`}
+                adminFetch={adminFetch}
+              />
+              <Btn
+                sm
+                tone="danger"
+                onClick={() => onDelete(s.name)}
+                disabled={busy || s.builtin}
+                title={s.builtin ? "Can't delete a built-in effect" : 'Delete this effect'}
+              >
+                Delete
+              </Btn>
+            </div>
+          </div>
+        ))}
+      </Card>
+
+      <Modal
+        open={modal === 'create'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
+        title="Create sound effect"
+        sub="rendered via ElevenLabs"
+        footer={
+          <>
+            <Btn onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn
+              tone="accent"
+              onClick={doCreate}
+              disabled={busy || !ready || !sfxForm.name.trim() || !sfxForm.prompt.trim()}
+            >
+              {busy ? 'Generating…' : 'Create sound effect'}
+            </Btn>
+          </>
+        }
+      >
+        {!ready && (
+          <div className="field-hint mb-3.5">
+            An ElevenLabs API key is required to generate effects. Set <code>ELEVENLABS_API_KEY</code>{' '}
+            and restart the controller, or use Import instead.
+          </div>
+        )}
         <div className="field">
           <Label>Name</Label>
           <Input
@@ -4916,18 +5036,26 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
             <span className="text-[12px] text-muted">sec · 0.5–22, blank lets the model decide</span>
           </div>
         </div>
-        <div className="mt-3.5 flex items-center gap-2.5">
-          <Btn
-            tone="accent"
-            onClick={createSfx}
-            disabled={busy || !ready || !sfxForm.name.trim() || !sfxForm.prompt.trim()}
-          >
-            {busy ? 'Generating…' : 'Create sound effect'}
-          </Btn>
-        </div>
-      </Card>
+      </Modal>
 
-      <Card title="Import sound effect" sub="bring your own mp3 / wav, no ElevenLabs key needed">
+      <Modal
+        open={modal === 'import'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
+        title="Import sound effect"
+        sub="bring your own mp3 / wav, no ElevenLabs key needed"
+        footer={
+          <>
+            <Btn onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn
+              tone="accent"
+              onClick={doImport}
+              disabled={busy || !importFile || !importName.trim()}
+            >
+              {busy ? 'Importing…' : 'Import sound effect'}
+            </Btn>
+          </>
+        }
+      >
         <div className="field">
           <Label>Name</Label>
           <Input
@@ -4966,60 +5094,7 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
           </div>
           <div className="field-hint">mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB · converted to MP3 on import</div>
         </div>
-        <div className="mt-3.5 flex items-center gap-2.5">
-          <Btn
-            tone="accent"
-            onClick={doImport}
-            disabled={busy || !importFile || !importName.trim()}
-          >
-            {busy ? 'Importing…' : 'Import sound effect'}
-          </Btn>
-        </div>
-      </Card>
-
-      <Card title="Effect library" sub={`${list.length} effect${list.length === 1 ? '' : 's'}`}>
-        {list.length === 0 && (
-          <div className="py-2 text-[12px] text-muted italic">
-            none yet
-          </div>
-        )}
-        {list.map(s => (
-          <div
-            key={s.name}
-            className="flex items-start gap-3 border-b border-dashed border-separator-strong py-3"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-bold text-ink">{s.name}</div>
-              {s.description && (
-                <div className="mt-0.5 text-[12px] break-words text-muted">
-                  {s.description}
-                </div>
-              )}
-              <div className="mt-1 flex flex-wrap items-center gap-2">
-                <span className="caption">{fmtSize(s.size)}</span>
-                {s.durationSec && <span className="caption">{s.durationSec}s</span>}
-                {s.builtin && <Pill tone="accent">builtin</Pill>}
-                {s.source === 'upload' && <Pill tone="ink">uploaded</Pill>}
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <PreviewButton
-                path={`/sfx/${encodeURIComponent(s.name)}/audio`}
-                adminFetch={adminFetch}
-              />
-              <Btn
-                sm
-                tone="danger"
-                onClick={() => onDelete(s.name)}
-                disabled={busy || s.builtin}
-                title={s.builtin ? "Can't delete a built-in effect" : 'Delete this effect'}
-              >
-                Delete
-              </Btn>
-            </div>
-          </div>
-        ))}
-      </Card>
+      </Modal>
     </>
   );
 }
