@@ -11,7 +11,7 @@
     "lastfm-session": "tsx scripts/lastfm-session.ts",
     "test:embed": "tsx scripts/embedding-preflight-test.ts",
     "test:llm": "tsx scripts/llm-pure.test.ts",
-    "test": "tsx scripts/llm-pure.test.ts && tsx scripts/picker-recency-regression.ts && tsx scripts/recent-plays.test.ts && tsx scripts/listeners-status.test.ts && tsx scripts/lastfm-enrich.test.ts && tsx scripts/web-search-searxng.test.ts && tsx scripts/request-dedup.test.ts",
+    "test": "tsx scripts/llm-pure.test.ts && tsx scripts/picker-recency-regression.ts && tsx scripts/recent-plays.test.ts && tsx scripts/listeners-status.test.ts && tsx scripts/lastfm-enrich.test.ts && tsx scripts/web-search-searxng.test.ts && tsx scripts/request-dedup.test.ts && tsx scripts/embedding-heavy.test.ts && tsx scripts/tagger-perf.test.ts",
     "lint": "eslint . && tsc --noEmit",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit"

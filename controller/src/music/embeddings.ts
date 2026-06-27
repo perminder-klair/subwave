@@ -21,6 +21,7 @@ import {
   resolveEmbeddingCfg,
   buildEmbeddingModel,
   isHeavyEmbeddingModel,
+  isLocalEmbeddingProvider,
 } from '../llm/provider.js';
 import type { EmbeddingCfg } from '../llm/provider.js';
 import { SHOW_MOODS as MOOD_VOCAB } from '../settings.js';
@@ -72,9 +73,12 @@ export interface EmbeddingPerfAdvisory {
 // Pure + name-based: never probes, never throws.
 export function embeddingPerfAdvisory(): EmbeddingPerfAdvisory {
   const { provider, model } = embeddingProviderInfo();
-  const local =
-    provider === 'ollama' || provider === 'locca' || provider === 'openai-compatible';
-  return { model, provider, local, heavy: isHeavyEmbeddingModel(model) };
+  return {
+    model,
+    provider,
+    local: isLocalEmbeddingProvider(provider),
+    heavy: isHeavyEmbeddingModel(model),
+  };
 }
 
 // Used by library.ts on first open — we need the schema dim before any

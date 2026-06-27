@@ -105,6 +105,15 @@ export function isHeavyEmbeddingModel(model: string): boolean {
   return false;
 }
 
+// Does this embedding provider run on the operator's own hardware (so model
+// weight is a CPU/RAM concern they pay for), vs a cloud API that does the work
+// off-box? Gates the heavy-model perf advisory — a big model on OpenAI/Google is
+// not the operator's performance problem. ollama / locca / openai-compatible are
+// the self-hosted transports.
+export function isLocalEmbeddingProvider(provider: string): boolean {
+  return provider === 'ollama' || provider === 'locca' || provider === 'openai-compatible';
+}
+
 // Resolved embedding config. `settings.embedding` overrides settings.llm field
 // by field; `overrides` (e.g. unsaved form values from the probe endpoint) win
 // over both. Mirrors the precedence in embeddingCfg().

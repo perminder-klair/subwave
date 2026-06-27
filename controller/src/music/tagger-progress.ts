@@ -41,3 +41,20 @@ export interface TaggerProgress {
 export function reportProgress(p: Omit<TaggerProgress, 'updatedAt'>): void {
   console.log(PROGRESS_PREFIX + JSON.stringify({ ...p, updatedAt: new Date().toISOString() }));
 }
+
+// Phase timings sorted slowest-first, with zero-duration phases dropped. The
+// shared shape behind both the CLI breakdown line and the 'done' event's
+// `timings` field, so the two can't drift. Pure — unit-pinned.
+export function sortedPhaseTimings(timings: Record<string, number>): Array<[string, number]> {
+  return Object.entries(timings)
+    .filter(([, ms]) => ms > 0)
+    .sort((a, b) => b[1] - a[1]);
+}
+
+// One-line, slowest-first phase breakdown for the tagger CLI log, e.g.
+// "seed 480s · learn 360s · embed 120s". '' when nothing was timed.
+export function formatPhaseBreakdown(timings: Record<string, number>): string {
+  return sortedPhaseTimings(timings)
+    .map(([p, ms]) => `${p} ${Math.round(ms / 1000)}s`)
+    .join(' · ');
+}
