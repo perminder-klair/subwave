@@ -2,6 +2,11 @@
 
 import { useState } from 'react';
 import type { WizardController } from './useWizard';
+import { ProviderSelector } from '../admin/llm/ProviderSelector';
+import { ModelCombobox } from '../admin/llm/ModelCombobox';
+import { PROVIDER_IDS } from '../admin/llm/providerMeta';
+import { useModelDiscovery } from '@/hooks/useModelDiscovery';
+import { LocationPicker } from '../LocationPicker';
 
 // Tiny presentation primitives kept local to the wizard — avoids dragging the
 // full admin UI library into a screen most operators see exactly once.
@@ -142,25 +147,12 @@ export function NavidromeStep({ w }: { w: WizardController }) {
 }
 
 // ─── LLM ───────────────────────────────────────────────────────────────────
-const LLM_PROVIDERS = [
-  { id: 'ollama', label: 'Ollama (local, no key)' },
-  { id: 'locca', label: 'locca (local llama.cpp, no key)' },
-  { id: 'anthropic', label: 'Anthropic Claude' },
-  { id: 'openai', label: 'OpenAI' },
-  { id: 'google', label: 'Google Gemini' },
-  { id: 'deepseek', label: 'DeepSeek' },
-  { id: 'openrouter', label: 'OpenRouter' },
-  { id: 'requesty', label: 'Requesty' },
-  { id: 'gateway', label: 'Vercel AI Gateway' },
-  { id: 'openai-compatible', label: 'OpenAI-compatible (self-hosted)' },
-];
+// Provider list, labels and blurbs come from the shared admin/llm/providerMeta
+// module (PROVIDER_IDS + the ProviderSelector card grid) so onboarding and the
+// admin Settings tab never drift.
 
 export function LlmStep({ w }: { w: WizardController }) {
   const [busy, setBusy] = useState(false);
-  const [discovering, setDiscovering] = useState(false);
-  const [discovery, setDiscovery] = useState<
-    { reachable: boolean; models: string[]; error?: string } | null
-  >(null);
   const isOllama = w.data.llm.provider === 'ollama';
   const isLocca = w.data.llm.provider === 'locca';
   const isCustom = w.data.llm.provider === 'openai-compatible';
@@ -169,12 +161,21 @@ export function LlmStep({ w }: { w: WizardController }) {
     await w.testLlm();
     setBusy(false);
   };
-  const onDiscover = async () => {
-    setDiscovering(true);
-    setDiscovery(null);
-    setDiscovery(await w.discoverLocca());
-    setDiscovering(false);
-  };
+  // Same unified model discovery the admin Settings tab uses. Enabled for the
+  // keyless-discoverable providers (ollama / locca / openai-compatible with a
+  // base URL / openrouter); cloud providers need their key saved on the box
+  // first, so they fall back to free-typing the model id.
+  const discoveryEnabled =
+    isOllama || isLocca ||
+    (isCustom && !!w.data.llm.baseUrl.trim()) ||
+    w.data.llm.provider === 'openrouter';
+  const discovery = useModelDiscovery({
+    provider: w.data.llm.provider,
+    baseUrl: w.data.llm.baseUrl,
+    ollamaUrl: w.data.llm.ollamaUrl,
+    enabled: discoveryEnabled,
+    adminFetch: w.auth.adminFetch,
+  });
   return (
     <div>
       <StepHeader
@@ -182,26 +183,19 @@ export function LlmStep({ w }: { w: WizardController }) {
         blurb="The DJ talks between tracks. Ollama running on the host is the homelab default — no API key needed."
       />
       <div className="grid gap-3">
-        <Field label="Provider">
-          <Select
+        {/* Not wrapped in <Field> — that renders a <label>, and a label around a
+            radiogroup of buttons hijacks clicks. Inline the same label styling. */}
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium tracking-wide text-ink/60 uppercase">Provider</span>
+          <ProviderSelector
             value={w.data.llm.provider}
-            onChange={e =>
-              w.patch(d => ({ llm: { ...d.llm, provider: e.target.value }, llmTest: { ok: null } }))
+            providerIds={PROVIDER_IDS}
+            keyAware={false}
+            onChange={id =>
+              w.patch(d => ({ llm: { ...d.llm, provider: id }, llmTest: { ok: null } }))
             }
-          >
-            {LLM_PROVIDERS.map(p => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Model" hint="e.g. llama3.1:8b · claude-sonnet-4 · gpt-4o-mini">
-          <TextInput
-            value={w.data.llm.model}
-            onChange={e => w.patch(d => ({ llm: { ...d.llm, model: e.target.value }, llmTest: { ok: null } }))}
           />
-        </Field>
+        </div>
         {isOllama && (
           <Field label="Ollama URL" hint="Reachable from the controller container">
             <TextInput
@@ -236,48 +230,6 @@ export function LlmStep({ w }: { w: WizardController }) {
             />
           </Field>
         )}
-        {isLocca && (
-          <div className="grid gap-2">
-            <button
-              type="button"
-              onClick={onDiscover}
-              disabled={discovering}
-              className="w-fit rounded border border-ink px-3 py-1.5 text-xs font-medium tracking-wide uppercase hover:bg-ink hover:text-bg disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {discovering ? 'Detecting…' : 'Detect locca models'}
-            </button>
-            {discovery && !discovery.reachable && (
-              <p className="text-xs text-amber-300">
-                No locca server reachable{discovery.error ? ` (${discovery.error})` : ''}. Start one
-                with <code>locca serve &lt;model&gt; --yes</code> on the host, then retry.
-              </p>
-            )}
-            {discovery && discovery.reachable && discovery.models.length === 0 && (
-              <p className="text-xs text-amber-300">locca is up but has no model loaded.</p>
-            )}
-            {discovery && discovery.reachable && discovery.models.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs text-ink/60">✓ locca detected — pick a model:</span>
-                {discovery.models.map(id => (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() =>
-                      w.patch(d => ({ llm: { ...d.llm, model: id }, llmTest: { ok: null } }))
-                    }
-                    className={`rounded border px-2 py-1 text-xs ${
-                      w.data.llm.model === id
-                        ? 'border-ink bg-ink text-bg'
-                        : 'border-ink/40 hover:border-ink'
-                    }`}
-                  >
-                    {id}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
         {!isOllama && !isLocca && (
           <Field label="API key" hint="Stored in state/secrets.env (mode 0600), not in settings.json">
             <TextInput
@@ -289,6 +241,51 @@ export function LlmStep({ w }: { w: WizardController }) {
             />
           </Field>
         )}
+        {/* Model — inlined label (not <Field>): the discovery combobox trigger is
+            a <button>, and a <label> wrapping it would hijack the click. Same
+            unified picker + free-type fallback as the admin Settings tab. */}
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium tracking-wide text-ink/60 uppercase">Model</span>
+          <div className="flex items-stretch gap-2">
+            {discovery.models.length > 0 ? (
+              <ModelCombobox
+                models={discovery.models}
+                value={w.data.llm.model}
+                onChange={v => w.patch(d => ({ llm: { ...d.llm, model: v }, llmTest: { ok: null } }))}
+                placeholder="Select a model"
+              />
+            ) : (
+              <TextInput
+                value={w.data.llm.model}
+                onChange={e => w.patch(d => ({ llm: { ...d.llm, model: e.target.value }, llmTest: { ok: null } }))}
+                placeholder={isOllama ? 'glm-5.1:cloud' : (isCustom || isLocca) ? 'model filename or id' : 'e.g. claude-sonnet-4 · gpt-4o-mini'}
+                className="max-w-[360px] flex-1"
+              />
+            )}
+            {discovery.loading
+              ? <span className="self-center text-xs whitespace-nowrap text-ink/50">discovering…</span>
+              : discoveryEnabled && (
+                <button
+                  type="button"
+                  onClick={discovery.refresh}
+                  title="Refresh model list"
+                  className="rounded border border-ink px-2.5 text-sm hover:bg-ink hover:text-bg"
+                >↻</button>
+              )
+            }
+          </div>
+          <span className="text-xs text-ink/50">
+            {discovery.models.length > 0
+              ? `${discovery.models.length} model${discovery.models.length !== 1 ? 's' : ''} discovered — pick one or filter.`
+              : discoveryEnabled
+                ? (discovery.error
+                    ? `Discovery failed: ${discovery.error}. Type a model ID manually.`
+                    : discovery.loading
+                      ? 'Discovering models…'
+                      : 'No models found yet — set the URL above, or type a model ID.')
+                : 'Type the model ID. Discovery runs here once the API key is saved.'}
+          </span>
+        </div>
         <div>
           <button
             type="button"
@@ -425,27 +422,32 @@ export function DjStep({ w }: { w: WizardController }) {
             onChange={e => w.patch(d => ({ dj: { ...d.dj, stationName: e.target.value } }))}
           />
         </Field>
-        <Field label="Location" hint="Used for weather + 'broadcasting from…' prompts">
-          <TextInput
-            value={w.data.dj.locationName}
-            onChange={e => w.patch(d => ({ dj: { ...d.dj, locationName: e.target.value } }))}
+        {/* Not a <Field>/<label> — the picker is a composite (combobox + buttons)
+            and shouldn't live inside a single <label>. */}
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium tracking-wide text-ink/60 uppercase">Location</span>
+          <LocationPicker
+            variant="onboarding"
+            value={{
+              locationName: w.data.dj.locationName,
+              lat: w.data.dj.lat,
+              lng: w.data.dj.lng,
+            }}
+            onChange={next => w.patch(d => ({ dj: { ...d.dj, ...next } }))}
+            onPick={r => {
+              const tz = r.timezone;
+              if (tz) w.patch(d => ({ dj: { ...d.dj, timezone: tz } }));
+            }}
           />
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Latitude" hint="-90 to 90">
-            <TextInput
-              inputMode="decimal"
-              value={w.data.dj.lat}
-              onChange={e => w.patch(d => ({ dj: { ...d.dj, lat: e.target.value } }))}
-            />
-          </Field>
-          <Field label="Longitude" hint="-180 to 180">
-            <TextInput
-              inputMode="decimal"
-              value={w.data.dj.lng}
-              onChange={e => w.patch(d => ({ dj: { ...d.dj, lng: e.target.value } }))}
-            />
-          </Field>
+          <span className="text-xs text-ink/50">
+            Search a city — coordinates and timezone fill in automatically. Used for weather +
+            “broadcasting from…” prompts.
+          </span>
+          {w.data.dj.timezone ? (
+            <span className="text-xs text-ink/50">
+              Timezone: {w.data.dj.timezone} (from your location)
+            </span>
+          ) : null}
         </div>
       </div>
     </div>

@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.30.0](https://github.com/perminder-klair/subwave/compare/v0.29.0...v0.30.0) (2026-06-26)
+
+
+### Features
+
+* cap max track length for autonomous picks ([#447](https://github.com/perminder-klair/subwave/issues/447)) ([#601](https://github.com/perminder-klair/subwave/issues/601)) ([edab50d](https://github.com/perminder-klair/subwave/commit/edab50d8895e180cc1618f401c884e495128140b))
+* **llm:** daily token usage cap with graceful degradation ([#599](https://github.com/perminder-klair/subwave/issues/599)) ([b9dbeb7](https://github.com/perminder-klair/subwave/commit/b9dbeb740753e46afdee09a2329322f4c5478289)), closes [#552](https://github.com/perminder-klair/subwave/issues/552)
+* **picker:** surface moods, energy, duration, instrumental to DJ agent candidates ([#605](https://github.com/perminder-klair/subwave/issues/605)) ([c263b2d](https://github.com/perminder-klair/subwave/commit/c263b2df4f12016272fe66e11951e0c5b0aea88a))
+* **picker:** tighten DJ-agent selection criteria and clean its session window ([#608](https://github.com/perminder-klair/subwave/issues/608)) ([63d2aff](https://github.com/perminder-klair/subwave/commit/63d2aff67861fb5bde74035b1a139dc02f4e271a))
+* **web:** express max track length cap in seconds, not minutes ([#604](https://github.com/perminder-klair/subwave/issues/604)) ([c59c4d4](https://github.com/perminder-klair/subwave/commit/c59c4d4db5aefacc46579d5c2f793d0dbf196e3b))
+* **web:** show app version in admin console footer ([#596](https://github.com/perminder-klair/subwave/issues/596)) ([ca360cd](https://github.com/perminder-klair/subwave/commit/ca360cdc68af902be9dea31fd95e4a93d28c8704))
+
+
+### Bug Fixes
+
+* **dj-agent:** gate mid-run link guidance on wantLink ([#610](https://github.com/perminder-klair/subwave/issues/610)) ([c5643bf](https://github.com/perminder-klair/subwave/commit/c5643bf8d52defb353643e8da16127ce537aa929))
+* **embedding:** stop chat-provider switch from silently breaking vector search ([#607](https://github.com/perminder-klair/subwave/issues/607)) ([b382e18](https://github.com/perminder-klair/subwave/commit/b382e18b7bc4b6786f0712826a0b3e03d276ad1b))
+* **picker:** stop artist/track over-repetition from three sources ([#603](https://github.com/perminder-klair/subwave/issues/603)) ([5fbd1cf](https://github.com/perminder-klair/subwave/commit/5fbd1cfa0e8a4e29e6fe55490b8abe689910f355))
+* **player:** tie the DJ thinking line to the on-air track ([#546](https://github.com/perminder-klair/subwave/issues/546)) ([#597](https://github.com/perminder-klair/subwave/issues/597)) ([03478d3](https://github.com/perminder-klair/subwave/commit/03478d3dca53682411e51803846d59e6d1f2a78b))
+* **sfx:** align under-voice stingers with the DJ's first word ([#609](https://github.com/perminder-klair/subwave/issues/609)) ([69d924d](https://github.com/perminder-klair/subwave/commit/69d924d5762ef0f5853596feda6366f552acf66f))
+* **web:** derive manual guide count from GUIDE array ([#600](https://github.com/perminder-klair/subwave/issues/600)) ([babe2ab](https://github.com/perminder-klair/subwave/commit/babe2ab9f7566548403d4604caeda463a7bfc50d))
+
 ## [0.29.0](https://github.com/perminder-klair/subwave/compare/v0.28.0...v0.29.0) (2026-06-25)
 
 

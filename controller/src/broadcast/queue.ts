@@ -35,6 +35,41 @@ function pickLinkInterval() {
   return 1 + Math.floor(Math.random() * 9);
 }
 
+// Upper bound on how far a recordPlay end-stamp can sit after the play's start
+// for the events-backfill dedup (playAlreadyRecorded). recordPlay stamps
+// endedAt at the track's END; an event's `t` is its START, so the two differ by
+// the track length. 15 min comfortably covers normal tracks (a track longer
+// than this is rare and only costs one harmless duplicate sidecar row), while
+// staying short enough that a genuine replay — always spaced more than a track
+// length apart — keeps its own entry rather than being merged away.
+export const BACKFILL_DEDUP_MAX_GAP_MS = 15 * 60_000;
+
+// Has this events-log play already been recorded by recordPlay? The old dedup
+// keyed on `${endedAt}|${title}` — an EXACT timestamp match — but recordPlay's
+// end-stamp never equals the event's start `t`, so it never fired and every
+// play got a duplicate id-less copy, filling the 300-entry sidecar in ~5h
+// instead of ~12h (halving the real anti-repeat window). Match on title|artist
+// with an existing endedAt landing in [t, t + maxGapMs] instead: exactly the
+// window a recordPlay end-stamp falls in for the SAME play. Pure + exported so
+// the dedup logic is unit-pinned (scripts/recent-plays.test.ts) without disk.
+export function playAlreadyRecorded(
+  existing: { title: string | null; artist: string | null; endedAt: string }[],
+  ev: { title?: string | null; artist?: string | null; t: string },
+  maxGapMs: number,
+): boolean {
+  const keyOf = (title: string | null | undefined, artist: string | null | undefined) =>
+    `${(title || '').toLowerCase().trim()}|${(artist || '').toLowerCase().trim()}`;
+  const k = keyOf(ev.title, ev.artist);
+  const t = new Date(ev.t).getTime();
+  if (!Number.isFinite(t)) return false;
+  for (const p of existing) {
+    if (keyOf(p.title, p.artist) !== k) continue;
+    const at = new Date(p.endedAt).getTime();
+    if (Number.isFinite(at) && at >= t && at - t <= maxGapMs) return true;
+  }
+  return false;
+}
+
 class Queue {
   upcoming: any[] = [];        // request items pushed by listeners, not yet playing
   current: any = null;         // what's broadcasting right now (request or auto)
@@ -151,11 +186,10 @@ class Queue {
   backfillRecentPlaysFromEvents() {
     try {
       const cutoff = Date.now() - 24 * 3_600_000;
-      // Dedup by `t|title` against existing sidecar (which records endedAt
-      // close to the play.start time; near-enough that exact equality works).
-      const have = new Set(
-        this._recentPlays.map(p => `${p.endedAt}|${p.title || ''}`),
-      );
+      // Dedup against plays recordPlay already logged — matched on title|artist
+      // with the existing end-stamp inside a track-length window of the event's
+      // start (playAlreadyRecorded), NOT an exact-timestamp key. The old exact
+      // key never matched (end-stamp ≠ start `t`), so every play was duplicated.
       const filled: typeof this._recentPlays = [];
       const today = new Date().toISOString().slice(0, 10);
       const yest = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
@@ -170,7 +204,10 @@ class Queue {
             const e = JSON.parse(line);
             if (e.type !== 'track.play' || !e.t || !e.title) continue;
             if (new Date(e.t).getTime() < cutoff) continue;
-            if (have.has(`${e.t}|${e.title}`)) continue;
+            // Compare against both the existing sidecar AND plays already filled
+            // in this pass, so two events for one play can't both slip through.
+            if (playAlreadyRecorded(this._recentPlays, e, BACKFILL_DEDUP_MAX_GAP_MS)) continue;
+            if (playAlreadyRecorded(filled, e, BACKFILL_DEDUP_MAX_GAP_MS)) continue;
             filled.push({
               id: null,
               title: e.title || null,
@@ -277,15 +314,26 @@ class Queue {
   // `introKind` picks both the TTS engine routing and the duck channel:
   //   'dj-speak' → say.txt   (HEAVY duck — request intros)
   //   'link'     → intro.txt (LIGHT duck — between-track auto-DJ links)
-  async push({ track, requestedBy = null, intent = null, introScript = null, introKind = 'dj-speak', aiPicked = false }: {
+  async push({ track, requestedBy = null, intent = null, introScript = null, introKind = 'dj-speak', aiPicked = false, allowDuplicate = false }: {
     track: any;
     requestedBy?: string | null;
     intent?: string | null;
     introScript?: string | null;
     introKind?: string;
     aiPicked?: boolean;
+    allowDuplicate?: boolean;
   }) {
-    if (aiPicked && track?.id) {
+    // Dedup guard. Applies to AI picks AND listener requests: two listener
+    // requests resolving to the same song over the 25-45s identify/match window
+    // each read queuedIds() before either reaches push(), so the early read
+    // can't see the other (issue #619). This check is the only synchronous
+    // point where both are visible — there is no await between it and the
+    // upcoming.push() below, so within the single-threaded event loop it's
+    // atomic and closes the race. Returns -1 so the caller can acknowledge
+    // honestly ("already on the way") instead of queuing a second back-to-back
+    // play. `allowDuplicate` opts an explicit operator action (the studio
+    // queue-track route) out — a deliberate manual queue always fires.
+    if (!allowDuplicate && track?.id) {
       const dominated = this.upcoming.some(i => i.track?.id === track.id)
         || (this.current?.track?.id === track.id);
       if (dominated) {
@@ -420,7 +468,12 @@ class Queue {
         // tracks resolve to null → no liq_amplify → unity gain, i.e. today.
         this.applyLoudnessGain(item.track);
 
-        const uri = subsonic.getAnnotatedUri(item.track);
+        // Hard length cap (#447 max-track-length): stamp a cue_out so Liquidsoap
+        // cuts an over-length autonomous pick mid-air. Explicit listener requests
+        // (requestedBy set) stay exempt — a requested long mix plays in full,
+        // mirroring the request path's selection-cap exemption in picker-tools.
+        const maxDurationSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
+        const uri = subsonic.getAnnotatedUri(item.track, { maxDurationSec });
         await writeHandoff(config.liquidsoap.queueFile, uri);
         item.sent = true;
         this.persist();  // record the sent flag — these are now live in dj_queue
@@ -490,8 +543,14 @@ class Queue {
   // Writes the effect's file path straight to sfx.txt — no TTS, the audio is
   // already rendered. Liquidsoap's sfx_queue mixes it beneath the voice
   // channels (see liquidsoap/radio.liq). Used by the segment-director agent
-  // to garnish a spoken line.
-  async playSfx(name: string) {
+  // to garnish a spoken line, and by applyMixTransition for between-track
+  // stingers.
+  //
+  // `underVoice` offsets the write by the voice lead-in (VOICE_LEADIN_MS) so a
+  // stinger meant to sit under a spoken line lands with the DJ's first word
+  // instead of during the channel's silent pre-roll. Transition stingers leave
+  // it false — they have no voice to align to and must fire at the crossfade.
+  async playSfx(name: string, { underVoice = false }: { underVoice?: boolean } = {}) {
     if (!name) return;
     try {
       const path = await sfx.getPath(name);
@@ -499,6 +558,7 @@ class Queue {
         this.log('error', `Unknown sound effect: ${name}`);
         return;
       }
+      if (underVoice) await sleep(VOICE_LEADIN_MS);
       await writeHandoff(config.liquidsoap.sfxFile, path);
       this.log('sfx', name);
       session.appendTurn({ role: 'segment', kind: 'sfx', text: name });
@@ -714,6 +774,51 @@ class Queue {
     return this.recentlyPlayed(hours).ids;
   }
 
+  // The last `n` DISTINCT tracks played — the count-based HARD no-repeat guard
+  // (filterPickerCandidates hardRecent*; never relaxed). Clock-independent: it
+  // walks the rolling sidecar newest-first and stops once it has seen `n`
+  // distinct tracks, so a busy or a quiet hour blocks the same number of songs.
+  //
+  // Counts DISTINCT tracks, not raw rows: the sidecar can hold two entries for
+  // one play (recordPlay logs it with an id at track-end; the boot events
+  // backfill logs an id-less copy at track-start), and those collapse here —
+  // `n` means n songs, not n rows — so the guard's strength matches the
+  // configured number regardless of the double-write. Collapses an id-less
+  // (backfilled) row against an id'd row of the same track via the shared
+  // title|artist key. Returns BOTH ids and keys so a candidate is blocked by
+  // whichever identifier it carries; the current track is added on top so a
+  // mid-song pick can't re-pick it. Empty sets when n <= 0.
+  recentlyPlayedByCount(n = 0): { ids: Set<string>; keys: Set<string> } {
+    const ids = new Set<string>();
+    const keys = new Set<string>();
+    if (!Number.isFinite(n) || n <= 0) return { ids, keys };
+    const keyOf = (title: string | null | undefined, artist: string | null | undefined) =>
+      `${(title || '').toLowerCase().trim()}|${(artist || '').toLowerCase().trim()}`;
+    const cur = this.current?.track;
+    if (cur?.id) ids.add(cur.id);
+    if (cur?.title) keys.add(keyOf(cur.title, cur.artist));
+    const seenIds = new Set<string>();
+    const seenKeys = new Set<string>();
+    let distinct = 0;
+    for (const p of this._recentPlays) {
+      if (distinct >= n) break;
+      const k = keyOf(p.title, p.artist);
+      // Already counted this track (by id OR by title|artist key)? Skip — this
+      // is the duplicate sidecar row, not a second distinct play.
+      if ((p.id && seenIds.has(p.id)) || (k && seenKeys.has(k))) continue;
+      distinct++;
+      if (p.id) {
+        seenIds.add(p.id);
+        ids.add(p.id);
+      }
+      if (k) {
+        seenKeys.add(k);
+        keys.add(k);
+      }
+    }
+    return { ids, keys };
+  }
+
   queuedIds(): Set<string> {
     const ids = new Set<string>();
     if (this.current?.track?.id) ids.add(this.current.track.id);
@@ -721,6 +826,18 @@ class Queue {
       if (item.track?.id) ids.add(item.track.id);
     }
     return ids;
+  }
+
+  // Honest acknowledgement for a listener request whose resolved track is
+  // already queued or on air — used when push() dedups the request (issue
+  // #619). Lets the caller send a truthful line instead of a false "coming up"
+  // or a phantom second back-to-back play. Distinguishes the on-air case so the
+  // listener isn't told something is "on the way" when it's playing right now.
+  dedupAck(trackId: string | null | undefined): string {
+    const onAir = !!trackId && this.current?.track?.id === trackId;
+    return onAir
+      ? `That one's spinning right now — stay tuned.`
+      : `That track's already queued — it's on the way.`;
   }
 
   // Lowercased artist names heard in the last `hours` hours — used by the

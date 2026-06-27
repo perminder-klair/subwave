@@ -570,7 +570,7 @@ export function getPlayableUri(song) {
 function escAnnotate(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
-export function getAnnotatedUri(song) {
+export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } = {}) {
   const fields = [
     `title="${escAnnotate(song.title)}"`,
     `artist="${escAnnotate(song.artist)}"`,
@@ -594,5 +594,15 @@ export function getAnnotatedUri(song) {
   // tracks play at even perceived volume — masters untouched, no bus
   // normaliser. Absent → no gain applied, i.e. unity / today's behaviour.
   if (song.gainDb != null) fields.push(`liq_amplify="${escAnnotate(song.gainDb)} dB"`);
+  // Hard track-length cap (issue #447 / max-track-length). When the caller passes
+  // a positive cap, stamp `liq_cue_out` so radio.liq's `cue_cut` stops the track
+  // at that second offset — a real ceiling that fires no matter how the track
+  // reached the stream, not just a selection bias. Only the capped paths set it
+  // (autonomous picks in queue.drainToLiquidsoap + the auto.m3u fallback);
+  // explicit listener requests pass null and play in full. A cue_out past a
+  // shorter track's end is a Liquidsoap no-op, so sub-cap tracks play untouched.
+  if (opts.maxDurationSec != null && opts.maxDurationSec > 0) {
+    fields.push(`liq_cue_out="${escAnnotate(opts.maxDurationSec)}"`);
+  }
   return `annotate:${fields.join(',')}:${getPlayableUri(song)}`;
 }

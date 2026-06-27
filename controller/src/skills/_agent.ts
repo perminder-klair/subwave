@@ -378,7 +378,7 @@ export async function agenticTick(ctx) {
     // unoffered kind.
     if (seg.sfx) {
       if (sfxCatalog.some(s => s.name === seg.sfx)) {
-        await queue.playSfx(seg.sfx);
+        await queue.playSfx(seg.sfx, { underVoice: true });
       } else {
         queue.log('error', `Segment agent picked unknown sfx "${seg.sfx}" — dropping`);
       }
@@ -513,7 +513,7 @@ export async function runCapability(which, ctx) {
   const pick = object?.sfx;
   if (pick) {
     if (sfxCatalog.some(s => s.name === pick)) {
-      await queue.playSfx(pick);
+      await queue.playSfx(pick, { underVoice: true });
     } else {
       queue.log('error', `Segment agent picked unknown sfx "${pick}" — dropping`);
     }
