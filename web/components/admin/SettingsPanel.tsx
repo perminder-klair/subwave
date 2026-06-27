@@ -806,6 +806,7 @@ export default function SettingsPanel() {
             own data fetch, so they render outside the data && form guard. */}
         {activeSection === 'archives' && (
           <>
+            <ArchivesPanel />
             {form && (
               <Card title="Hourly archive" sub="state/archive/%Y-%m-%d/%H-00.mp3">
                 <div className="grid gap-3">
@@ -888,7 +889,6 @@ export default function SettingsPanel() {
                 </div>
               </Card>
             )}
-            <ArchivesPanel />
           </>
         )}
         {activeSection === 'webhooks' && <WebhooksPanel />}
@@ -4357,12 +4357,12 @@ function ThemeCreator({
 
   if (!open) {
     return (
-      <Btn sm tone="accent" className="justify-self-start" onClick={() => setOpen(true)}>Create theme with AI</Btn>
+      <Btn sm tone="accent" onClick={() => setOpen(true)}>Create theme with AI</Btn>
     );
   }
 
   return (
-    <div className="grid gap-3 border border-ink p-3">
+    <div className="grid w-full basis-full gap-3 border border-ink p-3">
       <AiFill<{ name?: string; description?: string; mode?: 'light' | 'dark'; tokens?: Record<string, string> }>
         endpoint="/generate/theme"
         resultKey="theme"
@@ -4496,11 +4496,11 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
 
       <Card title="Create theme" sub="state/themes/*.json">
         <div className="grid gap-3">
-          <ThemeCreator adminFetch={adminFetch} onSaved={setThemes} />
-          <div>
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <Btn sm onClick={refresh} disabled={refreshing || busy}>
               {refreshing ? 'Refreshing…' : 'Refresh themes'}
             </Btn>
+            <ThemeCreator adminFetch={adminFetch} onSaved={setThemes} />
           </div>
           <div className="field-hint">
             Describe a look above and we&apos;ll draft the palette, or drop a JSON
