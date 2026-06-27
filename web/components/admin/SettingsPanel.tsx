@@ -4264,6 +4264,9 @@ interface ThemeDef {
   description?: string;
   mode: 'light' | 'dark';
   tokens: Record<string, string>;
+  // Set by the controller's /themes responses. Built-ins ship in the image and
+  // can't be removed; only user themes (state/themes/*.json) show a Remove button.
+  builtin?: boolean;
 }
 
 // Swatch columns shown per theme card — chosen to read the palette at a
@@ -4350,7 +4353,7 @@ function ThemeCreator({
 
   if (!open) {
     return (
-      <Btn sm tone="accent" onClick={() => setOpen(true)}>Create theme with AI</Btn>
+      <Btn sm tone="accent" className="justify-self-start" onClick={() => setOpen(true)}>Create theme with AI</Btn>
     );
   }
 
@@ -4405,6 +4408,7 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
   const [themes, setThemes] = useState<ThemeDef[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState<ThemeDef | null>(null);
 
   const activeId = data.values?.theme?.active;
   const PUBLIC_API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
@@ -4453,6 +4457,23 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
     await saveSettings({ theme: { active: theme.id } });
   };
 
+  // Delete a user theme's state/themes/<id>.json. If it was the active theme,
+  // fall back to the first remaining one (built-ins lead the list) through the
+  // normal selection flow so nothing points at a now-missing id.
+  const remove = async (theme: ThemeDef) => {
+    try {
+      const r = await adminFetch(`/themes/${encodeURIComponent(theme.id)}`, { method: 'DELETE' });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; themes?: ThemeDef[] };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const next = j.themes ?? [];
+      setThemes(next);
+      notify.ok(`removed "${theme.name}"`);
+      if (theme.id === activeId && next[0]) await choose(next[0]);
+    } catch (e) {
+      notify.err(`Remove failed: ${errorMessage(e)}`);
+    }
+  };
+
   return (
     <>
       <SectionHeader
@@ -4469,54 +4490,7 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
         manualHref="/manual/themes"
       />
 
-      <Card title="Picker" sub="active station theme">
-        {error && (
-          <div className="field-hint text-[var(--danger)]">
-            Couldn’t load themes: {error}
-          </div>
-        )}
-        {!themes && !error && (
-          <div className="text-[13px] text-muted italic">loading…</div>
-        )}
-        {themes && (
-          <div className="grid gap-2">
-            {themes.map(t => {
-              const isActive = t.id === activeId;
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => choose(t)}
-                  disabled={busy}
-                  className={cn(
-                    'flex w-full items-center gap-3 border p-3 text-left disabled:cursor-not-allowed disabled:opacity-60',
-                    isActive
-                      ? 'border-vermilion bg-[var(--ink-softer)]'
-                      : 'border-ink bg-bg hover:bg-[var(--overlay)]',
-                  )}
-                >
-                  <span className="inline-flex shrink-0 border border-ink" aria-hidden="true">
-                    {SWATCH_KEYS.map(k => (
-                      <Swatch key={k} color={t.tokens[k]} />
-                    ))}
-                  </span>
-                  <div className="grid min-w-0 flex-1 gap-0.5">
-                    <span className="text-[12px] font-bold tracking-[0.12em] uppercase">
-                      {t.name}
-                    </span>
-                    <span className="text-[11px] leading-[1.4] text-muted">
-                      {t.description || (t.mode === 'dark' ? 'Dark palette' : 'Light palette')}
-                    </span>
-                  </div>
-                  {isActive && <Pill tone="accent" dot>active</Pill>}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </Card>
-
-      <Card title="Custom themes" sub="state/themes/*.json">
+      <Card title="Create theme" sub="state/themes/*.json">
         <div className="grid gap-3">
           <ThemeCreator adminFetch={adminFetch} onSaved={setThemes} />
           <div>
@@ -4532,6 +4506,79 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
           </div>
         </div>
       </Card>
+
+      <Card title="Picker" sub="active station theme">
+        {error && (
+          <div className="field-hint text-[var(--danger)]">
+            Couldn’t load themes: {error}
+          </div>
+        )}
+        {!themes && !error && (
+          <div className="text-[13px] text-muted italic">loading…</div>
+        )}
+        {themes && (
+          <div className="grid gap-2">
+            {themes.map(t => {
+              const isActive = t.id === activeId;
+              return (
+                <div key={t.id} className="flex items-stretch gap-2">
+                  <button
+                    type="button"
+                    onClick={() => choose(t)}
+                    disabled={busy}
+                    className={cn(
+                      'flex min-w-0 flex-1 items-center gap-3 border p-3 text-left disabled:cursor-not-allowed disabled:opacity-60',
+                      isActive
+                        ? 'border-vermilion bg-[var(--ink-softer)]'
+                        : 'border-ink bg-bg hover:bg-[var(--overlay)]',
+                    )}
+                  >
+                    <span className="inline-flex shrink-0 border border-ink" aria-hidden="true">
+                      {SWATCH_KEYS.map(k => (
+                        <Swatch key={k} color={t.tokens[k]} />
+                      ))}
+                    </span>
+                    <div className="grid min-w-0 flex-1 gap-0.5">
+                      <span className="text-[12px] font-bold tracking-[0.12em] uppercase">
+                        {t.name}
+                      </span>
+                      <span className="text-[11px] leading-[1.4] text-muted">
+                        {t.description || (t.mode === 'dark' ? 'Dark palette' : 'Light palette')}
+                      </span>
+                    </div>
+                    {isActive && <Pill tone="accent" dot>active</Pill>}
+                  </button>
+                  {!t.builtin && (
+                    <Btn
+                      sm
+                      tone="danger"
+                      onClick={() => setConfirmRemove(t)}
+                      disabled={busy}
+                      title="Remove this custom theme"
+                    >
+                      Remove
+                    </Btn>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      <V3AlertDialog
+        open={confirmRemove != null}
+        onOpenChange={(o) => { if (!o) setConfirmRemove(null); }}
+        title="Remove theme"
+        description={
+          confirmRemove
+            ? `Remove the custom theme "${confirmRemove.name}"? This deletes state/themes/${confirmRemove.id}.json permanently.`
+            : ''
+        }
+        confirmLabel="remove"
+        danger
+        onConfirm={() => { if (confirmRemove) remove(confirmRemove); setConfirmRemove(null); }}
+      />
     </>
   );
 }

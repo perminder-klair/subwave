@@ -26,7 +26,7 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { tagger } from '../broadcast/tagger.js';
 import { skillCatalog } from '../skills/_agent.js';
-import { clearUserThemeCache, loadUserThemes, listThemes, saveUserTheme } from '../themes.js';
+import { clearUserThemeCache, loadUserThemes, listThemesAnnotated, saveUserTheme, deleteUserTheme } from '../themes.js';
 
 export const router = express.Router();
 
@@ -799,7 +799,7 @@ router.post('/themes/refresh', requireAdmin, async (req, res) => {
   try {
     clearUserThemeCache();
     await loadUserThemes(true);
-    const themes = await listThemes();
+    const themes = await listThemesAnnotated();
     res.json({ ok: true, themes });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -815,6 +815,21 @@ router.post('/themes/refresh', requireAdmin, async (req, res) => {
 router.post('/themes', requireAdmin, async (req, res) => {
   try {
     const themes = await saveUserTheme(req.body || {});
+    res.json({ ok: true, themes });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /themes/:id — remove a user theme file from ${STATE_DIR}/themes/.
+// Built-in ids are reserved and rejected. The admin UI reassigns the active
+// theme when it deletes the one in use, so this route only touches the file.
+// Returns the refreshed registry.
+// ---------------------------------------------------------------------------
+router.delete('/themes/:id', requireAdmin, async (req, res) => {
+  try {
+    const themes = await deleteUserTheme(req.params.id);
     res.json({ ok: true, themes });
   } catch (err) {
     res.status(400).json({ error: err.message });

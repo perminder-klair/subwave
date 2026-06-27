@@ -193,6 +193,15 @@ export async function listThemes(): Promise<Theme[]> {
   return [...BUILTIN_THEMES, ...user];
 }
 
+export type ThemeListItem = Theme & { builtin: boolean };
+
+// Same registry as listThemes(), but each entry is tagged with whether it's a
+// built-in. The admin UI uses the flag to gate the per-theme Remove button so
+// only user themes (state/themes/*.json) can be deleted.
+export async function listThemesAnnotated(): Promise<ThemeListItem[]> {
+  return (await listThemes()).map(t => ({ ...t, builtin: BUILTIN_IDS.has(t.id) }));
+}
+
 export async function getTheme(id: string): Promise<Theme> {
   const all = await listThemes();
   return (
@@ -224,7 +233,7 @@ export function slugifyThemeId(name: string): string {
 // shape the file-drop convention uses. Validates with the shared ThemeSchema
 // (so the token security regex applies), refuses reserved built-in ids, then
 // refreshes the user cache and returns the full registry.
-export async function saveUserTheme(input: any): Promise<Theme[]> {
+export async function saveUserTheme(input: any): Promise<ThemeListItem[]> {
   const id = (typeof input?.id === 'string' && input.id.trim())
     ? slugifyThemeId(input.id)
     : slugifyThemeId(input?.name || '');
@@ -237,5 +246,29 @@ export async function saveUserTheme(input: any): Promise<Theme[]> {
   await fs.writeFile(join(dir, `${theme.id}.json`), JSON.stringify(theme, null, 2), 'utf8');
   clearUserThemeCache();
   await loadUserThemes(true);
-  return listThemes();
+  return listThemesAnnotated();
+}
+
+// Delete a user theme file (${STATE_DIR}/themes/<id>.json) and return the
+// refreshed registry. Built-in ids are reserved (baked into the image, nothing
+// on disk to remove). The id is regex-validated before it touches the path so a
+// crafted ":id" can't traverse out of the themes dir.
+export async function deleteUserTheme(id: string): Promise<ThemeListItem[]> {
+  const clean = String(id || '').trim();
+  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(clean)) {
+    throw new Error('invalid theme id');
+  }
+  if (BUILTIN_IDS.has(clean)) {
+    throw new Error(`"${clean}" is a built-in theme and can't be removed`);
+  }
+  const file = join(userThemesDir(), `${clean}.json`);
+  try {
+    await fs.unlink(file);
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') throw new Error(`no custom theme "${clean}"`);
+    throw err;
+  }
+  clearUserThemeCache();
+  await loadUserThemes(true);
+  return listThemesAnnotated();
 }
