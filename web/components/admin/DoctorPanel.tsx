@@ -203,7 +203,7 @@ export default function DoctorPanel() {
   const buddyMood: BuddyMood = review?.available && review.overall ? MOOD_BY_OVERALL[review.overall] : 'content';
 
   return (
-    <div className="mx-auto max-w-[1100px] px-7 py-8">
+    <div className="mx-auto max-w-[1100px] px-0 py-8 sm:px-7">
       {/* Init hero — DJ Doc introduces himself and the whole run is one press.
           The booth's-open pitch is the primary content; "Let's go" runs the
           full assessment AND his review together. Stays up through the first
