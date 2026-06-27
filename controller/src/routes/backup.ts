@@ -55,6 +55,12 @@ const INCLUDE_DIRS = [
 const RESTORABLE = new Set<string>([...INCLUDE_FILES, ...INCLUDE_DIRS]);
 
 const appVersion = (() => {
+  // Build-arg wins (set from `git describe` by scripts/update.sh and the
+  // publish-images CI) so an image built off `develop` reports its true version
+  // rather than the stale package.json number, which only bumps on `main`.
+  // Mirrors web/next.config.js.
+  const fromEnv = process.env.SUBWAVE_BUILD_VERSION;
+  if (fromEnv) return fromEnv.replace(/^v/, '');
   try {
     const p = fileURLToPath(new URL('../../package.json', import.meta.url));
     return JSON.parse(readFileSync(p, 'utf8')).version || 'unknown';

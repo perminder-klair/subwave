@@ -92,6 +92,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
+      args:
+        # Version reported by the controller (backup manifest). Same source as
+        # the web build arg below; unset → falls back to controller/package.json.
+        - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
     depends_on:
@@ -161,6 +165,10 @@ services:
         - SITE_URL=\${SITE_URL:-}
         # NEXT_PUBLIC_* is inlined into the client bundle at BUILD time.
         - NEXT_PUBLIC_GA_ID=\${NEXT_PUBLIC_GA_ID:-}
+        # Version shown in the admin console footer, inlined at BUILD time.
+        # scripts/update.sh sets it from \`git describe\`; unset → falls back to
+        # web/package.json (see web/next.config.js).
+        - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
     depends_on:
@@ -339,6 +347,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
+      args:
+        # Version reported by the controller (backup manifest). Same source as
+        # the web build arg below; unset → falls back to controller/package.json.
+        - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
     depends_on:
@@ -395,6 +407,10 @@ services:
       args:
         - SITE_URL=\${SITE_URL:-}
         - NEXT_PUBLIC_GA_ID=\${NEXT_PUBLIC_GA_ID:-}
+        # Version shown in the admin console footer, inlined at BUILD time.
+        # scripts/update.sh sets it from \`git describe\`; unset → falls back to
+        # web/package.json (see web/next.config.js).
+        - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
     depends_on:
@@ -546,6 +562,11 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
+      args:
+        # Version reported by the controller (backup manifest); unset → falls
+        # back to controller/package.json. The dev web UI runs \`npm run dev\`
+        # outside Docker, where next.config.js resolves it via \`git describe\`.
+        - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     platform: linux/amd64
     container_name: sub-wave-controller
     restart: unless-stopped
