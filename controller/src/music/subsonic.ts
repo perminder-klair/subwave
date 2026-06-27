@@ -600,5 +600,11 @@ export function getAnnotatedUri(song) {
   // lowpass closed→open across the crossfade so the new track "surfaces from
   // far away". Absent → no sweep, i.e. a normal crossfade.
   if (song.sweep) fields.push('liq_sweep="true"');
+  // DJ washout: the DJ agent may flag a pick (transition:'washout') to dissolve
+  // INTO a ping-pong echo tail as that track ENDS; the queue stamps `washout` on
+  // the track. radio.liq's washout_watch reads `liq_washout` when the track
+  // starts and rings out its outro across the crossfade into the next track.
+  // Absent → no washout, i.e. a normal crossfade.
+  if (song.washout) fields.push('liq_washout="true"');
   return `annotate:${fields.join(',')}:${getPlayableUri(song)}`;
 }
