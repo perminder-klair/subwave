@@ -144,6 +144,25 @@ music = fallback(
 )
 
 # ---------------------------------------------------------------------------
+# HARD TRACK-LENGTH CAP — enforce max-track-length as a real ceiling (#447)
+# ---------------------------------------------------------------------------
+# The controller stamps `liq_cue_out="<seconds>"` (annotate:, via
+# subsonic.getAnnotatedUri) on autonomous picks and auto.m3u fallback entries
+# when a station/show max-track-length is set. `cue_cut` honours it and stops
+# the track at that offset, so an over-length track NEVER airs in full — even
+# the ones that slip past the controller's selection filter (unknown duration)
+# or that were already on the way when the limit changed. This is the safety
+# net that makes the admin setting a ceiling, not just a selection bias.
+#
+# Listener requests are deliberately left UN-stamped by the controller, so they
+# carry no cue_out and play in full — an explicit ask for a long mix isn't cut.
+# A cue_out past a shorter track's end is a no-op, so sub-cap tracks are
+# untouched. Default out-metadata label is `liq_cue_out`. Placed BEFORE the
+# music_meta capture so on_metadata still sees one clean event per cut track,
+# and before `cross` so the cut track-end drives a normal crossfade out.
+music = cue_cut(music)
+
+# ---------------------------------------------------------------------------
 # CROSSFADE TRANSITION — equal-amplitude blend across the full cross window
 # ---------------------------------------------------------------------------
 # fade.out/fade.in span the ENTIRE cross() buffer so the two tracks curve

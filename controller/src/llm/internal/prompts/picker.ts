@@ -35,10 +35,12 @@ export function showMusicLean(show?: ShowMusic | null): string {
   }
   if (show.energy) parts.push(`favour ${show.energy}-energy tracks`);
 
-  // The hard genre rule, phrased as a constraint rather than a preference. Still
-  // carries the never-starve escape hatch so a thin genre can't strand the show.
+  // The hard genre rule. Track selection is now code-enforced for strict shows
+  // (preferGenre in both pick paths), so this is lean: it governs the DJ's TALK
+  // and the never-starve fallback case (where off-genre tracks can still surface),
+  // not the candidate list.
   const lock = strict
-    ? `\n\nGenre lock for this show — every pick MUST be ${show.genre}. Stay within ${show.genre}; do not pick other genres. Only reach outside ${show.genre} if there is genuinely no ${show.genre} track left to play (never leave dead air).`
+    ? `\n\nThis show is ${show.genre}-only — keep your picks and your talk in ${show.genre}; only step outside if there is genuinely no ${show.genre} track left to play (never leave dead air).`
     : '';
   const soft = parts.length
     ? `\n\nMusic steer for this show — ${parts.join('; ')}. These are preferences, not hard filters: break them only when the flow genuinely demands it.`

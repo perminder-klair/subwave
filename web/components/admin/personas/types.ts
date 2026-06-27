@@ -8,6 +8,10 @@ export interface PersonaTts {
   // Per-persona voice-level trim in dB (−12..+12, default 0 = no change). Stacks
   // on top of the per-engine gain. See controller settings.ts:clampTtsGain.
   gainDb: number;
+  // Per-persona speech-rate multiplier (0.5..2.0×, default 1.0 = no change).
+  // Composes with the per-engine speed + daypart energy. Honoured by
+  // Piper/Kokoro/cloud only. See controller settings.ts:clampTtsSpeed.
+  speed: number;
 }
 
 export interface Persona {

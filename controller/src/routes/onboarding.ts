@@ -235,6 +235,9 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
     if (Array.isArray(b.personas)) settingsPatch.personas = b.personas;
     if (b.weather && typeof b.weather === 'object') settingsPatch.weather = b.weather;
     if (typeof b.station === 'string') settingsPatch.station = b.station;
+    // Timezone rides along from the wizard's location picker (Open-Meteo returns
+    // the IANA zone for the picked city). settings.update() validates it.
+    if (typeof b.timezone === 'string') settingsPatch.timezone = b.timezone;
     if (Object.keys(settingsPatch).length) await settings.update(settingsPatch);
 
     // Mark setup complete so the wizard exits even if Navidrome was skipped.

@@ -77,6 +77,13 @@ function resolveEngine(kind: string, personaTts: any) {
   if (chosen === 'pocket-tts' && !pocketTts.isAvailable()) {
     return tts.defaultEngine && tts.defaultEngine !== 'pocket-tts' ? tts.defaultEngine : 'piper';
   }
+  // Kokoro ships in the default image, but its model/voices files are pulled at
+  // build time and can be missing if that download failed. isAvailable() now
+  // existsSyncs them, so route around a broken Kokoro install instead of
+  // spawning a worker that just dies on load and falls back per segment.
+  if (chosen === 'kokoro' && !kokoro.isAvailable()) {
+    return tts.defaultEngine && tts.defaultEngine !== 'kokoro' ? tts.defaultEngine : 'piper';
+  }
   return chosen;
 }
 
@@ -145,6 +152,39 @@ function normalizeForSpeech(text: string) {
   return text.replace(/\bSUB\s*(?:\/|slash)\s*WAVE\b/gi, 'Subwave');
 }
 
+// Admin voice-preview ("Play sample"). Renders a one-off sample WAV with an
+// EXPLICIT engine + voice, deliberately bypassing both the on-air persona
+// resolution and the silent fallback chain in speak() — the operator wants to
+// hear exactly the engine they picked, or get a real error if it's unavailable
+// (sidecar down, no cloud key). A synthetic persona-shaped object routes the
+// voice/provider through speakWith() the same way a live persona would. `speed`
+// is the final rate multiplier to audition, clamped to the playout [0.5,2.0]
+// band; gain (dB) is a playout-time mix trim and is intentionally NOT baked in.
+// Returns the path to the generated WAV — the caller serves and unlinks it.
+const PREVIEW_TEXT_MAX = 200;
+const DEFAULT_PREVIEW_TEXT = "You're listening to SUB/WAVE. This is a voice preview.";
+
+export async function synthesizeSample(
+  { engine, voice = '', cloudProvider = 'openai', speed, text }: {
+    engine: string;
+    voice?: string;
+    cloudProvider?: string;
+    speed?: number;
+    text?: string;
+  },
+): Promise<string> {
+  if (!ENGINES.includes(engine)) throw new Error(`Unknown engine: ${engine}`);
+  const raw = (typeof text === 'string' && text.trim()) ? text.trim() : DEFAULT_PREVIEW_TEXT;
+  const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX));
+  const scale = settings.clampTtsSpeed(speed);
+  // Synthetic persona so speakWith() picks up the requested voice/provider
+  // exactly (its per-engine branches key off personaTts.engine === <engine>).
+  const personaTts = { engine, voice, cloudProvider };
+  // No outPath → each engine self-generates a WAV path under config.piper.outDir
+  // (reaped by cleanupOldVoices) and returns it.
+  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '' }, personaTts);
+}
+
 // Public entry point. Tries the configured engine; on failure, falls back to
 // a local engine so the DJ never goes silent because a model (or the network)
 // failed. Piper is the universal fallback — local, keyless, fast.
@@ -175,18 +215,33 @@ export async function speak(
   const soul = GLOBAL_VOICE_KINDS.has(kind)
     ? ''
     : String(settings.getEffectivePersona()?.soul || '').trim();
-  // Delivery pace tracks the daypart for live, persona-voiced segments.
-  // `speedScale` is a MULTIPLIER on the engine's configured speech rate (1.0 =
-  // unchanged), so it composes with — rather than overrides — an operator's
-  // global PIPER_SPEED/KOKORO_SPEED/CLOUD_TTS_SPEED. An explicit scale (e.g. a
-  // future talk-up-to-post line budget) always wins; otherwise persona-voiced
-  // kinds inherit the daypart energy. Persona-agnostic kinds (jingle/default)
-  // are skipped — jingles are pre-rendered offline, so a jingle cut at 2am must
-  // not carry 2am pacing into a noon playout. A daypart scale of 1.0
-  // (afternoon) composes to the config default, so the station is unchanged.
-  const scale = speedScale != null
+  // Delivery pace — a MULTIPLIER on the engine's configured speech rate (1.0 =
+  // unchanged), composed (not overridden) on top of an operator's global env
+  // base PIPER_SPEED/KOKORO_SPEED/CLOUD_TTS_SPEED. Three factors multiply:
+  //   engine base (settings.tts.speed[engine]) × persona (persona.tts.speed)
+  //   × daypart energy (energyForDaypart().speed)
+  // The engine base applies UNIVERSALLY — including jingles/default — mirroring
+  // how the env base already does; persona × daypart apply only to live,
+  // persona-voiced kinds (jingles are pre-rendered offline, so a jingle cut at
+  // 2am must not carry 2am pacing into a noon playout). An explicit `speedScale`
+  // (e.g. a future talk-up-to-post budget) replaces the persona/daypart live
+  // term but still composes with the engine base. Resolved-engine speed (post
+  // availability/key fallback) is used so the rate matches the engine that
+  // speaks — same approach as voiceGainDb(); the rare runtime-throw fallback
+  // reuses this scale. All factors default to 1.0, so a stock station is
+  // byte-for-byte unchanged. Final product clamped to [0.5, 2.0].
+  const ttsCfg: any = settings.get().tts || {};
+  const engineSpeed = settings.clampTtsSpeed(ttsCfg.speed?.[primary]);
+  const live = speedScale != null
     ? speedScale
-    : (GLOBAL_VOICE_KINDS.has(kind) ? undefined : energyForDaypart().speed);
+    : GLOBAL_VOICE_KINDS.has(kind)
+      ? 1
+      : (personaTts ? settings.clampTtsSpeed(personaTts.speed) : 1) * energyForDaypart().speed;
+  // Bounds-clamp the product but do NOT snap to the 0.05 grid — the daypart
+  // energy is a non-grid value, so at default knobs (all 1.0) the on-air scale
+  // stays exactly today's daypart figure. Snapping happens only on the stored
+  // per-engine / per-persona knobs (clampTtsSpeed above).
+  const scale = Math.min(settings.TTS_SPEED_MAX, Math.max(settings.TTS_SPEED_MIN, engineSpeed * live));
   const started = Date.now();
   const chars = (speakText || '').length;
   try {

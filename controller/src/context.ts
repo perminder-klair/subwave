@@ -113,6 +113,72 @@ function weatherToMood(condition) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Geocoding via Open-Meteo (no API key required) — powers the admin/onboarding
+// location picker: type a place name, get back coordinates + IANA timezone so
+// the operator never hand-copies lat/lng. Same provider we already use for
+// weather, so no new dependency. Results are cached per lowercased query for a
+// day (place coordinates don't move) with a soft entry cap to stay polite.
+// ---------------------------------------------------------------------------
+export interface GeocodeResult {
+  name: string;
+  admin1?: string;
+  country?: string;
+  countryCode?: string;
+  lat: number;
+  lng: number;
+  timezone?: string;
+  label: string;
+}
+
+const GEOCODE_TTL_MS = 24 * 60 * 60 * 1000;
+const GEOCODE_CACHE_MAX = 200;
+const geocodeCache = new Map<string, { results: GeocodeResult[]; fetchedAt: number }>();
+
+export async function geocodePlace(query: string): Promise<GeocodeResult[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+
+  const key = q.toLowerCase();
+  const hit = geocodeCache.get(key);
+  if (hit && Date.now() - hit.fetchedAt < GEOCODE_TTL_MS) {
+    // Refresh recency — Map iteration order is insertion order, so delete+set
+    // keeps the oldest entry first for eviction.
+    geocodeCache.delete(key);
+    geocodeCache.set(key, hit);
+    return hit.results;
+  }
+
+  const url =
+    'https://geocoding-api.open-meteo.com/v1/search?name=' +
+    encodeURIComponent(q) +
+    '&count=6&language=en&format=json';
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`geocoding upstream ${res.status}`);
+  const data = (await res.json()) as { results?: any[] };
+  const results: GeocodeResult[] = (data.results || []).map((r: any) => {
+    const name = r.name as string;
+    const admin1 = r.admin1 as string | undefined;
+    const country = r.country as string | undefined;
+    return {
+      name,
+      admin1,
+      country,
+      countryCode: r.country_code,
+      lat: r.latitude,
+      lng: r.longitude,
+      timezone: r.timezone,
+      label: [name, admin1, country].filter(Boolean).join(', '),
+    };
+  });
+
+  geocodeCache.set(key, { results, fetchedAt: Date.now() });
+  if (geocodeCache.size > GEOCODE_CACHE_MAX) {
+    geocodeCache.delete(geocodeCache.keys().next().value!);
+  }
+  return results;
+}
+
 const DAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const MONTH_LABELS = ['January', 'February', 'March', 'April', 'May', 'June',
                       'July', 'August', 'September', 'October', 'November', 'December'];

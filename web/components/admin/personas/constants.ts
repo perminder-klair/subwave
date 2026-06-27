@@ -36,13 +36,9 @@ export const KNOB_ROTATIONS = [
 ] as const;
 export const VOICE_CELLS = 32;
 
-export const ENGINES = [
-  { id: 'piper',  label: 'Piper' },
-  { id: 'kokoro', label: 'Kokoro' },
-  { id: 'chatterbox', label: 'Chatterbox' },
-  { id: 'pocket-tts', label: 'PocketTTS' },
-  { id: 'cloud',  label: 'Cloud' },
-];
+// Engine descriptors live in components/admin/tts/engineMeta.ts (shared with the
+// Settings voice tab) — import ENGINES from there, not here.
+
 // Chatterbox reference voice files are validated against this in audio/chatterbox.ts
 // — basename only, no path separators, .wav extension, conservative chars.
 export const CHATTERBOX_VOICE_RE = /^[A-Za-z0-9_.-]{1,80}\.wav$/;

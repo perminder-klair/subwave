@@ -236,7 +236,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
     else tune();
   };
   // Ticker that increments only on keyboard-driven volume adjusts. The
-  // TransportBar watches it to pulse the volume cells; slider drags don't
+  // TransportBar watches it to pulse the volume cells; knob drags don't
   // tick it (the cells need to track the finger pixel-for-pixel during a
   // drag — pulsing would fight that).
   const [volumePulse, setVolumePulse] = useState(0);

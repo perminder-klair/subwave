@@ -191,6 +191,16 @@ export const config = {
     // why we keep a separate, longer-lived store.
     recentPlaysFile: `${STATE_DIR}/recent-plays.json`,
     recentPlaysMax: 300,
+    // Count-based hard no-repeat guard: the picker (both pool and agent paths)
+    // never re-airs any of the last N DISTINCT plays. Unlike the time-window
+    // guard (recencyWindowsForLibrary) this is non-relaxable — it survives the
+    // filterPickerCandidates starvation cascade, closing the hole where a
+    // thin/over-visited mood cluster let the cascade drop the recent-track guard
+    // and re-serve a just-played song. Clamped to library size at use
+    // (effectiveNoRepeatWindow) so a small catalogue never fully blocks; 0
+    // disables. Seeds settings.llm.noRepeatWindow — the live, admin-tunable
+    // value; env wins. Listener requests stay exempt (request path is untouched).
+    noRepeatWindow: parseInt(process.env.NO_REPEAT_WINDOW || '100', 10),
   },
   curiosity: {
     // Durable dedup ledger for the `curiosity` segment capability. Holds every

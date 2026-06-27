@@ -11,7 +11,13 @@ import { languageModel, resolveModelId, ollamaBaseUrl, llmCfg } from './registry
 
 export interface Leg {
   cfg: any;       // the resolved llm config for this leg
-  model: any;     // AI SDK LanguageModel
+  model: any;     // AI SDK LanguageModel — honours the operator reasoning toggle
+  // Reasoning-disabled variant for forced-tool / structured legs (picker, done-
+  // tool, objectViaToolCall). Identical to `model` for every provider that can
+  // suppress thinking per-call; a separate instance only for OpenRouter, whose
+  // reasoning is fixed at construction. Lets the DJ's free-text keep reasoning
+  // while the picker runs no-think — no operator knowledge required.
+  noThinkModel: any;
   label: string;  // `provider:modelId` for /debug records
 }
 
@@ -28,7 +34,7 @@ function labelFor(cfg: any): string {
 // the caller surfaces, not something to silently route around.
 export function primaryLeg(): Leg {
   const cfg = llmCfg();
-  return { cfg, model: languageModel(cfg), label: labelFor(cfg) };
+  return { cfg, model: languageModel(cfg), noThinkModel: languageModel(cfg, { forceNoThink: true }), label: labelFor(cfg) };
 }
 
 // The optional backup leg, or null when no usable fallback is configured.
@@ -40,7 +46,7 @@ export function fallbackLeg(): Leg | null {
   const fb = settings.get().llm?.fallback;
   if (!fb || !fb.enabled) return null;
   try {
-    return { cfg: fb, model: languageModel(fb), label: labelFor(fb) };
+    return { cfg: fb, model: languageModel(fb), noThinkModel: languageModel(fb, { forceNoThink: true }), label: labelFor(fb) };
   } catch {
     return null;
   }

@@ -7,9 +7,11 @@ import { m } from 'motion/react';
 import { notify, errorMessage } from '../../lib/notify';
 import { fmtClockMinute, fmtSize, normalizeStationLocale, type StationLocale } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { applyTheme, cacheTheme } from '../../lib/theme';
 import { CLOUD_VOICES, CLOUD_MODELS } from '../../lib/cloudVoices';
 import { V3AlertDialog } from '../ui/alert-dialog';
+import { Modal } from '../ui/modal';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { Label } from '../ui/label';
@@ -17,40 +19,44 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
+import { EngineSelector } from './tts/EngineSelector';
+import { VoicePreviewButton } from './tts/VoicePreviewButton';
+import { ProviderSelector } from './llm/ProviderSelector';
+import { EmbeddingProviderSelector } from './embedding/EmbeddingProviderSelector';
+import { ModelCombobox } from './llm/ModelCombobox';
+import { LLM_ENV_VARS, llmProviderLabel } from './llm/providerMeta';
 import { AiFill } from './AiFill';
+import { LocationPicker, type GeocodeResult } from '../LocationPicker';
 import { cn } from '../../lib/cn';
 import ArchivesPanel from './ArchivesPanel';
 import WebhooksPanel from './WebhooksPanel';
 import BackupPanel from './BackupPanel';
+import {
+  Radio, Palette, Cpu, Mic, Library, Search, Music, AudioLines,
+  Activity, Archive, Webhook, Save, AlertTriangle,
+} from 'lucide-react';
 
 const SECTIONS = [
-  { id: 'station',  label: 'Station', hint: 'name · location · locale' },
-  { id: 'theme',    label: 'Theme', hint: 'station-wide palette' },
-  { id: 'llm',      label: 'LLM provider', hint: 'model routing' },
-  { id: 'tts',      label: 'TTS voice', hint: 'default engine' },
-  { id: 'library',  label: 'Library tagger', hint: 'embedding · propagation' },
-  { id: 'search',   label: 'Web search', hint: 'live-facts backend' },
-  { id: 'jingles',  label: 'Jingles', hint: 'stingers' },
-  { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers' },
-  { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz' },
-  { id: 'archives', label: 'Archives', hint: 'hourly recordings' },
-  { id: 'webhooks', label: 'Webhooks', hint: 'outbound events' },
-  { id: 'backup',   label: 'Backup', hint: 'export · restore' },
-  { id: 'danger',   label: 'Danger zone', hint: 'broadcast control' },
+  { id: 'station',  label: 'Station', hint: 'name · location · locale', icon: Radio },
+  { id: 'theme',    label: 'Theme', hint: 'station-wide palette', icon: Palette },
+  { id: 'llm',      label: 'LLM provider', hint: 'model routing', icon: Cpu },
+  { id: 'tts',      label: 'TTS voice', hint: 'default engine', icon: Mic },
+  { id: 'library',  label: 'Library tagger', hint: 'embedding · propagation', icon: Library },
+  { id: 'search',   label: 'Web search', hint: 'live-facts backend', icon: Search },
+  { id: 'jingles',  label: 'Jingles', hint: 'stingers', icon: Music },
+  { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers', icon: AudioLines },
+  { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz', icon: Activity },
+  { id: 'archives', label: 'Archives', hint: 'hourly recordings', icon: Archive },
+  { id: 'webhooks', label: 'Webhooks', hint: 'outbound events', icon: Webhook },
+  { id: 'backup',   label: 'Backup', hint: 'export · restore', icon: Save },
+  { id: 'danger',   label: 'Danger zone', hint: 'broadcast control', icon: AlertTriangle },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]['id'];
 
-// Cloud LLM providers read their key from this controller env var.
-const LLM_ENV_VARS: Record<string, string> = {
-  anthropic: 'ANTHROPIC_API_KEY',
-  openai: 'OPENAI_API_KEY',
-  google: 'GOOGLE_GENERATIVE_AI_API_KEY',
-  deepseek: 'DEEPSEEK_API_KEY',
-  openrouter: 'OPENROUTER_API_KEY',
-  requesty: 'REQUESTY_API_KEY',
-  gateway: 'AI_GATEWAY_API_KEY',
-};
+// LLM provider descriptors, the cloud-key env-var map and the badge logic live
+// in ./llm/providerMeta (imported above) — shared with the ProviderSelector card
+// grid and, later, the onboarding wizard. Don't redefine them here.
 
 const KEY_HINTS: Record<string, string> = {
   ANTHROPIC_API_KEY: 'sk-ant-...',
@@ -62,22 +68,6 @@ const KEY_HINTS: Record<string, string> = {
   ELEVENLABS_API_KEY: 'el_...',
   EMBEDDING_API_KEY: 'optional — defaults to chat key',
 };
-
-const LLM_PROVIDER_LABELS: Record<string, string> = {
-  ollama: 'Ollama (local/cloud)',
-  locca: 'locca (local llama.cpp, host)',
-  'openai-compatible': 'OpenAI-compatible (llama.cpp, vLLM, LM Studio)',
-  anthropic: 'Anthropic (Claude)',
-  openai: 'OpenAI (GPT)',
-  google: 'Google (Gemini)',
-  deepseek: 'DeepSeek',
-  openrouter: 'OpenRouter (multi-vendor aggregator)',
-  requesty: 'Requesty (multi-vendor aggregator)',
-  gateway: 'Vercel AI Gateway (multi-vendor aggregator)',
-};
-
-const llmProviderLabel = (id: string | undefined): string =>
-  (id && LLM_PROVIDER_LABELS[id]) || id || '—';
 
 // Suggested embedding model ids per provider — clickable chips under the Model
 // field so operators don't have to guess a valid name. The #1 trip-up is typing
@@ -139,6 +129,9 @@ interface TtsForm {
   // Per-engine voice-level trim in dB, keyed by engine id (note the hyphen in
   // `pocket-tts`). Always carries all 5 known engines, 0 = unity = no change.
   gainDb: Record<string, number>;
+  // Per-engine speech-rate multiplier, keyed by engine id. Always carries all 5
+  // known engines, 1.0 = unity = no change. Inert for chatterbox/pocket-tts.
+  speed: Record<string, number>;
 }
 
 interface LlmFallbackForm {
@@ -160,6 +153,7 @@ interface LlmForm {
   reasoning: boolean;
   toolChoice: string;
   pickerAgent: boolean;
+  noRepeatWindow: number;
   requestWebResolve: boolean;
   agentTimeoutMs: number;
   pauseWhenEmpty: boolean;
@@ -271,6 +265,7 @@ interface SettingsData {
     jingleRatio?: number;
     crossfadeDuration?: number;
     maxTrackSeconds?: number;
+    minTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number };
     stream?: { opusEnabled?: boolean };
     station?: string;
@@ -285,6 +280,7 @@ interface SettingsData {
       pocketTts?: { voice?: string };
       cloud?: Partial<CloudTtsCfg>;
       gainDb?: Record<string, number>;
+      speed?: Record<string, number>;
     };
     llm?: Partial<LlmForm>;
     search?: Partial<SearchForm>;
@@ -447,6 +443,16 @@ export default function SettingsPanel() {
           cloud: 0,
           ...(v.tts?.gainDb || {}),
         },
+        // Per-engine speech speed (×). Unity default for all 5, then overlay
+        // any saved values. Keyed by engine id — `pocket-tts` (hyphen).
+        speed: {
+          piper: 1,
+          kokoro: 1,
+          chatterbox: 1,
+          'pocket-tts': 1,
+          cloud: 1,
+          ...(v.tts?.speed || {}),
+        },
       },
       llm: {
         provider: v.llm?.provider ?? 'ollama',
@@ -457,6 +463,7 @@ export default function SettingsPanel() {
         reasoning: !!v.llm?.reasoning,
         toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
         pickerAgent: !!v.llm?.pickerAgent,
+        noRepeatWindow: typeof v.llm?.noRepeatWindow === 'number' ? v.llm.noRepeatWindow : 100,
         requestWebResolve: !!v.llm?.requestWebResolve,
         agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
         pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
@@ -579,8 +586,8 @@ export default function SettingsPanel() {
     } finally { setBusy(false); }
   };
 
-  const createJingle = async () => {
-    if (!jingleText.trim() || busy) return;
+  const createJingle = async (): Promise<boolean> => {
+    if (!jingleText.trim() || busy) return false;
     setBusy(true);
     try {
       const r = await adminFetch('/jingles', {
@@ -592,7 +599,8 @@ export default function SettingsPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setJingleText('');
       await refresh();
-    } catch (e) { notify.err(`Jingle creation failed: ${errorMessage(e)}`); }
+      return true;
+    } catch (e) { notify.err(`Jingle creation failed: ${errorMessage(e)}`); return false; }
     finally { setBusy(false); }
   };
 
@@ -626,8 +634,8 @@ export default function SettingsPanel() {
     finally { setBusy(false); }
   };
 
-  const createSfx = async () => {
-    if (!sfxForm.name.trim() || !sfxForm.prompt.trim() || busy) return;
+  const createSfx = async (): Promise<boolean> => {
+    if (!sfxForm.name.trim() || !sfxForm.prompt.trim() || busy) return false;
     setBusy(true);
     try {
       const r = await adminFetch('/sfx', {
@@ -644,7 +652,8 @@ export default function SettingsPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setSfxForm({ name: '', description: '', prompt: '', durationSec: '' });
       await refreshSfx();
-    } catch (e) { notify.err(`Sound effect creation failed: ${errorMessage(e)}`); }
+      return true;
+    } catch (e) { notify.err(`Sound effect creation failed: ${errorMessage(e)}`); return false; }
     finally { setBusy(false); }
   };
 
@@ -685,24 +694,28 @@ export default function SettingsPanel() {
         <span className="caption pb-2">settings</span>
         {SECTIONS.map(s => {
           const isActive = activeSection === s.id;
+          const Icon = s.icon;
           return (
             <button
               key={s.id}
               onClick={() => setActiveSection(s.id)}
               className={cn(
-                'grid cursor-pointer gap-1 border border-ink px-3 py-2.5 text-left font-[inherit]',
-                isActive ? 'bg-ink text-bg' : 'bg-transparent text-ink',
+                'flex cursor-pointer items-center gap-2.5 border border-ink px-3 py-2.5 text-left font-[inherit] transition-colors',
+                isActive ? 'bg-ink text-bg' : 'bg-[var(--ink-soft)] text-ink hover:bg-ink/10',
               )}
             >
-              <span className="text-[11px] font-bold tracking-[0.2em] uppercase">
-                {s.label}
-              </span>
-              <span className="text-[9px] tracking-[0.18em] uppercase opacity-70">
-                {s.id === 'jingles' && data
-                  ? `${data.jingles?.length ?? 0} file${(data.jingles?.length ?? 0) === 1 ? '' : 's'}`
-                  : s.id === 'sfx' && sfxData
-                    ? `${sfxData.sfx?.length ?? 0} effect${(sfxData.sfx?.length ?? 0) === 1 ? '' : 's'}`
-                    : s.hint}
+              <Icon className="size-4 shrink-0 opacity-80" strokeWidth={2} aria-hidden />
+              <span className="grid min-w-0 gap-1">
+                <span className="text-[11px] font-bold tracking-[0.2em] uppercase">
+                  {s.label}
+                </span>
+                <span className="text-[9px] tracking-[0.18em] uppercase opacity-70">
+                  {s.id === 'jingles' && data
+                    ? `${data.jingles?.length ?? 0} file${(data.jingles?.length ?? 0) === 1 ? '' : 's'}`
+                    : s.id === 'sfx' && sfxData
+                      ? `${sfxData.sfx?.length ?? 0} effect${(sfxData.sfx?.length ?? 0) === 1 ? '' : 's'}`
+                      : s.hint}
+                </span>
               </span>
             </button>
           );
@@ -792,116 +805,9 @@ export default function SettingsPanel() {
         )}
         {/* Self-contained panels — each re-calls useAdminAuth and owns its
             own data fetch, so they render outside the data && form guard. */}
-        {activeSection === 'archives' && <ArchivesPanel />}
-        {activeSection === 'webhooks' && <WebhooksPanel />}
-        {activeSection === 'backup' && <BackupPanel />}
-        {activeSection === 'danger' && (
+        {activeSection === 'archives' && (
           <>
-            <SectionHeader
-              eyebrow="danger zone"
-              title="Crossfade, stream control, and mixer restart."
-              sub="Crossfade is grouped here because it needs a mixer restart to apply. Stream stop and mixer restart both affect every current listener."
-              metrics={[
-                {
-                  n: data?.streamOnAir == null ? '—' : data.streamOnAir ? 'on air' : 'off air',
-                  l: 'broadcast',
-                  accent: data?.streamOnAir === true,
-                },
-                { n: `${data?.values?.crossfadeDuration ?? '—'}s`, l: 'crossfade' },
-              ]}
-            />
-
-            <Card title="Broadcast" sub={data?.streamOnAir === false ? 'currently off air' : 'currently on air'}>
-              <div className="grid gap-2">
-                {data?.streamOnAir === false ? (
-                  <Btn sm tone="accent" onClick={startStream} disabled={busy || !data}>
-                    Start stream
-                  </Btn>
-                ) : (
-                  <Btn sm tone="danger" onClick={() => setConfirmStop(true)} disabled={busy || !data || data?.streamOnAir == null}>
-                    Stop stream
-                  </Btn>
-                )}
-                <div className="field-hint">
-                  Takes the station off air by disconnecting the Icecast mount. A mixer restart brings it back on air.
-                </div>
-              </div>
-            </Card>
-
-            {form && (
-              <Card title="Crossfade" sub="track transition overlap">
-                <div className="field">
-                  <div className="flex items-center gap-2">
-                    <Label>Crossfade duration</Label>
-                    <Pill tone="ink">restart required</Pill>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      className="mono-num w-28"
-                      type="number"
-                      step={0.5}
-                      max={30}
-                      value={form.crossfadeDuration}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setForm(f => (f ? { ...f, crossfadeDuration: e.target.value } : f))
-                      }
-                    />
-                    <span className="text-[12px] text-muted">sec</span>
-                    <Btn
-                      sm
-                      onClick={() =>
-                        saveSettings({ crossfadeDuration: parseFloat(form.crossfadeDuration) })
-                      }
-                      disabled={busy}
-                    >
-                      Save crossfade
-                    </Btn>
-                  </div>
-                  <div className="field-hint">
-                    Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
-                    Saving flags a pending restart. Apply it with the Mixer card below.
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            {form && (
-              <Card title="Max track length" sub="keep long mixes out of rotation">
-                <div className="field">
-                  <Label>Maximum track length</Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      className="mono-num w-28"
-                      type="number"
-                      step={1}
-                      min={0}
-                      max={36000}
-                      value={form.maxTrackSeconds}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setForm(f => (f ? { ...f, maxTrackSeconds: e.target.value } : f))
-                      }
-                    />
-                    <span className="text-[12px] text-muted">sec (0 = no limit)</span>
-                    <Btn
-                      sm
-                      onClick={() =>
-                        saveSettings({ maxTrackSeconds: parseInt(form.maxTrackSeconds, 10) || 0 })
-                      }
-                      disabled={busy}
-                    >
-                      Save limit
-                    </Btn>
-                  </div>
-                  <div className="field-hint">
-                    The DJ won&rsquo;t auto-pick tracks longer than this — handy for hour-long
-                    album mixes or DJ sets that keep landing in rotation. Listener requests still
-                    play any length, and a show can override this with its own limit (0 there means
-                    unlimited). Applies on the next pick; no restart needed.
-                  </div>
-                </div>
-              </Card>
-            )}
-
+            <ArchivesPanel />
             {form && (
               <Card title="Hourly archive" sub="state/archive/%Y-%m-%d/%H-00.mp3">
                 <div className="grid gap-3">
@@ -980,6 +886,118 @@ export default function SettingsPanel() {
                       (current: {data?.values?.archive?.bitrate ?? '—'} kbps). 128 kbps is the
                       original default.
                     </div>
+                  </div>
+                </div>
+              </Card>
+            )}
+          </>
+        )}
+        {activeSection === 'webhooks' && <WebhooksPanel />}
+        {activeSection === 'backup' && <BackupPanel />}
+        {activeSection === 'danger' && (
+          <>
+            <SectionHeader
+              eyebrow="danger zone"
+              title="Crossfade, stream control, and mixer restart."
+              sub="Crossfade is grouped here because it needs a mixer restart to apply. Stream stop and mixer restart both affect every current listener."
+              metrics={[
+                {
+                  n: data?.streamOnAir == null ? '—' : data.streamOnAir ? 'on air' : 'off air',
+                  l: 'broadcast',
+                  accent: data?.streamOnAir === true,
+                },
+                { n: `${data?.values?.crossfadeDuration ?? '—'}s`, l: 'crossfade' },
+              ]}
+            />
+
+            <Card title="Broadcast" sub={data?.streamOnAir === false ? 'currently off air' : 'currently on air'}>
+              <div className="grid gap-2">
+                {data?.streamOnAir === false ? (
+                  <Btn sm tone="accent" onClick={startStream} disabled={busy || !data}>
+                    Start stream
+                  </Btn>
+                ) : (
+                  <Btn sm tone="danger" onClick={() => setConfirmStop(true)} disabled={busy || !data || data?.streamOnAir == null}>
+                    Stop stream
+                  </Btn>
+                )}
+                <div className="field-hint">
+                  Takes the station off air by disconnecting the Icecast mount. A mixer restart brings it back on air.
+                </div>
+              </div>
+            </Card>
+
+            {form && (
+              <Card title="Crossfade" sub="track transition overlap">
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Crossfade duration</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      className="mono-num w-28"
+                      type="number"
+                      step={0.5}
+                      max={30}
+                      value={form.crossfadeDuration}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f => (f ? { ...f, crossfadeDuration: e.target.value } : f))
+                      }
+                    />
+                    <span className="text-[12px] text-muted">sec</span>
+                    <Btn
+                      sm
+                      onClick={() =>
+                        saveSettings({ crossfadeDuration: parseFloat(form.crossfadeDuration) })
+                      }
+                      disabled={busy}
+                    >
+                      Save crossfade
+                    </Btn>
+                  </div>
+                  <div className="field-hint">
+                    Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
+                    Saving flags a pending restart. Apply it with the Mixer card below.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Max track length" sub="cut over-length tracks on air">
+                <div className="field">
+                  <Label>Maximum track length</Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      className="mono-num w-28"
+                      type="number"
+                      step={1}
+                      min={0}
+                      max={36000}
+                      value={form.maxTrackSeconds}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f => (f ? { ...f, maxTrackSeconds: e.target.value } : f))
+                      }
+                    />
+                    <span className="text-[12px] text-muted">
+                      sec · 0 = no limit · min {data?.values?.minTrackSeconds ?? 30}s
+                    </span>
+                    <Btn
+                      sm
+                      onClick={() =>
+                        saveSettings({ maxTrackSeconds: parseInt(form.maxTrackSeconds, 10) || 0 })
+                      }
+                      disabled={busy}
+                    >
+                      Save limit
+                    </Btn>
+                  </div>
+                  <div className="field-hint">
+                    The DJ won&rsquo;t auto-pick tracks longer than this — handy for hour-long
+                    album mixes or DJ sets that keep landing in rotation. Listener requests still
+                    play any length, and a show can override this with its own limit (0 there means
+                    unlimited). Applies on the next pick; no restart needed.
                   </div>
                 </div>
               </Card>
@@ -1255,6 +1273,7 @@ function formatGainDb(v: number): string {
   return `${sign}${Math.abs(v).toFixed(1)} dB`;
 }
 
+
 // Compact per-engine voice-level control: a labelled range slider + live readout,
 // writing into form.tts.gainDb[engineId]. Dropped into each engine's config panel.
 function TtsGainField({
@@ -1291,6 +1310,63 @@ function TtsGainField({
       />
       <div className="field-hint">
         Trim this engine’s loudness to match your other voices. <code>0 dB</code> = no change.
+      </div>
+    </div>
+  );
+}
+
+// Speech-rate trim. Range mirrors the server clamp (clampTtsSpeed: 0.5–2.0×).
+// Only Piper/Kokoro/cloud honour speed — chatterbox/pocket-tts ignore it.
+const TTS_SPEED_MIN = 0.5;
+const TTS_SPEED_MAX = 2;
+const TTS_SPEED_STEP = 0.05;
+const TTS_SPEED_UNSUPPORTED = new Set(['chatterbox', 'pocket-tts']);
+
+function formatSpeed(v: number): string {
+  return `${v.toFixed(2)}×`;
+}
+
+// Compact per-engine speech-speed control: a labelled range slider + live readout,
+// writing into form.tts.speed[engineId]. Disabled (with a hint) for the engines
+// whose workers ignore speed, so operators see why it has no effect there.
+function TtsSpeedField({
+  engineId,
+  form,
+  setForm,
+}: {
+  engineId: string;
+  form: FormState;
+  setForm: FormUpdater;
+}) {
+  const value = form.tts.speed?.[engineId] ?? 1;
+  const supported = !TTS_SPEED_UNSUPPORTED.has(engineId);
+  return (
+    <div className="field mt-4">
+      <div className="flex items-center justify-between gap-3">
+        <Label>Speech speed</Label>
+        <span className="font-mono text-[12px] text-ink tabular-nums">{formatSpeed(value)}</span>
+      </div>
+      <input
+        type="range"
+        min={TTS_SPEED_MIN}
+        max={TTS_SPEED_MAX}
+        step={TTS_SPEED_STEP}
+        value={value}
+        disabled={!supported}
+        onChange={(e: ChangeEvent<HTMLInputElement>) => {
+          const next = Number(e.target.value);
+          setForm(f => ({
+            ...f,
+            tts: { ...f.tts, speed: { ...f.tts.speed, [engineId]: next } },
+          }));
+        }}
+        aria-label="Speech speed multiplier"
+        className={cn('mt-1.5 w-full max-w-[360px] accent-[var(--accent)]', !supported && 'opacity-40')}
+      />
+      <div className="field-hint">
+        {supported
+          ? <>Slow down or speed up this engine. <code>1.00×</code> = no change.</>
+          : <>Not supported by this engine — only Piper, Kokoro and cloud honour speed.</>}
       </div>
     </div>
   );
@@ -1365,6 +1441,23 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   useEffect(() => { setCloudKeyInput(''); }, [form.tts.cloud.provider]);
   useEffect(() => { setCloudKeyTest(null); }, [form.tts.cloud.provider]);
 
+  const isCloudEngine = form.tts.defaultEngine === 'cloud';
+  const isCompat = form.tts.cloud.provider === 'openai-compatible';
+  const ttsKeyVar = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
+  const ttsKeySet = !!data.env?.[ttsKeyVar];
+
+  const ttsDiscoveryEnabled = isCloudEngine && (
+    (isCompat && !!form.tts.cloud.baseUrl.trim())
+    || (!isCompat && ttsKeySet)
+  );
+
+  const ttsDiscovery = useModelDiscovery({
+    provider: isCompat ? 'openai-compatible' : form.tts.cloud.provider,
+    baseUrl: form.tts.cloud.baseUrl,
+    enabled: ttsDiscoveryEnabled,
+    adminFetch,
+  });
+
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
@@ -1386,7 +1479,8 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   };
   const testCloudKey = async () => {
     const cloudKeyVar = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
-    if (!cloudKeyInput.trim()) return;
+    const hasTyped = !!cloudKeyInput.trim();
+    if (!hasTyped && !data.env?.[cloudKeyVar]) return;
     setCloudKeyTesting(true);
     setCloudKeyTest(null);
     try {
@@ -1397,6 +1491,12 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
       setCloudKeyTest(j);
+      if (j.ok && hasTyped) {
+        const saved = await saveKey(cloudKeyVar, cloudKeyInput);
+        if (saved) { notify.ok('Key verified and saved'); setCloudKeyInput(''); refresh(); }
+      } else if (j.ok) {
+        notify.ok('Key verified (on file)');
+      }
     } catch (e) {
       setCloudKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
     } finally {
@@ -1406,7 +1506,6 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   const engines = data.tts?.engines || ['piper'];
   const available = data.tts?.available || {};
   const ENGINE_LABELS: Record<string, string> = { piper: 'Piper', kokoro: 'Kokoro', chatterbox: 'Chatterbox', 'pocket-tts': 'PocketTTS', cloud: 'Cloud' };
-  const engineOptions = engines.map(e => ({ id: e, label: ENGINE_LABELS[e] || e }));
 
   const save = async () => {
     await saveSettings({
@@ -1425,6 +1524,9 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         // Per-engine voice-level trim. Always sent (server clamps + drops unknown
         // keys); keyed by engine id, `pocket-tts` with the hyphen.
         gainDb: form.tts.gainDb,
+        // Per-engine speech speed (×). Same contract as gainDb; inert for the
+        // engines whose workers ignore speed (chatterbox/pocket-tts).
+        speed: form.tts.speed,
       },
     });
     // Save cloud API key if typed -- goes to secrets.env, not settings.json
@@ -1463,6 +1565,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     pocketTts?: { voice?: string };
     cloud?: SavedCloud;
     gainDb?: Record<string, number>;
+    speed?: Record<string, number>;
   } = data.values?.tts || {};
   const savedEngine: string = savedTts.defaultEngine || 'piper';
   const savedKokoroVoice: string = savedTts.kokoro?.voice || '';
@@ -1478,6 +1581,12 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     e => (form.tts.gainDb?.[e] ?? 0) !== (savedGainDb[e] ?? 0),
   );
 
+  const savedSpeed: Record<string, number> = savedTts.speed || {};
+  // Any engine whose form speed differs from its saved value (absent → 1.0 unity).
+  const speedDirty = TTS_GAIN_ENGINES.some(
+    e => (form.tts.speed?.[e] ?? 1) !== (savedSpeed[e] ?? 1),
+  );
+
   const ttsDirty =
     form.tts.defaultEngine !== savedEngine
     || (form.tts.kokoro?.voice || '') !== savedKokoroVoice
@@ -1487,7 +1596,8 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     || (form.tts.cloud.model || '').trim() !== (savedCloud.model || '').trim()
     || (form.tts.cloud.voice || '').trim() !== (savedCloud.voice || '').trim()
     || (form.tts.cloud.baseUrl || '').trim() !== (savedCloud.baseUrl || '').trim()
-    || gainDirty;
+    || gainDirty
+    || speedDirty;
 
   let activeDetail: ReactNode = null;
   if (savedEngine === 'piper') {
@@ -1551,15 +1661,15 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               <Label>Engine</Label>
               {ttsDirty && <Pill tone="accent" dot>unsaved</Pill>}
             </div>
-            <Seg
-              accent
+            <EngineSelector
               value={form.tts.defaultEngine}
-              options={engineOptions}
+              engineIds={engines}
+              available={available}
               onChange={selectEngine}
             />
             <div className="field-hint">
               {ttsDirty
-                ? <>Engine changed. Hit “Save TTS settings” below to make <strong>{formEngineLabel}</strong> the new default.</>
+                ? <>Engine changed. Hit "Save TTS settings" below to make <strong>{formEngineLabel}</strong> the new default.</>
                 : <>The station default. Renders jingles and is the fallback when a persona’s own engine fails. Per-segment voice still comes from the persona on air.</>}
             </div>
           </div>
@@ -1573,6 +1683,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               </div>
             </div>
             <TtsGainField engineId="piper" form={form} setForm={setForm} />
+            <TtsSpeedField engineId="piper" form={form} setForm={setForm} />
           </>
         )}
 
@@ -1609,6 +1720,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               )}
             </div>
             <TtsGainField engineId="kokoro" form={form} setForm={setForm} />
+            <TtsSpeedField engineId="kokoro" form={form} setForm={setForm} />
           </>
         )}
 
@@ -1656,6 +1768,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               )}
             </div>
             <TtsGainField engineId="chatterbox" form={form} setForm={setForm} />
+            <TtsSpeedField engineId="chatterbox" form={form} setForm={setForm} />
           </>
         )}
 
@@ -1704,11 +1817,11 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               )}
             </div>
             <TtsGainField engineId="pocket-tts" form={form} setForm={setForm} />
+            <TtsSpeedField engineId="pocket-tts" form={form} setForm={setForm} />
           </>
         )}
 
         {form.tts.defaultEngine === 'cloud' && (() => {
-          const isCompat = form.tts.cloud.provider === 'openai-compatible';
           return (
           <div className="mt-4">
             <div className="field">
@@ -1743,21 +1856,49 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             <div className="mt-3.5 grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-[18px]">
               <div className="field">
                 <Label>Model</Label>
-                <Input
-                  value={form.tts.cloud.model}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))
+                <div className="flex items-stretch gap-2">
+                  {ttsDiscovery.models.length > 0 ? (
+                    <ModelCombobox
+                      models={ttsDiscovery.models}
+                      value={form.tts.cloud.model}
+                      onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: v } } }))}
+                      placeholder="Select a model"
+                    />
+                  ) : (
+                    <Input
+                      value={form.tts.cloud.model}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))
+                      }
+                      placeholder={
+                        isCompat
+                          ? 'chatterbox'
+                          : (CLOUD_MODELS[form.tts.cloud.provider as keyof typeof CLOUD_MODELS]?.[0] || 'gpt-4o-mini-tts')
+                      }
+                      className="max-w-[360px]"
+                    />
+                  )}
+                  {ttsDiscovery.loading
+                    ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
+                    : ttsDiscoveryEnabled && (
+                      <Btn onClick={ttsDiscovery.refresh} title="Refresh model list">↻</Btn>
+                    )
                   }
-                  placeholder={
-                    isCompat
-                      ? 'chatterbox'
-                      : (CLOUD_MODELS[form.tts.cloud.provider as keyof typeof CLOUD_MODELS]?.[0] || 'gpt-4o-mini-tts')
-                  }
-                />
+                </div>
                 <div className="field-hint">
-                  {isCompat
-                    ? <>Model id exactly as the server reports it at <code>/v1/models</code>, required.</>
-                    : <>e.g. “gpt-4o-mini-tts” (OpenAI) or “eleven_flash_v2_5” (ElevenLabs).</>}
+                  {ttsDiscovery.models.length > 0
+                    ? `${ttsDiscovery.models.length} model${ttsDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                    : !ttsDiscoveryEnabled
+                      ? (isCompat
+                          ? 'Set a base URL above to discover available models.'
+                          : 'Set an API key above to discover and select a model.')
+                      : ttsDiscovery.error
+                        ? `Discovery failed: ${ttsDiscovery.error}. Type a model ID manually.`
+                        : ttsDiscovery.loading
+                          ? 'Discovering models…'
+                          : (isCompat
+                              ? 'Model id exactly as the server reports it at /v1/models, required.'
+                              : 'e.g. "gpt-4o-mini-tts" (OpenAI) or "eleven_flash_v2_5" (ElevenLabs).')}
                 </div>
               </div>
               {(() => {
@@ -1830,13 +1971,21 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 <>
                   <div className="field">
                     <Label>{form.tts.cloud.provider === 'elevenlabs' ? 'ElevenLabs' : 'OpenAI'} API key</Label>
-                    <Input
-                      type="password"
-                      value={cloudKeyInput}
-                      placeholder={data.env?.[cloudKeyVar] ? '•••••• (on file)' : (KEY_HINTS[cloudKeyVar] ?? '')}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => setCloudKeyInput(e.target.value)}
-                      className="max-w-[360px]"
-                    />
+                    <div className="flex items-stretch gap-2">
+                      <Input
+                        type="password"
+                        value={cloudKeyInput}
+                        placeholder={data.env?.[cloudKeyVar] ? '•••••• (on file)' : (KEY_HINTS[cloudKeyVar] ?? '')}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setCloudKeyInput(e.target.value)}
+                        className="max-w-[360px]"
+                      />
+                      <Btn
+                        onClick={testCloudKey}
+                        disabled={cloudKeyTesting || (!cloudKeyInput.trim() && !data.env?.[cloudKeyVar])}
+                      >
+                        {cloudKeyTesting ? 'Testing…' : 'Test key'}
+                      </Btn>
+                    </div>
                     <div className="field-hint">
                       Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
                     </div>
@@ -1845,16 +1994,6 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                         This key is shared across LLM and Cloud TTS.
                       </div>
                     )}
-                  </div>
-                  <KeyStatus envVar={cloudKeyVar} present={!!data.env?.[cloudKeyVar]} />
-                  <div className="mt-2 flex items-center gap-2">
-                    <Btn
-                      sm
-                      onClick={testCloudKey}
-                      disabled={cloudKeyTesting || !cloudKeyInput.trim()}
-                    >
-                      {cloudKeyTesting ? 'Testing…' : 'Test key'}
-                    </Btn>
                   </div>
                   {cloudKeyTest && <KeyTestResult result={cloudKeyTest} />}
                 </>
@@ -1867,9 +2006,40 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               </div>
             )}
             <TtsGainField engineId="cloud" form={form} setForm={setForm} />
+            <TtsSpeedField engineId="cloud" form={form} setForm={setForm} />
+            {!isCompat && (() => {
+              const kv = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
+              return <KeyStatus envVar={kv} present={!!data.env?.[kv]} />;
+            })()}
           </div>
           );
         })()}
+
+          {/* Audition the selected engine + its configured voice + speed. */}
+          {(() => {
+            const e = form.tts.defaultEngine;
+            const previewVoice =
+              e === 'kokoro' ? (form.tts.kokoro?.voice || '')
+              : e === 'chatterbox' ? (form.tts.chatterbox?.referenceVoice || '')
+              : e === 'pocket-tts' ? (form.tts.pocketTts?.voice || '')
+              : e === 'cloud' ? (form.tts.cloud.voice || '')
+              : '';
+            return (
+              <div className="field">
+                <VoicePreviewButton
+                  engine={e}
+                  voice={previewVoice}
+                  cloudProvider={form.tts.cloud.provider}
+                  speed={form.tts.speed?.[e] ?? 1}
+                  adminFetch={adminFetch}
+                />
+                <div className="field-hint">
+                  Plays a short sample in the selected engine &amp; voice. Reflects voice
+                  and speed; the dB trim is applied later, on air.
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </Card>
 
@@ -1943,6 +2113,44 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     if (pin && meta) setEmbedPinNotice({ model: meta.model, dim: meta.dim, newProvider: v });
   };
 
+  const primaryKeyVar = LLM_ENV_VARS[form.llm.provider];
+  const primaryKeySet = !!(primaryKeyVar && data.env?.[primaryKeyVar]);
+
+  const primaryDiscoveryEnabled =
+    form.llm.provider === 'ollama'
+    || form.llm.provider === 'locca'
+    || (form.llm.provider === 'openai-compatible' && !!form.llm.baseUrl.trim())
+    || (form.llm.provider === 'openrouter')
+    || (!!primaryKeyVar && primaryKeySet);
+
+  const primaryDiscovery = useModelDiscovery({
+    provider: form.llm.provider,
+    baseUrl: form.llm.baseUrl,
+    ollamaUrl: form.llm.ollamaUrl,
+    enabled: primaryDiscoveryEnabled,
+    adminFetch,
+  });
+
+  const fallbackKeyVar = LLM_ENV_VARS[form.llm.fallback.provider];
+  const fallbackKeySet = !!(fallbackKeyVar && data.env?.[fallbackKeyVar]);
+
+  const fallbackDiscoveryEnabled =
+    form.llm.fallback.enabled && (
+      form.llm.fallback.provider === 'ollama'
+      || form.llm.fallback.provider === 'locca'
+      || (form.llm.fallback.provider === 'openai-compatible' && !!form.llm.fallback.baseUrl.trim())
+      || (form.llm.fallback.provider === 'openrouter')
+      || (!!fallbackKeyVar && fallbackKeySet)
+    );
+
+  const fallbackDiscovery = useModelDiscovery({
+    provider: form.llm.fallback.provider,
+    baseUrl: form.llm.fallback.baseUrl,
+    ollamaUrl: form.llm.fallback.ollamaUrl,
+    enabled: fallbackDiscoveryEnabled,
+    adminFetch,
+  });
+
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
@@ -1968,8 +2176,10 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     value: string,
     setTesting: (v: boolean) => void,
     setResult: (r: { ok: boolean; message: string; latencyMs: number } | null) => void,
+    clearInput?: () => void,
   ) => {
-    if (!value.trim()) return;
+    const hasTyped = !!value.trim();
+    if (!hasTyped && !data.env?.[envVar]) return;
     setTesting(true);
     setResult(null);
     try {
@@ -1980,6 +2190,12 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
       setResult(j);
+      if (j.ok && hasTyped) {
+        const saved = await saveKey(envVar, value);
+        if (saved) { notify.ok('Key verified and saved'); clearInput?.(); refresh(); }
+      } else if (j.ok) {
+        notify.ok('Key verified (on file)');
+      }
     } catch (e) {
       setResult({ ok: false, message: errorMessage(e), latencyMs: 0 });
     } finally {
@@ -2024,6 +2240,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         reasoning: form.llm.reasoning,
         toolChoice: form.llm.toolChoice,
         pickerAgent: form.llm.pickerAgent,
+        noRepeatWindow: form.llm.noRepeatWindow,
         requestWebResolve: form.llm.requestWebResolve,
         agentTimeoutMs: form.llm.agentTimeoutMs,
         pauseWhenEmpty: form.llm.pauseWhenEmpty,
@@ -2105,174 +2322,18 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               <Label>Provider</Label>
               {llmDirty && <Pill tone="accent" dot>unsaved</Pill>}
             </div>
-            <Select
+            <ProviderSelector
               value={form.llm.provider}
-              onValueChange={changeLlmProvider}
-            >
-              <SelectTrigger className="max-w-[360px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {(data.llm?.providers || ['ollama']).map(p => (
-                    <SelectItem key={p} value={p}>{llmProviderLabel(p)}</SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+              providerIds={data.llm?.providers || ['ollama']}
+              env={data.env}
+              onChange={changeLlmProvider}
+            />
             <div className="field-hint">
               {llmDirty
-                ? 'Provider changed. Hit “Save LLM provider” below to route every call here.'
+                ? 'Provider changed. Hit "Save LLM provider" below to route every call here.'
                 : 'The provider every LLM call routes through. Switching reroutes instantly on save, no redeploy.'}
             </div>
           </div>
-
-          <div className="field">
-            <Label>Model</Label>
-            <Input
-              value={form.llm.model}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, llm: { ...f.llm, model: e.target.value } }))
-              }
-              placeholder={
-                form.llm.provider === 'ollama'
-                  ? 'nemotron-3-super:cloud'
-                  : form.llm.provider === 'deepseek'
-                    ? 'deepseek-v4-flash'
-                    : form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca'
-                      ? 'Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf'
-                      : 'model id'
-              }
-              className="max-w-[360px]"
-            />
-            <div className="field-hint">
-              {form.llm.provider === 'ollama'
-                ? 'Ollama model tag, e.g. “nemotron-3-super:cloud”. Leave blank for the default.'
-                : form.llm.provider === 'gateway'
-                  ? 'Gateway model id, e.g. “anthropic/claude-sonnet-4-5”.'
-                  : form.llm.provider === 'openrouter'
-                    ? 'OpenRouter model id, e.g. “google/gemini-2.5-flash”.'
-                    : form.llm.provider === 'requesty'
-                      ? 'Requesty model id, e.g. “openai/gpt-4o-mini”.'
-                      : form.llm.provider === 'google'
-                      ? 'Gemini model id, e.g. “gemini-2.5-flash”.'
-                      : form.llm.provider === 'deepseek'
-                        ? 'DeepSeek model id. Leave blank for the “deepseek-v4-flash” default.'
-                        : form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca'
-                          ? 'Model id exactly as the server reports it at /v1/models, required.'
-                          : 'Model id for the chosen provider, required.'}
-            </div>
-          </div>
-
-          {form.llm.provider === 'openai-compatible' && (
-            <div className="field">
-              <Label>Server base URL</Label>
-              <Input
-                value={form.llm.baseUrl}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({ ...f, llm: { ...f.llm, baseUrl: e.target.value } }))
-                }
-                placeholder="http://192.168.1.101:8080/v1"
-                className="max-w-[360px]"
-              />
-              <div className="field-hint">
-                Any OpenAI-compatible server (llama.cpp, vLLM, LM Studio…),
-                including the <code>/v1</code> suffix. Must be reachable from the
-                controller container. Use the host’s LAN or Tailscale IP, not
-                <code>127.0.0.1</code>.
-              </div>
-            </div>
-          )}
-
-          {form.llm.provider === 'openai-compatible' && (
-            <>
-              <div className="field">
-                <Label>Bearer token</Label>
-                <Input
-                  type="password"
-                  value={compatKeyInput}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
-                  placeholder={(data.values?.llm as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
-                  className="max-w-[360px]"
-                />
-                <div className="field-hint">
-                  Optional — only needed when the server requires bearer authentication.
-                  Saved to <code>settings.json</code>, takes effect on next save.
-                </div>
-              </div>
-              <div className="mt-2 flex items-center gap-2">
-                <Btn
-                  sm
-                  onClick={() =>
-                    testCompatKey(
-                      compatKeyInput || '',
-                      form.llm.baseUrl,
-                      form.llm.model,
-                      setCompatKeyTesting,
-                      setCompatKeyTest,
-                    )
-                  }
-                  disabled={compatKeyTesting || !form.llm.baseUrl.trim()}
-                >
-                  {compatKeyTesting ? 'Testing…' : 'Test connection'}
-                </Btn>
-              </div>
-              {compatKeyTest && <KeyTestResult result={compatKeyTest} />}
-            </>
-          )}
-
-          {form.llm.provider === 'openai-compatible' && (
-            <div className="field">
-              <Label>Forced tool calls</Label>
-              <Seg
-                accent
-                value={form.llm.toolChoice === 'auto' ? 'auto' : 'required'}
-                options={[
-                  { id: 'required', label: 'Required' },
-                  { id: 'auto', label: 'Auto' },
-                ]}
-                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, toolChoice: v } }))}
-              />
-              <div className="field-hint">
-                How the picker forces the model to return a structured pick.
-                <code>Required</code> (default) sends{' '}
-                <code>tool_choice:&quot;required&quot;</code> — the reliable path for
-                local models. Switch to <code>Auto</code> only if your server
-                <strong> crashes</strong> on a tool call: some newer vLLM images
-                (notably Intel/XPU builds) mishandle the guided-decoding backend
-                that <code>required</code> engages, while <code>auto</code> never
-                does. On <code>Auto</code> a capable model still calls the tool;
-                misses fall back to the stateless picker.
-              </div>
-            </div>
-          )}
-
-          {form.llm.provider === 'locca' && (
-            <div className="field">
-              <Label>locca server base URL</Label>
-              <Input
-                value={form.llm.baseUrl}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({ ...f, llm: { ...f.llm, baseUrl: e.target.value } }))
-                }
-                placeholder="http://host.docker.internal:8080/v1"
-                className="max-w-[360px]"
-              />
-              <div className="field-hint">
-                Leave blank to use the locca server on the host
-                (<code>http://host.docker.internal:8080/v1</code>). Override only
-                for a non-default port or a remote host. Bring a model up with{' '}
-                <code>locca serve &lt;model&gt; --yes</code>; the model id below is
-                what locca reports at <code>/v1/models</code>.{' '}
-                <a
-                  href="https://github.com/perminder-klair/locca"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
-                >
-                  locca on GitHub ↗
-                </a>
-              </div>
-            </div>
-          )}
 
           {form.llm.provider === 'ollama' && (
             <div className="field">
@@ -2318,19 +2379,112 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             </div>
           )}
 
+          {form.llm.provider === 'openai-compatible' && (
+            <div className="field">
+              <Label>Server base URL</Label>
+              <Input
+                value={form.llm.baseUrl}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, llm: { ...f.llm, baseUrl: e.target.value } }))
+                }
+                placeholder="http://192.168.1.101:8080/v1"
+                className="max-w-[360px]"
+              />
+              <div className="field-hint">
+                Any OpenAI-compatible server (llama.cpp, vLLM, LM Studio…),
+                including the <code>/v1</code> suffix. Must be reachable from the
+                controller container. Use the host’s LAN or Tailscale IP, not
+                <code>127.0.0.1</code>.
+              </div>
+            </div>
+          )}
+
+          {form.llm.provider === 'openai-compatible' && (
+            <>
+              <div className="field">
+                <Label>Bearer token</Label>
+                <div className="flex items-stretch gap-2">
+                  <Input
+                    type="password"
+                    value={compatKeyInput}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
+                    placeholder={(data.values?.llm as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                    className="max-w-[360px]"
+                  />
+                  <Btn
+                    onClick={() =>
+                      testCompatKey(
+                        compatKeyInput || '',
+                        form.llm.baseUrl,
+                        form.llm.model,
+                        setCompatKeyTesting,
+                        setCompatKeyTest,
+                      )
+                    }
+                    disabled={compatKeyTesting || !form.llm.baseUrl.trim()}
+                  >
+                    {compatKeyTesting ? 'Testing…' : 'Test connection'}
+                  </Btn>
+                </div>
+                <div className="field-hint">
+                  Optional — only needed when the server requires bearer authentication.
+                  Saved to <code>settings.json</code>, takes effect on next save.
+                </div>
+              </div>
+              {compatKeyTest && <KeyTestResult result={compatKeyTest} />}
+            </>
+          )}
+
+          {form.llm.provider === 'locca' && (
+            <div className="field">
+              <Label>locca server base URL</Label>
+              <Input
+                value={form.llm.baseUrl}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, llm: { ...f.llm, baseUrl: e.target.value } }))
+                }
+                placeholder="http://host.docker.internal:8080/v1"
+                className="max-w-[360px]"
+              />
+              <div className="field-hint">
+                Leave blank to use the locca server on the host
+                (<code>http://host.docker.internal:8080/v1</code>). Override only
+                for a non-default port or a remote host. Bring a model up with{' '}
+                <code>locca serve &lt;model&gt; --yes</code>; the model id below is
+                what locca reports at <code>/v1/models</code>.{' '}
+                <a
+                  href="https://github.com/perminder-klair/locca"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
+                >
+                  locca on GitHub ↗
+                </a>
+              </div>
+            </div>
+          )}
+
           {LLM_ENV_VARS[form.llm.provider] && (() => {
             const keyVar = LLM_ENV_VARS[form.llm.provider]!;
             return (
               <>
                 <div className="field">
                   <Label>{llmProviderLabel(form.llm.provider)} API key</Label>
-                  <Input
-                    type="password"
-                    value={primaryKeyInput}
-                    placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
-                    className="max-w-[360px]"
-                  />
+                  <div className="flex items-stretch gap-2">
+                    <Input
+                      type="password"
+                      value={primaryKeyInput}
+                      placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
+                      className="max-w-[360px]"
+                    />
+                    <Btn
+                      onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest, () => setPrimaryKeyInput(''))}
+                      disabled={primaryKeyTesting || (!primaryKeyInput.trim() && !data.env?.[keyVar])}
+                    >
+                      {primaryKeyTesting ? 'Testing…' : 'Test key'}
+                    </Btn>
+                  </div>
                   <div className="field-hint">
                     Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
                   </div>
@@ -2340,20 +2494,93 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                     </div>
                   )}
                 </div>
-                <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
-                <div className="mt-2 flex items-center gap-2">
-                  <Btn
-                    sm
-                    onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest)}
-                    disabled={primaryKeyTesting || !primaryKeyInput.trim()}
-                  >
-                    {primaryKeyTesting ? 'Testing…' : 'Test key'}
-                  </Btn>
-                </div>
                 {primaryKeyTest && <KeyTestResult result={primaryKeyTest} />}
               </>
             );
           })()}
+
+          <div className="field">
+            <Label>Model</Label>
+            <div className="flex items-stretch gap-2">
+              {primaryDiscovery.models.length > 0 ? (
+                <ModelCombobox
+                  models={primaryDiscovery.models}
+                  value={form.llm.model}
+                  onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, model: v } }))}
+                  placeholder="Select a model"
+                />
+              ) : (
+                <Input
+                  value={form.llm.model}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({ ...f, llm: { ...f.llm, model: e.target.value } }))
+                  }
+                  disabled={!primaryDiscoveryEnabled && form.llm.provider !== 'ollama'}
+                  placeholder={
+                    !primaryDiscoveryEnabled
+                      ? (form.llm.provider === 'openai-compatible' ? 'Set a base URL first' : 'Set an API key above to discover and select a model')
+                      : form.llm.provider === 'ollama'
+                        ? 'nemotron-3-super:cloud'
+                        : form.llm.provider === 'deepseek'
+                          ? 'deepseek-v4-flash'
+                          : form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca'
+                            ? 'Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf'
+                            : 'model id'
+                  }
+                  className="max-w-[360px]"
+                />
+              )}
+              {primaryDiscovery.loading
+                ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
+                : primaryDiscoveryEnabled && (
+                  <Btn onClick={primaryDiscovery.refresh} title="Refresh model list">↻</Btn>
+                )
+              }
+            </div>
+            <div className="field-hint">
+              {primaryDiscovery.models.length > 0
+                ? `${primaryDiscovery.models.length} model${primaryDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                : !primaryDiscoveryEnabled
+                  ? (form.llm.provider === 'openai-compatible'
+                      ? 'Set a base URL above to discover available models.'
+                      : 'Set an API key above to discover and select a model.')
+                  : primaryDiscovery.error
+                    ? `Discovery failed: ${primaryDiscovery.error}. Type a model ID manually.`
+                    : primaryDiscovery.loading
+                      ? 'Discovering models…'
+                      : 'No models discovered. Type a model ID manually.'}
+            </div>
+          </div>
+
+          {primaryKeyVar && (
+            <KeyStatus envVar={primaryKeyVar} present={!!data.env?.[primaryKeyVar]} />
+          )}
+
+          {form.llm.provider === 'openai-compatible' && (
+            <div className="field">
+              <Label>Forced tool calls</Label>
+              <Seg
+                accent
+                value={form.llm.toolChoice === 'auto' ? 'auto' : 'required'}
+                options={[
+                  { id: 'required', label: 'Required' },
+                  { id: 'auto', label: 'Auto' },
+                ]}
+                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, toolChoice: v } }))}
+              />
+              <div className="field-hint">
+                How the picker forces the model to return a structured pick.
+                <code>Required</code> (default) sends{' '}
+                <code>tool_choice:&quot;required&quot;</code> — the reliable path for
+                local models. Switch to <code>Auto</code> only if your server
+                <strong> crashes</strong> on a tool call: some newer vLLM images
+                (notably Intel/XPU builds) mishandle the guided-decoding backend
+                that <code>required</code> engages, while <code>auto</code> never
+                does. On <code>Auto</code> a capable model still calls the tool;
+                misses fall back to the stateless picker.
+              </div>
+            </div>
+          )}
         </div>
       </Card>
 
@@ -2410,84 +2637,6 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 </div>
               </div>
 
-              <div className="field">
-                <Label>Backup model</Label>
-                <Input
-                  value={form.llm.fallback.model}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, model: e.target.value } } }))
-                  }
-                  placeholder={
-                    form.llm.fallback.provider === 'ollama'
-                      ? 'llama3.2:3b'
-                      : form.llm.fallback.provider === 'openai-compatible'
-                        ? 'model id as the server reports it'
-                        : 'model id'
-                  }
-                  className="max-w-[360px]"
-                />
-                <div className="field-hint">
-                  Model id for the backup provider. Leave blank only for Ollama
-                  (uses its default).
-                </div>
-              </div>
-
-              {form.llm.fallback.provider === 'openai-compatible' && (
-                <div className="field">
-                  <Label>Backup server base URL</Label>
-                  <Input
-                    value={form.llm.fallback.baseUrl}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, baseUrl: e.target.value } } }))
-                    }
-                    placeholder="http://192.168.1.101:8080/v1"
-                    className="max-w-[360px]"
-                  />
-                  <div className="field-hint">
-                    OpenAI-compatible server URL including the <code>/v1</code>
-                    suffix, required for this provider.
-                  </div>
-                </div>
-              )}
-
-              {form.llm.fallback.provider === 'openai-compatible' && (
-                <>
-                  <div className="field">
-                    <Label>Bearer token</Label>
-                    <Input
-                      type="password"
-                      value={compatFallbackKeyInput}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatFallbackKeyInput(e.target.value)}
-                      placeholder={(data.values?.llm?.fallback as unknown as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
-                      className="max-w-[360px]"
-                    />
-                    <div className="field-hint">
-                      Optional — only needed when the backup server requires bearer
-                      authentication. Saved to <code>settings.json</code>, takes effect on
-                      next save.
-                    </div>
-                  </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    <Btn
-                      sm
-                      onClick={() =>
-                        testCompatKey(
-                          compatFallbackKeyInput || '',
-                          form.llm.fallback.baseUrl,
-                          form.llm.fallback.model,
-                          setCompatFallbackKeyTesting,
-                          setCompatFallbackKeyTest,
-                        )
-                      }
-                      disabled={compatFallbackKeyTesting || !form.llm.fallback.baseUrl.trim()}
-                    >
-                      {compatFallbackKeyTesting ? 'Testing…' : 'Test connection'}
-                    </Btn>
-                  </div>
-                  {compatFallbackKeyTest && <KeyTestResult result={compatFallbackKeyTest} />}
-                </>
-              )}
-
               {form.llm.fallback.provider === 'ollama' && (
                 <div className="field">
                   <Label>Backup Ollama server URL</Label>
@@ -2528,6 +2677,148 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 </div>
               )}
 
+              {form.llm.fallback.provider === 'openai-compatible' && (
+                <div className="field">
+                  <Label>Backup server base URL</Label>
+                  <Input
+                    value={form.llm.fallback.baseUrl}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, baseUrl: e.target.value } } }))
+                    }
+                    placeholder="http://192.168.1.101:8080/v1"
+                    className="max-w-[360px]"
+                  />
+                  <div className="field-hint">
+                    OpenAI-compatible server URL including the <code>/v1</code>
+                    suffix, required for this provider.
+                  </div>
+                </div>
+              )}
+
+              {form.llm.fallback.provider === 'openai-compatible' && (
+                <>
+                  <div className="field">
+                    <Label>Bearer token</Label>
+                    <div className="flex items-stretch gap-2">
+                      <Input
+                        type="password"
+                        value={compatFallbackKeyInput}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatFallbackKeyInput(e.target.value)}
+                        placeholder={(data.values?.llm?.fallback as unknown as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                        className="max-w-[360px]"
+                      />
+                      <Btn
+                        onClick={() =>
+                          testCompatKey(
+                            compatFallbackKeyInput || '',
+                            form.llm.fallback.baseUrl,
+                            form.llm.fallback.model,
+                            setCompatFallbackKeyTesting,
+                            setCompatFallbackKeyTest,
+                          )
+                        }
+                        disabled={compatFallbackKeyTesting || !form.llm.fallback.baseUrl.trim()}
+                      >
+                        {compatFallbackKeyTesting ? 'Testing…' : 'Test connection'}
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      Optional — only needed when the backup server requires bearer
+                      authentication. Saved to <code>settings.json</code>, takes effect on
+                      next save.
+                    </div>
+                  </div>
+                  {compatFallbackKeyTest && <KeyTestResult result={compatFallbackKeyTest} />}
+                </>
+              )}
+
+              {LLM_ENV_VARS[form.llm.fallback.provider] && (() => {
+                const keyVar = LLM_ENV_VARS[form.llm.fallback.provider]!;
+                return (
+                  <>
+                    <div className="field">
+                      <Label>{llmProviderLabel(form.llm.fallback.provider)} API key</Label>
+                      <div className="flex items-stretch gap-2">
+                        <Input
+                          type="password"
+                          value={fallbackKeyInput}
+                          placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => setFallbackKeyInput(e.target.value)}
+                          className="max-w-[360px]"
+                        />
+                        <Btn
+                          onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest, () => setFallbackKeyInput(''))}
+                          disabled={fallbackKeyTesting || (!fallbackKeyInput.trim() && !data.env?.[keyVar])}
+                        >
+                          {fallbackKeyTesting ? 'Testing…' : 'Test key'}
+                        </Btn>
+                      </div>
+                      <div className="field-hint">
+                        Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
+                      </div>
+                    </div>
+                    {fallbackKeyTest && <KeyTestResult result={fallbackKeyTest} />}
+                  </>
+                );
+              })()}
+
+              <div className="field">
+                <Label>Backup model</Label>
+                <div className="flex items-stretch gap-2">
+                  {fallbackDiscovery.models.length > 0 ? (
+                    <ModelCombobox
+                      models={fallbackDiscovery.models}
+                      value={form.llm.fallback.model}
+                      onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, model: v } } }))}
+                      placeholder="Select a model"
+                    />
+                  ) : (
+                    <Input
+                      value={form.llm.fallback.model}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, model: e.target.value } } }))
+                      }
+                      disabled={!fallbackDiscoveryEnabled && form.llm.fallback.provider !== 'ollama'}
+                      placeholder={
+                        !fallbackDiscoveryEnabled
+                          ? (form.llm.fallback.provider === 'openai-compatible' ? 'Set a base URL first' : 'Set an API key above to discover and select a model')
+                          : form.llm.fallback.provider === 'ollama'
+                            ? 'llama3.2:3b'
+                            : form.llm.fallback.provider === 'deepseek'
+                              ? 'deepseek-chat'
+                              : form.llm.fallback.provider === 'openai-compatible' || form.llm.fallback.provider === 'locca'
+                                ? 'Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf'
+                                : 'model id'
+                      }
+                      className="max-w-[360px]"
+                    />
+                  )}
+                  {fallbackDiscovery.loading
+                    ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
+                    : fallbackDiscoveryEnabled && (
+                      <Btn onClick={fallbackDiscovery.refresh} title="Refresh model list">↻</Btn>
+                    )
+                  }
+                </div>
+                <div className="field-hint">
+                  {fallbackDiscovery.models.length > 0
+                    ? `${fallbackDiscovery.models.length} model${fallbackDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                    : !fallbackDiscoveryEnabled
+                      ? (form.llm.fallback.provider === 'openai-compatible'
+                          ? 'Set a base URL above to discover available models.'
+                          : 'Set an API key above to discover and select a model.')
+                      : fallbackDiscovery.error
+                        ? `Discovery failed: ${fallbackDiscovery.error}. Type a model ID manually.`
+                        : fallbackDiscovery.loading
+                          ? 'Discovering models…'
+                          : 'No models discovered. Type a model ID manually.'}
+                </div>
+              </div>
+
+              {fallbackKeyVar && (
+                <KeyStatus envVar={fallbackKeyVar} present={!!data.env?.[fallbackKeyVar]} />
+              )}
+
               <div className="grid grid-cols-[1fr_auto] items-center gap-4">
                 <div>
                   <div className="text-[13px] font-bold">Backup chain-of-thought</div>
@@ -2548,38 +2839,6 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   }
                 />
               </div>
-
-              {LLM_ENV_VARS[form.llm.fallback.provider] && (() => {
-                const keyVar = LLM_ENV_VARS[form.llm.fallback.provider]!;
-                return (
-                  <>
-                    <div className="field">
-                      <Label>{llmProviderLabel(form.llm.fallback.provider)} API key</Label>
-                      <Input
-                        type="password"
-                        value={fallbackKeyInput}
-                        placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
-                        onChange={(e: ChangeEvent<HTMLInputElement>) => setFallbackKeyInput(e.target.value)}
-                        className="max-w-[360px]"
-                      />
-                      <div className="field-hint">
-                        Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
-                      </div>
-                    </div>
-                    <KeyStatus envVar={keyVar} present={!!data.env?.[keyVar]} />
-                    <div className="mt-2 flex items-center gap-2">
-                      <Btn
-                        sm
-                        onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest)}
-                        disabled={fallbackKeyTesting || !fallbackKeyInput.trim()}
-                      >
-                        {fallbackKeyTesting ? 'Testing…' : 'Test key'}
-                      </Btn>
-                    </div>
-                    {fallbackKeyTest && <KeyTestResult result={fallbackKeyTest} />}
-                  </>
-                );
-              })()}
             </>
           )}
         </div>
@@ -2682,6 +2941,28 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             />
           </div>
         )}
+
+        <div className="field mt-4">
+          <Label>No-repeat window (tracks)</Label>
+          <Input
+            type="number"
+            min={0}
+            max={290}
+            step={10}
+            value={form.llm.noRepeatWindow}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setForm(f => ({ ...f, llm: { ...f.llm, noRepeatWindow: Math.max(0, Number(e.target.value)) } }))
+            }
+            placeholder="100"
+            className="max-w-[200px]"
+          />
+          <div className="field-hint">
+            The last N <strong>distinct</strong> tracks can never be re-picked &mdash; a hard
+            guard on both the agent and candidate-pool pickers, on top of the time-based
+            window. Auto-scales down on a small library so it never blocks everything.
+            {' '}<strong>0 = off</strong>. Listener requests stay exempt. 0&ndash;290.
+          </div>
+        </div>
       </Card>
 
       <Card title="Idle behaviour" sub="when no one's listening">
@@ -2840,8 +3121,8 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
       });
       const j = await res.json();
       setSearxngTestResult(j);
-    } catch (err: any) {
-      setSearxngTestResult({ ok: false, error: err?.message || 'request failed' });
+    } catch (err: unknown) {
+      setSearxngTestResult({ ok: false, error: err instanceof Error ? err.message : 'request failed' });
     } finally {
       setTestingSearxng(false);
     }
@@ -2954,15 +3235,27 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
             <>
               <div className="field">
                 <Label>Tavily API key</Label>
-                <Input
-                  type="password"
-                  value={form.search.apiKey === 'set' ? '' : form.search.apiKey}
-                  placeholder={form.search.apiKey === 'set' ? '•••••• (key on file)' : 'tvly-…'}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setForm(f => ({ ...f, search: { ...f.search, apiKey: e.target.value } }))
-                  }
-                  className="max-w-[360px]"
-                />
+                <div className="flex items-stretch gap-2">
+                  <Input
+                    type="password"
+                    value={form.search.apiKey === 'set' ? '' : form.search.apiKey}
+                    placeholder={form.search.apiKey === 'set' ? '•••••• (key on file)' : 'tvly-…'}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, search: { ...f.search, apiKey: e.target.value } }))
+                    }
+                    className="max-w-[360px]"
+                  />
+                  <Btn
+                    onClick={testTavilyKey}
+                    disabled={
+                      tavilyKeyTesting ||
+                      !form.search.apiKey.trim() ||
+                      form.search.apiKey === 'set'
+                    }
+                  >
+                    {tavilyKeyTesting ? 'Testing…' : 'Test key'}
+                  </Btn>
+                </div>
                 <div className="field-hint">
                   Stored alongside the other admin settings. Falls back to
                   <code> SEARCH_API_KEY</code> in <code>.env</code> when blank. Set
@@ -2970,19 +3263,6 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
                 </div>
               </div>
               <KeyStatus envVar="SEARCH_API_KEY" present={tavilyKeySet} />
-              <div className="mt-2 flex items-center gap-2">
-                <Btn
-                  sm
-                  onClick={testTavilyKey}
-                  disabled={
-                    tavilyKeyTesting ||
-                    !form.search.apiKey.trim() ||
-                    form.search.apiKey === 'set'
-                  }
-                >
-                  {tavilyKeyTesting ? 'Testing…' : 'Test key'}
-                </Btn>
-              </div>
               {tavilyKeyTest && <KeyTestResult result={tavilyKeyTest} />}
             </>
           )}
@@ -2991,7 +3271,7 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
             <>
               <div className="field">
                 <Label>SearXNG URL</Label>
-                <div className="flex gap-2">
+                <div className="flex items-stretch gap-2">
                   <Input
                     type="url"
                     placeholder="http://192.168.0.112:8888"
@@ -3001,7 +3281,7 @@ function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: 
                     }
                     className="max-w-[360px]"
                   />
-                  <Btn sm onClick={handleTestSearxng} disabled={!form.search?.baseUrl || testingSearxng}>
+                  <Btn onClick={handleTestSearxng} disabled={!form.search?.baseUrl || testingSearxng}>
                     {testingSearxng ? 'Testing…' : 'Test'}
                   </Btn>
                 </div>
@@ -3127,6 +3407,25 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
   // Local servers (llama.cpp/locca) need a dedicated embedding endpoint; cloud
   // and Ollama providers serve embeddings on the same endpoint as chat.
   const needsServerUrl = effectiveProvider === 'locca' || effectiveProvider === 'openai-compatible';
+
+  const embedKeyVar = LLM_ENV_VARS[effectiveProvider];
+  const embedKeySet = !!(embedKeyVar && data.env?.[embedKeyVar]);
+
+  const embedDiscoveryEnabled =
+    effectiveProvider === 'ollama'
+    || effectiveProvider === 'locca'
+    || (effectiveProvider === 'openai-compatible' && !!(e.baseUrl || form.llm.baseUrl).trim())
+    || (effectiveProvider === 'openrouter')
+    || (!!embedKeyVar && embedKeySet);
+
+  const embedDiscovery = useModelDiscovery({
+    provider: effectiveProvider,
+    baseUrl: e.baseUrl || form.llm.baseUrl,
+    ollamaUrl: e.ollamaUrl || form.llm.ollamaUrl,
+    scope: 'embedding',
+    enabled: embedDiscoveryEnabled,
+    adminFetch,
+  });
 
   const probeQuery = () => {
     const p = new URLSearchParams();
@@ -3261,27 +3560,16 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
         <div className="grid gap-[18px]">
           <div className="field">
             <Label>Provider</Label>
-            <Select
-              value={e.provider || '__follow__'}
-              onValueChange={v =>
-                setForm(f => ({
-                  ...f,
-                  embedding: { ...f.embedding, provider: v === '__follow__' ? '' : v },
-                }))
+            <EmbeddingProviderSelector
+              value={e.provider || ''}
+              providerIds={providers}
+              llmProvider={llmProvider}
+              env={data.env}
+              onChange={v =>
+                setForm(f => ({ ...f, embedding: { ...f.embedding, provider: v } }))
               }
-            >
-              <SelectTrigger className="max-w-[360px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="__follow__">
-                    Follow LLM provider — {llmProviderLabel(llmProvider)}
-                  </SelectItem>
-                  {providers.map(p => (
-                    <SelectItem key={p} value={p}>{llmProviderLabel(p)}</SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+              className="max-w-[560px]"
+            />
             <div className="field-hint">
               Where the text embeddings come from. Default follows your LLM
               provider, so Ollama-local users get <code>nomic-embed-text</code> free.
@@ -3305,7 +3593,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
                   {e.provider ? (
                     <><code>{llmProviderLabel(effectiveProvider)}</code> is a chat-only provider, with no embeddings endpoint, so the tagger can’t use it.</>
                   ) : (
-                    <>“Follow LLM provider” resolves to <code>{llmProviderLabel(llmProvider)}</code>, which is chat-only and has no embeddings endpoint.</>
+                    <>"Follow LLM provider" resolves to <code>{llmProviderLabel(llmProvider)}</code>, which is chat-only and has no embeddings endpoint.</>
                   )}{' '}
                   Pick a real embedding provider above. <strong>Ollama</strong> is local
                   and free (<code>nomic-embed-text</code>, auto-pulled on first run), or
@@ -3318,22 +3606,52 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
 
           <div className="field">
             <Label>Model</Label>
-            <Input
-              value={e.model}
-              onChange={(ev: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, embedding: { ...f.embedding, model: ev.target.value } }))
+            <div className="flex items-stretch gap-2">
+              {embedDiscovery.models.length > 0 ? (
+                <ModelCombobox
+                  models={embedDiscovery.models}
+                  value={e.model}
+                  onChange={v => setForm(f => ({ ...f, embedding: { ...f.embedding, model: v } }))}
+                  placeholder="Select a model"
+                />
+              ) : (
+                <Input
+                  value={e.model}
+                  onChange={(ev: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({ ...f, embedding: { ...f.embedding, model: ev.target.value } }))
+                  }
+                  placeholder={
+                    effectiveProvider === 'ollama' || effectiveProvider === 'locca'
+                      ? 'nomic-embed-text'
+                      : effectiveProvider === 'openai' || effectiveProvider === 'openai-compatible'
+                        ? 'text-embedding-3-small'
+                        : effectiveProvider === 'google'
+                          ? 'text-embedding-004'
+                          : 'model id'
+                  }
+                  className="max-w-[360px]"
+                />
+              )}
+              {embedDiscovery.loading
+                ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>
+                : embedDiscoveryEnabled && (
+                  <Btn onClick={embedDiscovery.refresh} title="Refresh model list">↻</Btn>
+                )
               }
-              placeholder={
-                effectiveProvider === 'ollama' || effectiveProvider === 'locca'
-                  ? 'nomic-embed-text'
-                  : effectiveProvider === 'openai' || effectiveProvider === 'openai-compatible'
-                    ? 'text-embedding-3-small'
-                    : effectiveProvider === 'google'
-                      ? 'text-embedding-004'
-                      : 'model id'
-              }
-              className="max-w-[360px]"
-            />
+            </div>
+            <div className="field-hint">
+              {embedDiscovery.models.length > 0
+                ? `${embedDiscovery.models.length} model${embedDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                : !embedDiscoveryEnabled
+                  ? (effectiveProvider === 'openai-compatible'
+                      ? 'Set a base URL above to discover available models.'
+                      : 'Set an API key above to discover and select a model.')
+                  : embedDiscovery.error
+                    ? `Discovery failed: ${embedDiscovery.error}. Type a model ID manually.`
+                    : embedDiscovery.loading
+                      ? 'Discovering models…'
+                      : 'No models discovered. Type a model ID manually.'}
+            </div>
             <div className="field-hint">
               Leave blank for the sensible default per provider. If you change
               this on a tagged library, the next run will reject the new dim.
@@ -3750,6 +4068,18 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
   const preview = clockPreview(previewTz, form.locale);
   const localeLabel = form.locale === 'en-US' ? 'English (US)' : 'English (UK)';
 
+  // A picked city carries its IANA zone. We *suggest* it rather than overwrite —
+  // the operator may have deliberately set a different station clock. Cleared
+  // once applied or dismissed.
+  const [tzSuggestion, setTzSuggestion] = useState<string | null>(null);
+  const handleGeocodePick = (r: GeocodeResult) => {
+    const effective = form.timezone || data.serverTimezone || '';
+    setTzSuggestion(r.timezone && r.timezone !== effective ? r.timezone : null);
+  };
+  // A picked zone may not be one of TZ_GROUPS' items; Radix Select needs a
+  // matching <SelectItem> to render it, so the card adds a fallback item.
+  const tzInGroups = !form.timezone || TZ_GROUPS.some(g => g.zones.includes(form.timezone));
+
   return (
     <>
       <SectionHeader
@@ -3782,36 +4112,40 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
       <Card title="Station location" sub="DJ context + Open-Meteo weather">
         <div className="field">
           <Label>Location</Label>
-          <div className="flex flex-wrap gap-2">
-            <Input
-              placeholder="name"
-              value={form.weather.locationName}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, weather: { ...f.weather, locationName: e.target.value } }))
-              }
-              className="w-[200px]"
-            />
-            <Input
-              className="mono-num w-[132px]"
-              type="number"
-              step="any"
-              placeholder="lat"
-              value={form.weather.lat}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, weather: { ...f.weather, lat: e.target.value } }))
-              }
-            />
-            <Input
-              className="mono-num w-[132px]"
-              type="number"
-              step="any"
-              placeholder="lng"
-              value={form.weather.lng}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, weather: { ...f.weather, lng: e.target.value } }))
-              }
-            />
-          </div>
+          <LocationPicker
+            variant="admin"
+            value={{
+              locationName: form.weather.locationName,
+              lat: form.weather.lat,
+              lng: form.weather.lng,
+            }}
+            onChange={next =>
+              setForm(f => ({ ...f, weather: { ...f.weather, ...next } }))
+            }
+            onPick={handleGeocodePick}
+          />
+          {tzSuggestion ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px]">
+              <span className="text-muted-foreground">
+                Set station timezone to <span className="text-foreground">{tzSuggestion}</span>?
+              </span>
+              <Btn
+                onClick={() => {
+                  setForm(f => ({ ...f, timezone: tzSuggestion }));
+                  setTzSuggestion(null);
+                }}
+              >
+                Apply
+              </Btn>
+              <button
+                type="button"
+                className="text-xs text-muted-foreground hover:text-foreground"
+                onClick={() => setTzSuggestion(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : null}
           <div className="field-hint">
             Where the station broadcasts from. Sets the DJ’s {'{location}'} and the Open-Meteo
             weather it reads on air (current: {data.values?.weather?.locationName} @ {data.values?.weather?.lat}, {data.values?.weather?.lng}). Applies live.
@@ -3858,6 +4192,13 @@ function StationSection({ data, form, setForm, busy, saveSettings }: SectionProp
               <SelectGroup>
                 <SelectItem value="auto">Auto, server timezone ({serverTz})</SelectItem>
               </SelectGroup>
+              {/* Fallback for a zone picked via the location search that isn't in
+                  the enumerated groups — Radix needs an item to show it. */}
+              {!tzInGroups ? (
+                <SelectGroup>
+                  <SelectItem value={form.timezone}>{form.timezone}</SelectItem>
+                </SelectGroup>
+              ) : null}
               {TZ_GROUPS.map(g => (
                 <SelectGroup key={g.region}>
                   <SelectLabel>{g.region}</SelectLabel>
@@ -3951,6 +4292,9 @@ interface ThemeDef {
   description?: string;
   mode: 'light' | 'dark';
   tokens: Record<string, string>;
+  // Set by the controller's /themes responses. Built-ins ship in the image and
+  // can't be removed; only user themes (state/themes/*.json) show a Remove button.
+  builtin?: boolean;
 }
 
 // Swatch columns shown per theme card — chosen to read the palette at a
@@ -4042,7 +4386,7 @@ function ThemeCreator({
   }
 
   return (
-    <div className="grid gap-3 border border-ink p-3">
+    <div className="grid w-full basis-full gap-3 border border-ink p-3">
       <AiFill<{ name?: string; description?: string; mode?: 'light' | 'dark'; tokens?: Record<string, string> }>
         endpoint="/generate/theme"
         resultKey="theme"
@@ -4092,6 +4436,7 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
   const [themes, setThemes] = useState<ThemeDef[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState<ThemeDef | null>(null);
 
   const activeId = data.values?.theme?.active;
   const PUBLIC_API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
@@ -4140,6 +4485,23 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
     await saveSettings({ theme: { active: theme.id } });
   };
 
+  // Delete a user theme's state/themes/<id>.json. If it was the active theme,
+  // fall back to the first remaining one (built-ins lead the list) through the
+  // normal selection flow so nothing points at a now-missing id.
+  const remove = async (theme: ThemeDef) => {
+    try {
+      const r = await adminFetch(`/themes/${encodeURIComponent(theme.id)}`, { method: 'DELETE' });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; themes?: ThemeDef[] };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const next = j.themes ?? [];
+      setThemes(next);
+      notify.ok(`removed "${theme.name}"`);
+      if (theme.id === activeId && next[0]) await choose(next[0]);
+    } catch (e) {
+      notify.err(`Remove failed: ${errorMessage(e)}`);
+    }
+  };
+
   return (
     <>
       <SectionHeader
@@ -4156,6 +4518,23 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
         manualHref="/manual/themes"
       />
 
+      <Card title="Create theme" sub="state/themes/*.json">
+        <div className="grid gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <Btn sm onClick={refresh} disabled={refreshing || busy}>
+              {refreshing ? 'Refreshing…' : 'Refresh themes'}
+            </Btn>
+            <ThemeCreator adminFetch={adminFetch} onSaved={setThemes} />
+          </div>
+          <div className="field-hint">
+            Describe a look above and we&apos;ll draft the palette, or drop a JSON
+            theme file in <code>state/themes/</code> and click <em>Refresh</em>,
+            no controller restart needed. The folder includes a
+            <code>README.md</code> with the format and the allowed token keys.
+          </div>
+        </div>
+      </Card>
+
       <Card title="Picker" sub="active station theme">
         {error && (
           <div className="field-hint text-[var(--danger)]">
@@ -4170,55 +4549,64 @@ function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProp
             {themes.map(t => {
               const isActive = t.id === activeId;
               return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => choose(t)}
-                  disabled={busy}
-                  className={cn(
-                    'flex w-full items-center gap-3 border p-3 text-left disabled:cursor-not-allowed disabled:opacity-60',
-                    isActive
-                      ? 'border-vermilion bg-[var(--ink-softer)]'
-                      : 'border-ink bg-bg hover:bg-[var(--overlay)]',
+                <div key={t.id} className="flex items-stretch gap-2">
+                  <button
+                    type="button"
+                    onClick={() => choose(t)}
+                    disabled={busy}
+                    className={cn(
+                      'flex min-w-0 flex-1 items-center gap-3 border p-3 text-left disabled:cursor-not-allowed disabled:opacity-60',
+                      isActive
+                        ? 'border-vermilion bg-[var(--ink-softer)]'
+                        : 'border-ink bg-bg hover:bg-[var(--overlay)]',
+                    )}
+                  >
+                    <span className="inline-flex shrink-0 border border-ink" aria-hidden="true">
+                      {SWATCH_KEYS.map(k => (
+                        <Swatch key={k} color={t.tokens[k]} />
+                      ))}
+                    </span>
+                    <div className="grid min-w-0 flex-1 gap-0.5">
+                      <span className="text-[12px] font-bold tracking-[0.12em] uppercase">
+                        {t.name}
+                      </span>
+                      <span className="text-[11px] leading-[1.4] text-muted">
+                        {t.description || (t.mode === 'dark' ? 'Dark palette' : 'Light palette')}
+                      </span>
+                    </div>
+                    {isActive && <Pill tone="accent" dot>active</Pill>}
+                  </button>
+                  {!t.builtin && (
+                    <Btn
+                      sm
+                      tone="danger"
+                      onClick={() => setConfirmRemove(t)}
+                      disabled={busy}
+                      title="Remove this custom theme"
+                    >
+                      Remove
+                    </Btn>
                   )}
-                >
-                  <span className="inline-flex shrink-0 border border-ink" aria-hidden="true">
-                    {SWATCH_KEYS.map(k => (
-                      <Swatch key={k} color={t.tokens[k]} />
-                    ))}
-                  </span>
-                  <div className="grid min-w-0 flex-1 gap-0.5">
-                    <span className="text-[12px] font-bold tracking-[0.12em] uppercase">
-                      {t.name}
-                    </span>
-                    <span className="text-[11px] leading-[1.4] text-muted">
-                      {t.description || (t.mode === 'dark' ? 'Dark palette' : 'Light palette')}
-                    </span>
-                  </div>
-                  {isActive && <Pill tone="accent" dot>active</Pill>}
-                </button>
+                </div>
               );
             })}
           </div>
         )}
       </Card>
 
-      <Card title="Custom themes" sub="state/themes/*.json">
-        <div className="grid gap-3">
-          <ThemeCreator adminFetch={adminFetch} onSaved={setThemes} />
-          <div>
-            <Btn sm onClick={refresh} disabled={refreshing || busy}>
-              {refreshing ? 'Refreshing…' : 'Refresh themes'}
-            </Btn>
-          </div>
-          <div className="field-hint">
-            Describe a look above and we&apos;ll draft the palette, or drop a JSON
-            theme file in <code>state/themes/</code> and click <em>Refresh</em>,
-            no controller restart needed. The folder includes a
-            <code>README.md</code> with the format and the allowed token keys.
-          </div>
-        </div>
-      </Card>
+      <V3AlertDialog
+        open={confirmRemove != null}
+        onOpenChange={(o) => { if (!o) setConfirmRemove(null); }}
+        title="Remove theme"
+        description={
+          confirmRemove
+            ? `Remove the custom theme "${confirmRemove.name}"? This deletes state/themes/${confirmRemove.id}.json permanently.`
+            : ''
+        }
+        confirmLabel="remove"
+        danger
+        onConfirm={() => { if (confirmRemove) remove(confirmRemove); setConfirmRemove(null); }}
+      />
     </>
   );
 }
@@ -4298,7 +4686,7 @@ function PreviewButton({ path, adminFetch, label = 'Play' }: PreviewButtonProps)
 interface JinglesSectionProps extends SectionProps {
   jingleText: string;
   setJingleText: (s: string) => void;
-  createJingle: () => void;
+  createJingle: () => Promise<boolean>;
   uploadJingle: (file: File, label: string) => Promise<boolean>;
   onDelete: (filename: string | null) => void;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
@@ -4310,6 +4698,7 @@ function JinglesSection({
 }: JinglesSectionProps) {
   const ratioDirty = form.jingleRatio !== String(data.values?.jingleRatio);
   const jingles = data.jingles || [];
+  const [modal, setModal] = useState<null | 'create' | 'import'>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importLabel, setImportLabel] = useState('');
   const importRef = useRef<HTMLInputElement>(null);
@@ -4320,7 +4709,11 @@ function JinglesSection({
       setImportFile(null);
       setImportLabel('');
       if (importRef.current) importRef.current.value = '';
+      setModal(null);
     }
+  };
+  const doCreate = async () => {
+    if (await createJingle()) setModal(null);
   };
 
   return (
@@ -4367,65 +4760,20 @@ function JinglesSection({
         </div>
       </Card>
 
-      <Card title="Create jingle" sub="rendered via Piper TTS">
-        <div className="field">
-          <Label>Jingle text</Label>
-          <Textarea
-            rows={2}
-            value={jingleText}
-            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setJingleText(e.target.value)}
-            placeholder='e.g. "You are listening to SUB slash WAVE. Requests open all night."'
-          />
-          <div className="flex flex-wrap items-center gap-2.5">
-            <Btn tone="accent" onClick={createJingle} disabled={busy || !jingleText.trim()}>
-              {busy ? 'Generating…' : 'Create jingle'}
+      <Card
+        title="Jingles"
+        sub={`${jingles.length} file${jingles.length === 1 ? '' : 's'}`}
+        right={
+          <>
+            <Btn sm tone="accent" onClick={() => setModal('create')} disabled={busy}>
+              + Create
             </Btn>
-            <span className="text-[11px] text-muted">
-              {jingleText.length}/500 chars · Piper TTS
-            </span>
-          </div>
-        </div>
-      </Card>
-
-      <Card title="Import jingle" sub="bring your own mp3 / wav">
-        <div className="field">
-          <Label>Audio file</Label>
-          <input
-            ref={importRef}
-            type="file"
-            accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFile(e.target.files?.[0] ?? null)}
-            className="hidden"
-          />
-          <div className="flex flex-wrap items-center gap-2.5">
-            <Btn tone="solid" onClick={() => importRef.current?.click()} disabled={busy}>
-              {importFile ? 'Change file…' : 'Choose audio file…'}
+            <Btn sm tone="solid" onClick={() => setModal('import')} disabled={busy}>
+              Import
             </Btn>
-            {importFile && (
-              <span className="text-[12px] text-ink">{importFile.name}</span>
-            )}
-          </div>
-          <div className="field-hint">
-            mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB · converted and level-matched on import
-          </div>
-        </div>
-        <div className="field mt-3.5">
-          <Label>Label (optional)</Label>
-          <Input
-            value={importLabel}
-            maxLength={200}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportLabel(e.target.value)}
-            placeholder="shown in the list, defaults to the file name"
-          />
-        </div>
-        <div className="mt-3.5 flex items-center gap-2.5">
-          <Btn tone="accent" onClick={doImport} disabled={busy || !importFile}>
-            {busy ? 'Importing…' : 'Import jingle'}
-          </Btn>
-        </div>
-      </Card>
-
-      <Card title="Jingles" sub={`${jingles.length} file${jingles.length === 1 ? '' : 's'}`}>
+          </>
+        }
+      >
         {jingles.length === 0 && (
           <div className="py-2 text-[12px] text-muted italic">
             none yet
@@ -4466,6 +4814,78 @@ function JinglesSection({
           </div>
         ))}
       </Card>
+
+      <Modal
+        open={modal === 'create'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
+        title="Create jingle"
+        sub="rendered via Piper TTS"
+        footer={
+          <>
+            <Btn onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn tone="accent" onClick={doCreate} disabled={busy || !jingleText.trim()}>
+              {busy ? 'Generating…' : 'Create jingle'}
+            </Btn>
+          </>
+        }
+      >
+        <div className="field">
+          <Label>Jingle text</Label>
+          <Textarea
+            rows={3}
+            value={jingleText}
+            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setJingleText(e.target.value)}
+            placeholder='e.g. "You are listening to SUB slash WAVE. Requests open all night."'
+          />
+          <div className="field-hint">{jingleText.length}/500 chars · Piper TTS</div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={modal === 'import'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
+        title="Import jingle"
+        sub="bring your own mp3 / wav"
+        footer={
+          <>
+            <Btn onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn tone="accent" onClick={doImport} disabled={busy || !importFile}>
+              {busy ? 'Importing…' : 'Import jingle'}
+            </Btn>
+          </>
+        }
+      >
+        <div className="field">
+          <Label>Audio file</Label>
+          <input
+            ref={importRef}
+            type="file"
+            accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFile(e.target.files?.[0] ?? null)}
+            className="hidden"
+          />
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Btn tone="solid" onClick={() => importRef.current?.click()} disabled={busy}>
+              {importFile ? 'Change file…' : 'Choose audio file…'}
+            </Btn>
+            {importFile && (
+              <span className="text-[12px] text-ink">{importFile.name}</span>
+            )}
+          </div>
+          <div className="field-hint">
+            mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB · converted and level-matched on import
+          </div>
+        </div>
+        <div className="field mt-3.5">
+          <Label>Label (optional)</Label>
+          <Input
+            value={importLabel}
+            maxLength={200}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportLabel(e.target.value)}
+            placeholder="shown in the list, defaults to the file name"
+          />
+        </div>
+      </Modal>
     </>
   );
 }
@@ -4477,7 +4897,7 @@ interface SfxSectionProps {
   sfxForm: SfxForm;
   setSfxForm: (updater: (f: SfxForm) => SfxForm) => void;
   busy: boolean;
-  createSfx: () => void;
+  createSfx: () => Promise<boolean>;
   uploadSfx: (file: File, name: string, description: string) => Promise<boolean>;
   onDelete: (name: string | null) => void;
   data: SettingsData | null;
@@ -4487,6 +4907,7 @@ interface SfxSectionProps {
 
 function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, onDelete, data, saveSettings, adminFetch }: SfxSectionProps) {
   // Hooks must run before the early "loading…" return — keep them at the top.
+  const [modal, setModal] = useState<null | 'create' | 'import'>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importName, setImportName] = useState('');
   const [importDesc, setImportDesc] = useState('');
@@ -4499,7 +4920,11 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
       setImportName('');
       setImportDesc('');
       if (importRef.current) importRef.current.value = '';
+      setModal(null);
     }
+  };
+  const doCreate = async () => {
+    if (await createSfx()) setModal(null);
   };
 
   if (!sfxData) {
@@ -4555,7 +4980,87 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
         </div>
       )}
 
-      <Card title="Create sound effect" sub="rendered via ElevenLabs">
+      <Card
+        title="Effect library"
+        sub={`${list.length} effect${list.length === 1 ? '' : 's'}`}
+        right={
+          <>
+            <Btn sm tone="accent" onClick={() => setModal('create')} disabled={busy}>
+              + Create
+            </Btn>
+            <Btn sm tone="solid" onClick={() => setModal('import')} disabled={busy}>
+              Import
+            </Btn>
+          </>
+        }
+      >
+        {list.length === 0 && (
+          <div className="py-2 text-[12px] text-muted italic">
+            none yet
+          </div>
+        )}
+        {list.map(s => (
+          <div
+            key={s.name}
+            className="flex items-start gap-3 border-b border-dashed border-separator-strong py-3"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-bold text-ink">{s.name}</div>
+              {s.description && (
+                <div className="mt-0.5 text-[12px] break-words text-muted">
+                  {s.description}
+                </div>
+              )}
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <span className="caption">{fmtSize(s.size)}</span>
+                {s.durationSec && <span className="caption">{s.durationSec}s</span>}
+                {s.builtin && <Pill tone="accent">builtin</Pill>}
+                {s.source === 'upload' && <Pill tone="ink">uploaded</Pill>}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <PreviewButton
+                path={`/sfx/${encodeURIComponent(s.name)}/audio`}
+                adminFetch={adminFetch}
+              />
+              <Btn
+                sm
+                tone="danger"
+                onClick={() => onDelete(s.name)}
+                disabled={busy || s.builtin}
+                title={s.builtin ? "Can't delete a built-in effect" : 'Delete this effect'}
+              >
+                Delete
+              </Btn>
+            </div>
+          </div>
+        ))}
+      </Card>
+
+      <Modal
+        open={modal === 'create'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
+        title="Create sound effect"
+        sub="rendered via ElevenLabs"
+        footer={
+          <>
+            <Btn onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn
+              tone="accent"
+              onClick={doCreate}
+              disabled={busy || !ready || !sfxForm.name.trim() || !sfxForm.prompt.trim()}
+            >
+              {busy ? 'Generating…' : 'Create sound effect'}
+            </Btn>
+          </>
+        }
+      >
+        {!ready && (
+          <div className="field-hint mb-3.5">
+            An ElevenLabs API key is required to generate effects. Set <code>ELEVENLABS_API_KEY</code>{' '}
+            and restart the controller, or use Import instead.
+          </div>
+        )}
         <div className="field">
           <Label>Name</Label>
           <Input
@@ -4603,18 +5108,26 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
             <span className="text-[12px] text-muted">sec · 0.5–22, blank lets the model decide</span>
           </div>
         </div>
-        <div className="mt-3.5 flex items-center gap-2.5">
-          <Btn
-            tone="accent"
-            onClick={createSfx}
-            disabled={busy || !ready || !sfxForm.name.trim() || !sfxForm.prompt.trim()}
-          >
-            {busy ? 'Generating…' : 'Create sound effect'}
-          </Btn>
-        </div>
-      </Card>
+      </Modal>
 
-      <Card title="Import sound effect" sub="bring your own mp3 / wav, no ElevenLabs key needed">
+      <Modal
+        open={modal === 'import'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
+        title="Import sound effect"
+        sub="bring your own mp3 / wav, no ElevenLabs key needed"
+        footer={
+          <>
+            <Btn onClick={() => setModal(null)}>Cancel</Btn>
+            <Btn
+              tone="accent"
+              onClick={doImport}
+              disabled={busy || !importFile || !importName.trim()}
+            >
+              {busy ? 'Importing…' : 'Import sound effect'}
+            </Btn>
+          </>
+        }
+      >
         <div className="field">
           <Label>Name</Label>
           <Input
@@ -4653,60 +5166,7 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
           </div>
           <div className="field-hint">mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB · converted to MP3 on import</div>
         </div>
-        <div className="mt-3.5 flex items-center gap-2.5">
-          <Btn
-            tone="accent"
-            onClick={doImport}
-            disabled={busy || !importFile || !importName.trim()}
-          >
-            {busy ? 'Importing…' : 'Import sound effect'}
-          </Btn>
-        </div>
-      </Card>
-
-      <Card title="Effect library" sub={`${list.length} effect${list.length === 1 ? '' : 's'}`}>
-        {list.length === 0 && (
-          <div className="py-2 text-[12px] text-muted italic">
-            none yet
-          </div>
-        )}
-        {list.map(s => (
-          <div
-            key={s.name}
-            className="flex items-start gap-3 border-b border-dashed border-separator-strong py-3"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-bold text-ink">{s.name}</div>
-              {s.description && (
-                <div className="mt-0.5 text-[12px] break-words text-muted">
-                  {s.description}
-                </div>
-              )}
-              <div className="mt-1 flex flex-wrap items-center gap-2">
-                <span className="caption">{fmtSize(s.size)}</span>
-                {s.durationSec && <span className="caption">{s.durationSec}s</span>}
-                {s.builtin && <Pill tone="accent">builtin</Pill>}
-                {s.source === 'upload' && <Pill tone="ink">uploaded</Pill>}
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <PreviewButton
-                path={`/sfx/${encodeURIComponent(s.name)}/audio`}
-                adminFetch={adminFetch}
-              />
-              <Btn
-                sm
-                tone="danger"
-                onClick={() => onDelete(s.name)}
-                disabled={busy || s.builtin}
-                title={s.builtin ? "Can't delete a built-in effect" : 'Delete this effect'}
-              >
-                Delete
-              </Btn>
-            </div>
-          </div>
-        ))}
-      </Card>
+      </Modal>
     </>
   );
 }
