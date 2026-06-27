@@ -736,6 +736,16 @@ body::after {
 
 /* Reduced motion — collapse anything that animates. */
 @media (prefers-reduced-motion: reduce) {
+    /* Low-power concession: the frosted backdrop blur is the single biggest GPU
+       cost on weak devices, and listeners who ask for reduced motion are often
+       on exactly those devices — drop it too. (Lite mode does the same wholesale
+       via html.lite below.) */
+    *,
+    *::before,
+    *::after {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
     .v3-drawer-content,
     .v3-drawer-overlay,
     .v3-blink,
@@ -774,6 +784,20 @@ body::after {
     .fz-scale .fz-needle {
         transition: none;
     }
+}
+
+/* Lite (low-power) mode — toggled from the player theme menu or pinned with
+   ?lite=1 (see lib/lite.ts). Drops every backdrop-filter blur and disables
+   animations so weak GPUs (kiosks, Raspberry Pi) stop re-compositing frosted
+   layers and looping effects every frame — the measured Pi 4 win is ~170% →
+   ~40% Chromium CPU. Transitions are intentionally left alone: they only fire
+   on interaction and aren't the continuous repaint cost. */
+html.lite *,
+html.lite *::before,
+html.lite *::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    animation: none !important;
 }
 
 /* Player title — Fraunces display serif (see the type-roles block up top).
