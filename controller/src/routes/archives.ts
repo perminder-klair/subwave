@@ -4,7 +4,8 @@
 import express from 'express';
 import { statSync } from 'node:fs';
 import { requireAdmin } from '../middleware/auth.js';
-import { list, resolveEntry, openStream } from '../broadcast/archives.js';
+import { list, resolveEntry, openStream, clearAll } from '../broadcast/archives.js';
+import { queue } from '../broadcast/queue.js';
 
 export const router = express.Router();
 
@@ -12,6 +13,19 @@ router.get('/archives', requireAdmin, async (req, res) => {
   try {
     const limit = Math.min(parseInt(String(req.query.limit ?? ''), 10) || 500, 5000);
     res.json({ archives: await list({ limit }) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Wipe every hourly recording — the collection-level DELETE (there is no
+// per-file delete; the operator either keeps a download or clears the lot).
+// Safe on air: see clearAll() in broadcast/archives.ts.
+router.delete('/archives', requireAdmin, async (_req, res) => {
+  try {
+    const result = await clearAll();
+    queue.log('scheduler', `archive cleared — ${result.removed} hour(s), ${result.bytes} bytes freed`);
+    res.json({ ok: true, ...result });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
