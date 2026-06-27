@@ -170,6 +170,7 @@ interface LlmForm {
   reasoning: boolean;
   toolChoice: string;
   pickerAgent: boolean;
+  noRepeatWindow: number;
   requestWebResolve: boolean;
   agentTimeoutMs: number;
   pauseWhenEmpty: boolean;
@@ -479,6 +480,7 @@ export default function SettingsPanel() {
         reasoning: !!v.llm?.reasoning,
         toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
         pickerAgent: !!v.llm?.pickerAgent,
+        noRepeatWindow: typeof v.llm?.noRepeatWindow === 'number' ? v.llm.noRepeatWindow : 100,
         requestWebResolve: !!v.llm?.requestWebResolve,
         agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
         pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
@@ -2402,6 +2404,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         reasoning: form.llm.reasoning,
         toolChoice: form.llm.toolChoice,
         pickerAgent: form.llm.pickerAgent,
+        noRepeatWindow: form.llm.noRepeatWindow,
         requestWebResolve: form.llm.requestWebResolve,
         agentTimeoutMs: form.llm.agentTimeoutMs,
         pauseWhenEmpty: form.llm.pauseWhenEmpty,
@@ -3109,6 +3112,28 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             />
           </div>
         )}
+
+        <div className="field mt-4">
+          <Label>No-repeat window (tracks)</Label>
+          <Input
+            type="number"
+            min={0}
+            max={290}
+            step={10}
+            value={form.llm.noRepeatWindow}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setForm(f => ({ ...f, llm: { ...f.llm, noRepeatWindow: Math.max(0, Number(e.target.value)) } }))
+            }
+            placeholder="100"
+            className="max-w-[200px]"
+          />
+          <div className="field-hint">
+            The last N <strong>distinct</strong> tracks can never be re-picked &mdash; a hard
+            guard on both the agent and candidate-pool pickers, on top of the time-based
+            window. Auto-scales down on a small library so it never blocks everything.
+            {' '}<strong>0 = off</strong>. Listener requests stay exempt. 0&ndash;290.
+          </div>
+        </div>
       </Card>
 
       <Card title="Idle behaviour" sub="when no one's listening">
