@@ -28,21 +28,25 @@ import { cn } from '../../lib/cn';
 import ArchivesPanel from './ArchivesPanel';
 import WebhooksPanel from './WebhooksPanel';
 import BackupPanel from './BackupPanel';
+import {
+  Radio, Palette, Cpu, Mic, Library, Search, Music, AudioLines,
+  Activity, Archive, Webhook, Save, AlertTriangle,
+} from 'lucide-react';
 
 const SECTIONS = [
-  { id: 'station',  label: 'Station', hint: 'name · location · locale' },
-  { id: 'theme',    label: 'Theme', hint: 'station-wide palette' },
-  { id: 'llm',      label: 'LLM provider', hint: 'model routing' },
-  { id: 'tts',      label: 'TTS voice', hint: 'default engine' },
-  { id: 'library',  label: 'Library tagger', hint: 'embedding · propagation' },
-  { id: 'search',   label: 'Web search', hint: 'live-facts backend' },
-  { id: 'jingles',  label: 'Jingles', hint: 'stingers' },
-  { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers' },
-  { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz' },
-  { id: 'archives', label: 'Archives', hint: 'hourly recordings' },
-  { id: 'webhooks', label: 'Webhooks', hint: 'outbound events' },
-  { id: 'backup',   label: 'Backup', hint: 'export · restore' },
-  { id: 'danger',   label: 'Danger zone', hint: 'broadcast control' },
+  { id: 'station',  label: 'Station', hint: 'name · location · locale', icon: Radio },
+  { id: 'theme',    label: 'Theme', hint: 'station-wide palette', icon: Palette },
+  { id: 'llm',      label: 'LLM provider', hint: 'model routing', icon: Cpu },
+  { id: 'tts',      label: 'TTS voice', hint: 'default engine', icon: Mic },
+  { id: 'library',  label: 'Library tagger', hint: 'embedding · propagation', icon: Library },
+  { id: 'search',   label: 'Web search', hint: 'live-facts backend', icon: Search },
+  { id: 'jingles',  label: 'Jingles', hint: 'stingers', icon: Music },
+  { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers', icon: AudioLines },
+  { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz', icon: Activity },
+  { id: 'archives', label: 'Archives', hint: 'hourly recordings', icon: Archive },
+  { id: 'webhooks', label: 'Webhooks', hint: 'outbound events', icon: Webhook },
+  { id: 'backup',   label: 'Backup', hint: 'export · restore', icon: Save },
+  { id: 'danger',   label: 'Danger zone', hint: 'broadcast control', icon: AlertTriangle },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]['id'];
@@ -685,24 +689,28 @@ export default function SettingsPanel() {
         <span className="caption pb-2">settings</span>
         {SECTIONS.map(s => {
           const isActive = activeSection === s.id;
+          const Icon = s.icon;
           return (
             <button
               key={s.id}
               onClick={() => setActiveSection(s.id)}
               className={cn(
-                'grid cursor-pointer gap-1 border border-ink px-3 py-2.5 text-left font-[inherit]',
-                isActive ? 'bg-ink text-bg' : 'bg-transparent text-ink',
+                'flex cursor-pointer items-center gap-2.5 border border-ink px-3 py-2.5 text-left font-[inherit] transition-colors',
+                isActive ? 'bg-ink text-bg' : 'bg-[var(--ink-soft)] text-ink hover:bg-ink/10',
               )}
             >
-              <span className="text-[11px] font-bold tracking-[0.2em] uppercase">
-                {s.label}
-              </span>
-              <span className="text-[9px] tracking-[0.18em] uppercase opacity-70">
-                {s.id === 'jingles' && data
-                  ? `${data.jingles?.length ?? 0} file${(data.jingles?.length ?? 0) === 1 ? '' : 's'}`
-                  : s.id === 'sfx' && sfxData
-                    ? `${sfxData.sfx?.length ?? 0} effect${(sfxData.sfx?.length ?? 0) === 1 ? '' : 's'}`
-                    : s.hint}
+              <Icon className="size-4 shrink-0 opacity-80" strokeWidth={2} aria-hidden />
+              <span className="grid min-w-0 gap-1">
+                <span className="text-[11px] font-bold tracking-[0.2em] uppercase">
+                  {s.label}
+                </span>
+                <span className="text-[9px] tracking-[0.18em] uppercase opacity-70">
+                  {s.id === 'jingles' && data
+                    ? `${data.jingles?.length ?? 0} file${(data.jingles?.length ?? 0) === 1 ? '' : 's'}`
+                    : s.id === 'sfx' && sfxData
+                      ? `${sfxData.sfx?.length ?? 0} effect${(sfxData.sfx?.length ?? 0) === 1 ? '' : 's'}`
+                      : s.hint}
+                </span>
               </span>
             </button>
           );
