@@ -6,7 +6,7 @@
 import { readFile, writeFile, unlink, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { STATE_DIR } from './config.js';
+import { STATE_DIR, config } from './config.js';
 import { DEFAULT_THEME_ID, isValidThemeId, listThemes } from './themes.js';
 import { isValidTimezone, setStationTimezone, zonedParts } from './time.js';
 
@@ -167,6 +167,40 @@ function normalizeTtsGainMap(raw: any): Record<string, number> {
   return out;
 }
 
+// DJ-voice speech-rate multiplier. A per-engine speed corrects an engine's
+// out-of-the-box pace (Piper/Kokoro/cloud each read at a different default);
+// a per-persona speed stacks on top as a character trim (a laid-back host
+// slower than a hyper morning one). Both compose multiplicatively with the
+// daypart energy already carried in audio/tts.ts, on top of the env base
+// (PIPER_SPEED/KOKORO_SPEED/CLOUD_TTS_SPEED) — see audio/tts.ts:speak(). A
+// MULTIPLIER where 1.0 = no change (today's behaviour); lower = slower. Only
+// Piper/Kokoro/cloud honour it — chatterbox/pocket-tts workers ignore speed,
+// so their map entries are inert (kept for symmetry with the gain map).
+export const TTS_SPEED_MIN = 0.5;
+export const TTS_SPEED_MAX = 2.0;
+export const TTS_SPEED_DEFAULT = 1.0;
+
+// Coerce any value to a clean speed multiplier: finite number, clamped to
+// [TTS_SPEED_MIN, TTS_SPEED_MAX], rounded to 0.05. Garbage / non-finite →
+// 1.0 (unity, i.e. today's behaviour).
+export function clampTtsSpeed(v: any): number {
+  // Treat unset (null/undefined/'') as unity, NOT as 0 — unlike gain, 0 is not
+  // this dial's default and would clamp to the 0.5 floor instead of no-change.
+  if (v === null || v === undefined || v === '') return TTS_SPEED_DEFAULT;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return TTS_SPEED_DEFAULT;
+  const c = Math.max(TTS_SPEED_MIN, Math.min(TTS_SPEED_MAX, n));
+  return Math.round(c * 20) / 20;
+}
+
+// Normalise a per-engine speed map to exactly one clean multiplier per known
+// engine (default 1.0). Drops unknown keys, mirroring normalizeTtsGainMap.
+function normalizeTtsSpeedMap(raw: any): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const e of TTS_ENGINES) out[e] = clampTtsSpeed(raw?.[e]);
+  return out;
+}
+
 // LLM provider abstraction. `ollama` is the homelab default; the cloud
 // providers are opt-in and resolved by llm/provider.js. `openrouter` and
 // `gateway` are aggregators — one key, any vendor's models. `openai-compatible`
@@ -242,6 +276,16 @@ function clampDailyTokenCap(raw: any, def: number): number {
 function clampBudgetSoftPct(raw: any, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   return Math.min(100, Math.max(0, Math.floor(raw)));
+}
+
+// Count-based hard no-repeat window (distinct plays). Floored to an integer in
+// [0, 290]: 0 disables; the 290 ceiling stays under the 300-entry _recentPlays
+// cap so the requested window is never silently truncated by a too-short
+// sidecar. Library-size clamping happens separately at use time
+// (effectiveNoRepeatWindow). Non-numeric/NaN falls back to `def`.
+function clampNoRepeatWindow(raw: any, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  return Math.min(290, Math.max(0, Math.floor(raw)));
 }
 
 // Validate + apply the connection fields shared by the primary LLM leg and its
@@ -459,6 +503,18 @@ export function effectiveMaxTrackSec(
   return sec && sec > 0 ? sec : null;
 }
 
+// Smallest non-zero max-track-length (seconds) validation accepts and the
+// admin/show UI offers. The on-air cut fires a crossfade that BEGINS
+// crossfadeDuration before the cut point, so a cap below the crossfade is
+// degenerate and below 2× leaves the track no solo airtime. 0 (= unlimited) is
+// always allowed — this is only the floor for a POSITIVE cap. Surfaced to the UI
+// via /settings.values.minTrackSeconds so client and server share one rule.
+export function minTrackSeconds(s: any = get()): number {
+  const xf = Number(s?.crossfadeDuration);
+  const cross = Number.isFinite(xf) && xf > 0 ? xf : DEFAULTS.crossfadeDuration;
+  return Math.max(30, Math.ceil(2 * cross));
+}
+
 function mintId(prefix) {
   return prefix + randomBytes(3).toString('hex');
 }
@@ -487,7 +543,7 @@ export const SEED_PERSONAS = [
     soul: DJ_SOULS[0],
     language: '',
     avatar: '',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_george', gainDb: 0 },
+    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_george', gainDb: 0, speed: 1 },
   },
   {
     id: 'p_default1',
@@ -498,7 +554,7 @@ export const SEED_PERSONAS = [
     soul: DJ_SOULS[1],
     language: '',
     avatar: '',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_alice', gainDb: 0 },
+    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_alice', gainDb: 0, speed: 1 },
   },
   {
     id: 'p_default2',
@@ -509,7 +565,7 @@ export const SEED_PERSONAS = [
     soul: DJ_SOULS[3],
     language: '',
     avatar: '',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_daniel', gainDb: 0 },
+    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bm_daniel', gainDb: 0, speed: 1 },
   },
 ];
 
@@ -616,6 +672,11 @@ const DEFAULTS = {
     // persona's own tts.gainDb. All 0 = unity = today's behaviour. See
     // TTS_GAIN_CLAMP_DB and audio/tts.ts:voiceGainDb().
     gainDb: { piper: 0, kokoro: 0, chatterbox: 0, 'pocket-tts': 0, cloud: 0 },
+    // Per-engine speech-rate multiplier (0.5–2.0×, 1.0 = no change), composed
+    // on top of the daypart energy and each persona's own tts.speed in
+    // audio/tts.ts:speak(). Only Piper/Kokoro/cloud honour it; chatterbox/
+    // pocket-tts ignore speed so their entries are inert. See clampTtsSpeed().
+    speed: { piper: 1, kokoro: 1, chatterbox: 1, 'pocket-tts': 1, cloud: 1 },
   },
   llm: {
     provider: 'ollama',
@@ -659,6 +720,14 @@ const DEFAULTS = {
     // dj-agent.js). When off, the stateless pool picker runs instead — still
     // inside a session, still logged, just without the conversational loop.
     pickerAgent: true,
+    // Count-based hard no-repeat window: the picker never re-airs any of the
+    // last N DISTINCT plays. Non-relaxable (survives the filterPickerCandidates
+    // starvation cascade), so it closes the hole where a thin mood cluster let
+    // the cascade re-serve a just-played song. Clamped to library size at use
+    // (effectiveNoRepeatWindow) so a small catalogue never fully blocks; 0
+    // disables. Seeded from config.queue.noRepeatWindow (env NO_REPEAT_WINDOW);
+    // listener requests stay exempt. See music/recency.ts + broadcast/queue.ts.
+    noRepeatWindow: config.queue.noRepeatWindow,
     // When on, the listener-request agent (djAgentRequest only — never the
     // per-track picker) gets an extra `identifyRequestedTrack` tool that resolves
     // a DESCRIBED track ("the song from the new Dune movie") via web search, then
@@ -911,7 +980,7 @@ function normalizeTts(raw: any) {
   // field and the server picks its own.
   if (!voice && engine === 'cloud' && cloudProvider !== 'openai-compatible') voice = 'alloy';
   if (!voice && engine !== 'cloud' && engine !== 'chatterbox' && engine !== 'piper') voice = 'bf_isabella';
-  return { engine, cloudProvider, voice, gainDb: clampTtsGain(raw?.gainDb) };
+  return { engine, cloudProvider, voice, gainDb: clampTtsGain(raw?.gainDb), speed: clampTtsSpeed(raw?.speed) };
 }
 
 function normalizePersona(raw: any) {
@@ -1208,6 +1277,9 @@ export async function load() {
       // Per-engine gain map — one clean gain per known engine, missing keys → 0,
       // unknown keys dropped. So an older save (no gainDb) loads at unity.
       gainDb: normalizeTtsGainMap(stored.tts?.gainDb),
+      // Per-engine speed map — one clean multiplier per known engine, missing
+      // keys → 1.0, unknown keys dropped. An older save (no speed) loads at unity.
+      speed: normalizeTtsSpeedMap(stored.tts?.speed),
     },
     llm: {
       provider: LLM_PROVIDERS.includes(stored.llm?.provider)
@@ -1233,6 +1305,9 @@ export async function load() {
         typeof stored.llm?.pickerAgent === 'boolean'
           ? stored.llm.pickerAgent
           : DEFAULTS.llm.pickerAgent,
+      // Clamped to [0, 290] (≤ the 300-entry sidecar cap); pre-field
+      // settings.json picks up the config/env-seeded default.
+      noRepeatWindow: clampNoRepeatWindow(stored.llm?.noRepeatWindow, DEFAULTS.llm.noRepeatWindow),
       requestWebResolve:
         typeof stored.llm?.requestWebResolve === 'boolean'
           ? stored.llm.requestWebResolve
@@ -1529,7 +1604,7 @@ function validateTtsBlock(raw, where) {
       );
     }
   }
-  return { engine: t.engine, cloudProvider: t.cloudProvider, voice, gainDb: clampTtsGain(t.gainDb) };
+  return { engine: t.engine, cloudProvider: t.cloudProvider, voice, gainDb: clampTtsGain(t.gainDb), speed: clampTtsSpeed(t.speed) };
 }
 
 export function validatePersonasStrict(raw) {
@@ -1706,6 +1781,14 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
           `shows[${i}].maxTrackSeconds must be an integer between ${BOUNDS.maxTrackSeconds.min} and ${BOUNDS.maxTrackSeconds.max}`,
         );
       }
+      // Same crossfade-relative floor as the station cap (0 = inherit/unlimited
+      // stays allowed). Shows have no own crossfade, so it's the station value.
+      const floor = minTrackSeconds();
+      if (n !== 0 && n < floor) {
+        throw new Error(
+          `shows[${i}].maxTrackSeconds must be 0 (inherit/unlimited) or at least ${floor}s`,
+        );
+      }
       maxTrackSeconds = n;
     }
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
@@ -1832,8 +1915,18 @@ export async function update(patch) {
         `maxTrackSeconds must be int in [${BOUNDS.maxTrackSeconds.min}, ${BOUNDS.maxTrackSeconds.max}]`,
       );
     }
-    // Picker-only knob (read live by music/picker + the auto-playlist refresh);
-    // no Liquidsoap file is written, so no restart.
+    // Non-zero caps must clear the crossfade-relative floor (0 = unlimited stays
+    // allowed): the track crossfades out starting crossfadeDuration before the
+    // cap, so a shorter cap is degenerate / leaves no solo airtime. Uses next's
+    // crossfade, already applied above if this same patch changed it.
+    const floor = minTrackSeconds(next);
+    if (v !== 0 && v < floor) {
+      throw new Error(
+        `maxTrackSeconds must be 0 (no limit) or at least ${floor}s`,
+      );
+    }
+    // Read live by queue.drainToLiquidsoap + the auto-playlist refresh to stamp
+    // liq_cue_out; no Liquidsoap file is written, so no restart.
     next.maxTrackSeconds = v;
   }
   if ('archive' in patch) {
@@ -2070,12 +2163,26 @@ export async function update(patch) {
         next.tts.gainDb[key] = clampTtsGain(t.gainDb[key]);
       }
     }
+    if (t.speed !== undefined) {
+      if (typeof t.speed !== 'object' || t.speed === null || Array.isArray(t.speed)) {
+        throw new Error('tts.speed must be an object keyed by engine');
+      }
+      for (const key of Object.keys(t.speed)) {
+        if (!TTS_ENGINES.includes(key)) {
+          throw new Error(`tts.speed has unknown engine "${key}"; must be one of: ${TTS_ENGINES.join(', ')}`);
+        }
+        next.tts.speed[key] = clampTtsSpeed(t.speed[key]);
+      }
+    }
   }
   if ('llm' in patch) {
     const l = patch.llm || {};
     applyLlmLegPatch(next.llm, l, 'llm');
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
+    }
+    if (l.noRepeatWindow !== undefined) {
+      next.llm.noRepeatWindow = clampNoRepeatWindow(Number(l.noRepeatWindow), next.llm.noRepeatWindow);
     }
     if (l.requestWebResolve !== undefined) {
       next.llm.requestWebResolve = !!l.requestWebResolve;

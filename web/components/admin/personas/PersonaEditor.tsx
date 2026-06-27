@@ -81,6 +81,7 @@ export function PersonaEditor({
         data={data}
         defaultEngine={defaultEngine}
         cloudIssueText={cloudIssueText}
+        adminFetch={adminFetch}
         updateTts={updateTts}
       />
 

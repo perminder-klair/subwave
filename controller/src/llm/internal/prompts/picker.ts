@@ -7,8 +7,8 @@ import * as settings from '../../../settings.js';
 import { djObject } from '../strategy/object.js';
 
 export const PICKER_CRITERIA = `Selection criteria, in order:
-1. FLOW — does it transition naturally from what just played (energy, mood, tempo)? When a candidate shows a "bpm" and/or Camelot "key", those are MEASURED — prefer a next track whose tempo sits near the current one (or steps it deliberately for the daypart) and whose key is harmonically close. A "pace" value (0–1) is the track's MEASURED perceptual energy, decoupled from tempo — use it to shape build/release arcs: avoid stacking two peaks back-to-back, ease down for wind-down dayparts, lift for workout/drive. A "sections" count hints how much the opening develops (higher = a busier, evolving intro). Treat all of these as tie-breakers, never hard rules; many tracks won't have them.
-2. CONTEXT — does it fit the time of day, weather, and dominant mood?
+1. FLOW — does it transition naturally from what just played? Match energy, mood and tempo, or step them deliberately for the daypart. Some candidates carry MEASURED acoustic facts — treat these as tie-breakers, never hard rules (many tracks won't have them): "bpm" and Camelot "key" (prefer a tempo near the current one and a harmonically-close key for a smooth segue); "pace" (0–1 perceptual energy, decoupled from tempo — shape build/release arcs: don't stack two peaks back-to-back, ease down for wind-down dayparts, lift for workout/drive); "sections" (higher = a busier, evolving intro); "instrumental" (true = no vocals — avoid stacking instrumentals back-to-back, and an instrumental opener leaves room to talk over).
+2. CONTEXT — does it fit the time of day, weather, and dominant mood? When a candidate carries its own "moods" tags and an "energy" band (low/medium/high), weigh those against the room's mood and the daypart — match a calm room with calm tracks, lift the energy for a workout slot.
 3. VARIETY — avoid the same artist back-to-back; don't repeat tracks you've already played today; rotate energy. Variety over cleverness — never pick a track because its title literally matches the time of day, the weather, or anything else literal.
 4. INTEREST — prefer something that creates a moment, not the most generic option.`;
 
@@ -35,10 +35,12 @@ export function showMusicLean(show?: ShowMusic | null): string {
   }
   if (show.energy) parts.push(`favour ${show.energy}-energy tracks`);
 
-  // The hard genre rule, phrased as a constraint rather than a preference. Still
-  // carries the never-starve escape hatch so a thin genre can't strand the show.
+  // The hard genre rule. Track selection is now code-enforced for strict shows
+  // (preferGenre in both pick paths), so this is lean: it governs the DJ's TALK
+  // and the never-starve fallback case (where off-genre tracks can still surface),
+  // not the candidate list.
   const lock = strict
-    ? `\n\nGenre lock for this show — every pick MUST be ${show.genre}. Stay within ${show.genre}; do not pick other genres. Only reach outside ${show.genre} if there is genuinely no ${show.genre} track left to play (never leave dead air).`
+    ? `\n\nThis show is ${show.genre}-only — keep your picks and your talk in ${show.genre}; only step outside if there is genuinely no ${show.genre} track left to play (never leave dead air).`
     : '';
   const soft = parts.length
     ? `\n\nMusic steer for this show — ${parts.join('; ')}. These are preferences, not hard filters: break them only when the flow genuinely demands it.`

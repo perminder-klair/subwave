@@ -65,9 +65,9 @@ export function CommandDialog({
 
 export const CommandInput = forwardRef<
   ComponentRef<typeof CommandPrimitive.Input>,
-  ComponentPropsWithoutRef<typeof CommandPrimitive.Input>
->(({ className, ...props }, ref) => (
-  <div className="flex items-center gap-2 border-b border-ink px-4">
+  ComponentPropsWithoutRef<typeof CommandPrimitive.Input> & { wrapperClassName?: string }
+>(({ className, wrapperClassName, ...props }, ref) => (
+  <div className={cn("flex items-center gap-2 border-b border-ink px-4", wrapperClassName)}>
     <Search size={15} strokeWidth={1.5} className="shrink-0 text-muted" />
     <CommandPrimitive.Input
       ref={ref}

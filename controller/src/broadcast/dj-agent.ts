@@ -25,7 +25,7 @@ import { buildPickerTools } from '../llm/tools.js';
 import { recordPick } from '../llm/log.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
-import { recencyWindowsForLibrary } from '../music/recency.js';
+import { recencyWindowsForLibrary, effectiveNoRepeatWindow } from '../music/recency.js';
 
 // --- Feature 4: DJ-mode mini-runs ------------------------------------------
 // A short, deliberate tempo/key journey across 2-3 consecutive picks. While a
@@ -165,7 +165,7 @@ export function runActive(): boolean {
 
 export const PICK_SCHEMA = z.object({
   id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
-  reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just label (e.g. "flow from previous, new artist")'),
+  reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just note what makes THIS pick a fresh step (new artist, a shift in energy/era/texture), not a vibe label you would recycle pick after pick (e.g. "new artist, lifts the energy", never a repeated "mellow reflective step")'),
   say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice (back-announce what just played, ease into what is coming, vary your opener); when the event says stay silent, set this to null'),
   // Transition effects (only honoured when the system prompt offers them — DJ mode + effects on).
   transition: z.enum(['normal', 'sweep', 'washout']).nullable().describe('special transition effect for this pick, used RARELY: "sweep" muffles the music under a lowpass that opens across the crossfade INTO this pick (it surfaces from far away) — for a big mood/energy jump; "washout" dissolves THIS track into a wide ping-pong echo tail as it ENDS, bleeding into the next track — for closing a segment or a dreamy/ambient pick; "normal" or null for an ordinary crossfade'),
@@ -222,7 +222,9 @@ export function pickSystem() {
 
 You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}${musicLean}
 
-${dj.PICKER_CRITERIA}${effectsGuidance()}${settings.agentLanguageReminder(persona, 'the "say" link')}`;
+${dj.PICKER_CRITERIA}
+
+Finding candidates: prefer tools backed by the local library — searchLibrary, songsByGenre, tracksByMood, tracksByEnergy, randomSongs, and the audio/embedding similarity tools. similarSongs and topSongsByArtist use external data and often return little, so try them second. If a tool returns nothing, switch tools rather than retrying. If a tool returns only a few tracks (fewer than ~4), make one more discovery call with a different tool before choosing, so you pick from a real range rather than whatever the first call happened to surface.${effectsGuidance()}${settings.agentLanguageReminder(persona, 'the "say" link')}`;
 }
 
 function requestSystem() {
@@ -290,12 +292,19 @@ export const pickerAgent = defineAgent({
   maxSteps: 4,
   timeoutMs: agentDeadline,
   buildSystem: () => pickSystem(),
-  buildTools: ({ recentIds, recentKeys, recentArtists, audioWaypoint }) => {
-    // Length cap for autonomous picks: the active show's override or the
-    // station default (issue #447), resolved live at run time so a show that
-    // just came on air takes effect. null = no cap.
-    const maxDurationSec = settings.effectiveMaxTrackSec();
-    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, recentArtists, audioWaypoint, maxDurationSec });
+  buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint }) => {
+    // Resolve the active show live (a show that just came on air takes effect):
+    // for a strict show, hard genre + era locks the discovery tools enforce on
+    // candidates — not just the prompt. Era rides the same genreStrict flag (no
+    // separate era-strict toggle). Track length is enforced as an on-air cut,
+    // NOT a pick filter (issue #447), so no length cap is passed here.
+    const activeShow = settings.resolveActiveShow();
+    const strict = !!(activeShow?.genreStrict);
+    const genreLock = strict && activeShow?.genre ? activeShow.genre : null;
+    const eraLock = strict && (activeShow?.fromYear != null || activeShow?.toYear != null)
+      ? { fromYear: activeShow.fromYear, toYear: activeShow.toYear }
+      : null;
+    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock });
     return { tools, extras: { seen } };
   },
 });
@@ -306,10 +315,11 @@ export const requestAgent = defineAgent({
   maxSteps: 4,
   timeoutMs: agentDeadline,
   buildSystem: () => requestSystem(),
-  // recentArtists deliberately empty — a request for a recently-played artist
-  // must still resolve. resolveReferences adds the web-backed reference resolver
-  // (request path only; no-op without a search provider) when the operator opts
-  // in via settings.llm.requestWebResolve.
+  // resolveReferences adds the web-backed reference resolver (request path only;
+  // no-op without a search provider) when the operator opts in via
+  // settings.llm.requestWebResolve. (Artists are no longer filtered on any pick
+  // path — see the buildPickerTools note — so a request for a recently-played
+  // artist resolves naturally.)
   buildTools: ({ recentIds }) => {
     const { tools, seen } = buildPickerTools({
       recentIds,
@@ -371,19 +381,32 @@ async function enqueuePick(
 
 async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLink: boolean; audioWaypoint?: number[] | null }): Promise<boolean> {
   await library.load();
-  const windows = recencyWindowsForLibrary(library.stats().distinctArtists);
-  // Scale the recency windows to the tagged library's artist diversity: dense
-  // catalogues keep the long anti-repeat guard, while small-artist libraries
-  // do not exclude every real candidate before the picker sees it.
+  const stats = library.stats();
+  const windows = recencyWindowsForLibrary(stats.distinctArtists);
+  // Scale the track-recency window to the tagged library's artist diversity:
+  // dense catalogues keep the long anti-repeat guard, while small-artist
+  // libraries don't exclude every real candidate before the picker sees it.
+  // Artist-recency is intentionally NOT applied at the agent-tool layer — see
+  // the buildPickerTools note (the similarity tools cluster on the just-played
+  // artist, so an artist strip starved them).
   const { ids: recentIds, keys: recentKeys } = queue.recentlyPlayed(windows.trackHours);
+  // Queued-but-not-yet-aired ids belong in the RELAXABLE set — they're not
+  // "recently played", just in-flight, and shouldn't tighten the hard guard.
   for (const id of queue.queuedIds()) recentIds.add(id);
-  const recentArtists = queue.recentArtistsSince(windows.artistHours);
+
+  // Count-based HARD no-repeat guard: the last N distinct plays can't re-air,
+  // and (unlike recentIds/recentKeys above) this survives the tool-level
+  // starvation cascade. Clamped to library size so a small catalogue never
+  // fully blocks; 0 = off, leaving the relaxable window in sole charge.
+  const effN = effectiveNoRepeatWindow(settings.get().llm?.noRepeatWindow ?? 0, stats.total);
+  const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
 
   const { object, steps, toolCalls, extras } = await pickerAgent.run({
     messages: session.windowMessages(),
     recentIds,
     recentKeys,
-    recentArtists,
+    hardRecentIds,
+    hardRecentKeys,
     // Sonic journey (Phase 2): registers the tracksTowardJourney tool, closed
     // over the run's current waypoint, so the agent path drifts the sound the
     // same way the pool path does. The event text tells the agent to use it.
@@ -509,14 +532,20 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     // the next track, they TEASE it — name the artist or capture its feel so
     // listeners know what's coming. The agent already knows its own pick when
     // it writes `say`, so this costs nothing extra.
+    // The "nod to it in the link" half only makes sense when a link is actually
+    // being written — gate it on wantLink so a silent mid-run pick ("Stay silent
+    // — no link this time.") doesn't also get told it may phrase something in a
+    // link that won't exist. The energy-direction guidance is pick selection, so
+    // it stays unconditional.
     const runClause = inRun
-      ? ` You're mid-run — keep the energy moving in the same direction (a touch ${energyForDaypart().speed >= 1 ? 'brisker' : 'mellower'}) and you may nod to it in the link, but never say tempo numbers.`
+      ? ` You're mid-run — keep the energy moving in the same direction (a touch ${energyForDaypart().speed >= 1 ? 'brisker' : 'mellower'}).`
+        + (wantLink ? ' You may nod to it in the link, but never say tempo numbers.' : '')
       : '';
     // Gated on the waypoint itself, not inRun: on a run's final pick the run
     // state is already cleared (advanceRun) but the last waypoint — the
     // destination itself — is still the one to land on.
     const journeyClause = audioWaypoint && audioWaypoint.length
-      ? ' A sonic journey is active: call tracksTowardJourney and strongly prefer one of its tracks — each one carries the sound a step toward where this arc is heading. Never mention the journey on air.'
+      ? ' A sonic journey is active: call tracksTowardJourney and lean toward one of its tracks — each carries the sound a step toward where this arc is heading. If it comes back thin, pick via the library mood/genre/audio tools and keep the energy heading the same way. Never mention the journey on air.'
       : '';
     const linkClause = wantLink
       ? (djMode
@@ -606,13 +635,26 @@ async function runRequestViaAgent(queue: any, { requester }: { requester: string
     }
 
     const intro = typeof object.intro === 'string' ? object.intro.trim() : '';
-    await queue.push({
+    const pos = await queue.push({
       track: trackFields(song),
       requestedBy: requester,
       intent: 'listener request',
       introScript: intro || null,
       introKind: 'dj-speak',
     });
+    // A concurrent request already queued this exact track — push() deduped it
+    // (#619). Acknowledge honestly (no second back-to-back play, no false
+    // "coming up", no intro to air) and still append the line as the session
+    // reply so the request event isn't left without one.
+    if (pos === -1) {
+      const ack = queue.dedupAck(song.id);
+      session.appendTurn({
+        role: 'dj', kind: 'request',
+        text: ack,
+        meta: { trackId: song.id, requester, toolCalls },
+      });
+      return { ack, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null };
+    }
     session.appendTurn({
       role: 'dj', kind: 'request',
       text: intro || object.ack || `Queued "${song.title}".`,

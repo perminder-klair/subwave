@@ -274,16 +274,24 @@ async function resolveRequest(entry) {
       recentTracks: queue.getRecentTracks(),
       recentOpeners: queue.getRecentOpeners(),
     });
-    await queue.push({
+    const pos = await queue.push({
       track: pick, requestedBy: requester, intent: 'more_like_this', introScript,
       introKind: 'dj-speak',
     });
+    entry.pick = pick;
+    if (pos === -1) {
+      // A concurrent request already queued this exact track — acknowledge
+      // honestly instead of airing a second intro over a phantom replay (#619).
+      const dupAck = queue.dedupAck(pick.id);
+      entry.pickSource = `${entry.pickSource}:already-queued`;
+      session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
+      return resolved({ ack: dupAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
+    }
     session.appendTurn({
       role: 'dj', kind: 'request',
       text: introScript || ackLine,
       meta: { trackId: pick.id, requester },
     });
-    entry.pick = pick;
     entry.introScript = introScript || null;
     return resolved({
       ack: ackLine,
@@ -539,21 +547,29 @@ async function resolveRequest(entry) {
     recentOpeners: queue.getRecentOpeners(),
   });
 
-  // 4. Add to queue (will trigger Liquidsoap via the queue manager)
-  await queue.push({
+  // 4. Add to queue (will trigger Liquidsoap via the queue manager). A
+  // concurrent request that already queued this exact track makes push() dedup
+  // it (#619) — acknowledge honestly rather than pretending it's freshly queued.
+  const pos = await queue.push({
     track: pick,
     requestedBy: requester,
     intent: matched.intent,
     introScript,
     introKind: 'dj-speak',
   });
+  entry.pick = pick;
+  if (pos === -1) {
+    const dupAck = queue.dedupAck(pick.id);
+    entry.pickSource = `${pickSource}:already-queued`;
+    session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
+    return resolved({ ack: dupAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
+  }
   session.appendTurn({
     role: 'dj', kind: 'request',
     text: introScript || ack || `Queued "${pick.title}".`,
     meta: { trackId: pick.id, requester },
   });
 
-  entry.pick = pick;
   entry.pickSource = pickSource;
   entry.introScript = introScript || null;
   return resolved({

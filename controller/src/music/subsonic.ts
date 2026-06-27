@@ -570,7 +570,7 @@ export function getPlayableUri(song) {
 function escAnnotate(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
-export function getAnnotatedUri(song) {
+export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } = {}) {
   const fields = [
     `title="${escAnnotate(song.title)}"`,
     `artist="${escAnnotate(song.artist)}"`,
@@ -601,10 +601,20 @@ export function getAnnotatedUri(song) {
   // far away". Absent → no sweep, i.e. a normal crossfade.
   if (song.sweep) fields.push('liq_sweep="true"');
   // DJ washout: the DJ agent may flag a pick (transition:'washout') to dissolve
-  // INTO a ping-pong echo tail as that track ENDS; the queue stamps `washout` on
+  // INTO a decaying echo tail as that track ENDS; the queue stamps `washout` on
   // the track. radio.liq's washout_watch reads `liq_washout` when the track
   // starts and rings out its outro across the crossfade into the next track.
   // Absent → no washout, i.e. a normal crossfade.
   if (song.washout) fields.push('liq_washout="true"');
+  // Hard track-length cap (issue #447 / max-track-length). When the caller passes
+  // a positive cap, stamp `liq_cue_out` so radio.liq's `cue_cut` stops the track
+  // at that second offset — a real ceiling that fires no matter how the track
+  // reached the stream, not just a selection bias. Only the capped paths set it
+  // (autonomous picks in queue.drainToLiquidsoap + the auto.m3u fallback);
+  // explicit listener requests pass null and play in full. A cue_out past a
+  // shorter track's end is a Liquidsoap no-op, so sub-cap tracks play untouched.
+  if (opts.maxDurationSec != null && opts.maxDurationSec > 0) {
+    fields.push(`liq_cue_out="${escAnnotate(opts.maxDurationSec)}"`);
+  }
   return `annotate:${fields.join(',')}:${getPlayableUri(song)}`;
 }

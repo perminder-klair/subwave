@@ -1,13 +1,18 @@
 'use client';
-// Text-to-speech engine, the engine-specific voice selector, and the per-persona
-// voice-level trim. Two columns from lg up (engine + selector on the left, the
-// level meter on the right) so the card fills the editor width instead of
-// stacking in a narrow left strip.
+// Text-to-speech engine picker, the engine-specific voice selector, and the
+// per-persona voice-level + speed trims. The engine is chosen from a radio-card
+// grid (shared EngineSelector) that surfaces availability up front; below it,
+// two columns from lg up — the engine's voice selector + a "Play sample" button
+// on the left, the level meter + speed slider on the right.
 import type { ChangeEvent } from 'react';
 import type { Persona, PersonaTts, SettingsResponse } from './types';
+import type { AdminAuth } from '../../../lib/adminAuth';
 import { CLOUD_VOICES } from '../../../lib/cloudVoices';
-import { ENGINES, CB_DEFAULT_VOICE, KOKORO_RE, CHATTERBOX_VOICE_RE, POCKET_TTS_VOICE_RE } from './constants';
+import { CB_DEFAULT_VOICE, KOKORO_RE, CHATTERBOX_VOICE_RE, POCKET_TTS_VOICE_RE } from './constants';
 import { Card, Seg } from '../ui';
+import { EngineSelector } from '../tts/EngineSelector';
+import { VoicePreviewButton } from '../tts/VoicePreviewButton';
+import { ENGINES } from '../tts/engineMeta';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import {
@@ -16,15 +21,18 @@ import {
 import { VoiceMeter } from './VoiceMeter';
 import { cn } from '../../../lib/cn';
 
+const ENGINE_IDS = ENGINES.map(e => e.id);
+
 interface PersonaVoiceCardProps {
   persona: Persona;
   data: SettingsResponse | null;
   defaultEngine: string;
   cloudIssueText: string | null;
+  adminFetch: AdminAuth['adminFetch'];
   updateTts: (patch: Partial<PersonaTts>) => void;
 }
 
-export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText, updateTts }: PersonaVoiceCardProps) {
+export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText, adminFetch, updateTts }: PersonaVoiceCardProps) {
   const kokoroVoices = data?.tts?.kokoroVoices || [];
   const pocketTtsVoices = data?.tts?.pocketTtsVoices || [];
   const cloudProviders = data?.tts?.cloudProviders || ['openai', 'elevenlabs'];
@@ -34,46 +42,54 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
     ? '0 dB'
     : `${gain > 0 ? '+' : '−'}${Math.abs(gain).toFixed(1)} dB`;
 
+  const speed = persona.tts.speed ?? 1;
+  // Only Piper/Kokoro/cloud honour speed; chatterbox/pocket-tts workers ignore
+  // it, so the control is shown but disabled with a hint for those engines.
+  const speedSupported = persona.tts.engine !== 'chatterbox' && persona.tts.engine !== 'pocket-tts';
+
+  // Engine change: the `voice` field is shared across engines but each engine
+  // validates it differently — a leftover value from the old engine (e.g. a
+  // Kokoro id like "bm_george") fails the new engine's check on save. Normalize
+  // voice to something the target engine accepts whenever the engine changes.
+  const selectEngine = (v: string) => {
+    const patch: Partial<PersonaTts> = { engine: v };
+    const cur = persona.tts.voice.trim();
+    if (v === 'cloud') {
+      const provVoices = CLOUD_VOICES[persona.tts.cloudProvider as keyof typeof CLOUD_VOICES] || [];
+      if (!provVoices.some(pv => pv.id === cur)) {
+        patch.voice = provVoices[0]?.id || cur;
+      }
+    } else if (v === 'kokoro') {
+      if (!KOKORO_RE.test(cur)) patch.voice = 'bf_isabella';
+    } else if (v === 'chatterbox') {
+      // Empty = built-in voice; a real value must be a .wav filename.
+      if (cur && !CHATTERBOX_VOICE_RE.test(cur)) patch.voice = '';
+    } else if (v === 'pocket-tts') {
+      if (!POCKET_TTS_VOICE_RE.test(cur)) patch.voice = 'alba';
+    }
+    updateTts(patch);
+  };
+
   return (
     <Card title="Voice" sub="text-to-speech engine">
+      {/* Engine — radio-card grid, full width above the two-column body. */}
+      <div className="field mb-4">
+        <Label>Engine</Label>
+        <EngineSelector
+          value={persona.tts.engine}
+          engineIds={ENGINE_IDS}
+          available={data?.tts?.available}
+          onChange={selectEngine}
+        />
+        <div className="field-hint max-w-[70ch]">
+          Each persona can use its own engine and voice. The badge on each card
+          shows whether it&apos;s ready in this build.
+        </div>
+      </div>
+
       <div className="lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-8">
-        {/* LEFT — engine + the engine-specific voice selector */}
+        {/* LEFT — the engine-specific voice selector + a sample player */}
         <div className="min-w-0">
-          <div className="field mb-3.5">
-            <Label>Engine</Label>
-            <Seg
-              value={persona.tts.engine}
-              options={ENGINES}
-              onChange={v => {
-                // The `voice` field is shared across engines but each engine
-                // validates it differently — a leftover value from the old
-                // engine (e.g. a Kokoro id like "bm_george") fails the new
-                // engine's check on save. Normalize voice to something the
-                // target engine accepts whenever the engine changes.
-                const patch: Partial<PersonaTts> = { engine: v };
-                const cur = persona.tts.voice.trim();
-                if (v === 'cloud') {
-                  const provVoices = CLOUD_VOICES[persona.tts.cloudProvider as keyof typeof CLOUD_VOICES] || [];
-                  if (!provVoices.some(pv => pv.id === cur)) {
-                    patch.voice = provVoices[0]?.id || cur;
-                  }
-                } else if (v === 'kokoro') {
-                  if (!KOKORO_RE.test(cur)) patch.voice = 'bf_isabella';
-                } else if (v === 'chatterbox') {
-                  // Empty = built-in voice; a real value must be a .wav filename.
-                  if (cur && !CHATTERBOX_VOICE_RE.test(cur)) patch.voice = '';
-                } else if (v === 'pocket-tts') {
-                  if (!POCKET_TTS_VOICE_RE.test(cur)) patch.voice = 'alba';
-                }
-                updateTts(patch);
-              }}
-            />
-            <div className="field-hint max-w-[70ch]">
-              Piper is local &amp; fast. Kokoro is more natural but slower. Chatterbox
-              clones a voice from a reference clip (local, opt-in). Cloud routes through
-              OpenAI / ElevenLabs.
-            </div>
-          </div>
 
           {persona.tts.engine === 'piper' && (() => {
             const piperVoices: string[] = data?.tts?.piperVoices || [];
@@ -337,6 +353,21 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
               </>
             );
           })()}
+
+          {/* Audition this persona's engine + voice + speed before saving. */}
+          <div className="mt-4">
+            <VoicePreviewButton
+              engine={persona.tts.engine}
+              voice={persona.tts.voice}
+              cloudProvider={persona.tts.cloudProvider}
+              speed={persona.tts.speed}
+              adminFetch={adminFetch}
+            />
+            <div className="field-hint mt-1.5">
+              Plays a short sample in this persona&apos;s voice. Reflects the voice
+              and speed; the dB trim is applied later, on air.
+            </div>
+          </div>
         </div>
 
         {/* RIGHT — voice level */}
@@ -357,6 +388,38 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
           <div className="field-hint">
             Trim this persona’s loudness on top of the engine level. <code>0 dB</code> = no change.
             Drag the meter or use the arrow keys.
+          </div>
+
+          {/* Speech speed — per-persona rate multiplier (0.5–2.0×). */}
+          <div className="field mt-4">
+            <div className="flex items-baseline justify-between gap-3">
+              <Label>Speech speed</Label>
+              <span className="font-mono text-[15px] font-extrabold text-[var(--accent)] tabular-nums">{speed.toFixed(2)}×</span>
+            </div>
+            <input
+              type="range"
+              min={0.5}
+              max={2}
+              step={0.05}
+              value={speed}
+              disabled={!speedSupported}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => updateTts({ speed: Number(e.target.value) })}
+              aria-label="Speech speed multiplier"
+              className={cn(
+                'mt-1.5 w-full accent-[var(--accent)]',
+                !speedSupported && 'opacity-40',
+              )}
+            />
+            <div className="mt-1.5 flex justify-between text-[8px] font-bold tracking-[0.1em] text-muted tabular-nums">
+              <span>0.5× slower</span>
+              <span className="-translate-x-1/2">1.0×</span>
+              <span>2.0× faster</span>
+            </div>
+            <div className="field-hint">
+              {speedSupported
+                ? <>Slow down or speed up this persona on top of the engine pace. <code>1.00×</code> = no change.</>
+                : <>Not supported by this engine — only Piper, Kokoro and cloud honour speed.</>}
+            </div>
           </div>
         </div>
       </div>

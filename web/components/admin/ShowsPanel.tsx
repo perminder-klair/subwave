@@ -134,6 +134,8 @@ interface SettingsResponse {
     /** Configured station zone; '' means Auto (use serverTimezone). */
     timezone?: string;
     locale?: StationLocale;
+    /** Crossfade-relative floor for a non-zero per-show cap (server-computed). */
+    minTrackSeconds?: number;
   };
   /** Effective zone when timezone is '' (Auto) — the container's own TZ. */
   serverTimezone?: string;
@@ -959,12 +961,11 @@ export default function ShowsPanel() {
                 }}
               />
               <span className="field-hint">
-                The longest a single track can run while this show is on air. The
-                DJ skips anything longer when it picks, so this is a hard limit,
-                not a lean like the fields above. Leave it blank to use the
-                station limit, enter 0 to allow any length (good for a show built
-                around long mixes or DJ sets), or set a number to cap it just for
-                this show.
+                The longest a single track plays while this show is on air —
+                anything longer fades out at the limit. Leave it blank to use the
+                station limit, enter 0 for no limit (good for long mixes or DJ
+                sets), or set at least {data?.values?.minTrackSeconds ?? 30}s to
+                cap it for this show.
               </span>
             </Field>
 

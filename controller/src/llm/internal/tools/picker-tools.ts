@@ -14,6 +14,7 @@ import * as subsonic from '../../../music/subsonic.js';
 import * as library from '../../../music/library.js';
 import * as embeddings from '../../../music/embeddings.js';
 import { filterPickerCandidates, durationSeconds } from '../../../music/recency.js';
+import { preferGenre, preferEra } from '../../../music/show-filter.js';
 import { searchWeb, searchReady } from '../../../skills/web-search.js';
 import { identifyTrackFromText } from '../prompts/request.js';
 
@@ -70,35 +71,45 @@ function shuffle<T>(arr: T[]): T[] {
   return [...arr].sort(() => Math.random() - 0.5);
 }
 
-// Most songs by any one artist allowed across a whole pick. The recent-artists
-// window (passed by dj-agent.pickViaAgent) already blocks any artist heard in
-// the last 2h, so this cap only matters when multiple tools (searchLibrary +
-// topSongsByArtist + similarSongs) surface the same artist within one pick.
-// 2 is tighter than the previous 3 to reduce in-pool fixation on deep
-// catalogues — per-tool cap=8 still leaves plenty of candidates overall.
-const MAX_PER_ARTIST = 2;
-
-// Builds a fresh tool set scoped to one pick. `recentIds` (recently-played
-// song ids) and `recentArtists` (lowercased recently-played artist names) are
-// filtered out inside every tool so the agent never has to be told "avoid
-// these" — it simply can't see them. `recentArtists` is left empty on the
-// listener-request path so a request for a recent artist still resolves.
+// Builds a fresh tool set scoped to one pick. `recentIds`/`recentKeys`
+// (recently-played track ids + "title|artist" keys) are filtered out inside
+// every tool so the agent never has to be told "avoid these" — it simply can't
+// see them. We deliberately do NOT filter by recent *artist*: the similarity
+// tools (similarSongs, tracksTowardJourney, tracks*LikeThis) return tracks
+// clustered around what's currently playing — i.e. the just-played artist's
+// neighbours — so an artist-recency strip gutted them to ~1 result while the
+// 12h track guard already prevents literal repeats (issue: thin picker pools on
+// niche catalogues). Track-recency alone is enough.
 export function buildPickerTools({
   recentIds = new Set<string>(),
   recentKeys = new Set<string>(),
-  recentArtists = new Set<string>(),
+  hardRecentIds = new Set<string>(),
+  hardRecentKeys = new Set<string>(),
   audioWaypoint = null,
   resolveReferences = false,
-  maxDurationSec = null,
+  genreLock = null,
+  eraLock = null,
 }: {
   recentIds?: Set<string>;
   recentKeys?: Set<string>;        // lowercased "title|artist" — backfilled entries lack ids
-  recentArtists?: Set<string>;
-  // Hard length cap (seconds) for autonomous picks — the active show's override
-  // or the station default (issue #447). null = no cap. Deliberately NOT set on
-  // the request path (djAgentRequest) so an explicit listener ask for a long
-  // mix still plays.
-  maxDurationSec?: number | null;
+  // Count-based HARD no-repeat set (last N distinct plays). Non-relaxable — a
+  // track in here is filtered out of every tool's results and survives the
+  // starvation cascade, so the agent literally cannot re-pick a just-played
+  // song even when a thin similarity cluster is all it can see. Populated from
+  // queue.recentlyPlayedByCount(N); empty on the request path (requests exempt).
+  hardRecentIds?: Set<string>;
+  hardRecentKeys?: Set<string>;    // lowercased "title|artist" — blocks id-less backfilled plays
+  // Hard genre constraint for a strict-genre show (settings.genreStrict). When
+  // set, every tool's candidates are genre-filtered (preferGenre, never-starve)
+  // before recency + cap, so the agent path enforces the lock in code, not just
+  // the prompt — mirroring the pool picker's strict mode. null = no lock.
+  // Deliberately NOT set on the request path: an explicit listener ask wins.
+  genreLock?: string | null;
+  // Hard era (decade/year window) constraint, applied only for a strict show
+  // (gated on the same genreStrict flag — there's no separate era-strict toggle).
+  // When set, candidates are year-filtered (preferEra, never-starve) before
+  // recency + cap. null / both-bounds-null = no era lock.
+  eraLock?: { fromYear?: number | null; toYear?: number | null } | null;
   // The active sonic journey's current waypoint vector (broadcast/dj-agent.ts).
   // When present, the tracksTowardJourney tool below is registered, closing
   // over it — the agent never sees the raw vector, only the tracks near it.
@@ -110,30 +121,29 @@ export function buildPickerTools({
   resolveReferences?: boolean;
 } = {}) {
   const seen = new Map<string, any>(); // id → slim song, accumulated across all tool calls
-  const artistCounts = new Map<string, number>(); // artist key → songs already accepted into `seen`
 
   // Filter recents, slim, and record into `seen` so the picker can resolve
-  // the agent's final id choice to a full track. Drops songs by an artist that
-  // played in the recent window, and caps any one artist's share of the pool.
-  // cap=8 (down from 12) keeps per-tool input tokens lower for the picker
-  // agent — see picker-latency notes in dj-agent.js. The seen map still
-  // accumulates across the whole loop, so the agent's id space grows with
-  // each tool call regardless.
+  // the agent's final id choice to a full track. Drops only recently-played
+  // tracks (by id/key) and tracks already surfaced this pick; artists are NOT
+  // filtered (see buildPickerTools note). cap=8 keeps per-tool input tokens
+  // lower for the picker agent — see picker-latency notes in dj-agent.js. The
+  // seen map still accumulates across the whole loop, so the agent's id space
+  // grows with each tool call regardless.
   const collect = (list: any, cap = 8) => {
-    const accepted = filterPickerCandidates(shuffle((list || []) as any[]), {
+    // Strict show: filter candidates BEFORE recency + cap, so the 8 the agent
+    // sees are genre-/era-pure. Both never-starve (fall back to the full list
+    // when a tool returns no match), so a thin genre/era degrades to off-target
+    // rather than dead air — same contract as the pool path.
+    let pool = shuffle((list || []) as any[]);
+    if (genreLock) pool = preferGenre(pool, genreLock);
+    if (eraLock) pool = preferEra(pool, eraLock);
+    const accepted = filterPickerCandidates(pool, {
       recentIds,
       recentKeys,
-      recentArtists,
+      hardRecentIds,
+      hardRecentKeys,
       seenIds: new Set(seen.keys()),
-      artistCounts,
-      maxPerArtist: MAX_PER_ARTIST,
       cap,
-      maxDurationSec,
-      // Per-tool, never relax the recent-artist guard: a single-artist tool
-      // result (topSongsByArtist / similarSongs narrowed to a just-played
-      // artist) returns empty so the agent uses a different tool, instead of the
-      // cascade handing that artist right back (the artist-fixation bypass).
-      allowArtistRelaxation: false,
     });
     const out: any[] = [];
     for (const s of accepted) {
@@ -208,9 +218,9 @@ export function buildPickerTools({
       description: 'A named artist\'s NEWEST releases, latest first — songs from their most recent albums/singles. Use this (not topSongsByArtist) when the listener asks for an artist\'s "latest", "newest", "new", or "most recent" song: topSongsByArtist ranks by popularity, so it cannot answer recency. Returns [] when the artist isn\'t in the library. Note: "latest in the library" — bounded by what has been added, not the artist\'s globally-newest release.',
       inputSchema: z.object({ artist: z.string() }),
       execute: async ({ artist }) => {
-        // Keep the pool tight (newest ~6 tracks): collect() shuffles and caps to
-        // MAX_PER_ARTIST per artist, and these are all one artist — a wide pool
-        // would let the shuffle drop the actual-newest tracks, defeating "latest".
+        // Keep the source list tight (newest ~6 tracks): collect() shuffles, so
+        // a wide pool would let the shuffle drop the actual-newest tracks,
+        // defeating "latest".
         try { return collect(await subsonic.getRecentSongsByArtist(artist, { albums: 2, count: 6 })); }
         catch (err) { return { error: err.message }; }
       },
@@ -267,12 +277,16 @@ export function buildPickerTools({
     ...(hasTextEmbeddings ? {
       tracksLikeThis: tool({
         description: 'Tracks whose mood + lyrics + metadata embed closest to a seed track — the controller\'s own semantic similarity over the actual library. Requires the mood/lyric embedding index to be built. Pass the currently-playing song id (best) OR a track title — a title is resolved to the matching track.',
+        // No k input: the agent reliably picked a small k (10–20), and the
+        // nearest neighbours cluster tightly + many are recently-played, so that
+        // left ~1 survivor after recency filtering. Pull a wide fixed KNN (60)
+        // internally — collect() still caps to 8 fresh ones. Mirrors the journey
+        // tool, which also takes no args.
         inputSchema: z.object({
           songId: z.string().describe('a song id (preferred) or a track title'),
-          k: z.number().int().min(1).max(50).default(20),
         }),
-        execute: async ({ songId, k }) => {
-          try { await library.load(); return collect(library.tracksLikeThis(songId, k)); }
+        execute: async ({ songId }) => {
+          try { await library.load(); return collect(library.tracksLikeThis(songId, 60)); }
           catch (err) { return { error: err.message }; }
         },
       }),
@@ -284,12 +298,16 @@ export function buildPickerTools({
     ...(hasAudioEmbeddings ? {
       tracksThatSoundLikeThis: tool({
         description: 'Tracks whose ACTUAL SOUND (timbre, instrumentation, production, energy — a CLAP audio embedding of the waveform) is closest to a seed track. Blind to tags and metadata, so it shines for instrumentals, non-English tracks, or anything with thin Last.fm coverage. Requires the audio embedding index to be built. Pass the currently-playing song id (best) OR a track title.',
+        // No k input: the agent reliably picked a small k (10–20), and audio
+        // neighbours cluster tightly + many are recently-played, so that left ~1
+        // survivor after recency filtering. Pull a wide fixed KNN (60) internally
+        // — collect() still caps to 8 fresh ones. Mirrors the journey tool, which
+        // also takes no args.
         inputSchema: z.object({
           songId: z.string().describe('a song id (preferred) or a track title'),
-          k: z.number().int().min(1).max(50).default(20),
         }),
-        execute: async ({ songId, k }) => {
-          try { await library.load(); return collect(library.tracksLikeThisAudio(songId, k)); }
+        execute: async ({ songId }) => {
+          try { await library.load(); return collect(library.tracksLikeThisAudio(songId, 60)); }
           catch (err) { return { error: err.message }; }
         },
       }),
@@ -303,17 +321,19 @@ export function buildPickerTools({
     ...(hasTextEmbeddings && hasEmbeddingProvider ? {
       searchByLyrics: tool({
         description: 'Semantic lyric / theme search over the library. Embeds the query and returns tracks whose lyrics + metadata are closest to it. Use for thematic picks the mood vocab can\'t express — e.g. "songs about hometown", "tracks with hopeful lyrics", "feeling stuck". Requires the mood/lyric embedding index and a text-embedding provider.',
+        // No k input: the agent reliably picked a small k, and recency filtering
+        // then thins it further. Pull a wide fixed KNN (60) internally —
+        // collect() still caps to 8 fresh ones. Mirrors the seed-similarity tools.
         inputSchema: z.object({
           query: z.string().min(3),
-          k: z.number().int().min(1).max(50).default(20),
         }),
-        execute: async ({ query, k }) => {
+        execute: async ({ query }) => {
           try {
             if (!embeddings.isAvailable()) return { error: 'embeddings not configured — set settings.embedding.enabled / provider' };
             await library.load();
             const [vec] = await embeddings.embedTexts([query.trim()]);
             if (!vec) return { error: 'embedding query failed' };
-            return collect(library.tracksByVector(vec, k));
+            return collect(library.tracksByVector(vec, 60));
           }
           catch (err) { return { error: err.message }; }
         },
@@ -362,7 +382,10 @@ export function buildPickerTools({
         description: 'Tracks nearest the active sonic journey\'s CURRENT waypoint — the station is mid-arc, drifting its sound toward a destination vibe over the next few picks. When the event says a journey is active, call this and strongly prefer one of its tracks: each one moves the sound a step along the arc. Takes no input.',
         inputSchema: z.object({}),
         execute: async () => {
-          try { await library.load(); return collect(library.tracksByAudioVector(audioWaypoint, 20)); }
+          // Pull a wide KNN (60) around the waypoint: the nearest neighbours
+          // cluster tightly and many will be recently-played, so a small k left
+          // the agent with ~1 candidate. collect() still caps to 8 fresh ones.
+          try { await library.load(); return collect(library.tracksByAudioVector(audioWaypoint, 60)); }
           catch (err) { return { error: err.message }; }
         },
       }),
@@ -376,7 +399,7 @@ export function buildPickerTools({
     // web text only steers which library tracks surface, never the id space.
     ...(resolveReferences && searchReady() ? {
       identifyRequestedTrack: tool({
-        description: 'LAST RESORT for a request that DESCRIBES a track instead of naming it — "the song from the new Dune movie", "the one all over TikTok", "this year\'s World Cup anthem". Looks the description up on the web, identifies the most likely song, then returns the matching tracks FROM THIS LIBRARY (or none if we do not have it). Do NOT use when the listener already gives an artist or a title — use searchLibrary for that. Returns { identified, candidates }: even when candidates is empty, `identified` tells you what the reference meant so you can pivot (e.g. topSongsByArtist) or tell the listener it is not in the library.',
+        description: 'Use when a listener DESCRIBES a track instead of naming it, OR pastes SONG LYRICS. Examples: "the song from the new Dune movie", "the one all over TikTok", or a block of lyrics in any language. Looks the text up on the web, identifies the most likely song, then returns matching tracks FROM THIS LIBRARY (or none if we do not have it). USE THIS (not searchLibrary) when the request looks like lyrics — repeated phrases, verse structure, or text in a non-English language that is not an artist/title. If the listener names an artist or title outright, use searchLibrary instead — not this. searchLibrary matches titles and artists; it cannot identify a song from its lyrics. (Distinct from searchByLyrics, which finds songs ABOUT a theme — this identifies the one specific song whose exact words the listener pasted.) Returns { identified, candidates }: even when candidates is empty, `identified` tells you what the reference meant so you can pivot (e.g. topSongsByArtist) or tell the listener it is not in the library.',
         inputSchema: z.object({
           reference: z.string().min(3).describe("the listener's description of the track, verbatim"),
         }),
