@@ -24,6 +24,12 @@ ENV SITE_URL=${SITE_URL}
 # Unset → no analytics script is emitted.
 ARG NEXT_PUBLIC_GA_ID
 ENV NEXT_PUBLIC_GA_ID=${NEXT_PUBLIC_GA_ID}
+# Version shown in the admin console footer, inlined into the client bundle at
+# build time (NEXT_PUBLIC_*), so it must be present *here*. Set from `git
+# describe` by scripts/update.sh and the publish-images CI; unset → the build
+# falls back to web/package.json (see web/next.config.js).
+ARG SUBWAVE_BUILD_VERSION
+ENV SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION}
 RUN npm run build
 
 # ---- runner ----
