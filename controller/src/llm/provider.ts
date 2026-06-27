@@ -26,5 +26,6 @@ export {
   embeddingInfoOf,
   resolveEmbeddingCfg,
   buildEmbeddingModel,
+  isHeavyEmbeddingModel,
 } from './internal/provider/embedding.js';
 export type { EmbeddingCfg } from './internal/provider/embedding.js';

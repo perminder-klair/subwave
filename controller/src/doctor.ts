@@ -17,6 +17,7 @@ import * as settings from './settings.js';
 import * as subsonic from './music/subsonic.js';
 import * as subsonicLog from './music/subsonic-log.js';
 import * as library from './music/library.js';
+import * as embeddings from './music/embeddings.js';
 import * as tts from './audio/tts.js';
 import { getStreamStatus } from './broadcast/listeners.js';
 import { streamStatus } from './broadcast/liquidsoap-control.js';
@@ -307,6 +308,22 @@ async function checkNavidrome(): Promise<Finding[]> {
   } catch (err: any) {
     out.push({ label: 'mood-tag coverage', status: 'skip', detail: err?.message || 'library unavailable' });
   }
+
+  // Embedding model perf advisory — a heavy LOCAL embedding model (bge-m3,
+  // *-large) is the quiet cause of slow re-embeds + Ollama RAM thrash on a
+  // CPU/NAS box. Deterministic + name-based (no probe), so it only ever warns.
+  try {
+    const adv = embeddings.embeddingPerfAdvisory();
+    const flag = adv.heavy && adv.local;
+    out.push({
+      label: 'embedding model',
+      status: flag ? 'warn' : 'ok',
+      detail: `${adv.provider}:${adv.model}${flag ? ' · heavy for a local host' : ''}`,
+      hint: flag
+        ? 'This is a large local embedding model — roughly 3–4× the size and 2–3× slower per track than the default nomic-embed-text, with bigger vectors (slower KNN, more RAM). On a CPU / NAS host it dominates re-embed time and can thrash Ollama when RAM is tight (it reloads the model between calls). Unless you specifically need its multilingual / long-context quality, switch Settings → Library tagger → Embedding to nomic-embed-text, then re-embed (Library → Maintenance → Re-embed all tracks).'
+        : undefined,
+    });
+  } catch { /* embedding cfg unavailable — skip silently */ }
 
   return out;
 }

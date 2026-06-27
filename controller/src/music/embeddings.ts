@@ -20,6 +20,7 @@ import {
   embeddingInfoOf,
   resolveEmbeddingCfg,
   buildEmbeddingModel,
+  isHeavyEmbeddingModel,
 } from '../llm/provider.js';
 import type { EmbeddingCfg } from '../llm/provider.js';
 import { SHOW_MOODS as MOOD_VOCAB } from '../settings.js';
@@ -52,6 +53,28 @@ export function isAvailable(): boolean {
 
 export function activeModelLabel(): string {
   return activeEmbeddingModelLabel();
+}
+
+export interface EmbeddingPerfAdvisory {
+  model: string;
+  provider: string;
+  // The embedding work runs on the operator's own hardware (CPU/NAS-bound), so a
+  // heavy model directly slows re-embeds. Cloud providers do the work off-box.
+  local: boolean;
+  // Large + slow on CPU relative to the light default (nomic-embed-text).
+  heavy: boolean;
+}
+
+// Performance profile of the active embedding model — drives the doctor's
+// "embedding model" advisory. A heavy LOCAL model (bge-m3, *-large) is the quiet
+// cause of slow re-embeds + Ollama RAM thrash on a CPU/NAS box; cloud models are
+// never a perf concern (the work runs off-box), so `local` gates the warning.
+// Pure + name-based: never probes, never throws.
+export function embeddingPerfAdvisory(): EmbeddingPerfAdvisory {
+  const { provider, model } = embeddingProviderInfo();
+  const local =
+    provider === 'ollama' || provider === 'locca' || provider === 'openai-compatible';
+  return { model, provider, local, heavy: isHeavyEmbeddingModel(model) };
 }
 
 // Used by library.ts on first open — we need the schema dim before any
