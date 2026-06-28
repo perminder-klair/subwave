@@ -41,6 +41,21 @@ function avatarUrlFor(personaId?: string | null): string {
   return personaId ? `/persona-avatar/${encodeURIComponent(personaId)}` : '';
 }
 
+// Resolve the public origin to build tune-in URLs from. SITE_URL (set by the
+// operator) wins — it's the trusted, canonical address and is immune to a
+// spoofed Host header on a misconfigured reverse proxy. When it's unset we fall
+// back to how the listener actually reached us (X-Forwarded-Proto/Host from the
+// proxy, else the request's own protocol/host) so LAN, Tailscale, and ad-hoc
+// custom-domain deployments still emit a URL that resolves for the listener.
+function publicOrigin(req: express.Request): string {
+  const fromEnv = (process.env.SITE_URL || '').trim().replace(/\/+$/, '');
+  if (fromEnv) return fromEnv;
+  const xfProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const proto = xfProto || req.protocol || 'http';
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  return host ? `${proto}://${host}` : `http://localhost`;
+}
+
 // ---------------------------------------------------------------------------
 // GET /cover/:id — proxy Subsonic cover art so listener browsers can use it
 // as MediaSession artwork (lock screen / CarPlay / Bluetooth display) without
@@ -195,6 +210,19 @@ router.get('/now-playing', async (req, res) => {
       listeners: stream.listeners,
       streamOnline: stream.online,
       streamBitrate: stream.bitrate,
+      // Structured description of the live broadcast for hardware players and
+      // tune-in helpers (the /listen.pls + /listen.m3u routes mirror this). The
+      // flat streamOnline/streamBitrate above stay for the existing web player;
+      // this `stream` object is additive. mount/format describe the always-
+      // served MP3 floor; opusEnabled tells clients the Opus mount is also live.
+      stream: {
+        mount: '/stream.mp3',
+        format: 'mp3',
+        bitrate: stream.bitrate,
+        sampleRate: stream.sampleRate,
+        channels: stream.channels,
+        opusEnabled: stationSettings.stream?.opusEnabled === true,
+      },
       // Cumulative since-boot LLM token total — drives the listener-facing
       // token ticker next to the now-playing time. Aggregate integer only; no
       // model/cost breakdown (that stays on the admin-gated /stats surface).
@@ -209,6 +237,50 @@ router.get('/now-playing', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ---------------------------------------------------------------------------
+// GET /listen.pls and GET /listen.m3u — one-paste tune-in files for hardware
+// and software players (Sonos, VLC, moOde, car receivers). A listener adds the
+// station by pasting one URL instead of hunting for the raw /stream.mp3 mount.
+//
+// Both wrap the always-served MP3 floor; the Opus mount is appended only when
+// the operator has enabled it. Origin comes from publicOrigin() (SITE_URL when
+// set, else the request host) so the link works from however the listener
+// reached the site. Unauthenticated by design — these expose nothing beyond the
+// already-public stream URL and station name.
+// ---------------------------------------------------------------------------
+function listenMounts(req: express.Request) {
+  const origin = publicOrigin(req);
+  const s = settings.get();
+  const station = s.station || 'SUB/WAVE';
+  const entries = [{ url: `${origin}/stream.mp3`, title: station }];
+  if (s.stream?.opusEnabled === true) {
+    entries.push({ url: `${origin}/stream.opus`, title: `${station} (Opus)` });
+  }
+  return { station, entries };
+}
+
+router.get('/listen.pls', (req, res) => {
+  const { entries } = listenMounts(req);
+  const lines = ['[playlist]', `NumberOfEntries=${entries.length}`];
+  entries.forEach((e, i) => {
+    const n = i + 1;
+    lines.push(`File${n}=${e.url}`, `Title${n}=${e.title}`, `Length${n}=-1`);
+  });
+  lines.push('Version=2');
+  res.setHeader('Content-Type', 'audio/x-scpls; charset=utf-8');
+  res.setHeader('Content-Disposition', 'inline; filename="listen.pls"');
+  res.send(lines.join('\n') + '\n');
+});
+
+router.get('/listen.m3u', (req, res) => {
+  const { entries } = listenMounts(req);
+  const lines = ['#EXTM3U'];
+  for (const e of entries) lines.push(`#EXTINF:-1,${e.title}`, e.url);
+  res.setHeader('Content-Type', 'audio/x-mpegurl; charset=utf-8');
+  res.setHeader('Content-Disposition', 'inline; filename="listen.m3u"');
+  res.send(lines.join('\n') + '\n');
 });
 
 // ---------------------------------------------------------------------------
