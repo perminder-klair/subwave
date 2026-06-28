@@ -135,21 +135,21 @@ RUN python3 -m venv /opt/server/venv && \
 # the Navidrome stream formats (opus/m4a/mp3). These two are runtime deps and
 # survive the build-essential purge below.
 #
-# CLAP audio embeddings ("sounds-like" similarity) are opt-in via
-# `--build-arg WITH_CLAP=1` — same pattern as the other heavy engines. They pull
-# CPU torch + transformers (+ onnxruntime for an exported encoder), ~1.5GB, so
-# the default image stays lean. At runtime they only activate when
-# ANALYZE_AUDIO_EMBEDDING=1 is also set; without the build arg that env is a
-# no-op (the model import fails and the worker cleanly emits bpm/key only).
-# CPU-only torch via the download.pytorch.org index, mirroring the venvs above.
+# CLAP audio embeddings ("sounds-like" similarity) ship ON by default — opt OUT
+# with `--build-arg WITH_CLAP=0` for a leaner image. They pull CPU torch +
+# transformers (+ onnxruntime for an exported encoder), ~1.5GB. At runtime they
+# only activate when ANALYZE_AUDIO_EMBEDDING=1 is also set; with the build arg
+# off that env is a no-op (the model import fails and the worker cleanly emits
+# bpm/key only). CPU-only torch via the download.pytorch.org index, mirroring the
+# venvs above.
 #
-# Vocal-activity ranges (Demucs source separation) are a SECOND opt-in via
-# `--build-arg WITH_DEMUCS=1` — pulls CPU torch + torchaudio + demucs, also
-# ~1.5GB. Runtime-gated by ANALYZE_VOCAL_ACTIVITY=1; without the build arg the
-# model import fails and the worker cleanly omits vocal_ranges. The two flags
+# Vocal-activity ranges (Demucs source separation) likewise ship ON by default —
+# opt OUT with `--build-arg WITH_DEMUCS=0`. Pulls CPU torch + torchaudio + demucs,
+# also ~1.5GB. Runtime-gated by ANALYZE_VOCAL_ACTIVITY=1; with the build arg off
+# the model import fails and the worker cleanly omits vocal_ranges. The two flags
 # are independent but share the same CPU-torch index.
-ARG WITH_CLAP=0
-ARG WITH_DEMUCS=0
+ARG WITH_CLAP=1
+ARG WITH_DEMUCS=1
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ffmpeg libsndfile1 && \
     rm -rf /var/lib/apt/lists/* && \

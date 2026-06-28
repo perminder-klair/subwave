@@ -794,13 +794,14 @@ SITE_URL=
 
 # ───────── Acoustic analysis (CLAP audio-similarity + Demucs vocals) ─────────
 # The analysis pass (npm run analyze / admin "Analyze audio") computes bpm, key,
-# loudness, structure, pace and a beat grid for every track. Two heavier,
-# opt-in dimensions need extra deps baked into the tts-heavy image at BUILD time
-# and switched on at RUN time.
+# loudness, structure, pace and a beat grid for every track. Two heavier
+# dimensions need extra deps baked into the tts-heavy image at BUILD time and
+# switched on at RUN time. They ship ON by default (the published image carries
+# them, ~1.5GB each); set the build arg to 0 for a leaner self-built image.
 #
 # Build args — pass to \`docker compose build tts-heavy\` (env or here):
-# WITH_CLAP=0     # 1 = build the CLAP "sounds-like" audio-embedding backend
-# WITH_DEMUCS=0   # 1 = build the Demucs source-separation (vocal-presence) backend
+# WITH_CLAP=1     # default 1 = build CLAP "sounds-like" backend; 0 = skip (leaner)
+# WITH_DEMUCS=1   # default 1 = build Demucs vocal-separation backend; 0 = skip
 #
 # Runtime flags — env wins ON over the admin toggles (settings.audio.*), never
 # off. A flag with no matching backend in the image is a clean no-op.
