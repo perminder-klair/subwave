@@ -27,16 +27,13 @@ import {
 import { Card, Btn, Pill, Eyebrow, Metric, Toggle } from './ui';
 import { Modal } from '../ui/modal';
 import { AiFill } from './AiFill';
+import GenreSuggest from './GenreSuggest';
+import { PersonaPicker, ThemePicker } from './ShowPickers';
 import { cn } from '../../lib/cn';
 
 const NAME_MAX = 60;
 const TOPIC_MAX = 1000;
 const SHOWS_MAX = 64;
-
-// Radix Select rejects an empty-string item value, so the "no override"
-// choice round-trips through this sentinel. Form state still stores the
-// real empty string ('' = use station default).
-const THEME_DEFAULT_SENTINEL = '__station_default__';
 
 // Storage keys are 0=Sun..6=Sat (JS getDay); display Mon-first.
 const DAYS = [
@@ -103,18 +100,22 @@ function decadeLabelOf(s: { fromYear: number | null; toYear: number | null }): s
   return hit && hit.from != null ? hit.label : null;
 }
 
-// Slim view of a theme returned by GET /themes — only the bits the picker
-// needs. Token maps are dropped here; we don't render swatches in the
-// shows panel (the admin Settings → Theme page is the gallery).
+// View of a theme returned by GET /themes. We keep the token map here so the
+// theme picker can render real colour swatches (see ShowPickers.ThemePicker).
 interface ThemeOption {
   id: string;
   name: string;
   mode?: string;
+  description?: string;
+  tokens?: Record<string, string>;
 }
 
 interface Persona {
   id: string;
   name?: string;
+  tagline?: string;
+  avatar?: string;
+  tts?: { engine?: string; voice?: string };
 }
 
 interface Schedule {
@@ -230,6 +231,7 @@ export default function ShowsPanel() {
   // Theme list for the per-show override dropdown. Public endpoint, no auth
   // needed — same source the player ThemeBootstrap reads.
   const [themes, setThemes] = useState<ThemeOption[]>([]);
+  const [activeThemeId, setActiveThemeId] = useState('');
   // Library genres for the show genre autocomplete. Admin-gated endpoint, so it
   // runs after sign-in; failures are silent (the field still accepts free text).
   const [genres, setGenres] = useState<string[]>([]);
@@ -318,8 +320,9 @@ export default function ShowsPanel() {
       try {
         const r = await fetch(`${API}/themes`);
         if (!r.ok || cancelled) return;
-        const j = (await r.json()) as { themes?: ThemeOption[] };
+        const j = (await r.json()) as { themes?: ThemeOption[]; active?: string };
         if (Array.isArray(j.themes)) setThemes(j.themes);
+        if (typeof j.active === 'string') setActiveThemeId(j.active);
       } catch {}
     })();
     return () => { cancelled = true; };
@@ -342,6 +345,7 @@ export default function ShowsPanel() {
 
   const personas: Persona[] = data?.values?.personas || [];
   const moods: string[] = data?.tts?.moods || [];
+  const apiBase = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
   const colorOf = (showId: string | null | undefined): string => {
     const idx = form && showId ? form.shows.findIndex(s => s.id === showId) : -1;
     return idx >= 0 ? (SHOW_COLORS[idx % SHOW_COLORS.length] ?? 'transparent') : 'transparent';
@@ -768,6 +772,7 @@ export default function ShowsPanel() {
       <Modal
         open={editIndex !== null}
         onOpenChange={(o) => { if (!o) closeModal(); }}
+        width={760}
         title={editIndex === -1 ? 'New show' : 'Edit show'}
         sub={editIndex === -1 ? 'define a show' : (draft?.name?.trim() || '')}
         footer={draft && (
@@ -805,23 +810,34 @@ export default function ShowsPanel() {
               <span className="field-hint">{draft.name.trim().length}/{NAME_MAX}</span>
             </Field>
 
-            <div className="stack-mobile grid grid-cols-[1fr_1fr] gap-3">
-              <Field>
-                <Label>persona owner</Label>
-                <Select
-                  value={draft.personaId || undefined}
-                  onValueChange={val => setDraftField({ personaId: val })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="— pick persona —" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {personas.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </Field>
+            <Field>
+              <Label>persona owner</Label>
+              <PersonaPicker
+                personas={personas}
+                value={draft.personaId}
+                onChange={id => setDraftField({ personaId: id })}
+                apiBase={apiBase}
+              />
+            </Field>
+
+            <Field>
+              <Label>theme override (applied while this show is on air)</Label>
+              <ThemePicker
+                themes={themes}
+                activeThemeId={activeThemeId}
+                value={draft.themeId}
+                onChange={id => setDraftField({ themeId: id })}
+              />
+              <span className="field-hint">
+                Optional. When this show goes on air the player switches to
+                this palette; back to the station default when the hour ends.
+                Manage themes in admin → Settings → Theme.
+              </span>
+            </Field>
+
+            <Eyebrow className="text-muted">music</Eyebrow>
+
+            <div className="stack-mobile grid grid-cols-3 gap-3">
               <Field>
                 <Label>music mood</Label>
                 <Select
@@ -837,51 +853,6 @@ export default function ShowsPanel() {
                     </SelectGroup>
                   </SelectContent>
                 </Select>
-              </Field>
-            </div>
-
-            <Field>
-              <Label>theme override (applied while this show is on air)</Label>
-              <Select
-                value={draft.themeId || THEME_DEFAULT_SENTINEL}
-                onValueChange={val =>
-                  setDraftField({ themeId: val === THEME_DEFAULT_SENTINEL ? '' : val })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value={THEME_DEFAULT_SENTINEL}>Station default</SelectItem>
-                    {themes.map(t => (
-                      <SelectItem key={t.id} value={t.id}>
-                        {t.name}{t.mode ? ` — ${t.mode}` : ''}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <span className="field-hint">
-                Optional. When this show goes on air the player switches to
-                this palette; back to the station default when the hour ends.
-                Manage themes in admin → Settings → Theme.
-              </span>
-            </Field>
-
-            <div className="stack-mobile grid grid-cols-[1.2fr_1fr_1fr] gap-3">
-              <Field>
-                <Label htmlFor="show-genre">genre lean</Label>
-                <Input
-                  id="show-genre"
-                  type="text" value={draft.genre} maxLength={64}
-                  list="show-genre-options"
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftField({ genre: e.target.value })}
-                  placeholder="e.g. Jazz (optional)"
-                />
-                <datalist id="show-genre-options">
-                  {genres.map(g => <option key={g} value={g} />)}
-                </datalist>
               </Field>
               <Field>
                 <Label>era</Label>
@@ -921,6 +892,26 @@ export default function ShowsPanel() {
               </Field>
             </div>
 
+            <Field>
+              <Label htmlFor="show-genre">genre lean</Label>
+              <Input
+                id="show-genre"
+                type="text" value={draft.genre} maxLength={64}
+                list="show-genre-options"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftField({ genre: e.target.value })}
+                placeholder="e.g. Jazz (optional)"
+              />
+              <datalist id="show-genre-options">
+                {genres.map(g => <option key={g} value={g} />)}
+              </datalist>
+            </Field>
+
+            <GenreSuggest
+              adminFetch={adminFetch}
+              value={draft.genre}
+              onSelect={(g) => setDraftField({ genre: g })}
+            />
+
             <div className="flex items-start gap-3">
               <div className="pt-0.5">
                 <Toggle
@@ -947,6 +938,24 @@ export default function ShowsPanel() {
             </span>
 
             <Field>
+              <Label htmlFor="show-topic">topic (fed to the DJ as the show theme)</Label>
+              <span className="field-hint">
+                This is the brief the AI DJ works from. The more you describe,
+                the better it picks music and writes links: name genres, eras,
+                moods, artists to lean into or avoid, the time of day, the kind
+                of listener, and how the host should sound. Write it like
+                you&apos;re briefing a real DJ before their slot.
+              </span>
+              <Textarea
+                id="show-topic"
+                rows={7} value={draft.topic} maxLength={TOPIC_MAX}
+                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setDraftField({ topic: e.target.value })}
+                placeholder="e.g. Slow ambient, modern classical and downtempo for the late shift. Think Nils Frahm, Hammock, Bonobo's quieter side, nothing with a hard beat. Keep the host calm and unhurried, like a friend talking you down at 1am."
+              />
+              <span className="field-hint">{draft.topic.trim().length}/{TOPIC_MAX}</span>
+            </Field>
+
+            <Field>
               <Label htmlFor="show-maxlen">max track length (seconds)</Label>
               <Input
                 id="show-maxlen"
@@ -967,24 +976,6 @@ export default function ShowsPanel() {
                 sets), or set at least {data?.values?.minTrackSeconds ?? 30}s to
                 cap it for this show.
               </span>
-            </Field>
-
-            <Field>
-              <Label htmlFor="show-topic">topic (fed to the DJ as the show theme)</Label>
-              <span className="field-hint">
-                This is the brief the AI DJ works from. The more you describe,
-                the better it picks music and writes links: name genres, eras,
-                moods, artists to lean into or avoid, the time of day, the kind
-                of listener, and how the host should sound. Write it like
-                you&apos;re briefing a real DJ before their slot.
-              </span>
-              <Textarea
-                id="show-topic"
-                rows={7} value={draft.topic} maxLength={TOPIC_MAX}
-                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setDraftField({ topic: e.target.value })}
-                placeholder="e.g. Slow ambient, modern classical and downtempo for the late shift. Think Nils Frahm, Hammock, Bonobo's quieter side, nothing with a hard beat. Keep the host calm and unhurried, like a friend talking you down at 1am."
-              />
-              <span className="field-hint">{draft.topic.trim().length}/{TOPIC_MAX}</span>
             </Field>
 
             {!draftValid && (
