@@ -569,7 +569,16 @@ function finish(
   if (legs.length > 1) {
     console.log(`[tag] per-leg: ${legs.map(([m, n]) => `${m}=${n}`).join(' · ')}`);
   }
-  console.log('[stats]', JSON.stringify(db.stats(), null, 2));
+  // Compact one-line summary — the full per-genre/per-mood breakdown was far too
+  // noisy for the run log + the admin log drawer (it buried the phase breakdown).
+  const s: any = db.stats();
+  const moods = Object.keys(s.byMood || {}).length;
+  const genres = Object.keys(s.byGenre || {}).length;
+  const src = Object.entries(s.bySource || {}).map(([k, v]) => `${k}=${v}`).join(' ');
+  console.log(
+    `[stats] ${s.total ?? 0} tagged · ${moods} moods · ${genres} genres · ` +
+    `${s.withEmbedding ?? 0} embedded${src ? ` · ${src}` : ''}`,
+  );
 }
 
 // ---------------------------------------------------------------------------
