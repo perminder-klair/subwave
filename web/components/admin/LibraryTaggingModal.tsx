@@ -134,19 +134,24 @@ export default function LibraryTaggingModal(p: Props) {
         {tab === 'run' && (
           <>
             <p className="text-[12px] leading-[1.55] text-muted">
-              Process new / untagged tracks. Untick a step to skip it this run.
+              Process new / untagged tracks. Untick a step to skip it this run — the
+              badge shows what each one costs.
             </p>
             <div className="grid gap-2.5">
               <Pass on={steps.reconcile} onClick={() => toggleStep('reconcile')}
-                name="Reconcile with Navidrome" hint="Sync the track list and prune entries for deleted files." />
+                name="Reconcile with Navidrome" tag="quick"
+                hint="Find newly-added tracks and drop ones deleted from Navidrome. Fast — no AI, no model calls." />
               <Pass on={steps.enrich} onClick={() => toggleStep('enrich')}
-                name="Enrich metadata" hint="Fetch Last.fm tags + lyrics that help the DJ understand each track." />
+                name="Enrich metadata" tag="network"
+                hint="Fetch Last.fm tags + lyrics per track to sharpen the mood read. External API calls — slower on big batches." />
               <Pass on={steps.tagMoods} onClick={() => toggleStep('tagMoods')}
-                name="Tag moods (LLM)" hint="Embed, then decide mood & energy and spread to similar tracks." />
+                name="Tag moods (LLM)" tag="AI · billed"
+                hint="The core step: embeds each track, then your LLM picks mood & energy and spreads tags to similar songs. Uses model calls." />
               <Pass on={effSteps.analyze} onClick={() => toggleStep('analyze')} disabled={analyzeLocked}
-                name="Analyze acoustics" hint={analyzeLocked
+                name="Analyze acoustics" tag="slow"
+                hint={analyzeLocked
                   ? 'No analysis engine running — start the tts-heavy sidecar or a local librosa venv.'
-                  : 'Measure tempo and key (bpm / key / intro).'} />
+                  : 'Tempo, key & intro — plus sounds-like + vocal fingerprints when those are enabled. The slowest step; vocal (Demucs) is especially heavy on CPU.'} />
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-dashed border-separator-strong pt-3.5">
               <div className="lib-batch">
@@ -287,8 +292,8 @@ export default function LibraryTaggingModal(p: Props) {
 }
 
 // Checkbox-style toggle row, shared by the Run steps and the Re-scan passes.
-function Pass({ on, onClick, name, hint, disabled }: {
-  on: boolean; onClick: () => void; name: string; hint: string; disabled?: boolean;
+function Pass({ on, onClick, name, hint, disabled, tag }: {
+  on: boolean; onClick: () => void; name: string; hint: string; disabled?: boolean; tag?: string;
 }) {
   return (
     <button type="button" className={cn('lib-pass', on && 'on')} onClick={onClick} disabled={disabled}>
@@ -298,7 +303,14 @@ function Pass({ on, onClick, name, hint, disabled }: {
         </svg>
       </span>
       <span>
-        <span className="lib-pass-name">{name}</span>
+        <span className="lib-pass-name">
+          {name}
+          {tag && (
+            <span className="ml-2 rounded-[3px] border border-separator-strong bg-[var(--ink-soft)] px-1.5 py-px align-[1.5px] text-[9px] font-bold tracking-[0.08em] text-muted uppercase">
+              {tag}
+            </span>
+          )}
+        </span>
         <span className="lib-pass-hint">{hint}</span>
       </span>
     </button>
