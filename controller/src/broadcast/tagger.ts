@@ -44,15 +44,28 @@ export function startTagger(
     reEnrich?: boolean;
     reAnalyze?: boolean;
     upgrade?: boolean;
+    // Forward-run step toggles from the admin Run tab. undefined = run the step
+    // (back-compat: callers that omit these get a full run); false emits the
+    // matching skip flag. Reconcile-*only* is a separate path (startReconcile).
+    reconcile?: boolean;
+    enrich?: boolean;
+    tagMoods?: boolean;
+    analyze?: boolean;
   } = {},
 ) {
-  const { limit, reseed, reEnrich, reAnalyze, upgrade } = opts;
+  const { limit, reseed, reEnrich, reAnalyze, upgrade, reconcile, enrich, tagMoods, analyze } = opts;
   const args = ['src/music/tag-library.ts'];
   if (Number.isFinite(limit) && (limit as number) > 0) args.push('--limit', String(limit));
   if (reseed) args.push('--reseed');
   if (reEnrich) args.push('--re-enrich');
   if (reAnalyze) args.push('--re-analyze');
   if (upgrade) args.push('--upgrade');
+  // Step deselections → skip flags. Only an explicit `false` skips; undefined
+  // leaves the phase on so omitting the fields keeps the legacy full-run.
+  if (enrich === false) args.push('--skip-enrich');
+  if (tagMoods === false) args.push('--skip-tag');
+  if (analyze === false) args.push('--skip-analyze');
+  if (reconcile === false) args.push('--no-prune');
 
   const detail = [
     Number.isFinite(limit) && (limit as number) > 0 ? `limit=${limit}` : null,
@@ -60,6 +73,10 @@ export function startTagger(
     reEnrich ? 're-enrich' : null,
     reAnalyze ? 're-analyze' : null,
     upgrade ? 'upgrade' : null,
+    enrich === false ? 'skip-enrich' : null,
+    tagMoods === false ? 'skip-tag' : null,
+    analyze === false ? 'skip-analyze' : null,
+    reconcile === false ? 'no-prune' : null,
   ]
     .filter(Boolean)
     .join(', ');
