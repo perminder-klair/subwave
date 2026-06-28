@@ -19,6 +19,7 @@ export const ENGINES: EngineMeta[] = [
   { id: 'chatterbox', label: 'Chatterbox', blurb: 'Clone a voice from a clip' },
   { id: 'pocket-tts', label: 'PocketTTS',  blurb: 'Multilingual · CPU-only' },
   { id: 'cloud',      label: 'Cloud',      blurb: 'OpenAI / ElevenLabs' },
+  { id: 'remote',     label: 'Remote',     blurb: 'Self-hosted HTTP endpoint' },
 ];
 
 export const ENGINE_META: Record<string, EngineMeta> = Object.fromEntries(
@@ -57,6 +58,10 @@ export function engineStatus(
       return a.cloud === false
         ? { label: 'no key', tone: 'warn' }
         : { label: 'key set', tone: 'ok' };
+    case 'remote':
+      return a.remote === false
+        ? { label: 'unreachable', tone: 'warn' }
+        : { label: 'ready', tone: 'ok' };
     default:
       return { label: '', tone: 'ok' };
   }

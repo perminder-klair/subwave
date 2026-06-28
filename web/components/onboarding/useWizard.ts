@@ -22,7 +22,7 @@ export interface WizardData {
   llmTest: { ok: boolean | null; msg?: string };
 
   tts: {
-    defaultEngine: 'piper' | 'kokoro' | 'cloud' | 'chatterbox' | 'pocket-tts';
+    defaultEngine: 'piper' | 'kokoro' | 'cloud' | 'chatterbox' | 'pocket-tts' | 'remote';
     // Advisory toggle — does the operator intend to run the optional
     // tts-heavy sidecar (Chatterbox + PocketTTS)? Persisted via
     // /onboarding/save into settings.tts.heavyEnabled. The web wizard can't

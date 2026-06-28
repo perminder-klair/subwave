@@ -123,13 +123,15 @@ export function effectiveFrequency(persona: any = getEffectivePersona()) {
 //
 // `cloud` routes through the AI SDK (OpenAI / ElevenLabs speech models) —
 // see llm/speech.js. `piper`, `kokoro`, `chatterbox`, and `pocket-tts` are
-// local engines. Chatterbox and PocketTTS are opt-in — the default controller
-// image doesn't bundle either; build the image with `--build-arg WITH_CHATTERBOX=1`
-// or `--build-arg WITH_POCKETTTS=1` (see docker/Dockerfile.controller) to
-// include the runtime. The dispatcher gates each engine on isAvailable() so
-// settings can reference it safely even when the runtime is absent (the
-// engine just falls back to Piper).
-export const TTS_ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud'];
+// local engines. `remote` is a first-class self-hosted HTTP engine that
+// speaks the same /speak + /health contract as tts-heavy; configure the URL
+// in settings.tts.remote.url. Chatterbox and PocketTTS are opt-in — the
+// default controller image doesn't bundle either; build the image with
+// `--build-arg WITH_CHATTERBOX=1` or `--build-arg WITH_POCKETTTS=1` (see
+// docker/Dockerfile.controller) to include the runtime. The dispatcher gates
+// each engine on isAvailable() so settings can reference it safely even when
+// the runtime is absent (the engine just falls back to Piper).
+export const TTS_ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud', 'remote'];
 
 // DJ-voice level trim, in dB. A per-engine gain levels the loudness gap between
 // TTS engines (only PocketTTS self-normalises today, so it sits quieter than
@@ -703,17 +705,22 @@ const DEFAULTS = {
       // provider === 'openai-compatible'.
       baseUrl: '',
     },
+    // Remote engine — a user-configured self-hosted TTS endpoint that speaks
+    // the Subwave-native /speak + /health contract (the same protocol the
+    // tts-heavy sidecar uses). The TTS equivalent of the LLM's custom base
+    // URL. Empty → engine reports unavailable; the dispatcher falls back.
+    remote: { url: '' },
     // Per-engine voice level trim (dB), applied via Liquidsoap's liq_amplify on
     // every spoken segment that resolves to that engine. Levels the loudness gap
     // between engines (e.g. boost PocketTTS to match raw Piper). Stacks with each
     // persona's own tts.gainDb. All 0 = unity = today's behaviour. See
     // TTS_GAIN_CLAMP_DB and audio/tts.ts:voiceGainDb().
-    gainDb: { piper: 0, kokoro: 0, chatterbox: 0, 'pocket-tts': 0, cloud: 0 },
+    gainDb: { piper: 0, kokoro: 0, chatterbox: 0, 'pocket-tts': 0, cloud: 0, remote: 0 },
     // Per-engine speech-rate multiplier (0.5–2.0×, 1.0 = no change), composed
     // on top of the daypart energy and each persona's own tts.speed in
     // audio/tts.ts:speak(). Only Piper/Kokoro/cloud honour it; chatterbox/
-    // pocket-tts ignore speed so their entries are inert. See clampTtsSpeed().
-    speed: { piper: 1, kokoro: 1, chatterbox: 1, 'pocket-tts': 1, cloud: 1 },
+    // pocket-tts/remote ignore speed so their entries are inert. See clampTtsSpeed().
+    speed: { piper: 1, kokoro: 1, chatterbox: 1, 'pocket-tts': 1, cloud: 1, remote: 1 },
   },
   llm: {
     provider: 'ollama',
@@ -1023,9 +1030,11 @@ function normalizeTts(raw: any) {
     voice = '';
   // openai-compatible voices are server-specific (often arbitrary cloning ref
   // names) — no canonical default; leave empty so generateSpeech omits the
-  // field and the server picks its own.
+  // field and the server picks its own. Remote engine voices likewise:
+  // server-specific (id, reference-wav filename, or VoiceDesign prompt), no
+  // Subwave-side default.
   if (!voice && engine === 'cloud' && cloudProvider !== 'openai-compatible') voice = 'alloy';
-  if (!voice && engine !== 'cloud' && engine !== 'chatterbox' && engine !== 'piper') voice = 'bf_isabella';
+  if (!voice && engine !== 'cloud' && engine !== 'chatterbox' && engine !== 'piper' && engine !== 'remote') voice = 'bf_isabella';
   return { engine, cloudProvider, voice, gainDb: clampTtsGain(raw?.gainDb), speed: clampTtsSpeed(raw?.speed) };
 }
 
@@ -1319,6 +1328,12 @@ export async function load() {
           typeof stored.tts?.cloud?.baseUrl === 'string'
             ? stored.tts.cloud.baseUrl.trim()
             : DEFAULTS.tts.cloud.baseUrl,
+      },
+      remote: {
+        url:
+          typeof stored.tts?.remote?.url === 'string'
+            ? stored.tts.remote.url.trim()
+            : DEFAULTS.tts.remote.url,
       },
       // Per-engine gain map — one clean gain per known engine, missing keys → 0,
       // unknown keys dropped. So an older save (no gainDb) loads at unity.
@@ -1660,6 +1675,11 @@ function validateTtsBlock(raw, where) {
     } else if (voice.length < 1 || voice.length > 100) {
       throw new Error(`${where}.tts.voice must be 1-100 chars`);
     }
+  } else if (t.engine === 'remote') {
+    // Remote engine voices are server-specific — the sidecar interprets them
+    // (built-in id, reference-wav filename, or VoiceDesign prompt). Empty is
+    // valid: the sidecar picks its own default.
+    if (voice.length > 100) throw new Error(`${where}.tts.voice must be 0-100 chars`);
   } else {
     // piper: empty = use the baked-in default voice. Otherwise the value must
     // be an .onnx filename (no path separators) referencing a model the operator
@@ -2221,6 +2241,17 @@ export async function update(patch) {
       // save the provider without one. Mirrors the LLM-side check below.
       if (next.tts.cloud.provider === 'openai-compatible' && !next.tts.cloud.baseUrl) {
         throw new Error('tts.cloud.baseUrl is required when provider is "openai-compatible"');
+      }
+    }
+    if (t.remote !== undefined) {
+      const r = t.remote || {};
+      if (r.url !== undefined) {
+        const v = String(r.url).trim();
+        if (v.length > 200) throw new Error('tts.remote.url must be 0-200 chars');
+        if (v && !/^https?:\/\//i.test(v)) {
+          throw new Error('tts.remote.url must start with http:// or https://');
+        }
+        next.tts.remote.url = v.replace(/\/+$/, ''); // strip trailing slashes
       }
     }
     if (t.gainDb !== undefined) {

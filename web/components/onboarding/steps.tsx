@@ -328,6 +328,7 @@ export function TtsStep({ w }: { w: WizardController }) {
             <option value="cloud">Cloud (OpenAI / ElevenLabs)</option>
             <option value="chatterbox">Chatterbox (voice cloning, sidecar)</option>
             <option value="pocket-tts">PocketTTS (multilingual, sidecar)</option>
+            <option value="remote">Remote (your own server)</option>
           </Select>
         </Field>
         <label className="flex items-center gap-2 text-sm">

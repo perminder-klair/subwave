@@ -45,7 +45,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
   const speed = persona.tts.speed ?? 1;
   // Only Piper/Kokoro/cloud honour speed; chatterbox/pocket-tts workers ignore
   // it, so the control is shown but disabled with a hint for those engines.
-  const speedSupported = persona.tts.engine !== 'chatterbox' && persona.tts.engine !== 'pocket-tts';
+  const speedSupported = persona.tts.engine !== 'chatterbox' && persona.tts.engine !== 'pocket-tts' && persona.tts.engine !== 'remote';
 
   // Engine change: the `voice` field is shared across engines but each engine
   // validates it differently — a leftover value from the old engine (e.g. a
@@ -67,6 +67,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
     } else if (v === 'pocket-tts') {
       if (!POCKET_TTS_VOICE_RE.test(cur)) patch.voice = 'alba';
     }
+    // Remote engine voices are free text — the sidecar decides. No default.
     updateTts(patch);
   };
 
@@ -257,6 +258,34 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                   Italian, Spanish and Portuguese. Drop a ~5s WAV into{' '}
                   <code>state/voices/</code> to clone a voice; it’ll appear under
                   <em> Custom</em> on next reload (cloning needs <code>HF_TOKEN</code>; see above).
+                </div>
+              </div>
+            );
+          })()}
+
+          {persona.tts.engine === 'remote' && (() => {
+            const remoteAvail = data?.tts?.available?.remote;
+            return (
+              <div className="field max-w-[360px]">
+                {remoteAvail === false && (
+                  <div className="mb-2.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
+                    The remote endpoint isn&apos;t reachable. Configure its URL in
+                    Settings &rarr; Voice. This persona falls back to{' '}
+                    <strong>{defaultEngine}</strong> until it&apos;s up.
+                  </div>
+                )}
+                <Label>Remote voice</Label>
+                <Input
+                  value={persona.tts.voice}
+                  maxLength={100}
+                  placeholder="Server-specific (id, filename, or VoiceDesign prompt)"
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => updateTts({ voice: e.target.value })}
+                />
+                <div className="field-hint">
+                  Free text forwarded to your self-hosted TTS endpoint. It can be
+                  a voice id, a reference-wav filename, or a VoiceDesign prompt —
+                  your sidecar decides. Configure the endpoint URL in Settings
+                  &rarr; Voice.
                 </div>
               </div>
             );
