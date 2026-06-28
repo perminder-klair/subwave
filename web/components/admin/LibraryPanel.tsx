@@ -623,6 +623,50 @@ export default function LibraryPanel() {
     }
   };
 
+  // Flip settings.audio.vocalActivity — the Demucs vocal-activity opt-in (#646).
+  // Mirrors toggleAudio; env ANALYZE_VOCAL_ACTIVITY still wins "on".
+  const toggleVocal = async () => {
+    if (vocalEnabled == null) return;
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio: { vocalActivity: !vocalEnabled } }),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
+      setVocalEnabled(!vocalEnabled);
+      notify.ok(!vocalEnabled ? 'vocal-activity analysis enabled' : 'vocal-activity analysis disabled');
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
+  // Backfill Demucs vocal ranges on tracks that lack them — POST with vocal:true
+  // so the analyze pass forces the vocal scope (#646).
+  const vocalBackfill = async () => {
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/library/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vocal: true }),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `vocal analysis start failed (${r.status})`);
+      notify.ok('vocal analysis started');
+      setLogOpen(true);
+      await loadTagger();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
   // -----------------------------------------------------------------------
   // derived
   // -----------------------------------------------------------------------
@@ -675,6 +719,8 @@ export default function LibraryPanel() {
         onToggleAudio={toggleAudio}
         onAnalyzeAudio={analyzeAudio}
         vocalEnabled={vocalEnabled}
+        onToggleVocal={toggleVocal}
+        onVocalBackfill={vocalBackfill}
       />
 
       <Tabs tab={tab} setTab={setTab} counts={counts} />

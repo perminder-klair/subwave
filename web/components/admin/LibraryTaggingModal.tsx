@@ -31,6 +31,12 @@ interface Props {
   audioIncapable: boolean;
   audioOn: boolean;
   audioEnabled: boolean | null;
+  // vocal-activity (Demucs) controls (#646). The Enable toggle is always shown
+  // here (this advanced tab is the opt-in surface, parallel to sounds-like) so
+  // it stays reachable; the panel's coverage *row* is what hides by default.
+  vocalIncapable: boolean;
+  vocalOn: boolean;
+  vocalEnabled: boolean | null;
   // when set, the modal opens straight to the matching tab/selection
   intent: 'reembed' | null;
   // handlers
@@ -39,6 +45,8 @@ interface Props {
   onRescan: (opts: RescanOpts) => void;
   onAnalyzeAudio: () => void;
   onToggleAudio: () => void;
+  onToggleVocal: () => void;
+  onVocalBackfill: () => void;
 }
 
 const TABS: { key: Tab; label: string }[] = [
@@ -192,6 +200,32 @@ export default function LibraryTaggingModal(p: Props) {
                     <code className="mt-1 block font-mono text-[10.5px] text-muted">docker compose pull tts-heavy &amp;&amp; docker compose --profile tts-heavy up -d tts-heavy</code>
                   </div>
                 )}
+                {/* vocal activity (#646) — Enable always reachable here; the
+                    panel's coverage row is what stays hidden until opted in */}
+                <div className="flex flex-col gap-2.5 border-t border-dashed border-separator-strong pt-3">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="caption flex items-center gap-2"><Activity size={13} /> Vocal activity · instrumental detection</span>
+                      {p.vocalEnabled && (
+                        <Btn sm tone="accent" onClick={() => { p.onVocalBackfill(); p.onOpenChange(false); }} disabled={p.busy || p.vocalIncapable}>
+                          <Play size={12} /> {p.vocalOn ? 'Backfill missing' : 'Analyze vocals'}
+                        </Btn>
+                      )}
+                      <Btn sm onClick={p.onToggleVocal} disabled={p.busy}>
+                        {p.vocalEnabled ? 'Disable' : 'Enable'}
+                      </Btn>
+                    </div>
+                    <p className="caption !tracking-[0.04em] !normal-case">
+                      Separates vocals from the mix so the DJ can tell instrumental vs vocal tracks and
+                      time talk before lyrics. Expensive — runs on the analysis engine.
+                    </p>
+                    {p.vocalIncapable && p.vocalEnabled && (
+                      <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink">
+                        <b>The analysis engine can&rsquo;t separate vocals.</b> Rebuild the tts-heavy
+                        sidecar with Demucs:
+                        <code className="mt-1 block font-mono text-[10.5px] text-muted">docker compose build --build-arg WITH_DEMUCS=1 tts-heavy &amp;&amp; docker compose --profile tts-heavy up -d tts-heavy</code>
+                      </div>
+                    )}
+                  </div>
               </div>
             )}
             <div className="flex justify-end border-t border-dashed border-separator-strong pt-3.5">

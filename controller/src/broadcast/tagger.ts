@@ -88,16 +88,20 @@ export function startTagger(
 // forces the --audio backfill scope so already-analysed tracks that lack an
 // audio vector are re-targeted — what the admin "Analyze audio" button wants.
 // Same single-flight state as the tagger; caller rejects when tagger.running.
-export function startAnalyzer(opts: { limit?: number; audio?: boolean } = {}) {
+// `vocal` forces the --vocal Demucs backfill scope (re-targets tracks missing
+// vocal_ranges_json) — what the admin "Backfill vocal analysis" button wants.
+export function startAnalyzer(opts: { limit?: number; audio?: boolean; vocal?: boolean } = {}) {
   // No --skip-walk: the script's default policy (walk Navidrome only when the
   // catalogue is empty) is the right bootstrap for a first-ever run.
-  const { limit, audio } = opts;
+  const { limit, audio, vocal } = opts;
   const args = ['src/music/analyze-library.ts'];
   if (Number.isFinite(limit) && (limit as number) > 0) args.push('--limit', String(limit));
   if (audio) args.push('--audio');
+  if (vocal) args.push('--vocal');
   const detail = [
     Number.isFinite(limit) && (limit as number) > 0 ? `limit=${limit}` : null,
     audio ? 'audio' : null,
+    vocal ? 'vocal' : null,
   ]
     .filter(Boolean)
     .join(', ');

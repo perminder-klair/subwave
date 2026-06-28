@@ -341,7 +341,12 @@ router.get('/library/coverage', requireAdmin, async (req, res) => {
 router.post('/library/analyze', requireAdmin, (req, res) => {
   if (tagger.running) return res.status(409).json({ error: 'a tagger/analyzer run is already active', tagger });
   const limit = parseIntSafe(req.body?.limit, null);
-  startAnalyzer({ limit: limit ?? undefined, audio: true });
+  // `vocal:true` (the "Backfill vocal analysis" button, #646) forces the Demucs
+  // vocal pass on tracks missing ranges; the default path backfills CLAP audio
+  // vectors. During a vocal run audio is left to its env default so the two
+  // backfills stay independently triggerable.
+  const vocal = req.body?.vocal === true;
+  startAnalyzer({ limit: limit ?? undefined, audio: vocal ? undefined : true, vocal: vocal || undefined });
   res.json({ ok: true, tagger });
 });
 

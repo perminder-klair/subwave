@@ -23,10 +23,17 @@ export interface Coverage {
   // Tracks with a CLAP audio (sounds-like) embedding. Same analysis backend,
   // gated on ANALYZE_AUDIO_EMBEDDING — 0 when that's off even if bpm/key runs.
   audioEmbedded?: number;
+  // Tracks with Demucs vocal-activity ranges (vocal_ranges_json NOT NULL). Only
+  // surfaced when vocalWanted; hidden by default for the common case (#646).
+  vocalAnalyzed?: number;
   total: number | null;
   percent: number | null;
   analysedPercent: number | null;
   audioEmbeddedPercent?: number | null;
+  vocalAnalyzedPercent?: number | null;
+  // Vocal analysis is wanted via env ANALYZE_VOCAL_ACTIVITY or
+  // settings.audio.vocalActivity — drives whether the vocal coverage row shows.
+  vocalWanted?: boolean;
   scannedAt: string | null;
   scanning: boolean;
   // null = still probing; false = no analysis backend (sidecar/librosa) running.
@@ -127,6 +134,9 @@ interface TaggingPanelProps {
   audioEnabled: boolean | null;
   onToggleAudio: () => void;
   onAnalyzeAudio: () => void;
+  // Vocal-activity (Demucs) controls — parallel to the sounds-like pair (#646).
+  onToggleVocal: () => void;
+  onVocalBackfill: () => void;
   // Whether vocal-activity (Demucs) analysis is enabled — null until the first
   // settings poll lands. Drives the "build WITH_DEMUCS=1" warning when on but
   // the backend can't produce vocal ranges.
@@ -177,18 +187,25 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const moodFillRef = useRef<HTMLSpanElement>(null);
   const acousticFillRef = useRef<HTMLSpanElement>(null);
   const audioFillRef = useRef<HTMLSpanElement>(null);
+  const vocalFillRef = useRef<HTMLSpanElement>(null);
   const runFillRef = useRef<HTMLSpanElement>(null);
 
   const tagged = p.coverage?.tagged ?? p.libStats?.total ?? null;
   const total = p.coverage?.total ?? null;
   const analysed = p.coverage?.analysed ?? null;
   const audioEmbedded = p.coverage?.audioEmbedded ?? null;
+  const vocalAnalyzed = p.coverage?.vocalAnalyzed ?? null;
   const pct = p.coverage?.percent ?? null;
   const apct = p.coverage?.analysedPercent ?? null;
   const audpct = p.coverage?.audioEmbeddedPercent ?? null;
+  const vpct = p.coverage?.vocalAnalyzedPercent ?? null;
   // Audio embeddings only exist once at least one is written; until then the
   // row reads "not enabled" rather than a misleading 0% (CLAP is opt-in).
   const audioOn = (audioEmbedded ?? 0) > 0;
+  // Vocal row is hidden unless the operator opted in (env or settings) — the
+  // common case never sees it. Backend resolves env-vs-settings precedence.
+  const vocalWanted = p.coverage?.vocalWanted === true;
+  const vocalOn = (vocalAnalyzed ?? 0) > 0;
   const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
   const running = !!p.tagger?.running;
   const analysisOff = p.coverage?.analysisAvailable === false;
@@ -230,6 +247,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   useDynamicStyle(moodFillRef, { width: pct != null ? `${Math.min(100, pct)}%` : '0%' });
   useDynamicStyle(acousticFillRef, { width: !analysisOff && apct != null ? `${Math.min(100, apct)}%` : '0%' });
   useDynamicStyle(audioFillRef, { width: audioOn && audpct != null ? `${Math.min(100, audpct)}%` : '0%' });
+  useDynamicStyle(vocalFillRef, { width: vocalOn && vpct != null ? `${Math.min(100, vpct)}%` : '0%' });
   useDynamicStyle(runFillRef, { width: runPct != null ? `${runPct}%` : null });
 
   useEffect(() => {
@@ -310,6 +328,19 @@ export default function TaggingPanel(p: TaggingPanelProps) {
               : p.audioEnabled ? 'enabled, not yet analysed' : 'off'}
           </span>
         </div>
+        {vocalWanted && (
+          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong pt-3">
+            <span className="caption flex items-center gap-2"><Activity size={13} /> Vocal activity · instrumental detection</span>
+            <span className="lib-opt-tag">optional</span>
+            <span className="lib-minibar"><span ref={vocalFillRef} /></span>
+            <span className="caption mono-num !tracking-[0.04em]">
+              {analysisOff ? 'engine off'
+                : vocalIncapable ? 'engine missing Demucs'
+                : vocalOn ? <>{num(vocalAnalyzed)} / {num(total)} · {vpct != null ? `${vpct}%` : '…'}</>
+                : 'enabled, not yet analysed'}
+            </span>
+          </div>
+        )}
         {vocalIncapable && p.vocalEnabled ? (
           <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
             <b>Vocal-activity is on, but the analysis engine can’t separate vocals.</b> Pull the latest
@@ -425,11 +456,16 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         audioIncapable={audioIncapable}
         audioOn={audioOn}
         audioEnabled={p.audioEnabled}
+        vocalIncapable={vocalIncapable}
+        vocalOn={vocalOn}
+        vocalEnabled={p.vocalEnabled}
         onStart={p.onStart}
         onReconcile={p.onReconcile}
         onRescan={p.onRescan}
         onAnalyzeAudio={p.onAnalyzeAudio}
         onToggleAudio={p.onToggleAudio}
+        onToggleVocal={p.onToggleVocal}
+        onVocalBackfill={p.onVocalBackfill}
       />
     </section>
   );

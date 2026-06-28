@@ -942,6 +942,15 @@ export function audioVectorCount(): number {
   }).n;
 }
 
+// Tracks with vocal-activity analysis done — vocal_ranges_json IS NOT NULL,
+// where a stored "[]" (analysed instrumental) counts as done. The inverse of
+// needsVocalIds, surfaced as a coverage meter (#646).
+export function vocalAnalyzedCount(): number {
+  return (requireDb().prepare(
+    'SELECT COUNT(*) AS n FROM tracks WHERE vocal_ranges_json IS NOT NULL',
+  ).get() as { n: number }).n;
+}
+
 // Ids that have no audio vector yet (never embedded). Resumable, ordered for
 // stable resumption, independent of the bpm/key analysis scope so the audio
 // backfill can run on its own cadence. LEFT JOIN where the vector row is absent.

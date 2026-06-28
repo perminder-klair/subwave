@@ -13,6 +13,9 @@
 //   --audio        also re-target already-analysed tracks that lack a CLAP
 //                  audio vector (backfill embeddings without a full re-analyze).
 //                  Implied when ANALYZE_AUDIO_EMBEDDING is set.
+//   --vocal        also re-target tracks missing Demucs vocal-activity ranges
+//                  (vocal_ranges_json IS NULL). Implied when ANALYZE_VOCAL_ACTIVITY
+//                  / settings.audio.vocalActivity is on.
 //
 // Walk policy: by default the metadata walk runs ONLY when the catalogue is
 // empty (first-run bootstrap) — the ~11.5 min walk over a populated DB is the
@@ -67,6 +70,8 @@ async function main() {
   const skipWalk = args.includes('--skip-walk');
   // undefined → runAnalysisPass falls back to the ANALYZE_AUDIO_EMBEDDING env.
   const audioBackfill = args.includes('--audio') ? true : undefined;
+  // undefined → falls back to ANALYZE_VOCAL_ACTIVITY / settings.audio.vocalActivity.
+  const vocalBackfill = args.includes('--vocal') ? true : undefined;
 
   await applyWizardOverlay();
   await settings.load();
@@ -126,7 +131,7 @@ async function main() {
     }
   }
 
-  const stats = await runAnalysisPass({ limit, reAnalyze, audioBackfill });
+  const stats = await runAnalysisPass({ limit, reAnalyze, audioBackfill, vocalBackfill });
   analyzer.shutdown();
   console.log('[analyze] stats:', JSON.stringify(stats));
   process.exit(stats.available ? 0 : 0);

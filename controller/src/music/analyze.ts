@@ -55,6 +55,13 @@ function vocalBackfillDefault(): boolean {
   }
 }
 
+// Whether vocal-activity analysis is *wanted* — env ANALYZE_VOCAL_ACTIVITY wins
+// on, else settings.audio.vocalActivity. Exposed so /library/coverage can decide
+// whether to surface the vocal coverage row (hidden by default; #646).
+export function vocalActivityWanted(): boolean {
+  return vocalBackfillDefault();
+}
+
 export interface AnalyzeStats {
   available: boolean;
   backend: string;
