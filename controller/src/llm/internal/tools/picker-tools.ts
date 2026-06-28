@@ -243,8 +243,13 @@ export function buildPickerTools({
       description: 'Songs tagged with a mood: energetic, calm, reflective, celebratory, romantic, spiritual, focus, workout, driving, cooking, rainy, sunny, night, morning, evening, festival, cultural. Optionally constrain by energy level (low|medium|high).',
       inputSchema: z.object({
         mood: z.string(),
-        energy: z.enum(['low', 'medium', 'high']).optional()
-          .describe('Optional energy filter — narrows the result to that tempo/intensity band.'),
+        // nullable (not optional): under AI SDK v7's `tool()` an optional field
+        // makes the Zod object's input/output types diverge, collapsing the
+        // schema generic to `never`. nullable keeps the key required-but-`| null`
+        // (symmetric), which the model fills with null to skip the filter — the
+        // `if (energy)` guard below already treats null as "no filter".
+        energy: z.enum(['low', 'medium', 'high']).nullable()
+          .describe('Optional energy filter — narrows the result to that tempo/intensity band. Pass null for no filter.'),
       }),
       execute: async ({ mood, energy }) => {
         try {
