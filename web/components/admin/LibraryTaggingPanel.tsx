@@ -218,6 +218,14 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // pass would skip vocal backfill (no-op), so warn rather than silently never
   // filling vocal ranges. Mirrors the CLAP `audioIncapable` warning above.
   const vocalIncapable = !analysisOff && p.coverage?.vocalAnalysisAvailable === false;
+  // "Starved" = the bpm/key pass HAS run (analysed > 0) but this heavier
+  // sub-output is still 0 while enabled. The engine processed tracks and produced
+  // none → it can't make them (an older sidecar without CLAP/Demucs that reports
+  // capability as null, so the *Incapable flags above never fire). Honest label
+  // instead of a forever-"not yet analysed" that never comes true.
+  const ranAnalysis = (analysed ?? 0) > 0;
+  const audioStarved = !analysisOff && !audioIncapable && !!p.audioEnabled && !audioOn && ranAnalysis;
+  const vocalStarved = !analysisOff && !vocalIncapable && vocalWanted && !vocalOn && ranAnalysis;
   const moodCount = p.libStats ? Object.keys(p.libStats.byMood || {}).length : 0;
   const lastTag = p.libStats?.updatedAt ? new Date(p.libStats.updatedAt).toLocaleString('en-GB') : '—';
 
@@ -325,6 +333,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             {analysisOff ? 'engine off'
               : audioIncapable ? 'engine missing CLAP'
               : audioOn ? <>{num(audioEmbedded)} / {num(total)} · {audpct != null ? `${audpct}%` : '…'}</>
+              : audioStarved ? 'engine can’t fingerprint — needs a CLAP build'
               : p.audioEnabled ? 'enabled, not yet analysed' : 'off'}
           </span>
         </div>
@@ -337,6 +346,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
               {analysisOff ? 'engine off'
                 : vocalIncapable ? 'engine missing Demucs'
                 : vocalOn ? <>{num(vocalAnalyzed)} / {num(total)} · {vpct != null ? `${vpct}%` : '…'}</>
+                : vocalStarved ? 'engine can’t separate vocals — needs a Demucs build'
                 : 'enabled, not yet analysed'}
             </span>
           </div>
