@@ -23,6 +23,7 @@ crossfade_duration = ref(10.0)
 archive_enabled = ref(true)
 archive_bitrate = ref(128)
 opus_enabled = ref(false)
+stream_bitrate = ref(192)
 station_name = ref("SUB/WAVE")
 
 if file.exists("/var/sub-wave/liquidsoap_jingle_ratio.txt") then
@@ -48,6 +49,12 @@ if file.exists("/var/sub-wave/liquidsoap_archive_bitrate.txt") then
   if v > 0 then archive_bitrate := v end
 end
 
+if file.exists("/var/sub-wave/liquidsoap_stream_bitrate.txt") then
+  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_stream_bitrate.txt"))
+  v = int_of_string(default=192, raw)
+  if v > 0 then stream_bitrate := v end
+end
+
 # Opt IN to the Ogg-Opus mount, which adds a continuous encoder (+ its
 # 44.1->48k resample). Only Blink (Chrome/Edge) clients ever select Opus — see
 # web/hooks/usePlayer.ts, which keeps Safari/iOS/Firefox on the MP3 mount — so
@@ -63,7 +70,7 @@ if file.exists("/var/sub-wave/liquidsoap_station_name.txt") then
   if raw != "" then station_name := raw end
 end
 
-log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} opus_enabled=#{opus_enabled()} station_name=#{station_name()}")
+log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} stream_bitrate=#{stream_bitrate()} opus_enabled=#{opus_enabled()} station_name=#{station_name()}")
 
 # ---------------------------------------------------------------------------
 # HTTP(S) FETCH OVERRIDE — Liquidsoap's built-in http.get.stream returns
@@ -594,7 +601,7 @@ music_meta.on_metadata(on_meta)
 # controller. It is NOT persisted: a mixer restart always comes back on air.
 #
 # Two mounts in parallel:
-#   /stream.mp3  — MP3 192 kbps, the universal compatibility floor
+#   /stream.mp3  — MP3, the universal compatibility floor (bitrate configurable)
 #                  (Sonos, hardware radios, car receivers, pre-iOS-17 Safari).
 #                  Bumped from 128 → 192: dense, brick-walled masters (e.g. hot
 #                  Punjabi/hip-hop catalogue pinned at 0 dBFS) produced audible
@@ -608,8 +615,23 @@ music_meta.on_metadata(on_meta)
 settings.init.force_start := true
 
 def make_stream_outputs() =
+  br = stream_bitrate()
+  mp3_enc =
+    if br <= 64 then
+      %mp3(bitrate=64, samplerate=44100, stereo=true)
+    elsif br <= 96 then
+      %mp3(bitrate=96, samplerate=44100, stereo=true)
+    elsif br <= 128 then
+      %mp3(bitrate=128, samplerate=44100, stereo=true)
+    elsif br <= 160 then
+      %mp3(bitrate=160, samplerate=44100, stereo=true)
+    elsif br <= 192 then
+      %mp3(bitrate=192, samplerate=44100, stereo=true)
+    else
+      %mp3(bitrate=320, samplerate=44100, stereo=true)
+    end
   mp3_out = output.icecast(
-    %mp3(bitrate=192, samplerate=44100, stereo=true),
+    mp3_enc,
     id="stream_mp3",
     fallible=true,
     host=environment.get(default="icecast", "ICECAST_HOST"),

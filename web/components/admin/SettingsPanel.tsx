@@ -267,7 +267,7 @@ interface SettingsData {
     maxTrackSeconds?: number;
     minTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number };
-    stream?: { opusEnabled?: boolean };
+    stream?: { opusEnabled?: boolean; bitrate?: number };
     station?: string;
     timezone?: string;
     locale?: StationLocale;
@@ -411,6 +411,7 @@ export default function SettingsPanel() {
       },
       stream: {
         opusEnabled: v.stream?.opusEnabled ?? true,
+        bitrate: String(v.stream?.bitrate ?? 192),
       },
       station: v.station ?? '',
       timezone: v.timezone ?? '',
@@ -1040,6 +1041,48 @@ export default function SettingsPanel() {
                     44.1→48 kHz resample. Turn it on if you have Chrome/Edge listeners and want
                     the bandwidth saving. The mandatory <code>/stream.mp3</code> mount serves
                     everyone either way.
+                  </div>
+                </div>
+
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Stream MP3 bitrate</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={form.stream.bitrate}
+                      onValueChange={v =>
+                        setForm(f => (f ? { ...f, stream: { ...f.stream, bitrate: v } } : f))
+                      }
+                    >
+                      <SelectTrigger className="w-32">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ARCHIVE_BITRATES.map(br => (
+                          <SelectItem key={br} value={String(br)}>
+                            {br} kbps
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Btn
+                      sm
+                      onClick={() =>
+                        saveSettings({
+                          stream: { bitrate: parseInt(form.stream.bitrate, 10) },
+                        })
+                      }
+                      disabled={busy}
+                    >
+                      Save bitrate
+                    </Btn>
+                  </div>
+                  <div className="field-hint">
+                    Higher bitrate = better quality, more listener bandwidth
+                    (current: {data?.values?.stream?.bitrate ?? '—'} kbps). 192 kbps is the
+                    original default.
                   </div>
                 </div>
               </Card>

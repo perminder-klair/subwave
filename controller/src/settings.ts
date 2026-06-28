@@ -632,7 +632,7 @@ const DEFAULTS = {
   // Safari/iOS/Firefox on MP3), and it adds a continuous Opus encoder + a
   // 44.1→48k resample, so operators opt in rather than pay that CPU unasked.
   // The mandatory /stream.mp3 mount always serves everyone.
-  stream: { opusEnabled: false },
+  stream: { opusEnabled: false, bitrate: 192 },
   weather: { lat: 30.7333, lng: 76.7794, locationName: 'Punjab', units: 'metric' as 'metric' | 'imperial' },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
   // placeholder and returned by GET /dj for the landing page. The product is
@@ -1218,6 +1218,10 @@ export async function load() {
         typeof stored.stream?.opusEnabled === 'boolean'
           ? stored.stream.opusEnabled
           : DEFAULTS.stream.opusEnabled,
+      bitrate:
+        typeof stored.stream?.bitrate === 'number' && ARCHIVE_BITRATE_SET.has(stored.stream.bitrate)
+          ? stored.stream.bitrate
+          : DEFAULTS.stream.bitrate,
     },
     weather: {
       lat: stored.weather?.lat ?? DEFAULTS.weather.lat,
@@ -2031,6 +2035,18 @@ export async function update(patch) {
         restart = true;
       }
     }
+    if (st.bitrate !== undefined) {
+      const v = parseInt(st.bitrate, 10);
+      if (!Number.isFinite(v) || !ARCHIVE_BITRATE_SET.has(v)) {
+        throw new Error(
+          `stream.bitrate must be one of: ${ARCHIVE_BITRATES.join(', ')}`,
+        );
+      }
+      if (v !== cur.stream.bitrate) {
+        next.stream.bitrate = v;
+        restart = true;
+      }
+    }
   }
   if ('weather' in patch) {
     const w = patch.weather || {};
@@ -2692,6 +2708,7 @@ const LIQ_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_crossfade.txt`;
 const LIQ_ARCHIVE_ENABLED_PATH = `${STATE_DIR}/liquidsoap_archive_enabled.txt`;
 const LIQ_ARCHIVE_BITRATE_PATH = `${STATE_DIR}/liquidsoap_archive_bitrate.txt`;
 const LIQ_OPUS_ENABLED_PATH = `${STATE_DIR}/liquidsoap_opus_enabled.txt`;
+const LIQ_STREAM_BITRATE_PATH = `${STATE_DIR}/liquidsoap_stream_bitrate.txt`;
 const LIQ_STATION_NAME_PATH = `${STATE_DIR}/liquidsoap_station_name.txt`;
 
 export async function writeLiquidsoapSettings(s) {
@@ -2700,6 +2717,7 @@ export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_ARCHIVE_ENABLED_PATH, s.archive.enabled ? 'true' : 'false');
   await writeFile(LIQ_ARCHIVE_BITRATE_PATH, String(s.archive.bitrate));
   await writeFile(LIQ_OPUS_ENABLED_PATH, s.stream.opusEnabled ? 'true' : 'false');
+  await writeFile(LIQ_STREAM_BITRATE_PATH, String(s.stream.bitrate));
   await writeFile(LIQ_STATION_NAME_PATH, s.station || DEFAULTS.station);
 }
 
@@ -2712,7 +2730,8 @@ export async function ensureLiquidsoapSettingsFile() {
     !existsSync(LIQ_CROSSFADE_PATH) ||
     !existsSync(LIQ_ARCHIVE_ENABLED_PATH) ||
     !existsSync(LIQ_ARCHIVE_BITRATE_PATH) ||
-    !existsSync(LIQ_OPUS_ENABLED_PATH)
+    !existsSync(LIQ_OPUS_ENABLED_PATH) ||
+    !existsSync(LIQ_STREAM_BITRATE_PATH)
   ) {
     await writeLiquidsoapSettings(s);
   }
