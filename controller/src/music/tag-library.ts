@@ -908,4 +908,8 @@ async function resolveTagConsumers(): Promise<TagConsumer[]> {
   ];
 }
 
-main().catch(err => { console.error(err); process.exit(1); });
+// Explicitly exit on success. The local analyze backend (analyzer.ts) is a
+// persistent stdio child that keeps the event loop alive, so returning from
+// main() naturally would hang the CLI indefinitely after a *completed* run.
+// Mirrors the --reconcile-only path's process.exit(0).
+main().then(() => process.exit(0)).catch(err => { console.error(err); process.exit(1); });
