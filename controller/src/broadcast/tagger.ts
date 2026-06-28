@@ -118,7 +118,12 @@ export function startReconcile() {
 
 function spawnChild(mode: 'tag' | 'analyze' | 'reconcile', args: string[], detail: string) {
   const label = mode === 'tag' ? 'tagger' : mode === 'analyze' ? 'analyzer' : 'reconcile';
-  const child = spawn('npx', ['tsx', ...args], { cwd: '/app', detached: false });
+  // detached:true makes the child a process-GROUP leader, so stopTagger can
+  // signal the whole tree at once (npx → npm → sh → node tsx → loader). Without
+  // it, child.pid is just the npx wrapper — SIGTERM'ing it killed the wrapper
+  // and ORPHANED the real worker, which kept tagging (the broken-Stop bug). We
+  // keep the stdio pipes and never unref(), so capture + exit tracking still work.
+  const child = spawn('npx', ['tsx', ...args], { cwd: '/app', detached: true });
   activeChild = child;
   tagger.running = true;
   tagger.startedAt = new Date().toISOString();
@@ -167,9 +172,25 @@ function spawnChild(mode: 'tag' | 'analyze' | 'reconcile', args: string[], detai
 // process was running.
 export function stopTagger(): { stopped: boolean } {
   if (!activeChild || !tagger.running) return { stopped: false };
+  const pid = activeChild.pid;
   try {
-    activeChild.kill('SIGTERM');
-    queue.log('scheduler', 'tagger stop requested (SIGTERM)');
+    if (pid) {
+      // Negative PID → signal the whole process GROUP (the child is its leader,
+      // detached:true above), so the actual node/tsx worker dies, not just the
+      // npx wrapper. Fall back to the lone process if the group send fails.
+      try { process.kill(-pid, 'SIGTERM'); }
+      catch { activeChild.kill('SIGTERM'); }
+      // Escalate to SIGKILL on the group if it's still alive after 5s — the
+      // npm/sh wrappers and the tsx loader don't always forward SIGTERM.
+      setTimeout(() => {
+        if (tagger.running) {
+          try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+        }
+      }, 5000);
+    } else {
+      activeChild.kill('SIGTERM');
+    }
+    queue.log('scheduler', 'tagger stop requested (SIGTERM → process group)');
     return { stopped: true };
   } catch (err: any) {
     queue.log('error', `tagger stop failed: ${err.message}`);
