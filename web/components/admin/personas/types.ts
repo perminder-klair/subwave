@@ -1,6 +1,8 @@
 // Shared types for the personas editor (/admin/personas). Split out of
 // PersonasPanel so the presentational sub-components can share one shape.
 
+import type { TtsAvailable } from '../tts/engineMeta';
+
 export interface PersonaTts {
   engine: 'piper' | 'kokoro' | 'chatterbox' | 'pocket-tts' | 'cloud' | string;
   cloudProvider: string;
@@ -85,7 +87,7 @@ export interface SettingsResponse {
     chatterboxVoiceDir?: string;
     pocketTtsVoices?: VoiceOption[];
     pocketTtsCustomVoices?: string[];
-    available?: Record<string, boolean>;
+    available?: TtsAvailable;
     cloudProviders?: string[];
   };
   env?: Record<string, unknown>;

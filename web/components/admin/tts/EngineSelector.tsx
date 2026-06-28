@@ -3,18 +3,23 @@
 // segmented control on both the Personas voice card and the Settings voice tab:
 // every engine is a selectable card showing its name, a one-line blurb and a
 // live status badge (ready / sidecar off / no key) so availability is visible
-// before you select. Styled on the newsprint RadioOption pattern. Tailwind-only
-// (no inline styles — issue #50).
+// before you select. Unavailable engines (except the currently-selected one)
+// are disabled with a tooltip explaining why — the operator can't pick a dead
+// engine, but an existing setup isn't stranded behind a greyed-out option.
+// Styled on the newsprint RadioOption pattern. Tailwind-only (no inline
+// styles — issue #50).
 import { cn } from '../../../lib/cn';
-import { ENGINE_META, engineStatus } from './engineMeta';
+import { ENGINE_META, engineStatus, engineHint, type TtsAvailable } from './engineMeta';
 
 interface EngineSelectorProps {
   // Currently selected engine id.
   value: string;
-  // Which engines to show as cards (Personas: all 5; Settings: data.tts.engines).
+  // Which engines to show as cards (Personas: all 6; Settings: data.tts.engines).
   engineIds: string[];
-  // SettingsResponse.tts.available — drives the per-card status badge.
-  available?: Record<string, boolean>;
+  // SettingsResponse.tts.available — drives the per-card status badge and the
+  // disabled state. A missing/undefined key means "assumed up" (no badge, not
+  // disabled). Only `=== false` gates.
+  available?: TtsAvailable;
   onChange: (id: string) => void;
   className?: string;
 }
@@ -30,18 +35,31 @@ export function EngineSelector({ value, engineIds, available, onChange, classNam
         const meta = ENGINE_META[id];
         const status = engineStatus(id, available);
         const active = value === id;
+        // Disable when the engine is genuinely unavailable AND it isn't the
+        // currently-selected value — an existing persona/stations on a dead
+        // engine keeps working (just falls back), and the operator can still
+        // click it to switch away.
+        const isDead = available?.[id] === false;
+        const isDisabled = isDead && !active;
+        const hint = isDead ? engineHint(id, available) : undefined;
         return (
           <button
             key={id}
             type="button"
             role="radio"
             aria-checked={active}
-            onClick={() => onChange(id)}
+            aria-disabled={isDisabled || undefined}
+            title={hint}
+            onClick={() => { if (!isDisabled) onChange(id); }}
             className={cn(
-              'grid cursor-pointer content-start gap-1.5 border p-3 text-left font-[inherit]',
+              'grid content-start gap-1.5 border p-3 text-left font-[inherit]',
+              isDisabled
+                ? 'cursor-not-allowed opacity-40'
+                : 'cursor-pointer',
               active
                 ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
-                : 'border-ink bg-transparent hover:bg-[var(--ink-softer)]',
+                : 'border-ink bg-transparent',
+              !isDisabled && !active && 'hover:bg-[var(--ink-softer)]',
             )}
           >
             {/* Title row — dot + name only, full card width. The status badge

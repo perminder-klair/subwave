@@ -70,6 +70,25 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
     updateTts(patch);
   };
 
+  // Derive a per-persona availability map. The global `available` map has a
+  // single `cloud` flag (any provider configured). Per-persona, cloud is only
+  // usable if *this persona's chosen provider* has a key — an ElevenLabs
+  // persona on an OpenAI-only station should see cloud as unavailable. When
+  // the persona isn't on cloud, fall back to the global flag (they haven't
+  // picked a provider yet, so we can't gate on one).
+  const globalAvail = data?.tts?.available;
+  let selectorAvailable = globalAvail;
+  if (globalAvail) {
+    const prov = persona.tts.cloudProvider;
+    const cloudByProv = globalAvail.cloudByProvider;
+    if (cloudByProv && persona.tts.engine === 'cloud' && prov) {
+      selectorAvailable = {
+        ...globalAvail,
+        cloud: cloudByProv[prov] !== false,
+      };
+    }
+  }
+
   return (
     <Card title="Voice" sub="text-to-speech engine">
       {/* Engine — radio-card grid, full width above the two-column body. */}
@@ -78,7 +97,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
         <EngineSelector
           value={persona.tts.engine}
           engineIds={ENGINE_IDS}
-          available={data?.tts?.available}
+          available={selectorAvailable}
           onChange={selectEngine}
         />
         <div className="field-hint max-w-[70ch]">
