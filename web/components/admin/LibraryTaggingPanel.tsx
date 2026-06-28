@@ -224,8 +224,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // capability as null, so the *Incapable flags above never fire). Honest label
   // instead of a forever-"not yet analysed" that never comes true.
   const ranAnalysis = (analysed ?? 0) > 0;
-  const audioStarved = !analysisOff && !audioIncapable && !!p.audioEnabled && !audioOn && ranAnalysis;
-  const vocalStarved = !analysisOff && !vocalIncapable && vocalWanted && !vocalOn && ranAnalysis;
+  // Only treat it as "starved" when the engine doesn't ADVERTISE the capability
+  // (null/unknown — an older sidecar). If it reports capable=true the honest read
+  // is "not yet analysed" (run a backfill); capable=false is the *Incapable path.
+  const audioStarved =
+    !analysisOff && p.coverage?.audioAnalysisAvailable == null && !!p.audioEnabled && !audioOn && ranAnalysis;
+  const vocalStarved =
+    !analysisOff && p.coverage?.vocalAnalysisAvailable == null && vocalWanted && !vocalOn && ranAnalysis;
   const moodCount = p.libStats ? Object.keys(p.libStats.byMood || {}).length : 0;
   const lastTag = p.libStats?.updatedAt ? new Date(p.libStats.updatedAt).toLocaleString('en-GB') : '—';
 
