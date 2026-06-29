@@ -288,6 +288,11 @@ export default function TaggingPanel(p: TaggingPanelProps) {
     !analysisOff && p.coverage?.audioAnalysisAvailable == null && !!p.audioEnabled && !audioOn && ranAnalysis;
   const vocalStarved =
     !analysisOff && p.coverage?.vocalAnalysisAvailable == null && vocalWanted && !vocalOn && ranAnalysis;
+  // A backfill is worth offering only while there's headroom — nothing written
+  // yet, or coverage below 100%. Gates the per-row "Backfill" action so a fully
+  // covered dimension doesn't show a dead button.
+  const audioGap = !audioOn || (audpct != null && audpct < 100);
+  const vocalGap = !vocalOn || (vpct != null && vpct < 100);
   const moodCount = p.libStats ? Object.keys(p.libStats.byMood || {}).length : 0;
   const lastTag = p.libStats?.updatedAt ? new Date(p.libStats.updatedAt).toLocaleString('en-GB') : '—';
 
@@ -376,8 +381,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         </div>
       </div>
 
-      {/* acoustic & audio coverage — status meters only; the controls (analyse,
-          enable/disable) live in the tagging modal's "Acoustic & audio" tab */}
+      {/* acoustic & audio coverage — status meter on each row, plus the controls
+          that change it: bpm/key is always-on (engine permitting); sounds-like
+          (CLAP) and vocal (Demucs) are opt-in, so they carry Enable/Disable + a
+          contextual Backfill (shown only while enabled, capable, and < 100%). */}
       <div className="flex flex-col gap-3 border-b border-ink px-6 py-4">
         <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
           <span className="caption flex items-center gap-2"><Activity size={13} /> Acoustic analysis · bpm / key</span>
@@ -398,21 +405,63 @@ export default function TaggingPanel(p: TaggingPanelProps) {
               : audioStarved ? 'engine can’t fingerprint — needs a CLAP build'
               : p.audioEnabled ? 'enabled, not yet analysed' : 'off'}
           </span>
+          {!analysisOff && (
+            <span className="ml-auto flex items-center gap-2">
+              {p.audioEnabled && !audioIncapable && audioGap && (
+                <Btn sm tone="accent" onClick={p.onAnalyzeAudio} disabled={p.busy || running}>
+                  <Play size={12} /> {audioOn ? 'Backfill' : 'Analyze'}
+                </Btn>
+              )}
+              <Btn sm onClick={p.onToggleAudio} disabled={p.busy || running}>
+                {p.audioEnabled ? 'Disable' : 'Enable'}
+              </Btn>
+            </span>
+          )}
         </div>
-        {vocalWanted && (
+        {/* Vocal (Demucs) row — the opt-in entry point now that the modal tab is
+            gone. Collapsed to a single "off · Enable" line until opted in (#646);
+            once wanted it shows the full meter + Disable + Backfill. */}
+        {(vocalWanted || !analysisOff) && (
           <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong pt-3">
             <span className="caption flex items-center gap-2"><Activity size={13} /> Vocal activity · instrumental detection</span>
             <span className="lib-opt-tag">optional</span>
-            <span className="lib-minibar"><span ref={vocalFillRef} /></span>
-            <span className="caption mono-num !tracking-[0.04em]">
-              {analysisOff ? 'engine off'
-                : vocalIncapable ? 'engine missing Demucs'
-                : vocalOn ? <>{num(vocalAnalyzed)} / {num(total)} · {vpct != null ? `${vpct}%` : '…'}</>
-                : vocalStarved ? 'engine can’t separate vocals — needs a Demucs build'
-                : 'enabled, not yet analysed'}
-            </span>
+            {vocalWanted ? (
+              <>
+                <span className="lib-minibar"><span ref={vocalFillRef} /></span>
+                <span className="caption mono-num !tracking-[0.04em]">
+                  {analysisOff ? 'engine off'
+                    : vocalIncapable ? 'engine missing Demucs'
+                    : vocalOn ? <>{num(vocalAnalyzed)} / {num(total)} · {vpct != null ? `${vpct}%` : '…'}</>
+                    : vocalStarved ? 'engine can’t separate vocals — needs a Demucs build'
+                    : 'enabled, not yet analysed'}
+                </span>
+                {!analysisOff && (
+                  <span className="ml-auto flex items-center gap-2">
+                    {!vocalIncapable && vocalGap && (
+                      <Btn sm tone="accent" onClick={p.onVocalBackfill} disabled={p.busy || running}>
+                        <Play size={12} /> {vocalOn ? 'Backfill' : 'Analyze'}
+                      </Btn>
+                    )}
+                    <Btn sm onClick={p.onToggleVocal} disabled={p.busy || running}>Disable</Btn>
+                  </span>
+                )}
+              </>
+            ) : (
+              <>
+                <span className="caption mono-num !tracking-[0.04em]">off</span>
+                <span className="ml-auto">
+                  <Btn sm onClick={p.onToggleVocal} disabled={p.busy || running}>Enable</Btn>
+                </span>
+              </>
+            )}
           </div>
         )}
+        {audioIncapable && p.audioEnabled ? (
+          <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
+            <b>Sounds-like is on, but the analysis engine can’t fingerprint audio.</b> Pull the latest
+            tts-heavy image and recreate the sidecar to enable CLAP embeddings.
+          </div>
+        ) : null}
         {vocalIncapable && p.vocalEnabled ? (
           <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
             <b>Vocal-activity is on, but the analysis engine can’t separate vocals.</b> Pull the latest
@@ -531,20 +580,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         busy={p.busy || running}
         remaining={remaining}
         analysisOff={analysisOff}
-        audioIncapable={audioIncapable}
-        audioOn={audioOn}
-        audioEnabled={p.audioEnabled}
-        vocalIncapable={vocalIncapable}
-        vocalOn={vocalOn}
-        vocalEnabled={p.vocalEnabled}
         vocalWanted={vocalWanted}
         onStart={p.onStart}
         onReconcile={p.onReconcile}
         onRescan={p.onRescan}
-        onAnalyzeAudio={p.onAnalyzeAudio}
-        onToggleAudio={p.onToggleAudio}
-        onToggleVocal={p.onToggleVocal}
-        onVocalBackfill={p.onVocalBackfill}
       />
     </section>
   );

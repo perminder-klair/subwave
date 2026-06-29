@@ -1,14 +1,15 @@
 'use client';
 
 // The single "Tagging" modal opened from the library panel's primary button.
-// Three tabs, one per intent:
-//   • Run            — pick which pipeline steps run, then start a forward run
-//   • Acoustic & audio — the optional bpm/key + sounds-like (CLAP) controls
-//   • Re-scan        — maintenance passes that redo work after a model change
-// The panel keeps every status meter; this modal owns the *actions*.
+// Two tabs, one per intent:
+//   • Run     — pick which pipeline steps run, then start a forward run
+//   • Re-scan — maintenance passes that redo already-done work after a model change
+// Both tabs are "configure + launch a pipeline run". The optional-dimension
+// lifecycle (enable / disable / backfill CLAP + Demucs) lives on the panel's
+// coverage rows instead, next to the meters it changes.
 
 import { useEffect, useState } from 'react';
-import { Play, RefreshCw, Activity } from 'lucide-react';
+import { Play, RefreshCw } from 'lucide-react';
 import { Modal } from '../ui/modal';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { Btn } from './ui';
@@ -16,7 +17,7 @@ import { cn } from '../../lib/cn';
 import type { Batch, RescanOpts, TagSteps } from './LibraryTaggingPanel';
 import { num } from './LibraryTaggingPanel';
 
-type Tab = 'run' | 'audio' | 'rescan';
+type Tab = 'run' | 'rescan';
 
 interface Props {
   open: boolean;
@@ -26,19 +27,11 @@ interface Props {
   setBatch: (b: Batch) => void;
   busy: boolean;
   remaining: number | null;
-  // coverage-derived availability
+  // coverage-derived availability. analysisOff locks the Run tab's "Analyze
+  // acoustics" step; vocalWanted gates the per-run "Vocal activity" sub-checkbox
+  // (Run tab) + the "Re-analyse vocal" sub-toggle (Re-scan tab) so they stay
+  // hidden until the operator opts vocal in on the panel (#646).
   analysisOff: boolean;
-  audioIncapable: boolean;
-  audioOn: boolean;
-  audioEnabled: boolean | null;
-  // vocal-activity (Demucs) controls (#646). The Enable toggle is always shown
-  // here (this advanced tab is the opt-in surface, parallel to sounds-like) so
-  // it stays reachable; the panel's coverage *row* is what hides by default.
-  vocalIncapable: boolean;
-  vocalOn: boolean;
-  vocalEnabled: boolean | null;
-  // Whether vocal is opted-in (env/settings) — gates the Run tab's per-run
-  // "Vocal activity (Demucs)" sub-checkbox so it stays hidden by default (#646).
   vocalWanted: boolean;
   // when set, the modal opens straight to the matching tab/selection
   intent: 'reembed' | null;
@@ -46,15 +39,10 @@ interface Props {
   onStart: (steps?: TagSteps) => void;
   onReconcile: () => void;
   onRescan: (opts: RescanOpts) => void;
-  onAnalyzeAudio: () => void;
-  onToggleAudio: () => void;
-  onToggleVocal: () => void;
-  onVocalBackfill: () => void;
 }
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'run', label: 'Run' },
-  { key: 'audio', label: 'Acoustic & audio' },
   { key: 'rescan', label: 'Re-scan' },
 ];
 
@@ -202,87 +190,14 @@ export default function LibraryTaggingModal(p: Props) {
           </>
         )}
 
-        {/* ------------------------------------------------------ ACOUSTIC & AUDIO */}
-        {tab === 'audio' && (
-          <>
-            <p className="text-[12px] leading-[1.55] text-muted">
-              Two optional, heavier dimensions on top of bpm/key. They sharpen the
-              DJ&rsquo;s picks but it plays fine without them — and they run on the
-              analysis engine, not the LLM, so they don&rsquo;t cost model calls.
-            </p>
-            {p.analysisOff ? (
-              <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink">
-                No analysis engine running. Start the tts-heavy sidecar
-                (<code className="font-mono text-[10.5px]">docker compose --profile tts-heavy up -d</code>)
-                or configure a local librosa venv, then return here.
-              </div>
-            ) : (
-              <div className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                  <span className="caption flex items-center gap-2"><Activity size={13} /> Sounds-like fingerprints</span>
-                  <Chip>slow</Chip>
-                  {p.audioEnabled && (
-                    <Btn sm tone="accent" onClick={() => { p.onAnalyzeAudio(); p.onOpenChange(false); }} disabled={p.busy || p.audioIncapable}>
-                      <Play size={12} /> {p.audioOn ? 'Analyze new tracks' : 'Analyze library'}
-                    </Btn>
-                  )}
-                  <Btn sm onClick={p.onToggleAudio} disabled={p.busy}>
-                    {p.audioEnabled ? 'Disable' : 'Enable'}
-                  </Btn>
-                  <span className="caption basis-full !tracking-[0.04em] !normal-case">
-                    Fingerprints how each track sounds (CLAP) for &ldquo;sounds-like&rdquo; picks
-                    and sonic journeys. ~1-2s/track on the analysis engine.
-                  </span>
-                </div>
-                {p.audioIncapable && p.audioEnabled && (
-                  <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink">
-                    <b>The analysis engine can&rsquo;t fingerprint audio.</b> Pull the latest tts-heavy
-                    image and recreate the sidecar:
-                    <code className="mt-1 block font-mono text-[10.5px] text-muted">docker compose pull tts-heavy &amp;&amp; docker compose --profile tts-heavy up -d tts-heavy</code>
-                  </div>
-                )}
-                {/* vocal activity (#646) — Enable always reachable here; the
-                    panel's coverage row is what stays hidden until opted in */}
-                <div className="flex flex-col gap-2.5 border-t border-dashed border-separator-strong pt-3">
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                      <span className="caption flex items-center gap-2"><Activity size={13} /> Vocal activity · instrumental detection</span>
-                      <Chip>very slow</Chip>
-                      {p.vocalEnabled && (
-                        <Btn sm tone="accent" onClick={() => { p.onVocalBackfill(); p.onOpenChange(false); }} disabled={p.busy || p.vocalIncapable}>
-                          <Play size={12} /> {p.vocalOn ? 'Backfill missing' : 'Analyze vocals'}
-                        </Btn>
-                      )}
-                      <Btn sm onClick={p.onToggleVocal} disabled={p.busy}>
-                        {p.vocalEnabled ? 'Disable' : 'Enable'}
-                      </Btn>
-                    </div>
-                    <p className="caption !tracking-[0.04em] !normal-case">
-                      Separates vocals from the mix so the DJ can tell instrumental vs vocal tracks
-                      and time talk before lyrics. Demucs source separation — ~10-30s/track on CPU.
-                    </p>
-                    {p.vocalIncapable && p.vocalEnabled && (
-                      <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink">
-                        <b>The analysis engine can&rsquo;t separate vocals.</b> Rebuild the tts-heavy
-                        sidecar with Demucs:
-                        <code className="mt-1 block font-mono text-[10.5px] text-muted">docker compose build --build-arg WITH_DEMUCS=1 tts-heavy &amp;&amp; docker compose --profile tts-heavy up -d tts-heavy</code>
-                      </div>
-                    )}
-                  </div>
-              </div>
-            )}
-            <div className="flex justify-end border-t border-dashed border-separator-strong pt-3.5">
-              <Btn onClick={() => p.onOpenChange(false)}>Done</Btn>
-            </div>
-          </>
-        )}
-
         {/* -------------------------------------------------------------- RE-SCAN */}
         {tab === 'rescan' && (
           <>
             <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1.5">
               <span className="max-w-[52ch] text-[12px] leading-[1.55] text-muted">
                 Redo work you&rsquo;ve already done — only needed after changing the LLM,
-                embedding model, or analysis engine. Existing mood tags are kept as seeds.
+                embedding model, or analysis engine. Each pass touches only tracks it
+                already processed; never your untagged backlog (that&rsquo;s the Run tab).
               </span>
               <button
                 type="button"
@@ -298,13 +213,13 @@ export default function LibraryTaggingModal(p: Props) {
             {/* ordered to mirror the Run pipeline: enrich → embed → tag → analyse */}
             <div className="grid gap-2.5">
               <Pass on={!!passes.reEnrich} onClick={() => togglePass('reEnrich')} name="Re-enrich metadata" tag="network"
-                hint="Re-fetch Last.fm tags + lyrics across the whole library. External API calls — slow on a big library." />
+                hint="Re-fetch Last.fm tags + lyrics for tracks you've already enriched. External API calls — slow on a big library." />
               <Pass on={!!passes.reseed} onClick={() => togglePass('reseed')} name="Re-embed all tracks" tag="slow"
-                hint="Drop & rebuild every similarity vector from scratch — re-spends embedding calls. Only after changing the embedding model." />
+                hint="Drop & rebuild the similarity vectors you already have — re-spends embedding calls. Only after changing the embedding model." />
               <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods" tag="AI · billed"
-                hint="Re-tag tracks whose prompt or model has gone stale. Uses model calls." />
+                hint="Re-tag already-tagged rows whose prompt or model has gone stale (never your manual tags). No model change → nothing to redo. Uses model calls." />
               <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics" tag="slow"
-                hint="Redo bpm/key + sounds-like for every track. Drops existing acoustic data and rebuilds it." />
+                hint="Redo bpm/key + sounds-like for tracks you've already analysed. Drops their acoustic data and rebuilds it." />
               {p.vocalWanted && (
                 <div className="pl-6">
                   <Pass on={!!passes.reAnalyze && reAnalyzeVocal} onClick={() => setReAnalyzeVocal(v => !v)}
