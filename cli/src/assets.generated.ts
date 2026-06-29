@@ -101,6 +101,11 @@ services:
     depends_on:
       broadcast:
         condition: service_healthy
+      # Bring the socket-proxy up whenever the controller is (re)created — even a
+      # selective \`up -d controller\` — so the Stats system panel works without a
+      # separate full \`up -d\`. Remove this entry too if you drop the proxy below.
+      docker-socket-proxy:
+        condition: service_started
     environment:
       # Enables the production-only admin gate: refuses to boot unless
       # ADMIN_USER + ADMIN_PASS are set in .env.
@@ -141,7 +146,8 @@ services:
   # CPU/memory through it via DOCKER_HOST=tcp://docker-socket-proxy:2375, so the
   # controller image itself never holds the socket. No host port — only
   # reachable on the internal compose network. Optional: remove this service
-  # (and the controller's DOCKER_HOST above) to drop the Stats system panel.
+  # (plus the controller's DOCKER_HOST and its docker-socket-proxy depends_on
+  # entry above) to drop the Stats system panel.
   docker-socket-proxy:
     image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
     container_name: sub-wave-docker-proxy
@@ -360,6 +366,11 @@ services:
     depends_on:
       broadcast:
         condition: service_healthy
+      # Bring the socket-proxy up whenever the controller is (re)created — even a
+      # selective \`up -d controller\` — so the Stats system panel works without a
+      # separate full \`up -d\`. Remove this entry too if you drop the proxy below.
+      docker-socket-proxy:
+        condition: service_started
     environment:
       - NODE_ENV=production
       - TZ=\${TZ:-Europe/London}
@@ -390,7 +401,8 @@ services:
   # CPU/memory through it via DOCKER_HOST=tcp://docker-socket-proxy:2375, so the
   # controller image itself never holds the socket. No host port — only
   # reachable on the internal compose network. Optional: remove this service
-  # (and the controller's DOCKER_HOST above) to drop the Stats system panel.
+  # (plus the controller's DOCKER_HOST and its docker-socket-proxy depends_on
+  # entry above) to drop the Stats system panel.
   docker-socket-proxy:
     image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
     container_name: sub-wave-docker-proxy
@@ -581,6 +593,11 @@ services:
     depends_on:
       broadcast:
         condition: service_healthy
+      # Bring the socket-proxy up whenever the controller is (re)created — even a
+      # selective \`up -d controller\` — so the Stats system panel works without a
+      # separate full \`up -d\`. Remove this entry too if you drop the proxy below.
+      docker-socket-proxy:
+        condition: service_started
     environment:
       - TZ=\${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
@@ -626,7 +643,8 @@ services:
   # other section refused by default). The controller reads per-container
   # CPU/memory through it via DOCKER_HOST=tcp://docker-socket-proxy:2375, so the
   # controller never holds the socket. No host port. Optional: remove this
-  # service (and the controller's DOCKER_HOST above) to drop the Stats panel.
+  # service (plus the controller's DOCKER_HOST and its docker-socket-proxy
+  # depends_on entry above) to drop the Stats panel.
   docker-socket-proxy:
     image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
     container_name: sub-wave-docker-proxy

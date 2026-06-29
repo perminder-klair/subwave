@@ -890,15 +890,17 @@ export default function StatsPanel() {
                   <div className="grid gap-3.5 p-3.5">
                     <div>
                       <div className="caption mb-2">by pick source</div>
-                      <Table<ByPickSourceRow>
-                        empty="no pick sources"
-                        rows={requests.byPickSource}
-                        cols={[
-                          { key: 'source', label: 'Source' },
-                          { key: 'count', label: 'Picks', align: 'right',
-                            render: r => <span className="mono-num">{r.count}</span> },
-                        ]}
-                      />
+                      <ScrollBox>
+                        <Table<ByPickSourceRow>
+                          empty="no pick sources"
+                          rows={requests.byPickSource}
+                          cols={[
+                            { key: 'source', label: 'Source' },
+                            { key: 'count', label: 'Picks', align: 'right',
+                              render: r => <span className="mono-num">{r.count}</span> },
+                          ]}
+                        />
+                      </ScrollBox>
                     </div>
                     <div>
                       <div className="caption mb-2">top requesters</div>
@@ -960,8 +962,9 @@ export default function StatsPanel() {
             <div className="p-3.5">
               {!systemRes.dockerAvailable ? (
                 <span className="field-hint italic">
-                  container stats unavailable, mount /var/run/docker.sock (read-only)
-                  into the controller to enable
+                  container stats unavailable — start the docker-socket-proxy
+                  sidecar (docker compose up -d) to enable
+                  {systemRes.dockerError ? ` · ${systemRes.dockerError}` : ''}
                 </span>
               ) : sysContainers.length === 0 ? (
                 <span className="field-hint italic">no containers reporting</span>
