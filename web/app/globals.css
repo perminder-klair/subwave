@@ -3294,8 +3294,8 @@ html.lite *::after {
    text, and a soft inset vignette. Theme-aware via tokens. */
 .admin-root .term-crt {
     background-image: repeating-linear-gradient(
-        color-mix(in srgb, var(--ink) 22%, transparent) 0px,
-        color-mix(in srgb, var(--ink) 22%, transparent) 1px,
+        color-mix(in srgb, var(--ink) 9%, transparent) 0px,
+        color-mix(in srgb, var(--ink) 9%, transparent) 1px,
         transparent 1px,
         transparent 3px
     );
