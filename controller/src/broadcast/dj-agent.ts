@@ -339,7 +339,10 @@ function trackFields(song) {
 // AND the durable picks-log record so neither reports a phantom pick that never
 // aired (push() has already logged the dedup-skip). Callers fall back on -1
 // (agent → pool → auto.m3u) instead of recording a session turn for a no-op.
-async function enqueuePick(queue, song, reason, source, link: string | null = null): Promise<number> {
+// `linkPrev` is the track the link back-announces (the one on-air when the pick
+// was made); the queue uses it to drop the link if a request jumps ahead and it
+// would otherwise air a stale "that was X" over the wrong transition.
+async function enqueuePick(queue, song, reason, source, link: string | null = null, linkPrev: any = null): Promise<number> {
   const pos = await queue.push({
     track: trackFields(song),
     requestedBy: null,
@@ -347,6 +350,7 @@ async function enqueuePick(queue, song, reason, source, link: string | null = nu
     introScript: link,
     introKind: 'link',
     aiPicked: true,
+    linkPrev,
   });
   if (pos === -1) return -1;
   queue.log('ai-pick', `${song.title} — ${song.artist}`, { reason, source });
@@ -358,7 +362,7 @@ async function enqueuePick(queue, song, reason, source, link: string | null = nu
 // Track event — a track started; pick the next one and maybe air a link.
 // ---------------------------------------------------------------------------
 
-async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLink: boolean; audioWaypoint?: number[] | null }): Promise<boolean> {
+async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = null }: { wantLink: boolean; audioWaypoint?: number[] | null; current?: any }): Promise<boolean> {
   await library.load();
   const stats = library.stats();
   const windows = recencyWindowsForLibrary(stats.distinctArtists);
@@ -411,7 +415,9 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLin
   const say = (djMode && rawSay) ? dj.enforceIntroBudget(rawSay, introMsOf(song)) : rawSay;
   // Attach the link to the pick so it airs as the pick starts (back-announcing
   // the track on-air now), instead of immediately over that on-air track (#189).
-  const queued = await enqueuePick(queue, song, object.reason, 'agent', (wantLink && say) ? say : null);
+  // Stamp `current` as the link's back-announce target so the queue can drop the
+  // link if a request jumps ahead of this pick before it airs.
+  const queued = await enqueuePick(queue, song, object.reason, 'agent', (wantLink && say) ? say : null, current);
   // Pick was already queued/on-air and got deduped — don't record a session turn
   // for a track that never airs. Returning false lets runTrackEvent fall through
   // to the pool for a fresh pick.
@@ -454,7 +460,9 @@ async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm:
       queue.log('error', `DJ link failed: ${err.message}`);
     }
   }
-  const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link);
+  // `current` is the link's back-announce target (passed to generateLink as
+  // `previous`); stamp it so the queue drops the link if a request jumps ahead.
+  const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link, current);
   // Even the pool landed on an already-queued track (a tiny library whose pool
   // collapsed to recents). Skip the session turn and let auto.m3u backstop the
   // slot — the next track-start re-triggers runTrackEvent for a fresh pick.
@@ -543,7 +551,7 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     // and go straight to the one-call pool picker below to stretch the budget.
     if (settings.get().llm?.pickerAgent && !cheap && !breakerOpen()) {
       try {
-        const queued = await pickViaAgent(queue, { wantLink, audioWaypoint });
+        const queued = await pickViaAgent(queue, { wantLink, audioWaypoint, current });
         breakerSuccess();
         if (queued) return;
         // The agent produced a valid pick but it was already queued/on-air, so

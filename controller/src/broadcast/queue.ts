@@ -314,7 +314,16 @@ class Queue {
   // `introKind` picks both the TTS engine routing and the duck channel:
   //   'dj-speak' → say.txt   (HEAVY duck — request intros)
   //   'link'     → intro.txt (LIGHT duck — between-track auto-DJ links)
-  async push({ track, requestedBy = null, intent = null, introScript = null, introKind = 'dj-speak', aiPicked = false, allowDuplicate = false }: {
+  // `linkPrev` is the track this item's intro/link BACK-ANNOUNCES (the one that
+  // was on-air when the pick was made). A between-track link is written as "that
+  // was X, here's this" against the track playing then; deferring it to air time
+  // (#189) is only valid while this pick is still the immediately-next track. If
+  // a listener request slips into `upcoming` ahead of it before it airs, that
+  // request plays first, so the baked-in "that was X" would name a track one (or
+  // more) older than what actually just played. airIntro() uses linkPrev to
+  // detect that and drop the now-stale back-announce rather than air a wrong
+  // name. Left null for request intros (they never back-announce).
+  async push({ track, requestedBy = null, intent = null, introScript = null, introKind = 'dj-speak', aiPicked = false, allowDuplicate = false, linkPrev = null }: {
     track: any;
     requestedBy?: string | null;
     intent?: string | null;
@@ -322,6 +331,7 @@ class Queue {
     introKind?: string;
     aiPicked?: boolean;
     allowDuplicate?: boolean;
+    linkPrev?: { id?: string | null; title?: string | null; artist?: string | null } | null;
   }) {
     // Dedup guard. Applies to AI picks AND listener requests: two listener
     // requests resolving to the same song over the 25-45s identify/match window
@@ -343,6 +353,11 @@ class Queue {
     }
     const item = {
       track, requestedBy, intent, introScript, introKind, aiPicked,
+      // Only stamp a back-announce target when there's actually an intro/link to
+      // air against it; a bare track carries no claim about what preceded it.
+      linkPrev: (introScript && linkPrev)
+        ? { id: linkPrev.id ?? null, title: linkPrev.title ?? null, artist: linkPrev.artist ?? null }
+        : null,
       introWav: null as string | null,
       introAired: false,
       queuedAt: new Date().toISOString(),
@@ -520,9 +535,23 @@ class Queue {
   // (issue #189). The WAV was rendered ahead of time in drainToLiquidsoap, so
   // this just writes the path to the duck channel and mirrors the bookkeeping
   // announce() does (djLog feeds the opener anti-repeat; session + webhook).
-  async airIntro(item: any) {
+  async airIntro(item: any, predecessor: any = null) {
     if (!item?.introWav || item.introAired || !existsSync(item.introWav)) return;
     item.introAired = true;
+    // Stale back-announce guard. The link/intro was written to back-announce
+    // `item.linkPrev` — valid only if that track is what actually just played.
+    // When a listener request was slipped into the queue ahead of this pick
+    // after the link was rendered, something else (the request) played in
+    // between, so the baked-in "that was X" now names a track one (or more)
+    // older than reality (issue: a request mid-pick makes the link name the
+    // wrong, older track). We can't re-cut rendered audio, so drop it — silence
+    // on this transition beats airing a wrong name.
+    if (shouldDropStaleLink(item, predecessor)) {
+      this.log('link-skip',
+        `Dropped stale link before "${item.track?.title}" — back-announced "${item.linkPrev.title}" but "${predecessor?.title || 'another track'}" actually played first`);
+      this.persist();
+      return;
+    }
     const kind = item.introKind || 'dj-speak';
     const targetFile = kind === 'link'
       ? config.liquidsoap.introFile
@@ -633,8 +662,11 @@ class Queue {
       // from queue time so the voice lands over the right song (#189). Fire-
       // and-forget: airIntro's writeHandoff can block up to maxWaitMs and must
       // not stall the 1.5s watcher tick. Use the live `this.current` so the
-      // introAired flag is set on the tracked object.
-      void this.airIntro(this.current);
+      // introAired flag is set on the tracked object. Pass the track that just
+      // rolled into history — the REAL predecessor — so a back-announcing link
+      // that no longer follows the track it names (a request jumped the queue)
+      // is dropped instead of airing a stale name.
+      void this.airIntro(this.current, this.history[0]?.track || null);
     } else {
       // Not a tracked request → auto-playlist or jingle.
       // If we keep seeing untracked plays while `upcoming` is non-empty, those
@@ -902,6 +934,36 @@ class Queue {
 
 function sleep(ms: number) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+// Do two track refs point at the same song? Used by the stale back-announce
+// guard. Prefer the Subsonic id when both carry one (the reliable key); fall
+// back to a normalised title match for auto-playlist tracks that reach the
+// watcher without an id.
+function sameTrack(
+  a: { id?: string | null; title?: string | null } | null,
+  b: { id?: string | null; title?: string | null } | null,
+): boolean {
+  if (!a || !b) return false;
+  if (a.id && b.id) return a.id === b.id;
+  const norm = (s: string | null | undefined) => (s || '').toLowerCase().trim();
+  return !!norm(a.title) && norm(a.title) === norm(b.title);
+}
+
+// Should airIntro DROP this item's intro/link as a stale back-announce? True
+// only for an item that names a specific predecessor (`linkPrev`) which is NOT
+// the track that actually played just before it — the off-by-one that happens
+// when a listener request jumps ahead of an auto-pick after its link was
+// rendered (the pick no longer follows the track its "that was X" names).
+// Items with no linkPrev (request intros — they never back-announce) always
+// air. Pure + exported so the guard is unit-pinned (scripts/stale-link.test.ts)
+// without touching disk or TTS.
+export function shouldDropStaleLink(
+  item: { linkPrev?: { id?: string | null; title?: string | null } | null } | null,
+  predecessor: { id?: string | null; title?: string | null } | null,
+): boolean {
+  if (!item?.linkPrev) return false;
+  return !sameTrack(item.linkPrev, predecessor);
 }
 
 // Per-target-file write chain. Liquidsoap polls each handoff file (say.txt,
