@@ -14,7 +14,7 @@ import { ENGINE_META, engineStatus, engineHint, type TtsAvailable } from './engi
 interface EngineSelectorProps {
   // Currently selected engine id.
   value: string;
-  // Which engines to show as cards (Personas: all 6; Settings: data.tts.engines).
+  // Which engines to show as cards (Personas: all 5; Settings: data.tts.engines).
   engineIds: string[];
   // SettingsResponse.tts.available — drives the per-card status badge and the
   // disabled state. A missing/undefined key means "assumed up" (no badge, not
