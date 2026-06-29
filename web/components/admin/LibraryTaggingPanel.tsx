@@ -408,13 +408,24 @@ export default function TaggingPanel(p: TaggingPanelProps) {
           {!analysisOff && (
             <span className="ml-auto flex items-center gap-2">
               {p.audioEnabled && !audioIncapable && audioGap && (
-                <Btn sm tone="accent" onClick={p.onAnalyzeAudio} disabled={p.busy || running}>
+                <Btn sm tone="accent" onClick={p.onAnalyzeAudio} disabled={p.busy || running}
+                  title="Fingerprint the tracks still missing a “sounds-like” vector — without redoing bpm/key.">
                   <Play size={12} /> {audioOn ? 'Backfill' : 'Analyze'}
                 </Btn>
               )}
-              <Btn sm onClick={p.onToggleAudio} disabled={p.busy || running}>
-                {p.audioEnabled ? 'Disable' : 'Enable'}
+              <Btn sm onClick={p.onToggleAudio} disabled={p.busy || running}
+                title={p.audioEnabled
+                  ? 'Pause fingerprinting newly-added tracks. Existing “sounds-like” data stays and keeps driving picks.'
+                  : 'Start fingerprinting new tracks for “sounds-like” picks (~1-2s each on the analysis engine).'}>
+                {p.audioEnabled ? 'Pause' : 'Enable'}
               </Btn>
+            </span>
+          )}
+          {!analysisOff && (
+            <span className="caption basis-full !tracking-[0.04em] !normal-case">
+              {p.audioEnabled
+                ? 'Auto-fingerprints new tracks for “sounds-like” picks (~1-2s each). Pausing stops new analysis only — existing fingerprints stay and keep driving picks.'
+                : 'Fingerprints how each track sounds for “sounds-like” picks (~1-2s each on the analysis engine).'}
             </span>
           )}
         </div>
@@ -438,11 +449,20 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 {!analysisOff && (
                   <span className="ml-auto flex items-center gap-2">
                     {!vocalIncapable && vocalGap && (
-                      <Btn sm tone="accent" onClick={p.onVocalBackfill} disabled={p.busy || running}>
+                      <Btn sm tone="accent" onClick={p.onVocalBackfill} disabled={p.busy || running}
+                        title="Separate vocals for the tracks still missing it — without redoing bpm/key.">
                         <Play size={12} /> {vocalOn ? 'Backfill' : 'Analyze'}
                       </Btn>
                     )}
-                    <Btn sm onClick={p.onToggleVocal} disabled={p.busy || running}>Disable</Btn>
+                    <Btn sm onClick={p.onToggleVocal} disabled={p.busy || running}
+                      title="Pause Demucs separation on newly-added tracks. Existing vocal data stays and keeps being used.">
+                      Pause
+                    </Btn>
+                  </span>
+                )}
+                {!analysisOff && (
+                  <span className="caption basis-full !tracking-[0.04em] !normal-case">
+                    Auto-separates vocals on new tracks (Demucs, ~10-30s each — CPU-heavy). Pausing stops new analysis only — existing data stays and keeps being used.
                   </span>
                 )}
               </>
@@ -450,7 +470,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
               <>
                 <span className="caption mono-num !tracking-[0.04em]">off</span>
                 <span className="ml-auto">
-                  <Btn sm onClick={p.onToggleVocal} disabled={p.busy || running}>Enable</Btn>
+                  <Btn sm onClick={p.onToggleVocal} disabled={p.busy || running}
+                    title="Start Demucs vocal separation on new tracks (~10-30s each — CPU-heavy).">
+                    Enable
+                  </Btn>
+                </span>
+                <span className="caption basis-full !tracking-[0.04em] !normal-case">
+                  Separates vocals so the DJ can talk before lyrics (Demucs, ~10-30s/track — CPU-heavy). Off by default.
                 </span>
               </>
             )}
