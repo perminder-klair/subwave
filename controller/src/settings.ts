@@ -606,10 +606,11 @@ export const SEED_PERSONAS = [
   },
 ];
 
-// Allowed archive bitrates. Matches the literal branches in radio.liq —
+// Allowed MP3 bitrates — shared by the hourly archive and the live
+// /stream.mp3 mount. Matches the literal branches in radio.liq —
 // %mp3(bitrate=…) needs a parse-time int, so the encoder is pre-baked for
 // this small set. Add a branch in radio.liq if you add a value here.
-export const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
+export const MP3_BITRATES = [64, 96, 128, 160, 192, 320] as const;
 
 const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
@@ -955,7 +956,7 @@ const BOUNDS = {
   maxTrackSeconds: { min: 0, max: 36000, type: 'int' },
 };
 
-const ARCHIVE_BITRATE_SET = new Set<number>(ARCHIVE_BITRATES);
+const MP3_BITRATE_SET = new Set<number>(MP3_BITRATES);
 
 let cache: any = null;
 
@@ -1198,7 +1199,7 @@ export async function load() {
   );
 
   const archiveBitrate =
-    typeof stored.archive?.bitrate === 'number' && ARCHIVE_BITRATE_SET.has(stored.archive.bitrate)
+    typeof stored.archive?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.archive.bitrate)
       ? stored.archive.bitrate
       : DEFAULTS.archive.bitrate;
 
@@ -1219,7 +1220,7 @@ export async function load() {
           ? stored.stream.opusEnabled
           : DEFAULTS.stream.opusEnabled,
       bitrate:
-        typeof stored.stream?.bitrate === 'number' && ARCHIVE_BITRATE_SET.has(stored.stream.bitrate)
+        typeof stored.stream?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.stream.bitrate)
           ? stored.stream.bitrate
           : DEFAULTS.stream.bitrate,
     },
@@ -2015,9 +2016,9 @@ export async function update(patch) {
     }
     if (a.bitrate !== undefined) {
       const v = parseInt(a.bitrate, 10);
-      if (!Number.isFinite(v) || !ARCHIVE_BITRATE_SET.has(v)) {
+      if (!Number.isFinite(v) || !MP3_BITRATE_SET.has(v)) {
         throw new Error(
-          `archive.bitrate must be one of: ${ARCHIVE_BITRATES.join(', ')}`,
+          `archive.bitrate must be one of: ${MP3_BITRATES.join(', ')}`,
         );
       }
       if (v !== cur.archive.bitrate) {
@@ -2037,9 +2038,9 @@ export async function update(patch) {
     }
     if (st.bitrate !== undefined) {
       const v = parseInt(st.bitrate, 10);
-      if (!Number.isFinite(v) || !ARCHIVE_BITRATE_SET.has(v)) {
+      if (!Number.isFinite(v) || !MP3_BITRATE_SET.has(v)) {
         throw new Error(
-          `stream.bitrate must be one of: ${ARCHIVE_BITRATES.join(', ')}`,
+          `stream.bitrate must be one of: ${MP3_BITRATES.join(', ')}`,
         );
       }
       if (v !== cur.stream.bitrate) {

@@ -601,12 +601,15 @@ music_meta.on_metadata(on_meta)
 # controller. It is NOT persisted: a mixer restart always comes back on air.
 #
 # Two mounts in parallel:
-#   /stream.mp3  — MP3, the universal compatibility floor (bitrate configurable)
+#   /stream.mp3  — MP3, the universal compatibility floor
 #                  (Sonos, hardware radios, car receivers, pre-iOS-17 Safari).
-#                  Bumped from 128 → 192: dense, brick-walled masters (e.g. hot
+#                  Bitrate is operator-configurable (admin → Settings → Stream
+#                  MP3 bitrate); 192 is the default. The default sits at 192,
+#                  not 128, because dense, brick-walled masters (e.g. hot
 #                  Punjabi/hip-hop catalogue pinned at 0 dBFS) produced audible
-#                  encode grain ("swishy static") at 128 with no headroom. The
+#                  encode grain ("swishy static") at 128 with no headroom — the
 #                  extra ~50% bandwidth buys a clean re-encode of busy material.
+#                  Dropping below 192 reintroduces that grain on hot masters.
 #   /stream.opus — Ogg-Opus 96 kbps, ~equal-or-better quality at half the
 #                  bandwidth for modern browsers (the web player auto-prefers
 #                  it via canPlayType). Browsers / VLC / cliamp on a recent
@@ -615,6 +618,9 @@ music_meta.on_metadata(on_meta)
 settings.init.force_start := true
 
 def make_stream_outputs() =
+  # Pick the encoder from a fixed set: %mp3(bitrate=…) needs a parse-time
+  # literal int (can't pass a ref), same constraint as the archive output
+  # below. Keep these branches in sync with MP3_BITRATES in settings.ts.
   br = stream_bitrate()
   mp3_enc =
     if br <= 64 then

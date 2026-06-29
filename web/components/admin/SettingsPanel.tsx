@@ -217,9 +217,9 @@ interface StreamForm {
   bitrate: string;
 }
 
-// Keep in sync with ARCHIVE_BITRATES in controller/src/settings.ts — radio.liq
+// Keep in sync with MP3_BITRATES in controller/src/settings.ts — radio.liq
 // has a literal `%mp3(bitrate=…)` branch per value, so this set is fixed.
-const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
+const MP3_BITRATES = [64, 96, 128, 160, 192, 320] as const;
 
 interface FormState {
   jingleRatio: string;
@@ -864,7 +864,7 @@ export default function SettingsPanel() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {ARCHIVE_BITRATES.map(br => (
+                          {MP3_BITRATES.map(br => (
                             <SelectItem key={br} value={String(br)}>
                               {br} kbps
                             </SelectItem>
@@ -1066,7 +1066,7 @@ export default function SettingsPanel() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {ARCHIVE_BITRATES.map(br => (
+                        {MP3_BITRATES.map(br => (
                           <SelectItem key={br} value={String(br)}>
                             {br} kbps
                           </SelectItem>
