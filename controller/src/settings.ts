@@ -300,11 +300,10 @@ function applyLlmLegPatch(target: any, patch: any, label: string): void {
     if (v.length > 100) throw new Error(`${label}.model must be 0-100 chars`);
     target.model = v;
   }
-  // 'set' is the redaction sentinel from getRedacted() — ignore it so a
-  // round-tripped settings form doesn't overwrite the real key.
-  if (l.apiKey !== undefined && l.apiKey !== 'set') {
-    target.apiKey = String(l.apiKey);
-  }
+  // NB: the inline API key is NOT handled here — it's routed per-provider into
+  // settings.llm.keys by applyInlineKey() at the call site, after the leg's
+  // provider has been resolved. Keeping it out of the shared leg patch is what
+  // stops one provider's key leaking into another's slot (issue #657).
   if (l.ollamaUrl !== undefined) {
     const v = String(l.ollamaUrl).trim();
     if (v.length > 200) throw new Error(`${label}.ollamaUrl must be 0-200 chars`);
@@ -336,6 +335,52 @@ function applyLlmLegPatch(target: any, patch: any, label: string): void {
     }
     target.toolChoice = v;
   }
+}
+
+// Route an incoming inline API key to its provider's slot in `llmHost.keys`
+// (issue #657). `provider` is the leg's already-resolved provider, so the key
+// lands under the identity it belongs to and can never shadow another
+// provider's key after a switch. '' clears that provider's entry; 'set' (the
+// getRedacted() sentinel) and undefined leave it untouched.
+function applyInlineKey(llmHost: any, provider: string, rawApiKey: any): void {
+  if (rawApiKey === undefined || rawApiKey === 'set') return;
+  const v = String(rawApiKey);
+  if (v.length > 1000) throw new Error('llm.apiKey must be 0-1000 chars');
+  if (!llmHost.keys || typeof llmHost.keys !== 'object') llmHost.keys = {};
+  if (v) llmHost.keys[provider] = v;
+  else delete llmHost.keys[provider];
+}
+
+// Build the per-provider inline-key map from a stored settings.llm blob.
+// Sanitises any persisted `keys` (string values, known providers only) and
+// migrates the two legacy single slots (settings.llm.apiKey /
+// settings.llm.fallback.apiKey). Those were only ever written by the
+// openai-compatible / locca inline-key path, so a value found while the leg's
+// provider is something else is a STALE compat token that leaked into the
+// shared slot (issue #657) — attribute it to its true owner (openai-compatible)
+// rather than the current provider, which both preserves the real key and keeps
+// the env-var provider's slot empty so it resolves from secrets.env again.
+function normalizeLlmKeys(storedLlm: any): Record<string, string> {
+  const out: Record<string, string> = {};
+  const raw = storedLlm?.keys;
+  if (raw && typeof raw === 'object') {
+    for (const p of Object.keys(raw)) {
+      if (LLM_PROVIDERS.includes(p) && typeof raw[p] === 'string' && raw[p]) out[p] = raw[p];
+    }
+  }
+  const ownerFor = (prov: any) =>
+    prov === 'openai-compatible' || prov === 'locca' ? prov : 'openai-compatible';
+  const legacyPrimary = typeof storedLlm?.apiKey === 'string' ? storedLlm.apiKey : '';
+  if (legacyPrimary) {
+    const owner = ownerFor(storedLlm?.provider);
+    if (!out[owner]) out[owner] = legacyPrimary;
+  }
+  const legacyFallback = typeof storedLlm?.fallback?.apiKey === 'string' ? storedLlm.fallback.apiKey : '';
+  if (legacyFallback) {
+    const owner = ownerFor(storedLlm?.fallback?.provider);
+    if (!out[owner]) out[owner] = legacyFallback;
+  }
+  return out;
 }
 
 // Cloud TTS vendors usable by the `cloud` engine. `openai-compatible` targets
@@ -673,7 +718,16 @@ const DEFAULTS = {
   llm: {
     provider: 'ollama',
     model: '',
+    // Legacy single inline-key slot. Superseded by `keys` (per-provider) — kept
+    // only so an old settings.json migrates cleanly. Always '' after load();
+    // resolution reads `keys`, never this. See llmKeyFor() / normalizeLlmKeys().
     apiKey: '',
+    // Per-provider inline API keys, keyed by provider id (issue #657). Only the
+    // inline-key providers (openai-compatible, locca) ever populate this from the
+    // UI — env-var providers (openrouter, anthropic, …) keep their key in
+    // state/secrets.env. Namespacing by provider means switching providers can
+    // never leave one provider's key in the slot another provider then reads.
+    keys: {},
     // Ollama server URL. Empty → fall back to config.ollama.url. Only used
     // when provider === 'ollama'.
     ollamaUrl: '',
@@ -1278,7 +1332,10 @@ export async function load() {
         ? stored.llm.provider
         : DEFAULTS.llm.provider,
       model: typeof stored.llm?.model === 'string' ? stored.llm.model.trim() : DEFAULTS.llm.model,
-      apiKey: typeof stored.llm?.apiKey === 'string' ? stored.llm.apiKey : DEFAULTS.llm.apiKey,
+      // Legacy single slot is migrated into `keys` below, then cleared — there
+      // is exactly one source of truth for inline keys (issue #657).
+      apiKey: '',
+      keys: normalizeLlmKeys(stored.llm),
       ollamaUrl:
         typeof stored.llm?.ollamaUrl === 'string'
           ? stored.llm.ollamaUrl.trim()
@@ -1332,7 +1389,9 @@ export async function load() {
             ? fb.provider
             : DEFAULTS.llm.fallback.provider,
           model: typeof fb.model === 'string' ? fb.model.trim() : DEFAULTS.llm.fallback.model,
-          apiKey: typeof fb.apiKey === 'string' ? fb.apiKey : DEFAULTS.llm.fallback.apiKey,
+          // Legacy fallback slot migrated into settings.llm.keys above, then
+          // cleared. The fallback resolves its key from `keys[fb.provider]`.
+          apiKey: '',
           ollamaUrl:
             typeof fb.ollamaUrl === 'string' ? fb.ollamaUrl.trim() : DEFAULTS.llm.fallback.ollamaUrl,
           baseUrl:
@@ -1509,11 +1568,31 @@ export function getDefaults() {
   return DEFAULTS;
 }
 
+// Resolve the operator-entered inline API key for a provider from the
+// per-provider map (issue #657). Returns '' when none is stored, in which case
+// the registry/embedding layer falls through to the provider's env var
+// (OPENROUTER_API_KEY etc.) exactly as before. This is the single resolution
+// chokepoint — leg assembly (registry.llmCfg / legs.fallbackLeg) and the
+// openai-compatible probe/discovery routes all go through it.
+export function llmKeyFor(provider: string): string {
+  const keys = get().llm?.keys || {};
+  const v = keys[provider];
+  return typeof v === 'string' ? v : '';
+}
+
 // Settings with secret fields masked — for the admin /settings response.
 export function getRedacted() {
   const s = get();
   const clone = JSON.parse(JSON.stringify(s));
-  if (clone.llm) clone.llm.apiKey = s.llm?.apiKey ? 'set' : '';
+  if (clone.llm) {
+    clone.llm.apiKey = s.llm?.apiKey ? 'set' : '';
+    // Per-provider inline keys masked to 'set' | '' per entry, so the admin UI
+    // can show which providers have a key on file without exposing the value.
+    clone.llm.keys = {};
+    for (const p of Object.keys(s.llm?.keys || {})) {
+      clone.llm.keys[p] = s.llm.keys[p] ? 'set' : '';
+    }
+  }
   if (clone.llm?.fallback) clone.llm.fallback.apiKey = s.llm?.fallback?.apiKey ? 'set' : '';
   if (clone.tts?.cloud) clone.tts.cloud.apiKey = s.tts?.cloud?.apiKey ? 'set' : '';
   if (clone.search) clone.search.apiKey = s.search?.apiKey ? 'set' : '';
@@ -2170,6 +2249,9 @@ export async function update(patch) {
   if ('llm' in patch) {
     const l = patch.llm || {};
     applyLlmLegPatch(next.llm, l, 'llm');
+    // Route the primary inline key into keys[provider] AFTER the provider is
+    // resolved, so it's stored under the identity it belongs to (issue #657).
+    applyInlineKey(next.llm, next.llm.provider, l.apiKey);
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
     }
@@ -2210,6 +2292,10 @@ export async function update(patch) {
         next.llm.fallback.enabled = !!fb.enabled;
       }
       applyLlmLegPatch(next.llm.fallback, fb, 'llm.fallback');
+      // Fallback inline key shares the same per-provider map (keys live at
+      // next.llm.keys, not under the fallback) — routed by the fallback's
+      // resolved provider.
+      applyInlineKey(next.llm, next.llm.fallback.provider, fb.apiKey);
       if (
         next.llm.fallback.enabled &&
         next.llm.fallback.provider === 'openai-compatible' &&

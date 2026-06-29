@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { Palette } from 'lucide-react';
+import { Palette, Zap } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useDynamicStyle } from '../hooks/useDynamicStyle';
+import { useLiteMode } from '../hooks/useLiteMode';
 import { useThemeSwitcher } from './ThemeBootstrap';
 
 /** The columns shown in each card's swatch — paper, ink, accent, overlay.
@@ -44,6 +45,7 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const popoverId = useId();
+  const { lite, setLite } = useLiteMode();
 
   // Close on outside click and Escape. mousedown beats click so the popover
   // doesn't flicker when a listener clicks a different control elsewhere in
@@ -179,6 +181,43 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
                 ({themes.find(t => t.id === stationActiveId)?.name ?? stationActiveId})
               </span>
             )}
+          </button>
+
+          {/* Low-power toggle. Drops backdrop blur + animations so weak GPUs
+              (kiosks, Raspberry Pi) stop re-compositing frosted layers every
+              frame. Persists per-browser; a kiosk can also pin it with ?lite=1
+              in its start URL. A top margin sets it off from the theme rows —
+              no section title, by request. */}
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={lite}
+            onClick={() => setLite(!lite)}
+            className={cn(
+              'mt-2 flex w-full items-center gap-2 border px-2 py-1.5 text-left',
+              lite
+                ? 'border-vermilion bg-[var(--ink-softer)]'
+                : 'border-soft-border bg-bg hover:bg-[var(--overlay)]',
+            )}
+          >
+            <Zap className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className="grid min-w-0 flex-1 gap-0.5">
+              <span className="truncate text-[11px] font-bold tracking-[0.12em] uppercase">
+                Lite mode
+              </span>
+              <span className="truncate text-[10px] leading-[1.3] text-muted">
+                Improves performance on low-power screens
+              </span>
+            </span>
+            <span
+              className={cn(
+                'shrink-0 text-[10px] font-bold tracking-[0.2em] uppercase',
+                lite ? 'text-vermilion' : 'text-muted',
+              )}
+              aria-hidden="true"
+            >
+              {lite ? 'On' : 'Off'}
+            </span>
           </button>
         </div>
       )}

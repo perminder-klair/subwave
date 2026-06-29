@@ -43,8 +43,11 @@ export function primaryLeg(): Leg {
 // no model) degrades to "no fallback" rather than throwing over the primary's
 // own error.
 export function fallbackLeg(): Leg | null {
-  const fb = settings.get().llm?.fallback;
-  if (!fb || !fb.enabled) return null;
+  const stored = settings.get().llm?.fallback;
+  if (!stored || !stored.enabled) return null;
+  // Resolve the fallback's inline key per-provider (issue #657) — the stored
+  // fallback.apiKey slot is legacy/empty now. Empty → its env var, as before.
+  const fb = { ...stored, apiKey: settings.llmKeyFor(stored.provider) };
   try {
     return { cfg: fb, model: languageModel(fb), noThinkModel: languageModel(fb, { forceNoThink: true }), label: labelFor(fb) };
   } catch {

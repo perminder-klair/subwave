@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import ManualPage from './ManualPage';
 import StreamUrl from './StreamUrl';
+import ListenLinks from './ListenLinks';
 import CodeBlock from "@/components/CodeBlock";
 
 // Where the "open a network stream" command lives in each VLC build. VLC's
@@ -126,6 +127,27 @@ export default function Clients() {
             Sonos, hardware internet radios, car receivers, and older mobile devices.
           </p>
         </div>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">THE EVEN EASIER WAY</p>
+        <h2>One-tap tune-in links.</h2>
+        <p>
+          Some players — Sonos, moOde, hardware internet radios, car receivers —
+          want a <em>playlist file</em>, not a bare stream address. The station
+          serves both, each a one-line wrapper around the{' '}
+          <code className="bs-code-inline">/stream.mp3</code> mount above:
+        </p>
+        <ListenLinks />
+        <p className="text-muted">
+          Paste either link where the player asks for a station or stream URL and it
+          tunes straight in — no need to type the raw address.{' '}
+          <code className="bs-code-inline">.pls</code> is the most widely supported
+          (Sonos, VLC, foobar2000); <code className="bs-code-inline">.m3u</code> is the
+          fallback for anything that prefers it. Both follow whatever domain you are
+          reading this on, need no sign-in, and add the Opus mount automatically when
+          the operator has enabled it.
+        </p>
       </section>
 
       <section className="bs-section">

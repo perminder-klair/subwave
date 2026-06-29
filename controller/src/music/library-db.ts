@@ -1147,6 +1147,45 @@ export function trackIdsByGenreDecade(): Map<string, string[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Per-genre embedding centroids — the mean text-embedding vector across every
+// tagged+embedded track in each genre. Powers the genre-cloud 2D projection
+// (music/genre-cloud.ts): semantically similar genres land near each other.
+// One streaming SQL join so a multi-thousand-track library stays light on
+// memory — vectors are accumulated into per-genre running sums, never all held
+// at once.
+// ---------------------------------------------------------------------------
+export function genreCentroids(): Array<{ genre: string; count: number; centroid: Float32Array }> {
+  const stmt = requireDb().prepare(
+    `SELECT t.genre AS genre, v.embedding AS embedding
+       FROM tracks t JOIN track_vectors v ON v.id = t.id
+      WHERE t.genre IS NOT NULL AND TRIM(t.genre) != ''`,
+  );
+  const sums = new Map<string, { sum: Float64Array; count: number }>();
+  let dim = 0;
+  for (const row of stmt.iterate() as Iterable<{ genre: string; embedding: Buffer }>) {
+    const b = row.embedding;
+    const vec = new Float32Array(b.buffer, b.byteOffset, Math.floor(b.byteLength / 4));
+    if (!dim) dim = vec.length;
+    if (vec.length !== dim) continue; // defensive: skip any stray off-dim rows
+    let acc = sums.get(row.genre);
+    if (!acc) {
+      acc = { sum: new Float64Array(dim), count: 0 };
+      sums.set(row.genre, acc);
+    }
+    for (let i = 0; i < dim; i++) acc.sum[i] += vec[i];
+    acc.count++;
+  }
+  const out: Array<{ genre: string; count: number; centroid: Float32Array }> = [];
+  for (const [genre, { sum, count }] of sums) {
+    if (!count) continue;
+    const centroid = new Float32Array(dim);
+    for (let i = 0; i < dim; i++) centroid[i] = sum[i] / count;
+    out.push({ genre, count, centroid });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Filter (admin UI library browse panel)
 // ---------------------------------------------------------------------------
 

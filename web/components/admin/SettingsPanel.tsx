@@ -2408,7 +2408,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                     type="password"
                     value={compatKeyInput}
                     onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
-                    placeholder={(data.values?.llm as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                    placeholder={(data.values?.llm as { keys?: Record<string, unknown> })?.keys?.['openai-compatible'] === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
                     className="max-w-[360px]"
                   />
                   <Btn
@@ -2704,7 +2704,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                         type="password"
                         value={compatFallbackKeyInput}
                         onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatFallbackKeyInput(e.target.value)}
-                        placeholder={(data.values?.llm?.fallback as unknown as Record<string, unknown>)?.apiKey === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                        placeholder={(data.values?.llm as { keys?: Record<string, unknown> })?.keys?.['openai-compatible'] === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
                         className="max-w-[360px]"
                       />
                       <Btn

@@ -473,15 +473,25 @@ radio = rotate(
 )
 
 # ---------------------------------------------------------------------------
-# SAFETY — blank detection, fallback to silence-killer playlist
+# SAFETY — fallback to the emergency loop when the source dies
 # ---------------------------------------------------------------------------
 
-# If the source dies, play a static "technical difficulties" loop
+# If the source dies, play a static "technical difficulties" loop. This is the
+# real dead-air guard: `emergency` is an always-ready, non-silent single, so the
+# broadcast never has nothing to pull.
 emergency = single("/sounds/emergency.mp3")
 radio = fallback(track_sensitive=false, [radio, emergency])
 
-# Blank detection — skip if more than 5s of silence
-radio = blank.skip(max_blank=5.0, radio)
+# NOTE: a `blank.skip(max_blank=5.0, radio)` used to sit here to skip >5s of
+# digital silence. It was REMOVED (#660). With no music in the chain — a fresh
+# install pre-onboarding, Navidrome down, or the auto playlist exhausted —
+# blank.skip busy-loops at ~100% CPU: it pegs a core and stops feeding Icecast,
+# so /stream.mp3 starts returning 404. The spin happens in ANY position (before
+# OR after this fallback — both were measured at ~100% CPU on an empty-library
+# broadcast; removing the operator drops it to ~5%), so reordering does not help.
+# The emergency single above already covers the only case blank.skip protected
+# against in practice (a dead source), so the silence-skip is not worth a
+# fresh-install-breaking CPU spin.
 
 # ---------------------------------------------------------------------------
 # BROADCAST BUS — masters preserved, brick-wall as the only safety
@@ -750,7 +760,7 @@ server.register(
 )
 
 # Skip the currently playing track. `radio` is the final broadcast source;
-# .skip() propagates down through compress → blank.skip → fallback → rotate →
+# .skip() propagates down through compress → fallback → rotate →
 # smooth_add → cross → music, force-ending the current track. `cross` then
 # runs the normal dj_transition crossfade into the next track (next dj_queue
 # item, else auto_playlist). Operator-only — listeners can't reach this.

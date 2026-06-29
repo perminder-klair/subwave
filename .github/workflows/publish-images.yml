@@ -77,7 +77,18 @@ jobs:
               WITH_CLAP=1
               WITH_DEMUCS=1
     steps:
+      # fetch-depth: 0 pulls full history + tags so `git describe` resolves the
+      # version on a workflow_dispatch from a branch (a tag push already has the
+      # tag at HEAD).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The version stamped into the images (admin footer + controller). On a tag
+      # push `git describe` returns the tag (e.g. v0.31.0); a branch dispatch
+      # yields <tag>-<n>-g<sha>. Empty → builds fall back to package.json.
+      - id: version
+        run: echo "version=$(git describe --tags --always 2>/dev/null || echo '')" >> "$GITHUB_OUTPUT"
 
       # QEMU provides the cross-arch emulation buildx needs to build the
       # linux/arm64 variant on the amd64 GitHub runner.
@@ -106,7 +117,9 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           platforms: ${{ matrix.platforms }}
-          build-args: ${{ matrix.build_args }}
+          build-args: |
+            ${{ matrix.build_args }}
+            SUBWAVE_BUILD_VERSION=${{ steps.version.outputs.version }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
