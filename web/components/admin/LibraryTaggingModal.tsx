@@ -195,8 +195,9 @@ export default function LibraryTaggingModal(p: Props) {
         {tab === 'audio' && (
           <>
             <p className="text-[12px] leading-[1.55] text-muted">
-              Optional acoustic analysis. Improves beat-matching and enables
-              &ldquo;sounds-like&rdquo; picks; tagging works fine without it.
+              Two optional, heavier dimensions on top of bpm/key. They sharpen the
+              DJ&rsquo;s picks but it plays fine without them — and they run on the
+              analysis engine, not the LLM, so they don&rsquo;t cost model calls.
             </p>
             {p.analysisOff ? (
               <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink">
@@ -206,8 +207,9 @@ export default function LibraryTaggingModal(p: Props) {
               </div>
             ) : (
               <div className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-center gap-3">
-                  <span className="caption flex items-center gap-2"><Activity size={13} /> Audio fingerprint · sounds-like</span>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <span className="caption flex items-center gap-2"><Activity size={13} /> Sounds-like fingerprints</span>
+                  <Chip>slow</Chip>
                   {p.audioEnabled && (
                     <Btn sm tone="accent" onClick={() => { p.onAnalyzeAudio(); p.onOpenChange(false); }} disabled={p.busy || p.audioIncapable}>
                       <Play size={12} /> {p.audioOn ? 'Analyze new tracks' : 'Analyze library'}
@@ -216,6 +218,10 @@ export default function LibraryTaggingModal(p: Props) {
                   <Btn sm onClick={p.onToggleAudio} disabled={p.busy}>
                     {p.audioEnabled ? 'Disable' : 'Enable'}
                   </Btn>
+                  <span className="caption basis-full !tracking-[0.04em] !normal-case">
+                    Fingerprints how each track sounds (CLAP) for &ldquo;sounds-like&rdquo; picks
+                    and sonic journeys. ~1-2s/track on the analysis engine.
+                  </span>
                 </div>
                 {p.audioIncapable && p.audioEnabled && (
                   <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink">
@@ -227,8 +233,9 @@ export default function LibraryTaggingModal(p: Props) {
                 {/* vocal activity (#646) — Enable always reachable here; the
                     panel's coverage row is what stays hidden until opted in */}
                 <div className="flex flex-col gap-2.5 border-t border-dashed border-separator-strong pt-3">
-                    <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                       <span className="caption flex items-center gap-2"><Activity size={13} /> Vocal activity · instrumental detection</span>
+                      <Chip>very slow</Chip>
                       {p.vocalEnabled && (
                         <Btn sm tone="accent" onClick={() => { p.onVocalBackfill(); p.onOpenChange(false); }} disabled={p.busy || p.vocalIncapable}>
                           <Play size={12} /> {p.vocalOn ? 'Backfill missing' : 'Analyze vocals'}
@@ -239,8 +246,8 @@ export default function LibraryTaggingModal(p: Props) {
                       </Btn>
                     </div>
                     <p className="caption !tracking-[0.04em] !normal-case">
-                      Separates vocals from the mix so the DJ can tell instrumental vs vocal tracks and
-                      time talk before lyrics. Expensive — runs on the analysis engine.
+                      Separates vocals from the mix so the DJ can tell instrumental vs vocal tracks
+                      and time talk before lyrics. Demucs source separation — ~10-30s/track on CPU.
                     </p>
                     {p.vocalIncapable && p.vocalEnabled && (
                       <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink">
@@ -263,8 +270,8 @@ export default function LibraryTaggingModal(p: Props) {
           <>
             <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1.5">
               <span className="max-w-[52ch] text-[12px] leading-[1.55] text-muted">
-                Only needed after changing the LLM, embedding model, or analysis engine.
-                Existing mood tags are kept as seeds.
+                Redo work you&rsquo;ve already done — only needed after changing the LLM,
+                embedding model, or analysis engine. Existing mood tags are kept as seeds.
               </span>
               <button
                 type="button"
@@ -278,14 +285,14 @@ export default function LibraryTaggingModal(p: Props) {
               </button>
             </div>
             <div className="grid gap-2.5">
-              <Pass on={!!passes.reseed} onClick={() => togglePass('reseed')} name="Re-embed all tracks"
-                hint="Drop & rebuild every vector. Run after changing the embedding model." />
-              <Pass on={!!passes.reEnrich} onClick={() => togglePass('reEnrich')} name="Re-enrich metadata"
-                hint="Re-fetch Last.fm tags + lyrics that feed the tagging." />
-              <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics"
-                hint="Redo BPM / key for every track. Also refreshes sounds-like fingerprints when enabled." />
-              <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods"
-                hint="Re-tag tracks whose prompt or model is now stale." />
+              <Pass on={!!passes.reseed} onClick={() => togglePass('reseed')} name="Re-embed all tracks" tag="slow"
+                hint="Drop & rebuild every similarity vector from scratch — re-spends embedding calls. Only after changing the embedding model." />
+              <Pass on={!!passes.reEnrich} onClick={() => togglePass('reEnrich')} name="Re-enrich metadata" tag="network"
+                hint="Re-fetch Last.fm tags + lyrics across the whole library. External API calls — slow on a big library." />
+              <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics" tag="very slow"
+                hint="Redo bpm/key for every track, plus sounds-like + vocal when enabled. The heaviest pass — Demucs can run for hours." />
+              <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods" tag="AI · billed"
+                hint="Re-tag tracks whose prompt or model has gone stale. Uses model calls." />
             </div>
             <div className="flex items-center justify-end gap-2.5 border-t border-dashed border-separator-strong pt-3.5">
               <Btn onClick={() => p.onOpenChange(false)}>Cancel</Btn>
@@ -324,14 +331,20 @@ function Pass({ on, onClick, name, hint, disabled, tag }: {
       <span>
         <span className="lib-pass-name">
           {name}
-          {tag && (
-            <span className="ml-2 rounded-[3px] border border-separator-strong bg-[var(--ink-soft)] px-1.5 py-px align-[1.5px] text-[9px] font-bold tracking-[0.08em] text-muted uppercase">
-              {tag}
-            </span>
-          )}
+          {tag && <span className="ml-2 inline-block align-[1.5px]"><Chip>{tag}</Chip></span>}
         </span>
         <span className="lib-pass-hint">{hint}</span>
       </span>
     </button>
+  );
+}
+
+// Small uppercase cost/characteristic badge — quick / network / AI · billed /
+// slow / very slow. Shared by the step rows and the Acoustic & audio headers.
+function Chip({ children }: { children: string }) {
+  return (
+    <span className="rounded-[3px] border border-separator-strong bg-[var(--ink-soft)] px-1.5 py-px text-[9px] font-bold tracking-[0.08em] text-muted uppercase">
+      {children}
+    </span>
   );
 }
