@@ -63,6 +63,12 @@ export function startTagger(
   if (reEnrich) args.push('--re-enrich');
   if (reAnalyze) args.push('--re-analyze');
   if (upgrade) args.push('--upgrade');
+  // Any re-* pass means this came from the admin Re-scan tab → --rescan, which
+  // scopes every pass to already-done tracks and suppresses forward discovery of
+  // the untagged remainder. (Raw CLI re-* flags without --rescan keep their
+  // documented per-flag, full-library meaning.)
+  const rescan = !!(reseed || reEnrich || reAnalyze || upgrade);
+  if (rescan) args.push('--rescan');
   // Step deselections → skip flags. Only an explicit `false` skips; undefined
   // leaves the phase on so omitting the fields keeps the legacy full-run.
   if (enrich === false) args.push('--skip-enrich');
@@ -75,6 +81,7 @@ export function startTagger(
 
   const detail = [
     Number.isFinite(limit) && (limit as number) > 0 ? `limit=${limit}` : null,
+    rescan ? 'rescan' : null,
     reseed ? 'reseed' : null,
     reEnrich ? 're-enrich' : null,
     reAnalyze ? 're-analyze' : null,

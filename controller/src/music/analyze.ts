@@ -19,6 +19,11 @@ import { reportProgress } from './tagger-progress.js';
 export interface AnalyzeOptions {
   limit?: number;        // cap tracks this run (default: all that need it)
   reAnalyze?: boolean;   // drop existing analysis first, redo everything
+  // Re-scan mode: a --re-analyze redoes ONLY the already-analysed population
+  // (captured before the clear), never the un-analysed remainder. The raw
+  // standalone `npm run analyze --re-analyze` leaves this off and redoes the
+  // whole library as documented.
+  rescan?: boolean;
   // Widen the scope to tracks that have bpm/key but no CLAP audio vector yet
   // (analysed before audio embeddings were enabled). Only meaningful when the
   // backend actually emits embeddings; defaults from ANALYZE_AUDIO_EMBEDDING.
@@ -96,21 +101,37 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   const vocalWanted = opts.vocalBackfill ?? vocalBackfillDefault();
   const vocalBackfill = vocalWanted && analyzer.vocalActivityAvailable() !== false;
 
+  // A re-scan re-analyse is scoped to the tracks that were ALREADY analysed —
+  // snapshot them before the clear wipes the bpm marker. A raw --re-analyze
+  // leaves reAnalyzeScope null and redoes the whole library (needsAnalysisIds
+  // returns everything once the version markers are cleared).
+  let reAnalyzeScope: string[] | null = null;
   if (opts.reAnalyze) {
+    if (opts.rescan) reAnalyzeScope = db.analysedIds();
     db.clearAnalysis({ keepVocal: !vocalBackfill });
-    console.log(`[analyze] --re-analyze: cleared existing analysis${vocalBackfill ? '' : ' (kept vocal ranges)'}`);
+    console.log(
+      `[analyze] --re-analyze: cleared existing analysis${vocalBackfill ? '' : ' (kept vocal ranges)'}` +
+        (reAnalyzeScope ? ` — re-scan scope: ${reAnalyzeScope.length} already-analysed tracks` : ''),
+    );
   }
 
   const cap = opts.limit && opts.limit > 0 ? opts.limit : undefined;
-  const bpmIds = db.needsAnalysisIds(cap);
+  const bpmIds = reAnalyzeScope
+    ? (cap ? reAnalyzeScope.slice(0, cap) : reAnalyzeScope)
+    : db.needsAnalysisIds(cap);
   let ids = bpmIds;
 
   // Audio backfill: also target already-analysed tracks that lack a CLAP audio
   // vector, so enabling embeddings on a previously-analysed library fills it in
   // without a full --re-analyze. Re-running analysis on these recomputes bpm/key
   // (same values, harmless) and stores the new audio vector from the same call.
+  // `audioBackfill` stays the "CLAP wanted" signal (drives the per-track embed
+  // flag below); the widening is gated separately on !reAnalyzeScope. A re-scan
+  // re-analyse already has a FIXED scope (the previously-analysed set) and
+  // re-embeds CLAP for those via embed:true — so it must NOT widen, or it'd pull
+  // the whole library back in (every track looks vector-less right after the clear).
   const audioBackfill = opts.audioBackfill ?? audioBackfillDefault();
-  if (audioBackfill) {
+  if (audioBackfill && !reAnalyzeScope) {
     const seen = new Set(bpmIds);
     const audioIds = db.unanalysedAudioIds(cap).filter(id => !seen.has(id));
     ids = cap ? [...bpmIds, ...audioIds].slice(0, cap) : [...bpmIds, ...audioIds];
@@ -131,7 +152,10 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // backend / not yet probed) keeps today's behaviour. isAvailable() above has
   // already probed the sidecar, so the capability is current here.
   // (vocalWanted / vocalBackfill resolved up front — see the clear above.)
-  if (vocalBackfill) {
+  // Widening is suppressed under a fixed re-scan scope for the same reason as
+  // audio above; the per-track vocal:true flag below still re-runs Demucs for the
+  // in-scope tracks, so vocal ranges are rebuilt without dragging in the remainder.
+  if (vocalBackfill && !reAnalyzeScope) {
     const seen = new Set(ids);
     const vocalIds = db.needsVocalIds(cap).filter(id => !seen.has(id));
     const before = ids.length;
@@ -139,7 +163,10 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     if (ids.length > before) {
       console.log(`[analyze] vocal backfill: +${ids.length - before} tracks missing vocal-activity ranges`);
     }
-  } else if (vocalWanted) {
+  } else if (vocalWanted && !reAnalyzeScope) {
+    // Only warn when widening was actually attempted (not under a fixed re-scan
+    // scope, where the per-track vocal flag handles the rebuild and capability is
+    // surfaced in the admin UI instead).
     console.log('[analyze] vocal backfill skipped — backend has no Demucs (build tts-heavy WITH_DEMUCS=1 to enable vocal ranges)');
   }
 

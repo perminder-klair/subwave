@@ -24,7 +24,11 @@
 //                         "Reconcile with Navidrome" step deselected)
 //   --vocal / --no-vocal  force the Phase-5 Demucs vocal pass on / off for this
 //                         run (else defers to settings.audio.vocalActivity)
-//   --upgrade             re-tag only rows with stale promptHash or model
+//   --upgrade             re-LLM-tag only tagged rows with stale promptHash/model
+//                         (never source='manual'). The "Re-decide moods" pass.
+//   --rescan              re-scan mode: fire ONLY the selected re-* passes, each
+//                         scoped to already-done tracks; never forward-process the
+//                         untagged remainder (set by the admin Re-scan tab)
 //
 // On boot the library-db auto-migrates any state/moods.json into the SQLite
 // tracks table as legacy v1 entries (see library-db.ts).
@@ -45,6 +49,7 @@ import { isUnreachable, isQuotaOrAuthError } from '../llm/sdk.js';
 import { tagBatch, tagOne, TAGGER_BATCH_SYSTEM, type TagResult } from './tagger-core.js';
 import { runAnalysisPass } from './analyze.js';
 import { reportProgress, formatPhaseBreakdown, sortedPhaseTimings } from './tagger-progress.js';
+import { planRun } from './rescan-scope.js';
 import { mapPool, memoizeByKey } from '../util/async-pool.js';
 
 // ---------------------------------------------------------------------------
@@ -91,6 +96,11 @@ interface CliFlags {
   // without the slow Demucs pass (or include it) without touching the setting.
   vocal: boolean;
   noVocal: boolean;
+  // Re-scan mode (admin Re-scan tab). Fire ONLY the selected re-* passes, each
+  // scoped to already-done tracks; the forward seed→propagate→active-learn
+  // discovery is suppressed so the untagged remainder is never processed. Raw CLI
+  // re-* flags (no --rescan) keep their documented per-flag, full-library meaning.
+  rescan: boolean;
 }
 
 function parseFlags(): CliFlags {
@@ -105,9 +115,9 @@ function parseFlags(): CliFlags {
     reseed: args.includes('--reseed'),
     reEnrich: args.includes('--re-enrich'),
     skipEnrich: args.includes('--skip-enrich'),
-    // Not implemented yet. When a stale-re-tag pass is built, its row
-    // selection MUST exclude source='manual' — operator-set tags are ground
-    // truth and never go stale with prompt/model changes.
+    // Re-decide moods: re-LLM-tag tagged rows whose prompt/model went stale. Row
+    // selection (db.staleTaggedIds) excludes source='manual' — operator-set tags
+    // are ground truth and never go stale with prompt/model changes.
     upgrade: args.includes('--upgrade'),
     skipAnalyze: args.includes('--skip-analyze'),
     reAnalyze: args.includes('--re-analyze'),
@@ -120,6 +130,7 @@ function parseFlags(): CliFlags {
     noPrune: args.includes('--no-prune'),
     vocal: args.includes('--vocal'),
     noVocal: args.includes('--no-vocal'),
+    rescan: args.includes('--rescan'),
   };
 }
 
@@ -274,7 +285,13 @@ async function main() {
       `moodVote=${moodVoteThreshold} confidence=${confidenceThreshold}`,
   );
 
+  // A re-scan re-embed rebuilds vectors only for the already-embedded population —
+  // snapshot it BEFORE the drop (afterwards every track looks unembedded). A
+  // normal --reseed run rebuilds vectors as part of its forward pass and doesn't
+  // need the snapshot. Used by the plan.reEmbed branch below.
+  let reembedIds: string[] = [];
   if (flags.reseed) {
+    if (flags.rescan) reembedIds = db.embeddedIds();
     console.log('[tag] --reseed: dropping track_vectors, re-embedding from scratch');
     db.dropVectors();
   }
@@ -312,15 +329,33 @@ async function main() {
   }
   lap('walk');
 
-  // Honour --limit by capping how many NEW tracks we work on this run.
-  // We do this by selecting the first N untagged ids; ones beyond the cap
-  // wait for the next run.
+  // Which phases run this pass. A re-scan fires only the selected re-* passes and
+  // suppresses forward discovery; a normal run is a full forward pass minus any
+  // deselected steps (pure decision, unit-pinned in rescan-scope.test.ts).
+  const plan = planRun(flags);
+
+  // Forward "Run" scope: the untagged tracks this run discovers + tags. A re-scan
+  // redoes already-done work for the EXISTING population, so its forward scope is
+  // empty — each re-* pass below redoes only the tracks that already carry that
+  // artifact (enriched / embedded / analysed / tagged), never the remainder.
+  // Honour --limit on a forward run by capping how many NEW tracks we work on;
+  // ones beyond the cap wait for the next run.
   const allUntagged = db.untaggedIds();
-  const targetUntagged =
-    flags.limit === Infinity ? allUntagged : allUntagged.slice(0, flags.limit);
-  console.log(
-    `[tag] ${targetUntagged.length} untagged tracks in scope this run (of ${allUntagged.length} total untagged)`,
-  );
+  const targetUntagged = flags.rescan
+    ? []
+    : flags.limit === Infinity
+      ? allUntagged
+      : allUntagged.slice(0, flags.limit);
+  if (flags.rescan) {
+    console.log(
+      `[tag] re-scan mode: redoing selected passes for already-done tracks ` +
+        `(not forward-processing ${allUntagged.length} untagged)`,
+    );
+  } else {
+    console.log(
+      `[tag] ${targetUntagged.length} untagged tracks in scope this run (of ${allUntagged.length} total untagged)`,
+    );
+  }
 
   // ---- Phase 0: ENRICH ---------------------------------------------------
   // Normal runs enrich only the in-scope untagged tracks. A --re-enrich pass is
@@ -330,18 +365,22 @@ async function main() {
   // library and made re-enrich a silent no-op (issue #531). The per-track
   // enrichedAt cache is bypassed inside phaseEnrich when reEnrich is set; --limit
   // still caps the count so a partial refresh is possible.
-  if (!flags.skipEnrich) {
+  if (plan.enrich) {
     const enrichIds = selectEnrichIds({
       reEnrich: flags.reEnrich,
+      rescan: flags.rescan,
       limit: flags.limit,
       liveIds,
+      // Re-scan re-enrich redoes only the already-enriched population.
+      enrichedIds: flags.rescan ? db.enrichedIds() : undefined,
       targetUntagged,
     });
     if (flags.reEnrich) {
-      console.log(`[tag] --re-enrich: refreshing metadata for ${enrichIds.length} tracks`);
+      const scopeNote = flags.rescan ? 'already-enriched tracks' : 'tracks';
+      console.log(`[tag] --re-enrich: refreshing metadata for ${enrichIds.length} ${scopeNote}`);
     }
     await phaseEnrich(enrichIds, flags.reEnrich);
-  } else {
+  } else if (flags.skipEnrich) {
     console.log('[tag] --skip-enrich: not fetching Last.fm tags or lyrics');
   }
   lap('enrich');
@@ -349,13 +388,13 @@ async function main() {
   // ---- Phases 1-4: TAG MOODS (embed → seed → propagate → active-learn) ----
   // Wrapped as the user-facing "Tag moods" step: --skip-tag skips all four so a
   // run can refresh enrichment and/or acoustics without writing embeddings or
-  // moods. llmCalls/llmTagged are hoisted here so finish() still reports 0 when
-  // tagging is skipped.
+  // moods. A re-scan suppresses these forward-discovery phases entirely
+  // (plan.forwardTag === false) and runs the scoped re-embed / re-decide passes
+  // below instead. llmCalls/llmTagged are hoisted here so finish() still reports
+  // 0 when tagging is skipped.
   let llmCalls = 0;
   let llmTagged = 0;
-  if (flags.skipTag) {
-    console.log('[tag] --skip-tag: skipping embed + mood tagging (phases 1-4)');
-  } else {
+  if (plan.forwardTag) {
     // ---- Phase 1: EMBED ----------------------------------------------------
     await phaseEmbed(targetUntagged, flags.batchSize);
     lap('embed');
@@ -528,17 +567,58 @@ async function main() {
       uncertain = stillUncertain;
     }
     lap('learn');
-  } // end "Tag moods" step (!flags.skipTag)
+  } else if (flags.skipTag) {
+    console.log('[tag] --skip-tag: skipping embed + mood tagging (phases 1-4)');
+  } // end forward "Tag moods" step (plan.forwardTag)
+
+  // ---- Re-scan: RE-EMBED (model swap) ------------------------------------
+  // Rebuild vectors for the already-embedded population only (snapshotted before
+  // the drop above) — never the untagged remainder. phaseEmbed also re-embeds any
+  // tagged row that lost its vector, so the KNN graph the existing tags anchor is
+  // fully restored under the new model.
+  if (plan.reEmbed) {
+    console.log(`[tag] re-embed: rebuilding ${reembedIds.length} vectors from scratch`);
+    await phaseEmbed(reembedIds, flags.batchSize);
+    lap('embed');
+  }
+
+  // ---- Re-scan: RE-DECIDE moods ------------------------------------------
+  // Re-LLM-tag tagged rows whose prompt or model went stale (never manual). With
+  // no prompt/model change nothing is stale → clean no-op. Scoped to the existing
+  // tagged set, so it never reaches into the untagged remainder.
+  if (plan.reDecide) {
+    const stale = db.staleTaggedIds(
+      promptHash,
+      modelLabel,
+      flags.limit === Infinity ? undefined : flags.limit,
+    );
+    if (stale.length === 0) {
+      console.log('[tag] re-decide: no tagged rows are stale (prompt/model unchanged) — nothing to redo');
+    } else {
+      console.log(`[tag] re-decide: re-tagging ${stale.length} stale row(s)`);
+      const tagged = await llmTagInBatches(
+        stale, flags.batchSize, promptHash, 'llm', tagConsumers, { phase: 'seed' },
+      );
+      llmCalls += tagged.callCount;
+      llmTagged += tagged.tagged;
+      mergeByLeg(tagged.byLeg);
+      console.log(`[tag] re-decide done: ${tagged.tagged}/${stale.length} re-tagged`);
+    }
+    lap('seed');
+  }
 
   // ---- Phase 5: ANALYZE (acoustic bpm/key/intro) -------------------------
   // Independent of mood tagging — runs the same pass as `npm run analyze`.
   // No-ops cleanly when no analysis backend (tts-heavy sidecar / local
-  // librosa venv) is reachable, so it never blocks a tag run.
-  if (!flags.skipAnalyze) {
+  // librosa venv) is reachable, so it never blocks a tag run. In a re-scan it
+  // runs only when "Re-analyse" was selected (plan.analyze), and scopes to the
+  // already-analysed set (rescan flag threaded through).
+  if (plan.analyze) {
     try {
       await runAnalysisPass({
         limit: flags.limit === Infinity ? undefined : flags.limit,
         reAnalyze: flags.reAnalyze,
+        rescan: flags.rescan,
         // Tri-state: --vocal forces the Demucs pass on, --no-vocal forces it off,
         // neither (undefined) defers to settings.audio.vocalActivity / env.
         vocalBackfill: flags.vocal ? true : flags.noVocal ? false : undefined,
