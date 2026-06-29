@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
 import { Card } from './ui';
+import { V3AlertDialog } from '../ui/alert-dialog';
 import type { Persona, PersonaTts, FormState, SettingsResponse } from './personas/types';
 import { DIAL_NEUTRAL, PERSONA_MAX, PROMPT_MIN, PROMPT_MAX } from './personas/constants';
 import {
@@ -40,6 +41,8 @@ export default function PersonasPanel() {
   // Per-persona "uploading" flag — drives the spinner / disables the buttons
   // while the request is in flight.
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  // Index of the persona pending a delete-confirm (null = no dialog open).
+  const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
   // The editor block. After adding a persona we scroll it into view so the
   // operator actually sees the new persona open for editing — it stacks below
   // the roster and would otherwise be off-screen.
@@ -400,7 +403,7 @@ export default function PersonasPanel() {
         onGenerateAvatar={generateAvatar}
         onClearAvatar={clearAvatar}
         onSetActive={() => setForm(f => f ? ({ ...f, activePersonaId: focused.id }) : f)}
-        onRemove={() => { removePersona(safeIdx); setFocusIdx(i => Math.max(0, i - 1)); }}
+        onRemove={() => setConfirmDeleteIdx(safeIdx)}
         canSave={canSave}
         focusedOk={focusedOk}
         allPersonasOk={allPersonasOk}
@@ -408,6 +411,29 @@ export default function PersonasPanel() {
         busy={busy}
         onSave={save}
         onDiscard={load}
+      />
+
+      <V3AlertDialog
+        open={confirmDeleteIdx !== null}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteIdx(null); }}
+        title="Delete persona"
+        description={
+          <>
+            Remove{' '}
+            <b>{confirmDeleteIdx !== null ? (form.personas[confirmDeleteIdx]?.name.trim() || 'this persona') : 'this persona'}</b>
+            {' '}from the roster? Nothing is permanent until you Save persona.
+          </>
+        }
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        danger
+        onConfirm={() => {
+          if (confirmDeleteIdx !== null) {
+            removePersona(confirmDeleteIdx);
+            setFocusIdx(i => Math.max(0, i - 1));
+          }
+          setConfirmDeleteIdx(null);
+        }}
       />
     </div>
   );
