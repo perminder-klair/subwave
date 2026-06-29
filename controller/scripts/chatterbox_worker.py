@@ -44,11 +44,44 @@ def log(msg):
 def main():
     try:
         import torch
-        import torchaudio as ta
+        import soundfile as sf
         from chatterbox.tts_turbo import ChatterboxTurboTTS
     except Exception as e:
         emit({"id": None, "ok": False, "fatal": True, "error": f"import failed: {e}"})
         sys.exit(1)
+
+    # --- torch >= 2.9 float64 guard (RTX 50-series / Blackwell) ----------------
+    # The CUDA build for newer cards (sm_120) runs chatterbox-tts — which is
+    # built against torch 2.6 — on torch >= 2.9, and 2.9 is strict about dtype
+    # mismatches. In ChatterboxTurboTTS.prepare_conditionals the reference clip
+    # is loudness-normalised by multiplying with a pyloudnorm float64 gain, which
+    # upcasts the waveform to float64; that array then flows through
+    # librosa.resample into the voice encoder as a Double tensor and trips
+    # "expected scalar type Float but found Double" (torch 2.6 silently promoted
+    # it). Coerce librosa's audio output back to float32 at the source. No-op on
+    # the CPU / older-GPU paths, where the audio is already float32.
+    try:
+        import librosa
+
+        _orig_load = librosa.load
+        _orig_resample = librosa.resample
+
+        def _load_f32(*args, **kwargs):
+            y, sr = _orig_load(*args, **kwargs)
+            if hasattr(y, "dtype") and y.dtype != "float32":
+                y = y.astype("float32")
+            return y, sr
+
+        def _resample_f32(*args, **kwargs):
+            y = _orig_resample(*args, **kwargs)
+            if hasattr(y, "dtype") and y.dtype != "float32":
+                y = y.astype("float32")
+            return y
+
+        librosa.load = _load_f32
+        librosa.resample = _resample_f32
+    except Exception as e:
+        log(f"librosa float32 guard not applied: {e}")
 
     device = DEVICE
     if device == "cuda" and not torch.cuda.is_available():
@@ -93,13 +126,24 @@ def main():
             else:
                 wav = model.generate(text)
 
-            # generate() returns a torch tensor shaped [channels, samples];
-            # torchaudio.save needs it on CPU.
+            # generate() returns a torch tensor shaped [channels, samples].
+            # Write via soundfile (libsndfile) rather than torchaudio.save:
+            # torch >= 2.8 routes torchaudio.save through torchcodec — an extra
+            # native dep that isn't in the image and whose libnvrtc mismatches
+            # the cu128 wheels on the GPU build. soundfile is already present
+            # (librosa depends on it) and writes the same WAV. It wants a numpy
+            # array shaped [samples] (mono) or [samples, channels].
+            if hasattr(wav, "detach"):
+                wav = wav.detach()
             if hasattr(wav, "cpu"):
                 wav = wav.cpu()
-            ta.save(out, wav, sample_rate)
+            samples = wav.numpy() if hasattr(wav, "numpy") else wav
+            if getattr(samples, "ndim", 1) == 2:
+                # [channels, samples] -> mono [samples] or [samples, channels]
+                samples = samples[0] if samples.shape[0] == 1 else samples.T
+            sf.write(out, samples, sample_rate)
 
-            duration = float(wav.shape[-1]) / float(sample_rate)
+            duration = float(samples.shape[0]) / float(sample_rate)
             emit({"id": req_id, "ok": True, "path": out, "duration_s": round(duration, 3)})
         except Exception as e:
             log(f"request failed: {e}\n{traceback.format_exc()}")

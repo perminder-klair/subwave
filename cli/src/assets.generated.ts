@@ -227,6 +227,10 @@ services:
         # and layer on docker-compose.tts-heavy-gpu.yml (device reservation +
         # TTS_HEAVY_DEVICE=cuda). Source build only. See docs/gpu-tts.md.
         CHATTERBOX_TORCH_INDEX_URL: \${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        # RTX 50-series (Blackwell) only: chatterbox-tts pins torch==2.6.0, which
+        # has no sm_120 kernels. Set a newer spec to override the pin, paired with
+        # a cu128 index above, e.g. CHATTERBOX_TORCH_SPEC="torch==2.9.1 torchaudio==2.9.1".
+        CHATTERBOX_TORCH_SPEC: \${CHATTERBOX_TORCH_SPEC:-}
     # amd64-only image (heavy PyTorch stack); pinned so it runs under emulation
     # on arm64 hosts. The other services are multi-arch and auto-select.
     platform: linux/amd64
@@ -456,6 +460,10 @@ services:
         # layer on docker-compose.tts-heavy-gpu.yml. Defaults to CPU wheels.
         # Source build only. See docs/gpu-tts.md.
         CHATTERBOX_TORCH_INDEX_URL: \${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        # RTX 50-series (Blackwell) only: override chatterbox-tts's torch==2.6.0
+        # pin (no sm_120 kernels) with a newer spec + a cu128 index above, e.g.
+        # CHATTERBOX_TORCH_SPEC="torch==2.9.1 torchaudio==2.9.1". See docs/gpu-tts.md.
+        CHATTERBOX_TORCH_SPEC: \${CHATTERBOX_TORCH_SPEC:-}
     # amd64-only image (heavy PyTorch stack); pinned so it runs under emulation
     # on arm64 hosts. The other services are multi-arch and auto-select.
     platform: linux/amd64
@@ -653,6 +661,10 @@ services:
         # layer on docker-compose.tts-heavy-gpu.yml. Defaults to CPU wheels.
         # Source build only. See docs/gpu-tts.md.
         CHATTERBOX_TORCH_INDEX_URL: \${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        # RTX 50-series (Blackwell) only: override chatterbox-tts's torch==2.6.0
+        # pin (no sm_120 kernels) with a newer spec + a cu128 index above, e.g.
+        # CHATTERBOX_TORCH_SPEC="torch==2.9.1 torchaudio==2.9.1". See docs/gpu-tts.md.
+        CHATTERBOX_TORCH_SPEC: \${CHATTERBOX_TORCH_SPEC:-}
     platform: linux/amd64
     container_name: sub-wave-tts-heavy
     restart: unless-stopped
@@ -705,6 +717,13 @@ export const COMPOSE_TTS_HEAVY_GPU_YML = `# GPU opt-in overlay for the tts-heavy
 #
 # (BYO reverse-proxy hosts: swap docker-compose.yml for docker-compose.byo.yml.)
 #
+# RTX 50-series (Blackwell / sm_120): chatterbox-tts pins torch==2.6.0, which has
+# no sm_120 kernels, so the default cu124 build loads but 500s at synthesis. Use
+# a cu128 index AND override the pin:
+#
+#   echo 'CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128' >> .env
+#   echo 'CHATTERBOX_TORCH_SPEC=torch==2.9.1 torchaudio==2.9.1' >> .env
+#
 # Requirements: an NVIDIA GPU with the driver + NVIDIA Container Toolkit
 # installed. Pick the cuXXX wheel tag that matches your driver — see
 # https://pytorch.org/get-started/locally/. Full guide: docs/gpu-tts.md.
@@ -717,6 +736,17 @@ services:
       # CUDA isn't actually visible, so a misconfigured host degrades, not fails.
       - TTS_HEAVY_DEVICE=cuda
     # Hand the GPU into the container (needs the NVIDIA Container Toolkit).
+    #
+    # The deploy.resources reservation below is the modern (CDI) path. On hosts
+    # where the NVIDIA runtime is registered in LEGACY mode, that reservation
+    # fails with "could not select device driver nvidia"; there, delete the
+    # \`deploy:\` block and instead use the legacy runtime:
+    #
+    #   runtime: nvidia
+    #   environment:
+    #     - TTS_HEAVY_DEVICE=cuda
+    #     - NVIDIA_VISIBLE_DEVICES=all
+    #     - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     deploy:
       resources:
         reservations:

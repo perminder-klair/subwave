@@ -155,6 +155,10 @@ services:
         # layer on docker-compose.tts-heavy-gpu.yml. Defaults to CPU wheels.
         # Source build only. See docs/gpu-tts.md.
         CHATTERBOX_TORCH_INDEX_URL: ${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        # RTX 50-series (Blackwell) only: override chatterbox-tts's torch==2.6.0
+        # pin (no sm_120 kernels) with a newer spec + a cu128 index above, e.g.
+        # CHATTERBOX_TORCH_SPEC="torch==2.9.1 torchaudio==2.9.1". See docs/gpu-tts.md.
+        CHATTERBOX_TORCH_SPEC: ${CHATTERBOX_TORCH_SPEC:-}
     platform: linux/amd64
     container_name: sub-wave-tts-heavy
     restart: unless-stopped
