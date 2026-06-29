@@ -78,12 +78,14 @@ export function budgetMode(
 // Transient vs unreachable error classification
 // ---------------------------------------------------------------------------
 //
-// Three classifiers gate two different recovery mechanisms:
-//   isTransient        → withTransientRetry retries on the SAME leg (5xx / plain 429 / socket).
-//   isUnreachable      → withFailover switches to the BACKUP leg (host is DOWN).
-//   isQuotaOrAuthError → withFailover switches to the BACKUP leg (host UP but
-//                        refusing this leg: quota/usage-limit/billing 429, or
-//                        an auth failure — retrying the same model is futile).
+// Four classifiers gate two different recovery mechanisms:
+//   isTransient         → withTransientRetry retries on the SAME leg (5xx / plain 429 / socket).
+//   isUnreachable       → withFailover switches to the BACKUP leg (host is DOWN).
+//   isQuotaOrAuthError  → withFailover switches to the BACKUP leg (host UP but
+//                         refusing this leg: quota/usage-limit/billing 429, or
+//                         an auth failure — retrying the same model is futile).
+//   isUpstreamOverloaded→ withFailover switches to the BACKUP leg (a reachable
+//                         gateway relayed a saturated upstream — see below).
 // isUnreachable is a strict subset of isTransient: it EXCLUDES 408/425/429/5xx,
 // because a host that answers with a status is reachable — those stay with
 // transient retry on the configured model rather than being masked by a silent
@@ -92,6 +94,15 @@ export function budgetMode(
 // recover this call, so it is pulled OUT of the transient set and fails over
 // instead of pointlessly retrying a dead leg (issue #438 — Ollama Cloud's
 // "weekly usage limit" 429s looped on the exhausted leg and never failed over).
+//
+// isUpstreamOverloaded is the inverse-shaped sibling: it is ADDED to the
+// failover set but deliberately LEFT IN the transient set. An OpenRouter
+// "Upstream error from <provider>: ResourceExhausted" (issue #671) or an
+// Anthropic 529 "Overloaded" means the chosen model/route is saturated right
+// now — which, unlike a quota cap, CAN clear in a second. So withTransientRetry
+// gets first crack on the chosen model (honouring #320); only when the overload
+// persists past that budget does withFailover try the configured fallback model,
+// instead of the call dying on the saturated route having never tried the backup.
 
 const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 const TRANSIENT_CODE = new Set([
@@ -166,6 +177,31 @@ export function isQuotaOrAuthError(err: any): boolean {
   if (AUTH_RE.test(msg)) return true;
   if (QUOTA_RE.test(msg)) return true;
   return false;
+}
+
+// A reachable gateway relayed a saturated upstream: the host answered, but the
+// model/route it fronts is at capacity right now. OpenRouter surfaces this as
+// "Upstream error from <provider>: ResourceExhausted: Worker local total
+// request limit reached (32/32)" (issue #671); Anthropic as a 529 "Overloaded";
+// Vertex/gRPC as RESOURCE_EXHAUSTED. Unlike a quota cap this is NOT the user's
+// account being out of credit (so it is NOT isQuotaOrAuthError) and the host is
+// UP (so it is NOT isUnreachable) — it is a transient capacity blip that CAN
+// clear on a retry. So it deliberately STAYS in the transient set
+// (withTransientRetry gets first crack on the chosen model); withFailover then
+// adds it as a failover trigger, so a persistent overload finally tries the
+// configured fallback model rather than dying on the saturated route. Matched
+// by message because the signal is in the relayed text, plus Anthropic's 529.
+// Kept tight to avoid stealing plain rate-limit 429s (which should stay same-leg
+// transient retries): only an explicit upstream/overload/exhausted phrase or a
+// 529 qualifies — a bare 503 or "rate limit exceeded, slow down" does not.
+const UPSTREAM_OVERLOAD_RE = /upstream error|resource[ _]?exhausted|overloaded|no instances?\b.*\bavailable|worker local total request limit/i;
+
+export function isUpstreamOverloaded(err: any): boolean {
+  if (!err) return false;
+  const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
+  if (status === 529) return true; // Anthropic "Overloaded" — outside TRANSIENT_STATUS
+  const msg = String(err.message || err.cause?.message || '');
+  return UPSTREAM_OVERLOAD_RE.test(msg);
 }
 
 // ---------------------------------------------------------------------------
