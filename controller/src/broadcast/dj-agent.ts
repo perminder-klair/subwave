@@ -166,7 +166,7 @@ export function runActive(): boolean {
 export const PICK_SCHEMA = z.object({
   id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
   reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just note what makes THIS pick a fresh step (new artist, a shift in energy/era/texture), not a vibe label you would recycle pick after pick (e.g. "new artist, lifts the energy", never a repeated "mellow reflective step")'),
-  say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice (back-announce what just played, ease into what is coming, vary your opener); when the event says stay silent, set this to null'),
+  say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). When the event says stay silent, set this to null'),
 });
 
 const REQUEST_SCHEMA = z.object({
@@ -510,10 +510,15 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     const { rankTarget, audioWaypoint } = advanceRun(djMode, current);
     const inRun = runActive();
 
-    // The link clause differs in DJ mode: a working DJ doesn't just ease into
-    // the next track, they TEASE it — name the artist or capture its feel so
+    // The link clause differs in DJ mode: a working DJ doesn't just announce the
+    // next track, they TEASE it — name the artist or capture its feel so
     // listeners know what's coming. The agent already knows its own pick when
-    // it writes `say`, so this costs nothing extra.
+    // it writes `say`, so this costs nothing extra. The link is FORWARD-LOOKING
+    // only — it introduces the pick, never back-announces "${current?.title}".
+    // The link airs when the pick starts, but a listener request can slip ahead
+    // of the pick in the meantime, so naming what "just played" goes stale (it
+    // names a track one older than reality); introducing the pick is always
+    // correct whatever aired before it.
     // The "nod to it in the link" half only makes sense when a link is actually
     // being written — gate it on wantLink so a silent mid-run pick ("Stay silent
     // — no link this time.") doesn't also get told it may phrase something in a
@@ -531,8 +536,8 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
       : '';
     const linkClause = wantLink
       ? (djMode
-          ? ` Also write a short link that airs as your pick starts: back-announce "${current?.title}", then tease what's next — name the artist or capture the feel of the track you pick so listeners know what's coming. If the track you pick shows an intro_ms, keep the link short enough to finish before then, so you land just as the vocals come in.`
-          : ` Also write a short link that airs as your pick starts: back-announce "${current?.title}" and lead into the track you pick.`)
+          ? ` Also write a short link that airs as your pick starts: introduce what's coming — name the artist or capture the feel of the track you pick so listeners know what's next. Do not back-announce or name the track that just played. If the track you pick shows an intro_ms, keep the link short enough to finish before then, so you land just as the vocals come in.`
+          : ` Also write a short link that airs as your pick starts: lead into the track you pick. Do not back-announce or name the track that just played.`)
       : ' Stay silent — no link this time.';
     // Surface the current track's real Subsonic id so similarSongs /
     // tracksLikeThis ("pass the currently-playing song id") actually have one

@@ -82,17 +82,24 @@ export async function generateAdLib({ instruction, context = null, recap = null,
 
 export async function generateLink({ previous, current, context, recap = null, recentTracks = null, recentOpeners = null }: any) {
   const ctxLines = buildContextLines(context, { recentTracks, contextFields: SCRIPT_CONTEXT_FIELDS });
-  if (previous?.title) ctxLines.push(`Just played: "${previous.title}" by ${previous.artist || 'unknown'}`);
+  // Forward-looking only: the link is written when the pick is made but doesn't
+  // air until that pick actually starts — and a listener request can slip ahead
+  // of it in the meantime, so we can't know what really played just before it.
+  // Naming the previous track is therefore unsafe (it goes stale → the DJ names
+  // a track one older than reality). We intro the track NOW STARTING instead, so
+  // the line is always correct whatever played before it. (`previous` is still
+  // accepted for the tempo/key mix nod below — a vague feel, never a name.)
   if (current?.title) ctxLines.push(`Now playing: "${current.title}" by ${current.artist || 'unknown'}`);
 
-  // DJ-mode personas tease what's coming, not just back-announce — mirrors the
-  // agent path in broadcast/dj-agent.ts so both pickers feel like the same DJ.
+  // DJ-mode personas lean harder into teasing the track's feel / artist.
   const djMode = !!settings.getEffectivePersona()?.djMode;
   const teaseClause = djMode
-    ? ` Tease what's coming — name the artist or capture the feel so listeners know what's next.`
+    ? ` Name the artist or capture the feel so listeners know what they're hearing.`
     : '';
   // DJ-mode mix patter: only when BOTH tracks carry measured tempo/key, and
-  // only as a natural option — never forced, never robotic numbers on air.
+  // only as a natural option — never forced, never robotic numbers on air. This
+  // is a feel ("easing into something a touch faster"), not a track name, so it
+  // stays safe even if a request slipped in ahead of this pick.
   const prevAK = bpmKeyFor(previous);
   const curAK = bpmKeyFor(current);
   const patterClause = (djMode && (prevAK.bpm || prevAK.key) && (curAK.bpm || curAK.key))
@@ -100,7 +107,7 @@ export async function generateLink({ previous, current, context, recap = null, r
     : '';
   // Talk-within-the-intro budget for the track now starting (current = the pick).
   const budget = introBudgetPhrase(introMsFor(current));
-  const prompt = `Write a DJ link between tracks. Back-announce what just played and ease into what's playing now.${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhrase('link')}, conversational, don't list both titles like a robot — pick one to mention specifically and treat the other lightly.\n\n${ctxLines.join('\n')}`;
+  const prompt = `Write a short DJ link introducing the track now starting — set it up, capture its feel, weave in the moment.${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhrase('link')}, conversational. Keep it forward-looking: don't back-announce, recap, or name the track that just played — focus on what's playing now.\n\n${ctxLines.join('\n')}`;
 
   return djText({
     system: djSystem(),

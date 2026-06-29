@@ -538,17 +538,17 @@ class Queue {
   async airIntro(item: any, predecessor: any = null) {
     if (!item?.introWav || item.introAired || !existsSync(item.introWav)) return;
     item.introAired = true;
-    // Stale back-announce guard. The link/intro was written to back-announce
-    // `item.linkPrev` — valid only if that track is what actually just played.
-    // When a listener request was slipped into the queue ahead of this pick
-    // after the link was rendered, something else (the request) played in
-    // between, so the baked-in "that was X" now names a track one (or more)
-    // older than reality (issue: a request mid-pick makes the link name the
-    // wrong, older track). We can't re-cut rendered audio, so drop it — silence
-    // on this transition beats airing a wrong name.
+    // Stale back-announce safety-net. Links are written forward-looking (intro
+    // the pick, never name the just-played track), so this normally never fires.
+    // It catches the model disobeying: if the rendered line actually NAMES a
+    // track (`linkPrev`) that a listener request bumped out of the just-played
+    // slot after the link was rendered, the baked-in "that was X" now names a
+    // track one (or more) older than reality. We can't re-cut rendered audio, so
+    // drop it — silence on this one hand-off beats airing a wrong name. A
+    // forward-looking line that doesn't name the previous track airs regardless.
     if (shouldDropStaleLink(item, predecessor)) {
       this.log('link-skip',
-        `Dropped stale link before "${item.track?.title}" — back-announced "${item.linkPrev.title}" but "${predecessor?.title || 'another track'}" actually played first`);
+        `Dropped stale link before "${item.track?.title}" — it named "${item.linkPrev.title}" but "${predecessor?.title || 'another track'}" actually played first`);
       this.persist();
       return;
     }
@@ -950,20 +950,40 @@ function sameTrack(
   return !!norm(a.title) && norm(a.title) === norm(b.title);
 }
 
-// Should airIntro DROP this item's intro/link as a stale back-announce? True
-// only for an item that names a specific predecessor (`linkPrev`) which is NOT
-// the track that actually played just before it — the off-by-one that happens
-// when a listener request jumps ahead of an auto-pick after its link was
-// rendered (the pick no longer follows the track its "that was X" names).
-// Items with no linkPrev (request intros — they never back-announce) always
-// air. Pure + exported so the guard is unit-pinned (scripts/stale-link.test.ts)
-// without touching disk or TTS.
+// Does this spoken line actually name `track` (by title or artist)? A coarse
+// case-insensitive substring test — enough to tell a forward-looking link
+// ("here's something new") from one that back-announces a specific track ("that
+// was Blue Monday by New Order"). The ≥4-char floor keeps a tiny/common title
+// ("OK", "Go", "Up") from matching incidental words in unrelated patter.
+function mentionsTrack(
+  text: string | null | undefined,
+  track: { title?: string | null; artist?: string | null } | null,
+): boolean {
+  const hay = (text || '').toLowerCase();
+  if (!hay || !track) return false;
+  const t = (track.title || '').toLowerCase().trim();
+  const a = (track.artist || '').toLowerCase().trim();
+  return (t.length >= 4 && hay.includes(t)) || (a.length >= 4 && hay.includes(a));
+}
+
+// Should airIntro DROP this item's intro/link as a stale back-announce? Links
+// are written forward-looking (introduce the pick, never name the just-played
+// track), so the common case never trips this. It's a precise safety-net for
+// the model disobeying that instruction: fire ONLY when the rendered line names
+// a specific predecessor (`linkPrev`) AND that track is NOT what actually played
+// just before it — the off-by-one a listener request causes when it slips ahead
+// of the pick after the link was rendered. A forward-looking link (doesn't name
+// the previous track) always airs, even if a request jumped ahead, so there's no
+// silent hand-off. Items with no linkPrev (request intros) always air too. Pure
+// + exported so the guard is unit-pinned (scripts/stale-link.test.ts) without
+// touching disk or TTS.
 export function shouldDropStaleLink(
-  item: { linkPrev?: { id?: string | null; title?: string | null } | null } | null,
+  item: { linkPrev?: { id?: string | null; title?: string | null; artist?: string | null } | null; introScript?: string | null } | null,
   predecessor: { id?: string | null; title?: string | null } | null,
 ): boolean {
   if (!item?.linkPrev) return false;
-  return !sameTrack(item.linkPrev, predecessor);
+  if (sameTrack(item.linkPrev, predecessor)) return false;   // names the right track → fine
+  return mentionsTrack(item.introScript, item.linkPrev);     // wrong predecessor — only drop if it's actually named
 }
 
 // Per-target-file write chain. Liquidsoap polls each handoff file (say.txt,
