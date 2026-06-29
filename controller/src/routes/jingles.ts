@@ -98,6 +98,7 @@ router.post('/tag-library', requireAdmin, (req, res) => {
     enrich: stepBool(req.body?.enrich),
     tagMoods: stepBool(req.body?.tagMoods),
     analyze: stepBool(req.body?.analyze),
+    vocal: stepBool(req.body?.vocal),
   });
   res.json({ ok: true, tagger });
 });

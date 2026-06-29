@@ -22,6 +22,8 @@
 //                         analyze still run per their flags (admin "Tag moods" off)
 //   --no-prune            walk Navidrome but don't drop orphaned rows (admin
 //                         "Reconcile with Navidrome" step deselected)
+//   --vocal / --no-vocal  force the Phase-5 Demucs vocal pass on / off for this
+//                         run (else defers to settings.audio.vocalActivity)
 //   --upgrade             re-tag only rows with stale promptHash or model
 //
 // On boot the library-db auto-migrates any state/moods.json into the SQLite
@@ -82,6 +84,13 @@ interface CliFlags {
   // Walk Navidrome but don't prune orphaned rows — the admin "Reconcile with
   // Navidrome" step unchecked. (A normal run prunes by default.)
   noPrune: boolean;
+  // Per-run override of the Demucs vocal-activity backfill in Phase 5. --vocal
+  // forces it on, --no-vocal forces it off; neither falls back to the setting
+  // (settings.audio.vocalActivity / ANALYZE_VOCAL_ACTIVITY). The admin Run tab's
+  // "Vocal activity" sub-checkbox drives these so a run can do bpm/key + CLAP
+  // without the slow Demucs pass (or include it) without touching the setting.
+  vocal: boolean;
+  noVocal: boolean;
 }
 
 function parseFlags(): CliFlags {
@@ -109,6 +118,8 @@ function parseFlags(): CliFlags {
     reconcileOnly: args.includes('--reconcile-only'),
     skipTag: args.includes('--skip-tag'),
     noPrune: args.includes('--no-prune'),
+    vocal: args.includes('--vocal'),
+    noVocal: args.includes('--no-vocal'),
   };
 }
 
@@ -528,6 +539,9 @@ async function main() {
       await runAnalysisPass({
         limit: flags.limit === Infinity ? undefined : flags.limit,
         reAnalyze: flags.reAnalyze,
+        // Tri-state: --vocal forces the Demucs pass on, --no-vocal forces it off,
+        // neither (undefined) defers to settings.audio.vocalActivity / env.
+        vocalBackfill: flags.vocal ? true : flags.noVocal ? false : undefined,
       });
     } catch (err: any) {
       console.error(`[tag] analysis phase failed (non-fatal): ${err?.message || err}`);

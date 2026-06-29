@@ -107,6 +107,9 @@ export type TagSteps = {
   enrich: boolean;
   tagMoods: boolean;
   analyze: boolean;
+  // Per-run Demucs vocal pass — only sent/honoured when analyze is on and vocal
+  // is enabled in settings; lets a run do bpm/key + CLAP without the slow Demucs.
+  vocal: boolean;
 };
 
 export function num(n: number | null | undefined): string {
@@ -474,6 +477,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         vocalIncapable={vocalIncapable}
         vocalOn={vocalOn}
         vocalEnabled={p.vocalEnabled}
+        vocalWanted={vocalWanted}
         onStart={p.onStart}
         onReconcile={p.onReconcile}
         onRescan={p.onRescan}

@@ -51,9 +51,12 @@ export function startTagger(
     enrich?: boolean;
     tagMoods?: boolean;
     analyze?: boolean;
+    // Per-run Demucs override (only meaningful when analyze runs). true forces
+    // the vocal pass on, false forces it off; undefined defers to the setting.
+    vocal?: boolean;
   } = {},
 ) {
-  const { limit, reseed, reEnrich, reAnalyze, upgrade, reconcile, enrich, tagMoods, analyze } = opts;
+  const { limit, reseed, reEnrich, reAnalyze, upgrade, reconcile, enrich, tagMoods, analyze, vocal } = opts;
   const args = ['src/music/tag-library.ts'];
   if (Number.isFinite(limit) && (limit as number) > 0) args.push('--limit', String(limit));
   if (reseed) args.push('--reseed');
@@ -66,6 +69,9 @@ export function startTagger(
   if (tagMoods === false) args.push('--skip-tag');
   if (analyze === false) args.push('--skip-analyze');
   if (reconcile === false) args.push('--no-prune');
+  // Vocal override only applies when the analyze phase actually runs.
+  if (analyze !== false && vocal === true) args.push('--vocal');
+  if (analyze !== false && vocal === false) args.push('--no-vocal');
 
   const detail = [
     Number.isFinite(limit) && (limit as number) > 0 ? `limit=${limit}` : null,
@@ -77,6 +83,8 @@ export function startTagger(
     tagMoods === false ? 'skip-tag' : null,
     analyze === false ? 'skip-analyze' : null,
     reconcile === false ? 'no-prune' : null,
+    analyze !== false && vocal === true ? 'vocal' : null,
+    analyze !== false && vocal === false ? 'no-vocal' : null,
   ]
     .filter(Boolean)
     .join(', ');

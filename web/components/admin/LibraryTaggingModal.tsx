@@ -37,6 +37,9 @@ interface Props {
   vocalIncapable: boolean;
   vocalOn: boolean;
   vocalEnabled: boolean | null;
+  // Whether vocal is opted-in (env/settings) — gates the Run tab's per-run
+  // "Vocal activity (Demucs)" sub-checkbox so it stays hidden by default (#646).
+  vocalWanted: boolean;
   // when set, the modal opens straight to the matching tab/selection
   intent: 'reembed' | null;
   // handlers
@@ -60,7 +63,7 @@ export default function LibraryTaggingModal(p: Props) {
 
   // Run-tab step selection — all on by default (today's full-run behaviour).
   const [steps, setSteps] = useState<TagSteps>({
-    reconcile: true, enrich: true, tagMoods: true, analyze: true,
+    reconcile: true, enrich: true, tagMoods: true, analyze: true, vocal: true,
   });
   const toggleStep = (k: keyof TagSteps) => setSteps(s => ({ ...s, [k]: !s[k] }));
 
@@ -89,7 +92,14 @@ export default function LibraryTaggingModal(p: Props) {
 
   // Analyze can't run without an engine — force it off + lock the box.
   const analyzeLocked = p.analysisOff;
-  const effSteps: TagSteps = { ...steps, analyze: analyzeLocked ? false : steps.analyze };
+  const effAnalyze = analyzeLocked ? false : steps.analyze;
+  const effSteps: TagSteps = {
+    ...steps,
+    analyze: effAnalyze,
+    // Vocal only matters when analyze runs and vocal is opted-in; otherwise send
+    // false (a harmless --no-vocal — backend ignores it when analyze is off).
+    vocal: effAnalyze && p.vocalWanted ? steps.vocal : false,
+  };
   const anyStep = effSteps.reconcile || effSteps.enrich || effSteps.tagMoods || effSteps.analyze;
   const onlyReconcile = effSteps.reconcile && !effSteps.enrich && !effSteps.tagMoods && !effSteps.analyze;
 
@@ -151,7 +161,16 @@ export default function LibraryTaggingModal(p: Props) {
                 name="Analyze acoustics" tag="slow"
                 hint={analyzeLocked
                   ? 'No analysis engine running — start the tts-heavy sidecar or a local librosa venv.'
-                  : 'Tempo, key & intro — plus sounds-like + vocal fingerprints when those are enabled. The slowest step; vocal (Demucs) is especially heavy on CPU.'} />
+                  : 'Tempo, key & intro, plus sounds-like fingerprints when enabled. The slow step; vocal separation is split out below.'} />
+              {p.vocalWanted && (
+                <div className="pl-6">
+                  <Pass on={effAnalyze && steps.vocal} onClick={() => toggleStep('vocal')}
+                    disabled={!effAnalyze} name="Vocal activity (Demucs)" tag="very slow"
+                    hint={!effAnalyze
+                      ? 'Part of acoustic analysis — tick "Analyze acoustics" first.'
+                      : 'Source-separate each track to detect instrumental vs vocal. Very heavy on CPU (~10-30s/track) — untick to do bpm/key + sounds-like without it.'} />
+                </div>
+              )}
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-dashed border-separator-strong pt-3.5">
               <div className="lib-batch">
