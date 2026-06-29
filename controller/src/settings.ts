@@ -606,10 +606,11 @@ export const SEED_PERSONAS = [
   },
 ];
 
-// Allowed archive bitrates. Matches the literal branches in radio.liq —
+// Allowed MP3 bitrates — shared by the hourly archive and the live
+// /stream.mp3 mount. Matches the literal branches in radio.liq —
 // %mp3(bitrate=…) needs a parse-time int, so the encoder is pre-baked for
 // this small set. Add a branch in radio.liq if you add a value here.
-export const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
+export const MP3_BITRATES = [64, 96, 128, 160, 192, 320] as const;
 
 const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
@@ -632,7 +633,7 @@ const DEFAULTS = {
   // Safari/iOS/Firefox on MP3), and it adds a continuous Opus encoder + a
   // 44.1→48k resample, so operators opt in rather than pay that CPU unasked.
   // The mandatory /stream.mp3 mount always serves everyone.
-  stream: { opusEnabled: false },
+  stream: { opusEnabled: false, bitrate: 192 },
   weather: { lat: 30.7333, lng: 76.7794, locationName: 'Punjab', units: 'metric' as 'metric' | 'imperial' },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
   // placeholder and returned by GET /dj for the landing page. The product is
@@ -955,7 +956,7 @@ const BOUNDS = {
   maxTrackSeconds: { min: 0, max: 36000, type: 'int' },
 };
 
-const ARCHIVE_BITRATE_SET = new Set<number>(ARCHIVE_BITRATES);
+const MP3_BITRATE_SET = new Set<number>(MP3_BITRATES);
 
 let cache: any = null;
 
@@ -1198,7 +1199,7 @@ export async function load() {
   );
 
   const archiveBitrate =
-    typeof stored.archive?.bitrate === 'number' && ARCHIVE_BITRATE_SET.has(stored.archive.bitrate)
+    typeof stored.archive?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.archive.bitrate)
       ? stored.archive.bitrate
       : DEFAULTS.archive.bitrate;
 
@@ -1218,6 +1219,10 @@ export async function load() {
         typeof stored.stream?.opusEnabled === 'boolean'
           ? stored.stream.opusEnabled
           : DEFAULTS.stream.opusEnabled,
+      bitrate:
+        typeof stored.stream?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.stream.bitrate)
+          ? stored.stream.bitrate
+          : DEFAULTS.stream.bitrate,
     },
     weather: {
       lat: stored.weather?.lat ?? DEFAULTS.weather.lat,
@@ -2011,9 +2016,9 @@ export async function update(patch) {
     }
     if (a.bitrate !== undefined) {
       const v = parseInt(a.bitrate, 10);
-      if (!Number.isFinite(v) || !ARCHIVE_BITRATE_SET.has(v)) {
+      if (!Number.isFinite(v) || !MP3_BITRATE_SET.has(v)) {
         throw new Error(
-          `archive.bitrate must be one of: ${ARCHIVE_BITRATES.join(', ')}`,
+          `archive.bitrate must be one of: ${MP3_BITRATES.join(', ')}`,
         );
       }
       if (v !== cur.archive.bitrate) {
@@ -2028,6 +2033,18 @@ export async function update(patch) {
       const v = !!st.opusEnabled;
       if (v !== cur.stream.opusEnabled) {
         next.stream.opusEnabled = v;
+        restart = true;
+      }
+    }
+    if (st.bitrate !== undefined) {
+      const v = parseInt(st.bitrate, 10);
+      if (!Number.isFinite(v) || !MP3_BITRATE_SET.has(v)) {
+        throw new Error(
+          `stream.bitrate must be one of: ${MP3_BITRATES.join(', ')}`,
+        );
+      }
+      if (v !== cur.stream.bitrate) {
+        next.stream.bitrate = v;
         restart = true;
       }
     }
@@ -2692,6 +2709,7 @@ const LIQ_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_crossfade.txt`;
 const LIQ_ARCHIVE_ENABLED_PATH = `${STATE_DIR}/liquidsoap_archive_enabled.txt`;
 const LIQ_ARCHIVE_BITRATE_PATH = `${STATE_DIR}/liquidsoap_archive_bitrate.txt`;
 const LIQ_OPUS_ENABLED_PATH = `${STATE_DIR}/liquidsoap_opus_enabled.txt`;
+const LIQ_STREAM_BITRATE_PATH = `${STATE_DIR}/liquidsoap_stream_bitrate.txt`;
 const LIQ_STATION_NAME_PATH = `${STATE_DIR}/liquidsoap_station_name.txt`;
 
 export async function writeLiquidsoapSettings(s) {
@@ -2700,6 +2718,7 @@ export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_ARCHIVE_ENABLED_PATH, s.archive.enabled ? 'true' : 'false');
   await writeFile(LIQ_ARCHIVE_BITRATE_PATH, String(s.archive.bitrate));
   await writeFile(LIQ_OPUS_ENABLED_PATH, s.stream.opusEnabled ? 'true' : 'false');
+  await writeFile(LIQ_STREAM_BITRATE_PATH, String(s.stream.bitrate));
   await writeFile(LIQ_STATION_NAME_PATH, s.station || DEFAULTS.station);
 }
 
@@ -2712,7 +2731,8 @@ export async function ensureLiquidsoapSettingsFile() {
     !existsSync(LIQ_CROSSFADE_PATH) ||
     !existsSync(LIQ_ARCHIVE_ENABLED_PATH) ||
     !existsSync(LIQ_ARCHIVE_BITRATE_PATH) ||
-    !existsSync(LIQ_OPUS_ENABLED_PATH)
+    !existsSync(LIQ_OPUS_ENABLED_PATH) ||
+    !existsSync(LIQ_STREAM_BITRATE_PATH)
   ) {
     await writeLiquidsoapSettings(s);
   }
