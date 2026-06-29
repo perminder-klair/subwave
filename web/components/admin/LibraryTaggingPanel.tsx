@@ -181,6 +181,57 @@ function fmtDur(ms: number): string {
   return r ? `${m}m ${r}s` : `${m}m`;
 }
 
+// Make a raw tagger log line human for the drawer: strip the [tag]/[analyze]
+// noise, add a phase emoji, lightly rephrase the common lines, and tint by kind.
+// Backend logs stay machine-greppable; only the operator's view is dressed up.
+const grp = (s: string | undefined): string => {
+  const n = Number(String(s ?? '').replace(/[, ]/g, ''));
+  return Number.isFinite(n) ? n.toLocaleString('en-GB') : String(s ?? '');
+};
+// Rename the breakdown phase keys to the friendly labels (walk→scan, etc.).
+const humanBreakdown = (s: string | undefined): string =>
+  String(s ?? '').replace(/\b(setup|walk|enrich|embed|seed|propagate|learn|analyze)\b/g, k => PHASE_LABEL[k] ?? k);
+
+const LOG_RULES: { re: RegExp; to: (m: RegExpMatchArray) => string; cls: string }[] = [
+  { re: /^done in (\d+)s\..*?llm_tagged=(\d+)/, to: m => `✅  Done in ${fmtDur(Number(m[1]) * 1000)} — ${m[2]} tracks tagged`, cls: 'text-emerald-500 font-semibold' },
+  { re: /^phase breakdown:\s*(.+)$/, to: m => `⏱️  Time per phase — ${humanBreakdown(m[1])}`, cls: 'text-ink' },
+  { re: /^([\d,]+) tagged · (.+)$/, to: m => `📊  Library now: ${grp(m[1])} tagged · ${m[2]}`, cls: 'text-ink' },
+  { re: /^walked ([\d,]+) total tracks/, to: m => `🔍  Scanned ${grp(m[1])} tracks`, cls: 'text-muted' },
+  { re: /^walked ([\d,]+) tracks/, to: m => `🔍  Scanning library… ${grp(m[1])}`, cls: 'text-muted' },
+  { re: /^([\d,]+) untagged tracks in scope.*?\(of ([\d,]+)/, to: m => `📋  ${grp(m[1])} new tracks to tag (${grp(m[2])} still untagged)`, cls: 'text-ink' },
+  { re: /^enriched (\d+)\/(\d+) \(lastfm: (\d+), lyrics: (\d+)\)/, to: m => `🌐  Enriched ${m[1]}/${m[2]} — ${m[3]} Last.fm, ${m[4]} lyrics`, cls: 'text-muted' },
+  { re: /^phase-0 done.*?enriched (\d+)/, to: m => `🌐  Metadata fetched for ${m[1]} tracks`, cls: 'text-muted' },
+  { re: /^phase-1 embedding (\d+) tracks/, to: m => `🧬  Building similarity vectors for ${m[1]} tracks…`, cls: 'text-muted' },
+  { re: /^embedded (\d+)\/(\d+)/, to: m => `🧬  Vectors ${m[1]}/${m[2]}`, cls: 'text-muted' },
+  { re: /^LLM-tagged (\d+)\/(\d+)/, to: m => `🏷️  DJ tagged ${m[1]}/${m[2]}`, cls: 'text-muted' },
+  { re: /^phase-2 done: (\d+)\/(\d+) seeded/, to: m => `✓  Mood tagging done — ${m[1]}/${m[2]}`, cls: 'text-emerald-500' },
+  { re: /^phase-3 propagated (\d+) tracks; (\d+) uncertain/, to: m => `🔗  Spread tags to ${m[1]} similar tracks (${m[2]} unsure)`, cls: 'text-muted' },
+  { re: /^phase-4 round (\d+).*?LLM-tagging (\d+)/, to: m => `🔁  Round ${m[1]}: re-checking ${m[2]} unsure tracks…`, cls: 'text-muted' },
+  { re: /^(\d+) tracks to analyse/, to: m => `🔊  Analysing audio for ${m[1]} tracks…`, cls: 'text-muted' },
+  { re: /^(\d+)\/(\d+) \(ok=\d+ fail=(\d+)\)/, to: m => `🔊  Audio ${m[1]}/${m[2]}${Number(m[3]) ? ` · ${m[3]} failed` : ''}`, cls: 'text-muted' },
+  { re: /^done — analyzed=(\d+).*?audio-embedded=(\d+)/, to: m => `✓  Audio analysed — ${m[1]} tracks, ${m[2]} sounds-like`, cls: 'text-emerald-500' },
+  { re: /^backend: (\w+)/, to: m => `🔊  Audio engine: ${m[1]}`, cls: 'text-muted' },
+  { re: /^LLM model: (.+)/, to: m => `🤖  Tagging model — ${m[1]}`, cls: 'text-muted' },
+  { re: /^embedding model: (.+)/, to: m => `🧬  Embedding model — ${m[1]}`, cls: 'text-muted' },
+  { re: /^starting\b/, to: () => '▶️  Starting up…', cls: 'text-muted' },
+];
+
+function beautifyLog(raw: string): { text: string; cls: string } {
+  if (/^\[exit 0\]/.test(raw)) return { text: '✅  Finished', cls: 'text-emerald-500 font-semibold' };
+  if (/^\[exit/.test(raw)) return { text: `⏹  Stopped (${raw.replace(/^\[exit\s*|\]\s*$/g, '')})`, cls: 'text-vermilion font-semibold' };
+  const s = raw.replace(/^\[(tag|analyze|stats|scheduler|error)\]\s*/, '');
+  const low = s.toLowerCase();
+  // Real failures (but not "0 failed" / "fail=0") → vermilion warning.
+  if (/(fail(ed)?|error|unreachable|can'?t|missing)/.test(low) && !/fail=0|0 failed/.test(low)) {
+    return { text: `⚠️  ${s}`, cls: 'text-vermilion' };
+  }
+  for (const r of LOG_RULES) {
+    const m = s.match(r.re);
+    if (m) return { text: r.to(m), cls: r.cls };
+  }
+  return { text: s, cls: 'text-muted' };
+}
+
 export default function TaggingPanel(p: TaggingPanelProps) {
   const [modalOpen, setModalOpen] = useState(false);
   // Intent carried into the modal when opened from a contextual prompt — the
@@ -455,10 +506,16 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         </button>
       </div>
 
-      {/* log drawer — reuses the theme-aware .term surface */}
+      {/* log drawer — reuses the theme-aware .term surface; each line is dressed
+          up for humans (emoji + friendly phrasing + tint) via beautifyLog */}
       {p.logOpen && (
         <pre ref={logRef} className="term m-0 max-h-56 overflow-y-auto !border-t !border-l-0 border-separator-strong">
-          {(p.tagger?.lastLog || []).join('\n') || '(no log output yet, start a tagging run to see the booth think)'}
+          {(p.tagger?.lastLog ?? []).length
+            ? (p.tagger?.lastLog ?? []).map((line, i) => {
+                const f = beautifyLog(line);
+                return <div key={i} className={cn('whitespace-pre-wrap', f.cls)}>{f.text}</div>;
+              })
+            : 'No log output yet — start a tagging run to watch the booth think.'}
         </pre>
       )}
 
