@@ -178,6 +178,8 @@ export default function LibraryTaggingModal(p: Props) {
                 <select id="modal-batch" value={p.batch} onChange={e => p.setBatch(e.target.value as Batch)}>
                   <option value="100">next 100</option>
                   <option value="500">next 500</option>
+                  <option value="5000">next 5,000</option>
+                  <option value="10000">next 10,000</option>
                   <option value="all">all{p.remaining != null ? ` ${num(p.remaining)}` : ''} remaining</option>
                 </select>
               </div>

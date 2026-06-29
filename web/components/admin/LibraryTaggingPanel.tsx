@@ -89,7 +89,7 @@ export interface LibraryStatsLite {
   updatedAt: string | null;
 }
 
-export type Batch = '100' | '500' | 'all';
+export type Batch = '100' | '500' | '5000' | '10000' | 'all';
 
 export type RescanOpts = {
   reseed?: boolean;
