@@ -7,15 +7,15 @@ export default function Voices() {
     <ManualPage
       eyebrow="MANUAL · 12"
       title="Voices & TTS."
-      intro="The DJ's words are written by the language model, but turning them into speech is a separate job. Five text-to-speech engines render the voice: four run on your own hardware, one is hosted. You can mix them per segment, clone a voice, or hand the heavy one to a GPU."
+      intro="The DJ's words are written by the language model, but turning them into speech is a separate job. Six text-to-speech engines render the voice: four built in, one hosted, and one a TTS server you run yourself. You can mix them per segment, clone a voice, point at your own server, or hand the heavy one to a GPU."
       current="/manual/voices"
     >
       <section className="bs-section">
         <p className="bs-eyebrow">THE ENGINES</p>
         <h2>Local voices, or the cloud.</h2>
         <p>
-          You pick the engine under <strong>Admin &rarr; TTS voice</strong>. Four run on
-          your own hardware, one is hosted.
+          You pick the engine under <strong>Admin &rarr; TTS voice</strong>. Four are
+          built in, one is hosted, and one points at a server you run yourself.
         </p>
         <ul className="bs-list">
           <li>
@@ -45,10 +45,16 @@ export default function Voices() {
           </li>
           <li>
             <strong>Cloud</strong> is hosted text-to-speech through OpenAI or ElevenLabs,
-            using an API key. It's the most lifelike of the five, but it costs per use and
+            using an API key. It's the most lifelike of the six, but it costs per use and
             depends on the network being up. The Cloud engine also speaks{' '}
             <strong>OpenAI-compatible</strong>, so it can point at any self-hosted speech
             server, including a Chatterbox box on your own GPU (see below).
+          </li>
+          <li>
+            <strong>Remote</strong> is a TTS server you run yourself — a LAN box, a
+            Tailscale host, a spare GPU — that speaks a tiny Subwave-native HTTP
+            contract. It's the clean way to self-host an engine like Qwen3-TTS, F5-TTS
+            or CosyVoice without dressing it up as another provider (see below).
           </li>
         </ul>
         <p>
@@ -111,6 +117,66 @@ docker compose up -d`}</CodeBlock>
           <code className="bs-code-inline">docker/Dockerfile.controller</code> still work.
           They bundle the engines inside the controller image instead, but the sidecar is
           the recommended path for fresh installs.
+        </p>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">REMOTE</p>
+        <h2>Your own TTS server.</h2>
+        <p>
+          The <strong>Remote</strong> engine points SUB/WAVE at a TTS server you run
+          yourself, anywhere the controller can reach over the network — a LAN box, a
+          Tailscale host, a spare GPU machine. Unlike the OpenAI-compatible Cloud route
+          (which speaks OpenAI&apos;s{' '}
+          <code className="bs-code-inline">/v1/audio/speech</code>), Remote speaks a tiny
+          Subwave-native contract, so wrapping a model like Qwen3-TTS, F5-TTS or CosyVoice
+          in a server is only a few lines.
+        </p>
+        <p>
+          Configure it under <strong>Admin &rarr; TTS voice</strong>: pick{' '}
+          <strong>Remote</strong> and set <strong>Server URL</strong> to the endpoint
+          (e.g. <code className="bs-code-inline">http://192.168.1.101:5001</code>, a LAN or
+          Tailscale IP the controller container can reach, not{' '}
+          <code className="bs-code-inline">127.0.0.1</code>). The console shows{' '}
+          <strong>ready</strong> once the health check passes, and the station falls back
+          to Piper whenever the URL is blank or the server is down. A persona&apos;s{' '}
+          <strong>Remote voice</strong> is free text forwarded straight to your server — a
+          voice id, a reference-WAV filename, a VoiceDesign prompt, whatever it
+          understands.
+        </p>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">THE CONTRACT</div>
+          <p>
+            Your server needs two routes.{' '}
+            <code className="bs-code-inline">GET /health</code> returns{' '}
+            <code className="bs-code-inline">{`{ "ok": true }`}</code> when it&apos;s ready.{' '}
+            <code className="bs-code-inline">POST /speak</code> takes JSON{' '}
+            <code className="bs-code-inline">{`{ "text": "…", "voice": "…" }`}</code> and
+            returns the rendered audio (WAV) <em>in the response body</em>. The audio
+            travels over the wire, so no shared filesystem or volume is needed — that&apos;s
+            the difference from the bundled{' '}
+            <code className="bs-code-inline">tts-heavy</code> sidecar, which hands back a
+            path on a shared volume.
+          </p>
+        </div>
+        <p>That&apos;s the whole server — for example, in Flask:</p>
+        <CodeBlock>{`@app.get("/health")
+def health():
+    return {"ok": True}
+
+@app.post("/speak")
+def speak():
+    body  = request.get_json()
+    text  = body["text"]
+    voice = body.get("voice", "")
+    wav   = my_model.render(text, voice)        # -> WAV bytes
+    return Response(wav, mimetype="audio/wav")`}</CodeBlock>
+        <p className="text-muted">
+          Optional: if your server substitutes a different voice than the one requested,
+          set the <code className="bs-code-inline">X-TTS-Fell-Back</code> response header
+          (plus <code className="bs-code-inline">X-TTS-Voice-Used</code> and{' '}
+          <code className="bs-code-inline">X-TTS-Fell-Back-Reason</code>) and SUB/WAVE logs
+          the substitution instead of leaving you to guess why the voice changed.
         </p>
       </section>
 
