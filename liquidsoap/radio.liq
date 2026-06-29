@@ -222,6 +222,33 @@ end
 # one song behind until the next crossfade.
 music_meta = music
 
+# JINGLES & STATION ID — rotate a jingle in every N tracks.
+#
+# CRITICAL: this rotate MUST sit here, on the raw pre-cross / pre-duck music
+# source, NOT at the top of the chain. `rotate` defaults to track_sensitive=true
+# so it only advances to the next source at a *track boundary* of the source it
+# is currently playing. Both `cross` (below) and the `smooth_add` ducking layers
+# present their output as ONE continuous, never-ending track — they do not
+# propagate the underlying per-track boundaries upward (the same reason
+# on_metadata hooks `music_meta` here and not the post-cross source). If the
+# rotate is placed above them it plays exactly one jingle at startup, switches to
+# the music side, never sees a track end again, and is stuck on music forever —
+# jingles "stop triggering" (issue: jingles only fire once per restart). Placing
+# it on the raw playlist sources keeps the boundaries clean so it rotates
+# indefinitely. An empty jingles.m3u is fine: rotate skips the unavailable
+# source and plays music. music_meta is captured ABOVE this, so jingles never
+# show up in now-playing.
+jingles = playlist(
+  id="jingles",
+  mode="randomize",
+  reload_mode="watch",
+  "/var/sub-wave/jingles.m3u"
+)
+music = rotate(
+  weights=[1, jingle_ratio()],  # 1 jingle for every N music tracks (settings.json)
+  [jingles, music]
+)
+
 # Per-track loudness normalisation. The controller stamps `liq_amplify` (in the
 # "<n> dB" form, via subsonic.getAnnotatedUri) on any track with a measured LUFS;
 # `amplify` reads it per track — exactly the ReplayGain mechanism. Base factor
@@ -456,21 +483,11 @@ radio = smooth_add(
   special=sfx_bed
 )
 
-# ---------------------------------------------------------------------------
-# JINGLES & STATION ID — every 30 mins, rotate a jingle in
-# ---------------------------------------------------------------------------
-
-jingles = playlist(
-  id="jingles",
-  mode="randomize",
-  reload_mode="watch",
-  "/var/sub-wave/jingles.m3u"
-)
-
-radio = rotate(
-  weights=[1, jingle_ratio()],  # 1 jingle for every N music tracks (settings.json)
-  [jingles, radio]
-)
+# NOTE: jingles are NOT rotated in here. The rotate lives up on the raw pre-cross
+# music source (see the "JINGLES & STATION ID" block above music_meta) because a
+# track_sensitive rotate placed above `cross` + `smooth_add` only ever fires one
+# jingle at startup and then stalls — those operators hide the per-track
+# boundaries it needs to switch on.
 
 # ---------------------------------------------------------------------------
 # SAFETY — fallback to the emergency loop when the source dies
