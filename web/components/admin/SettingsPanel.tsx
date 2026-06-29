@@ -214,6 +214,7 @@ interface ArchiveForm {
 
 interface StreamForm {
   opusEnabled: boolean;
+  bitrate: string;
 }
 
 // Keep in sync with ARCHIVE_BITRATES in controller/src/settings.ts — radio.liq
