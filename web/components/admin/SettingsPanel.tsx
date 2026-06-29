@@ -1045,9 +1045,14 @@ export default function SettingsPanel() {
                   </div>
                 </div>
 
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Stream MP3 bitrate" sub="/stream.mp3">
                 <div className="field">
                   <div className="flex items-center gap-2">
-                    <Label>Stream MP3 bitrate</Label>
+                    <Label>Bitrate</Label>
                     <Pill tone="ink">restart required</Pill>
                   </div>
                   <div className="flex items-center gap-2">
