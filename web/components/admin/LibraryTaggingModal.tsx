@@ -71,6 +71,9 @@ export default function LibraryTaggingModal(p: Props) {
   const [passes, setPasses] = useState<RescanOpts>({
     reseed: false, reEnrich: false, reAnalyze: false, upgrade: false,
   });
+  // Sub-toggle: does a Re-analyse-acoustics pass also redo the slow Demucs pass?
+  // Default on (re-analyse = redo all); unticking keeps existing vocal ranges.
+  const [reAnalyzeVocal, setReAnalyzeVocal] = useState(true);
   const [confirmRescan, setConfirmRescan] = useState(false);
   const togglePass = (k: keyof RescanOpts) => setPasses(prev => ({ ...prev, [k]: !prev[k] }));
   const passAllSelected = !!(passes.reseed && passes.reEnrich && passes.reAnalyze && passes.upgrade);
@@ -111,11 +114,17 @@ export default function LibraryTaggingModal(p: Props) {
     p.onOpenChange(false);
   };
 
+  // Only carry the vocal override when re-analysing AND vocal is opted-in; else
+  // omit it so the run defers to settings.audio.vocalActivity.
+  const rescanPayload = (): RescanOpts => ({
+    ...passes,
+    vocal: passes.reAnalyze && p.vocalWanted ? reAnalyzeVocal : undefined,
+  });
   const runRescan = () => {
     if (!anyPass || p.busy) return;
     // Re-embedding re-spends embedding calls — confirm first; lighter passes go.
     if (passes.reseed) { setConfirmRescan(true); return; }
-    p.onRescan(passes);
+    p.onRescan(rescanPayload());
     clearPasses();
     p.onOpenChange(false);
   };
@@ -286,15 +295,25 @@ export default function LibraryTaggingModal(p: Props) {
                 {passAllSelected ? 'Clear all' : 'Select all'}
               </button>
             </div>
+            {/* ordered to mirror the Run pipeline: enrich → embed → tag → analyse */}
             <div className="grid gap-2.5">
-              <Pass on={!!passes.reseed} onClick={() => togglePass('reseed')} name="Re-embed all tracks" tag="slow"
-                hint="Drop & rebuild every similarity vector from scratch — re-spends embedding calls. Only after changing the embedding model." />
               <Pass on={!!passes.reEnrich} onClick={() => togglePass('reEnrich')} name="Re-enrich metadata" tag="network"
                 hint="Re-fetch Last.fm tags + lyrics across the whole library. External API calls — slow on a big library." />
-              <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics" tag="very slow"
-                hint="Redo bpm/key for every track, plus sounds-like + vocal when enabled. The heaviest pass — Demucs can run for hours." />
+              <Pass on={!!passes.reseed} onClick={() => togglePass('reseed')} name="Re-embed all tracks" tag="slow"
+                hint="Drop & rebuild every similarity vector from scratch — re-spends embedding calls. Only after changing the embedding model." />
               <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods" tag="AI · billed"
                 hint="Re-tag tracks whose prompt or model has gone stale. Uses model calls." />
+              <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics" tag="slow"
+                hint="Redo bpm/key + sounds-like for every track. Drops existing acoustic data and rebuilds it." />
+              {p.vocalWanted && (
+                <div className="pl-6">
+                  <Pass on={!!passes.reAnalyze && reAnalyzeVocal} onClick={() => setReAnalyzeVocal(v => !v)}
+                    disabled={!passes.reAnalyze} name="Re-analyse vocal (Demucs)" tag="very slow"
+                    hint={!passes.reAnalyze
+                      ? 'Part of Re-analyse acoustics — tick that first.'
+                      : 'Also redo Demucs vocal separation. Untick to keep your existing vocal ranges and skip the slow pass (~10-30s/track).'} />
+                </div>
+              )}
             </div>
             <div className="flex items-center justify-end gap-2.5 border-t border-dashed border-separator-strong pt-3.5">
               <Btn onClick={() => p.onOpenChange(false)}>Cancel</Btn>
@@ -313,7 +332,7 @@ export default function LibraryTaggingModal(p: Props) {
         description="This pass drops and rebuilds every similarity vector from scratch, which re-spends embedding calls and can take several minutes on a large library. Existing mood tags are kept and reused as seeds. Only needed after changing the embedding model."
         confirmLabel="re-scan"
         danger
-        onConfirm={() => { p.onRescan(passes); clearPasses(); setConfirmRescan(false); p.onOpenChange(false); }}
+        onConfirm={() => { p.onRescan(rescanPayload()); clearPasses(); setConfirmRescan(false); p.onOpenChange(false); }}
       />
     </Modal>
   );

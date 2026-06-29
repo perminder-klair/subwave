@@ -761,13 +761,18 @@ export function needsAnalysisIds(limit?: number): string[] {
   return rows.map(r => r.id);
 }
 
-export function clearAnalysis(): void {
+// Drop the acoustic analysis so a --re-analyze can recompute it. `keepVocal`
+// preserves vocal_ranges_json — used when re-analysing bpm/key + sounds-like
+// WITHOUT redoing the (very slow) Demucs vocal pass, so existing vocal data
+// isn't wiped and left NULL (it wouldn't be rebuilt that run). #646-adjacent.
+export function clearAnalysis(opts: { keepVocal?: boolean } = {}): void {
   const d = requireDb();
+  const vocalCol = opts.keepVocal ? '' : ' vocal_ranges_json = NULL,';
   d.prepare(
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
       analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
       structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
-      key_ranges_json = NULL, vocal_ranges_json = NULL, analysis_version = NULL`,
+      key_ranges_json = NULL,${vocalCol} analysis_version = NULL`,
   ).run();
   // The audio (CLAP) vectors are written in the same pass, so a --re-analyze
   // that redoes bpm/key drops them too — the next pass re-embeds from scratch.

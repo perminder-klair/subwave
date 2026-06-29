@@ -96,6 +96,9 @@ export type RescanOpts = {
   reEnrich?: boolean;
   reAnalyze?: boolean;
   upgrade?: boolean;
+  // Whether a Re-analyse-acoustics pass also redoes the slow Demucs vocal pass.
+  // false → --no-vocal (re-do bpm/key + sounds-like, keep existing vocal ranges).
+  vocal?: boolean;
 };
 
 // Forward-run step toggles from the modal's Run tab. All default true; an

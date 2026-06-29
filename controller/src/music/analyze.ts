@@ -89,9 +89,16 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   const backend = analyzer.backendLabel();
   console.log(`[analyze] backend: ${backend}`);
 
+  // Resolve the vocal (Demucs) decision up front: a --re-analyze that is NOT
+  // redoing vocal preserves existing vocal_ranges rather than wiping them (they
+  // wouldn't be rebuilt this pass). Only run vocal when the backend can actually
+  // produce it (a sidecar without Demucs reports vocalActivityAvailable===false).
+  const vocalWanted = opts.vocalBackfill ?? vocalBackfillDefault();
+  const vocalBackfill = vocalWanted && analyzer.vocalActivityAvailable() !== false;
+
   if (opts.reAnalyze) {
-    db.clearAnalysis();
-    console.log('[analyze] --re-analyze: cleared existing analysis');
+    db.clearAnalysis({ keepVocal: !vocalBackfill });
+    console.log(`[analyze] --re-analyze: cleared existing analysis${vocalBackfill ? '' : ' (kept vocal ranges)'}`);
   }
 
   const cap = opts.limit && opts.limit > 0 ? opts.limit : undefined;
@@ -123,8 +130,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // "275/7093" report). `false` = definitively not built → skip; `null` (local
   // backend / not yet probed) keeps today's behaviour. isAvailable() above has
   // already probed the sidecar, so the capability is current here.
-  const vocalWanted = opts.vocalBackfill ?? vocalBackfillDefault();
-  const vocalBackfill = vocalWanted && analyzer.vocalActivityAvailable() !== false;
+  // (vocalWanted / vocalBackfill resolved up front — see the clear above.)
   if (vocalBackfill) {
     const seen = new Set(ids);
     const vocalIds = db.needsVocalIds(cap).filter(id => !seen.has(id));
