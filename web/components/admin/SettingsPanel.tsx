@@ -789,7 +789,7 @@ export default function SettingsPanel() {
             {activeSection === 'scrobble' && (
               <ScrobbleSection
                 data={data} form={form} setForm={updateForm} busy={busy}
-                saveSettings={saveSettings} adminFetch={adminFetch}
+                saveSettings={saveSettings} adminFetch={adminFetch} refresh={refresh}
               />
             )}
           </>
@@ -5175,9 +5175,10 @@ function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uploadSfx, 
 
 interface ScrobbleSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  refresh: () => void;
 }
 
-function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch }: ScrobbleSectionProps) {
+function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: ScrobbleSectionProps) {
   const lf = form.scrobble.lastfm;
   const lb = form.scrobble.listenbrainz;
   const savedLf = data.values?.scrobble?.lastfm || {};
@@ -5196,6 +5197,12 @@ function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch }
   const lbTokenSet = lb.userToken === 'set' || !!env.LISTENBRAINZ_USER_TOKEN;
   const lfReady = lf.enabled && lfApiKeySet && lfApiSecretSet && lfSessionSet;
   const lbReady = lb.enabled && lbTokenSet;
+
+  // "Connect to Last.fm" flow — replaces the CLI session-key dance. Needs the
+  // API key + secret saved first (the backend reads them from settings/env).
+  const canConnect = lfApiKeySet && lfApiSecretSet;
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
 
   const saveLastfm = () => {
     const patch: Partial<ScrobbleLastfmForm> = {
@@ -5234,6 +5241,56 @@ function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch }
     }
   };
 
+  // Step 1: ask the controller for an auth token + URL, open it for the user.
+  const connectLastfm = async () => {
+    setConnecting(true);
+    try {
+      const r = await adminFetch('/scrobble/lastfm/connect', { method: 'POST' });
+      const j = (await r.json().catch(() => ({}))) as {
+        ok?: boolean; token?: string; authUrl?: string; message?: string;
+      };
+      if (!r.ok || !j.ok || !j.authUrl || !j.token) {
+        notify.err(j.message || `couldn't start (${r.status})`);
+        return;
+      }
+      window.open(j.authUrl, '_blank', 'noopener,noreferrer');
+      setAuthToken(j.token);
+      notify.ok('Authorize in the Last.fm tab, then click “I authorized — finish”.');
+    } catch (e) {
+      notify.err(errorMessage(e));
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  // Step 2: trade the authorized token for a session key; the controller saves
+  // it and switches scrobbling on, so a refresh reflects "connected".
+  const finishLastfm = async () => {
+    if (!authToken) return;
+    setConnecting(true);
+    try {
+      const r = await adminFetch('/scrobble/lastfm/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: authToken }),
+      });
+      const j = (await r.json().catch(() => ({}))) as {
+        ok?: boolean; username?: string; message?: string;
+      };
+      if (!r.ok || !j.ok) {
+        notify.err(j.message || `couldn't finish (${r.status})`);
+        return;
+      }
+      setAuthToken(null);
+      notify.ok(`Connected to Last.fm${j.username ? ` as ${j.username}` : ''}.`);
+      refresh();
+    } catch (e) {
+      notify.err(errorMessage(e));
+    } finally {
+      setConnecting(false);
+    }
+  };
+
   return (
     <>
       <SectionHeader
@@ -5241,9 +5298,9 @@ function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch }
         title="Station-wide scrobbling to Last.fm and ListenBrainz."
         sub={<>
           Each backend is independent, pick one or both. Tracks scrobble only when at
-          least one listener is tuned in to the stream. Paste credentials below; nothing
-          here leaves the controller. See the <code>npm run lastfm-session</code> helper
-          if you don&apos;t already have a Last.fm session key.
+          least one listener is tuned in to the stream. For Last.fm, enter your API key
+          and secret, then hit <strong>Connect to Last.fm</strong> to authorize, no
+          session-key wrangling. Nothing here leaves the controller.
         </>}
         metrics={[
           { n: lfReady ? 'on' : 'off', l: 'last.fm', accent: lfReady },
@@ -5317,6 +5374,36 @@ function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch }
           </div>
 
           <div className="field">
+            <Label>Authorize</Label>
+            {!authToken ? (
+              <Btn
+                sm
+                tone="accent"
+                onClick={connectLastfm}
+                disabled={busy || connecting || !canConnect}
+              >
+                {connecting ? 'Opening Last.fm…' : 'Connect to Last.fm'}
+              </Btn>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Btn sm tone="accent" onClick={finishLastfm} disabled={busy || connecting}>
+                  {connecting ? 'Finishing…' : 'I authorized — finish'}
+                </Btn>
+                <Btn sm onClick={() => setAuthToken(null)} disabled={connecting}>
+                  Cancel
+                </Btn>
+              </div>
+            )}
+            <div className="field-hint">
+              {!canConnect
+                ? 'Enter your API key + secret above and Save first, then connect.'
+                : !authToken
+                  ? 'Opens Last.fm to grant access, then fills in your session key and switches scrobbling on — no terminal needed.'
+                  : 'A Last.fm tab opened. Click “Yes, allow access” there, then finish here.'}
+            </div>
+          </div>
+
+          <div className="field">
             <Label>Session key</Label>
             <Input
               type="password"
@@ -5331,10 +5418,10 @@ function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch }
               className="max-w-[360px]"
             />
             <div className="field-hint">
-              Generated by authorizing your account. Run
-              <code> cd controller &amp;&amp; npm run lastfm-session</code> for a guided
-              flow, or fetch one yourself via <code>auth.getSession</code>. Doesn&apos;t
-              expire. Falls back to <code>LASTFM_SESSION_KEY</code>.
+              Easiest: hit <strong>Connect to Last.fm</strong> above and it fills this
+              in for you. Advanced: paste one from
+              <code> npm run lastfm-session</code>. Doesn&apos;t expire. Falls back to
+              <code> LASTFM_SESSION_KEY</code>.
             </div>
           </div>
 

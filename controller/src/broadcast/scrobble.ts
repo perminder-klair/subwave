@@ -108,7 +108,16 @@ function signLastfm(params: Record<string, string>, secret: string): string {
   return createHash('md5').update(sigStr, 'utf8').digest('hex');
 }
 
-async function callLastfm(method: string, baseParams: Record<string, string>, creds: LastfmCreds): Promise<void> {
+// Outcome of a single Last.fm/ListenBrainz call. `ok:false` carries a one-line
+// reason. The fire-and-forget callers (onTrackEvent) ignore this; only the
+// admin Test button inspects it — for years it couldn't, because this swallowed
+// every failure and always read as success.
+interface CallResult {
+  ok: boolean;
+  message?: string;
+}
+
+async function callLastfm(method: string, baseParams: Record<string, string>, creds: LastfmCreds): Promise<CallResult> {
   const params: Record<string, string> = {
     ...baseParams,
     method,
@@ -134,20 +143,26 @@ async function callLastfm(method: string, baseParams: Record<string, string>, cr
     if (!r.ok) {
       let detail = '';
       try { detail = (await r.text()).slice(0, 200); } catch {}
-      console.warn(`[scrobble] last.fm ${method} → ${r.status}${detail ? ` — ${detail}` : ''}`);
-      return;
+      const message = `HTTP ${r.status}${detail ? ` — ${detail}` : ''}`;
+      console.warn(`[scrobble] last.fm ${method} → ${message}`);
+      return { ok: false, message };
     }
     // 200 doesn't guarantee success — Last.fm embeds a JSON `error` field.
     try {
       const data = (await r.json()) as any;
       if (data?.error) {
-        console.warn(`[scrobble] last.fm ${method} error ${data.error}: ${data.message || ''}`);
+        const message = `error ${data.error}: ${data.message || ''}`.trim();
+        console.warn(`[scrobble] last.fm ${method} ${message}`);
+        return { ok: false, message };
       }
     } catch {
       // Non-JSON body on 200 — treat as success.
     }
+    return { ok: true };
   } catch (err: any) {
-    console.warn(`[scrobble] last.fm ${method} failed: ${err?.message || err}`);
+    const message = err?.name === 'AbortError' ? 'request timed out' : (err?.message || String(err));
+    console.warn(`[scrobble] last.fm ${method} failed: ${message}`);
+    return { ok: false, message };
   } finally {
     clearTimeout(timer);
   }
@@ -164,27 +179,96 @@ function lastfmTrackParams(track: ScrobbleTrack): Record<string, string> {
   return p;
 }
 
-async function lastfmUpdateNowPlaying(track: ScrobbleTrack, creds: LastfmCreds): Promise<void> {
-  await callLastfm('track.updateNowPlaying', lastfmTrackParams(track), creds);
+async function lastfmUpdateNowPlaying(track: ScrobbleTrack, creds: LastfmCreds): Promise<CallResult> {
+  return callLastfm('track.updateNowPlaying', lastfmTrackParams(track), creds);
 }
 
 async function lastfmScrobble(
   track: ScrobbleTrack,
   startedAt: string,
   creds: LastfmCreds,
-): Promise<void> {
+): Promise<CallResult> {
   const ts = Math.floor(Date.parse(startedAt) / 1000);
-  if (!Number.isFinite(ts)) return;
-  await callLastfm(
+  if (!Number.isFinite(ts)) return { ok: false, message: 'invalid start timestamp' };
+  return callLastfm(
     'track.scrobble',
     { ...lastfmTrackParams(track), timestamp: String(ts) },
     creds,
   );
 }
 
+// ── Last.fm web-auth flow (admin "Connect to Last.fm") ───────────────────────
+//
+// Replaces the CLI `npm run lastfm-session` dance with a two-step handshake the
+// admin UI drives: getAuthToken → operator authorizes in the browser →
+// completeAuth trades the token for a long-lived session key. Uses the SAME
+// env-wins api-key/secret resolution as scrobble time, so the session key it
+// mints is bound to the exact api key scrobbling will use (no mismatch).
+
+// Just the api key + secret — no session key yet, no `enabled` gate (the whole
+// point of the flow is to obtain the missing session key).
+function lastfmApiCreds(): { apiKey: string; apiSecret: string } | null {
+  const s: any = settings.get()?.scrobble?.lastfm || {};
+  const apiKey = process.env.LASTFM_API_KEY || s.apiKey || '';
+  const apiSecret = process.env.LASTFM_API_SECRET || s.apiSecret || '';
+  if (!apiKey || !apiSecret) return null;
+  return { apiKey, apiSecret };
+}
+
+// Signed GET to a Last.fm auth method. Unlike the write calls these are reads
+// whose body we need, so this THROWS on any failure for the route to surface.
+async function callLastfmAuth(
+  method: string,
+  extra: Record<string, string>,
+  creds: { apiKey: string; apiSecret: string },
+): Promise<any> {
+  const params: Record<string, string> = { api_key: creds.apiKey, method, ...extra };
+  params.api_sig = signLastfm(params, creds.apiSecret);
+  params.format = 'json';
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const r = await fetch(`${LASTFM_API}?${new URLSearchParams(params)}`, {
+      headers: { 'User-Agent': 'sub-wave/scrobble' },
+      signal: ctrl.signal,
+    });
+    const data: any = await r.json().catch(() => ({}));
+    if (!r.ok || data?.error) {
+      throw new Error(data?.message || `Last.fm ${method} failed (HTTP ${r.status})`);
+    }
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Step 1: mint a request token + the URL the operator visits to grant access.
+export async function lastfmGetAuthToken(): Promise<{ token: string; authUrl: string }> {
+  const creds = lastfmApiCreds();
+  if (!creds) throw new Error('Save your Last.fm API key and secret first');
+  const data = await callLastfmAuth('auth.getToken', {}, creds);
+  const token: string = data?.token;
+  if (!token) throw new Error('Last.fm did not return an auth token');
+  const authUrl = `https://www.last.fm/api/auth/?api_key=${encodeURIComponent(creds.apiKey)}&token=${encodeURIComponent(token)}`;
+  return { token, authUrl };
+}
+
+// Step 2: after the operator authorizes, trade the token for a session key
+// (long-lived, never expires) and the username it belongs to.
+export async function lastfmCompleteAuth(token: string): Promise<{ sessionKey: string; username: string }> {
+  const creds = lastfmApiCreds();
+  if (!creds) throw new Error('Save your Last.fm API key and secret first');
+  if (!token || !token.trim()) throw new Error('Missing auth token');
+  const data = await callLastfmAuth('auth.getSession', { token: token.trim() }, creds);
+  const sessionKey: string = data?.session?.key;
+  const username: string = data?.session?.name || '';
+  if (!sessionKey) throw new Error('Last.fm returned no session key — was access granted?');
+  return { sessionKey, username };
+}
+
 // ── ListenBrainz client ─────────────────────────────────────────────────────
 
-async function postListenbrainz(payload: Record<string, unknown>, token: string, label: string): Promise<void> {
+async function postListenbrainz(payload: Record<string, unknown>, token: string, label: string): Promise<CallResult> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
@@ -201,10 +285,15 @@ async function postListenbrainz(payload: Record<string, unknown>, token: string,
     if (!r.ok) {
       let detail = '';
       try { detail = (await r.text()).slice(0, 200); } catch {}
-      console.warn(`[scrobble] listenbrainz ${label} → ${r.status}${detail ? ` — ${detail}` : ''}`);
+      const message = `HTTP ${r.status}${detail ? ` — ${detail}` : ''}`;
+      console.warn(`[scrobble] listenbrainz ${label} → ${message}`);
+      return { ok: false, message };
     }
+    return { ok: true };
   } catch (err: any) {
-    console.warn(`[scrobble] listenbrainz ${label} failed: ${err?.message || err}`);
+    const message = err?.name === 'AbortError' ? 'request timed out' : (err?.message || String(err));
+    console.warn(`[scrobble] listenbrainz ${label} failed: ${message}`);
+    return { ok: false, message };
   } finally {
     clearTimeout(timer);
   }
@@ -225,8 +314,8 @@ function listenbrainzTrackMetadata(track: ScrobbleTrack): Record<string, unknown
   return md;
 }
 
-async function listenbrainzPlayingNow(track: ScrobbleTrack, token: string): Promise<void> {
-  await postListenbrainz(
+async function listenbrainzPlayingNow(track: ScrobbleTrack, token: string): Promise<CallResult> {
+  return postListenbrainz(
     {
       listen_type: 'playing_now',
       payload: [{ track_metadata: listenbrainzTrackMetadata(track) }],
@@ -236,10 +325,10 @@ async function listenbrainzPlayingNow(track: ScrobbleTrack, token: string): Prom
   );
 }
 
-async function listenbrainzSubmit(track: ScrobbleTrack, startedAt: string, token: string): Promise<void> {
+async function listenbrainzSubmit(track: ScrobbleTrack, startedAt: string, token: string): Promise<CallResult> {
   const ts = Math.floor(Date.parse(startedAt) / 1000);
-  if (!Number.isFinite(ts)) return;
-  await postListenbrainz(
+  if (!Number.isFinite(ts)) return { ok: false, message: 'invalid start timestamp' };
+  return postListenbrainz(
     {
       listen_type: 'single',
       payload: [
@@ -320,22 +409,18 @@ export async function testNowPlaying(
   if (provider === 'lastfm') {
     const creds = lastfmCreds();
     if (!creds) return { ok: false, message: 'last.fm not enabled or missing credentials' };
-    try {
-      await lastfmUpdateNowPlaying(track, creds);
-      return { ok: true, message: `sent now-playing to last.fm for "${track.title}"` };
-    } catch (err: any) {
-      return { ok: false, message: err?.message || 'last.fm test failed' };
-    }
+    const res = await lastfmUpdateNowPlaying(track, creds);
+    return res.ok
+      ? { ok: true, message: `sent now-playing to last.fm for "${track.title}"` }
+      : { ok: false, message: `last.fm rejected it — ${res.message || 'unknown error'}` };
   }
   if (provider === 'listenbrainz') {
     const token = listenbrainzToken();
     if (!token) return { ok: false, message: 'listenbrainz not enabled or missing user token' };
-    try {
-      await listenbrainzPlayingNow(track, token);
-      return { ok: true, message: `sent playing_now to listenbrainz for "${track.title}"` };
-    } catch (err: any) {
-      return { ok: false, message: err?.message || 'listenbrainz test failed' };
-    }
+    const res = await listenbrainzPlayingNow(track, token);
+    return res.ok
+      ? { ok: true, message: `sent playing_now to listenbrainz for "${track.title}"` }
+      : { ok: false, message: `listenbrainz rejected it — ${res.message || 'unknown error'}` };
   }
   return { ok: false, message: `unknown provider "${provider}"` };
 }
