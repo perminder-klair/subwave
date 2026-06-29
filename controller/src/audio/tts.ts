@@ -145,9 +145,9 @@ async function speakWith(engine: string, text: string, opts: any, personaTts: an
     return cloud.speak(text, { ...opts, cloudOverride });
   }
   if (engine === 'remote') {
-    // Remote engine — persona's `voice` is forwarded as-is to the sidecar,
+    // Remote engine — persona's `voice` is forwarded as-is to the endpoint,
     // which interprets it (built-in id, reference-wav filename, or VoiceDesign
-    // prompt). No global fallback voice — the sidecar owns its defaults.
+    // prompt). No global fallback voice — the endpoint owns its defaults.
     const voice = (personaTts && personaTts.engine === 'remote' && personaTts.voice)
       ? personaTts.voice
       : undefined;

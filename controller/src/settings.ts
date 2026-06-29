@@ -123,9 +123,11 @@ export function effectiveFrequency(persona: any = getEffectivePersona()) {
 //
 // `cloud` routes through the AI SDK (OpenAI / ElevenLabs speech models) —
 // see llm/speech.js. `piper`, `kokoro`, `chatterbox`, and `pocket-tts` are
-// local engines. `remote` is a first-class self-hosted HTTP engine that
-// speaks the same /speak + /health contract as tts-heavy; configure the URL
-// in settings.tts.remote.url. Chatterbox and PocketTTS are opt-in — the
+// local engines. `remote` is a first-class self-hosted HTTP engine: it POSTs
+// to a configurable /speak endpoint and gets the rendered audio back in the
+// response body (no shared volume, so the endpoint can live on any host),
+// gated on a /health probe. Configure the URL in settings.tts.remote.url.
+// Chatterbox and PocketTTS are opt-in — the
 // default controller image doesn't bundle either; build the image with
 // `--build-arg WITH_CHATTERBOX=1` or `--build-arg WITH_POCKETTTS=1` (see
 // docker/Dockerfile.controller) to include the runtime. The dispatcher gates
@@ -705,10 +707,10 @@ const DEFAULTS = {
       // provider === 'openai-compatible'.
       baseUrl: '',
     },
-    // Remote engine — a user-configured self-hosted TTS endpoint that speaks
-    // the Subwave-native /speak + /health contract (the same protocol the
-    // tts-heavy sidecar uses). The TTS equivalent of the LLM's custom base
-    // URL. Empty → engine reports unavailable; the dispatcher falls back.
+    // Remote engine — a user-configured self-hosted TTS endpoint that renders
+    // audio over HTTP (POST /speak → audio body, gated on a /health probe).
+    // The TTS equivalent of the LLM's custom base URL. Empty → engine reports
+    // unavailable; the dispatcher falls back.
     remote: { url: '' },
     // Per-engine voice level trim (dB), applied via Liquidsoap's liq_amplify on
     // every spoken segment that resolves to that engine. Levels the loudness gap
@@ -2248,8 +2250,19 @@ export async function update(patch) {
       if (r.url !== undefined) {
         const v = String(r.url).trim();
         if (v.length > 200) throw new Error('tts.remote.url must be 0-200 chars');
-        if (v && !/^https?:\/\//i.test(v)) {
-          throw new Error('tts.remote.url must start with http:// or https://');
+        if (v) {
+          // Full parse (not just a prefix test) so a malformed host/port —
+          // e.g. http://host:notaport or http://host:99999 — is rejected at
+          // save time instead of silently failing the /health probe later.
+          let parsed: URL;
+          try {
+            parsed = new URL(v);
+          } catch {
+            throw new Error('tts.remote.url must be a valid http:// or https:// URL');
+          }
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            throw new Error('tts.remote.url must start with http:// or https://');
+          }
         }
         next.tts.remote.url = v.replace(/\/+$/, ''); // strip trailing slashes
       }

@@ -9,6 +9,7 @@ import * as jingles from './broadcast/jingles.js';
 import * as sfx from './broadcast/sfx.js';
 import { queue } from './broadcast/queue.js';
 import * as session from './broadcast/session.js';
+import * as remoteTts from './audio/remoteTts.js';
 import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
 import { startScheduler } from './broadcast/scheduler.js';
@@ -123,6 +124,15 @@ app.listen(config.server.port, async () => {
     );
   } catch (err) {
     console.error('[settings] load failed:', err.message);
+  }
+
+  // Start the remote-TTS /health probe loop now that settings are loaded — its
+  // URL lives in settings (not env), so it can't self-start at import time the
+  // way the env-configured tts-heavy probe does. Best-effort; never fatal.
+  try {
+    remoteTts.start();
+  } catch (err: any) {
+    console.error('[remote] tts probe start failed:', err.message);
   }
 
   // Seed today's LLM token tally from the durable event log so a mid-day

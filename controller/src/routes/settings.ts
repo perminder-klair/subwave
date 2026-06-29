@@ -9,6 +9,7 @@ import * as library from '../music/library.js';
 import * as jingles from '../broadcast/jingles.js';
 import * as settings from '../settings.js';
 import * as tts from '../audio/tts.js';
+import * as remoteTts from '../audio/remoteTts.js';
 import * as chatterbox from '../audio/chatterbox.js';
 import * as piper from '../audio/piper.js';
 import * as llmProvider from '../llm/provider.js';
@@ -190,6 +191,12 @@ router.post('/settings', requireAdmin, async (req, res) => {
     }
     if (result.requiresRestart) {
       queue.log('scheduler', `mixer settings changed — Liquidsoap restart required`);
+    }
+    // A changed remote-TTS URL re-probes immediately so availability (and the
+    // admin "ready/unreachable" badge) reflects the new endpoint on the next
+    // /settings fetch instead of waiting for the 30s probe tick.
+    if (req.body?.tts?.remote?.url !== undefined) {
+      await remoteTts.refresh();
     }
     res.json(result);
   } catch (err) {

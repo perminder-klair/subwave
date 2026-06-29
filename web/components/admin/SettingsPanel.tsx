@@ -2050,11 +2050,13 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 className="max-w-[360px]"
               />
               <div className="field-hint">
-                Any self-hosted TTS server that speaks the Subwave-native{' '}
-                <code>/speak</code> + <code>/health</code> contract (Qwen3-TTS
-                clone, F5-TTS, CosyVoice, your own sidecar…). Must be reachable
-                from the controller container. Use the host&apos;s LAN or Tailscale
-                IP, not <code>127.0.0.1</code>.
+                Any self-hosted TTS server that renders audio over HTTP — POST{' '}
+                <code>/speak</code> returns the audio in the response body, gated
+                on a <code>/health</code> probe (Qwen3-TTS clone, F5-TTS,
+                CosyVoice, your own server…). The audio comes back over the wire,
+                so no shared volume is needed. Must be reachable from the
+                controller container — use the host&apos;s LAN or Tailscale IP,
+                not <code>127.0.0.1</code>.
               </div>
             </div>
             <TtsGainField engineId="remote" form={form} setForm={setForm} />
