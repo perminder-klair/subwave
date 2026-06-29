@@ -534,10 +534,24 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     const journeyClause = audioWaypoint && audioWaypoint.length
       ? ' A sonic journey is active: call tracksTowardJourney and lean toward one of its tracks — each carries the sound a step toward where this arc is heading. If it comes back thin, pick via the library mood/genre/audio tools and keep the energy heading the same way. Never mention the journey on air.'
       : '';
+    // Opener variety for the link. The free-text pool path gets a rotating angle
+    // + an anti-repeat opener list via decoratePrompt; the agent `say` path
+    // didn't, so its links settled into the same shape ("here's…", "coming
+    // up…"). Feed it the same two signals through the event message: one random
+    // forward-looking angle to vary the approach, and the recent openers to
+    // steer clear of. Only when a link is actually being written.
+    const linkAngle = wantLink ? dj.pickAngle('link') : null;
+    const recentOpeners = wantLink ? queue.getRecentOpeners() : [];
+    const varietyClause = wantLink
+      ? ` Approach for this link: ${linkAngle} Vary your first words — don't default to "here's", "this is", or "coming up".`
+        + (recentOpeners.length
+            ? ` You opened recent lines with ${recentOpeners.slice(0, 6).map(o => `"${o}…"`).join(', ')} — start this one differently.`
+            : '')
+      : '';
     const linkClause = wantLink
       ? (djMode
-          ? ` Also write a short link that airs as your pick starts: introduce what's coming — name the artist or capture the feel of the track you pick so listeners know what's next. Do not back-announce or name the track that just played. If the track you pick shows an intro_ms, keep the link short enough to finish before then, so you land just as the vocals come in.`
-          : ` Also write a short link that airs as your pick starts: lead into the track you pick. Do not back-announce or name the track that just played.`)
+          ? ` Also write a short link that airs as your pick starts: introduce what's coming — name the artist or capture the feel of the track you pick so listeners know what's next. Do not back-announce or name the track that just played. If the track you pick shows an intro_ms, keep the link short enough to finish before then, so you land just as the vocals come in.${varietyClause}`
+          : ` Also write a short link that airs as your pick starts: lead into the track you pick. Do not back-announce or name the track that just played.${varietyClause}`)
       : ' Stay silent — no link this time.';
     // Surface the current track's real Subsonic id so similarSongs /
     // tracksLikeThis ("pass the currently-playing song id") actually have one

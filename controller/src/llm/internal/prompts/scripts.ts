@@ -107,7 +107,7 @@ export async function generateLink({ previous, current, context, recap = null, r
     : '';
   // Talk-within-the-intro budget for the track now starting (current = the pick).
   const budget = introBudgetPhrase(introMsFor(current));
-  const prompt = `Write a short DJ link introducing the track now starting — set it up, capture its feel, weave in the moment.${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhrase('link')}, conversational. Keep it forward-looking: don't back-announce, recap, or name the track that just played — focus on what's playing now.\n\n${ctxLines.join('\n')}`;
+  const prompt = `Write a short DJ link to carry into the track now starting — set it up, capture its feel, weave in the moment.${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhrase('link')}, conversational. Vary how you open — don't default to "here's", "this is", "coming up", or "that was"; find a different way in each time. Keep it forward-looking: don't back-announce, recap, or name the track that just played — focus on what's playing now.\n\n${ctxLines.join('\n')}`;
 
   return djText({
     system: djSystem(),
