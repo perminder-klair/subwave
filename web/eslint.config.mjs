@@ -97,6 +97,7 @@ export default defineConfig([
             '^field-hint$',
             '^rule-label$',
             '^term$',
+            '^term-crt$',
             '^log$',
             '^msg$',
             '^t$',

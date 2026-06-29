@@ -592,7 +592,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
       {/* log drawer — reuses the theme-aware .term surface; each line is dressed
           up for humans (emoji + friendly phrasing + tint) via beautifyLog */}
       {p.logOpen && (
-        <pre ref={logRef} className="term m-0 max-h-56 overflow-y-auto !border-t !border-l-0 border-separator-strong">
+        <pre ref={logRef} className="term term-crt m-0 max-h-56 overflow-y-auto !border-t !border-l-0 border-separator-strong">
           {(p.tagger?.lastLog ?? []).length
             ? (p.tagger?.lastLog ?? []).map((line, i) => {
                 const f = beautifyLog(line);

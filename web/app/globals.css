@@ -3289,6 +3289,20 @@ html.lite *::after {
     overflow: auto;
 }
 
+/* CRT modifier — a minimal phosphor look for the live tagging-log drawer:
+   fixed scanlines (don't scroll with content), a faint accent glow on the
+   text, and a soft inset vignette. Theme-aware via tokens. */
+.admin-root .term-crt {
+    background-image: repeating-linear-gradient(
+        color-mix(in srgb, var(--ink) 22%, transparent) 0px,
+        color-mix(in srgb, var(--ink) 22%, transparent) 1px,
+        transparent 1px,
+        transparent 3px
+    );
+    text-shadow: 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+    box-shadow: inset 0 0 36px color-mix(in srgb, var(--ink) 55%, transparent);
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    LIBRARY — redesigned /admin/library. One merged tagging panel + clearer
    browse/search/untagged. Every value is a token (or token-derived color-mix)
