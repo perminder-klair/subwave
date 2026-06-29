@@ -111,7 +111,10 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
 
 # --- Controller app ---------------------------------------------------------
 WORKDIR /app
-COPY controller/package*.json ./
+# .npmrc carries `legacy-peer-deps=true` (OpenRouter provider still declares a
+# stale `peer ai@^6` after the AI SDK v7 upgrade); it must land before install
+# or npm hits ERESOLVE.
+COPY controller/package*.json controller/.npmrc ./
 RUN npm install --omit=dev
 COPY controller/src ./src
 COPY controller/scripts ./scripts
