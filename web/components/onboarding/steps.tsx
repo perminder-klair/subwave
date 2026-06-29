@@ -82,8 +82,14 @@ export function NavidromeStep({ w }: { w: WizardController }) {
   const [busy, setBusy] = useState(false);
   const onTest = async () => {
     setBusy(true);
-    await w.testNavidrome();
-    setBusy(false);
+    // testNavidrome never throws — it catches its own errors into the pill —
+    // but the finally is the backstop so the button can never get wedged on
+    // "Testing…" if anything unexpected slips through (issue #682).
+    try {
+      await w.testNavidrome();
+    } finally {
+      setBusy(false);
+    }
   };
   return (
     <div>
@@ -158,8 +164,11 @@ export function LlmStep({ w }: { w: WizardController }) {
   const isCustom = w.data.llm.provider === 'openai-compatible';
   const onTest = async () => {
     setBusy(true);
-    await w.testLlm();
-    setBusy(false);
+    try {
+      await w.testLlm();
+    } finally {
+      setBusy(false);
+    }
   };
   // Same unified model discovery the admin Settings tab uses. Enabled for the
   // keyless-discoverable providers (ollama / locca / openai-compatible with a
