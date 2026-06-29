@@ -233,8 +233,8 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 - **There is no `/skip` for listeners.** Track-end is the only natural
   transition; operators have an admin-only skip endpoint.
 - **Add to Sonos / VLC with one link.** Hardware and software players take a
-  playlist file, not a raw stream URL — paste `https://<your-station>/api/listen.pls`
-  (or `/api/listen.m3u`) into Sonos, VLC, moOde, or a car receiver and it tunes
+  playlist file, not a raw stream URL — paste `https://<your-station>/listen.pls`
+  (or `/listen.m3u`) into Sonos, VLC, moOde, or a car receiver and it tunes
   straight in. Both are public (no auth), point at the always-served MP3 mount
   (plus Opus when you've enabled it), and resolve the origin from `SITE_URL`
   when set, otherwise the address you reached the station on (LAN / Tailscale /

@@ -48,6 +48,17 @@
 	}
 
 	# -------------------------------------------------------------------------
+	# /listen.pls + /listen.m3u — one-paste tune-in files (VLC, Sonos, hardware)
+	# -------------------------------------------------------------------------
+	# Served by the controller at its root (NOT under /api), so use a plain
+	# handle with no path stripping. Without this they fall through to the
+	# Next.js catch-all below and 404.
+	@listen path /listen.pls /listen.m3u
+	handle @listen {
+		reverse_proxy controller:7701
+	}
+
+	# -------------------------------------------------------------------------
 	# Everything else → Next.js web UI
 	# -------------------------------------------------------------------------
 	handle {
