@@ -19,6 +19,21 @@ export function PersonaBehaviorCard({ persona, update }: PersonaBehaviorCardProp
       <div className="lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-8">
         {/* LEFT — frequency, script length, DJ mode */}
         <div>
+          <div className="rule-label">Music only</div>
+          <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+            <div>
+              <div className="text-[13px] font-bold">Music only — no DJ voice</div>
+              <div className="mt-0.5 text-[11px] text-muted">
+                AI picks tracks normally. All spoken output is silenced — no links, IDs,
+                or segments. Frequency settings are ignored while this is on.
+              </div>
+            </div>
+            <Toggle
+              on={!!persona.musicOnly}
+              onClick={() => update({ musicOnly: !persona.musicOnly })}
+            />
+          </div>
+
           <div className="rule-label">talk frequency</div>
           <div className="stack-mobile grid grid-cols-3 gap-2">
             {FREQUENCIES.map(f => (

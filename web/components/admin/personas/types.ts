@@ -24,6 +24,10 @@ export interface Persona {
   // what's next, runs callbacks across the session, and is more present. Off =
   // the historical tasteful-narrator behaviour.
   djMode: boolean;
+  // When true all spoken output is suppressed — no links, IDs, or segments.
+  // The AI picker continues to select tracks normally. Frequency settings are
+  // ignored while this is on.
+  musicOnly?: boolean;
   // Tone dials, 0–10, default 5 (neutral). Map to prompt bands server-side.
   humour: number;
   localColour: number;
