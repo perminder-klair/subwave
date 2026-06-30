@@ -120,8 +120,8 @@ export async function getDjQueueIds(): Promise<Set<string>> {
           if (match && match[1]) {
             subsonicIds.add(match[1]);
           }
-        } catch {
-          // Per-RID errors swallowed (RID may be consumed/played between calls)
+        } catch (ridErr: any) {
+          console.warn(`[liquidsoap] request.metadata ${rid} failed: ${ridErr.message}`);
         }
       }
 

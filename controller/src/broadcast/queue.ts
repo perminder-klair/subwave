@@ -149,6 +149,17 @@ class Queue {
       }
       this.log('scheduler',
         `Queue recovered: ${this.upcoming.length} upcoming, ${this.history.length} played`);
+
+      // Re-drain any items snapshotted as sent:false mid-TTS during a crash.
+      if (this.upcoming.some(i => !i.sent)) {
+        void this.drainToLiquidsoap();
+      }
+
+      // Reconcile sent:true items against the live dj_queue after a short
+      // delay so Liquidsoap has time to accept telnet connections on boot.
+      if (this.upcoming.some(i => i.sent)) {
+        setTimeout(() => { void this.reconcileWithDjQueue(); }, 3000);
+      }
     } catch (err: any) {
       console.error('[queue] recover failed:', err.message);
     }
@@ -347,6 +358,7 @@ class Queue {
       introAired: false,
       queuedAt: new Date().toISOString(),
       sent: false,
+      confirmedInLiquidsoap: false,
     };
     this.upcoming.push(item);
     this.log('queued', `${track.title} — ${track.artist}`, { requestedBy, queueDepth: this.upcoming.length });
@@ -739,19 +751,41 @@ class Queue {
   }
 
   // Reconcile Node's upcoming queue with Liquidsoap's actual dj_queue.
-  // Sent items that are missing from Liquidsoap are dropped (e.g. after a Liquidsoap restart).
+  // Reconcile Node's upcoming queue with Liquidsoap's actual dj_queue.
+  // Only drops items that were confirmed present in dj_queue at least once
+  // and are now gone (played/consumed). Items that have never been seen in
+  // dj_queue (in-flight grace period) are kept so a just-sent pick isn't
+  // dropped before Liquidsoap's next poll (up to 1s after writeHandoff).
   async reconcileWithDjQueue() {
     const sentItems = this.upcoming.filter(i => i.sent);
     if (sentItems.length === 0) return;
 
     try {
       const liveIds = await liquidsoapControl.getDjQueueIds();
-      const beforeCount = this.upcoming.length;
 
+      // If Liquidsoap returned an empty set while we have sent items, it's
+      // either mid-poll (item in flight) or truly restarted. We can't tell
+      // which — bail and drop nothing.
+      if (liveIds.size === 0) {
+        this.log('scheduler', 'reconcileWithDjQueue: empty liveIds, skipping drop');
+        return;
+      }
+
+      // Pass 1: confirm items that ARE currently in dj_queue.
+      for (const item of this.upcoming) {
+        if (item.sent && item.track?.id && liveIds.has(item.track.id)) {
+          item.confirmedInLiquidsoap = true;
+        }
+      }
+
+      // Pass 2: drop only items that were confirmed-present and are now gone.
+      const beforeCount = this.upcoming.length;
       this.upcoming = this.upcoming.filter(item => {
         if (!item.sent) return true;
+        if (!item.confirmedInLiquidsoap) return true;  // grace period — keep
         const id = item.track?.id;
-        return id && liveIds.has(id);
+        if (!id) return true;  // no id to match against — keep
+        return liveIds.has(id);
       });
 
       const droppedCount = beforeCount - this.upcoming.length;
