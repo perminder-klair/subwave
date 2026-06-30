@@ -3387,6 +3387,7 @@ html.lite *::after {
     padding: 12px 13px; cursor: pointer; text-align: left; font-family: inherit;
 }
 .admin-root .lib-pass:hover { border-color: var(--ink); }
+.admin-root .lib-pass:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
 .admin-root .lib-pass.on { border-color: var(--accent); background: var(--accent-soft); }
 .admin-root .lib-pass .box {
     width: 15px; height: 15px; border: 1px solid var(--ink); flex: none; margin-top: 2px;
