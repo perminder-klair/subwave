@@ -482,8 +482,29 @@ const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
 
 const PERSONA_LIMIT = 12;
 const SHOWS_LIMIT = 64;
+const PLAYLISTS_PER_SHOW = 10;
 const SKILLS_PER_PERSONA_LIMIT = 20;
 const WEBHOOKS_LIMIT = 16;
+
+// A show can anchor to one or more Navidrome playlists: the playlist union
+// becomes the show's candidate pool. Stored as Subsonic playlist ids; deduped,
+// trimmed, capped. Never validated against the live Navidrome here (offline
+// validation, same as `genre` free-text) — an id that no longer exists simply
+// contributes nothing at pick time (never-starve). Empty = no anchor.
+function coercePlaylistIds(raw: any): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const id = v.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= PLAYLISTS_PER_SHOW) break;
+  }
+  return out;
+}
 
 // Event names the outbound webhook fan-out can subscribe to. Kept in sync
 // with broadcast/webhooks.ts WEBHOOK_EVENTS — duplicated here so settings.ts
@@ -1123,6 +1144,12 @@ function normalizeShows(raw: any, personaIds: string[]) {
     // maxTrackSeconds; 0 = unlimited (opt this show back out of the cap so a
     // long-form mix show can air hour-long sets); >0 = this show's own cap.
     const maxTrackSeconds = coerceMaxTrackSeconds(rawMaxTrackSec(item), true);
+    // Optional Navidrome playlist anchor — the union of these playlists becomes
+    // the show's candidate pool. playlistStrict (default off) makes the playlist
+    // the show's ENTIRE universe; soft just lets it dominate. Both default empty
+    // so existing shows are byte-for-byte unchanged.
+    const playlistIds = coercePlaylistIds(item.playlistIds);
+    const playlistStrict = item.playlistStrict === true;
     out.push({
       id,
       name,
@@ -1136,6 +1163,8 @@ function normalizeShows(raw: any, personaIds: string[]) {
       energy,
       genreStrict,
       maxTrackSeconds,
+      playlistIds,
+      playlistStrict,
     });
     if (out.length >= SHOWS_LIMIT) break;
   }
@@ -1889,10 +1918,27 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
       }
       maxTrackSeconds = n;
     }
+    // Optional Navidrome playlist anchor. Shape-checked only (array of strings,
+    // capped) — ids are resolved against the live Navidrome at pick time, never
+    // here, so a stale id is tolerated. playlistStrict is a plain boolean.
+    let playlistIds: string[] = [];
+    if (item.playlistIds !== undefined && item.playlistIds !== null) {
+      if (!Array.isArray(item.playlistIds)) {
+        throw new Error(`shows[${i}].playlistIds must be an array of strings`);
+      }
+      if (item.playlistIds.length > PLAYLISTS_PER_SHOW) {
+        throw new Error(`shows[${i}].playlistIds must have at most ${PLAYLISTS_PER_SHOW} entries`);
+      }
+      for (const v of item.playlistIds) {
+        if (typeof v !== 'string') throw new Error(`shows[${i}].playlistIds entries must be strings`);
+      }
+      playlistIds = coercePlaylistIds(item.playlistIds);
+    }
+    const playlistStrict = item.playlistStrict === true;
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId, genre, fromYear, toYear, energy, genreStrict, maxTrackSeconds };
+    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId, genre, fromYear, toYear, energy, genreStrict, maxTrackSeconds, playlistIds, playlistStrict };
   });
 }
 
@@ -2647,6 +2693,11 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     // Per-show track-length cap override (seconds). null = inherit the station
     // default; 0 = unlimited; >0 = own cap. See effectiveMaxTrackSec().
     maxTrackSeconds: show.maxTrackSeconds != null ? show.maxTrackSeconds : null,
+    // Navidrome playlist anchor: the union of these playlists becomes the show's
+    // candidate pool (music/show-playlist.ts). playlistStrict makes it the show's
+    // entire universe; soft just lets it dominate. Empty array = no anchor.
+    playlistIds: Array.isArray(show.playlistIds) ? show.playlistIds.filter((v: any) => typeof v === 'string') : [],
+    playlistStrict: show.playlistStrict === true,
     // Empty string means "fall back to the station-wide default". The route
     // layer is responsible for resolving an empty/stale id against the live
     // theme registry; we just surface what the show declares.

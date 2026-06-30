@@ -75,6 +75,13 @@ interface Show {
    *  0 = unlimited (opt this show out of the cap so it can air long mixes);
    *  >0 = this show's own cap. */
   maxTrackSeconds: number | null;
+  /** Navidrome playlist anchor — the union of these playlists becomes the show's
+   *  candidate pool. Empty = no anchor (behaves as before). */
+  playlistIds: string[];
+  /** When true (and ≥1 playlist is pinned) the playlist is the show's ENTIRE
+   *  universe; off-playlist tracks only play as a never-starve fallback. When
+   *  false, the playlist just dominates the pool. Defaults off. */
+  playlistStrict: boolean;
 }
 
 // Decade presets for the era dropdown → fromYear/toYear. 'any' clears the window.
@@ -188,10 +195,12 @@ function NowCard({ label, accent, slotHour, show, color, personaLabel }: NowCard
 // Compact " · genre · 80s · high" suffix for the show summary lines, omitting
 // whatever the show doesn't pin. A strict genre is flagged inline so the hard
 // lock is visible at a glance.
-function showFilterSummary(s: { genre: string; fromYear: number | null; toYear: number | null; energy: string; genreStrict?: boolean; maxTrackSeconds?: number | null }): string {
+function showFilterSummary(s: { genre: string; fromYear: number | null; toYear: number | null; energy: string; genreStrict?: boolean; maxTrackSeconds?: number | null; playlistIds?: string[]; playlistStrict?: boolean }): string {
   const genre = s.genre ? (s.genreStrict ? `${s.genre} (strict)` : s.genre) : '';
   const len = s.maxTrackSeconds == null ? '' : s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s`;
-  const bits = [genre, decadeLabelOf(s), s.energy, len].filter(Boolean);
+  const nPl = s.playlistIds?.length ?? 0;
+  const playlist = nPl ? `${nPl} playlist${nPl > 1 ? 's' : ''}${s.playlistStrict ? ' (strict)' : ''}` : '';
+  const bits = [genre, decadeLabelOf(s), s.energy, len, playlist].filter(Boolean);
   return bits.length ? ` · ${bits.join(' · ')}` : '';
 }
 
@@ -248,6 +257,9 @@ export default function ShowsPanel() {
   // Library genres for the show genre autocomplete. Admin-gated endpoint, so it
   // runs after sign-in; failures are silent (the field still accepts free text).
   const [genres, setGenres] = useState<string[]>([]);
+  // Navidrome playlists for the per-show playlist-anchor picker. Admin-gated;
+  // failures are silent (the picker just shows no options to choose from).
+  const [playlists, setPlaylists] = useState<{ id: string; name: string; songCount: number | null }[]>([]);
 
   // Drag-paint stroke: { active, value } — value is the showId/null painted
   // for the whole stroke, decided on mousedown so a drag doesn't flicker.
@@ -321,6 +333,8 @@ export default function ShowsPanel() {
           energy: s.energy ?? '',
           genreStrict: s.genreStrict ?? false,
           maxTrackSeconds: s.maxTrackSeconds ?? null,
+          playlistIds: Array.isArray(s.playlistIds) ? s.playlistIds : [],
+          playlistStrict: s.playlistStrict ?? false,
         }));
         setForm({ shows, schedule: week });
         // Arm the first valid show as the brush so the grid is paintable at once.
@@ -364,6 +378,21 @@ export default function ShowsPanel() {
     return () => { cancelled = true; };
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Fetch Navidrome playlists once for the show playlist-anchor picker (admin-gated).
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await adminFetch('/dj/playlists');
+        if (!r.ok || cancelled) return;
+        const j = (await r.json()) as { results?: { id: string; name: string; songCount: number | null }[] };
+        if (Array.isArray(j.results)) setPlaylists(j.results);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const personas: Persona[] = data?.values?.personas || [];
   const moods: string[] = data?.tts?.moods || [];
   const apiBase = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
@@ -400,6 +429,7 @@ export default function ShowsPanel() {
           personaId: personas[0]?.id || '', mood: moods[0] || '',
           themeId: '', genre: '', fromYear: null, toYear: null, energy: '',
           genreStrict: false, maxTrackSeconds: null,
+          playlistIds: [], playlistStrict: false,
         }],
       };
     });
@@ -532,6 +562,9 @@ export default function ShowsPanel() {
             genre: s.genre.trim(), fromYear: s.fromYear, toYear: s.toYear, energy: s.energy || '',
             genreStrict: !!s.genre.trim() && s.genreStrict,
             maxTrackSeconds: s.maxTrackSeconds,
+            playlistIds: s.playlistIds || [],
+            // Strict only means something with at least one playlist pinned.
+            playlistStrict: (s.playlistIds?.length ?? 0) > 0 && s.playlistStrict,
           })),
           schedule: form.schedule,
         }),
@@ -778,6 +811,7 @@ export default function ShowsPanel() {
           themes={themes}
           activeThemeId={activeThemeId}
           genres={genres}
+          playlists={playlists}
           apiBase={apiBase}
           adminFetch={adminFetch}
           minTrackSeconds={data?.values?.minTrackSeconds}
@@ -846,6 +880,7 @@ interface ShowEditorProps {
   themes: ThemeOption[];
   activeThemeId: string;
   genres: string[];
+  playlists: { id: string; name: string; songCount: number | null }[];
   apiBase: string;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   minTrackSeconds?: number;
@@ -861,7 +896,7 @@ interface ShowEditorProps {
 }
 
 function ShowEditor({
-  show, editorRef, personas, moods, themes, activeThemeId, genres, apiBase,
+  show, editorRef, personas, moods, themes, activeThemeId, genres, playlists, apiBase,
   adminFetch, minTrackSeconds, allShowsOk, canSave, busy,
   update, onSave, onClose, onRemove,
 }: ShowEditorProps) {
@@ -1028,6 +1063,69 @@ function ShowEditor({
             band, or any mix. The DJ leans toward these but can break them for
             flow; leave blank to let the topic and mood drive selection.
           </span>
+
+          <Field>
+            <Label>playlist anchor</Label>
+            <span className="field-hint">
+              Pin one or more Navidrome playlists: their combined tracks become
+              this show&apos;s pool. The AI DJ still sequences and talks over
+              them. Pick none to let genre/era/mood drive selection (up to 10).
+            </span>
+            {playlists.length === 0 ? (
+              <span className="field-hint opacity-60">
+                No Navidrome playlists found yet — create some in Navidrome and
+                reopen this panel.
+              </span>
+            ) : (
+              <div className="grid max-h-44 gap-1 overflow-y-auto border border-ink bg-[var(--ink-softer)] p-2">
+                {playlists.map(pl => {
+                  const checked = show.playlistIds.includes(pl.id);
+                  const atCap = !checked && show.playlistIds.length >= 10;
+                  return (
+                    <label
+                      key={pl.id}
+                      className={`flex items-center gap-2 text-sm ${atCap ? 'opacity-40' : 'cursor-pointer'}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={atCap}
+                        onChange={() => update({
+                          playlistIds: checked
+                            ? show.playlistIds.filter(id => id !== pl.id)
+                            : [...show.playlistIds, pl.id],
+                        })}
+                      />
+                      <span className="truncate">{pl.name}</span>
+                      {pl.songCount != null && (
+                        <span className="field-hint">({pl.songCount})</span>
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </Field>
+
+          {show.playlistIds.length > 0 && (
+            <div className="flex items-start gap-3">
+              <div className="pt-0.5">
+                <Toggle
+                  on={show.playlistStrict}
+                  onClick={() => update({ playlistStrict: !show.playlistStrict })}
+                />
+              </div>
+              <div className="grid gap-0.5">
+                <Label>Playlist only (strict)</Label>
+                <span className="field-hint">
+                  Play ONLY tracks from the pinned playlist(s) — off-playlist
+                  tracks air only as a last resort to avoid silence. Off: the
+                  playlist dominates but the DJ can still wander for variety.
+                  Listener requests are always allowed through, either way.
+                </span>
+              </div>
+            </div>
+          )}
 
           <Field>
             <Label htmlFor="show-topic">topic (fed to the DJ as the show theme)</Label>

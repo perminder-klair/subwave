@@ -312,6 +312,25 @@ router.get('/dj/search', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /dj/playlists — the operator's Navidrome playlists, for the show editor's
+// playlist-anchor multi-select. id + name + songCount is all the UI needs.
+// ---------------------------------------------------------------------------
+router.get('/dj/playlists', requireAdmin, async (_req, res) => {
+  try {
+    const playlists = await subsonic.getPlaylists();
+    const results = (Array.isArray(playlists) ? playlists : []).map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      songCount: p.songCount ?? null,
+    }));
+    res.json({ results });
+  } catch (err) {
+    queue.log('error', `/dj/playlists failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /dj/recent — most recently added tracks, for the manual queue UI.
 // Navidrome only sorts albums by recency, so we expand the newest albums into
 // their songs and flatten. Results are queue-ready /dj/search-shaped objects.

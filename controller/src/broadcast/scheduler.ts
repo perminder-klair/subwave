@@ -13,6 +13,7 @@ import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { artistKey } from '../music/recency.js';
 import { normGenre, genreMatches, inYearRange, preferEnergy } from '../music/show-filter.js';
+import { resolveShowPlaylistPool } from '../music/show-playlist.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
 import * as session from './session.js';
@@ -35,6 +36,10 @@ const AUTO_MAX_PER_ARTIST = 2;   // cap any one artist's share of the fallback p
 // SHOW_NARROW_FACTOR so the show's genre/era actually fills the fallback (#629).
 const SHOW_GENRE_WEIGHT = 14;        // dedicated show-genre source (soft lean)
 const SHOW_GENRE_STRICT_WEIGHT = 24; // strict: this source carries most of the pool
+// A show anchored to Navidrome playlist(s): the union becomes the dominant
+// fallback source (soft) or — after the strict end-filter — the whole pool.
+const SHOW_PLAYLIST_WEIGHT = 14;        // dedicated show-playlist source (soft)
+const SHOW_PLAYLIST_STRICT_WEIGHT = 24; // strict: this source carries the pool
 const SHOW_NARROW_FACTOR = 0.5;      // shrink mood/playlist/recent/etc. for shows
 
 function shuffle<T>(arr: T[]): T[] {
@@ -82,6 +87,15 @@ async function refreshAutoPlaylistInner() {
   const narrow = !!(show && (showGenre || fromYear != null || toYear != null));
   const strict = !!(show?.genreStrict && showGenre);
 
+  // Show playlist anchor: resolve the union once. The fallback must honour it
+  // too, so the LLM-free coast (LLM down, budget-hard, zero listeners) still
+  // plays the show's playlist. Strict → the pool is hard-filtered to it at the
+  // end (and the off-playlist random top-up is skipped); soft → it just
+  // dominates. Null when the show pins no playlists.
+  const playlistPool = show ? await resolveShowPlaylistPool(show) : null;
+  const hasPlaylist = !!playlistPool?.tracks?.length;
+  const strictPlaylist = hasPlaylist && !!show?.playlistStrict;
+
   // Resolve the show's free-text genre to the library's exact tag once, up front.
   // A resolution failure / absent genre leaves genreName null, which disables the
   // strict hard-filter and the genre-targeted fetches — the documented degrade
@@ -98,8 +112,9 @@ async function refreshAutoPlaylistInner() {
   // this (genreName null → no filter). Soft mode is a no-op here.
   const enforce = (items: any[]) =>
     strictGenreNorm ? items.filter((t: any) => genreMatches(t, strictGenreNorm)) : items;
-  // Shrink the off-genre sources so the dedicated show-genre source dominates.
-  const nz = (cap: number) => (narrow ? Math.max(2, Math.ceil(cap * SHOW_NARROW_FACTOR)) : cap);
+  // Shrink the off-genre / off-playlist sources so the dedicated show source
+  // (genre or playlist) dominates the pool.
+  const nz = (cap: number) => ((narrow || hasPlaylist) ? Math.max(2, Math.ceil(cap * SHOW_NARROW_FACTOR)) : cap);
 
   // Length cap: the active show's override or the station default (issue #447),
   // resolved in seconds. null = no cap. Now that the fallback honours the show's
@@ -107,7 +122,7 @@ async function refreshAutoPlaylistInner() {
   const maxDurationSec = settings.effectiveMaxTrackSec(show);
 
   const pool: any[] = [];
-  const fromSource: Record<string, number> = { 'show-genre': 0, mood: 0, playlist: 0, recent: 0, frequent: 0, starred: 0, random: 0 };
+  const fromSource: Record<string, number> = { 'show-genre': 0, 'show-playlist': 0, mood: 0, playlist: 0, recent: 0, frequent: 0, starred: 0, random: 0 };
   // Cap each artist's share of the pool. Without this, a deep-catalogue artist
   // (many mood-tagged / starred / frequent tracks) can dominate the fallback
   // playlist, so whenever Liquidsoap coasts on auto.m3u the same artist clusters
@@ -153,6 +168,14 @@ async function refreshAutoPlaylistInner() {
     } catch (err) {
       queue.log('error', `Show-genre fetch failed: ${err.message}`);
     }
+  }
+
+  // 0b. Dedicated show-playlist source — the dominant contributor whenever the
+  // show is anchored to Navidrome playlist(s). Placed early so playlist tracks
+  // fill the pool before the (shrunk) discovery sources. In strict mode the
+  // whole pool is filtered to these ids at the end, so this is the universe.
+  if (hasPlaylist) {
+    take('show-playlist', shuffle(playlistPool!.tracks), strictPlaylist ? SHOW_PLAYLIST_STRICT_WEIGHT : SHOW_PLAYLIST_WEIGHT);
   }
 
   // 1. Mood-tagged from the LLM-built library (only if tagger has run).
@@ -205,8 +228,11 @@ async function refreshAutoPlaylistInner() {
   }
 
   // 6. Top up with random to TARGET_POOL. For a show, bias the fill toward its
-  // genre/era (Navidrome filters server-side, so it stays pure).
-  if (pool.length < TARGET_POOL) {
+  // genre/era (Navidrome filters server-side, so it stays pure). A strict
+  // playlist show skips this entirely — random can't be playlist-filtered, so
+  // better a short looping in-playlist fallback than off-playlist filler (the
+  // strict end-filter below would drop it anyway).
+  if (pool.length < TARGET_POOL && !strictPlaylist) {
     try {
       const random = narrow
         ? await subsonic.getRandomSongs({ size: TARGET_POOL, genre: genreName || undefined, fromYear: fromYear ?? undefined, toYear: toYear ?? undefined })
@@ -225,6 +251,15 @@ async function refreshAutoPlaylistInner() {
     }
   }
 
+  // Strict playlist: drop every off-playlist track so the LLM-free coast plays
+  // only the show's curation. The dedicated show-playlist source guarantees
+  // in-set tracks are present, so this is normally a clean filter; never-starve
+  // to the unfiltered pool only if NOT ONE survived (a true dead-air guard).
+  if (strictPlaylist) {
+    const inPl = pool.filter((t: any) => t?.id && playlistPool!.ids.has(t.id));
+    if (inPl.length) { pool.length = 0; pool.push(...inPl); }
+  }
+
   // Stamp the station cap on every fallback entry (#447). max-track-length is a
   // pure on-air cue_out cut, not a selection filter, so over-length tracks stay
   // in the pool and simply crossfade out at the cap when the queue runs dry.
@@ -239,12 +274,19 @@ async function refreshAutoPlaylistInner() {
   } else if (strict && genreName && pool.length < TARGET_POOL) {
     queue.log('scheduler', `Auto-playlist: only ${pool.length} in-genre tracks for ${genreName} — looping a short genre-pure fallback`);
   }
+  if (strictPlaylist && pool.length < TARGET_POOL) {
+    queue.log('scheduler', `Auto-playlist: only ${pool.length} in-playlist tracks — looping a short playlist-pure fallback`);
+  }
 
+  const playlistTag = hasPlaylist
+    ? (playlistPool!.names.length ? playlistPool!.names.join('/') : `${show.playlistIds.length} playlist(s)`)
+    : '';
   const showInfo = show
     ? `, show=${show.name}` +
       (showGenre ? ` genre=${genreName || showGenre} (${strict ? 'strict' : 'soft'})` : '') +
       (fromYear != null || toYear != null ? ` year=${fromYear ?? ''}-${toYear ?? ''}` : '') +
-      (showEnergy ? ` energy=${showEnergy}` : '')
+      (showEnergy ? ` energy=${showEnergy}` : '') +
+      (hasPlaylist ? ` playlist=${playlistTag} (${strictPlaylist ? 'strict' : 'soft'})` : '')
     : '';
   queue.log('scheduler',
     `Auto-playlist refreshed: ${pool.length} tracks (` +

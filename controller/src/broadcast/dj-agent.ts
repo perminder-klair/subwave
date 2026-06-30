@@ -15,6 +15,7 @@ import { z } from 'zod';
 import * as settings from '../settings.js';
 import * as session from './session.js';
 import * as picker from '../music/picker.js';
+import { resolveShowPlaylistPool } from '../music/show-playlist.js';
 import * as library from '../music/library.js';
 import * as mix from '../music/mix.js';
 import * as journey from '../music/journey.js';
@@ -208,9 +209,19 @@ export function pickSystem() {
   // instead of a soft lean, so both pick paths honour strict the same way. Lives
   // in the system prompt for the same session-window reason as the show brief.
   const musicLean = dj.showMusicLean(activeShow);
+  // Playlist anchor: a separate steer from genre/era. Strict → every pick MUST
+  // come from the pinned playlist (the tools already enforce this in code, but
+  // saying so keeps the agent reaching for showPlaylistTracks instead of
+  // burning steps on tools that come back empty); soft → strong preference,
+  // occasional steps outside allowed for flow.
+  const playlistLean = activeShow?.playlistIds?.length
+    ? (activeShow.playlistStrict
+        ? `\n\nThis show is anchored to a curated playlist: every track you pick MUST come from it. Call showPlaylistTracks first and choose from what it returns.`
+        : `\n\nThis show leans on a curated playlist: call showPlaylistTracks first and strongly prefer those tracks; only step outside occasionally when the flow calls for it.`)
+    : '';
   return `${settings.agentPersonaPreamble(persona, { rules: false })}
 
-You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}${musicLean}
+You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}${musicLean}${playlistLean}
 
 ${dj.PICKER_CRITERIA}
 
@@ -282,7 +293,7 @@ export const pickerAgent = defineAgent({
   maxSteps: 4,
   timeoutMs: agentDeadline,
   buildSystem: () => pickSystem(),
-  buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint }) => {
+  buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, playlistLock, playlistTracks }) => {
     // Resolve the active show live (a show that just came on air takes effect):
     // for a strict show, hard genre + era locks the discovery tools enforce on
     // candidates — not just the prompt. Era rides the same genreStrict flag (no
@@ -294,7 +305,9 @@ export const pickerAgent = defineAgent({
     const eraLock = strict && (activeShow?.fromYear != null || activeShow?.toYear != null)
       ? { fromYear: activeShow.fromYear, toYear: activeShow.toYear }
       : null;
-    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock });
+    // playlistLock / playlistTracks are pre-resolved by pickViaAgent (the
+    // Navidrome fetch is async; buildTools is sync) and threaded through run().
+    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock, playlistLock, playlistTracks });
     return { tools, extras: { seen } };
   },
 });
@@ -384,6 +397,16 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   const effN = effectiveNoRepeatWindow(settings.get().llm?.noRepeatWindow ?? 0, stats.total);
   const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
 
+  // Show playlist anchor: resolve the union here (async Navidrome fetch) and
+  // thread it into the agent's tools. Strict → a hard lock set so every tool's
+  // results are intersected with the playlist (the agent can only pick in-set);
+  // soft → just the tracks, exposed via showPlaylistTracks for a strong prompt
+  // preference, no lock. Null when the show pins no playlists.
+  const activeShow = settings.resolveActiveShow();
+  const playlistPool = activeShow ? await resolveShowPlaylistPool(activeShow) : null;
+  const playlistLock = playlistPool && activeShow?.playlistStrict ? playlistPool.ids : null;
+  const playlistTracks = playlistPool?.tracks ?? null;
+
   const { object, steps, toolCalls, extras } = await pickerAgent.run({
     messages: session.windowMessages(),
     recentIds,
@@ -394,6 +417,8 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
     // over the run's current waypoint, so the agent path drifts the sound the
     // same way the pool path does. The event text tells the agent to use it.
     audioWaypoint,
+    playlistLock,
+    playlistTracks,
   });
 
   const song = object?.id ? extras.seen.get(object.id) : null;
