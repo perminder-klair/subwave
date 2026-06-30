@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.33.0](https://github.com/perminder-klair/subwave/compare/v0.32.0...v0.33.0) (2026-06-30)
+
+
+### Features
+
+* **admin:** full-screen editor dialog + unified list cards ([#708](https://github.com/perminder-klair/subwave/issues/708)) ([d0ebf16](https://github.com/perminder-klair/subwave/commit/d0ebf16ce26941dead52e5c61661689c0c6efa1c))
+* **boardcast:** configurable stream bitrate ([#676](https://github.com/perminder-klair/subwave/issues/676)) ([85a9d18](https://github.com/perminder-klair/subwave/commit/85a9d18626f66ffe057089c62b0cdb539bd16a54))
+* **shows:** anchor shows to Navidrome playlists ([#701](https://github.com/perminder-klair/subwave/issues/701)) ([56da727](https://github.com/perminder-klair/subwave/commit/56da7276a4b135eefc7133a99d46ef8987d91eae))
+* **shows:** in-page show editor with save/delete confirms ([#694](https://github.com/perminder-klair/subwave/issues/694)) ([8d04b1d](https://github.com/perminder-klair/subwave/commit/8d04b1d491fe2ba2e29ed6ecfe5736e59ee4007a))
+* **skills:** create, edit & delete skills from the admin UI ([#695](https://github.com/perminder-klair/subwave/issues/695)) ([b5ac6ff](https://github.com/perminder-klair/subwave/commit/b5ac6fffa6c741c51dd88787f5a3430c5ddf3574))
+* **skills:** unify built-in & custom skills on one loader + services API ([#698](https://github.com/perminder-klair/subwave/issues/698)) ([1974d03](https://github.com/perminder-klair/subwave/commit/1974d0313aa02aa6b6174e51e0da924b05fdf238))
+* **stream:** configurable stream outputs — FLAC mount, Opus bitrate, AAC-LC mount ([#699](https://github.com/perminder-klair/subwave/issues/699)) ([e821086](https://github.com/perminder-klair/subwave/commit/e82108644127830ab38d6f25b809b7b5e9f79a42))
+* **tts:** add remote TTS engine for self-hosted HTTP endpoints ([#672](https://github.com/perminder-klair/subwave/issues/672)) ([6d4621d](https://github.com/perminder-klair/subwave/commit/6d4621dab3ea48817a03e4c3d398cd881ba26816))
+
+
+### Bug Fixes
+
+* **admin:** stop native basic-auth popup on skill edit ([#709](https://github.com/perminder-klair/subwave/issues/709)) ([78b7bdc](https://github.com/perminder-klair/subwave/commit/78b7bdc4bee067c286eb6eee1614282cba59b624))
+* **stats:** scroll the pick-source list + reliably wire the docker-socket-proxy ([#693](https://github.com/perminder-klair/subwave/issues/693)) ([ba06f94](https://github.com/perminder-klair/subwave/commit/ba06f94d0be18455a4a962290af9ea7712a8c5a9))
+
+## [0.32.0](https://github.com/perminder-klair/subwave/compare/v0.31.0...v0.32.0) (2026-06-29)
+
+
+### Features
+
+* **api:** /listen.pls + /listen.m3u tune-in endpoints + now-playing stream block ([#670](https://github.com/perminder-klair/subwave/issues/670)) ([0b1f48f](https://github.com/perminder-klair/subwave/commit/0b1f48f10f622a130cf9310ac641fff06f9d7244))
+* **scrobble:** in-admin "Connect to Last.fm", drop the CLI session-key step ([#686](https://github.com/perminder-klair/subwave/issues/686)) ([590eb32](https://github.com/perminder-klair/subwave/commit/590eb32e21797856c1d86290894d2125c13465bc))
+* **web:** lite mode to drop blur + animations on low-power devices ([#661](https://github.com/perminder-klair/subwave/issues/661)) ([e77b72c](https://github.com/perminder-klair/subwave/commit/e77b72c69eaf41338b969861dc13525229a35791))
+* **web:** visual show editor with genre, persona & theme pickers ([#674](https://github.com/perminder-klair/subwave/issues/674)) ([1d33de6](https://github.com/perminder-klair/subwave/commit/1d33de6242e90ce78792ed6094726198be731d10))
+
+
+### Bug Fixes
+
+* **app:** clamp DJ thinking line so long scripts don't overlap the waveform ([#668](https://github.com/perminder-klair/subwave/issues/668)) ([0cf58fa](https://github.com/perminder-klair/subwave/commit/0cf58faee5c58be840dce154352707159ea95820))
+* **broadcast:** forward-looking DJ links so a request can't make the DJ name a stale track ([#675](https://github.com/perminder-klair/subwave/issues/675)) ([1f9d38d](https://github.com/perminder-klair/subwave/commit/1f9d38d8b2f85e98b5eab07d27297dc7acb8da9a))
+* **broadcast:** remove blank.skip that busy-loops at 100% CPU on empty library ([#660](https://github.com/perminder-klair/subwave/issues/660)) ([#665](https://github.com/perminder-klair/subwave/issues/665)) ([643248f](https://github.com/perminder-klair/subwave/commit/643248f2d307799c316b0eeb29984aefbfe5ca9e))
+* **broadcast:** rotate jingles on the raw music source so they keep firing ([#687](https://github.com/perminder-klair/subwave/issues/687)) ([f1372ba](https://github.com/perminder-klair/subwave/commit/f1372ba1daf55b8a6f657182b2bf63ca5ae1a48b))
+* **build:** copy controller/.npmrc into image so npm install gets legacy-peer-deps ([#678](https://github.com/perminder-klair/subwave/issues/678)) ([c16516c](https://github.com/perminder-klair/subwave/commit/c16516c268d86dd1c9f97c5f28b212a294c6f368))
+* **build:** stamp deployed version into images so the admin footer isn't a release behind ([#663](https://github.com/perminder-klair/subwave/issues/663)) ([854f82e](https://github.com/perminder-klair/subwave/commit/854f82e017d276d79f868f712cc4ac483c6d2f5b))
+* **caddy:** route /listen.pls + /listen.m3u to the controller ([#689](https://github.com/perminder-klair/subwave/issues/689)) ([d739d95](https://github.com/perminder-klair/subwave/commit/d739d953c86bd8d6e6e96c819c33c29fe805cd3a))
+* **llm:** fail over to fallback model on upstream-overload errors ([#671](https://github.com/perminder-klair/subwave/issues/671)) ([#684](https://github.com/perminder-klair/subwave/issues/684)) ([40d57ae](https://github.com/perminder-klair/subwave/commit/40d57ae500faa1e519bf0c262188a2ac8e7ce6d8))
+* **llm:** namespace inline API keys per-provider ([#657](https://github.com/perminder-klair/subwave/issues/657)) ([#664](https://github.com/perminder-klair/subwave/issues/664)) ([932f3a6](https://github.com/perminder-klair/subwave/commit/932f3a6d26f16d0ad6cb79530a72bae6653902b5))
+* **onboarding:** surface errors and bound timeouts on the Test buttons ([#682](https://github.com/perminder-klair/subwave/issues/682)) ([#683](https://github.com/perminder-klair/subwave/issues/683)) ([66590ba](https://github.com/perminder-klair/subwave/commit/66590baab9e32447fae254a52b9a7ac5fc21c472))
+* **tts:** run Chatterbox on RTX 50-series (Blackwell) GPUs ([#685](https://github.com/perminder-klair/subwave/issues/685)) ([53a4751](https://github.com/perminder-klair/subwave/commit/53a4751888491324e3317c7c42adf4e24ebef302))
+* **web:** don't false-flag raw LLM-request dumps as warnings in tagging log ([#679](https://github.com/perminder-klair/subwave/issues/679)) ([bc9e562](https://github.com/perminder-klair/subwave/commit/bc9e5621f09a87ad019065e45b9e8eebcefd94af))
+
+
+### Performance
+
+* **tagger:** parallel enrichment, phase timings, heavy-embedding-model warning ([#662](https://github.com/perminder-klair/subwave/issues/662)) ([7d9f9be](https://github.com/perminder-klair/subwave/commit/7d9f9be211e54e5ec5c20f8449b756f32ec68990))
+
 ## [0.31.0](https://github.com/perminder-klair/subwave/compare/v0.30.0...v0.31.0) (2026-06-27)
 
 
