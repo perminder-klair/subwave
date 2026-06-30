@@ -33,7 +33,7 @@ import WebhooksPanel from './WebhooksPanel';
 import BackupPanel from './BackupPanel';
 import {
   Radio, Palette, Cpu, Mic, Library, Search, Music, AudioLines,
-  Activity, Archive, Webhook, Save, AlertTriangle, Music2,
+  Activity, Archive, Webhook, Save, AlertTriangle, Music2, HelpCircle,
 } from 'lucide-react';
 
 const SECTIONS = [
@@ -5904,6 +5904,7 @@ interface MusicSectionProps extends SectionProps {
 function MusicSection({ data, form, setForm, busy, saveSettings, adminFetch }: MusicSectionProps) {
   const [testResult, setTestResult] = useState<{ ok: boolean; detail?: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  const [showTokenGuide, setShowTokenGuide] = useState(false);
   const isNavidrome = form.music.source === 'navidrome';
 
   const testConnection = async () => {
@@ -6051,7 +6052,18 @@ function MusicSection({ data, form, setForm, busy, saveSettings, adminFetch }: M
               <div className="field-hint">Base URL of your Plex Media Server including port.</div>
             </div>
             <div className="field mt-3.5">
-              <Label>X-Plex-Token</Label>
+              <div className="flex items-center gap-2">
+                <Label>X-Plex-Token</Label>
+                <button
+                  type="button"
+                  onClick={() => setShowTokenGuide(true)}
+                  className="flex items-center gap-1 text-[11px] text-muted hover:text-ink transition-colors"
+                  aria-label="How to find your Plex token"
+                >
+                  <HelpCircle size={12} />
+                  <span>How to find</span>
+                </button>
+              </div>
               <Input
                 type="password"
                 value={form.musicKeyInput}
@@ -6061,12 +6073,38 @@ function MusicSection({ data, form, setForm, busy, saveSettings, adminFetch }: M
                 placeholder={data.setup?.plex?.url ? 'set — leave blank to keep' : 'paste your Plex token'}
                 className="max-w-[360px]"
               />
-              <div className="field-hint">
-                In Plex Web: open any media item, click ... → Get Info → View XML. The token appears as X-Plex-Token= in the URL.
-              </div>
             </div>
           </>
         )}
+
+        <Modal
+          open={showTokenGuide}
+          onOpenChange={setShowTokenGuide}
+          title="Finding your X-Plex-Token"
+          sub="one-time setup"
+          width={500}
+          footer={<Btn onClick={() => setShowTokenGuide(false)}>Done</Btn>}
+        >
+          <div className="space-y-4 text-sm">
+            <div>
+              <div className="eyebrow mb-2">Method 1 — Plex Web App</div>
+              <ol className="list-decimal pl-4 space-y-1.5 text-ink/80 leading-relaxed">
+                <li>Open your Plex Web App (e.g. <code className="caption bg-[var(--ink-softer)] px-1 rounded">{form.music.plex.url || 'http://your-plex:32400'}/web</code>)</li>
+                <li>Click on any song, album, or movie</li>
+                <li>Click the <strong>...</strong> (three-dot) menu on the item</li>
+                <li>Click <strong>Get Info</strong></li>
+                <li>In the dialog, click <strong>View XML</strong></li>
+                <li>Look at the URL in the new tab — copy the value after <code className="caption bg-[var(--ink-softer)] px-1 rounded">X-Plex-Token=</code></li>
+              </ol>
+            </div>
+            <div className="border-t border-ink/20 pt-4">
+              <div className="eyebrow mb-2">Method 2 — Preferences.xml (server)</div>
+              <p className="text-ink/70 mb-2">SSH into your Plex server and run:</p>
+              <pre className="caption bg-[var(--ink-softer)] p-2 rounded overflow-x-auto">grep PlexOnlineToken &quot;/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Preferences.xml&quot;</pre>
+              <p className="field-hint mt-1">The token is the value of the <code>PlexOnlineToken</code> attribute.</p>
+            </div>
+          </div>
+        </Modal>
 
         <div className="flex items-center gap-3 pt-1">
           <Btn sm onClick={testConnection} disabled={testing || busy}>
