@@ -281,32 +281,87 @@ export async function getArtistLastfmTags(id: string, opts: { count?: number } =
 }
 
 export async function getLyrics(songId: string): Promise<string> {
-  // Fetch lyrics from LRCLIB (free, no key) by title+artist — same source
-  // Navidrome uses internally. Falls back to Plex Mood tags when LRCLIB has
-  // no coverage, then empty string.
+  // Fetch lyrics using the same chain Navidrome's lyrics plugin uses:
+  //   1. LRCLIB /api/get  — exact match by title + artist + album + duration
+  //   2. LRCLIB /api/search — fuzzy query, pick by duration within 2s
+  //   3. lyrics.ovh       — plain text fallback, good coverage for new releases
+  //   4. Plex Mood tags   — last resort when nothing else has coverage
+  const LRCLIB = 'https://lrclib.net';
+  const LYRICS_OVH = 'https://api.lyrics.ovh';
+  const UA = { 'User-Agent': 'sub-wave/lyrics' };
+  const DURATION_TOLERANCE = 2;
+  const EXCERPT = 300;
+
+  async function lrclibGet(title: string, artist: string, album: string, duration: number): Promise<string> {
+    const params = new URLSearchParams({
+      artist_name: artist,
+      track_name: title,
+      album_name: album,
+      duration: String(Math.round(duration)),
+    });
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    try {
+      const r = await fetch(`${LRCLIB}/api/get?${params}`, { headers: UA, signal: ctrl.signal });
+      if (!r.ok) return '';
+      const data = await r.json() as any;
+      return (data?.plainLyrics || data?.syncedLyrics || '').trim();
+    } catch { return ''; } finally { clearTimeout(timer); }
+  }
+
+  async function lrclibSearch(title: string, artist: string, duration: number): Promise<string> {
+    const params = new URLSearchParams({ q: `${artist} ${title}` });
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    try {
+      const r = await fetch(`${LRCLIB}/api/search?${params}`, { headers: UA, signal: ctrl.signal });
+      if (!r.ok) return '';
+      const results = await r.json() as any[];
+      const match = Array.isArray(results)
+        ? results.find(x => typeof x.duration === 'number' && Math.abs(x.duration - duration) <= DURATION_TOLERANCE)
+        : null;
+      return ((match?.plainLyrics || match?.syncedLyrics) ?? '').trim();
+    } catch { return ''; } finally { clearTimeout(timer); }
+  }
+
+  async function lyricsOvh(title: string, artist: string): Promise<string> {
+    const enc = (s: string) => encodeURIComponent(s);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    try {
+      const r = await fetch(`${LYRICS_OVH}/v1/${enc(artist)}/${enc(title)}`, { headers: UA, signal: ctrl.signal });
+      if (!r.ok) return '';
+      const data = await r.json() as any;
+      return (data?.lyrics || '').trim();
+    } catch { return ''; } finally { clearTimeout(timer); }
+  }
+
   try {
     const t = db.isOpen() ? db.getTrack(songId) : null;
-    const title = t?.title;
-    const artist = t?.artist;
+    const title = t?.title || '';
+    const artist = t?.artist || '';
+    const album = t?.album || '';
+    const duration = t?.durationSec ?? 0;
+
     if (title && artist) {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 5000);
-      try {
-        const params = new URLSearchParams({ artist_name: artist, track_name: title });
-        const r = await fetch(`https://lrclib.net/api/get?${params}`, {
-          headers: { 'User-Agent': 'sub-wave/lyrics' },
-          signal: ctrl.signal,
-        });
-        if (r.ok) {
-          const data = await r.json() as any;
-          const plain: string = data?.plainLyrics || '';
-          if (plain.trim()) return plain.slice(0, 300).trim();
-        }
-      } finally {
-        clearTimeout(timer);
+      // 1. LRCLIB exact match
+      if (album && duration) {
+        const lyrics = await lrclibGet(title, artist, album, duration);
+        if (lyrics) return lyrics.slice(0, EXCERPT);
       }
+
+      // 2. LRCLIB fuzzy search
+      if (duration) {
+        const lyrics = await lrclibSearch(title, artist, duration);
+        if (lyrics) return lyrics.slice(0, EXCERPT);
+      }
+
+      // 3. lyrics.ovh
+      const lyrics = await lyricsOvh(title, artist);
+      if (lyrics) return lyrics.slice(0, EXCERPT);
     }
-    // Fallback: Plex Mood tags when LRCLIB has no coverage
+
+    // 4. Plex Mood tags
     const ratingKey = songId.replace('plex:', '');
     const data = await plexFetch(`/library/metadata/${ratingKey}`);
     const track = data?.MediaContainer?.Metadata?.[0];
