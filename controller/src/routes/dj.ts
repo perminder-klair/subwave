@@ -11,12 +11,12 @@ import * as subsonic from '../music/subsonic.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, refreshAutoPlaylist } from '../broadcast/scheduler.js';
-import { skillCatalog, runCapability } from '../skills/_agent.js';
-import { loadCustomSkills, parseFrontmatter, BUILTIN_KINDS } from '../skills/loader.js';
-import { writeBuiltinSkillFile, msToCooldownStr } from '../skills/scaffold.js';
-import { readFile } from 'node:fs/promises';
+import { skillCatalog, runCapability, CAPABILITIES, effectiveContextFields } from '../skills/_agent.js';
+import { loadCustomSkills, parseFrontmatter, BUILTIN_KINDS, RESERVED_KINDS, SLUG_RE } from '../skills/loader.js';
+import { writeSkillFile, msToCooldownStr } from '../skills/scaffold.js';
+import { readFile, rm, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { STATE_DIR } from '../config.js';
+import { STATE_DIR, config } from '../config.js';
 import { skipTrack } from '../broadcast/liquidsoap-control.js';
 import { getFullContext } from '../context.js';
 
@@ -51,73 +51,242 @@ router.post('/dj/skills/rescan', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// GET /dj/skills/:kind/file — read a built-in skill's editable SKILL.md so the
-// admin UI can prefill its edit form. Scoped to the 7 built-in kinds; custom
-// skills are edited on disk + Rescan, not here. Falls back to live defaults
-// (skillCatalog) when the file hasn't been scaffolded yet.
+// Custom-skill CRUD helpers. Custom skills live at state/skills/<slug>/SKILL.md
+// (prompt-only: frontmatter + the markdown brief). The controller is the single
+// validation gate, reusing SLUG_RE / RESERVED_KINDS / dj.CONTEXT_FIELDS so the
+// rules never drift from what the loader enforces. tool.mjs stays a disk-drop +
+// Rescan power-feature — writeSkillFile never touches it.
+// ---------------------------------------------------------------------------
+const SKILLS_DIR = resolve(STATE_DIR, 'skills');
+const COOLDOWN_RE = /^\d+\s*[smhd]?$/;
+const ENV_KEY_RE = /^[A-Z][A-Z0-9_]*$/;
+
+// True when SKILL.md exists for this slug (folder is a real skill).
+async function skillFileExists(slug: string): Promise<boolean> {
+  try { await stat(join(SKILLS_DIR, slug, 'SKILL.md')); return true; } catch { return false; }
+}
+
+// True when the custom skill has a tool.mjs data fetcher beside SKILL.md, so the
+// edit form can warn that a data tool is attached and edited on disk, not here.
+async function skillHasTool(slug: string): Promise<boolean> {
+  try { await stat(join(SKILLS_DIR, slug, 'tool.mjs')); return true; } catch { return false; }
+}
+
+// Validate the prompt-only fields shared by create + custom-edit, returning a
+// SkillFileFields object for writeSkillFile. Throws Error(message) on the first
+// invalid field; callers map that to a 400. The slug is the immutable identity,
+// passed in (from the URL on edit, from the body on create).
+function buildCustomSkillFields(slug: string, b: any): any {
+  const brief = typeof b.brief === 'string' ? b.brief.trim() : '';
+  if (!brief) throw new Error('brief is required');
+
+  const cooldown = typeof b.cooldown === 'string' ? b.cooldown.trim() : '';
+  if (cooldown && !COOLDOWN_RE.test(cooldown)) {
+    throw new Error('cooldown must look like "45m", "6h", "2d", or a bare number (minutes)');
+  }
+
+  const label = typeof b.label === 'string' && b.label.trim() ? b.label.trim() : undefined;
+  const fields: any = { kind: slug, label, cooldown: cooldown || undefined, brief };
+
+  // Context fields — the "right now" lines this segment may weave in (#471).
+  // Accept a comma string or an array; validate every token so a typo fails
+  // loudly here. An empty selection resets the skill to the default profile.
+  if (b.context !== undefined) {
+    const raw = Array.isArray(b.context) ? b.context : String(b.context).split(',');
+    const toks = raw.map((s: any) => String(s).trim().toLowerCase()).filter(Boolean);
+    const known = new Set<string>(dj.CONTEXT_FIELDS as readonly string[]);
+    const bad = toks.filter((t: string) => !known.has(t));
+    if (bad.length) {
+      throw new Error(`unknown context field(s): ${bad.join(', ')} — valid: ${[...known].join(', ')}`);
+    }
+    if (toks.length) fields.contextFields = toks;
+  }
+
+  if (b.window !== undefined) {
+    const w = String(b.window).trim().toLowerCase();
+    if (w !== 'any' && w !== 'commute') throw new Error('window must be "any" or "commute"');
+    if (w === 'commute') fields.window = 'commute';
+  }
+
+  if (b.requiresKey !== undefined && String(b.requiresKey).trim()) {
+    const key = String(b.requiresKey).trim();
+    if (!ENV_KEY_RE.test(key)) throw new Error('requiresKey must be an env var name (UPPER_SNAKE_CASE)');
+    fields.requiresKey = key;
+  }
+
+  return fields;
+}
+
+// ---------------------------------------------------------------------------
+// GET /dj/skills/:kind/file — read a skill's editable SKILL.md so the admin UI
+// can prefill its edit form. Serves both the 7 built-in kinds (falling back to
+// live defaults when the file hasn't been scaffolded yet) and custom skills
+// (404 when there's no such folder).
 // ---------------------------------------------------------------------------
 router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
   const kind = req.params.kind;
-  if (!BUILTIN_KINDS.has(kind)) {
-    return res.status(400).json({ error: `not an editable built-in skill: ${kind}` });
-  }
-  const file = join(resolve(STATE_DIR, 'skills', kind), 'SKILL.md');
   const cat = skillCatalog().find(s => s.kind === kind);
+
+  if (BUILTIN_KINDS.has(kind)) {
+    // Shipped defaults from the RAW CAPABILITIES entry (NOT the override-merged
+    // catalogue), so the admin "Reset to default" restores the as-shipped brief
+    // even after the SKILL.md has been edited. News seeds its feed from config
+    // (env-or-BBC), mirroring the scaffolder.
+    const rawCap = CAPABILITIES.find((c: any) => c.kind === kind);
+    const defaults = rawCap ? {
+      label: rawCap.label || kind,
+      cooldown: msToCooldownStr(rawCap.cooldownMs || 0),
+      context: (effectiveContextFields(rawCap) || []).join(', '),
+      brief: rawCap.desc || '',
+      ...(kind === 'news' ? { feed: config.news.feedUrl, feedMaxItems: config.news.maxItems } : {}),
+    } : null;
+
+    const file = join(SKILLS_DIR, kind, 'SKILL.md');
+    try {
+      const raw = await readFile(file, 'utf8');
+      const { data, body } = parseFrontmatter(raw);
+      return res.json({
+        kind,
+        custom: false,
+        exists: true,
+        isNews: kind === 'news',
+        label: data.label || cat?.label || kind,
+        cooldown: data.cooldown || msToCooldownStr(cat?.cooldownMs || 0),
+        // Comma-separated "right now" fields this segment may weave in (#471).
+        // Prefer the file's own value; fall back to the live effective set.
+        context: (data.context ?? data.contextFields)?.trim() || (cat?.contextFields || []).join(', '),
+        knownContextFields: [...dj.CONTEXT_FIELDS],
+        feed: data.feed || cat?.feed || null,
+        feedMaxItems: data.feedMaxItems ? parseInt(data.feedMaxItems, 10) : (cat?.feedMaxItems || null),
+        brief: body || cat?.description || '',
+        defaults,
+      });
+    } catch {
+      // No file yet — hand back the live built-in defaults so the form prefills.
+      return res.json({
+        kind,
+        custom: false,
+        exists: false,
+        isNews: kind === 'news',
+        label: cat?.label || kind,
+        cooldown: msToCooldownStr(cat?.cooldownMs || 0),
+        context: (cat?.contextFields || []).join(', '),
+        knownContextFields: [...dj.CONTEXT_FIELDS],
+        feed: cat?.feed || null,
+        feedMaxItems: cat?.feedMaxItems || null,
+        brief: cat?.description || '',
+        defaults,
+      });
+    }
+  }
+
+  // Custom skill — prefill the edit form from its SKILL.md.
+  if (!SLUG_RE.test(kind)) {
+    return res.status(400).json({ error: `invalid skill name: ${kind}` });
+  }
   try {
-    const raw = await readFile(file, 'utf8');
+    const raw = await readFile(join(SKILLS_DIR, kind, 'SKILL.md'), 'utf8');
     const { data, body } = parseFrontmatter(raw);
     res.json({
       kind,
+      custom: true,
       exists: true,
-      isNews: kind === 'news',
+      isNews: false,
       label: data.label || cat?.label || kind,
-      cooldown: data.cooldown || msToCooldownStr(cat?.cooldownMs || 0),
-      // Comma-separated "right now" fields this segment may weave in (#471).
-      // Prefer the file's own value; fall back to the live effective set.
+      cooldown: data.cooldown || (cat?.cooldownMs ? msToCooldownStr(cat.cooldownMs) : ''),
       context: (data.context ?? data.contextFields)?.trim() || (cat?.contextFields || []).join(', '),
       knownContextFields: [...dj.CONTEXT_FIELDS],
-      feed: data.feed || cat?.feed || null,
-      feedMaxItems: data.feedMaxItems ? parseInt(data.feedMaxItems, 10) : (cat?.feedMaxItems || null),
-      brief: body || cat?.description || '',
+      window: data.window === 'commute' ? 'commute' : 'any',
+      requiresKey: data.requiresKey || '',
+      hasTool: await skillHasTool(kind),
+      brief: body || '',
     });
   } catch {
-    // No file yet — hand back the live built-in defaults so the form prefills.
-    res.json({
-      kind,
-      exists: false,
-      isNews: kind === 'news',
-      label: cat?.label || kind,
-      cooldown: msToCooldownStr(cat?.cooldownMs || 0),
-      context: (cat?.contextFields || []).join(', '),
-      knownContextFields: [...dj.CONTEXT_FIELDS],
-      feed: cat?.feed || null,
-      feedMaxItems: cat?.feedMaxItems || null,
-      brief: cat?.description || '',
-    });
+    res.status(404).json({ error: `no such skill: ${kind}` });
   }
 });
 
 // ---------------------------------------------------------------------------
-// PUT /dj/skills/:kind/file — write a built-in skill's SKILL.md from the admin
-// edit form (brief/cooldown/label, + feed/feedMaxItems for news), then reload
-// so the override applies immediately. Scoped to the 7 built-in kinds.
+// POST /dj/skills — create a custom (prompt-only) skill. Writes a new
+// state/skills/<slug>/SKILL.md and reloads. Created skills arrive DISABLED (the
+// loader's posture) — the operator reviews + enables them before they can air.
+// Body: { name, label?, cooldown?, context?, window?, requiresKey?, brief }
+// ---------------------------------------------------------------------------
+router.post('/dj/skills', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const name = typeof b.name === 'string' ? b.name.trim().toLowerCase() : '';
+  if (!SLUG_RE.test(name)) {
+    return res.status(400).json({ error: 'name must be a lowercase slug (a–z, 0–9, hyphens), 1–49 chars' });
+  }
+  if (RESERVED_KINDS.has(name)) {
+    return res.status(400).json({ error: `"${name}" is reserved — it shadows a built-in capability, pick another name` });
+  }
+  if (await skillFileExists(name)) {
+    return res.status(409).json({ error: `a skill named "${name}" already exists` });
+  }
+
+  let fields: any;
+  try {
+    fields = buildCustomSkillFields(name, b);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message });
+  }
+
+  try {
+    await writeSkillFile(fields);
+    await loadCustomSkills();
+    queue.log('scheduler', `[skills] custom "${name}" created via admin UI`);
+    res.json({ skills: skillCatalog() });
+  } catch (err: any) {
+    queue.log('error', `POST /dj/skills (${name}) failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PUT /dj/skills/:kind/file — write a skill's SKILL.md from the admin edit form,
+// then reload so the change applies immediately. Built-in kinds take the news-
+// aware path; custom slugs (which must already exist) take the prompt-only path.
 // ---------------------------------------------------------------------------
 router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
   const kind = req.params.kind;
-  if (!BUILTIN_KINDS.has(kind)) {
-    return res.status(400).json({ error: `not an editable built-in skill: ${kind}` });
-  }
   const b = req.body || {};
+
+  // Custom skill edit — same validation as create, minus the slug (immutable).
+  if (!BUILTIN_KINDS.has(kind)) {
+    if (!SLUG_RE.test(kind)) {
+      return res.status(400).json({ error: `invalid skill name: ${kind}` });
+    }
+    if (!(await skillFileExists(kind))) {
+      return res.status(404).json({ error: `no such custom skill: ${kind} — create it first` });
+    }
+    let fields: any;
+    try {
+      fields = buildCustomSkillFields(kind, b);
+    } catch (err: any) {
+      return res.status(400).json({ error: err.message });
+    }
+    try {
+      await writeSkillFile(fields); // rewrites SKILL.md only; a sibling tool.mjs is left intact
+      await loadCustomSkills();
+      queue.log('scheduler', `[skills] custom "${kind}" edited via admin UI`);
+      return res.json({ skills: skillCatalog() });
+    } catch (err: any) {
+      queue.log('error', `PUT /dj/skills/${kind}/file failed: ${err.message}`);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // Built-in edit — brief/cooldown/label/context, + feed/feedMaxItems for news.
   const brief = typeof b.brief === 'string' ? b.brief.trim() : '';
   if (!brief) return res.status(400).json({ error: 'brief is required' });
 
   const cooldown = typeof b.cooldown === 'string' ? b.cooldown.trim() : '';
-  if (cooldown && !/^\d+\s*[smhd]?$/.test(cooldown)) {
+  if (cooldown && !COOLDOWN_RE.test(cooldown)) {
     return res.status(400).json({ error: 'cooldown must look like "45m", "6h", "2d", or a bare number (minutes)' });
   }
 
   const label = typeof b.label === 'string' && b.label.trim() ? b.label.trim() : undefined;
-
   const fields: any = { kind, label, cooldown: cooldown || undefined, brief };
 
   // Context fields — the "right now" lines this segment may weave in (#471).
@@ -152,12 +321,39 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
   }
 
   try {
-    await writeBuiltinSkillFile(fields);
+    await writeSkillFile(fields);
     await loadCustomSkills();
     queue.log('scheduler', `[skills] built-in "${kind}" edited via admin UI`);
     res.json({ skills: skillCatalog() });
   } catch (err: any) {
     queue.log('error', `PUT /dj/skills/${kind}/file failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /dj/skills/:slug — remove a custom skill (its whole folder, including
+// any tool.mjs). Built-ins can't be deleted; they're edited in place. Reloads
+// and returns the refreshed catalogue.
+// ---------------------------------------------------------------------------
+router.delete('/dj/skills/:slug', requireAdmin, async (req, res) => {
+  const slug = req.params.slug;
+  if (BUILTIN_KINDS.has(slug)) {
+    return res.status(400).json({ error: "built-in skills can't be deleted — edit them instead" });
+  }
+  if (!SLUG_RE.test(slug)) {
+    return res.status(400).json({ error: `invalid skill name: ${slug}` });
+  }
+  if (!(await skillFileExists(slug))) {
+    return res.status(404).json({ error: `no such custom skill: ${slug}` });
+  }
+  try {
+    await rm(join(SKILLS_DIR, slug), { recursive: true, force: true });
+    await loadCustomSkills();
+    queue.log('scheduler', `[skills] custom "${slug}" deleted via admin UI`);
+    res.json({ skills: skillCatalog() });
+  } catch (err: any) {
+    queue.log('error', `DELETE /dj/skills/${slug} failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

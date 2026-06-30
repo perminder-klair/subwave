@@ -28,20 +28,25 @@ export function msToCooldownStr(ms: number): string {
 }
 
 interface SkillFileFields {
-  kind: string;
+  kind: string;             // == the slug for a custom skill
   label?: string;
   cooldown?: string;
   contextFields?: string[]; // "right now" fields the segment may mention (#471)
+  window?: 'any' | 'commute'; // custom skills only — emitted when 'commute'
+  requiresKey?: string;       // custom skills only — env var the skill needs
   feed?: string;        // news only
   feedMaxItems?: number; // news only
   brief?: string;
 }
 
-// Render + write a built-in skill's SKILL.md. Used by the scaffolder (seeding
-// defaults) and the admin edit route (PUT /dj/skills/:kind/file). Creates the
-// folder if absent and overwrites the file unconditionally — callers decide
-// whether to call it (the scaffolder stats first; the route always writes).
-export async function writeBuiltinSkillFile(fields: SkillFileFields): Promise<void> {
+// Render + write a skill's SKILL.md. Used by the scaffolder (seeding the 7
+// built-in defaults), the admin built-in edit route (PUT /dj/skills/:kind/file),
+// and the custom-skill create/edit routes (POST /dj/skills, PUT
+// /dj/skills/:slug/file). Creates the folder if absent and overwrites the file
+// unconditionally — callers decide whether to call it (the scaffolder stats
+// first; the routes always write). Never touches a sibling `tool.mjs`, so
+// editing a custom skill's brief leaves its data tool intact.
+export async function writeSkillFile(fields: SkillFileFields): Promise<void> {
   const { kind } = fields;
   const lines = ['---', `name: ${kind}`];
   if (fields.label) lines.push(`label: ${fields.label}`);
@@ -50,6 +55,10 @@ export async function writeBuiltinSkillFile(fields: SkillFileFields): Promise<vo
   // the knob is visible+editable in every scaffolded SKILL.md; add or drop
   // tokens (e.g. `weather`) to change what the segment is allowed to mention.
   if (fields.contextFields && fields.contextFields.length) lines.push(`context: ${fields.contextFields.join(', ')}`);
+  // Custom-skill knobs. `window: any` is the loader default, so only the
+  // restrictive `commute` value is worth writing.
+  if (fields.window === 'commute') lines.push('window: commute');
+  if (fields.requiresKey) lines.push(`requiresKey: ${fields.requiresKey}`);
   if (fields.feed) lines.push(`feed: ${fields.feed}`);
   if (fields.feedMaxItems) lines.push(`feedMaxItems: ${fields.feedMaxItems}`);
   lines.push('---', (fields.brief || '').trim(), '');
@@ -86,7 +95,7 @@ export async function scaffoldBuiltinSkills(): Promise<void> {
         fields.feed = config.news.feedUrl; // already env-or-BBC (config.ts)
         fields.feedMaxItems = config.news.maxItems;
       }
-      await writeBuiltinSkillFile(fields);
+      await writeSkillFile(fields);
       queue.log('scheduler', `[skills] scaffolded built-in "${cap.kind}" → state/skills/${cap.kind}/SKILL.md`);
     } catch (err: any) {
       queue.log('error', `[skills] failed to scaffold "${cap.kind}": ${err?.message || err}`);

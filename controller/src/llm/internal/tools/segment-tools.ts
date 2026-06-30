@@ -18,9 +18,10 @@ import { fetchOnThisDay, curiositySeen, recordCuriosity } from '../../../skills/
 import { getArtist, searchArtists } from '../../../music/subsonic.js';
 
 // `caps` is the list of capabilities offered this tick (see skills/_agent.js).
-// Only data-backed kinds get a tool — traffic is pure generation and needs none.
-// `curiosity` has a data tool but the agent is free to fall through to pure
-// generation under cap.desc when the tool returns `available: false`.
+// Only data-backed kinds get a tool. `curiosity` has a data tool but the agent
+// is free to fall through to pure generation under cap.desc when the tool
+// returns `available: false`; `now-playing-dig` does NOT — it must stay silent
+// unless its search tool surfaces a real, specific detail (no invented trivia).
 export function buildSegmentTools(ctx: any, state: any, caps: any[]) {
   const kinds = new Set(caps.map((c: any) => c.kind));
   const tools: any = {};
@@ -181,6 +182,37 @@ export function buildSegmentTools(ctx: any, state: any, caps: any[]) {
             .map(r => `${r.title}: ${(r.content || '').replace(/\s+/g, ' ').trim().slice(0, 240)}`);
           if (!answer && sources.length === 0) return { available: false };
           return { artist, alreadySearched, answer, sources };
+        } catch (err) {
+          return { error: err.message };
+        }
+      },
+    });
+  }
+
+  // Now-playing dig — search the web for a concrete detail about the EXACT track
+  // on air (producer, sample, B-side, chart, backstory). Grounded so the DJ
+  // never invents track trivia: returns { available: false } when nothing solid
+  // comes back, and the brief says to stay silent on that.
+  if (kinds.has('now-playing-dig') && searchReady()) {
+    tools.digCurrentTrack = tool({
+      description: 'Search the web for a specific, verifiable detail about the exact track currently on air (producer, sample, B-side, chart, backstory).',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const cur = queue.current?.track;
+        const artist = cur?.artist;
+        const title = cur?.title;
+        if (!artist || !title || /^unknown/i.test(artist) || /^unknown/i.test(title)) return { available: false };
+        const trackKey = `${artist} — ${title}`;
+        const alreadyDug = trackKey === state.lastDugTrack;
+        try {
+          const data = await searchWeb(`${artist} "${title}" song producer sample b-side chart story`);
+          state.lastDugTrack = trackKey;
+          const answer = (data.answer || '').trim();
+          const sources = (data.results || [])
+            .slice(0, 3)
+            .map(r => `${r.title}: ${(r.content || '').replace(/\s+/g, ' ').trim().slice(0, 240)}`);
+          if (!answer && sources.length === 0) return { available: false };
+          return { artist, title, alreadyDug, answer, sources };
         } catch (err) {
           return { error: err.message };
         }

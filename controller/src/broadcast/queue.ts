@@ -1140,8 +1140,8 @@ function wavDurationMs(path: string): number | null {
   }
 }
 
-const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check', 'weather', 'news', 'traffic', 'curiosity', 'album-anniversary', 'library-deep-cut', 'web-search']);
-const DEDUPE_KINDS = new Set(['station-id', 'hourly-check', 'weather', 'news', 'traffic', 'curiosity', 'album-anniversary', 'library-deep-cut', 'web-search']);
+const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check', 'weather', 'news', 'now-playing-dig', 'curiosity', 'album-anniversary', 'library-deep-cut', 'web-search']);
+const DEDUPE_KINDS = new Set(['station-id', 'hourly-check', 'weather', 'news', 'now-playing-dig', 'curiosity', 'album-anniversary', 'library-deep-cut', 'web-search']);
 const KIND_LABEL: Record<string, string> = {
   'dj-speak': 'intro',
   'link': 'link',
@@ -1149,7 +1149,7 @@ const KIND_LABEL: Record<string, string> = {
   'hourly-check': 'hourly',
   'weather': 'weather',
   'news': 'news',
-  'traffic': 'traffic',
+  'now-playing-dig': 'now-playing',
   'curiosity': 'curiosity',
   'album-anniversary': 'anniversary',
   'library-deep-cut': 'deep-cut',

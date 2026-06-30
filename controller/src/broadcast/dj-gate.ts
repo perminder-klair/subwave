@@ -6,7 +6,7 @@
 // scheduled show's owner this hour, or the active persona) — quiet | moderate
 // | aggressive.
 //
-// Between-track segments (weather, news, traffic, facts, web search) are NOT
+// Between-track segments (weather, news, now-playing digs, facts, web search) are NOT
 // gated here — the segment-director agent (skills/_agent.js) owns its own
 // frequency floor. Lives outside scheduler.js to keep that file lean.
 

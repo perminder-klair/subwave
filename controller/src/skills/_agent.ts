@@ -28,7 +28,8 @@
 //   - a frequency-derived floor on the gap between ANY two segments
 //   - capabilities the operator disabled, or the on-air persona doesn't own,
 //     are never offered
-//   - traffic is only offered during commute hours; web-search only with a key
+//   - commute-only skills (via `window: commute`) air only during commute hours;
+//     search-backed skills (web-search, now-playing-dig) only with a provider
 
 import { z } from 'zod';
 import { queue } from '../broadcast/queue.js';
@@ -48,7 +49,7 @@ import * as sfx from '../broadcast/sfx.js';
 //   label       — human label for the admin command-center UI
 //   cooldownMs  — hard minimum gap between autonomous firings of this kind
 //   desc        — the one-line briefing shown BOTH to the agent (per-capability
-//                 guidance — for traffic, which has no data tool, this is the
+//                 guidance — for a skill with no data tool, this is the
 //                 agent's ONLY brief) and to the admin UI
 //   contextFields — (optional) the "right now" fields (CONTEXT_FIELDS) this
 //                 capability's situation block may include. Unset → the default
@@ -71,32 +72,35 @@ export const CAPABILITIES: any[] = [
     // default profile (no weather), so weather stops bleeding into news,
     // curiosity, deep cuts, etc. (issue #471).
     contextFields: [...CONTEXT_FIELDS],
-    desc: 'A short weather check, in character — one or two sentences. Only worth airing when conditions have genuinely changed.',
+    desc: 'A quick, in-character read on the weather right now — one or two sentences that fold the conditions into the moment, never a forecast or a temperature readout. Only air it when the weather has genuinely turned; don\'t narrate "still grey out". Never open with "here\'s your weather" or "weather check".',
   },
   {
     kind: 'news', skill: 'news', label: 'News headlines',
     cooldownMs: 45 * 60 * 1000,
-    desc: 'Read one fresh headline in a single sentence — half-distracted BBC 6 Music tone, never an anchor voice, no editorialising, no "in other news".',
+    desc: 'Glance at one fresh headline and drop it into a single sentence in your own words — a casual, half-distracted aside between songs, never an anchor or newsreader voice, never the headline read verbatim, no editorialising, no "in other news". Steer to the lighter, cultural, or human-interest item; if everything on the feed is grim — war, death, disaster — say nothing. A music station shouldn\'t read tragedy in a breezy aside.',
   },
   {
-    kind: 'traffic', skill: 'traffic', label: 'Traffic',
-    cooldownMs: 90 * 60 * 1000,
-    desc: 'A deadpan mock "travel and traffic report for the listening area" — one absurd, small-scale sentence played dead straight, like a real travel bulletin, but about everyday or online congestion instead of roads: a tailback at the kettle, a bottleneck on the stairs, slow buffering in the inside lane, a queue building on the sofa. Keep it small and universal — never a real road, place name, or actual incident.',
+    kind: 'now-playing-dig', skill: 'now-playing-dig', label: 'Now-playing dig',
+    cooldownMs: 45 * 60 * 1000,
+    // Search-grounded, like web-search: only ready when a provider is configured.
+    // The data tool (digCurrentTrack) is wired by kind in llm/segment-tools.ts.
+    ready: () => searchReady(),
+    desc: 'One concrete, verifiable detail about the exact track on air — who produced it, a sample it\'s built on, the B-side, where it charted, the story behind it — worked into a single conversational line. Use only what the search tool actually surfaces; if it returns nothing solid, say nothing. Never guess, never "I think", no "fun fact", no URLs. It\'s about this specific track, not the artist in general.',
   },
   {
     kind: 'curiosity', skill: 'curiosity', label: 'Curiosity',
     cooldownMs: 60 * 60 * 1000,
-    desc: 'One oddly-specific moment of interest — a real "on this day in 19xx" beat from history if the tool surfaces a good one, otherwise a concrete factoid lightly themed to the hour or season. Never say "fun fact", "interestingly", or "did you know".',
+    desc: 'One oddly-specific moment of interest — ideally a real "on this day" beat from the tool (any year), dropped in like you just remembered it. If the tool has nothing, offer a light, true observation tied to the date or season rather than a hard "fact" you can\'t vouch for — and if you\'d be guessing, skip it. Never say "fun fact", "interestingly", or "did you know".',
   },
   {
     kind: 'album-anniversary', skill: 'album-anniversary', label: 'Album anniversary',
     cooldownMs: 6 * 60 * 60 * 1000,
-    desc: 'If the album currently on air is hitting a 5/10/20/25-year mark this year, note it like a presenter spotting a date in the prep notes — one short sentence, never gushing, never "classic".',
+    desc: 'If the album on air is hitting a round-number anniversary this year, note it like a presenter spotting a date in the prep notes — one short sentence on the date itself. Trust the year you\'re given; don\'t pad it with claims about what the album "meant" or how it charted. Never gushing, never "classic".',
   },
   {
     kind: 'library-deep-cut', skill: 'library-deep-cut', label: 'Library deep-cut tease',
     cooldownMs: 90 * 60 * 1000,
-    desc: 'If the on-air artist has a track in the library that has not been played in months, tease that it might come around later — one sentence, like a presenter teasing the rest of the show. Never name the track unless the tool surfaced exactly one.',
+    desc: 'If the on-air artist has a track in the library that\'s gone cold (not played in a while), tease it like there\'s more worth digging out of the crate — one sentence, in passing, without promising when it\'ll play. Never name the track unless the tool surfaced exactly one, and don\'t characterise how it sounds.',
   },
   {
     kind: 'web-search', skill: 'web-search', label: 'Web search',
@@ -106,7 +110,7 @@ export const CAPABILITIES: any[] = [
     // DuckDuckGo (the default) needs no key; Tavily needs SEARCH_API_KEY (or a
     // key pasted into the admin UI). searchReady() encapsulates both.
     ready: () => searchReady(),
-    desc: 'Work one genuine, recent detail about the artist on air into a single conversational line — no "I read online", no URLs, no list.',
+    desc: 'Work one genuine, recent thing the on-air artist is up to — a new release, a tour, something in the press this week — into a single conversational line. Use only what the search returned; if it surfaced nothing solid or nothing new, say nothing. No "I read online", no URLs, no list, no embellishing beyond the facts.',
   },
 ];
 
@@ -227,9 +231,10 @@ function availableCapabilities(ctx: any, now: Date) {
     if (!isEnabled) continue;
     if (persona?.skills && !persona.skills.includes(cap.skill)) continue;
     if (now.getTime() - (lastFired.get(cap.kind) || 0) < cap.cooldownMs) continue;
-    // Window gating: built-in traffic is commute-only; custom skills opt in via
-    // `window: commute` in their SKILL.md frontmatter.
-    if ((cap.kind === 'traffic' || cap.window === 'commute') && !ctx.clock?.isCommute) continue;
+    // Window gating: custom skills opt into commute-hours-only firing via
+    // `window: commute` in their SKILL.md frontmatter. (No built-in is
+    // commute-gated by default since the traffic skill was retired.)
+    if (cap.window === 'commute' && !ctx.clock?.isCommute) continue;
     if (cap.ready && !cap.ready()) continue;
     out.push(cap);
   }

@@ -69,7 +69,7 @@ export default function AdminSettings() {
           </li>
           <li>
             <strong>Skills</strong> — the real-world segments the autonomous DJ can run:
-            weather, news, traffic, facts, web search. Toggle each on or off
+            weather, news, now-playing digs, facts, web search. Toggle each on or off
             station-wide.
           </li>
         </ul>

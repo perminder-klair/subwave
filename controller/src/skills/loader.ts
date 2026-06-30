@@ -57,19 +57,24 @@ import { queue } from '../broadcast/queue.js';
 // than rejected — that's how operators edit the shipped skills. Everything else
 // in RESERVED_KINDS is queue-internal and stays un-overridable.
 export const BUILTIN_KINDS = new Set([
-  'weather', 'news', 'traffic', 'curiosity',
+  'weather', 'news', 'now-playing-dig', 'curiosity',
   'album-anniversary', 'library-deep-cut', 'web-search',
 ]);
 
-// Built-in capability kinds — custom skills may not shadow these.
-const RESERVED_KINDS = new Set([
+// Built-in capability kinds — custom skills may not shadow these. Exported so
+// the admin create route (POST /dj/skills) rejects the same set the loader does.
+export const RESERVED_KINDS = new Set([
   ...BUILTIN_KINDS,
   // queue.announce reserves 'link' for the light-ducked intro channel.
   'link', 'dj-speak', 'announcement', 'station-id', 'hourly',
 ]);
 
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
-const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,48}$/;
+// Custom-skill slug: lowercase, starts alphanumeric, then alphanumeric/hyphen,
+// ≤49 chars. Anchored, so it can't contain '/', '.', or whitespace — the routes
+// rely on that to keep a slug from escaping state/skills/. Exported so the admin
+// create route validates against the exact pattern the loader enforces.
+export const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,48}$/;
 
 // Loaded custom capabilities, in the same shape as _agent.js CAPABILITIES,
 // plus { custom: true } and an optional wrapped data tool. Rebuilt on reload.

@@ -4317,3 +4317,26 @@ html.lite *::after {
     .observatory-root .cmap-ripple,
     .observatory-root .wire-line { animation: none !important; }
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Skill Edit Card ("segment sheet") modal — /admin/skills. Pseudo-elements and
+   keyframes the SkillEditModal sheet relies on (kept here, not injected from
+   JS). Scoped to .sw-seg so they can't leak into the rest of the admin.
+   ─────────────────────────────────────────────────────────────────────────── */
+@keyframes sw-spin { to { transform: rotate(360deg); } }
+@keyframes sw-ring {
+    0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 55%, transparent); }
+    70%, 100% { box-shadow: 0 0 0 8px transparent; }
+}
+@keyframes sw-blink { 0%, 45% { opacity: 1; } 55%, 100% { opacity: 0.2; } }
+.sw-seg textarea:focus, .sw-seg input:focus { border-color: var(--accent) !important; }
+.sw-seg ::placeholder { color: var(--muted); opacity: 0.75; }
+.sw-seg .sw-ghost:hover { background: var(--ink-soft); }
+.sw-seg .sw-title:focus { border-bottom-color: var(--accent) !important; }
+.sw-seg .sw-dropcap::first-letter {
+    font-size: 2.7em; font-weight: 800; float: left; line-height: 0.74;
+    color: var(--accent); padding: 4px 9px 0 0;
+}
+@media (prefers-reduced-motion: reduce) {
+    .sw-seg [style*="sw-spin"], .sw-seg [style*="sw-ring"] { animation: none !important; }
+}
