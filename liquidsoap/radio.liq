@@ -23,7 +23,10 @@ crossfade_duration = ref(10.0)
 archive_enabled = ref(true)
 archive_bitrate = ref(128)
 opus_enabled = ref(false)
+opus_bitrate = ref(96)
 flac_enabled = ref(false)
+aac_enabled = ref(false)
+aac_bitrate = ref(192)
 stream_bitrate = ref(192)
 station_name = ref("SUB/WAVE")
 
@@ -66,6 +69,27 @@ if file.exists("/var/sub-wave/liquidsoap_opus_enabled.txt") then
   opus_enabled := (raw == "true")
 end
 
+if file.exists("/var/sub-wave/liquidsoap_opus_bitrate.txt") then
+  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_opus_bitrate.txt"))
+  v = int_of_string(default=96, raw)
+  if v > 0 then opus_bitrate := v end
+end
+
+# Opt IN to the AAC-LC mount (raw ADTS, served as audio/aac). AAC's role here is
+# device compatibility — players/hardware that decode AAC but not Opus — so it's
+# off by default and aimed at external players, not the web/native UI (which
+# never auto-select it). Stays at the source 44.1 kHz (no resample).
+if file.exists("/var/sub-wave/liquidsoap_aac_enabled.txt") then
+  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_aac_enabled.txt"))
+  aac_enabled := (raw == "true")
+end
+
+if file.exists("/var/sub-wave/liquidsoap_aac_bitrate.txt") then
+  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_aac_bitrate.txt"))
+  v = int_of_string(default=192, raw)
+  if v > 0 then aac_bitrate := v end
+end
+
 # Opt IN to the Ogg-FLAC mount — a lossless capture of the processed broadcast
 # bus (no resample; stays at the source 44.1 kHz). Runs a third continuous
 # encoder at ~800-900 kbps, so it's off by default. It's a true lossless tier
@@ -83,7 +107,7 @@ if file.exists("/var/sub-wave/liquidsoap_station_name.txt") then
   if raw != "" then station_name := raw end
 end
 
-log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} stream_bitrate=#{stream_bitrate()} opus_enabled=#{opus_enabled()} station_name=#{station_name()}")
+log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} stream_bitrate=#{stream_bitrate()} opus_enabled=#{opus_enabled()} opus_bitrate=#{opus_bitrate()} flac_enabled=#{flac_enabled()} aac_enabled=#{aac_enabled()} aac_bitrate=#{aac_bitrate()} station_name=#{station_name()}")
 
 # ---------------------------------------------------------------------------
 # HTTP(S) FETCH OVERRIDE — Liquidsoap's built-in http.get.stream returns
@@ -682,19 +706,28 @@ def make_stream_outputs() =
   )
   # Opus mandates 48 kHz internally — Liquidsoap resamples from the 44.1 kHz
   # source bus. application="audio" is the right tuning for music (vs "voip"
-  # or "lowdelay"). 96 kbps is the music-transparent sweet spot. Gated on
-  # opus_enabled so operators can drop the encoder + resample (no-op shutdown
-  # when off).
+  # or "lowdelay"). 96 kbps is the music-transparent default; the bitrate is
+  # selectable from a fixed set because %opus(bitrate=…) needs a parse-time
+  # literal (same constraint as %mp3). Keep these branches in sync with
+  # OPUS_BITRATES in settings.ts. Gated on opus_enabled so operators can drop
+  # the encoder + resample (no-op shutdown when off).
   opus_shutdown =
     if opus_enabled() then
+      obr = opus_bitrate()
+      opus_enc =
+        if obr <= 96 then
+          %opus(bitrate=96, samplerate=48000, channels=2, application="audio", vbr="constrained")
+        elsif obr <= 128 then
+          %opus(bitrate=128, samplerate=48000, channels=2, application="audio", vbr="constrained")
+        elsif obr <= 192 then
+          %opus(bitrate=192, samplerate=48000, channels=2, application="audio", vbr="constrained")
+        elsif obr <= 256 then
+          %opus(bitrate=256, samplerate=48000, channels=2, application="audio", vbr="constrained")
+        else
+          %opus(bitrate=320, samplerate=48000, channels=2, application="audio", vbr="constrained")
+        end
       opus_out = output.icecast(
-        %opus(
-          bitrate=96,
-          samplerate=48000,
-          channels=2,
-          application="audio",
-          vbr="constrained"
-        ),
+        opus_enc,
         id="stream_opus",
         fallible=true,
         host=environment.get(default="icecast", "ICECAST_HOST"),
@@ -743,10 +776,47 @@ def make_stream_outputs() =
     else
       fun () -> ()
     end
+  # AAC-LC over Icecast as raw ADTS (transmux="adts") — broadly decodable by
+  # players/hardware that lack Opus. afterburner=true trades a little CPU for
+  # better quality. No resample — stays at the source 44.1 kHz. Bitrate is a
+  # parse-time literal (same constraint as %mp3/%opus); keep these branches in
+  # sync with AAC_BITRATES in settings.ts. format="audio/aac" pins the mount's
+  # advertised MIME so streaming clients recognise the ADTS stream.
+  aac_shutdown =
+    if aac_enabled() then
+      abr = aac_bitrate()
+      aac_enc =
+        if abr <= 128 then
+          %fdkaac(bitrate=128, aot="mpeg4_aac_lc", transmux="adts", afterburner=true, samplerate=44100, channels=2)
+        elsif abr <= 192 then
+          %fdkaac(bitrate=192, aot="mpeg4_aac_lc", transmux="adts", afterburner=true, samplerate=44100, channels=2)
+        else
+          %fdkaac(bitrate=256, aot="mpeg4_aac_lc", transmux="adts", afterburner=true, samplerate=44100, channels=2)
+        end
+      aac_out = output.icecast(
+        aac_enc,
+        id="stream_aac",
+        format="audio/aac",
+        fallible=true,
+        host=environment.get(default="icecast", "ICECAST_HOST"),
+        port=7702,
+        password=environment.get("ICECAST_SOURCE_PASSWORD"),
+        mount="/stream.aac",
+        name=station_name(),
+        description="Personal frequency from the homelab",
+        genre="Various",
+        url="http://localhost:7700",
+        radio
+      )
+      aac_out.shutdown
+    else
+      fun () -> ()
+    end
   fun () -> begin
     mp3_out.shutdown()
     opus_shutdown()
     flac_shutdown()
+    aac_shutdown()
   end
 end
 

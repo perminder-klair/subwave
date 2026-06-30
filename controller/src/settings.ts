@@ -615,6 +615,11 @@ export const SEED_PERSONAS = [
 // %mp3(bitrate=…) needs a parse-time int, so the encoder is pre-baked for
 // this small set. Add a branch in radio.liq if you add a value here.
 export const MP3_BITRATES = [64, 96, 128, 160, 192, 320] as const;
+// Opus + AAC encoders share the same parse-time-literal constraint as %mp3, so
+// each is pre-baked for a small set in radio.liq. Add a branch there if you add
+// a value here.
+export const OPUS_BITRATES = [96, 128, 192, 256, 320] as const;
+export const AAC_BITRATES = [128, 192, 256] as const;
 
 const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
@@ -637,7 +642,14 @@ const DEFAULTS = {
   // Safari/iOS/Firefox on MP3), and it adds a continuous Opus encoder + a
   // 44.1→48k resample, so operators opt in rather than pay that CPU unasked.
   // The mandatory /stream.mp3 mount always serves everyone.
-  stream: { opusEnabled: false, flacEnabled: false, bitrate: 192 },
+  stream: {
+    opusEnabled: false,
+    opusBitrate: 96,
+    flacEnabled: false,
+    aacEnabled: false,
+    aacBitrate: 192,
+    bitrate: 192,
+  },
   weather: { lat: 30.7333, lng: 76.7794, locationName: 'Punjab', units: 'metric' as 'metric' | 'imperial' },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
   // placeholder and returned by GET /dj for the landing page. The product is
@@ -966,6 +978,8 @@ const BOUNDS = {
 };
 
 const MP3_BITRATE_SET = new Set<number>(MP3_BITRATES);
+const OPUS_BITRATE_SET = new Set<number>(OPUS_BITRATES);
+const AAC_BITRATE_SET = new Set<number>(AAC_BITRATES);
 
 let cache: any = null;
 
@@ -1230,10 +1244,24 @@ export async function load() {
         typeof stored.stream?.opusEnabled === 'boolean'
           ? stored.stream.opusEnabled
           : DEFAULTS.stream.opusEnabled,
+      opusBitrate:
+        typeof stored.stream?.opusBitrate === 'number' &&
+        OPUS_BITRATE_SET.has(stored.stream.opusBitrate)
+          ? stored.stream.opusBitrate
+          : DEFAULTS.stream.opusBitrate,
       flacEnabled:
         typeof stored.stream?.flacEnabled === 'boolean'
           ? stored.stream.flacEnabled
           : DEFAULTS.stream.flacEnabled,
+      aacEnabled:
+        typeof stored.stream?.aacEnabled === 'boolean'
+          ? stored.stream.aacEnabled
+          : DEFAULTS.stream.aacEnabled,
+      aacBitrate:
+        typeof stored.stream?.aacBitrate === 'number' &&
+        AAC_BITRATE_SET.has(stored.stream.aacBitrate)
+          ? stored.stream.aacBitrate
+          : DEFAULTS.stream.aacBitrate,
       bitrate:
         typeof stored.stream?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.stream.bitrate)
           ? stored.stream.bitrate
@@ -2062,10 +2090,41 @@ export async function update(patch) {
         restart = true;
       }
     }
+    if (st.opusBitrate !== undefined) {
+      const v = parseInt(st.opusBitrate, 10);
+      if (!Number.isFinite(v) || !OPUS_BITRATE_SET.has(v)) {
+        throw new Error(
+          `stream.opusBitrate must be one of: ${OPUS_BITRATES.join(', ')}`,
+        );
+      }
+      if (v !== cur.stream.opusBitrate) {
+        next.stream.opusBitrate = v;
+        restart = true;
+      }
+    }
     if (st.flacEnabled !== undefined) {
       const v = !!st.flacEnabled;
       if (v !== cur.stream.flacEnabled) {
         next.stream.flacEnabled = v;
+        restart = true;
+      }
+    }
+    if (st.aacEnabled !== undefined) {
+      const v = !!st.aacEnabled;
+      if (v !== cur.stream.aacEnabled) {
+        next.stream.aacEnabled = v;
+        restart = true;
+      }
+    }
+    if (st.aacBitrate !== undefined) {
+      const v = parseInt(st.aacBitrate, 10);
+      if (!Number.isFinite(v) || !AAC_BITRATE_SET.has(v)) {
+        throw new Error(
+          `stream.aacBitrate must be one of: ${AAC_BITRATES.join(', ')}`,
+        );
+      }
+      if (v !== cur.stream.aacBitrate) {
+        next.stream.aacBitrate = v;
         restart = true;
       }
     }
@@ -2764,7 +2823,10 @@ const LIQ_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_crossfade.txt`;
 const LIQ_ARCHIVE_ENABLED_PATH = `${STATE_DIR}/liquidsoap_archive_enabled.txt`;
 const LIQ_ARCHIVE_BITRATE_PATH = `${STATE_DIR}/liquidsoap_archive_bitrate.txt`;
 const LIQ_OPUS_ENABLED_PATH = `${STATE_DIR}/liquidsoap_opus_enabled.txt`;
+const LIQ_OPUS_BITRATE_PATH = `${STATE_DIR}/liquidsoap_opus_bitrate.txt`;
 const LIQ_FLAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_flac_enabled.txt`;
+const LIQ_AAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_aac_enabled.txt`;
+const LIQ_AAC_BITRATE_PATH = `${STATE_DIR}/liquidsoap_aac_bitrate.txt`;
 const LIQ_STREAM_BITRATE_PATH = `${STATE_DIR}/liquidsoap_stream_bitrate.txt`;
 const LIQ_STATION_NAME_PATH = `${STATE_DIR}/liquidsoap_station_name.txt`;
 
@@ -2774,7 +2836,10 @@ export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_ARCHIVE_ENABLED_PATH, s.archive.enabled ? 'true' : 'false');
   await writeFile(LIQ_ARCHIVE_BITRATE_PATH, String(s.archive.bitrate));
   await writeFile(LIQ_OPUS_ENABLED_PATH, s.stream.opusEnabled ? 'true' : 'false');
+  await writeFile(LIQ_OPUS_BITRATE_PATH, String(s.stream.opusBitrate));
   await writeFile(LIQ_FLAC_ENABLED_PATH, s.stream.flacEnabled ? 'true' : 'false');
+  await writeFile(LIQ_AAC_ENABLED_PATH, s.stream.aacEnabled ? 'true' : 'false');
+  await writeFile(LIQ_AAC_BITRATE_PATH, String(s.stream.aacBitrate));
   await writeFile(LIQ_STREAM_BITRATE_PATH, String(s.stream.bitrate));
   await writeFile(LIQ_STATION_NAME_PATH, s.station || DEFAULTS.station);
 }

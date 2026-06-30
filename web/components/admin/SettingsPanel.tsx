@@ -215,13 +215,19 @@ interface ArchiveForm {
 
 interface StreamForm {
   opusEnabled: boolean;
+  opusBitrate: string;
   flacEnabled: boolean;
+  aacEnabled: boolean;
+  aacBitrate: string;
   bitrate: string;
 }
 
 // Keep in sync with MP3_BITRATES in controller/src/settings.ts — radio.liq
 // has a literal `%mp3(bitrate=…)` branch per value, so this set is fixed.
 const MP3_BITRATES = [64, 96, 128, 160, 192, 320] as const;
+// Keep in sync with OPUS_BITRATES / AAC_BITRATES in controller/src/settings.ts.
+const OPUS_BITRATES = [96, 128, 192, 256, 320] as const;
+const AAC_BITRATES = [128, 192, 256] as const;
 
 interface FormState {
   jingleRatio: string;
@@ -270,7 +276,14 @@ interface SettingsData {
     maxTrackSeconds?: number;
     minTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number };
-    stream?: { opusEnabled?: boolean; flacEnabled?: boolean; bitrate?: number };
+    stream?: {
+      opusEnabled?: boolean;
+      opusBitrate?: number;
+      flacEnabled?: boolean;
+      aacEnabled?: boolean;
+      aacBitrate?: number;
+      bitrate?: number;
+    };
     station?: string;
     timezone?: string;
     locale?: StationLocale;
@@ -415,7 +428,10 @@ export default function SettingsPanel() {
       },
       stream: {
         opusEnabled: v.stream?.opusEnabled ?? true,
+        opusBitrate: String(v.stream?.opusBitrate ?? 96),
         flacEnabled: v.stream?.flacEnabled ?? false,
+        aacEnabled: v.stream?.aacEnabled ?? false,
+        aacBitrate: String(v.stream?.aacBitrate ?? 192),
         bitrate: String(v.stream?.bitrate ?? 192),
       },
       station: v.station ?? '',
@@ -1013,45 +1029,88 @@ export default function SettingsPanel() {
             )}
 
             {form && (
-              <Card title="Opus stream" sub="/stream.opus (Ogg-Opus 96 kbps)">
-                <div className="field">
-                  <div className="flex items-center gap-2">
-                    <Label>Serve the secondary Opus mount</Label>
-                    <Pill tone="ink">restart required</Pill>
+              <Card title="Opus stream" sub="/stream.opus (Ogg-Opus)">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>Serve the secondary Opus mount</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.stream.opusEnabled ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, stream: { ...f.stream, opusEnabled: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({ stream: { opusEnabled: form.stream.opusEnabled } })
+                        }
+                        disabled={busy}
+                      >
+                        Save
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      Off by default. Only Chrome/Edge listeners ever pick Opus (Safari, iOS and
+                      Firefox stay on the universal MP3 mount); for them it&apos;s equal-or-better
+                      quality at ~half the bandwidth, but it adds a continuous second encoder + a
+                      44.1→48 kHz resample. Turn it on if you have Chrome/Edge listeners and want
+                      the bandwidth saving. The mandatory <code>/stream.mp3</code> mount serves
+                      everyone either way.
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Seg
-                      options={[
-                        { id: 'on', label: 'On' },
-                        { id: 'off', label: 'Off' },
-                      ]}
-                      value={form.stream.opusEnabled ? 'on' : 'off'}
-                      onChange={id =>
-                        setForm(f =>
-                          f ? { ...f, stream: { ...f.stream, opusEnabled: id === 'on' } } : f,
-                        )
-                      }
-                    />
-                    <Btn
-                      sm
-                      onClick={() =>
-                        saveSettings({ stream: { opusEnabled: form.stream.opusEnabled } })
-                      }
-                      disabled={busy}
-                    >
-                      Save
-                    </Btn>
-                  </div>
-                  <div className="field-hint">
-                    Off by default. Only Chrome/Edge listeners ever pick Opus (Safari, iOS and
-                    Firefox stay on the universal MP3 mount); for them it&apos;s equal-or-better
-                    quality at ~half the bandwidth, but it adds a continuous second encoder + a
-                    44.1→48 kHz resample. Turn it on if you have Chrome/Edge listeners and want
-                    the bandwidth saving. The mandatory <code>/stream.mp3</code> mount serves
-                    everyone either way.
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>Bitrate</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Select
+                        value={form.stream.opusBitrate}
+                        onValueChange={v =>
+                          setForm(f => (f ? { ...f, stream: { ...f.stream, opusBitrate: v } } : f))
+                        }
+                      >
+                        <SelectTrigger className="w-32">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {OPUS_BITRATES.map(br => (
+                            <SelectItem key={br} value={String(br)}>
+                              {br} kbps
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({
+                            stream: { opusBitrate: parseInt(form.stream.opusBitrate, 10) },
+                          })
+                        }
+                        disabled={busy}
+                      >
+                        Save bitrate
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      96 kbps is transparent for most music; 256/320 suits hifi listeners
+                      (current: {data?.values?.stream?.opusBitrate ?? '—'} kbps). Raising it
+                      increases bandwidth for <em>every</em> Chrome/Edge listener, since the web
+                      player auto-selects this mount.
+                    </div>
                   </div>
                 </div>
-
               </Card>
             )}
 
@@ -1103,6 +1162,98 @@ export default function SettingsPanel() {
                     players (VLC, foobar2000, a network streamer) — the web and mobile players
                     stay on MP3/Opus and won&apos;t auto-select it. The mandatory{' '}
                     <code>/stream.mp3</code> mount always serves everyone.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="AAC stream" sub="/stream.aac (AAC-LC, ADTS)">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>Serve the AAC mount</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.stream.aacEnabled ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, stream: { ...f.stream, aacEnabled: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({ stream: { aacEnabled: form.stream.aacEnabled } })
+                        }
+                        disabled={busy}
+                      >
+                        Save
+                      </Btn>
+                    </div>
+                    {form.stream.aacEnabled && (
+                      <div className="field-hint">
+                        Point a player at{' '}
+                        <code>
+                          {typeof window !== 'undefined' ? window.location.origin : ''}
+                          /stream.aac
+                        </code>
+                      </div>
+                    )}
+                    <div className="field-hint">
+                      Off by default. A continuous AAC-LC encoder whose purpose is reach —
+                      players and hardware that decode AAC but not Opus. Aimed at external
+                      players; the web and mobile players stay on MP3/Opus and won&apos;t
+                      auto-select it. The mandatory <code>/stream.mp3</code> mount serves
+                      everyone either way.
+                    </div>
+                  </div>
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>Bitrate</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Select
+                        value={form.stream.aacBitrate}
+                        onValueChange={v =>
+                          setForm(f => (f ? { ...f, stream: { ...f.stream, aacBitrate: v } } : f))
+                        }
+                      >
+                        <SelectTrigger className="w-32">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {AAC_BITRATES.map(br => (
+                            <SelectItem key={br} value={String(br)}>
+                              {br} kbps
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({
+                            stream: { aacBitrate: parseInt(form.stream.aacBitrate, 10) },
+                          })
+                        }
+                        disabled={busy}
+                      >
+                        Save bitrate
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      AAC-LC is transparent around 256 kbps (current:{' '}
+                      {data?.values?.stream?.aacBitrate ?? '—'} kbps).
+                    </div>
                   </div>
                 </div>
               </Card>

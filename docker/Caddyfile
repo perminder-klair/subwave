@@ -20,14 +20,15 @@
 
 :80 {
 	# -------------------------------------------------------------------------
-	# /stream.mp3 + /stream.opus + /stream.flac — Icecast broadcast endpoints
+	# /stream.mp3 + /stream.opus + /stream.flac + /stream.aac — Icecast endpoints
 	# -------------------------------------------------------------------------
 	# All mounts are served by the same Icecast on broadcast:7702 (Liquidsoap
-	# encodes the same source bus into MP3 192 kbps, Ogg-Opus 96 kbps and
-	# Ogg-FLAC lossless in parallel; Opus + FLAC are off by default).
-	# flush_interval -1 disables buffering so the audio stays live.
-	# Query strings (e.g. ?t=12345 cache-busters) pass through automatically.
-	@streams path /stream.mp3 /stream.opus /stream.flac
+	# encodes the same source bus into MP3, Ogg-Opus, Ogg-FLAC lossless and
+	# AAC-LC in parallel; Opus/FLAC/AAC are off by default and their bitrates
+	# are operator-configurable). flush_interval -1 disables buffering so the
+	# audio stays live. Query strings (e.g. ?t=12345 cache-busters) pass
+	# through automatically.
+	@streams path /stream.mp3 /stream.opus /stream.flac /stream.aac
 	handle @streams {
 		reverse_proxy broadcast:7702 {
 			flush_interval -1
@@ -66,10 +67,10 @@
 		reverse_proxy web:7700
 	}
 
-	# Don't compress the live audio mounts — MP3/Opus/FLAC are already compressed
-	# (gzip just burns CPU on incompressible data) and an encoder layer on the
-	# never-ending body fights the `flush_interval -1` live path above.
-	@compressible not path /stream.mp3 /stream.opus /stream.flac
+	# Don't compress the live audio mounts — MP3/Opus/FLAC/AAC are already
+	# compressed (gzip just burns CPU on incompressible data) and an encoder
+	# layer on the never-ending body fights the `flush_interval -1` live path.
+	@compressible not path /stream.mp3 /stream.opus /stream.flac /stream.aac
 	encode @compressible gzip zstd
 
 	log {
