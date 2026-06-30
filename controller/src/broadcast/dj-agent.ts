@@ -340,6 +340,8 @@ function trackFields(song) {
     album: song.album,
     year: song.year,
     genre: song.genre,
+    path: song.path ?? null,
+    _partKey: song.plexPartKey || song._partKey || null,
   };
 }
 

@@ -150,6 +150,8 @@ async function walkMusicSource(): Promise<{ walked: number; liveIds: Set<string>
       year: song.year,
       genre: song.genre,
       duration: song.duration,
+      path: song.path ?? null,
+      plexPartKey: song._partKey ?? null,
     });
     liveIds.add(song.id);
     walked += 1;

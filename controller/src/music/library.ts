@@ -70,6 +70,8 @@ export function get(songId: string): any {
     structure: t.structure,
     vocalRanges: t.vocalRanges, // [] = instrumental, null = not computed
     paceMean: paceMeanOf(t.pace),
+    path: t.path,
+    plexPartKey: t.plexPartKey,
   };
 }
 

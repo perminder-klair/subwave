@@ -21,7 +21,9 @@ const SAMPLE_PLEX_TRACK = {
   duration: 235568,
   thumb: '/library/metadata/2/thumb/1782812114',
   Genre: [{ tag: 'Pop/Rock' }],
-  Part: [{ file: '/media/music/09 - Girls Like You.opus', key: '/library/parts/1/1782811927/file.opus' }],
+  Media: [{
+    Part: [{ file: '/media/music/09 - Girls Like You.opus', key: '/library/parts/1/1782811927/file.opus' }]
+  }]
 };
 
 test('normalizePlexTrack maps Plex track to SubWave Song shape', () => {

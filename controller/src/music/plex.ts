@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { buildAnnotatedUri } from './subsonic.js';
 import * as lastfm from './lastfm.js';
+import * as db from './library-db.js';
 
 function plexHeaders(): Record<string, string> {
   return {
@@ -35,7 +36,9 @@ async function getSectionKey(): Promise<string> {
 }
 
 export function normalizePlexTrack(t: any): any {
-  const part = Array.isArray(t.Part) ? t.Part[0] : t.Part;
+  const media = Array.isArray(t.Media) ? t.Media[0] : t.Media;
+  const partList = t.Part || media?.Part;
+  const part = Array.isArray(partList) ? partList[0] : partList;
   return {
     id: `plex:${t.ratingKey}`,
     title: t.title || '',
@@ -310,8 +313,20 @@ export function getStreamUrl(songId: string): string {
 }
 
 export function getRawStreamUrl(songId: string): string {
-  const ratingKey = songId.replace('plex:', '');
-  return `${config.plex.url}/library/parts/${ratingKey}/0/file?X-Plex-Token=${config.plex.token}`;
+  let partPath = '';
+  if (db.isOpen()) {
+    try {
+      const t = db.getTrack(songId);
+      if (t?.plexPartKey) {
+        partPath = t.plexPartKey;
+      }
+    } catch { /* ignore */ }
+  }
+  if (!partPath) {
+    const ratingKey = songId.replace('plex:', '');
+    partPath = `/library/parts/${ratingKey}/0/file`;
+  }
+  return `${config.plex.url}${partPath}?X-Plex-Token=${config.plex.token}`;
 }
 
 export function getLocalPath(_song: any): string | null {
@@ -319,7 +334,18 @@ export function getLocalPath(_song: any): string | null {
 }
 
 export function getPlayableUri(song: any): string {
-  const partPath = song._partKey || `/library/parts/${song.id.replace('plex:', '')}/0/file`;
+  let partPath = song._partKey || song.plexPartKey;
+  if (!partPath && db.isOpen()) {
+    try {
+      const t = db.getTrack(song.id);
+      if (t?.plexPartKey) {
+        partPath = t.plexPartKey;
+      }
+    } catch { /* ignore */ }
+  }
+  if (!partPath) {
+    partPath = `/library/parts/${song.id.replace('plex:', '')}/0/file`;
+  }
   return `subhttp:${config.plex.url}${partPath}?X-Plex-Token=${config.plex.token}`;
 }
 

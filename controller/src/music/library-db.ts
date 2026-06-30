@@ -89,6 +89,8 @@ export interface TrackRecord {
   promptHash: string | null;
   model: string | null;
   taggedAt: string | null;
+  path: string | null;
+  plexPartKey: string | null;
   // Acoustic analysis (music/analyze-library.ts). All nullable — a track that
   // hasn't been analysed reads null and every consumer treats that as "no
   // signal, behave as today".
@@ -137,6 +139,8 @@ export interface TrackMeta {
   year?: number | string | null;
   genre?: string | null;
   duration?: number | null;
+  path?: string | null;
+  plexPartKey?: string | null;
 }
 
 export interface TrackEnrichment {
@@ -396,6 +400,13 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     d.pragma('user_version = 9');
   }
 
+  if (userVersion < 10) {
+    // File paths and Plex-specific part keys for streaming.
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN path TEXT;`);
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN plex_part_key TEXT;`);
+    d.pragma('user_version = 10');
+  }
+
   // The vec0 virtual table carries the embedding dim in its schema. If the
   // stored dim doesn't match the requested one, the caller asked for a model
   // swap — that's a --reseed operation, not an auto-migration.
@@ -607,15 +618,17 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
   requireDb()
     .prepare(
       `
-      INSERT INTO tracks (id, title, artist, album, year, genre, duration_sec)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tracks (id, title, artist, album, year, genre, duration_sec, path, plex_part_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
         album        = COALESCE(excluded.album, tracks.album),
         year         = COALESCE(excluded.year, tracks.year),
         genre        = COALESCE(excluded.genre, tracks.genre),
-        duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec)
+        duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec),
+        path         = COALESCE(excluded.path, tracks.path),
+        plex_part_key = COALESCE(excluded.plex_part_key, tracks.plex_part_key)
     `,
     )
     .run(
@@ -626,6 +639,8 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
       normaliseYear(meta.year),
       meta.genre ?? null,
       Number.isFinite(meta.duration as number) ? (meta.duration as number) : null,
+      meta.path ?? null,
+      meta.plexPartKey ?? null,
     );
 }
 
@@ -1391,6 +1406,8 @@ function rowToTrack(row: any): TrackRecord {
     promptHash: row.prompt_hash,
     model: row.model,
     taggedAt: row.tagged_at,
+    path: row.path ?? null,
+    plexPartKey: row.plex_part_key ?? null,
     bpm: row.bpm ?? null,
     musicalKey: row.musical_key ?? null,
     introMs: row.intro_ms ?? null,
