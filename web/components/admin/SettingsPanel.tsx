@@ -215,6 +215,7 @@ interface ArchiveForm {
 
 interface StreamForm {
   opusEnabled: boolean;
+  flacEnabled: boolean;
   bitrate: string;
 }
 
@@ -269,7 +270,7 @@ interface SettingsData {
     maxTrackSeconds?: number;
     minTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number };
-    stream?: { opusEnabled?: boolean; bitrate?: number };
+    stream?: { opusEnabled?: boolean; flacEnabled?: boolean; bitrate?: number };
     station?: string;
     timezone?: string;
     locale?: StationLocale;
@@ -414,6 +415,7 @@ export default function SettingsPanel() {
       },
       stream: {
         opusEnabled: v.stream?.opusEnabled ?? true,
+        flacEnabled: v.stream?.flacEnabled ?? false,
         bitrate: String(v.stream?.bitrate ?? 192),
       },
       station: v.station ?? '',
@@ -1050,6 +1052,59 @@ export default function SettingsPanel() {
                   </div>
                 </div>
 
+              </Card>
+            )}
+
+            {form && (
+              <Card title="FLAC stream" sub="/stream.flac (Ogg FLAC, lossless)">
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Serve the lossless FLAC mount</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Seg
+                      options={[
+                        { id: 'on', label: 'On' },
+                        { id: 'off', label: 'Off' },
+                      ]}
+                      value={form.stream.flacEnabled ? 'on' : 'off'}
+                      onChange={id =>
+                        setForm(f =>
+                          f ? { ...f, stream: { ...f.stream, flacEnabled: id === 'on' } } : f,
+                        )
+                      }
+                    />
+                    <Btn
+                      sm
+                      onClick={() =>
+                        saveSettings({ stream: { flacEnabled: form.stream.flacEnabled } })
+                      }
+                      disabled={busy}
+                    >
+                      Save
+                    </Btn>
+                  </div>
+                  {form.stream.flacEnabled && (
+                    <div className="field-hint">
+                      Point a player at{' '}
+                      <code>
+                        {typeof window !== 'undefined' ? window.location.origin : ''}
+                        /stream.flac
+                      </code>
+                    </div>
+                  )}
+                  <div className="field-hint">
+                    Off by default. A continuous third encoder that losslessly captures the
+                    broadcast bus at ~800–900 kbps (≈4× the MP3 mount). It&apos;s a true lossless
+                    tier <strong>only when your source files are themselves lossless</strong>{' '}
+                    (FLAC/ALAC/WAV); for a lossy-source library (e.g. AAC/MP3) it faithfully
+                    carries lossy audio and adds no fidelity over MP3/Opus. Meant for external
+                    players (VLC, foobar2000, a network streamer) — the web and mobile players
+                    stay on MP3/Opus and won&apos;t auto-select it. The mandatory{' '}
+                    <code>/stream.mp3</code> mount always serves everyone.
+                  </div>
+                </div>
               </Card>
             )}
 

@@ -23,6 +23,7 @@ crossfade_duration = ref(10.0)
 archive_enabled = ref(true)
 archive_bitrate = ref(128)
 opus_enabled = ref(false)
+flac_enabled = ref(false)
 stream_bitrate = ref(192)
 station_name = ref("SUB/WAVE")
 
@@ -63,6 +64,18 @@ end
 if file.exists("/var/sub-wave/liquidsoap_opus_enabled.txt") then
   raw = string.trim(file.contents("/var/sub-wave/liquidsoap_opus_enabled.txt"))
   opus_enabled := (raw == "true")
+end
+
+# Opt IN to the Ogg-FLAC mount — a lossless capture of the processed broadcast
+# bus (no resample; stays at the source 44.1 kHz). Runs a third continuous
+# encoder at ~800-900 kbps, so it's off by default. It's a true lossless tier
+# only when the source files are themselves lossless; for lossy-source libraries
+# it faithfully carries lossy audio at 4x the MP3 bandwidth. Intended for
+# external players (VLC / foobar / network streamers) — the web player does not
+# auto-select it. The mandatory /stream.mp3 mount always serves everyone.
+if file.exists("/var/sub-wave/liquidsoap_flac_enabled.txt") then
+  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_flac_enabled.txt"))
+  flac_enabled := (raw == "true")
 end
 
 if file.exists("/var/sub-wave/liquidsoap_station_name.txt") then
@@ -698,9 +711,42 @@ def make_stream_outputs() =
     else
       fun () -> ()
     end
+  # Ogg-wrapped FLAC (streamable over Icecast, unlike the file-oriented native
+  # %flac). No resample — stays at the source 44.1 kHz. FLAC is lossless so
+  # there's no bitrate; compression=5 is the FLAC default (CPU/size balance) and
+  # bits_per_sample=16 is CD-quality and universally decodable. Gated on
+  # flac_enabled so the encoder only runs when an operator opts in.
+  flac_shutdown =
+    if flac_enabled() then
+      flac_out = output.icecast(
+        %ogg(
+          %flac(
+            samplerate=44100,
+            channels=2,
+            compression=5,
+            bits_per_sample=16
+          )
+        ),
+        id="stream_flac",
+        fallible=true,
+        host=environment.get(default="icecast", "ICECAST_HOST"),
+        port=7702,
+        password=environment.get("ICECAST_SOURCE_PASSWORD"),
+        mount="/stream.flac",
+        name=station_name(),
+        description="Personal frequency from the homelab — lossless",
+        genre="Various",
+        url="http://localhost:7700",
+        radio
+      )
+      flac_out.shutdown
+    else
+      fun () -> ()
+    end
   fun () -> begin
     mp3_out.shutdown()
     opus_shutdown()
+    flac_shutdown()
   end
 end
 
