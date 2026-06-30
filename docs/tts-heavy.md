@@ -116,6 +116,34 @@ heatmap.
   on an **older `tts-heavy` image** built without the full stack — pull the
   latest image and recreate the sidecar.
 
+### Disabling individual TTS engines to save memory
+
+Both TTS workers (Chatterbox and PocketTTS) load their full model weights at
+container startup and hold them resident — even when you only use one engine.
+On CPU-only hosts this can fill several gigabytes of swap while RAM sits mostly
+free (the kernel pages out idle model weights and never proactively reclaims
+the swap). If you only use one TTS engine, or if you run the sidecar solely for
+acoustic analysis, you can skip loading the unused engine(s):
+
+```ini
+# in your root .env
+
+# Using PocketTTS and don't want Chatterbox's 2–3 GB model in swap:
+DISABLE_CHATTERBOX=1
+
+# Using Chatterbox only:
+DISABLE_POCKET_TTS=1
+
+# Analysis-only — sidecar with no TTS engines at all:
+DISABLE_CHATTERBOX=1
+DISABLE_POCKET_TTS=1
+```
+
+The worker objects still exist so `/health` and `/speak` return a clean "not
+ready" instead of crashing, but their supervisors are never started and the
+models are never loaded. If you later switch engines, remove the flag and
+recreate the container (`docker compose --profile tts-heavy up -d`).
+
 ### Running analysis without the sidecar (dev / offline)
 
 The analyzer has a second backend: a **local Python venv** with `librosa`

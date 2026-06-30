@@ -48,6 +48,15 @@ ANALYZE_SECONDS = os.environ.get("ANALYZE_SECONDS", "60")
 DEVICE = os.environ.get("TTS_HEAVY_DEVICE", "cpu").lower()
 POCKET_TTS_DEFAULT_VOICE = os.environ.get("POCKET_TTS_VOICE", "alba")
 
+# Per-engine kill switches. Set DISABLE_CHATTERBOX=1 or DISABLE_POCKET_TTS=1
+# in your .env to skip loading that engine entirely. The worker object is still
+# created so /health and /speak can return a clean "not ready" rather than
+# crashing, but its run() supervisor is never started — the model is never
+# loaded and no RAM or swap is consumed. Useful when you only use one TTS
+# engine, or when you run tts-heavy solely for acoustic analysis.
+DISABLE_CHATTERBOX = os.environ.get("DISABLE_CHATTERBOX", "").lower() in ("1", "true", "yes")
+DISABLE_POCKET_TTS = os.environ.get("DISABLE_POCKET_TTS", "").lower() in ("1", "true", "yes")
+
 # Per-worker HF cache homes so the two engines don't fight over the same
 # directory. Each is a named volume in the compose files, so the weights a
 # worker downloads on its first boot survive container recreates. The env vars
@@ -271,11 +280,11 @@ async def lifespan(_app: FastAPI):
     # the port bind and the controller's probe would see "connection refused"
     # for the entire boot — leading operators to think the sidecar is broken
     # when it's just still loading.
-    tasks = [
-        asyncio.create_task(chatterbox_worker.run(), name="chatterbox-run"),
-        asyncio.create_task(pocket_worker.run(), name="pocket-tts-run"),
-        asyncio.create_task(analyzer_worker.run(), name="analyze-run"),
-    ]
+    tasks = [asyncio.create_task(analyzer_worker.run(), name="analyze-run")]
+    if not DISABLE_CHATTERBOX:
+        tasks.append(asyncio.create_task(chatterbox_worker.run(), name="chatterbox-run"))
+    if not DISABLE_POCKET_TTS:
+        tasks.append(asyncio.create_task(pocket_worker.run(), name="pocket-tts-run"))
     try:
         yield
     finally:
