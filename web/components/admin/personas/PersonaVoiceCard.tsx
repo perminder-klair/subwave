@@ -13,7 +13,7 @@ import { Card, Seg } from '../ui';
 import { EngineSelector } from '../tts/EngineSelector';
 import { VoicePreviewButton } from '../tts/VoicePreviewButton';
 import { VoicePicker, type VoicePickerGroup } from '../tts/VoicePicker';
-import { ENGINES } from '../tts/engineMeta';
+import { ENGINES, type EngineAvailability } from '../tts/engineMeta';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import {
@@ -73,6 +73,21 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
     updateTts(patch);
   };
 
+  // Resolve Cloud against this persona's saved provider even before the Cloud
+  // card is selected. openai-compatible has no key-based availability entry and
+  // is trusted by the server, while unknown providers retain the global status.
+  const globalAvail = data?.tts?.available as EngineAvailability | undefined;
+  let selectorAvailable = globalAvail;
+  if (globalAvail) {
+    const prov = persona.tts.cloudProvider;
+    const cloudByProv = globalAvail.cloudByProvider;
+    if (cloudByProv && prov in cloudByProv) {
+      selectorAvailable = { ...globalAvail, cloud: cloudByProv[prov] };
+    } else if (prov === 'openai-compatible') {
+      selectorAvailable = { ...globalAvail, cloud: true };
+    }
+  }
+
   return (
     <Card flat title="Voice" sub="text-to-speech engine">
       {/* Engine — radio-card grid, full width above the two-column body. */}
@@ -81,7 +96,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
         <EngineSelector
           value={persona.tts.engine}
           engineIds={ENGINE_IDS}
-          available={data?.tts?.available}
+          available={selectorAvailable}
           onChange={selectEngine}
         />
         <div className="field-hint max-w-[70ch]">
