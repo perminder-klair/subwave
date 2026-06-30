@@ -3,7 +3,6 @@ import * as settings from '../../settings.js';
 // Lazy imports — avoids circular deps and lets the router swap at runtime.
 let _navidrome: any = null;
 let _plex: any = null;
-let _cachedSource: string | null = null;
 
 async function loadNavidrome() {
   if (!_navidrome) _navidrome = await import('../subsonic.js');
@@ -23,11 +22,11 @@ export function getSource(): any {
     if (!_plex) {
       // Synchronous fallback: trigger load but return Navidrome until ready.
       // In practice plex.ts is always pre-loaded by the time any route fires.
-      loadPlex();
+      loadPlex().catch(console.error);
     }
     return _plex || _navidrome;
   }
-  if (!_navidrome) loadNavidrome();
+  if (!_navidrome) loadNavidrome().catch(console.error);
   return _navidrome;
 }
 
@@ -45,7 +44,6 @@ export async function warmSourceCache() {
 }
 
 export function invalidateSourceCache() {
-  _cachedSource = null;
   _plex = null;
   // Navidrome is always available; keep it cached.
 }
