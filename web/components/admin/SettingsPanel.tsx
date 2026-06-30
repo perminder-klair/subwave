@@ -5998,7 +5998,7 @@ function MusicSection({ data, form, setForm, busy, saveSettings, adminFetch }: M
         {isNavidrome && (
           <>
             <div className="rule-label">Navidrome</div>
-            <div className="field">
+            <div className="field mt-3.5">
               <Label>Server URL</Label>
               <Input
                 value={form.music.navidrome.url}
@@ -6009,7 +6009,7 @@ function MusicSection({ data, form, setForm, busy, saveSettings, adminFetch }: M
                 className="max-w-[360px]"
               />
             </div>
-            <div className="field">
+            <div className="field mt-3.5">
               <Label>Username</Label>
               <Input
                 value={form.music.navidrome.user}
@@ -6020,7 +6020,7 @@ function MusicSection({ data, form, setForm, busy, saveSettings, adminFetch }: M
                 className="max-w-[360px]"
               />
             </div>
-            <div className="field">
+            <div className="field mt-3.5">
               <Label>Password</Label>
               <Input
                 type="password"
@@ -6038,7 +6038,7 @@ function MusicSection({ data, form, setForm, busy, saveSettings, adminFetch }: M
         {!isNavidrome && (
           <>
             <div className="rule-label">Plex Media Server</div>
-            <div className="field">
+            <div className="field mt-3.5">
               <Label>Server URL</Label>
               <Input
                 value={form.music.plex.url}
@@ -6050,7 +6050,7 @@ function MusicSection({ data, form, setForm, busy, saveSettings, adminFetch }: M
               />
               <div className="field-hint">Base URL of your Plex Media Server including port.</div>
             </div>
-            <div className="field">
+            <div className="field mt-3.5">
               <Label>X-Plex-Token</Label>
               <Input
                 type="password"
@@ -6062,7 +6062,7 @@ function MusicSection({ data, form, setForm, busy, saveSettings, adminFetch }: M
                 className="max-w-[360px]"
               />
               <div className="field-hint">
-                Found in Plex Settings → Troubleshooting → Plex Media Server, or in Preferences.xml as PlexOnlineToken.
+                In Plex Web: open any media item, click ... → Get Info → View XML. The token appears as X-Plex-Token= in the URL.
               </div>
             </div>
           </>
