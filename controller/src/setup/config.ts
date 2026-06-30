@@ -23,6 +23,7 @@ export interface SetupConfig {
     user?: string;
     pass?: string;
   };
+  plex?: { url?: string; token?: string };
   // ISO timestamp written when the wizard saves successfully.
   setupCompletedAt?: string;
 }

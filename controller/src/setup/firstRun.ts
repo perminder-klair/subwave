@@ -19,13 +19,10 @@ export interface SetupStatus {
 export async function getSetupStatus(): Promise<SetupStatus> {
   // config.navidrome.* is populated from env at boot; setup-config.json is the
   // wizard's persistence layer. If env supplies values, env wins.
-  const envHasNavidrome = Boolean(
-    process.env.NAVIDROME_URL &&
-      process.env.NAVIDROME_USER &&
-      process.env.NAVIDROME_PASS,
-  );
+  const hasNavidrome = !!(process.env.NAVIDROME_URL && process.env.NAVIDROME_USER && process.env.NAVIDROME_PASS);
+  const hasPlex = !!(process.env.PLEX_URL && process.env.PLEX_TOKEN);
 
-  if (envHasNavidrome) {
+  if (hasNavidrome) {
     return {
       needsSetup: false,
       setupCompletedAt: null,
@@ -33,12 +30,21 @@ export async function getSetupStatus(): Promise<SetupStatus> {
     };
   }
 
+  if (hasPlex) {
+    return {
+      needsSetup: false,
+      setupCompletedAt: null,
+      navidromeSource: 'unset',
+    };
+  }
+
   const sc = await loadSetupConfig();
   const nv = sc.navidrome || {};
   const setupConfigHasNavidrome = Boolean(nv.url && nv.user && nv.pass);
+  const setupConfigHasPlex = Boolean(sc.plex?.url && sc.plex?.token);
 
   return {
-    needsSetup: !setupConfigHasNavidrome,
+    needsSetup: !(setupConfigHasNavidrome || setupConfigHasPlex),
     setupCompletedAt: sc.setupCompletedAt || null,
     navidromeSource: setupConfigHasNavidrome ? 'setup-config' : 'unset',
   };
@@ -56,13 +62,18 @@ export function getSetupStatusSync(): SetupStatus {
   if (envHasNavidrome) {
     return { needsSetup: false, setupCompletedAt: null, navidromeSource: 'env' };
   }
+  const envHasPlex = Boolean(process.env.PLEX_URL && process.env.PLEX_TOKEN);
+  if (envHasPlex) {
+    return { needsSetup: false, setupCompletedAt: null, navidromeSource: 'unset' };
+  }
   // Read the config we already loaded into memory rather than touching disk.
   const url = config.navidrome.url;
   const user = config.navidrome.user;
   const pass = config.navidrome.password;
   const filled = Boolean(url && user && pass && url !== 'http://navidrome:4533');
+  const plexFilled = Boolean(config.plex.url && config.plex.token);
   return {
-    needsSetup: !filled,
+    needsSetup: !(filled || plexFilled),
     setupCompletedAt: null,
     navidromeSource: filled ? 'setup-config' : 'unset',
   };

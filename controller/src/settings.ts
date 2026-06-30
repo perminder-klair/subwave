@@ -197,6 +197,13 @@ function normalizeTtsSpeedMap(raw: any): Record<string, number> {
   return out;
 }
 
+// Music source backends. `navidrome` is the default (Subsonic-compatible);
+// `plex` is the alternative for operators with a Plex Media Server.
+// Validated by settings.music.source; the active source is resolved at
+// runtime by music/source/index.ts.
+export const MUSIC_SOURCES = ['navidrome', 'plex'] as const;
+export type MusicSourceId = typeof MUSIC_SOURCES[number];
+
 // LLM provider abstraction. `ollama` is the homelab default; the cloud
 // providers are opt-in and resolved by llm/provider.js. `openrouter` and
 // `gateway` are aggregators — one key, any vendor's models. `openai-compatible`
@@ -965,6 +972,13 @@ const DEFAULTS = {
   sfx: {
     enabled: true,
   },
+  // Active music source — which backend the controller uses to browse and
+  // stream tracks. 'navidrome' is the default (Subsonic-compatible);
+  // 'plex' is the alternative for operators with a Plex Media Server.
+  // Validated against MUSIC_SOURCES on load/update; defaults to 'navidrome'.
+  music: {
+    source: 'navidrome' as string,
+  },
   // Outbound webhooks. Each entry POSTs station events (see broadcast/
   // webhooks.ts for the event list) to `url` with a fire-and-forget HTTP
   // call. Empty by default — operators add hooks via the admin UI.
@@ -1565,6 +1579,11 @@ export async function load() {
     },
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
+    },
+    music: {
+      source: (MUSIC_SOURCES as readonly string[]).includes(stored.music?.source)
+        ? stored.music.source
+        : 'navidrome',
     },
     webhooks: normalizeWebhooks(stored.webhooks),
     scrobble: {
@@ -2621,6 +2640,17 @@ export async function update(patch) {
     const sx = patch.sfx || {};
     if (sx.enabled !== undefined) {
       next.sfx.enabled = !!sx.enabled;
+    }
+  }
+  if (patch.music !== undefined && patch.music !== null) {
+    if (typeof patch.music !== 'object') throw new Error('music must be an object');
+    if (patch.music.source !== undefined) {
+      if (!(MUSIC_SOURCES as readonly string[]).includes(patch.music.source)) {
+        throw new Error(`music.source must be one of: ${MUSIC_SOURCES.join(', ')}`);
+      }
+      next.music = { ...next.music, source: patch.music.source };
+      const { invalidateSourceCache } = await import('./music/source/index.js');
+      invalidateSourceCache();
     }
   }
   if ('ui' in patch) {

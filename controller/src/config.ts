@@ -48,6 +48,10 @@ export const config = {
     apiVersion: '1.16.1',
     clientName: 'sub-wave',
   },
+  plex: {
+    url: process.env.PLEX_URL || '',
+    token: process.env.PLEX_TOKEN || '',
+  },
   ollama: {
     // Default-when-blank server URL + model. The admin Settings UI
     // (`llm.ollamaUrl` / `llm.model`) overrides both — there are no
