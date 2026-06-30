@@ -47,7 +47,7 @@ function avatarUrlFor(personaId?: string | null): string {
 // back to how the listener actually reached us (X-Forwarded-Proto/Host from the
 // proxy, else the request's own protocol/host) so LAN, Tailscale, and ad-hoc
 // custom-domain deployments still emit a URL that resolves for the listener.
-function publicOrigin(req: express.Request): string {
+export function publicOrigin(req: express.Request): string {
   const fromEnv = (process.env.SITE_URL || '').trim().replace(/\/+$/, '');
   if (fromEnv) return fromEnv;
   const xfProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();

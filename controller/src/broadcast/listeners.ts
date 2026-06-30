@@ -271,7 +271,7 @@ export interface ListenerConnection {
   connections?: number;
 }
 
-const BROADCAST_MOUNTS = ['/stream.mp3', '/stream.opus'];
+const BROADCAST_MOUNTS = ['/stream.mp3', '/stream.opus', '/stream.flac', '/stream.aac'];
 let cachedAdminPassword: string | null = null;
 
 // Resolve the Icecast admin password: explicit env wins, otherwise read the
