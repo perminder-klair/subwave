@@ -32,6 +32,11 @@ export default function PersonasPanel() {
   const [busy, setBusy] = useState(false);
   // index of the persona being edited
   const [focusIdx, setFocusIdx] = useState(0);
+  // whether the full-screen persona editor is open (the roster is the browse
+  // view; selecting a card or adding a persona opens this).
+  const [editorOpen, setEditorOpen] = useState(false);
+  // id of a freshly-added persona — the AI-draft field shows only while creating.
+  const [creatingId, setCreatingId] = useState<string | null>(null);
   // toggles the system-prompt editor card
   const [showPrompt, setShowPrompt] = useState(false);
   // Bumped on every avatar mutation. Appended as ?v=… so the admin <img>
@@ -136,13 +141,14 @@ export default function PersonasPanel() {
     // The new persona lands at the end of the roster — its index is the
     // current length. Capture it before the append so we can focus it.
     const newIdx = form.personas.length;
+    const newId = clientMintId();
     setForm(f => {
       if (!f) return f;
       if (f.personas.length >= PERSONA_MAX) return f;
       return {
         ...f,
         personas: [...f.personas, {
-          id: clientMintId(), name: 'New persona', tagline: '',
+          id: newId, name: 'New persona', tagline: '',
           frequency: 'moderate', scriptLength: 'concise', djMode: false,
           humour: DIAL_NEUTRAL, localColour: DIAL_NEUTRAL, warmth: DIAL_NEUTRAL, soul: '',
           language: '',
@@ -156,7 +162,9 @@ export default function PersonasPanel() {
     // with a toast — otherwise the add is silent and the operator never notices
     // the entry tucked at the end of the roster.
     scrollToEditorRef.current = true;
+    setCreatingId(newId);
     setFocusIdx(newIdx);
+    setEditorOpen(true);
     notify.ok('New persona added. Fill in its details, then Save persona.');
   };
   const removePersona = (i: number) =>
@@ -250,8 +258,8 @@ export default function PersonasPanel() {
   const canSave = !!form && allPersonasOk && promptOk
     && form.personas.some(p => p.id === form.activePersonaId);
 
-  const save = async () => {
-    if (!canSave || !form) return;
+  const save = async (): Promise<boolean> => {
+    if (!canSave || !form) return false;
     setBusy(true);
     try {
       const r = await adminFetch('/settings', {
@@ -294,8 +302,10 @@ export default function PersonasPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       notify.ok('personas saved, applies on the next spoken line');
       await load();
+      return true;
     } catch (e) {
       notify.err(errorMessage(e));
+      return false;
     } finally { setBusy(false); }
   };
 
@@ -352,10 +362,6 @@ export default function PersonasPanel() {
         onAirShow={onAirShow}
         defaultEngine={defaultEngine}
         onAirCloudIssue={onAirCloudIssue}
-        personaCount={form.personas.length}
-        showPrompt={showPrompt}
-        onTogglePrompt={() => setShowPrompt(s => !s)}
-        onAdd={addPersona}
       />
 
       {showPrompt && (
@@ -376,10 +382,11 @@ export default function PersonasPanel() {
         personas={form.personas}
         activePersonaId={form.activePersonaId}
         onAirPersonaId={onAirPersonaId}
-        focusedIdx={safeIdx}
         avatarTick={avatarTick}
-        onSelect={setFocusIdx}
+        showPrompt={showPrompt}
+        onTogglePrompt={() => setShowPrompt(s => !s)}
         onAdd={addPersona}
+        onSelect={(i) => { setCreatingId(null); setFocusIdx(i); setEditorOpen(true); }}
       />
 
       <PersonaEditor
@@ -396,6 +403,9 @@ export default function PersonasPanel() {
         cloudIssueText={focusedCloudIssue}
         skillCatalog={skillCatalog}
         editorRef={editorRef}
+        open={editorOpen}
+        isNew={focused.id === creatingId}
+        onClose={() => setEditorOpen(false)}
         setPersona={setPersona}
         setPersonaTts={setPersonaTts}
         setPersonaSkills={setPersonaSkills}
@@ -409,8 +419,8 @@ export default function PersonasPanel() {
         allPersonasOk={allPersonasOk}
         promptOk={promptOk}
         busy={busy}
-        onSave={save}
-        onDiscard={load}
+        onSave={async () => { if (await save()) setEditorOpen(false); }}
+        onDiscard={() => { load(); setEditorOpen(false); }}
       />
 
       <V3AlertDialog
@@ -433,6 +443,7 @@ export default function PersonasPanel() {
             setFocusIdx(i => Math.max(0, i - 1));
           }
           setConfirmDeleteIdx(null);
+          setEditorOpen(false);
         }}
       />
     </div>

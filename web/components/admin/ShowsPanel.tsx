@@ -27,6 +27,7 @@ import {
 } from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Metric, Toggle } from './ui';
 import { V3AlertDialog } from '../ui/alert-dialog';
+import { EditorDialog } from '../ui/editor-dialog';
 import { AiFill } from './AiFill';
 import GenreSuggest from './GenreSuggest';
 import { PersonaPicker, ThemePicker } from './ShowPickers';
@@ -239,6 +240,8 @@ export default function ShowsPanel() {
   // (null = none open). Shows are edited in place — no modal, no draft copy;
   // edits land straight on `form.shows[focusIdx]` and persist on Save schedule.
   const [focusIdx, setFocusIdx] = useState<number | null>(null);
+  // id of a freshly-added show — the AI-draft field shows only while creating.
+  const [creatingId, setCreatingId] = useState<string | null>(null);
   // The editor block, scrolled into view when a show is opened (add / edit) so
   // the operator actually sees it — it stacks below the list and would else be
   // off-screen. The flag gates the scroll to deliberate opens (not re-renders).
@@ -411,7 +414,7 @@ export default function ShowsPanel() {
     setForm(f => f ? ({ ...f, shows: f.shows.map((s, idx) => (idx === i ? { ...s, ...patch } : s)) }) : f);
 
   // Open an existing show in the editor below the list, scrolling it into view.
-  const focusShow = (i: number) => { scrollToEditorRef.current = true; setFocusIdx(i); };
+  const focusShow = (i: number) => { scrollToEditorRef.current = true; setCreatingId(null); setFocusIdx(i); };
 
   // Append a fresh show (persona + mood pre-filled, name blank so it reads as
   // incomplete until named) and open it for editing.
@@ -436,6 +439,7 @@ export default function ShowsPanel() {
     // arm the new show as the brush if nothing is armed yet
     setBrush(b => b ?? id);
     scrollToEditorRef.current = true;
+    setCreatingId(id);
     setFocusIdx(newIdx);
     notify.ok('New show added — give it a name, persona and mood, then Save schedule.');
   };
@@ -547,8 +551,8 @@ export default function ShowsPanel() {
     return { day: d, hour: h, showId: form?.schedule?.[d]?.[h] ?? null };
   };
 
-  const save = async () => {
-    if (!canSave || !form) return;
+  const save = async (): Promise<boolean> => {
+    if (!canSave || !form) return false;
     setBusy(true);
     try {
       const r = await adminFetch('/settings', {
@@ -573,8 +577,10 @@ export default function ShowsPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       notify.ok('schedule saved, the current hour applies on the next pick');
       await load();
+      return true;
     } catch (e) {
       notify.err(errorMessage(e));
+      return false;
     } finally { setBusy(false); }
   };
 
@@ -761,44 +767,37 @@ export default function ShowsPanel() {
       </Card>
 
       {/* ── SHOW DEFINITIONS ─────────────────────────────────────────────── */}
-      <Card
-        title="Show definitions"
-        sub={`${form.shows.length}/${SHOWS_MAX} shows`}
-        right={<Btn sm tone="accent" onClick={addShow}
-          disabled={form.shows.length >= SHOWS_MAX || personas.length === 0}>
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
+        <span className="caption">show definitions · {form.shows.length}/{SHOWS_MAX} shows</span>
+        <Btn
+          tone="accent"
+          onClick={addShow}
+          disabled={form.shows.length >= SHOWS_MAX || personas.length === 0}
+        >
           + Add show
-        </Btn>}
-      >
-        {form.shows.length === 0 && (
-          <p className="text-[12px] text-muted">
-            No shows yet. Add one to start programming the week.
-          </p>
-        )}
-        <div className="grid gap-2">
-          {form.shows.map((s, i) => {
-            const ok = showValid(s);
-            const hrs = countHours(s.id);
-            return (
-              <ShowDefRow
-                key={s.id}
-                show={s}
-                index={i}
-                ok={ok}
-                hrs={hrs}
-                focused={focusIdx === i}
-                personaLabel={personaName(s.personaId)}
-                onEdit={() => focusShow(i)}
-                onRemove={() => setConfirmDeleteIdx(i)}
-              />
-            );
-          })}
-        </div>
-        {form.shows.length > 0 && (
-          <p className="mt-2.5 text-[11px] text-muted">
-            Click a show (or <b>Edit</b>) to open it in the editor below.
-          </p>
-        )}
-      </Card>
+        </Btn>
+      </div>
+      {form.shows.length === 0 && (
+        <p className="text-[12px] text-muted">
+          No shows yet. Add one to start programming the week.
+        </p>
+      )}
+
+      {form.shows.map((s, i) => {
+        const ok = showValid(s);
+        const hrs = countHours(s.id);
+        return (
+          <ShowDefRow
+            key={s.id}
+            show={s}
+            index={i}
+            ok={ok}
+            hrs={hrs}
+            personaLabel={personaName(s.personaId)}
+            onEdit={() => focusShow(i)}
+          />
+        );
+      })}
 
       {/* ── INLINE SHOW EDITOR ───────────────────────────────────────────── */}
       {focused && focusIdx != null && (
@@ -818,8 +817,9 @@ export default function ShowsPanel() {
           allShowsOk={allShowsOk}
           canSave={canSave}
           busy={busy}
+          isNew={focused.id === creatingId}
           update={(patch) => setShow(focusIdx, patch)}
-          onSave={save}
+          onSave={async () => { if (await save()) setFocusIdx(null); }}
           onClose={() => setFocusIdx(null)}
           onRemove={() => setConfirmDeleteIdx(focusIdx)}
         />
@@ -889,6 +889,7 @@ interface ShowEditorProps {
   allShowsOk: boolean;
   canSave: boolean;
   busy: boolean;
+  isNew: boolean;       // show the AI-draft field only while creating
   update: (patch: Partial<Show>) => void;
   onSave: () => void;
   onClose: () => void;
@@ -897,34 +898,58 @@ interface ShowEditorProps {
 
 function ShowEditor({
   show, editorRef, personas, moods, themes, activeThemeId, genres, playlists, apiBase,
-  adminFetch, minTrackSeconds, allShowsOk, canSave, busy,
+  adminFetch, minTrackSeconds, allShowsOk, canSave, busy, isNew,
   update, onSave, onClose, onRemove,
 }: ShowEditorProps) {
   const valid = showValid(show);
   return (
-    <div ref={editorRef} className="scroll-mt-4">
-      <Card
-        title={show.name.trim() ? 'Edit show' : 'New show'}
-        sub={show.name.trim() || 'define a show'}
-        right={
-          <span className="flex gap-2">
-            <Btn sm tone="danger" onClick={onRemove}>Remove</Btn>
-            <Btn sm onClick={onClose}>Close</Btn>
+    <EditorDialog
+      open
+      onOpenChange={(o) => { if (!o) onClose(); }}
+      title={<Eyebrow className="text-vermilion">{isNew ? 'New show' : 'Edit show'}</Eyebrow>}
+      sub={<span className="caption truncate">{show.name.trim() || 'define a show'}</span>}
+      footer={
+        <div className="flex flex-wrap items-center gap-3">
+          {/* left — destructive action */}
+          <Btn lg tone="danger" onClick={onRemove}>Remove</Btn>
+          {/* right — status + close/save */}
+          <span className="ml-auto flex items-center gap-3">
+            <span
+              className={cn(
+                'size-1.5 flex-none rounded-full',
+                canSave ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
+              )}
+            />
+            <span className="text-[11px] text-muted">
+              {!valid
+                ? <span className="text-[var(--danger)]">this show needs a name, a persona, and a mood</span>
+                : !allShowsOk
+                  ? <span className="text-[var(--danger)]">another show in the list is incomplete</span>
+                  : 'saves all shows + the weekly grid · applies live on the next pick'}
+            </span>
+            <Btn lg onClick={onClose}>Close</Btn>
+            <Btn lg tone="accent" onClick={onSave} disabled={busy || !canSave}>
+              {busy ? 'Saving…' : 'Save show'}
+            </Btn>
           </span>
-        }
-      >
-        <div className="grid gap-3.5">
-          <AiFill<Partial<Omit<Show, 'personaId' | 'themeId'>> & { personaId?: string | null; themeId?: string | null }>
-            endpoint="/generate/show"
-            resultKey="show"
-            adminFetch={adminFetch}
-            placeholder="e.g. a Sunday-morning gospel hour, warm and uplifting"
-            onApply={(s) => update({
-              ...s,
-              personaId: s.personaId ?? show.personaId ?? '',
-              themeId: s.themeId ?? '',
-            })}
-          />
+        </div>
+      }
+    >
+      <div ref={editorRef} className="grid">
+        <Card flat title="Identity" bodyClass="grid gap-3.5">
+          {isNew && (
+            <AiFill<Partial<Omit<Show, 'personaId' | 'themeId'>> & { personaId?: string | null; themeId?: string | null }>
+              endpoint="/generate/show"
+              resultKey="show"
+              adminFetch={adminFetch}
+              placeholder="e.g. a Sunday-morning gospel hour, warm and uplifting"
+              onApply={(s) => update({
+                ...s,
+                personaId: s.personaId ?? show.personaId ?? '',
+                themeId: s.themeId ?? '',
+              })}
+            />
+          )}
           <Field>
             <Label htmlFor="show-name">show name</Label>
             <Input
@@ -961,9 +986,9 @@ function ShowEditor({
               Manage themes in admin → Settings → Theme.
             </span>
           </Field>
+        </Card>
 
-          <Eyebrow className="text-muted">music</Eyebrow>
-
+        <Card flat title="Music" bodyClass="grid gap-3.5">
           <div className="stack-mobile grid grid-cols-3 gap-3">
             <Field>
               <Label>music mood</Label>
@@ -1126,7 +1151,9 @@ function ShowEditor({
               </div>
             </div>
           )}
+        </Card>
 
+        <Card flat title="Brief" bodyClass="grid gap-3.5">
           <Field>
             <Label htmlFor="show-topic">topic (fed to the DJ as the show theme)</Label>
             <span className="field-hint">
@@ -1167,34 +1194,9 @@ function ShowEditor({
               cap it for this show.
             </span>
           </Field>
-
-          {/* Save bar — labelled "Save show" for the editing context, though one
-              Save actually persists every show + the weekly grid (the personas
-              pattern, where "Save persona" likewise saves the whole roster). The
-              status line spells out that wider scope. */}
-          <div className="flex flex-wrap items-center gap-3 border border-ink bg-[var(--ink-softer)] p-3">
-            <span
-              className={cn(
-                'size-1.5 flex-none rounded-full',
-                canSave ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
-              )}
-            />
-            <span className="text-[11px] text-muted">
-              {!valid
-                ? <span className="text-[var(--danger)]">this show needs a name, a persona, and a mood</span>
-                : !allShowsOk
-                  ? <span className="text-[var(--danger)]">another show in the list is incomplete</span>
-                  : 'saves all shows + the weekly grid · applies live on the next pick'}
-            </span>
-            <span className="ml-auto">
-              <Btn tone="accent" onClick={onSave} disabled={busy || !canSave}>
-                {busy ? 'Saving…' : 'Save show'}
-              </Btn>
-            </span>
-          </div>
-        </div>
-      </Card>
-    </div>
+        </Card>
+      </div>
+    </EditorDialog>
   );
 }
 
@@ -1382,54 +1384,46 @@ interface ShowDefRowProps {
   index: number;
   ok: boolean;
   hrs: number;
-  focused: boolean;
   personaLabel: string;
   onEdit: () => void;
-  onRemove: () => void;
 }
 
-function ShowDefRow({ show: s, index: i, ok, hrs, focused, personaLabel, onEdit, onRemove }: ShowDefRowProps) {
-  const stripeRef = useRef<HTMLDivElement>(null);
-  useDynamicStyle(stripeRef, { background: SHOW_COLORS[i % SHOW_COLORS.length] ?? '#000' });
+// One show as a full-width card, matching the skills list: a colour dot + name
+// with status pills on the right, a persona/mood/topic summary on the left, and
+// an Edit action on the right (Remove lives inside the editor).
+function ShowDefRow({ show: s, index: i, ok, hrs, personaLabel, onEdit }: ShowDefRowProps) {
+  const dotRef = useRef<HTMLSpanElement>(null);
+  useDynamicStyle(dotRef, { background: SHOW_COLORS[i % SHOW_COLORS.length] ?? '#000' });
   return (
-    <div
-      className={cn(
-        'flex items-center gap-3 border py-2.5 pr-3',
-        focused
-          ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
-          : ok ? 'border-separator-strong' : 'border-[var(--danger)]',
-      )}
-    >
-      <div ref={stripeRef} className="w-1 self-stretch" />
-      {/* Clicking the row opens the show in the editor below (same as Edit). */}
-      <button
-        type="button"
-        onClick={onEdit}
-        aria-pressed={focused}
-        className="grid min-w-0 flex-1 cursor-pointer gap-0.5 border-0 bg-transparent p-0 text-left font-[inherit]"
-      >
-        <div className="overflow-hidden text-[14px] font-extrabold tracking-[-0.01em] text-ellipsis whitespace-nowrap text-ink">
+    <Card
+      title={
+        <span className="inline-flex items-center gap-2">
+          <span ref={dotRef} className="size-2.5 flex-none rounded-full" />
           {s.name.trim() || 'untitled'}
-        </div>
-        <div className="text-[11px] text-muted">
-          persona · {personaLabel} · mood · {s.mood || '—'}{showFilterSummary(s)}
-        </div>
-        {s.topic.trim() && (
-          <div className="overflow-hidden text-[11px] text-ellipsis whitespace-nowrap text-muted italic">
-            {s.topic.trim()}
+        </span>
+      }
+      right={
+        <>
+          {!ok && <Pill tone="accent">incomplete</Pill>}
+          {hrs > 0 ? <Pill tone="ink">{hrs}h / week</Pill> : <Pill>unscheduled</Pill>}
+        </>
+      }
+    >
+      <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+        <div className="min-w-0">
+          <div className="text-[12px] leading-[1.6] text-muted">
+            persona · {personaLabel} · mood · {s.mood || '—'}{showFilterSummary(s)}
           </div>
-        )}
-      </button>
-      <div className="flex shrink-0 items-center gap-1.5">
-        {!ok && <Pill tone="accent">incomplete</Pill>}
-        {hrs > 0
-          ? <Pill tone="ink">{hrs}h / week</Pill>
-          : <Pill>unscheduled</Pill>}
-        <Btn sm onClick={onEdit}>{focused ? 'Editing' : 'Edit'}</Btn>
-        <Btn sm tone="danger" onClick={onRemove} title="Remove this show">
-          ✕
-        </Btn>
+          {s.topic.trim() && (
+            <div className="mt-1 line-clamp-2 text-[12px] leading-[1.6] text-muted italic">
+              {s.topic.trim()}
+            </div>
+          )}
+        </div>
+        <div className="flex flex-col gap-2">
+          <Btn className="min-w-[92px]" onClick={onEdit}>Edit</Btn>
+        </div>
       </div>
-    </div>
+    </Card>
   );
 }

@@ -72,7 +72,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
   };
 
   return (
-    <Card title="Voice" sub="text-to-speech engine">
+    <Card flat title="Voice" sub="text-to-speech engine">
       {/* Engine — radio-card grid, full width above the two-column body. */}
       <div className="field mb-4">
         <Label>Engine</Label>

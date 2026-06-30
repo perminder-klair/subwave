@@ -15,7 +15,7 @@ interface PersonaBehaviorCardProps {
 
 export function PersonaBehaviorCard({ persona, update }: PersonaBehaviorCardProps) {
   return (
-    <Card title="Behaviour" sub="how this persona talks">
+    <Card flat title="Behaviour" sub="how this persona talks">
       <div className="lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-8">
         {/* LEFT — frequency, script length, DJ mode */}
         <div>

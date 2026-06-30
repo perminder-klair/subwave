@@ -134,6 +134,9 @@ export default defineConfig([
             // .is-spotlight — accent-rail card modifier (.admin-root
             // .card.is-spotlight) used by DJ Doc's verdict card.
             '^is-spotlight$',
+            // .is-flat — flat-section card modifier (.admin-root .card.is-flat)
+            // used inside EditorDialog so sections read as divider-separated.
+            '^is-flat$',
             '^strip-mobile$',
             // bare state / descendant classes used with .lib-* parents
             '^on$',

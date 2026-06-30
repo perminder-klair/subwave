@@ -12,7 +12,7 @@ interface PersonaSkillsCardProps {
 
 export function PersonaSkillsCard({ persona, skillCatalog, setSkills }: PersonaSkillsCardProps) {
   return (
-    <Card title="Skills" sub="autonomous segments this persona runs">
+    <Card flat title="Skills" sub="autonomous segments this persona runs">
       <p className="mb-2.5 max-w-[70ch] text-[12px] leading-[1.6] text-muted">
         When this persona is on air, only the skills ticked here can fire. A skill must
         also be enabled station-wide on the <strong>Skills</strong> page.

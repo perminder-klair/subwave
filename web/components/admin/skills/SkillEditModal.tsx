@@ -20,6 +20,8 @@ import type { CSSProperties } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { V3AlertDialog } from '../../ui/alert-dialog';
+import { EditorDialog } from '../../ui/editor-dialog';
+import { Eyebrow } from '../ui';
 import { CONTEXT_FIELD_LABELS, CONTEXT_FIELDS_FALLBACK, splitContext } from './contextFields';
 
 // Minimal shape of a catalogue skill (from GET /dj/skills) — only what the
@@ -175,13 +177,9 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEdit, fileId, adminFetch]);
 
-  // ── Escape to close ───────────────────────────────────────────────────────
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Escape-to-close and body scroll-lock are handled by EditorDialog (Radix
+  // Dialog) — no manual key listener, so the nested delete confirm gets escape
+  // first and the page behind stays locked.
 
   const dirty = loaded && fieldsKey(fields) !== snapshot;
   const nameValid = !isEdit ? SLUG_RE.test(name) : true;
@@ -369,89 +367,102 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
     border: '1px solid var(--ink)', background: 'var(--field)', color: 'var(--ink)',
   };
 
-  return (
+  // ── Header / footer slots for the full-screen EditorDialog ──────────────────
+  // Uniform header: a static label + the segment type (the editable name/slug
+  // live in the body's first section, matching the other editors).
+  const headerTitle = (
+    <Eyebrow className="text-vermilion">{isEdit ? 'Edit skill' : 'New skill'}</Eyebrow>
+  );
+  const headerSub = (
+    <span className="caption truncate">{custom ? 'custom segment' : 'built-in segment'}</span>
+  );
+  // On-air toggle (edit only) — lives in the footer with the other actions so
+  // the header stays uniform across all three editors.
+  const airToggle = isEdit ? (
     <div
-      onClick={onClose}
-      style={{
-        // z-30: above admin chrome (≤ z-20), below the V3AlertDialog (overlay
-        // z-40 / content z-50) so the delete confirm layers on top of this sheet.
-        position: 'fixed', inset: 0, zIndex: 30, display: 'flex', alignItems: 'flex-start',
-        justifyContent: 'center', padding: '40px 16px', overflowY: 'auto',
-        background: 'color-mix(in oklab, var(--ink) 55%, transparent)',
-        backdropFilter: 'blur(2px)',
-      }}
+      onClick={() => { if (!acting) toggleEnabled(); }}
+      title={enabled ? 'On air — click to take off air' : 'Off air — click to put on air'}
+      style={{ position: 'relative', width: 62, height: 30, border: '1px solid var(--ink)', flex: 'none', cursor: acting ? 'wait' : 'pointer', transition: 'background .15s cubic-bezier(.2,.7,.2,1)', background: enabled ? 'var(--ink)' : 'transparent', opacity: acting ? 0.6 : 1 }}
     >
-      {/* The pseudo-elements + keyframes this sheet relies on live in
-          globals.css under the `.sw-seg` / `sw-*` names (kept out of JS to
-          avoid dangerouslySetInnerHTML). */}
-      <div
-        className="sw-seg"
-        onClick={e => e.stopPropagation()}
-        style={{ width: 'min(1000px,100%)', position: 'relative', border: '1px solid var(--ink)', background: 'var(--bg)' }}
-      >
-        {/* Masthead */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 28, padding: '16px 30px 14px' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', minWidth: 0 }}>
-            <div style={{ minWidth: 0 }}>
-              {/* Editable skill name (label) */}
+      <div style={{ position: 'absolute', top: 2, left: 2, width: 24, height: 24, transition: 'transform .18s cubic-bezier(.2,.7,.2,1)', background: enabled ? 'var(--bg)' : 'var(--ink)', transform: `translateX(${enabled ? 32 : 0}px)` }} />
+    </div>
+  ) : null;
+
+  // Transport bar — on-air toggle / Run / Delete on the left, unsaved / flash /
+  // Close / Save on the right. Border + padding supplied by EditorDialog's footer.
+  const footer = (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        {airToggle}
+        {isEdit && (
+          <button type="button" onClick={run} disabled={acting} style={{ padding: '13px 26px', fontSize: 11, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', transition: 'transform .1s', border: '1px solid var(--accent)', background: 'var(--accent)', color: '#fff', cursor: acting ? 'wait' : 'pointer', opacity: acting ? 0.7 : 1 }}>
+            ▸ RUN NOW
+          </button>
+        )}
+        {isEdit && custom && (
+          <button type="button" onClick={() => setConfirmDelete(true)} disabled={acting} className="sw-ghost" style={{ padding: '13px 22px', background: 'transparent', color: 'var(--danger)', border: '1px solid var(--danger)', fontSize: 11, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', cursor: acting ? 'wait' : 'pointer', opacity: acting ? 0.7 : 1 }}>
+            DELETE
+          </button>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        {dirty && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--accent)', fontWeight: 700 }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent)' }} />UNSAVED EDITS
+          </span>
+        )}
+        {flash && (
+          <span className="v3-blink" style={{ fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--accent)', fontWeight: 700 }}>✓ {flash}</span>
+        )}
+        <button type="button" onClick={onClose} className="sw-ghost" style={{ padding: '13px 22px', background: 'transparent', color: 'var(--muted)', border: '1px solid color-mix(in oklab, var(--ink) 24%, transparent)', fontSize: 11, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', cursor: 'pointer' }}>
+          CLOSE
+        </button>
+        <button type="button" onClick={save} disabled={!canSave} style={{ padding: '13px 26px', background: canSave ? 'var(--ink)' : 'color-mix(in oklab, var(--ink) 20%, transparent)', color: 'var(--bg)', border: '1px solid var(--ink)', fontSize: 11, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', cursor: canSave ? 'pointer' : 'not-allowed' }}>
+          {busy ? (mode === 'create' ? 'CREATING…' : 'SAVING…') : (mode === 'create' ? 'CREATE' : 'SAVE')}
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <EditorDialog
+      open
+      onOpenChange={(o) => { if (!o) onClose(); }}
+      title={headerTitle}
+      sub={headerSub}
+      footer={footer}
+      className="sw-seg"
+    >
+      {!loaded ? (
+        <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--muted)', fontStyle: 'italic', fontSize: 13 }}>loading…</div>
+      ) : (
+        <div style={{ opacity: isEdit && !enabled ? 0.6 : 1, transition: 'opacity .2s ease' }}>
+
+            {/* Skill name + slug */}
+            <div className="sw-section">
+              <div style={sectionLabel}>SKILL NAME</div>
               <input
-                className="sw-title"
                 value={fields.label}
                 onChange={e => patch({ label: e.target.value })}
                 placeholder={displayName}
-                style={{
-                  ...inputBase, background: 'transparent', border: 'none', borderBottom: '1px solid transparent',
-                  fontSize: 24, lineHeight: 1.1, letterSpacing: '-0.01em', fontWeight: 800,
-                  padding: '2px 0', width: '100%', minWidth: 0,
-                }}
+                aria-label="Skill name"
+                style={{ ...inputBase, marginTop: 16, padding: '12px 16px', fontSize: 18, fontWeight: 800, letterSpacing: '-0.01em', width: '100%', boxSizing: 'border-box' }}
               />
               {mode === 'create' && (
-                <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap', alignItems: 'center' }}>
-                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 700 }}>SLUG</span>
-                    <input
-                      value={name}
-                      onChange={e => setName(e.target.value.toLowerCase())}
-                      placeholder="moon-phase"
-                      style={{
-                        ...inputBase, padding: '6px 10px', fontSize: 12, fontWeight: 700, letterSpacing: '0.04em', width: 180,
-                        borderColor: name && !nameValid ? 'var(--accent)' : 'var(--ink)',
-                      }}
-                    />
-                  </label>
-                </div>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
+                  <span style={{ fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 700 }}>SLUG</span>
+                  <input
+                    value={name}
+                    onChange={e => setName(e.target.value.toLowerCase())}
+                    placeholder="moon-phase"
+                    style={{ ...inputBase, padding: '8px 12px', fontSize: 13, fontWeight: 700, letterSpacing: '0.04em', width: 200, borderColor: name && !nameValid ? 'var(--accent)' : 'var(--ink)' }}
+                  />
+                </label>
               )}
             </div>
-          </div>
-
-          {/* Segment tag + on-air toggle — one slim row */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flex: 'none' }}>
-            <span style={{ fontSize: 10, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600 }}>
-              {custom ? 'CUSTOM SEGMENT' : 'BUILT-IN SEGMENT'}
-            </span>
-            {isEdit && (
-              <div
-                onClick={() => { if (!acting) toggleEnabled(); }}
-                title={enabled ? 'On air — click to take off air' : 'Off air — click to put on air'}
-                style={{ position: 'relative', width: 62, height: 30, border: '1px solid var(--ink)', flex: 'none', cursor: acting ? 'wait' : 'pointer', transition: 'background .15s cubic-bezier(.2,.7,.2,1)', background: enabled ? 'var(--ink)' : 'transparent', opacity: acting ? 0.6 : 1 }}
-              >
-                <div style={{ position: 'absolute', top: 2, left: 2, width: 24, height: 24, transition: 'transform .18s cubic-bezier(.2,.7,.2,1)', background: enabled ? 'var(--bg)' : 'var(--ink)', transform: `translateX(${enabled ? 32 : 0}px)` }} />
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Double rule */}
-        <div style={{ height: 5, borderTop: '1px solid var(--ink)', borderBottom: '1px solid var(--ink)' }} />
-
-        {/* Body */}
-        {!loaded ? (
-          <div style={{ padding: 60, textAlign: 'center', color: 'var(--muted)', fontStyle: 'italic', fontSize: 13 }}>loading…</div>
-        ) : (
-          <div style={{ padding: 30, opacity: isEdit && !enabled ? 0.6 : 1, transition: 'opacity .2s ease' }}>
 
             {/* Cooldown */}
-            <div style={{ marginBottom: 34 }}>
+            <div className="sw-section">
               <div style={sectionLabel}>COOLDOWN — MINIMUM GAP BETWEEN AIRINGS</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap', marginTop: 16 }}>
                 <div style={{ display: 'flex' }}>
@@ -472,7 +483,7 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
 
             {/* Window — custom skills only (built-in window isn't editable) */}
             {custom && (
-              <div style={{ marginBottom: 34 }}>
+              <div className="sw-section">
                 <div style={sectionLabel}>WHEN IT CAN AIR</div>
                 <div style={{ display: 'flex', marginTop: 16 }}>
                   {([['any', 'ANY TIME'], ['commute', 'COMMUTE ONLY']] as const).map(([w, lbl], i) => (
@@ -485,7 +496,7 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
 
             {/* News feed — news built-in only */}
             {isNews && (
-              <div style={{ marginBottom: 34 }}>
+              <div className="sw-section">
                 <div style={sectionLabel}>NEWS FEED — RSS 2.0</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
                   <input
@@ -511,7 +522,7 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
             )}
 
             {/* Context bank */}
-            <div style={{ marginBottom: 34 }}>
+            <div className="sw-section">
               <div style={sectionLabel}>CONTEXT THE DJ MAY MENTION</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
                 {knownContext.map(field => {
@@ -535,7 +546,7 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
             </div>
 
             {/* Brief */}
-            <div>
+            <div className="sw-section">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                 <div style={sectionLabel}>THE BRIEF — WHAT THE DJ SAYS, AND WHEN TO STAY SILENT</div>
                 {/* Built-ins revert to their shipped default — restores both the
@@ -576,62 +587,8 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
           </div>
         )}
 
-        {/* Transport / actions — Run now (left), Close + Save (right) */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, padding: '18px 30px', borderTop: '1px solid var(--ink)', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {isEdit && (
-              <button
-                type="button"
-                onClick={run}
-                disabled={acting}
-                style={{ padding: '13px 26px', fontSize: 11, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', transition: 'transform .1s', border: '1px solid var(--accent)', background: 'var(--accent)', color: '#fff', cursor: acting ? 'wait' : 'pointer', opacity: acting ? 0.7 : 1 }}
-              >
-                ▸ RUN NOW
-              </button>
-            )}
-            {isEdit && custom && (
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(true)}
-                disabled={acting}
-                className="sw-ghost"
-                style={{ padding: '13px 22px', background: 'transparent', color: 'var(--danger)', border: '1px solid var(--danger)', fontSize: 11, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', cursor: acting ? 'wait' : 'pointer', opacity: acting ? 0.7 : 1 }}
-              >
-                DELETE
-              </button>
-            )}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            {dirty && (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--accent)', fontWeight: 700 }}>
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent)' }} />UNSAVED EDITS
-              </span>
-            )}
-            {flash && (
-              <span style={{ fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--accent)', fontWeight: 700, animation: 'sw-blink 1s steps(1) infinite' }}>✓ {flash}</span>
-            )}
-            <button
-              type="button"
-              onClick={onClose}
-              className="sw-ghost"
-              style={{ padding: '13px 22px', background: 'transparent', color: 'var(--muted)', border: '1px solid color-mix(in oklab, var(--ink) 24%, transparent)', fontSize: 11, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', cursor: 'pointer' }}
-            >
-              CLOSE
-            </button>
-            <button
-              type="button"
-              onClick={save}
-              disabled={!canSave}
-              style={{ padding: '13px 26px', background: canSave ? 'var(--ink)' : 'color-mix(in oklab, var(--ink) 20%, transparent)', color: 'var(--bg)', border: '1px solid var(--ink)', fontSize: 11, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', cursor: canSave ? 'pointer' : 'not-allowed' }}
-            >
-              {busy ? (mode === 'create' ? 'CREATING…' : 'SAVING…') : (mode === 'create' ? 'CREATE' : 'SAVE')}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Delete confirm — the shared V3AlertDialog (same as Dash's skip-track
-          prompt). Portals above this sheet (sheet is z-30, dialog content z-50). */}
+      {/* Delete confirm — the shared V3AlertDialog. Layers above the
+          full-screen EditorDialog (both Radix) and now receives Escape first. */}
       <V3AlertDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
@@ -641,6 +598,6 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
         danger
         onConfirm={remove}
       />
-    </div>
+    </EditorDialog>
   );
 }
