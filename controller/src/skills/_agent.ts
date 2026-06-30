@@ -314,6 +314,7 @@ function buildSituation(ctx: any, { forced = false, contextFields, recentCuriosi
 // or stays silent. Never throws — failures are logged and the tick ends.
 export async function agenticTick(ctx) {
   if (tickBusy) return;
+  if (settings.voiceSilenced()) return;
 
   const now = new Date();
   const persona = settings.getEffectivePersona(now);

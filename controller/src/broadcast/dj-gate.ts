@@ -14,6 +14,7 @@ import * as settings from '../settings.js';
 import { zonedParts } from '../time.js';
 
 export function shouldFire(kind, now = new Date()) {
+  if (settings.voiceSilenced()) return false;
   // effectiveFrequency bumps a DJ-mode persona one rung up the ladder, so it
   // drops more idents / time checks — a working DJ marks the clock more often.
   const f = settings.effectiveFrequency(settings.getEffectivePersona(now));
