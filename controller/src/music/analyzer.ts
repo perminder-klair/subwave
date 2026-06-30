@@ -2,7 +2,11 @@
 // running librosa, which deliberately does NOT live in the controller image.
 //
 // Two backends, in priority order:
-//   1. tts-heavy sidecar — POST {url} to its /analyze endpoint (production).
+//   1. analysis sidecar — POST {url} to its /analyze endpoint (production).
+//      The base URL is resolved from config.analyzer.urls: the dedicated
+//      `--profile analyzer` image (ANALYZE_URL) first, then the tts-heavy
+//      sidecar (TTS_HEAVY_URL), whose image still carries the analyze worker —
+//      so existing tts-heavy installs keep working with zero config.
 //   2. local Python venv — spawn scripts/analyze_worker.py over stdio, the
 //      same persistent-worker pattern as audio/kokoro.ts (offline / dev; set
 //      ANALYZE_PYTHON to a venv that has librosa).
@@ -297,10 +301,13 @@ async function analyzeViaLocalPath(path: string, opts: AnalyzeRequestOpts = {}):
 let _sidecarAudioCapable: boolean | null = null;
 // Same, for vocal-activity (Demucs) support — null until probed/absent field.
 let _sidecarVocalCapable: boolean | null = null;
+// The candidate base URL that last reported the 'analyze' engine — the one
+// sidecarRequest POSTs to. Set by sidecarReachable; '' until a probe succeeds.
+let _sidecarBase = '';
 
-async function sidecarReachable(): Promise<boolean> {
-  const url = config.ttsHeavy.url;
-  if (!url) return false;
+// Probe one candidate /health for the 'analyze' engine. Records the capability
+// flags + the winning base URL on success.
+async function probeSidecar(url: string): Promise<boolean> {
   try {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 5000);
@@ -315,6 +322,7 @@ async function sidecarReachable(): Promise<boolean> {
     };
     const reachable = !!body.ok && Array.isArray(body.engines) && body.engines.includes('analyze');
     if (reachable) {
+      _sidecarBase = url;
       _sidecarAudioCapable = typeof body.analyze_audio_capable === 'boolean' ? body.analyze_audio_capable : null;
       _sidecarVocalCapable = typeof body.analyze_vocal_capable === 'boolean' ? body.analyze_vocal_capable : null;
     }
@@ -324,10 +332,19 @@ async function sidecarReachable(): Promise<boolean> {
   }
 }
 
+// Try each configured candidate (dedicated analyzer first, then the tts-heavy
+// sidecar) and stop at the first that advertises the 'analyze' engine.
+async function sidecarReachable(): Promise<boolean> {
+  for (const url of config.analyzer.urls) {
+    if (await probeSidecar(url)) return true;
+  }
+  return false;
+}
+
 // POST the sidecar a request body of either {url} (it downloads) or {path}
 // (a file on the shared volume the controller pre-fetched).
 async function sidecarRequest(body: ({ url: string } | { path: string }) & AnalyzeRequestOpts): Promise<AnalysisResult> {
-  const base = config.ttsHeavy.url;
+  const base = _sidecarBase;
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), config.analyzer.requestTimeoutMs);
   try {
@@ -337,7 +354,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
       body: JSON.stringify(body),
       signal: ac.signal,
     });
-    if (!res.ok) throw new Error(`tts-heavy /analyze ${res.status}: ${await res.text().catch(() => '')}`);
+    if (!res.ok) throw new Error(`analyze sidecar ${res.status}: ${await res.text().catch(() => '')}`);
     const resBody = (await res.json()) as any;
     if (!resBody.ok) throw new Error(resBody.error || 'analysis failed');
     return {

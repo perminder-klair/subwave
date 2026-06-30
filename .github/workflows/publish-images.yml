@@ -76,6 +76,18 @@ jobs:
             build_args: |
               WITH_CLAP=1
               WITH_DEMUCS=1
+          # The standalone acoustic-analysis sidecar (`--profile analyzer`): the
+          # librosa + CLAP + Demucs analyzer split out of tts-heavy so operators
+          # who want analysis don't have to pull the ~6GB Chatterbox + PocketTTS
+          # image. amd64-only for the same reason as tts-heavy — the published
+          # image carries the CPU-torch CLAP/Demucs stack. Same WITH_CLAP/
+          # WITH_DEMUCS bake-in: lazy-loaded at runtime, disk cost only.
+          - image: subwave-analyzer
+            dockerfile: docker/Dockerfile.analyzer
+            platforms: linux/amd64
+            build_args: |
+              WITH_CLAP=1
+              WITH_DEMUCS=1
     steps:
       # fetch-depth: 0 pulls full history + tags so `git describe` resolves the
       # version on a workflow_dispatch from a branch (a tag push already has the
