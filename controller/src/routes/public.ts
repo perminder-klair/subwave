@@ -94,7 +94,7 @@ router.get('/cover/:id', async (req, res) => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 5000);
     const coverUrl = id.startsWith('plex:')
-      ? plexSource.getCoverArtUrl(id, 512)
+      ? await plexSource.getCoverArtUrl(id, 512)
       : subsonic.getCoverArtUrl(id, 512);
     const r = await fetch(coverUrl, { signal: ctrl.signal });
     clearTimeout(timer);

@@ -5,6 +5,7 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import { queue } from './queue.js';
 import { PROGRESS_PREFIX, type TaggerProgress } from '../music/tagger-progress.js';
+import { refresh as refreshCoverage } from '../music/library-coverage.js';
 
 type TaggerState = {
   running: boolean;
@@ -177,6 +178,8 @@ function spawnChild(mode: 'tag' | 'analyze' | 'reconcile', args: string[], detai
     if (activeChild === child) activeChild = null;
     tagger.lastLog.push(`[exit ${signal || code}]`);
     queue.log('scheduler', `${label} finished (${signal ? `signal ${signal}` : `exit ${code}`})`);
+    // Invalidate coverage cache so the UI reflects the new track count immediately.
+    if (code === 0) refreshCoverage();
   });
   queue.log('scheduler', `${label} started${detail ? ` (${detail})` : ''}`);
 }

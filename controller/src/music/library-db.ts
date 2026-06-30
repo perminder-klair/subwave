@@ -91,6 +91,7 @@ export interface TrackRecord {
   taggedAt: string | null;
   path: string | null;
   plexPartKey: string | null;
+  plexThumb: string | null;
   // Acoustic analysis (music/analyze-library.ts). All nullable — a track that
   // hasn't been analysed reads null and every consumer treats that as "no
   // signal, behave as today".
@@ -141,6 +142,7 @@ export interface TrackMeta {
   duration?: number | null;
   path?: string | null;
   plexPartKey?: string | null;
+  plexThumb?: string | null;
 }
 
 export interface TrackEnrichment {
@@ -200,6 +202,12 @@ export interface LibraryStats {
 // on the normal matching-dim path.
 // `adoptStoredDim` (live controller) treats the dim already recorded in the DB
 // as authoritative: the stored vectors win, and `embeddingDim` is only the
+// Flags set during DB migration — read by server.ts after open() to decide
+// whether a post-migration backfill tagger run is needed.
+export const migrationFlags: { needsPlexThumbBackfill: boolean } = {
+  needsPlexThumbBackfill: false,
+};
+
 // fallback used when the DB has never been tagged. This stops the runtime from
 // wiping a tagged index just because the model *name* maps to a different
 // default than the dim the tagger actually probed (#319). The tagger leaves it
@@ -405,6 +413,13 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     runDdl(d, `ALTER TABLE tracks ADD COLUMN path TEXT;`);
     runDdl(d, `ALTER TABLE tracks ADD COLUMN plex_part_key TEXT;`);
     d.pragma('user_version = 10');
+  }
+
+  if (userVersion < 11) {
+    // Plex album-thumb path for cover art (track ratingKey ≠ album ratingKey).
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN plex_thumb TEXT;`);
+    d.pragma('user_version = 11');
+    migrationFlags.needsPlexThumbBackfill = true;
   }
 
   // The vec0 virtual table carries the embedding dim in its schema. If the
@@ -618,8 +633,8 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
   requireDb()
     .prepare(
       `
-      INSERT INTO tracks (id, title, artist, album, year, genre, duration_sec, path, plex_part_key)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tracks (id, title, artist, album, year, genre, duration_sec, path, plex_part_key, plex_thumb)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
@@ -628,7 +643,8 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
         genre        = COALESCE(excluded.genre, tracks.genre),
         duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec),
         path         = COALESCE(excluded.path, tracks.path),
-        plex_part_key = COALESCE(excluded.plex_part_key, tracks.plex_part_key)
+        plex_part_key = COALESCE(excluded.plex_part_key, tracks.plex_part_key),
+        plex_thumb   = COALESCE(excluded.plex_thumb, tracks.plex_thumb)
     `,
     )
     .run(
@@ -641,6 +657,7 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
       Number.isFinite(meta.duration as number) ? (meta.duration as number) : null,
       meta.path ?? null,
       meta.plexPartKey ?? null,
+      meta.plexThumb ?? null,
     );
 }
 
@@ -1408,6 +1425,7 @@ function rowToTrack(row: any): TrackRecord {
     taggedAt: row.tagged_at,
     path: row.path ?? null,
     plexPartKey: row.plex_part_key ?? null,
+    plexThumb: row.plex_thumb ?? null,
     bpm: row.bpm ?? null,
     musicalKey: row.musical_key ?? null,
     introMs: row.intro_ms ?? null,

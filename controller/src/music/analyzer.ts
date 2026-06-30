@@ -15,7 +15,6 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdirSync, createWriteStream, readFileSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
-import * as subsonic from './subsonic.js';
 import { getSource } from './source/index.js';
 
 // A structural span over the track, in milliseconds (span shape). Spans

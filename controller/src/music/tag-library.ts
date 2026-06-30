@@ -49,6 +49,7 @@ import { isUnreachable, isQuotaOrAuthError } from '../llm/sdk.js';
 import { tagBatch, tagOne, TAGGER_BATCH_SYSTEM, type TagResult } from './tagger-core.js';
 import { runAnalysisPass } from './analyze.js';
 import { reportProgress, formatPhaseBreakdown, sortedPhaseTimings } from './tagger-progress.js';
+import { getTotal as getCoverageTotal, invalidate as invalidateCoverage } from './library-coverage.js';
 import { planRun } from './rescan-scope.js';
 import { mapPool, memoizeByKey } from '../util/async-pool.js';
 
@@ -152,6 +153,7 @@ async function walkMusicSource(): Promise<{ walked: number; liveIds: Set<string>
       duration: song.duration,
       path: song.path ?? null,
       plexPartKey: song._partKey ?? null,
+      plexThumb: song._thumb ?? null,
     });
     liveIds.add(song.id);
     walked += 1;
@@ -180,6 +182,8 @@ async function reconcileOnly() {
     // A transient empty response must never wipe the DB.
     console.warn('[tag] reconcile: music source returned 0 tracks — skipping prune');
   }
+  const cachedTotal = getCoverageTotal();
+  if (cachedTotal === null || cachedTotal !== walked) invalidateCoverage();
   reportProgress({
     phase: 'done',
     label: pruned > 0
@@ -334,6 +338,13 @@ async function main() {
     if (pruned > 0) {
       console.log(`[tag] pruned ${pruned} orphaned tracks no longer in music source`);
     }
+  }
+
+  // Invalidate the coverage cache if the library size changed so the UI
+  // shows the correct total without waiting for the 6h TTL.
+  const cachedTotal = getCoverageTotal();
+  if (cachedTotal === null || cachedTotal !== walked) {
+    invalidateCoverage();
   }
   lap('walk');
 
@@ -875,6 +886,7 @@ async function processBatch(
     album: t.album ?? undefined,
     year: t.year ?? undefined,
     genre: t.genre ?? undefined,
+    lastfmTags: t.lastfmTags ?? undefined,
   }));
   const opts = consumer.pin ? { leg: consumer.pin } : {};
 
@@ -915,6 +927,11 @@ async function processBatch(
       continue;
     }
     const { moods, energy } = result;
+    // LLM returns moods=[] when it genuinely can't determine mood from the
+    // metadata. Don't save that — it would set tagged_at and lock the track
+    // out of the untagged pool forever, making re-tagging impossible.
+    // Leave it as NULL so it stays untagged and can be retried.
+    if (moods.length === 0) continue;
     db.upsertTrackTags(songs[j].id, {
       moods,
       energy,

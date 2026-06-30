@@ -216,6 +216,24 @@ export async function getRecentSongsByArtist(artistName: string, opts: { count?:
   } catch { return []; }
 }
 
+export async function getAlbumList(offset = 0, size = 500): Promise<any[]> {
+  try {
+    const key = await getSectionKey();
+    const data = await plexFetch(`/library/sections/${key}/all`, {
+      type: '9',
+      sort: 'titleSort',
+      'X-Plex-Container-Start': String(offset),
+      'X-Plex-Container-Size': String(size),
+    });
+    return (data?.MediaContainer?.Metadata || []).map((a: any) => ({
+      id: `plex:${a.ratingKey}`,
+      name: a.title,
+      artist: a.parentTitle,
+      year: a.year,
+    }));
+  } catch { return []; }
+}
+
 export async function getAlbum(id: string): Promise<any[]> {
   try {
     const ratingKey = id.replace('plex:', '');
@@ -262,8 +280,18 @@ export async function getArtistLastfmTags(id: string, opts: { count?: number } =
   } catch { return []; }
 }
 
-export async function getLyrics(_songId: string): Promise<string> {
-  return '';
+export async function getLyrics(songId: string): Promise<string> {
+  // Plex has no lyrics API, but exposes Mood tags per track (from MusicBrainz /
+  // acoustic analysis). Return them as a comma-separated hint so the enrichment
+  // phase stores them in lyric_excerpt and the LLM tagger sees real mood context
+  // instead of an empty string.
+  try {
+    const ratingKey = songId.replace('plex:', '');
+    const data = await plexFetch(`/library/metadata/${ratingKey}`);
+    const track = data?.MediaContainer?.Metadata?.[0];
+    const moods: string[] = (track?.Mood || []).map((m: any) => m.tag).filter(Boolean);
+    return moods.length ? `Moods: ${moods.join(', ')}` : '';
+  } catch { return ''; }
 }
 
 export async function* iterateAllSongs(): AsyncGenerator<any> {
@@ -303,7 +331,28 @@ export async function getPlaylist(id: string): Promise<any[]> {
   } catch { return []; }
 }
 
-export function getCoverArtUrl(id: string, _size?: number): string {
+export async function getCoverArtUrl(id: string, _size?: number): Promise<string> {
+  // Plex tracks inherit cover art from their album; the thumb path on the track
+  // metadata points to the album ratingKey, not the track's own ratingKey.
+  // We store it in plex_thumb during the library walk. When it's not in the DB
+  // (track added after last walk), fetch it live from the Plex API rather than
+  // guessing /library/metadata/<track-ratingKey>/thumb which always 404s.
+  if (db.isOpen()) {
+    try {
+      const t = db.getTrack(id);
+      if (t?.plexThumb) {
+        return `${config.plex.url}${t.plexThumb}?X-Plex-Token=${config.plex.token}`;
+      }
+    } catch { /* ignore */ }
+  }
+  // Live lookup: the track's own metadata carries a `thumb` field pointing at
+  // the album ratingKey (e.g. /library/metadata/55/thumb/…), which Plex serves.
+  try {
+    const ratingKey = id.replace('plex:', '');
+    const data = await plexFetch(`/library/metadata/${ratingKey}`);
+    const track = data?.MediaContainer?.Metadata?.[0];
+    if (track?.thumb) return `${config.plex.url}${track.thumb}?X-Plex-Token=${config.plex.token}`;
+  } catch { /* ignore */ }
   const ratingKey = id.replace('plex:', '');
   return `${config.plex.url}/library/metadata/${ratingKey}/thumb?X-Plex-Token=${config.plex.token}`;
 }

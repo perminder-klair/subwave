@@ -25,13 +25,13 @@
 // The heavy DSP lives in music/analyzer.ts's backend (tts-heavy sidecar or a
 // local librosa venv via ANALYZE_PYTHON). With no backend the pass is a no-op.
 
-import * as subsonic from './subsonic.js';
 import * as db from './library-db.js';
 import * as settings from '../settings.js';
 import * as embeddings from './embeddings.js';
 import { config } from '../config.js';
 import { loadSecretsIntoEnv } from '../setup/secrets.js';
 import { loadSetupConfig } from '../setup/config.js';
+import { getSource } from './source/index.js';
 import { runAnalysisPass } from './analyze.js';
 import * as analyzer from './analyzer.js';
 import { reportProgress } from './tagger-progress.js';
@@ -56,6 +56,10 @@ async function applyWizardOverlay() {
       if (!process.env.NAVIDROME_URL && sc.navidrome.url) config.navidrome.url = sc.navidrome.url;
       if (!process.env.NAVIDROME_USER && sc.navidrome.user) config.navidrome.user = sc.navidrome.user;
       if (!process.env.NAVIDROME_PASS && sc.navidrome.pass) config.navidrome.password = sc.navidrome.pass;
+    }
+    if (sc.plex) {
+      if (!process.env.PLEX_URL && sc.plex.url) config.plex.url = sc.plex.url;
+      if (!process.env.PLEX_TOKEN && sc.plex.token) config.plex.token = sc.plex.token;
     }
   } catch (err: any) {
     console.error('[setup-config] load failed:', err.message);
@@ -90,7 +94,7 @@ async function main() {
     console.log(
       forceWalk
         ? '[analyze] --walk: refreshing track metadata...'
-        : '[analyze] empty catalogue — walking Navidrome...',
+        : '[analyze] empty catalogue — walking music source...',
     );
   } else {
     console.log(
@@ -99,10 +103,10 @@ async function main() {
   }
 
   if (shouldWalk) {
-    reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
+    reportProgress({ phase: 'walk', label: 'Scanning music library', done: 0 });
     let walked = 0;
     const liveIds = new Set<string>();
-    for await (const song of subsonic.iterateAllSongs()) {
+    for await (const song of getSource().iterateAllSongs()) {
       db.upsertTrackMeta(song.id, {
         title: song.title,
         artist: song.artist,
@@ -110,23 +114,26 @@ async function main() {
         year: song.year,
         genre: song.genre,
         duration: song.duration,
+        path: song.path ?? null,
+        plexPartKey: song._partKey ?? null,
+        plexThumb: song._thumb ?? null,
       });
       liveIds.add(song.id);
       walked += 1;
       if (walked % 500 === 0) {
         console.log(`[analyze] walked ${walked} tracks`);
-        reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: walked });
+        reportProgress({ phase: 'walk', label: 'Scanning music library', done: walked });
       }
     }
     console.log(`[analyze] walked ${walked} total tracks`);
 
-    // Reconcile: drop rows for tracks no longer in Navidrome so the analysis
-    // scope reflects the live catalogue, not orphans from past full rescans.
+    // Reconcile: drop rows for tracks no longer in the music source so the
+    // analysis scope reflects the live catalogue, not orphans from past rescans.
     // Guarded on a non-empty walk (a complete, authoritative pass).
     if (walked > 0) {
       const pruned = db.pruneMissingTracks(liveIds);
       if (pruned > 0) {
-        console.log(`[analyze] pruned ${pruned} orphaned tracks no longer in Navidrome`);
+        console.log(`[analyze] pruned ${pruned} orphaned tracks no longer in music source`);
       }
     }
   }

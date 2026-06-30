@@ -14,7 +14,7 @@
 // API is generous and the tagger loop is already sequential + per-artist cached).
 
 import * as settings from '../settings.js';
-import * as subsonic from './subsonic.js';
+import { getSource } from './source/index.js';
 
 const TIMEOUT_MS = 5000;
 const LASTFM_API = 'https://ws.audioscrobbler.com/2.0/';
@@ -267,10 +267,11 @@ export async function getArtistTags(
     return getArtistTopTags(artist, { count });
   }
   try {
-    const matches = await subsonic.searchArtists(artist, { artistCount: 1 });
+    const source = getSource();
+    const matches = await source.searchArtists(artist, { artistCount: 1 });
     const artistId = matches?.[0]?.id;
     if (!artistId) return [];
-    const tags = await subsonic.getArtistLastfmTags(artistId, { count });
+    const tags = await source.getArtistLastfmTags(artistId, { count });
     return Array.isArray(tags) ? tags : [];
   } catch {
     return [];
