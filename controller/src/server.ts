@@ -37,6 +37,7 @@ import { router as audienceRoutes } from './routes/audience.js';
 import { router as systemRoutes } from './routes/system.js';
 import { router as generateRoutes } from './routes/generate.js';
 import { router as doctorRoutes } from './routes/doctor.js';
+import { warmSourceCache } from './music/source/index.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
 import { loadSetupConfig } from './setup/config.js';
 import { getSetupStatus } from './setup/firstRun.js';
@@ -124,6 +125,13 @@ app.listen(config.server.port, async () => {
     );
   } catch (err) {
     console.error('[settings] load failed:', err.message);
+  }
+
+  // Warm the source cache so the first request picker call returns instantly.
+  try {
+    await warmSourceCache();
+  } catch (err: any) {
+    console.error('[source] warm cache failed:', err.message);
   }
 
   // Start the remote-TTS /health probe loop now that settings are loaded — its

@@ -4,7 +4,7 @@
 // outcome so the UI can poll for it.
 import express from 'express';
 import { randomUUID } from 'node:crypto';
-import * as subsonic from '../music/subsonic.js';
+import { getSource } from '../music/source/index.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import { getFullContext } from '../context.js';
@@ -69,9 +69,9 @@ async function pickByArtistAndSort({ artistName, sort, scope: _scope, recentIds 
   try {
     // Fuzzy-resolve so a transliteration variance or typo ("Sikandar" vs the
     // library's "Sikander") still lands on the right artist instead of failing.
-    const matchedArtist = await subsonic.resolveArtist(artistName);
+    const matchedArtist = await getSource().resolveArtist(artistName);
     if (!matchedArtist) return null;
-    const artist = await subsonic.getArtist(matchedArtist.id);
+    const artist = await getSource().getArtist(matchedArtist.id);
     let albums = artist?.album || [];
     if (albums.length === 0) return null;
 
@@ -90,7 +90,7 @@ async function pickByArtistAndSort({ artistName, sort, scope: _scope, recentIds 
     // Try the top-ranked album first; if its tracks are all recently played,
     // walk down the list before giving up.
     for (const album of albums.slice(0, 5)) {
-      const songs = await subsonic.getAlbum(album.id);
+      const songs = await getSource().getAlbum(album.id);
       if (songs.length === 0) continue;
       const fresh = songs.filter(s => !recentIds.has(s.id));
       const pool = fresh.length > 0 ? fresh : songs;
@@ -121,13 +121,13 @@ async function pickSimilarToTrack(reference, recentIds: Set<string>) {
     return list[Math.floor(Math.random() * list.length)];
   };
   try {
-    if (await subsonic.supportsSonicSimilarity()) {
-      const pick = pickFresh(await subsonic.getSonicSimilarTracks(id, { count: 25 }));
+    if (await getSource().supportsSonicSimilarity()) {
+      const pick = pickFresh(await getSource().getSonicSimilarTracks(id, { count: 25 }));
       if (pick) return pick;
     }
   } catch (err) { queue.log('error', `more-like-this sonic similar failed: ${err.message}`); }
   try {
-    const pick = pickFresh(await subsonic.getSimilarSongs(id, { count: 25 }));
+    const pick = pickFresh(await getSource().getSimilarSongs(id, { count: 25 }));
     if (pick) return pick;
   } catch (err) { queue.log('error', `more-like-this similar songs failed: ${err.message}`); }
   return null;
@@ -139,7 +139,7 @@ async function pickSimilarToTrack(reference, recentIds: Set<string>) {
 // getSongsByGenre with an exact genre name. Returns the matched name or null.
 async function resolveGenre(name) {
   try {
-    return await subsonic.resolveGenreName(name);
+    return await getSource().resolveGenreName(name);
   } catch (err) {
     queue.log('error', `resolveGenre failed: ${err.message}`);
     return null;
@@ -394,7 +394,7 @@ async function resolveRequest(entry) {
     const genre = await resolveGenre(matched.genre);
     if (genre) {
       try {
-        const songs = await subsonic.getSongsByGenre(genre, { count: 100 });
+        const songs = await getSource().getSongsByGenre(genre, { count: 100 });
         pick = randomFresh(songs);
         if (pick) pickSource = `genre:${genre}`;
       } catch (err) {
@@ -412,7 +412,7 @@ async function resolveRequest(entry) {
     const genre = await resolveGenre(matched.language);
     if (genre) {
       try {
-        const songs = await subsonic.getSongsByGenre(genre, { count: 100 });
+        const songs = await getSource().getSongsByGenre(genre, { count: 100 });
         pick = randomFresh(songs);
         if (pick) pickSource = `language-genre:${genre}`;
       } catch (err) {
@@ -421,7 +421,7 @@ async function resolveRequest(entry) {
     }
     if (!pick) {
       try {
-        const r = await subsonic.search(matched.language, { songCount: 25 });
+        const r = await getSource().search(matched.language, { songCount: 25 });
         pick = randomFresh(r);
         if (pick) pickSource = `language-search:${matched.language}`;
       } catch (err) {
@@ -446,11 +446,11 @@ async function resolveRequest(entry) {
       let candidates: any[] = [];
       for (const term of terms) {
         const songOffset = Math.floor(Math.random() * 3) * 25;
-        let r = await subsonic.search(term, { songCount: 25, songOffset });
+        let r = await getSource().search(term, { songCount: 25, songOffset });
         // A deep offset can land past the end of the result set — fall back
         // to the first page so a valid query never comes back empty.
         if (r.length === 0 && songOffset > 0) {
-          r = await subsonic.search(term, { songCount: 25 });
+          r = await getSource().search(term, { songCount: 25 });
         }
         candidates = [...candidates, ...r];
       }
@@ -479,7 +479,7 @@ async function resolveRequest(entry) {
   // adjacency that wasn't captured in our local mood tags.
   if (!pick && currentTrack?.id && (matched.mood || /similar|like|match/i.test(text))) {
     try {
-      const similar = await subsonic.getSimilarSongs(currentTrack.id, { count: 20 });
+      const similar = await getSource().getSimilarSongs(currentTrack.id, { count: 20 });
       pick = randomFresh(similar);
       if (pick) pickSource = 'similar-to-current';
     } catch {}
@@ -497,7 +497,7 @@ async function resolveRequest(entry) {
   // 2g. Starred — operator's hand-picked favourites are always a safe pick.
   if (!pick) {
     try {
-      const starred = await subsonic.getStarred();
+      const starred = await getSource().getStarred();
       pick = randomFresh(starred);
       if (pick) pickSource = 'starred';
     } catch {}

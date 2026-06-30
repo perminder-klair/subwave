@@ -6,7 +6,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
 import { stat, rename } from 'node:fs/promises';
 import { config } from '../config.js';
-import * as subsonic from '../music/subsonic.js';
+import { getSource } from '../music/source/index.js';
 import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
 import { speak, voiceGainDb } from '../audio/tts.js';
@@ -488,7 +488,7 @@ class Queue {
         // (requestedBy set) stay exempt — a requested long mix plays in full,
         // mirroring the request path's selection-cap exemption in picker-tools.
         const maxDurationSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
-        const uri = subsonic.getAnnotatedUri(item.track, { maxDurationSec });
+        const uri = getSource().getAnnotatedUri(item.track, { maxDurationSec });
         await writeHandoff(config.liquidsoap.queueFile, uri);
         item.sent = true;
         this.persist();  // record the sent flag — these are now live in dj_queue

@@ -14,7 +14,7 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { z } from 'zod';
 import { config, STATE_DIR } from './config.js';
 import * as settings from './settings.js';
-import * as subsonic from './music/subsonic.js';
+import { getSource } from './music/source/index.js';
 import * as subsonicLog from './music/subsonic-log.js';
 import * as library from './music/library.js';
 import * as embeddings from './music/embeddings.js';
@@ -260,7 +260,7 @@ async function checkLlm(s: any): Promise<Finding[]> {
 async function checkNavidrome(): Promise<Finding[]> {
   const out: Finding[] = [];
 
-  const p = await subsonic.ping();
+  const p = await getSource().ping();
   out.push({
     label: 'connectivity',
     status: p.ok ? 'ok' : 'fail',
