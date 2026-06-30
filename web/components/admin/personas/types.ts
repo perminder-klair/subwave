@@ -27,7 +27,7 @@ export interface Persona {
   // When true all spoken output is suppressed — no links, IDs, or segments.
   // The AI picker continues to select tracks normally. Frequency settings are
   // ignored while this is on.
-  musicOnly?: boolean;
+  musicOnly: boolean;
   // Tone dials, 0–10, default 5 (neutral). Map to prompt bands server-side.
   humour: number;
   localColour: number;

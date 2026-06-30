@@ -510,6 +510,7 @@ class Queue {
   //   - everything else → say.txt → voice_queue → HEAVY duck (solo voice
   //              dominates; used for station ID / hourly / weather)
   async announce(text, kind = 'announcement') {
+    if (settings.voiceSilenced()) return;   // music-only persona: no voice
     if (!text || !text.trim()) return;
     try {
       const wavPath = await speak(text, { kind });
