@@ -39,11 +39,12 @@ export interface EngineStatus {
 // null when it's unreachable / not in use.
 export interface EngineAvailability {
   heavyEnabled?: string[] | null;
+  cloudByProvider?: Record<string, boolean>;
   [engine: string]: boolean | string[] | null | Record<string, boolean> | undefined;
 }
 
 // Pure: derive an engine's status badge from the controller's availability map.
-// A missing/undefined flag means "not yet known / assumed up", so we only flag
+// A missing/undefined flag means 'not yet known / assumed up', so we only flag
 // a hard `=== false`. `warn` reads as the recoverable-problem tone (sidecar
 // down, engine disabled, no cloud key); `ok` is the quiet ready state.
 export function engineStatus(
@@ -81,5 +82,45 @@ export function engineStatus(
         : { label: 'ready', tone: 'ok' };
     default:
       return { label: '', tone: 'ok' };
+  }
+}
+
+export interface EngineEnableHint {
+  reason: string;
+  action?: string;
+}
+
+export function engineEnableHint(
+  id: string,
+  available: EngineAvailability | undefined,
+): EngineEnableHint | undefined {
+  const a = available || {};
+  switch (id) {
+    case 'kokoro':
+      return a.kokoro === false
+        ? { reason: 'Kokoro is not installed in the controller image' }
+        : undefined;
+    case 'chatterbox':
+    case 'pocket-tts': {
+      if (a[id] !== false) return undefined;
+      const enabled = Array.isArray(a.heavyEnabled) ? a.heavyEnabled : null;
+      if (enabled && enabled.includes(id)) {
+        return { reason: id + ' is enabled but its sidecar worker is still starting', action: 'wait for the tts-heavy health check, then reload' };
+      }
+      if (enabled) {
+        return { reason: id + ' is disabled by TTS_HEAVY_ENGINES', action: 'enable ' + id + ' in TTS_HEAVY_ENGINES and recreate tts-heavy' };
+      }
+      return { reason: 'tts-heavy sidecar is offline', action: 'docker compose --profile tts-heavy up -d' };
+    }
+    case 'cloud':
+      return a.cloud === false
+        ? { reason: 'no API key is configured for the selected provider', action: 'add it in Settings → Voice' }
+        : undefined;
+    case 'remote':
+      return a.remote === false
+        ? { reason: 'the remote TTS endpoint is unreachable', action: 'check its URL and service status in Settings → Voice' }
+        : undefined;
+    default:
+      return undefined;
   }
 }
