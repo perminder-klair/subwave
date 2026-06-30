@@ -85,13 +85,14 @@ the phase is unremarkable.`}</CodeBlock>
         <h2>The shipped skills are files too.</h2>
         <p>
           The seven built-ins — weather, news, now-playing digs, curiosity, album anniversaries,
-          library deep-cuts, and web search — are written into{' '}
+          library deep-cuts, and web search — ship as directories (under{' '}
+          <code className="bs-code-inline">controller/src/skills/builtins/&lt;kind&gt;/</code>) and
+          load through the same loader as your own. Each is scaffolded into{' '}
           <code className="bs-code-inline">state/skills/&lt;kind&gt;/SKILL.md</code> the first
-          time the station boots. Editing one (on the admin <strong>Skills</strong> page, or
-          the file directly) overrides its brief, cooldown, or label in place. A built-in
-          file may leave the body empty to keep the default wording, and never loads a{' '}
-          <code className="bs-code-inline">tool.mjs</code>; the built-ins already have their
-          data wired in.
+          time the station boots. Editing that (on the admin <strong>Skills</strong> page, or
+          the file directly) overrides its brief, cooldown, context, or label in place — without
+          touching the built-in&rsquo;s <code className="bs-code-inline">tool.mjs</code>, which
+          always runs. An override may leave the body empty to keep the default wording.
         </p>
         <p>
           The big one: <strong>News reads the BBC by default</strong>. Hit{' '}
@@ -120,16 +121,29 @@ not a newsreader's. Skip anything dull or stale; silence is fine.`}</CodeBlock>
         <h2>Let the DJ look before it speaks.</h2>
         <p>
           With a <code className="bs-code-inline">tool.mjs</code>, the DJ can fetch live data
-          before deciding whether to air the line, the same mechanism the built-in weather
-          and news skills use. Export a default function; return any JSON, and use{' '}
+          before deciding whether to air the line — the exact same mechanism the built-ins use
+          (they&rsquo;re directories with a <code className="bs-code-inline">tool.mjs</code> too).
+          Export a default function; return any JSON, and use{' '}
           <code className="bs-code-inline">{`{ available: false }`}</code> to tell the DJ
-          there&rsquo;s nothing worth airing.
+          there&rsquo;s nothing worth airing. The 3rd arg, <code className="bs-code-inline">services</code>,
+          is the station facade — <code className="bs-code-inline">searchWeb</code>,{' '}
+          <code className="bs-code-inline">library</code>, <code className="bs-code-inline">nowPlaying</code>,{' '}
+          <code className="bs-code-inline">recentPlays</code>, <code className="bs-code-inline">onThisDay</code>,{' '}
+          <code className="bs-code-inline">fetchHeadlines</code>, durable{' '}
+          <code className="bs-code-inline">recall</code> — so a custom skill can reach as far as a built-in.
         </p>
-        <CodeBlock>{`export default async function (ctx, state) {
-  // ctx   — the moment: { time, weather, festival, dominantMood, clock }
-  // state — cross-tick memory (persists between firings)
-  return { available: true, phase: 'full moon', illumination: 100 };
-}`}</CodeBlock>
+        <CodeBlock>{`export default async function (ctx, state, services, config) {
+  // ctx      — the moment: { time, weather, festival, dominantMood, clock }
+  // state    — cross-tick memory (persists between firings)
+  // services — the station facade (searchWeb, library, nowPlaying, onThisDay…)
+  // config   — this skill's own SKILL.md frontmatter
+  const artist = services.nowPlaying()?.artist;
+  if (!artist) return { available: false };
+  return { available: true, artist };
+}
+
+// OPTIONAL: gate the skill on a runtime condition (e.g. a search provider).
+export const ready = (services) => services.searchReady();`}</CodeBlock>
         <p>
           The call is timeout-guarded and any error degrades cleanly to &ldquo;no
           data&rdquo;; a slow or broken skill can never hang the station. With no{' '}
