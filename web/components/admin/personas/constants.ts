@@ -9,6 +9,26 @@ export const SCRIPT_LENGTHS = [
   { id: 'concise',  label: 'Concise',  desc: 'Standard one-to-four sentence segments. The default.' },
   { id: 'extended', label: 'Extended', desc: 'Longer, storytelling segments. Roughly double the length across intros, links, weather and idents.' },
 ];
+export const DJ_STYLES = [
+  {
+    id: 'music-only',
+    label: 'Music only',
+    desc: 'No voice — AI picks tracks silently.',
+    feedback: 'The AI picker and session agent run normally. All spoken output is suppressed — no links, IDs, hourly checks, or segments. Listener requests queue and play, just without a spoken intro.',
+  },
+  {
+    id: 'narrator',
+    label: 'Narrator',
+    desc: 'Between-track links, IDs, and segments.',
+    feedback: 'The default. The DJ speaks tastefully between tracks — short links, station IDs at :15 and :45, and optional segments like weather and news when they\'re due.',
+  },
+  {
+    id: 'full-dj',
+    label: 'Full DJ',
+    desc: 'Works the desk — more talk and character.',
+    feedback: 'Back-announces the last track, teases what\'s coming, runs callbacks across the hour, and talks more often. Most active and characterful mode.',
+  },
+];
 // Personality dials, 0–10, default 5. They map to three prompt bands server-side
 // (settings.personaToneDirectives): 0–3 low, 7–10 high, 4–6 neutral (nothing
 // injected). Surfacing the band keeps operators from expecting 6 vs 7 to differ.
