@@ -541,7 +541,7 @@ router.get('/dj/search', requireAdmin, async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/dj/playlists', requireAdmin, async (_req, res) => {
   try {
-    const playlists = await subsonic.getPlaylists();
+    const playlists = await getSource().getPlaylists();
     const results = (Array.isArray(playlists) ? playlists : []).map((p: any) => ({
       id: p.id,
       name: p.name,
