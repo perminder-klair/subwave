@@ -18,8 +18,9 @@
 // agent. `agenticTick()` is the 5-minute cron; `runCapability()` is the
 // /dj/skill manual override — same tool-loop, but forced to one capability
 // with cooldowns bypassed. The capability registry is loaded by skills/loader.js
-// (built-ins from src/skills/builtins/, custom from state/skills); this module
-// consumes it (allCapabilities) and also backs the admin catalogue via
+// from the single load root state/skills/<slug>/ (the seven built-ins are seeded
+// there on first boot from src/skills/builtins/ templates; see skills/scaffold.js).
+// This module consumes it (allCapabilities) and backs the admin catalogue via
 // `skillCatalog()`. The skill modules left in this directory — news.js,
 // web-search.js, curiosity.js — are pure fetch helpers behind station-services.
 //
@@ -39,7 +40,7 @@ import { defineAgent } from '../llm/agent.js';
 import { buildContextLines, CONTEXT_FIELDS } from '../llm/dj.js';
 import { buildSegmentTools } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
-import { builtinCapabilities, customCapabilities } from './loader.js';
+import { loadedCapabilities } from './loader.js';
 import * as sfx from '../broadcast/sfx.js';
 
 // The capability registry now lives entirely in skills/loader.js, which loads
@@ -47,19 +48,18 @@ import * as sfx from '../broadcast/sfx.js';
 // optional tool.mjs). Each cap carries: kind/skill (the queue.announce kind +
 // enable-toggle slug), label, cooldownMs, desc (the agent brief), contextFields
 // (the "right now" fields it may mention; unset → default profile, no weather),
-// window, requiresKey, ready() (from the tool module or the env key), and the
-// wrapped data tool (toolFn/toolName/toolDesc/config). The seven built-ins live
-// in src/skills/builtins/<kind>/; operator skills + brief overrides live in
-// state/skills/<slug>/.
+// window, requiresKey, ready() (from the tool module or the env key), seeded
+// (shipped built-in vs operator skill), and the wrapped data tool
+// (toolFn/toolName/toolDesc/config). Every skill lives under state/skills/<slug>/.
 
-// The full capability set the segment director operates over: built-ins (with
-// operator brief-overrides merged) plus operator-dropped custom skills.
-// Everything downstream — the autonomous tick, runCapability, skillCatalog, the
-// admin toggles — iterates THIS, so a dropped skill lights up the whole chain.
-// Custom caps carry { custom: true } and are gated more conservatively (disabled
-// until the operator enables them). Read live so a rescan takes effect at once.
+// The full capability set the segment director operates over: every skill loaded
+// from state/skills — seeded built-ins and operator-dropped custom skills alike,
+// on one footing. Everything downstream — the autonomous tick, runCapability,
+// skillCatalog, the admin toggles — iterates THIS, so a dropped skill lights up
+// the whole chain. Non-seeded (operator) caps are gated more conservatively
+// (disabled until enabled). Read live so a rescan takes effect at once.
 function allCapabilities(): any[] {
-  return [...builtinCapabilities(), ...customCapabilities()];
+  return loadedCapabilities();
 }
 
 // The default per-skill context profile: every "right now" field EXCEPT
@@ -152,10 +152,10 @@ function availableCapabilities(ctx: any, now: Date) {
   const persona = settings.getEffectivePersona(now);
   const out: any[] = [];
   for (const cap of allCapabilities()) {
-    // Built-ins are enabled unless explicitly turned off; custom skills are
-    // DISCOVERED-BUT-DISABLED — they must be explicitly enabled before they
+    // Seeded built-ins are enabled unless explicitly turned off; operator skills
+    // are DISCOVERED-BUT-DISABLED — they must be explicitly enabled before they
     // can air, so dropping a folder never auto-airs unreviewed content/code.
-    const isEnabled = cap.custom ? enabled[cap.skill] === true : enabled[cap.skill] !== false;
+    const isEnabled = cap.seeded ? enabled[cap.skill] !== false : enabled[cap.skill] === true;
     if (!isEnabled) continue;
     if (persona?.skills && !persona.skills.includes(cap.skill)) continue;
     if (now.getTime() - (lastFired.get(cap.kind) || 0) < cap.cooldownMs) continue;
@@ -486,12 +486,13 @@ export function skillCatalog() {
       description: c.desc || '',
       kind: c.kind,
       cooldownMs: c.cooldownMs || 0,
-      // Built-ins default on; custom skills are discovered-but-disabled and
-      // only count as enabled once the operator explicitly flips them on.
-      enabled: c.custom ? enabledMap[c.skill] === true : enabledMap[c.skill] !== false,
-      // Marks an operator-dropped skill (state/skills) vs a built-in, so the
-      // admin UI can badge it and explain the off-by-default behaviour.
-      custom: !!c.custom,
+      // Seeded built-ins default on; operator skills are discovered-but-disabled
+      // and only count as enabled once the operator explicitly flips them on.
+      enabled: c.seeded ? enabledMap[c.skill] !== false : enabledMap[c.skill] === true,
+      // Marks an operator-authored skill vs a shipped built-in, so the admin UI
+      // can badge it and explain the off-by-default behaviour. (`custom` is the
+      // API's name for "not seeded".)
+      custom: !c.seeded,
       // `ready` is false when the capability needs an env key that isn't set;
       // `requiresKey` names it and `keyUrl` links the operator to its source.
       ready: typeof c.ready === 'function' ? !!c.ready() : true,

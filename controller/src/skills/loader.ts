@@ -1,32 +1,34 @@
 // Skill loader — the single source of truth for the DJ's between-track segment
 // capabilities. Every skill, shipped or operator-added, is a self-contained
-// directory:
+// directory under ONE runtime load root, ${STATE_DIR}/skills/<slug>/:
 //
-//   <dir>/<slug>/
+//   <slug>/
 //     SKILL.md     frontmatter (→ metadata) + body (→ the agent's brief)
 //     tool.mjs     OPTIONAL: a data fetcher the segment director calls first
 //
-// Two roots are scanned:
-//   1. controller/src/skills/builtins/<kind>/   — the seven shipped built-ins
-//      (first-party, read-only; bundled in the image / bind-mounted in dev).
-//   2. ${STATE_DIR}/skills/<slug>/              — operator skills + built-in
-//      brief overrides (state/skills/<built-in-kind> edits the shipped brief).
+// The seven built-ins are not special at load time: they are *seeded* into
+// state/skills on first boot from read-only templates that ship in the image
+// (src/skills/builtins/<kind>/, see scaffold.js → seedBuiltinSkills), then loaded
+// exactly like an operator skill. The only residue of "built-in" is the
+// SEEDED_KINDS set (the shipped kinds), which drives a few first-party
+// affordances — enabled-by-default, can't-hard-delete, reset-to-default, and
+// reserved naming — NOT a separate load path or trust posture.
 //
-// A skill's tool.mjs is the same contract for both:
+// A skill's tool.mjs is the same contract for everyone:
 //   export default async (ctx, state, services, config) => data
 //   export const description = '…'   // OPTIONAL: tool description for the agent
 //   export const ready = (services) => boolean   // OPTIONAL: gate availability
 // `services` (station-services.ts) is the curated facade onto search, the
 // library, the play log, feeds and durable recall — the one way a tool reaches
-// the world, so built-in and custom skills run on identical footing.
+// the world. Every tool runs behind a timeout + try/catch at the call site
+// (llm/segment-tools.js), seeded or operator-authored alike.
 //
 // Safety posture (operator code in state/skills is the operator's own, same
 // trust model as a local Claude Code skill, but still fenced):
 //   - malformed skills are skipped with a logged warning, never crash boot
-//   - custom skills are DISCOVERED-BUT-DISABLED — they appear in /admin/skills
-//     toggled off and cannot air until the operator enables them
-//   - a custom tool.mjs runs behind a timeout + try/catch at the call site
-//     (llm/segment-tools.ts); built-in tools are first-party and unfenced
+//   - operator (non-seeded) skills are DISCOVERED-BUT-DISABLED — they appear in
+//     /admin/skills toggled off and cannot air until the operator enables them
+//   - every tool.mjs runs behind a timeout + try/catch (llm/segment-tools.js)
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
@@ -35,9 +37,10 @@ import { STATE_DIR } from '../config.js';
 import { queue, registerSkillKinds } from '../broadcast/queue.js';
 import { buildStationServices } from '../llm/internal/tools/station-services.js';
 
-// Shipped built-in skill directories, resolved relative to this module so it
-// works under both dev (tsx on bind-mounted src) and prod (tsx on the COPYd
-// src). Exported so the scaffolder can seed editable state overrides from them.
+// Shipped built-in TEMPLATE store, resolved relative to this module so it works
+// under both dev (tsx on bind-mounted src) and prod (tsx on the COPYd src). This
+// is NOT a runtime load root — it is read only by the seeder + reset route
+// (scaffold.js). Exported so those can resolve template files.
 export const BUILTINS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), 'builtins');
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
 const SLUG_RE_INNER = /^[a-z0-9][a-z0-9-]{0,48}$/;
@@ -49,36 +52,21 @@ const SLUG_RE_INNER = /^[a-z0-9][a-z0-9-]{0,48}$/;
 export const SLUG_RE = SLUG_RE_INNER;
 
 // Kinds the queue reserves for its own voice channels — a custom skill may not
-// shadow these (built-in kinds are added below, once loaded).
+// shadow these (seeded kinds are added below, once discovered).
 const QUEUE_INTERNAL_KINDS = ['link', 'dj-speak', 'announcement', 'station-id', 'hourly', 'hourly-check'];
 
-// Derived at load time from the built-in directories. Exported as live sets that
-// callers (.has()) read after boot. `BUILTIN_KINDS` is the set of shipped kinds;
+// Derived at boot from the template directories. Exported as live sets that
+// callers (.has()) read after boot. `SEEDED_KINDS` is the set of shipped kinds;
 // `RESERVED_KINDS` adds the queue-internal kinds a custom skill can't shadow.
-export const BUILTIN_KINDS = new Set<string>();
+export const SEEDED_KINDS = new Set<string>();
 export const RESERVED_KINDS = new Set<string>(QUEUE_INTERNAL_KINDS);
 
-let builtinBase: any[] = [];          // the shipped built-in caps (from BUILTINS_DIR)
-let loadedCustom: any[] = [];         // operator custom caps (from state/skills)
-let builtinOverrides: Record<string, any> = {}; // built-in brief overrides (from state/skills)
-let importCounter = 0;                // cache-buster for re-importing edited tool.mjs
+let loadedSkills: any[] = []; // the single live capability set (seeded + custom)
+let importCounter = 0;        // cache-buster for re-importing edited tool.mjs
 
-export function builtinBaseCaps(): any[] { return builtinBase; }
-export function customCapabilities(): any[] { return loadedCustom; }
-export function getBuiltinOverrides(): Record<string, any> { return builtinOverrides; }
-
-// Built-in caps with operator brief-edits from state/skills/<kind>/SKILL.md
-// applied. An override contributes only the keys it specified — desc / cooldown
-// / label / context and, for news, feed / feedMaxItems — merged over the shipped
-// default; the tool (toolFn / ready / toolName) is always the first-party one.
-// Read live so a rescan takes effect without a restart.
-export function builtinCapabilities(): any[] {
-  return builtinBase.map(c => {
-    const ov = builtinOverrides[c.kind];
-    if (!ov) return c;
-    return { ...c, ...ov, config: { ...c.config, ...ov.config } };
-  });
-}
+// The full live capability set — seeded built-ins and operator skills, loaded on
+// identical footing. Read live so a rescan takes effect without a restart.
+export function loadedCapabilities(): any[] { return loadedSkills; }
 
 // Minimal flat-YAML frontmatter parser. The frontmatter we accept is a small,
 // flat key: value block — no nesting, lists, or multiline scalars — so a tiny
@@ -128,6 +116,48 @@ function parseContextFields(raw: string | undefined): string[] | undefined {
   return list.length ? list : undefined;
 }
 
+// A shipped built-in template, read on demand by the seeder / reset route /
+// admin "defaults" payload. The template FILES are never kept resident.
+export interface SkillTemplate {
+  kind: string;
+  skillMd: string;            // raw SKILL.md text (for verbatim seeding)
+  data: Record<string, string>;
+  body: string;
+  toolPath: string | null;    // absolute path to tool.mjs, or null (prompt-only)
+}
+
+// Read a shipped template's files. Returns null when there's no such template.
+export async function readTemplate(kind: string): Promise<SkillTemplate | null> {
+  const dir = join(BUILTINS_DIR, kind);
+  let skillMd: string;
+  try {
+    skillMd = await readFile(join(dir, 'SKILL.md'), 'utf8');
+  } catch {
+    return null;
+  }
+  const { data, body } = parseFrontmatter(skillMd);
+  let toolPath: string | null = join(dir, 'tool.mjs');
+  try { await stat(toolPath); } catch { toolPath = null; }
+  return { kind, skillMd, data, body, toolPath };
+}
+
+// Discover the shipped kinds from the template dir names and (re)build the
+// derived SEEDED_KINDS / RESERVED_KINDS sets. Cheap — readdir only; the template
+// FILES are read on demand. Runs once at boot (templates are static).
+export async function discoverSeededKinds(): Promise<Set<string>> {
+  SEEDED_KINDS.clear();
+  try {
+    const dirents = await readdir(BUILTINS_DIR, { withFileTypes: true });
+    for (const d of dirents) if (d.isDirectory()) SEEDED_KINDS.add(d.name);
+  } catch (err: any) {
+    queue.log('error', `[skills] could not read built-in templates ${BUILTINS_DIR}: ${err?.message || err}`);
+  }
+  RESERVED_KINDS.clear();
+  for (const k of QUEUE_INTERNAL_KINDS) RESERVED_KINDS.add(k);
+  for (const k of SEEDED_KINDS) RESERVED_KINDS.add(k);
+  return SEEDED_KINDS;
+}
+
 // Dynamically import a skill's optional tool.mjs. Returns the data function plus
 // its optional `description` / `ready` exports, or null when there's no tool.
 async function loadToolModule(dir: string): Promise<{ fn: any; description?: string; ready?: any } | null> {
@@ -151,10 +181,10 @@ async function loadToolModule(dir: string): Promise<{ fn: any; description?: str
   };
 }
 
-// Build a full capability from a skill directory. `builtin` controls the trust
-// posture: built-ins are first-party (custom:false, tool unfenced); state skills
-// are operator code (custom:true, fenced at the call site).
-async function loadSkillDir(dir: string, slug: string, { builtin }: { builtin: boolean }): Promise<any | null> {
+// Build a full capability from a skill directory. `seeded` controls the
+// first-party affordances (enabled-by-default, can't-delete, reset) — NOT the
+// trust posture: every loaded tool runs fenced at the call site, seeded or not.
+async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boolean }): Promise<any | null> {
   let raw: string;
   try {
     raw = await readFile(join(dir, 'SKILL.md'), 'utf8');
@@ -167,7 +197,8 @@ async function loadSkillDir(dir: string, slug: string, { builtin }: { builtin: b
     queue.log('error', `[skills] "${slug}" rejected — name "${name}" must be a lowercase slug`);
     return null;
   }
-  if (!builtin && !body) {
+  // A seeded built-in always ships a brief; an operator skill must supply one.
+  if (!seeded && !body) {
     queue.log('error', `[skills] "${slug}" rejected — SKILL.md body (the agent's brief) is empty`);
     return null;
   }
@@ -189,7 +220,9 @@ async function loadSkillDir(dir: string, slug: string, { builtin }: { builtin: b
     label,
     cooldownMs: parseCooldownMs(data.cooldown),
     desc: body,
-    custom: !builtin,
+    // Provenance, NOT trust: a shipped kind (seeded into state) vs an operator
+    // skill. Drives enabled-by-default + the admin delete/reset affordances.
+    seeded,
     window: data.window === 'commute' ? 'commute' : 'any',
     requiresKey,
     // Absent → effectiveContextFields() falls back to the default profile (#471).
@@ -219,86 +252,32 @@ async function loadSkillDir(dir: string, slug: string, { builtin }: { builtin: b
   return cap;
 }
 
-// Scan the shipped built-in directories. Populates builtinBase + the derived
-// BUILTIN_KINDS / RESERVED_KINDS sets. Runs once at boot (built-ins are static).
-export async function loadBuiltins(): Promise<any[]> {
-  let entries: string[] = [];
-  try {
-    const dirents = await readdir(BUILTINS_DIR, { withFileTypes: true });
-    entries = dirents.filter(d => d.isDirectory()).map(d => d.name).sort();
-  } catch (err: any) {
-    queue.log('error', `[skills] could not read built-ins dir ${BUILTINS_DIR}: ${err?.message || err}`);
-    builtinBase = [];
-    return builtinBase;
-  }
-  const out: any[] = [];
-  for (const slug of entries) {
-    try {
-      const cap = await loadSkillDir(join(BUILTINS_DIR, slug), slug, { builtin: true });
-      if (cap) out.push(cap);
-    } catch (err: any) {
-      queue.log('error', `[skills] built-in "${slug}" failed to load: ${err.message}`);
-    }
-  }
-  builtinBase = out;
-  // Rebuild the derived kind sets.
-  BUILTIN_KINDS.clear();
-  for (const c of out) BUILTIN_KINDS.add(c.kind);
-  RESERVED_KINDS.clear();
-  for (const k of QUEUE_INTERNAL_KINDS) RESERVED_KINDS.add(k);
-  for (const k of BUILTIN_KINDS) RESERVED_KINDS.add(k);
-  return builtinBase;
-}
-
-// Scan state/skills and rebuild the custom caps + built-in overrides. Never
-// throws — a broken folder is logged and skipped. Ensures built-ins are loaded
-// first (so kinds classify correctly). Returns the loaded custom caps.
-export async function loadCustomSkills(): Promise<any[]> {
-  if (!builtinBase.length) await loadBuiltins();
-  builtinOverrides = {};
+// Scan the single load root (state/skills) and rebuild the live capability set.
+// Never throws — a broken folder is logged and skipped. Ensures the seeded kinds
+// are discovered first (so folders classify correctly). Returns the loaded caps.
+export async function loadSkills(): Promise<any[]> {
+  if (!SEEDED_KINDS.size) await discoverSeededKinds();
   let entries: string[] = [];
   try {
     const dirents = await readdir(SKILLS_DIR, { withFileTypes: true });
     entries = dirents.filter(d => d.isDirectory()).map(d => d.name);
   } catch {
-    loadedCustom = []; // no state/skills dir → nothing custom (the common case)
-    return loadedCustom;
+    loadedSkills = []; // no state/skills dir yet → nothing to load
+    registerSkillKinds([]);
+    return loadedSkills;
   }
 
   const out: any[] = [];
   const seen = new Set<string>();
   for (const slug of entries) {
     try {
-      // A folder named after a built-in kind is an OVERRIDE of that built-in's
-      // brief — it never loads a tool.mjs (built-ins keep their first-party
-      // tool) and contributes only the frontmatter/body keys it specifies.
-      if (BUILTIN_KINDS.has(slug)) {
-        const raw = await readFile(join(SKILLS_DIR, slug, 'SKILL.md'), 'utf8').catch(() => null);
-        if (raw == null) continue;
-        const { data, body } = parseFrontmatter(raw);
-        const ov: any = { config: data };
-        if (body) ov.desc = body;
-        if (data.cooldown) ov.cooldownMs = parseCooldownMs(data.cooldown);
-        if (data.label) ov.label = data.label.trim();
-        const ovContext = parseContextFields(data.context ?? data.contextFields);
-        if (ovContext) ov.contextFields = ovContext;
-        if (data.feed) ov.feed = data.feed.trim();
-        if (data.feedMaxItems) {
-          const n = parseInt(data.feedMaxItems, 10);
-          if (Number.isFinite(n) && n > 0) ov.feedMaxItems = n;
-        }
-        if (builtinOverrides[slug]) {
-          queue.log('error', `[skills] duplicate built-in override "${slug}" — keeping the first`);
-          continue;
-        }
-        builtinOverrides[slug] = ov;
-        continue;
-      }
-      if (RESERVED_KINDS.has(slug)) {
+      // A folder shadowing a queue-internal kind (link/dj-speak/…) is rejected.
+      // Seeded kinds live in RESERVED_KINDS too but are legitimate, so exempt them.
+      if (RESERVED_KINDS.has(slug) && !SEEDED_KINDS.has(slug)) {
         queue.log('error', `[skills] "${slug}" rejected — shadows a reserved capability`);
         continue;
       }
-      const cap = await loadSkillDir(join(SKILLS_DIR, slug), slug, { builtin: false });
+      const cap = await loadSkillDir(join(SKILLS_DIR, slug), slug, { seeded: SEEDED_KINDS.has(slug) });
       if (!cap) continue;
       if (seen.has(cap.kind)) {
         queue.log('error', `[skills] duplicate skill kind "${cap.kind}" — keeping the first`);
@@ -311,22 +290,19 @@ export async function loadCustomSkills(): Promise<any[]> {
     }
   }
 
-  loadedCustom = out;
-  // Register every skill kind (built-in + custom) as a recap voice/dedupe kind,
-  // so the DJ's anti-repeat memory covers them without a hand-maintained list.
-  registerSkillKinds([...BUILTIN_KINDS, ...out.map(c => c.kind)]);
-  if (out.length) {
-    queue.log('scheduler', `[skills] loaded ${out.length} custom skill(s): ${out.map(c => c.kind).join(', ')}`);
-  }
-  const ovKinds = Object.keys(builtinOverrides);
-  if (ovKinds.length) {
-    queue.log('scheduler', `[skills] applied ${ovKinds.length} built-in override(s): ${ovKinds.join(', ')}`);
-  }
-  return loadedCustom;
+  loadedSkills = out;
+  // Register every loaded kind as a recap voice/dedupe kind, so the DJ's
+  // anti-repeat memory covers them without a hand-maintained list.
+  registerSkillKinds(out.map(c => c.kind));
+  const seededN = out.filter(c => c.seeded).length;
+  const customN = out.length - seededN;
+  queue.log('scheduler', `[skills] loaded ${out.length} skill(s): ${seededN} built-in, ${customN} custom`);
+  return loadedSkills;
 }
 
-// Load both roots — built-ins then state. Called once at boot.
+// Discover + load. Called once at boot AFTER the seeder has populated state/skills
+// (server.js orders seedBuiltinSkills() before this).
 export async function loadAllSkills(): Promise<void> {
-  await loadBuiltins();
-  await loadCustomSkills();
+  await discoverSeededKinds();
+  await loadSkills();
 }

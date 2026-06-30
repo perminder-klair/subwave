@@ -12,8 +12,8 @@ import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
-import { loadCustomSkills, parseFrontmatter, BUILTIN_KINDS, RESERVED_KINDS, SLUG_RE, builtinBaseCaps } from '../skills/loader.js';
-import { writeSkillFile, msToCooldownStr } from '../skills/scaffold.js';
+import { loadSkills, parseFrontmatter, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate } from '../skills/loader.js';
+import { writeSkillFile, msToCooldownStr, resetBuiltinSkill } from '../skills/scaffold.js';
 import { readFile, rm, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { STATE_DIR, config } from '../config.js';
@@ -35,15 +35,15 @@ router.get('/dj/skills', requireAdmin, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// POST /dj/skills/rescan — reload operator-dropped custom skills from
-// state/skills (picks up new folders and edited SKILL.md / tool.mjs files
-// without a controller restart). Returns the refreshed catalogue.
+// POST /dj/skills/rescan — reload all skills from state/skills (picks up new
+// folders and edited SKILL.md / tool.mjs files — built-in or custom — without a
+// controller restart). Returns the refreshed catalogue.
 // ---------------------------------------------------------------------------
 router.post('/dj/skills/rescan', requireAdmin, async (req, res) => {
   try {
-    const caps = await loadCustomSkills();
-    queue.log('scheduler', `[skills] rescanned — ${caps.length} custom skill(s) loaded`);
-    res.json({ skills: skillCatalog(), custom: caps.length });
+    const caps = await loadSkills();
+    queue.log('scheduler', `[skills] rescanned — ${caps.length} skill(s) loaded`);
+    res.json({ skills: skillCatalog(), custom: caps.filter((c: any) => !c.seeded).length });
   } catch (err) {
     queue.log('error', `/dj/skills/rescan failed: ${err.message}`);
     res.status(500).json({ error: err.message });
@@ -127,17 +127,17 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
   const kind = req.params.kind;
   const cat = skillCatalog().find(s => s.kind === kind);
 
-  if (BUILTIN_KINDS.has(kind)) {
-    // Shipped defaults from the built-in's directory default (NOT the
-    // override-merged catalogue), so the admin "Reset to default" restores the
-    // as-shipped brief even after the SKILL.md has been edited. News seeds its
-    // feed from config (env-or-BBC), mirroring the scaffolder.
-    const rawCap = builtinBaseCaps().find((c: any) => c.kind === kind);
-    const defaults = rawCap ? {
-      label: rawCap.label || kind,
-      cooldown: msToCooldownStr(rawCap.cooldownMs || 0),
-      context: (effectiveContextFields(rawCap) || []).join(', '),
-      brief: rawCap.desc || '',
+  if (SEEDED_KINDS.has(kind)) {
+    // Shipped defaults read straight from the built-in's TEMPLATE (NOT the live
+    // state copy), so the admin "Reset to default" shows the as-shipped brief
+    // even after the state SKILL.md has been edited. News seeds its feed from
+    // config (env-or-BBC), mirroring the seeder.
+    const tpl = await readTemplate(kind);
+    const defaults = tpl ? {
+      label: tpl.data.label || kind,
+      cooldown: tpl.data.cooldown || '60m',
+      context: (effectiveContextFields({ contextFields: tpl.data.context ?? tpl.data.contextFields }) || []).join(', '),
+      brief: tpl.body || '',
       ...(kind === 'news' ? { feed: config.news.feedUrl, feedMaxItems: config.news.maxItems } : {}),
     } : null;
 
@@ -159,6 +159,10 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
         feed: data.feed || cat?.feed || null,
         feedMaxItems: data.feedMaxItems ? parseInt(data.feedMaxItems, 10) : (cat?.feedMaxItems || null),
         brief: body || cat?.description || '',
+        // Built-ins now carry an editable tool.mjs in state too (seeded on first
+        // boot), so the edit form shows the same "edit on disk + Rescan" hint as
+        // custom skills.
+        hasTool: await skillHasTool(kind),
         defaults,
       });
     } catch {
@@ -175,6 +179,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
         feed: cat?.feed || null,
         feedMaxItems: cat?.feedMaxItems || null,
         brief: cat?.description || '',
+        hasTool: await skillHasTool(kind),
         defaults,
       });
     }
@@ -234,7 +239,7 @@ router.post('/dj/skills', requireAdmin, async (req, res) => {
 
   try {
     await writeSkillFile(fields);
-    await loadCustomSkills();
+    await loadSkills();
     queue.log('scheduler', `[skills] custom "${name}" created via admin UI`);
     res.json({ skills: skillCatalog() });
   } catch (err: any) {
@@ -253,7 +258,7 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
   const b = req.body || {};
 
   // Custom skill edit — same validation as create, minus the slug (immutable).
-  if (!BUILTIN_KINDS.has(kind)) {
+  if (!SEEDED_KINDS.has(kind)) {
     if (!SLUG_RE.test(kind)) {
       return res.status(400).json({ error: `invalid skill name: ${kind}` });
     }
@@ -268,7 +273,7 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
     }
     try {
       await writeSkillFile(fields); // rewrites SKILL.md only; a sibling tool.mjs is left intact
-      await loadCustomSkills();
+      await loadSkills();
       queue.log('scheduler', `[skills] custom "${kind}" edited via admin UI`);
       return res.json({ skills: skillCatalog() });
     } catch (err: any) {
@@ -322,7 +327,7 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
 
   try {
     await writeSkillFile(fields);
-    await loadCustomSkills();
+    await loadSkills();
     queue.log('scheduler', `[skills] built-in "${kind}" edited via admin UI`);
     res.json({ skills: skillCatalog() });
   } catch (err: any) {
@@ -332,14 +337,37 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /dj/skills/:kind/reset — restore a built-in to its shipped default,
+// overwriting BOTH state/skills/<kind>/SKILL.md AND tool.mjs from the image
+// template. This is how an operator reverts a broken edit or pulls in a newer
+// image's tool.mjs (which the seeder won't auto-apply once the file exists).
+// Only valid for seeded built-in kinds — custom skills have no shipped default.
+// ---------------------------------------------------------------------------
+router.post('/dj/skills/:kind/reset', requireAdmin, async (req, res) => {
+  const kind = req.params.kind;
+  if (!SEEDED_KINDS.has(kind)) {
+    return res.status(400).json({ error: `"${kind}" is not a built-in skill — only built-ins can be reset to default` });
+  }
+  try {
+    await resetBuiltinSkill(kind);
+    await loadSkills();
+    queue.log('scheduler', `[skills] built-in "${kind}" reset to default via admin UI`);
+    res.json({ skills: skillCatalog() });
+  } catch (err: any) {
+    queue.log('error', `POST /dj/skills/${kind}/reset failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // DELETE /dj/skills/:slug — remove a custom skill (its whole folder, including
-// any tool.mjs). Built-ins can't be deleted; they're edited in place. Reloads
-// and returns the refreshed catalogue.
+// any tool.mjs). Built-ins can't be deleted — only disabled; the seeder restores
+// a missing built-in folder on the next boot. Reloads and returns the catalogue.
 // ---------------------------------------------------------------------------
 router.delete('/dj/skills/:slug', requireAdmin, async (req, res) => {
   const slug = req.params.slug;
-  if (BUILTIN_KINDS.has(slug)) {
-    return res.status(400).json({ error: "built-in skills can't be deleted — edit them instead" });
+  if (SEEDED_KINDS.has(slug)) {
+    return res.status(400).json({ error: "built-in skills can't be deleted — disable them instead" });
   }
   if (!SLUG_RE.test(slug)) {
     return res.status(400).json({ error: `invalid skill name: ${slug}` });
@@ -349,7 +377,7 @@ router.delete('/dj/skills/:slug', requireAdmin, async (req, res) => {
   }
   try {
     await rm(join(SKILLS_DIR, slug), { recursive: true, force: true });
-    await loadCustomSkills();
+    await loadSkills();
     queue.log('scheduler', `[skills] custom "${slug}" deleted via admin UI`);
     res.json({ skills: skillCatalog() });
   } catch (err: any) {

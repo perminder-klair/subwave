@@ -12,9 +12,11 @@
 //   services — the curated station facade (search, library, play log, feeds…)
 //   config   — the skill's own frontmatter (e.g. news' feed / feedMaxItems)
 //
-// Operator (custom) tools run operator-supplied code, so they're fenced behind
-// a hard timeout + try/catch — a slow or throwing skill degrades to "no data"
-// rather than hanging the tick. First-party built-in tools run unfenced.
+// Every skill tool now lives in state/skills (built-ins seeded there on first
+// boot), so all of them run behind a hard timeout + try/catch — a slow or
+// throwing skill degrades to "no data" rather than hanging the tick. The
+// network-heavy built-ins (web-search, news RSS, on-this-day) must finish within
+// the timeout or that tick simply yields no segment.
 
 import { tool } from 'ai';
 import { z } from 'zod';
@@ -26,14 +28,13 @@ export function buildSegmentTools(ctx: any, state: any, caps: any[]) {
 
   for (const cap of caps as any[]) {
     if (typeof cap.toolFn !== 'function' || !cap.toolName) continue;
-    const fenced = !!cap.custom;
     tools[cap.toolName] = tool({
       description: cap.toolDesc,
       inputSchema: z.object({}),
       execute: async () => {
         try {
           const p = Promise.resolve(cap.toolFn(ctx, state, services, cap.config));
-          return await (fenced ? withTimeout(p, 8000) : p);
+          return await withTimeout(p, 8000);
         } catch (err: any) {
           return { error: err?.message || String(err) };
         }
@@ -44,8 +45,8 @@ export function buildSegmentTools(ctx: any, state: any, caps: any[]) {
   return tools;
 }
 
-// Resolve `p`, or reject after `ms` — keeps an operator skill's tool.mjs from
-// stalling the segment tick indefinitely.
+// Resolve `p`, or reject after `ms` — keeps any skill's tool.mjs from stalling
+// the segment tick indefinitely.
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((res, rej) => {
     const t = setTimeout(() => rej(new Error(`tool timed out after ${ms}ms`)), ms);

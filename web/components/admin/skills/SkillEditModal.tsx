@@ -40,8 +40,8 @@ interface SkillEditModalProps {
   onSkillsChange: (skills: SkillLike[]) => void;  // refresh the panel list after any mutation
 }
 
-// The shipped defaults for a built-in (from the raw CAPABILITIES entry), used by
-// "Reset to default".
+// The shipped defaults for a built-in (read from the image template), used to
+// gate the "Reset to default" button. The reset itself is server-side.
 interface SkillDefaults {
   label?: string;
   cooldown?: string;
@@ -301,21 +301,43 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
     }
   };
 
-  // Restore the form to the built-in's shipped defaults. Repopulates the fields
-  // (doesn't persist) so the operator reviews and then Saves — at which point
-  // the SKILL.md is rewritten to the default.
-  const resetToDefault = () => {
-    if (!defaults) return;
-    setFields(f => ({
-      ...f,
-      label: defaults.label ?? f.label,
-      cooldown: defaults.cooldown ?? f.cooldown,
-      context: splitContext(defaults.context),
-      feed: defaults.feed ?? '',
-      feedMaxItems: defaults.feedMaxItems != null ? String(defaults.feedMaxItems) : '',
-      brief: defaults.brief ?? '',
-    }));
-    flashFor('RESET — REVIEW & SAVE');
+  // Restore a built-in to its shipped default. Server-side and immediate: POST
+  // overwrites BOTH the SKILL.md AND the tool.mjs in state/skills/<kind>/ from the
+  // image template (an in-form repopulate couldn't restore the code). We then
+  // refetch the now-restored SKILL.md so the form mirrors the shipped values, and
+  // refresh the catalogue.
+  const resetToDefault = async () => {
+    if (custom || !isEdit || busy) return;
+    setBusy(true);
+    try {
+      const r = await adminFetch(`/dj/skills/${fileId}/reset`, { method: 'POST' });
+      const j = (await r.json().catch(() => ({}))) as { skills?: SkillLike[]; error?: string };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      onSkillsChange(Array.isArray(j.skills) ? j.skills : []);
+
+      const fr = await adminFetch(`/dj/skills/${fileId}/file`);
+      const fj = (await fr.json().catch(() => ({}))) as SkillFileResponse;
+      if (fr.ok) {
+        const next: FileFields = {
+          label: fj.label || '',
+          cooldown: fj.cooldown || '',
+          context: splitContext(fj.context),
+          window: fj.window === 'commute' ? 'commute' : 'any',
+          feed: fj.feed || '',
+          feedMaxItems: fj.feedMaxItems != null ? String(fj.feedMaxItems) : '',
+          brief: fj.brief || '',
+        };
+        setFields(next);
+        setSnapshot(fieldsKey(next));
+        setHasTool(!!fj.hasTool);
+      }
+      flashFor('RESET TO SHIPPED DEFAULT');
+      notify.ok(`Reset “${kind}” to default`);
+    } catch (e) {
+      notify.err(`Reset failed: ${errorMessage(e)}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   // ── Style helpers (mirror the design, using our theme vars) ─────────────────
@@ -516,14 +538,16 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
             <div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                 <div style={sectionLabel}>THE BRIEF — WHAT THE DJ SAYS, AND WHEN TO STAY SILENT</div>
-                {/* Built-ins can be reverted to their shipped default brief/cooldown/context. */}
+                {/* Built-ins revert to their shipped default — restores both the
+                    brief (SKILL.md) and the data tool (tool.mjs) from the image. */}
                 {!custom && defaults && (
                   <button
                     type="button"
                     onClick={resetToDefault}
+                    disabled={busy}
                     className="sw-ghost"
-                    title="Restore the shipped default for this built-in skill (review, then Save)"
-                    style={{ flex: 'none', padding: '6px 12px', background: 'transparent', color: 'var(--muted)', border: '1px solid color-mix(in oklab, var(--ink) 24%, transparent)', fontSize: 10, fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', cursor: 'pointer' }}
+                    title="Restore this built-in's shipped SKILL.md and tool.mjs from the image"
+                    style={{ flex: 'none', padding: '6px 12px', background: 'transparent', color: 'var(--muted)', border: '1px solid color-mix(in oklab, var(--ink) 24%, transparent)', fontSize: 10, fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.5 : 1 }}
                   >
                     ↺ Reset to default
                   </button>
@@ -545,7 +569,7 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
               </div>
               {hasTool && (
                 <div style={{ marginTop: 14, border: '1px solid color-mix(in oklab, var(--ink) 24%, transparent)', borderLeft: '3px solid var(--accent)', padding: '12px 14px', fontSize: 12, lineHeight: 1.6, color: 'var(--muted)' }}>
-                  A <code>tool.mjs</code> data fetcher is attached and runs each tick before the DJ speaks. Edit or remove it on disk + Rescan — it isn&apos;t editable here. Deleting the skill removes it too.
+                  A <code>tool.mjs</code> data fetcher is attached and runs each tick before the DJ speaks. Edit it on disk in <code>state/skills/{kind}/</code> + Rescan — it isn&apos;t editable here.{custom ? ' Deleting the skill removes it too.' : ' Use ↺ Reset to default to restore the shipped version.'}
                 </div>
               )}
             </div>

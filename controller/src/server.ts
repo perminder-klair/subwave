@@ -147,19 +147,20 @@ app.listen(config.server.port, async () => {
     console.error('[budget] seed failed:', err.message);
   }
 
-  // Load the shipped built-in skills (src/skills/builtins/<kind>/), then scaffold
-  // each as an editable state/skills/<kind>/SKILL.md override (idempotent — never
-  // clobbers operator edits), then load operator custom skills + brief overrides
-  // from state/skills. Built-ins must load first so kinds classify correctly.
-  // None of this is fatal.
+  // Seed the shipped built-ins (src/skills/builtins/<kind>/ templates) into
+  // state/skills/<kind>/ as full editable skills — SKILL.md + tool.mjs, idempotent
+  // (never clobbers operator edits) — then load state/skills as the single load
+  // root. Built-ins are no longer special at load time; the seeder just runs first
+  // so their files exist when the scan happens. None of this is fatal.
   try {
-    const { loadBuiltins, loadCustomSkills } = await import('./skills/loader.js');
-    const builtins = await loadBuiltins();
-    if (builtins.length) console.log(`[skills] ${builtins.length} built-in(s): ${builtins.map((c: any) => c.kind).join(', ')}`);
-    const { scaffoldBuiltinSkills } = await import('./skills/scaffold.js');
-    await scaffoldBuiltinSkills();
-    const caps = await loadCustomSkills();
-    if (caps.length) console.log(`[skills] ${caps.length} custom skill(s): ${caps.map((c: any) => c.kind).join(', ')}`);
+    const { loadSkills } = await import('./skills/loader.js');
+    const { seedBuiltinSkills } = await import('./skills/scaffold.js');
+    await seedBuiltinSkills();
+    const caps = await loadSkills();
+    const seeded = caps.filter((c: any) => c.seeded);
+    if (seeded.length) console.log(`[skills] ${seeded.length} built-in(s): ${seeded.map((c: any) => c.kind).join(', ')}`);
+    const custom = caps.filter((c: any) => !c.seeded);
+    if (custom.length) console.log(`[skills] ${custom.length} custom skill(s): ${custom.map((c: any) => c.kind).join(', ')}`);
   } catch (err: any) {
     console.error('[skills] load failed:', err.message);
   }
