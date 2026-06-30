@@ -2,7 +2,7 @@
 //   - refreshes the auto-playlist file Liquidsoap falls back to
 //   - hourly time check (top of every hour, in character)
 //   - station IDs (every ~45 min, varied by frequency setting)
-//   - agentic segment tick (weather, news, traffic, facts, web search) every 5 min
+//   - agentic segment tick (weather, news, now-playing digs, facts, web search) every 5 min
 
 import cron from 'node-cron';
 import { writeFile } from 'node:fs/promises';
@@ -316,7 +316,7 @@ export async function runLink() {
 // SEGMENT TICK
 // Hands a snapshot of the moment and a set of real-world data tools to the
 // segment-director agent (skills/_agent.js), which decides whether to air one
-// between-track segment (weather / news / traffic / fact / artist news) or to
+// between-track segment (weather / news / now-playing dig / fact / artist news) or to
 // stay silent. The same agent also backs the /dj/skill manual-override route
 // (runCapability), forced to one capability.
 // ---------------------------------------------------------------------------

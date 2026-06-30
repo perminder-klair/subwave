@@ -1,19 +1,24 @@
 'use client';
 
 // Skills editor — /admin/skills. The autonomous DJ segments (weather, news,
-// traffic, random facts) the station can fire between tracks.
+// now-playing digs, random facts) the station can fire between tracks.
 //
 // Each skill is toggled on/off station-wide here. A skill only fires
 // autonomously when it is enabled here AND assigned to the persona on air
 // (see /admin/personas). "Run now" is an operator override — it fires the
 // segment immediately, bypassing the enable toggle, the persona assignment,
 // the frequency gate, and the cooldown.
+//
+// Creating and editing a skill (custom or built-in) opens the SkillEditModal
+// "segment sheet" — the list here is just the roster + quick actions.
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { notify, errorMessage } from '../../lib/notify';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { RefreshCw, Plus } from 'lucide-react';
 import { Card, Btn, Pill, Eyebrow, Toggle } from './ui';
 import { V3Alert } from '../ui/alert';
+import SkillEditModal from './skills/SkillEditModal';
 
 interface Skill {
   name: string;
@@ -44,52 +49,8 @@ interface SkillRunResponse {
   error?: string;
 }
 
-// Response of GET /dj/skills/:kind/file — the editable contents of a built-in
-// skill's SKILL.md (or live defaults when it hasn't been scaffolded yet).
-interface SkillFileResponse {
-  kind: string;
-  exists?: boolean;
-  isNews?: boolean;
-  label?: string;
-  cooldown?: string;
-  context?: string;                 // comma-separated "right now" fields (#471)
-  knownContextFields?: string[];    // the full vocabulary, for the tick-boxes
-  feed?: string | null;
-  feedMaxItems?: number | null;
-  brief?: string;
-  error?: string;
-}
-
-// The in-form editing state for one built-in skill.
-interface EditForm {
-  kind: string;
-  isNews: boolean;
-  label: string;
-  cooldown: string;
-  context: string[];          // selected "right now" fields the segment may mention
-  knownContext: string[];     // the full vocabulary to render tick-boxes from
-  feed: string;
-  feedMaxItems: string;
-  brief: string;
-}
-
-// Friendly labels for the context fields (#471). Keys are the controller's
-// CONTEXT_FIELDS vocabulary; anything not listed falls back to the raw key.
-const CONTEXT_FIELD_LABELS: Record<string, string> = {
-  date: 'Date & season',
-  clock: 'Clock time',
-  time: 'Daypart',
-  weather: 'Weather',
-  festival: 'Festival',
-  show: 'Current show',
-  listeners: 'Listener count',
-};
-// Fallback vocabulary if the controller doesn't send knownContextFields.
-const CONTEXT_FIELDS_FALLBACK = ['date', 'clock', 'time', 'weather', 'festival', 'show', 'listeners'];
-
-function splitContext(s?: string): string[] {
-  return typeof s === 'string' ? s.split(',').map(t => t.trim()).filter(Boolean) : [];
-}
+// Which skill the modal is editing/creating, if any.
+type ModalState = { mode: 'create' } | { mode: 'edit'; skill: Skill };
 
 function cooldownLabel(ms?: number): string {
   if (!ms) return 'no cooldown';
@@ -132,9 +93,7 @@ export default function SkillsPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);   // skill name currently mutating, or null
   const [rescanning, setRescanning] = useState(false);
-  const [editing, setEditing] = useState<string | null>(null); // kind whose edit form is open
-  const [editForm, setEditForm] = useState<EditForm | null>(null);
-  const [editBusy, setEditBusy] = useState(false);             // loading or saving the edit form
+  const [modal, setModal] = useState<ModalState | null>(null); // open editor sheet, or null
 
   useEffect(() => {
     if (!hydrated || needsAuth) return;
@@ -182,68 +141,6 @@ export default function SkillsPanel() {
     } catch (e) {
       notify.err(`Rescan failed: ${errorMessage(e)}`);
     } finally { setRescanning(false); }
-  };
-
-  // Open (or toggle closed) the inline edit form for a built-in skill. Fetches
-  // the current SKILL.md contents so the form prefills with what's on disk.
-  const openEdit = async (kind: string) => {
-    if (editing === kind) { setEditing(null); setEditForm(null); return; }
-    setEditing(kind);
-    setEditForm(null);
-    setEditBusy(true);
-    try {
-      const r = await adminFetch(`/dj/skills/${kind}/file`);
-      const j = (await r.json().catch(() => ({}))) as SkillFileResponse;
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setEditForm({
-        kind,
-        isNews: !!j.isNews,
-        label: j.label || '',
-        cooldown: j.cooldown || '',
-        context: splitContext(j.context),
-        knownContext: Array.isArray(j.knownContextFields) && j.knownContextFields.length
-          ? j.knownContextFields
-          : CONTEXT_FIELDS_FALLBACK,
-        feed: j.feed || '',
-        feedMaxItems: j.feedMaxItems != null ? String(j.feedMaxItems) : '',
-        brief: j.brief || '',
-      });
-    } catch (e) {
-      notify.err(`Couldn't load skill: ${errorMessage(e)}`);
-      setEditing(null);
-    } finally { setEditBusy(false); }
-  };
-
-  const saveEdit = async () => {
-    if (!editForm) return;
-    setEditBusy(true);
-    try {
-      const body: Record<string, unknown> = {
-        brief: editForm.brief,
-        cooldown: editForm.cooldown,
-        label: editForm.label,
-        // Sent as an array; an empty list resets the skill to the default
-        // profile (everything except weather). See issue #471.
-        context: editForm.context,
-      };
-      if (editForm.isNews) {
-        body.feed = editForm.feed;
-        if (editForm.feedMaxItems) body.feedMaxItems = editForm.feedMaxItems;
-      }
-      const r = await adminFetch(`/dj/skills/${editForm.kind}/file`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const j = (await r.json().catch(() => ({}))) as SkillToggleResponse;
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      if (Array.isArray(j.skills)) setSkills(j.skills);
-      notify.ok(`Saved ${editForm.kind}`);
-      setEditing(null);
-      setEditForm(null);
-    } catch (e) {
-      notify.err(`Save failed: ${errorMessage(e)}`);
-    } finally { setEditBusy(false); }
   };
 
   const runNow = async (name: string) => {
@@ -298,15 +195,15 @@ export default function SkillsPanel() {
             on the Personas page. “Run now” is an operator override and ignores both.
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            The built-in skills are editable too. Hit <strong>Edit</strong> to change a skill&apos;s
-            brief, cooldown, or which real-world context (time, weather…) it may mention
-            (and, for News, its feed URL). Edits are saved to
-            <code> state/skills/&lt;kind&gt;/SKILL.md</code>.
+            Hit <strong>Edit</strong> on any skill to open its segment sheet — change the brief,
+            cooldown, or which real-world context (time, weather…) it may mention (and, for News,
+            its feed URL). Edits are saved to <code>state/skills/&lt;kind&gt;/SKILL.md</code>.
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            Drop your own skills into <code>state/skills/&lt;name&gt;/SKILL.md</code> and hit
-            <strong> Rescan</strong>. Custom skills arrive <strong>disabled</strong>, so review
-            them, then enable them before they can air.
+            Add your own with <strong>New skill</strong> — it writes
+            <code> state/skills/&lt;name&gt;/SKILL.md</code> for you. (You can still drop a folder there
+            by hand — with an optional <code>tool.mjs</code> data tool — and hit <strong>Rescan</strong>.)
+            Custom skills arrive <strong>disabled</strong>, so review them, then enable them before they can air.
           </div>
           <a
             href="/manual/skills"
@@ -320,9 +217,16 @@ export default function SkillsPanel() {
         <div className="flex items-center gap-4 bg-[var(--ink-softer)] p-3.5">
           <span className="caption">{skills.length} skill{skills.length === 1 ? '' : 's'}</span>
           <span className="caption text-vermilion">{enabledCount} enabled</span>
-          <div className="ml-auto">
-            <Btn onClick={rescan} disabled={rescanning}>
-              {rescanning ? 'Rescanning…' : 'Rescan state/skills'}
+          <div className="ml-auto flex items-center gap-2">
+            <Btn tone="accent" onClick={() => setModal({ mode: 'create' })}>
+              <Plus size={14} /> New skill
+            </Btn>
+            <Btn
+              onClick={rescan}
+              disabled={rescanning}
+              title={rescanning ? 'Rescanning state/skills…' : 'Rescan state/skills'}
+            >
+              <RefreshCw size={14} className={rescanning ? 'animate-spin' : ''} />
             </Btn>
           </div>
         </div>
@@ -333,7 +237,6 @@ export default function SkillsPanel() {
         <Card
           key={s.name}
           title={s.label || s.name}
-          sub={s.kind}
           right={
             <>
               {s.custom && <Pill>custom</Pill>}
@@ -372,12 +275,11 @@ export default function SkillsPanel() {
           )}
           <div className="grid grid-cols-[1fr_auto] items-center gap-4">
             <div>
-              <div className="text-[12px] leading-[1.6] text-muted">
+              <div className="line-clamp-2 text-[12px] leading-[1.6] text-muted">
                 <SkillDescription text={s.description} keyUrl={s.keyUrl} />
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
                 <Pill className="text-[8px]">{cooldownLabel(s.cooldownMs)}</Pill>
-                <Pill className="text-[8px]">kind · {s.kind}</Pill>
               </div>
             </div>
             <div className="flex flex-col gap-2">
@@ -388,113 +290,23 @@ export default function SkillsPanel() {
               >
                 {busy === s.name ? 'Working…' : 'Run now'}
               </Btn>
-              {/* Built-in skills are editable in place; custom skills are edited
-                  on disk + Rescan, so no Edit button for them. */}
-              {!s.custom && (
-                <Btn
-                  onClick={() => openEdit(s.kind || s.name)}
-                  disabled={editBusy && editing === (s.kind || s.name)}
-                >
-                  {editing === (s.kind || s.name) ? 'Close' : 'Edit'}
-                </Btn>
-              )}
+              {/* Edit opens the segment-sheet modal for both built-in and custom
+                  skills; Run now / Delete live inside the sheet. */}
+              <Btn onClick={() => setModal({ mode: 'edit', skill: s })}>Edit</Btn>
             </div>
           </div>
-
-          {/* ── INLINE EDIT FORM ──────────────────────────────────────────── */}
-          {editing === (s.kind || s.name) && (
-            <div className="mt-3 border-t border-ink pt-3">
-              {!editForm ? (
-                <div className="text-[12px] text-muted italic">loading…</div>
-              ) : (
-                <div className="grid gap-3">
-                  {editForm.isNews && (
-                    <>
-                      <label className="grid gap-1">
-                        <span className="caption">Feed URL (RSS 2.0)</span>
-                        <input
-                          type="url"
-                          value={editForm.feed}
-                          onChange={e => setEditForm({ ...editForm, feed: e.target.value })}
-                          placeholder="https://…/rss.xml"
-                          className="border border-ink bg-transparent px-2 py-1.5 text-[12px] outline-none focus:border-vermilion"
-                        />
-                      </label>
-                      <label className="grid gap-1">
-                        <span className="caption">Max items to scan</span>
-                        <input
-                          type="number"
-                          min={1}
-                          value={editForm.feedMaxItems}
-                          onChange={e => setEditForm({ ...editForm, feedMaxItems: e.target.value })}
-                          placeholder="10"
-                          className="w-28 border border-ink bg-transparent px-2 py-1.5 text-[12px] outline-none focus:border-vermilion"
-                        />
-                      </label>
-                    </>
-                  )}
-                  <label className="grid gap-1">
-                    <span className="caption">Cooldown</span>
-                    <input
-                      type="text"
-                      value={editForm.cooldown}
-                      onChange={e => setEditForm({ ...editForm, cooldown: e.target.value })}
-                      placeholder="45m"
-                      className="w-28 border border-ink bg-transparent px-2 py-1.5 text-[12px] outline-none focus:border-vermilion"
-                    />
-                    <span className="text-[10px] text-muted">e.g. <code>45m</code>, <code>6h</code>, <code>2d</code>, or a bare number (minutes)</span>
-                  </label>
-                  <div className="grid gap-1">
-                    <span className="caption">Context this segment may mention</span>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-                      {editForm.knownContext.map(field => {
-                        const checked = editForm.context.includes(field);
-                        return (
-                          <label key={field} className="flex items-center gap-1.5 text-[12px]">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => setEditForm({
-                                ...editForm,
-                                context: checked
-                                  ? editForm.context.filter(f => f !== field)
-                                  : [...editForm.context, field],
-                              })}
-                              className="accent-vermilion"
-                            />
-                            {CONTEXT_FIELD_LABELS[field] || field}
-                          </label>
-                        );
-                      })}
-                    </div>
-                    <span className="text-[10px] text-muted">
-                      Tick only what&apos;s topical for this segment. Leaving <strong>Weather</strong> off keeps it
-                      out of the prompt, so the DJ stops mentioning it on every break.
-                    </span>
-                  </div>
-                  <label className="grid gap-1">
-                    <span className="caption">Brief (what the DJ says, and when to stay silent)</span>
-                    <textarea
-                      rows={4}
-                      value={editForm.brief}
-                      onChange={e => setEditForm({ ...editForm, brief: e.target.value })}
-                      className="border border-ink bg-transparent px-2 py-1.5 text-[12px] leading-[1.5] outline-none focus:border-vermilion"
-                    />
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <Btn tone="accent" onClick={saveEdit} disabled={editBusy || !editForm.brief.trim()}>
-                      {editBusy ? 'Saving…' : 'Save'}
-                    </Btn>
-                    <Btn onClick={() => { setEditing(null); setEditForm(null); }} disabled={editBusy}>
-                      Cancel
-                    </Btn>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
         </Card>
       ))}
+
+      {/* ── EDIT / CREATE MODAL ──────────────────────────────────────────── */}
+      {modal && (
+        <SkillEditModal
+          mode={modal.mode}
+          skill={modal.mode === 'edit' ? modal.skill : undefined}
+          onClose={() => setModal(null)}
+          onSkillsChange={next => { if (Array.isArray(next)) setSkills(next as Skill[]); }}
+        />
+      )}
     </div>
   );
 }

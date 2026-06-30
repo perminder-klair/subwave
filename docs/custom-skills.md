@@ -1,11 +1,19 @@
 # Custom skills
 
 SUB/WAVE's **skills** are the things the AI DJ does *between* tracks — a weather
-check, a headline, a tongue-in-cheek traffic gag. The built-in ones are defined in
+check, a headline, a dig on the song playing. The built-in ones are defined in
 `controller/src/skills/_agent.ts` and **scaffolded as editable files** into
 `state/skills/<kind>/SKILL.md` on first boot — so you can change what they say (and,
 for news, which feed they read) without touching the codebase. You can also add
-entirely new skills by dropping a folder into `state/skills/`.
+entirely new skills — either from the admin UI or by dropping a folder into
+`state/skills/`.
+
+> **TL;DR — want a brand-new segment?** Open **/admin/skills → New skill**, fill in
+> a name, a brief, and a cooldown, then **Create skill**. It writes
+> `state/skills/<slug>/SKILL.md` for you (and arrives **disabled** — enable it when
+> you're happy). Custom skills can also be **edited** and **deleted** from the same
+> page. The form is prompt-only; a `tool.mjs` data fetcher is still a disk-drop (see
+> [tool.mjs (optional)](#toolmjs-optional) below).
 
 > **TL;DR — News reads UK/BBC and you want something local?** Open
 > **/admin/skills → News → Edit**, paste your own RSS feed URL and rewrite the
@@ -90,7 +98,7 @@ You can also set this from the admin UI: **/admin/skills → Edit** shows a
 tick-box per field. An empty selection resets the skill to the default profile.
 
 For a **new** skill the `name` must be a lowercase slug that isn't a built-in kind
-(`weather`, `news`, `traffic`, `curiosity`, `album-anniversary`, `library-deep-cut`,
+(`weather`, `news`, `now-playing-dig`, `curiosity`, `album-anniversary`, `library-deep-cut`,
 `web-search`). Naming a folder after a built-in kind instead *edits* that built-in —
 see [Editing the built-in skills](#editing-the-built-in-skills). Bad frontmatter is
 logged and skipped — it never crashes the controller.
@@ -113,8 +121,8 @@ export default async function (ctx, state) {
 
 The call is **timeout-guarded (8 s)** and any throw degrades cleanly to "no
 data" — a slow or broken skill can never hang the between-track tick. With no
-`tool.mjs`, the skill is pure generation (like the built-in `traffic`): the DJ
-writes from the brief alone.
+`tool.mjs`, the skill is pure generation: the DJ writes from the brief alone,
+with no live data to look at.
 
 > **Security.** `tool.mjs` runs operator-supplied code inside the controller
 > container — the same trust model as a locally-installed Claude Code skill.
@@ -122,7 +130,7 @@ writes from the brief alone.
 
 ## Editing the built-in skills
 
-The 7 built-ins — `weather`, `news`, `traffic`, `curiosity`, `album-anniversary`,
+The 7 built-ins — `weather`, `news`, `now-playing-dig`, `curiosity`, `album-anniversary`,
 `library-deep-cut`, `web-search` — are written into `state/skills/<kind>/SKILL.md`
 the first time the controller boots. A file **named after a built-in kind** is an
 **override**: it edits that skill's brief / cooldown / label / `context:` in place
