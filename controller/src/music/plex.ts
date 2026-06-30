@@ -1,0 +1,328 @@
+import { config } from '../config.js';
+import { buildAnnotatedUri } from './subsonic.js';
+import * as lastfm from './lastfm.js';
+
+function plexHeaders(): Record<string, string> {
+  return {
+    'X-Plex-Token': config.plex.token,
+    'Accept': 'application/json',
+    'X-Plex-Client-Identifier': 'subwave',
+    'X-Plex-Product': 'SubWave',
+  };
+}
+
+async function plexFetch(path: string, params?: Record<string, string>): Promise<any> {
+  const url = new URL(config.plex.url + path);
+  if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  const res = await fetch(url.toString(), {
+    headers: plexHeaders(),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`Plex ${path} -> HTTP ${res.status}`);
+  return res.json();
+}
+
+let _sectionKey: string | null = null;
+
+async function getSectionKey(): Promise<string> {
+  if (_sectionKey) return _sectionKey;
+  const data = await plexFetch('/library/sections');
+  const sections: any[] = data?.MediaContainer?.Directory || [];
+  const music = sections.find((s: any) => s.type === 'artist');
+  if (!music) throw new Error('No Plex music library found. Add a Music library in Plex first.');
+  _sectionKey = music.key;
+  return _sectionKey!;
+}
+
+export function normalizePlexTrack(t: any): any {
+  const part = Array.isArray(t.Part) ? t.Part[0] : t.Part;
+  return {
+    id: `plex:${t.ratingKey}`,
+    title: t.title || '',
+    artist: t.grandparentTitle || '',
+    album: t.parentTitle || '',
+    year: t.parentYear || undefined,
+    genre: (Array.isArray(t.Genre) ? t.Genre[0]?.tag : t.Genre?.tag) || undefined,
+    duration: t.duration ? Math.floor(t.duration / 1000) : undefined,
+    path: part?.file || undefined,
+    _partKey: part?.key || '',
+    _thumb: t.thumb || '',
+  };
+}
+
+async function fetchTracks(params: Record<string, string>): Promise<any[]> {
+  const key = await getSectionKey();
+  const data = await plexFetch(`/library/sections/${key}/all`, { type: '10', ...params });
+  return (data?.MediaContainer?.Metadata || []).map(normalizePlexTrack);
+}
+
+export async function ping(): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    if (!config.plex.url || !config.plex.token) {
+      return { ok: false, reason: 'Plex URL or token not configured' };
+    }
+    const data = await plexFetch('/identity');
+    return { ok: true, reason: `Plex ${data?.MediaContainer?.version || ''}` };
+  } catch (err: any) {
+    return { ok: false, reason: err.message };
+  }
+}
+
+export function isStationArchive(song: any): boolean {
+  const p = song?.path || '';
+  return /\barchive\b/.test(p) && /\d{2}-00\.\w+$/.test(p);
+}
+
+export async function search(query: string, opts: { songCount?: number; songOffset?: number } = {}): Promise<any[]> {
+  try {
+    const key = await getSectionKey();
+    const data = await plexFetch('/search', { query, type: '10', sectionId: key, limit: String(opts.songCount ?? 20) });
+    return (data?.MediaContainer?.Metadata || []).map(normalizePlexTrack);
+  } catch { return []; }
+}
+
+export async function getRandomSongs(opts: { size?: number; genre?: string } = {}): Promise<any[]> {
+  try {
+    const params: Record<string, string> = { sort: 'random', 'X-Plex-Container-Size': String(opts.size ?? 20) };
+    if (opts.genre) params.genre = opts.genre;
+    return fetchTracks(params);
+  } catch { return []; }
+}
+
+export async function getSongsByGenre(genre: string, opts: { count?: number } = {}): Promise<any[]> {
+  try {
+    return fetchTracks({ genre, 'X-Plex-Container-Size': String(opts.count ?? 20) });
+  } catch { return []; }
+}
+
+export async function getGenres(): Promise<{ value: string; songCount: number; albumCount: number }[]> {
+  try {
+    const key = await getSectionKey();
+    const data = await plexFetch(`/library/sections/${key}/genre`);
+    return (data?.MediaContainer?.Directory || []).map((g: any) => ({
+      value: g.title || '',
+      songCount: g.size || 0,
+      albumCount: 0,
+    }));
+  } catch { return []; }
+}
+
+export async function resolveGenreName(name: string): Promise<string | null> {
+  const genres = await getGenres();
+  const match = genres.find(g => g.value.toLowerCase() === name.toLowerCase());
+  return match?.value || null;
+}
+
+export async function resolveArtist(name: string): Promise<any | null> {
+  try {
+    const results = await searchArtists(name, { artistCount: 1 });
+    return results[0] || null;
+  } catch { return null; }
+}
+
+export async function getSimilarSongs(id: string, opts: { count?: number } = {}): Promise<any[]> {
+  try {
+    const song = await getSong(id);
+    if (!song) return [];
+    const similarArtists = await lastfm.getSimilarArtists(song.artist, { count: 3 });
+    const results: any[] = [];
+    for (const artist of similarArtists.slice(0, 3)) {
+      const tracks = await search(artist, { songCount: Math.ceil((opts.count || 10) / 3) });
+      results.push(...tracks);
+      if (results.length >= (opts.count || 10)) break;
+    }
+    return results.slice(0, opts.count || 10);
+  } catch { return []; }
+}
+
+export async function supportsSonicSimilarity(): Promise<boolean> {
+  return false;
+}
+
+export async function getSonicSimilarTracks(id: string, opts: { count?: number } = {}): Promise<any[]> {
+  return getSimilarSongs(id, opts);
+}
+
+export async function getStarred(): Promise<any[]> {
+  try {
+    return fetchTracks({ 'userRating>>': '0', sort: 'userRating:desc' });
+  } catch { return []; }
+}
+
+export async function getRecentlyAddedAlbums(opts: { size?: number } = {}): Promise<any[]> {
+  try {
+    const key = await getSectionKey();
+    const data = await plexFetch(`/library/sections/${key}/all`, {
+      type: '9', sort: 'addedAt:desc', 'X-Plex-Container-Size': String(opts.size ?? 20),
+    });
+    return (data?.MediaContainer?.Metadata || []).map((a: any) => ({
+      id: `plex:${a.ratingKey}`,
+      name: a.title,
+      artist: a.parentTitle,
+      year: a.year,
+    }));
+  } catch { return []; }
+}
+
+export async function getFrequentAlbums(opts: { size?: number } = {}): Promise<any[]> {
+  try {
+    const key = await getSectionKey();
+    const data = await plexFetch(`/library/sections/${key}/all`, {
+      type: '9', sort: 'viewCount:desc', 'X-Plex-Container-Size': String(opts.size ?? 20),
+    });
+    return (data?.MediaContainer?.Metadata || []).map((a: any) => ({
+      id: `plex:${a.ratingKey}`,
+      name: a.title,
+      artist: a.parentTitle,
+      year: a.year,
+    }));
+  } catch { return []; }
+}
+
+export async function getArtistInfo(id: string, _opts: { count?: number } = {}): Promise<any | null> {
+  try {
+    const ratingKey = id.replace('plex:', '');
+    const data = await plexFetch(`/library/metadata/${ratingKey}`);
+    const artist = data?.MediaContainer?.Metadata?.[0];
+    if (!artist) return null;
+    const lfmInfo = await lastfm.getArtistInfo(artist.title || '');
+    return {
+      id,
+      name: artist.title,
+      biography: lfmInfo?.bio || artist.summary || '',
+      tags: lfmInfo?.tags || [],
+    };
+  } catch { return null; }
+}
+
+export async function getTopSongs(artistName: string, opts: { count?: number } = {}): Promise<any[]> {
+  try {
+    const topTracks = await lastfm.getTopTracks(artistName, { count: opts.count || 10 });
+    const results: any[] = [];
+    for (const t of topTracks.slice(0, opts.count || 10)) {
+      const found = await search(`${t.title} ${t.artist}`, { songCount: 1 });
+      if (found.length) results.push(found[0]);
+    }
+    return results;
+  } catch { return []; }
+}
+
+export async function getRecentSongsByArtist(artistName: string, opts: { count?: number } = {}): Promise<any[]> {
+  try {
+    return search(artistName, { songCount: opts.count || 10 });
+  } catch { return []; }
+}
+
+export async function getAlbum(id: string): Promise<any[]> {
+  try {
+    const ratingKey = id.replace('plex:', '');
+    const data = await plexFetch(`/library/metadata/${ratingKey}/children`);
+    return (data?.MediaContainer?.Metadata || []).map(normalizePlexTrack);
+  } catch { return []; }
+}
+
+export async function getSong(id: string): Promise<any | null> {
+  try {
+    const ratingKey = id.replace('plex:', '');
+    const data = await plexFetch(`/library/metadata/${ratingKey}`);
+    const track = data?.MediaContainer?.Metadata?.[0];
+    return track ? normalizePlexTrack(track) : null;
+  } catch { return null; }
+}
+
+export async function getArtist(id: string): Promise<any | null> {
+  try {
+    const ratingKey = id.replace('plex:', '');
+    const data = await plexFetch(`/library/metadata/${ratingKey}`);
+    const artist = data?.MediaContainer?.Metadata?.[0];
+    if (!artist) return null;
+    return { id, name: artist.title, albumCount: artist.childCount || 0 };
+  } catch { return null; }
+}
+
+export async function searchArtists(query: string, opts: { artistCount?: number } = {}): Promise<any[]> {
+  try {
+    const key = await getSectionKey();
+    const data = await plexFetch('/search', { query, type: '8', sectionId: key, limit: String(opts.artistCount ?? 10) });
+    return (data?.MediaContainer?.Metadata || []).map((a: any) => ({
+      id: `plex:${a.ratingKey}`,
+      name: a.title,
+    }));
+  } catch { return []; }
+}
+
+export async function getArtistLastfmTags(id: string, opts: { count?: number } = {}): Promise<string[]> {
+  try {
+    const artist = await getArtist(id);
+    if (!artist) return [];
+    return lastfm.getArtistTopTags(artist.name, opts);
+  } catch { return []; }
+}
+
+export async function getLyrics(_songId: string): Promise<string> {
+  return '';
+}
+
+export async function* iterateAllSongs(): AsyncGenerator<any> {
+  const key = await getSectionKey();
+  let start = 0;
+  const size = 100;
+  while (true) {
+    const data = await plexFetch(`/library/sections/${key}/all`, {
+      type: '10',
+      'X-Plex-Container-Start': String(start),
+      'X-Plex-Container-Size': String(size),
+    });
+    const tracks: any[] = data?.MediaContainer?.Metadata || [];
+    if (tracks.length === 0) break;
+    for (const t of tracks) yield normalizePlexTrack(t);
+    if (tracks.length < size) break;
+    start += size;
+  }
+}
+
+export async function getPlaylists(): Promise<any[]> {
+  try {
+    const data = await plexFetch('/playlists', { playlistType: 'audio' });
+    return (data?.MediaContainer?.Metadata || []).map((p: any) => ({
+      id: `plex:${p.ratingKey}`,
+      name: p.title,
+      songCount: p.leafCount || 0,
+    }));
+  } catch { return []; }
+}
+
+export async function getPlaylist(id: string): Promise<any[]> {
+  try {
+    const ratingKey = id.replace('plex:', '');
+    const data = await plexFetch(`/playlists/${ratingKey}/items`);
+    return (data?.MediaContainer?.Metadata || []).map(normalizePlexTrack);
+  } catch { return []; }
+}
+
+export function getCoverArtUrl(id: string, _size?: number): string {
+  const ratingKey = id.replace('plex:', '');
+  return `${config.plex.url}/library/metadata/${ratingKey}/thumb?X-Plex-Token=${config.plex.token}`;
+}
+
+export function getStreamUrl(songId: string): string {
+  return getRawStreamUrl(songId);
+}
+
+export function getRawStreamUrl(songId: string): string {
+  const ratingKey = songId.replace('plex:', '');
+  return `${config.plex.url}/library/parts/${ratingKey}/0/file?X-Plex-Token=${config.plex.token}`;
+}
+
+export function getLocalPath(_song: any): string | null {
+  return null;
+}
+
+export function getPlayableUri(song: any): string {
+  const partPath = song._partKey || `/library/parts/${song.id.replace('plex:', '')}/0/file`;
+  return `subhttp:${config.plex.url}${partPath}?X-Plex-Token=${config.plex.token}`;
+}
+
+export function getAnnotatedUri(song: any, opts: { maxDurationSec?: number | null } = {}): string {
+  return buildAnnotatedUri(song, getPlayableUri(song), opts);
+}
