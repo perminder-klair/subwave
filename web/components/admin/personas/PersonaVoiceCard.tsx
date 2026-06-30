@@ -12,7 +12,7 @@ import { CB_DEFAULT_VOICE, KOKORO_RE, CHATTERBOX_VOICE_RE, POCKET_TTS_VOICE_RE }
 import { Card, Seg } from '../ui';
 import { EngineSelector } from '../tts/EngineSelector';
 import { VoicePreviewButton } from '../tts/VoicePreviewButton';
-import { ENGINES } from '../tts/engineMeta';
+import { ENGINES, type TtsAvailable } from '../tts/engineMeta';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import {
@@ -71,6 +71,20 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
     updateTts(patch);
   };
 
+  // Per-persona cloud availability: a persona on `elevenlabs` when only an
+  // OpenAI key is set should see cloud as unavailable, even if another persona
+  // with an OpenAI key would see it as available. Fall back to the global flag
+  // when the persona isn't on cloud (provider not yet chosen / switching).
+  const globalAvail = data?.tts?.available as TtsAvailable | undefined;
+  let selectorAvailable = globalAvail;
+  if (globalAvail) {
+    const prov = persona.tts.cloudProvider;
+    const cloudByProv = globalAvail.cloudByProvider;
+    if (cloudByProv && persona.tts.engine === 'cloud' && prov) {
+      selectorAvailable = { ...globalAvail, cloud: cloudByProv[prov] !== false };
+    }
+  }
+
   return (
     <Card title="Voice" sub="text-to-speech engine">
       {/* Engine — radio-card grid, full width above the two-column body. */}
@@ -79,7 +93,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
         <EngineSelector
           value={persona.tts.engine}
           engineIds={ENGINE_IDS}
-          available={data?.tts?.available}
+          available={selectorAvailable}
           onChange={selectEngine}
         />
         <div className="field-hint max-w-[70ch]">

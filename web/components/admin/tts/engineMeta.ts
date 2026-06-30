@@ -26,20 +26,32 @@ export const ENGINE_META: Record<string, EngineMeta> = Object.fromEntries(
   ENGINES.map(e => [e.id, e]),
 );
 
+// The controller's availableEngines() shape. Missing/undefined key means
+// "not yet known / assumed up" — consumers only gate on `=== false`.
+export interface TtsAvailable {
+  piper?: boolean;
+  kokoro?: boolean;
+  chatterbox?: boolean;
+  'pocket-tts'?: boolean;
+  cloud?: boolean;
+  remote?: boolean;
+  pocketTtsCloning?: boolean | null;
+  cloudByProvider?: Record<string, boolean>;
+}
+
 export type EngineStatusTone = 'ok' | 'warn';
 export interface EngineStatus {
   label: string;
   tone: EngineStatusTone;
 }
 
-// Pure: derive an engine's status badge from the controller's availability map
-// (SettingsResponse.tts.available — piper/kokoro/chatterbox/pocket-tts/cloud
-// booleans). A missing/undefined flag means "not yet known / assumed up", so we
-// only flag a hard `=== false`. `warn` reads as the recoverable-problem tone
-// (sidecar down, no cloud key); `ok` is the quiet ready state.
+// Pure: derive an engine's status badge from the controller's availability map.
+// A missing/undefined flag means "not yet known / assumed up", so we only flag
+// a hard `=== false`. `warn` is the recoverable-problem tone (sidecar down, no
+// cloud key); `ok` is the quiet ready state.
 export function engineStatus(
   id: string,
-  available: Record<string, boolean> | undefined,
+  available: TtsAvailable | undefined,
 ): EngineStatus {
   const a = available || {};
   switch (id) {
@@ -50,8 +62,11 @@ export function engineStatus(
         ? { label: 'unavailable', tone: 'warn' }
         : { label: 'ready', tone: 'ok' };
     case 'chatterbox':
+      return a.chatterbox === false
+        ? { label: 'sidecar off', tone: 'warn' }
+        : { label: 'ready', tone: 'ok' };
     case 'pocket-tts':
-      return a[id] === false
+      return a['pocket-tts'] === false
         ? { label: 'sidecar off', tone: 'warn' }
         : { label: 'ready', tone: 'ok' };
     case 'cloud':
@@ -64,5 +79,50 @@ export function engineStatus(
         : { label: 'ready', tone: 'ok' };
     default:
       return { label: '', tone: 'ok' };
+  }
+}
+
+export interface EngineEnableHint {
+  reason: string;
+  // The exact shell command or UI action needed to enable this engine.
+  action?: string;
+}
+
+// Pure: derive the "how to enable this engine" hint for an unavailable engine.
+// Returns undefined when the engine is available or the hint doesn't apply.
+export function engineEnableHint(
+  id: string,
+  available: TtsAvailable | undefined,
+): EngineEnableHint | undefined {
+  const a = available || {};
+  switch (id) {
+    case 'kokoro':
+      return a.kokoro === false
+        ? { reason: 'Kokoro model or venv not present on the controller' }
+        : undefined;
+    case 'chatterbox':
+      return a.chatterbox === false
+        ? {
+            reason: 'tts-heavy sidecar is offline',
+            action: 'docker compose --profile tts-heavy up -d',
+          }
+        : undefined;
+    case 'pocket-tts':
+      return a['pocket-tts'] === false
+        ? {
+            reason: 'tts-heavy sidecar is offline',
+            action: 'docker compose --profile tts-heavy up -d',
+          }
+        : undefined;
+    case 'cloud':
+      return a.cloud === false
+        ? { reason: 'no API key configured for this provider', action: 'add it in Settings → Voice' }
+        : undefined;
+    case 'remote':
+      return a.remote === false
+        ? { reason: 'remote endpoint is unreachable', action: 'check the URL in Settings → Voice' }
+        : undefined;
+    default:
+      return undefined;
   }
 }
