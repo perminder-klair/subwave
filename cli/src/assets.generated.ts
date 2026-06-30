@@ -248,6 +248,12 @@ services:
       # host + nvidia runtime; the server gracefully falls back to cpu when
       # CUDA isn't actually available.
       - TTS_HEAVY_DEVICE=\${TTS_HEAVY_DEVICE:-cpu}
+      # Set DISABLE_CHATTERBOX=1 or DISABLE_POCKET_TTS=1 in your root .env to
+      # skip loading that engine entirely. The model is never started so no RAM
+      # or swap is consumed. Useful when you only use one TTS engine, or when
+      # you run tts-heavy solely for acoustic analysis (both engines disabled).
+      - DISABLE_CHATTERBOX=\${DISABLE_CHATTERBOX:-}
+      - DISABLE_POCKET_TTS=\${DISABLE_POCKET_TTS:-}
       # Default voice id used by PocketTTS when a persona doesn't override it.
       - POCKET_TTS_VOICE=\${POCKET_TTS_VOICE:-alba}
       # Optional — enables PocketTTS zero-shot voice CLONING (issue #238). The
@@ -484,6 +490,12 @@ services:
     profiles: ["tts-heavy"]
     environment:
       - TTS_HEAVY_DEVICE=\${TTS_HEAVY_DEVICE:-cpu}
+      # Set DISABLE_CHATTERBOX=1 or DISABLE_POCKET_TTS=1 in your root .env to
+      # skip loading that engine entirely. The model is never started so no RAM
+      # or swap is consumed. Useful when you only use one TTS engine, or when
+      # you run tts-heavy solely for acoustic analysis (both engines disabled).
+      - DISABLE_CHATTERBOX=\${DISABLE_CHATTERBOX:-}
+      - DISABLE_POCKET_TTS=\${DISABLE_POCKET_TTS:-}
       - POCKET_TTS_VOICE=\${POCKET_TTS_VOICE:-alba}
       # Optional — enables PocketTTS voice CLONING (issue #238). Cloning weights
       # are gated on Hugging Face; accept the terms at
@@ -689,6 +701,12 @@ services:
     profiles: ["tts-heavy"]
     environment:
       - TTS_HEAVY_DEVICE=\${TTS_HEAVY_DEVICE:-cpu}
+      # Set DISABLE_CHATTERBOX=1 or DISABLE_POCKET_TTS=1 in your root .env to
+      # skip loading that engine entirely. The model is never started so no RAM
+      # or swap is consumed. Useful when you only use one TTS engine, or when
+      # you run tts-heavy solely for acoustic analysis (both engines disabled).
+      - DISABLE_CHATTERBOX=\${DISABLE_CHATTERBOX:-}
+      - DISABLE_POCKET_TTS=\${DISABLE_POCKET_TTS:-}
       - POCKET_TTS_VOICE=\${POCKET_TTS_VOICE:-alba}
       # Optional — enables PocketTTS voice CLONING (issue #238). Cloning weights
       # are gated; accept terms at huggingface.co/kyutai/pocket-tts and set
