@@ -187,7 +187,7 @@ async function checkController(compose: ComposeStatus): Promise<Finding[]> {
       out.push({
         label: 'setup',
         status: 'fail',
-        detail: 'incomplete — Navidrome + LLM not configured',
+        detail: 'incomplete — music source + LLM not configured',
         hint: `Run \`subwave setup\` or open ${webBaseFor(compose.env)}/onboarding to finish configuration.`,
       });
     } else if (needsSetup === false) {

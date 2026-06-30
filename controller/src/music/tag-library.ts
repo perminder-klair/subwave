@@ -33,7 +33,7 @@
 // On boot the library-db auto-migrates any state/moods.json into the SQLite
 // tracks table as legacy v1 entries (see library-db.ts).
 
-import * as subsonic from './subsonic.js';
+import { getSource, warmSourceCache } from './source/index.js';
 import * as lastfm from './lastfm.js';
 import * as db from './library-db.js';
 import * as settings from '../settings.js';
@@ -134,15 +134,15 @@ function parseFlags(): CliFlags {
   };
 }
 
-// Walk the entire Navidrome catalogue, upserting each song's metadata into the
-// tracks table and collecting the live id set. Shared by the full tagger run
-// (Phase A) and the standalone --reconcile-only path. Cheap: metadata only, no
-// embeddings or LLM calls.
-async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<string> }> {
-  reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
+// Walk the entire music library catalogue, upserting each song's metadata into
+// the tracks table and collecting the live id set. Shared by the full tagger
+// run (Phase A) and the standalone --reconcile-only path. Cheap: metadata only,
+// no embeddings or LLM calls.
+async function walkMusicSource(): Promise<{ walked: number; liveIds: Set<string> }> {
+  reportProgress({ phase: 'walk', label: 'Scanning music library', done: 0 });
   let walked = 0;
   const liveIds = new Set<string>();
-  for await (const song of subsonic.iterateAllSongs()) {
+  for await (const song of getSource().iterateAllSongs()) {
     db.upsertTrackMeta(song.id, {
       title: song.title,
       artist: song.artist,
@@ -155,43 +155,43 @@ async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<string> }
     walked += 1;
     if (walked % 500 === 0) {
       console.log(`[tag] walked ${walked} tracks`);
-      reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: walked });
+      reportProgress({ phase: 'walk', label: 'Scanning music library', done: walked });
     }
   }
   console.log(`[tag] walked ${walked} total tracks`);
   return { walked, liveIds };
 }
 
-// Standalone reconcile: diff library-db against the live Navidrome catalogue and
-// drop rows (and their vectors) for tracks that are gone. No embedding preflight
-// and no LLM — opens the existing DB at its stored dim so vectors are untouched.
+// Standalone reconcile: diff library-db against the live music source catalogue
+// and drop rows (and their vectors) for tracks that are gone. No embedding
+// preflight and no LLM — opens the existing DB at its stored dim so vectors
+// are untouched.
 async function reconcileOnly() {
   await db.open({ embeddingDim: embeddings.resolveEmbeddingDim(), adoptStoredDim: true });
-  console.log('[tag] reconcile-only: walking Navidrome to prune orphaned rows');
-  const { walked, liveIds } = await walkNavidrome();
+  console.log('[tag] reconcile-only: walking music source to prune orphaned rows');
+  const { walked, liveIds } = await walkMusicSource();
   let pruned = 0;
   if (walked > 0) {
     pruned = db.pruneMissingTracks(liveIds);
-    console.log(`[tag] reconcile pruned ${pruned} orphaned tracks no longer in Navidrome`);
+    console.log(`[tag] reconcile pruned ${pruned} orphaned tracks no longer in music source`);
   } else {
-    // A transient empty Navidrome response must never wipe the DB.
-    console.warn('[tag] reconcile: Navidrome returned 0 tracks — skipping prune');
+    // A transient empty response must never wipe the DB.
+    console.warn('[tag] reconcile: music source returned 0 tracks — skipping prune');
   }
   reportProgress({
     phase: 'done',
     label: pruned > 0
-      ? `Removed ${pruned} track${pruned === 1 ? '' : 's'} no longer in Navidrome`
-      : 'Library is in sync with Navidrome',
+      ? `Removed ${pruned} track${pruned === 1 ? '' : 's'} no longer in music library`
+      : 'Library is in sync with music source',
     done: pruned,
   });
   console.log(`[tag] reconcile complete (walked ${walked}, pruned ${pruned})`);
   process.exit(0);
 }
 
-// Mirrors server.ts boot: cloud API keys from secrets.env, Navidrome creds
+// Mirrors server.ts boot: cloud API keys from secrets.env, music source creds
 // from setup-config.json. Standalone CLIs skip server.ts, so without this
-// they fall back to the hardcoded `http://navidrome:4533` and ENOTFOUND on
-// any install with a custom Navidrome host.
+// they fall back to the hardcoded defaults and ENOTFOUND on custom hosts.
 async function applyWizardOverlay() {
   try {
     await loadSecretsIntoEnv();
@@ -205,6 +205,10 @@ async function applyWizardOverlay() {
       if (!process.env.NAVIDROME_USER && sc.navidrome.user) config.navidrome.user = sc.navidrome.user;
       if (!process.env.NAVIDROME_PASS && sc.navidrome.pass)
         config.navidrome.password = sc.navidrome.pass;
+    }
+    if (sc.plex) {
+      if (!process.env.PLEX_URL && sc.plex.url) config.plex.url = sc.plex.url;
+      if (!process.env.PLEX_TOKEN && sc.plex.token) config.plex.token = sc.plex.token;
     }
   } catch (err: any) {
     console.error('[setup-config] load failed:', err.message);
@@ -232,6 +236,8 @@ async function main() {
 
   await applyWizardOverlay();
   await settings.load();
+  // Load the active music backend (navidrome or plex) before any walk.
+  await warmSourceCache();
 
   // Reconcile is a pure catalogue diff — short-circuit before any embedding /
   // LLM setup so it runs even when embeddings are disabled or unconfigured.
@@ -307,24 +313,24 @@ async function main() {
     for (const [k, v] of Object.entries(m)) byLeg[k] = (byLeg[k] || 0) + v;
   };
 
-  // ---- Phase A: iterate Navidrome and upsert track metadata into DB ------
-  // Cheap; ensures every Navidrome song is in the tracks table so subsequent
-  // phases can operate purely off SQL.
+  // ---- Phase A: iterate music source and upsert track metadata into DB -----
+  // Cheap; ensures every song is in the tracks table so subsequent phases can
+  // operate purely off SQL.
   lap('setup');
-  console.log('[tag] walking Navidrome library...');
-  const { walked, liveIds } = await walkNavidrome();
+  console.log('[tag] walking music library...');
+  const { walked, liveIds } = await walkMusicSource();
 
   // Reconcile against the live catalogue. The walk above is complete and
-  // authoritative, so any track row it didn't see is gone from Navidrome
+  // authoritative, so any track row it didn't see is gone from the music source
   // (typically after a full rescan that re-mints IDs). Pruning the orphans
   // keeps coverage %, untagged scope and analysis scope honest. Guarded on a
-  // non-empty walk so a transient empty Navidrome response can't wipe the DB.
+  // non-empty walk so a transient empty response can't wipe the DB.
   if (flags.noPrune) {
     console.log('[tag] --no-prune: skipping orphan prune (reconcile step deselected)');
   } else if (walked > 0) {
     const pruned = db.pruneMissingTracks(liveIds);
     if (pruned > 0) {
-      console.log(`[tag] pruned ${pruned} orphaned tracks no longer in Navidrome`);
+      console.log(`[tag] pruned ${pruned} orphaned tracks no longer in music source`);
     }
   }
   lap('walk');
@@ -740,7 +746,7 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
     let lyricExcerpt: string | null = null;
     if (lyricsEnabled) {
       try {
-        const raw = await subsonic.getLyrics(id);
+        const raw = await getSource().getLyrics(id);
         if (typeof raw === 'string' && raw.trim()) {
           lyricExcerpt = raw.trim();
         }

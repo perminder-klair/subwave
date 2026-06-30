@@ -152,7 +152,7 @@ interface TaggingPanelProps {
 // One friendly sentence per pipeline phase — shown under the live progress so
 // the operator knows what the run is actually doing right now.
 const PHASE_HINT: Record<TaggerProgress['phase'], string> = {
-  walk: 'Reading the track list from Navidrome.',
+  walk: 'Reading the track list from your music library.',
   enrich: 'Fetching Last.fm tags and lyrics that help the DJ understand each track.',
   embed: 'Computing similarity vectors so tags can spread between similar tracks.',
   seed: 'The DJ is deciding mood & energy for a representative set of tracks.',

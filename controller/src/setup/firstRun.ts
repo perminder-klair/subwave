@@ -13,7 +13,7 @@ export interface SetupStatus {
   needsSetup: boolean;
   setupCompletedAt: string | null;
   // Useful for the wizard's "I see you already have NAVIDROME_URL in env" UX.
-  navidromeSource: 'env' | 'setup-config' | 'unset';
+  navidromeSource: 'env' | 'setup-config' | 'plex' | 'plex/env' | 'unset';
 }
 
 export async function getSetupStatus(): Promise<SetupStatus> {
@@ -34,7 +34,7 @@ export async function getSetupStatus(): Promise<SetupStatus> {
     return {
       needsSetup: false,
       setupCompletedAt: null,
-      navidromeSource: 'unset',
+      navidromeSource: 'plex/env',
     };
   }
 
@@ -46,7 +46,7 @@ export async function getSetupStatus(): Promise<SetupStatus> {
   return {
     needsSetup: !(setupConfigHasNavidrome || setupConfigHasPlex),
     setupCompletedAt: sc.setupCompletedAt || null,
-    navidromeSource: setupConfigHasNavidrome ? 'setup-config' : 'unset',
+    navidromeSource: setupConfigHasNavidrome ? 'setup-config' : setupConfigHasPlex ? 'plex' : 'unset',
   };
 }
 
@@ -64,7 +64,7 @@ export function getSetupStatusSync(): SetupStatus {
   }
   const envHasPlex = Boolean(process.env.PLEX_URL && process.env.PLEX_TOKEN);
   if (envHasPlex) {
-    return { needsSetup: false, setupCompletedAt: null, navidromeSource: 'unset' };
+    return { needsSetup: false, setupCompletedAt: null, navidromeSource: 'plex/env' };
   }
   // Read the config we already loaded into memory rather than touching disk.
   const url = config.navidrome.url;
@@ -75,6 +75,6 @@ export function getSetupStatusSync(): SetupStatus {
   return {
     needsSetup: !(filled || plexFilled),
     setupCompletedAt: null,
-    navidromeSource: filled ? 'setup-config' : 'unset',
+    navidromeSource: filled ? 'setup-config' : plexFilled ? 'plex' : 'unset',
   };
 }
