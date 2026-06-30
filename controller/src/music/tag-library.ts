@@ -887,6 +887,7 @@ async function processBatch(
     year: t.year ?? undefined,
     genre: t.genre ?? undefined,
     lastfmTags: t.lastfmTags ?? undefined,
+    lyricExcerpt: t.lyricExcerpt ?? undefined,
   }));
   const opts = consumer.pin ? { leg: consumer.pin } : {};
 

@@ -281,11 +281,32 @@ export async function getArtistLastfmTags(id: string, opts: { count?: number } =
 }
 
 export async function getLyrics(songId: string): Promise<string> {
-  // Plex has no lyrics API, but exposes Mood tags per track (from MusicBrainz /
-  // acoustic analysis). Return them as a comma-separated hint so the enrichment
-  // phase stores them in lyric_excerpt and the LLM tagger sees real mood context
-  // instead of an empty string.
+  // Fetch lyrics from LRCLIB (free, no key) by title+artist — same source
+  // Navidrome uses internally. Falls back to Plex Mood tags when LRCLIB has
+  // no coverage, then empty string.
   try {
+    const t = db.isOpen() ? db.getTrack(songId) : null;
+    const title = t?.title;
+    const artist = t?.artist;
+    if (title && artist) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 5000);
+      try {
+        const params = new URLSearchParams({ artist_name: artist, track_name: title });
+        const r = await fetch(`https://lrclib.net/api/get?${params}`, {
+          headers: { 'User-Agent': 'sub-wave/lyrics' },
+          signal: ctrl.signal,
+        });
+        if (r.ok) {
+          const data = await r.json() as any;
+          const plain: string = data?.plainLyrics || '';
+          if (plain.trim()) return plain.slice(0, 300).trim();
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    // Fallback: Plex Mood tags when LRCLIB has no coverage
     const ratingKey = songId.replace('plex:', '');
     const data = await plexFetch(`/library/metadata/${ratingKey}`);
     const track = data?.MediaContainer?.Metadata?.[0];

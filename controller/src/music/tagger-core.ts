@@ -62,6 +62,7 @@ export interface TaggableSong {
   year?: number | string | null;
   genre?: string | null;
   lastfmTags?: string[] | null;
+  lyricExcerpt?: string | null;
 }
 
 export interface TagResult {
@@ -83,13 +84,15 @@ function sanitizeTag(parsed: { moods?: unknown; energy?: unknown }): TagResult {
 
 function formatSong(song: TaggableSong): string {
   const tags = song.lastfmTags?.length ? song.lastfmTags.join(', ') : '?';
+  const excerpt = song.lyricExcerpt?.trim() || '?';
   return (
     `Title: ${song.title || '?'} | ` +
     `Artist: ${song.artist || '?'} | ` +
     `Album: ${song.album || '?'} | ` +
     `Year: ${song.year || '?'} | ` +
     `Genre: ${song.genre || '?'} | ` +
-    `Tags: ${tags}`
+    `Tags: ${tags} | ` +
+    `Lyrics/Context: ${excerpt}`
   );
 }
 
@@ -102,13 +105,15 @@ export interface TagOpts {
 
 export async function tagOne(song: TaggableSong, opts: TagOpts = {}): Promise<TagResult> {
   const tags = song.lastfmTags?.length ? song.lastfmTags.join(', ') : '?';
+  const excerpt = song.lyricExcerpt?.trim() || '?';
   const userPrompt =
     `Title: ${song.title}\n` +
     `Artist: ${song.artist || '?'}\n` +
     `Album: ${song.album || '?'}\n` +
     `Year: ${song.year || '?'}\n` +
     `Genre: ${song.genre || '?'}\n` +
-    `Tags: ${tags}`;
+    `Tags: ${tags}\n` +
+    `Lyrics/Context: ${excerpt}`;
 
   const parsed = await djObject({
     system: TAGGER_SYSTEM,
