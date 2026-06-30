@@ -12,7 +12,7 @@
 
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { z } from 'zod';
-import { config, STATE_DIR } from './config.js';
+import { STATE_DIR } from './config.js';
 import * as settings from './settings.js';
 import { getSource } from './music/source/index.js';
 import * as subsonicLog from './music/subsonic-log.js';
@@ -97,7 +97,7 @@ export async function runDoctor(): Promise<DoctorReport> {
   // Each check swallows its own errors and degrades to a 'skip'/'fail' finding,
   // so one failing subsystem never blanks the whole report.
   sections.push({ name: 'LLM', findings: await safe(() => checkLlm(s)) });
-  sections.push({ name: 'Navidrome & library', findings: await safe(checkNavidrome) });
+  sections.push({ name: 'Navidrome & library', findings: await safe(checkMusicSource) });
   sections.push({ name: 'Broadcast', findings: await safe(checkBroadcast) });
   sections.push({ name: 'Voice (TTS)', findings: await safe(() => checkTts(s)) });
   sections.push({ name: 'Capabilities', findings: await safe(() => checkCapabilities(s)) });
@@ -257,17 +257,18 @@ async function checkLlm(s: any): Promise<Finding[]> {
   return out;
 }
 
-async function checkNavidrome(): Promise<Finding[]> {
+async function checkMusicSource(): Promise<Finding[]> {
   const out: Finding[] = [];
 
+  const source = (settings.get() as any).music?.source || 'navidrome';
   const p = await getSource().ping();
   out.push({
     label: 'connectivity',
     status: p.ok ? 'ok' : 'fail',
-    detail: p.ok ? `${config.navidrome.url} · authenticated` : p.reason || 'unreachable',
-    hint: p.ok
-      ? undefined
-      : 'The picker has no music source without Navidrome. Check the URL / username / password in setup, and that Navidrome is up.',
+    detail: p.ok
+      ? `${source} · authenticated`
+      : p.reason || 'unreachable',
+    hint: p.ok ? undefined : `The picker has no music source. Check the ${source} URL and credentials in Settings -> Music.`,
   });
 
   // Recent call error rate across all endpoints.
