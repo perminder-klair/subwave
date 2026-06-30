@@ -67,14 +67,24 @@ export function useAdminAuth(): AdminAuth {
   // flips us into the sign-in flow on 401.
   const adminFetch = useCallback(async (path: string, init: RequestInit = {}): Promise<Response> => {
     const headers: Record<string, string> = { ...((init.headers as Record<string, string>) || {}) };
-    if (auth) headers.Authorization = `Basic ${auth}`;
+    // Resolve the token from state, falling back to the persisted copy. A
+    // freshly mounted hook instance can fire a request from a mount effect
+    // BEFORE its own hydration effect has copied the token out of localStorage
+    // into `auth`. Without this fallback that first request goes out
+    // unauthenticated, the controller answers 401 + `WWW-Authenticate: Basic`,
+    // and the browser pops its NATIVE basic-auth dialog over the app (the
+    // symptom seen when opening the skill-edit modal).
+    let token = auth;
+    if (!token && typeof window !== 'undefined') {
+      try { token = localStorage.getItem(STORAGE_KEY); } catch {}
+    }
+    if (token) headers.Authorization = `Basic ${token}`;
     const r = await fetch(`${API_URL}${path}`, { ...init, headers });
     if (r.status === 401) {
       // Only treat a 401 as a revoked token when we actually sent
-      // credentials. A 401 on a call made before this hook instance has
-      // hydrated (auth still null) must not wipe a valid token that a
-      // sibling useAdminAuth instance is relying on.
-      if (auth) {
+      // credentials. A 401 on a call made with no token at all must not wipe a
+      // valid token that a sibling useAdminAuth instance is relying on.
+      if (token) {
         try { localStorage.removeItem(STORAGE_KEY); } catch {}
         setAuth(null);
       }
