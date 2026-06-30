@@ -18,6 +18,7 @@ import {
   checkRateLimit, clientIp,
   REQUESTS_DISABLED, REQUEST_TEXT_MAX, REQUEST_NAME_MAX,
 } from '../middleware/ratelimit.js';
+import { voiceSilenced } from '../settings.js';
 
 export const router = express.Router();
 
@@ -265,7 +266,7 @@ async function resolveRequest(entry) {
     // actual pick, not the seed.
     const sameArtist = !!pick.artist && pick.artist === refArtist;
     const ackLine = sameArtist ? `More from ${refArtist}, coming up.` : `More like that, coming up.`;
-    const introScript = await dj.generateIntro({
+    const introScript = voiceSilenced() ? null : await dj.generateIntro({
       track: pick,
       context: ctx,
       requestedBy: requester,
@@ -536,7 +537,7 @@ async function resolveRequest(entry) {
   // 3. Generate DJ intro that mentions the request. On a miss, pass the
   // requested-but-absent artist so the spoken intro owns the substitution
   // instead of pretending the track is by them.
-  const introScript = await dj.generateIntro({
+  const introScript = voiceSilenced() ? null : await dj.generateIntro({
     track: pick,
     context: ctx,
     requestedBy: requester,

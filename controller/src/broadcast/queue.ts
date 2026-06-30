@@ -460,7 +460,7 @@ class Queue {
         // — airing now would play it over whatever's currently on-air, one (or
         // more) tracks before this one reaches the front of dj_queue (issue
         // #189). airIntro() writes it to the voice file when the track starts.
-        if (item.introScript && !item.introWav) {
+        if (item.introScript && !item.introWav && !settings.voiceSilenced()) {
           try {
             item.introWav = await speak(item.introScript, { kind: item.introKind || 'dj-speak' });
           } catch (err: any) {
@@ -510,6 +510,7 @@ class Queue {
   //   - everything else → say.txt → voice_queue → HEAVY duck (solo voice
   //              dominates; used for station ID / hourly / weather)
   async announce(text, kind = 'announcement') {
+    if (settings.voiceSilenced()) return;   // music-only persona: no voice
     if (!text || !text.trim()) return;
     try {
       const wavPath = await speak(text, { kind });
@@ -536,7 +537,7 @@ class Queue {
   // this just writes the path to the duck channel and mirrors the bookkeeping
   // announce() does (djLog feeds the opener anti-repeat; session + webhook).
   async airIntro(item: any, predecessor: any = null) {
-    if (!item?.introWav || item.introAired || !existsSync(item.introWav)) return;
+    if (!item?.introWav || item.introAired || !existsSync(item.introWav) || settings.voiceSilenced()) return;
     item.introAired = true;
     // Stale back-announce safety-net. Links are written forward-looking (intro
     // the pick, never name the just-played track), so this normally never fires.

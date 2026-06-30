@@ -1058,6 +1058,7 @@ function normalizePersona(raw: any) {
     frequency: FREQUENCIES.includes(raw.frequency) ? raw.frequency : 'moderate',
     scriptLength: SCRIPT_LENGTHS.includes(raw.scriptLength) ? raw.scriptLength : 'concise',
     djMode: raw.djMode === true,
+    musicOnly: typeof raw.musicOnly === 'boolean' ? raw.musicOnly : false,
     humour: normalizeDial(raw.humour),
     localColour: normalizeDial(raw.localColour),
     warmth: normalizeDial(raw.warmth),
@@ -1752,6 +1753,13 @@ export function validatePersonasStrict(raw) {
       }
       djMode = item.djMode;
     }
+    let musicOnly = false;
+    if (item.musicOnly !== undefined && item.musicOnly !== null) {
+      if (typeof item.musicOnly !== 'boolean') {
+        throw new Error(`personas[${i}].musicOnly must be a boolean`);
+      }
+      musicOnly = item.musicOnly;
+    }
     const tts = validateTtsBlock(item.tts, `personas[${i}]`);
     // skills — optional. Absent → null ("all skills", legacy/default). Present
     // → an explicit slug array (the UI always sends one once edited).
@@ -1802,7 +1810,7 @@ export function validatePersonasStrict(raw) {
       tagline,
       frequency: item.frequency,
       scriptLength,
-      djMode,
+      djMode, musicOnly,
       humour: normalizeDial(item.humour),
       localColour: normalizeDial(item.localColour),
       warmth: normalizeDial(item.warmth),
@@ -2667,6 +2675,10 @@ export function getEffectivePersona(date: Date = new Date()) {
     if (p) return p;
   }
   return getActivePersona();
+}
+
+export function voiceSilenced(): boolean {
+  return !!(getEffectivePersona()?.musicOnly);
 }
 
 // The persona's on-air language as a blunt system-prompt directive. Empty

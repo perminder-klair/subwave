@@ -497,6 +497,10 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
       queue.log('budget', 'daily LLM token cap reached — coasting on the auto playlist');
       return;
     }
+    // Music-only persona: AI picker runs normally, no voice output.
+    // Force here before any djMode / budget branch so neither path can re-enable it.
+    if (settings.voiceSilenced()) wantLink = false;
+
     const cheap = budget.preferCheapPicker();
     wantLink = wantLink && !cheap;
 
@@ -640,7 +644,7 @@ async function runRequestViaAgent(queue: any, { requester }: { requester: string
       track: trackFields(song),
       requestedBy: requester,
       intent: 'listener request',
-      introScript: intro || null,
+      introScript: settings.voiceSilenced() ? null : (intro || null),   // suppress when music-only
       introKind: 'dj-speak',
     });
     // A concurrent request already queued this exact track — push() deduped it

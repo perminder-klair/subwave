@@ -1,10 +1,10 @@
 'use client';
-// How this persona talks: talk frequency, script length, DJ mode, and the tone
+// How this persona talks: talk frequency, script length, DJ style, and the tone
 // dials. Two columns from lg up (settings on the left, dials on the right) so
 // the knobs stay grouped instead of spreading across the full editor width.
 import type { Persona } from './types';
-import { FREQUENCIES, SCRIPT_LENGTHS, TONE_DIALS, toneBandIndex } from './constants';
-import { Card, Toggle } from '../ui';
+import { FREQUENCIES, SCRIPT_LENGTHS, DJ_STYLES, TONE_DIALS, toneBandIndex } from './constants';
+import { Card } from '../ui';
 import { RadioOption } from './RadioOption';
 import { ToneKnob } from './ToneKnob';
 
@@ -14,11 +14,34 @@ interface PersonaBehaviorCardProps {
 }
 
 export function PersonaBehaviorCard({ persona, update }: PersonaBehaviorCardProps) {
+  const djStyleId = persona.musicOnly ? 'music-only' : persona.djMode ? 'full-dj' : 'narrator';
+  const activeDjStyle = DJ_STYLES.find(s => s.id === djStyleId)!;
+
+  function setDjStyle(id: string) {
+    if (id === 'music-only') update({ musicOnly: true, djMode: false });
+    else if (id === 'full-dj') update({ musicOnly: false, djMode: true });
+    else update({ musicOnly: false, djMode: false });
+  }
+
   return (
     <Card title="Behaviour" sub="how this persona talks">
       <div className="lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-8">
-        {/* LEFT — frequency, script length, DJ mode */}
+        {/* LEFT — DJ style, frequency, script length */}
         <div>
+          <div className="rule-label">DJ style</div>
+          <div className="stack-mobile grid grid-cols-3 gap-2">
+            {DJ_STYLES.map(s => (
+              <RadioOption
+                key={s.id}
+                active={s.id === djStyleId}
+                label={s.label}
+                desc={s.desc}
+                onSelect={() => setDjStyle(s.id)}
+              />
+            ))}
+          </div>
+          <div className="field-hint mt-2">{activeDjStyle.feedback}</div>
+
           <div className="rule-label">talk frequency</div>
           <div className="stack-mobile grid grid-cols-3 gap-2">
             {FREQUENCIES.map(f => (
@@ -43,22 +66,6 @@ export function PersonaBehaviorCard({ persona, update }: PersonaBehaviorCardProp
                 onSelect={() => update({ scriptLength: s.id })}
               />
             ))}
-          </div>
-
-          <div className="rule-label">DJ mode</div>
-          <div className="grid grid-cols-[1fr_auto] items-center gap-4">
-            <div>
-              <div className="text-[13px] font-bold">Work the desk like a real DJ</div>
-              <div className="mt-0.5 text-[11px] text-muted">
-                Back-announces and teases what&apos;s coming next, runs callbacks across the
-                hour, and talks more often. Off keeps this persona a tasteful between-track
-                narrator.
-              </div>
-            </div>
-            <Toggle
-              on={persona.djMode}
-              onClick={() => update({ djMode: !persona.djMode })}
-            />
           </div>
         </div>
 
