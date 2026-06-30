@@ -1,9 +1,9 @@
 # Custom skills
 
 SUB/WAVE's **skills** are the things the AI DJ does *between* tracks — a weather
-check, a headline, a dig on the song playing. The built-in ones are defined in
-`controller/src/skills/_agent.ts` and **scaffolded as editable files** into
-`state/skills/<kind>/SKILL.md` on first boot — so you can change what they say (and,
+check, a headline, a dig on the song playing. The built-in ones ship as
+directories under `controller/src/skills/builtins/<kind>/` and are **scaffolded
+as editable files** into `state/skills/<kind>/SKILL.md` on first boot — so you can change what they say (and,
 for news, which feed they read) without touching the codebase. You can also add
 entirely new skills — either from the admin UI or by dropping a folder into
 `state/skills/`.
@@ -106,32 +106,62 @@ logged and skipped — it never crashes the controller.
 ## tool.mjs (optional)
 
 If present, the default export is wrapped as an [AI SDK](https://sdk.vercel.ai)
-tool the segment director can call **before** writing the line — the same
-mechanism the built-in weather/news skills use to look at real data.
+tool the segment director can call **before** writing the line. This is the
+**exact same mechanism the built-ins use** — the seven shipped skills are just
+directories with a `SKILL.md` and a `tool.mjs`, loaded the same way as yours.
 
 ```js
-export default async function (ctx, state) {
-  // ctx   — the moment: { time, weather, festival, dominantMood, clock }
-  // state — cross-tick dedup memory (persists between firings)
+export default async function (ctx, state, services, config) {
+  // ctx      — the moment: { time, weather, festival, dominantMood, clock }
+  // state    — cross-tick dedup memory (persists between firings)
+  // services — the curated station facade (see below)
+  // config   — this skill's own SKILL.md frontmatter (e.g. a custom `feed:`)
   // Return any JSON-serialisable object. The `{ available: false }` convention
   // tells the agent there's nothing worth airing right now.
   return { available: true, foo: 'bar' };
 }
+
+// OPTIONAL: a richer tool description shown to the agent (else a generic one).
+export const description = 'Fetch X for the … segment.';
+
+// OPTIONAL: gate the whole skill on a runtime condition — when this returns
+// false the skill is never even offered (e.g. no search provider configured).
+export const ready = (services) => services.searchReady();
 ```
 
-The call is **timeout-guarded (8 s)** and any throw degrades cleanly to "no
-data" — a slow or broken skill can never hang the between-track tick. With no
-`tool.mjs`, the skill is pure generation: the DJ writes from the brief alone,
-with no live data to look at.
+### `services` — the station facade
 
-> **Security.** `tool.mjs` runs operator-supplied code inside the controller
-> container — the same trust model as a locally-installed Claude Code skill.
-> Only drop in code you've read and trust.
+The one way a tool reaches the world, so built-in and custom skills run on
+identical footing. It's read-mostly (no settings writes, no secrets):
+
+| call | what it does |
+|---|---|
+| `services.searchWeb(query, opts?)` | web search via the configured provider (DuckDuckGo / Tavily / SearXNG) |
+| `services.searchReady()` | `true` when a search provider is usable |
+| `services.nowPlaying()` | the track on air — `{ artist, title, album, year, id }` or `null` |
+| `services.recentPlays(hours)` | play-log dedup sets `{ ids, keys }` over the last *hours* |
+| `services.library.getArtist(id)` / `.getAlbum(id)` / `.searchArtists(name, opts?)` | Navidrome/Subsonic reads |
+| `services.onThisDay()` | Wikipedia "on this day" events for today |
+| `services.fetchHeadlines({ feedUrl?, maxItems? })` | fetch + parse an RSS feed |
+| `services.recall.seen(key)` / `.remember(key)` | durable, cross-restart dedup ledger |
+| `services.log(msg)` | append a line to the station event log |
+
+A **custom** skill's `tool.mjs` is **timeout-guarded (8 s)** and any throw
+degrades cleanly to "no data" — a slow or broken skill can never hang the
+between-track tick. (Built-in tools are first-party and run unfenced.) With no
+`tool.mjs`, the skill is pure generation: the DJ writes from the brief alone.
+
+> **Security.** A custom `tool.mjs` runs operator-supplied code inside the
+> controller container, and `services` lets it spend your search-provider quota
+> and read your library — the same trust model as a locally-installed Claude
+> Code skill. Only drop in code you've read and trust. (Custom skills also stay
+> disabled until you enable them in `/admin/skills`.)
 
 ## Editing the built-in skills
 
 The 7 built-ins — `weather`, `news`, `now-playing-dig`, `curiosity`, `album-anniversary`,
-`library-deep-cut`, `web-search` — are written into `state/skills/<kind>/SKILL.md`
+`library-deep-cut`, `web-search` — ship as directories under
+`controller/src/skills/builtins/<kind>/` and are copied into `state/skills/<kind>/SKILL.md`
 the first time the controller boots. A file **named after a built-in kind** is an
 **override**: it edits that skill's brief / cooldown / label / `context:` in place
 rather than being rejected as a name clash. (For everything else, a built-in kind in

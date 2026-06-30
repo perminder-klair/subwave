@@ -17,14 +17,15 @@
 // Both the autonomous tick AND the operator override now run through this
 // agent. `agenticTick()` is the 5-minute cron; `runCapability()` is the
 // /dj/skill manual override — same tool-loop, but forced to one capability
-// with cooldowns bypassed. The CAPABILITIES table below is the single source
-// of truth, and also backs the admin catalogue via `skillCatalog()`. The only
-// skill modules left in this directory — news.js, web-search.js — are pure
-// fetch helpers that back the segment tools (llm/segment-tools.js).
+// with cooldowns bypassed. The capability registry is loaded by skills/loader.js
+// (built-ins from src/skills/builtins/, custom from state/skills); this module
+// consumes it (allCapabilities) and also backs the admin catalogue via
+// `skillCatalog()`. The skill modules left in this directory — news.js,
+// web-search.js, curiosity.js — are pure fetch helpers behind station-services.
 //
 // Guard rails the autonomous tick cannot talk its way past (the operator
 // override bypasses all of them — when the operator asks, they get a segment):
-//   - per-kind hard cooldown (CAPABILITIES below)
+//   - per-kind hard cooldown (from each skill's SKILL.md)
 //   - a frequency-derived floor on the gap between ANY two segments
 //   - capabilities the operator disabled, or the on-air persona doesn't own,
 //     are never offered
@@ -37,101 +38,28 @@ import * as settings from '../settings.js';
 import { defineAgent } from '../llm/agent.js';
 import { buildContextLines, CONTEXT_FIELDS } from '../llm/dj.js';
 import { buildSegmentTools } from '../llm/segment-tools.js';
-import { searchReady } from './web-search.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
-import { customCapabilities, getBuiltinOverrides } from './loader.js';
+import { builtinCapabilities, customCapabilities } from './loader.js';
 import * as sfx from '../broadcast/sfx.js';
 
-// Capability table — the single source of truth for the DJ's between-track
-// segment capabilities. Each entry carries:
-//   kind        — the queue.announce kind
-//   skill       — the operator enable-toggle slug (kept identical to `kind`)
-//   label       — human label for the admin command-center UI
-//   cooldownMs  — hard minimum gap between autonomous firings of this kind
-//   desc        — the one-line briefing shown BOTH to the agent (per-capability
-//                 guidance — for a skill with no data tool, this is the
-//                 agent's ONLY brief) and to the admin UI
-//   contextFields — (optional) the "right now" fields (CONTEXT_FIELDS) this
-//                 capability's situation block may include. Unset → the default
-//                 profile (everything EXCEPT weather), so a segment only sees
-//                 weather if it opts in. `weather` opts back in below; an
-//                 operator opts any skill in with `context:` in its SKILL.md.
-//   requiresKey — (optional) env key the capability needs
-//   keyUrl      — (optional) where the operator obtains that key
-//   ready       — (optional) () => boolean; false when the env key is missing
-// CAPABILITIES backs the agentic tick, the operator override (runCapability),
-// and the admin catalogue (skillCatalog). It is also the single source of
-// truth the scaffolder seeds editable state/skills/<kind>/SKILL.md files from
-// (see skills/scaffold.js), and the base that built-in overrides merge over.
-export const CAPABILITIES: any[] = [
-  {
-    kind: 'weather', skill: 'weather', label: 'Weather',
-    cooldownMs: 25 * 60 * 1000,
-    // The one built-in that opts the weather line into its situation block — it
-    // is literally the weather segment. Everything else falls back to the
-    // default profile (no weather), so weather stops bleeding into news,
-    // curiosity, deep cuts, etc. (issue #471).
-    contextFields: [...CONTEXT_FIELDS],
-    desc: 'A quick, in-character read on the weather right now — one or two sentences that fold the conditions into the moment, never a forecast or a temperature readout. Only air it when the weather has genuinely turned; don\'t narrate "still grey out". Never open with "here\'s your weather" or "weather check".',
-  },
-  {
-    kind: 'news', skill: 'news', label: 'News headlines',
-    cooldownMs: 45 * 60 * 1000,
-    desc: 'Glance at one fresh headline and drop it into a single sentence in your own words — a casual, half-distracted aside between songs, never an anchor or newsreader voice, never the headline read verbatim, no editorialising, no "in other news". Steer to the lighter, cultural, or human-interest item; if everything on the feed is grim — war, death, disaster — say nothing. A music station shouldn\'t read tragedy in a breezy aside.',
-  },
-  {
-    kind: 'now-playing-dig', skill: 'now-playing-dig', label: 'Now-playing dig',
-    cooldownMs: 45 * 60 * 1000,
-    // Search-grounded, like web-search: only ready when a provider is configured.
-    // The data tool (digCurrentTrack) is wired by kind in llm/segment-tools.ts.
-    ready: () => searchReady(),
-    desc: 'One concrete, verifiable detail about the exact track on air — who produced it, a sample it\'s built on, the B-side, where it charted, the story behind it — worked into a single conversational line. Use only what the search tool actually surfaces; if it returns nothing solid, say nothing. Never guess, never "I think", no "fun fact", no URLs. It\'s about this specific track, not the artist in general.',
-  },
-  {
-    kind: 'curiosity', skill: 'curiosity', label: 'Curiosity',
-    cooldownMs: 60 * 60 * 1000,
-    desc: 'One oddly-specific moment of interest — ideally a real "on this day" beat from the tool (any year), dropped in like you just remembered it. If the tool has nothing, offer a light, true observation tied to the date or season rather than a hard "fact" you can\'t vouch for — and if you\'d be guessing, skip it. Never say "fun fact", "interestingly", or "did you know".',
-  },
-  {
-    kind: 'album-anniversary', skill: 'album-anniversary', label: 'Album anniversary',
-    cooldownMs: 6 * 60 * 60 * 1000,
-    desc: 'If the album on air is hitting a round-number anniversary this year, note it like a presenter spotting a date in the prep notes — one short sentence on the date itself. Trust the year you\'re given; don\'t pad it with claims about what the album "meant" or how it charted. Never gushing, never "classic".',
-  },
-  {
-    kind: 'library-deep-cut', skill: 'library-deep-cut', label: 'Library deep-cut tease',
-    cooldownMs: 90 * 60 * 1000,
-    desc: 'If the on-air artist has a track in the library that\'s gone cold (not played in a while), tease it like there\'s more worth digging out of the crate — one sentence, in passing, without promising when it\'ll play. Never name the track unless the tool surfaced exactly one, and don\'t characterise how it sounds.',
-  },
-  {
-    kind: 'web-search', skill: 'web-search', label: 'Web search',
-    cooldownMs: 60 * 60 * 1000,
-    // requiresKey/keyUrl depend on the active search provider — see
-    // skillCatalog() below, which derives them from settings.search.provider.
-    // DuckDuckGo (the default) needs no key; Tavily needs SEARCH_API_KEY (or a
-    // key pasted into the admin UI). searchReady() encapsulates both.
-    ready: () => searchReady(),
-    desc: 'Work one genuine, recent thing the on-air artist is up to — a new release, a tour, something in the press this week — into a single conversational line. Use only what the search returned; if it surfaced nothing solid or nothing new, say nothing. No "I read online", no URLs, no list, no embellishing beyond the facts.',
-  },
-];
+// The capability registry now lives entirely in skills/loader.js, which loads
+// every skill — shipped and operator-added — from a directory (SKILL.md +
+// optional tool.mjs). Each cap carries: kind/skill (the queue.announce kind +
+// enable-toggle slug), label, cooldownMs, desc (the agent brief), contextFields
+// (the "right now" fields it may mention; unset → default profile, no weather),
+// window, requiresKey, ready() (from the tool module or the env key), and the
+// wrapped data tool (toolFn/toolName/toolDesc/config). The seven built-ins live
+// in src/skills/builtins/<kind>/; operator skills + brief overrides live in
+// state/skills/<slug>/.
 
-// The full capability set the segment director operates over: the built-in
-// CAPABILITIES above plus operator-dropped custom skills loaded from
-// state/skills (see skills/loader.js). Everything downstream — the autonomous
-// tick, runCapability, skillCatalog, the admin toggles — iterates THIS, so a
-// dropped skill lights up the whole chain. Custom caps carry { custom: true }
-// and are gated more conservatively (disabled until the operator enables them).
+// The full capability set the segment director operates over: built-ins (with
+// operator brief-overrides merged) plus operator-dropped custom skills.
+// Everything downstream — the autonomous tick, runCapability, skillCatalog, the
+// admin toggles — iterates THIS, so a dropped skill lights up the whole chain.
+// Custom caps carry { custom: true } and are gated more conservatively (disabled
+// until the operator enables them). Read live so a rescan takes effect at once.
 function allCapabilities(): any[] {
   return [...builtinCapabilities(), ...customCapabilities()];
-}
-
-// CAPABILITIES with operator edits from state/skills/<kind>/SKILL.md applied.
-// An override (loaded by skills/loader.js) contributes only the keys it
-// specified — desc/cooldownMs/label and, for news, feed/feedMaxItems — spread
-// over the hardcoded defaults; everything else (skill, ready, requiresKey) is
-// preserved. Read live so a rescan takes effect without a restart.
-function builtinCapabilities(): any[] {
-  const ov = getBuiltinOverrides();
-  return CAPABILITIES.map(c => (ov[c.kind] ? { ...c, ...ov[c.kind] } : c));
 }
 
 // The default per-skill context profile: every "right now" field EXCEPT

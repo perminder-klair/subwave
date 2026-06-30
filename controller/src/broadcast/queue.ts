@@ -1140,21 +1140,28 @@ function wavDurationMs(path: string): number | null {
   }
 }
 
-const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check', 'weather', 'news', 'now-playing-dig', 'curiosity', 'album-anniversary', 'library-deep-cut', 'web-search']);
-const DEDUPE_KINDS = new Set(['station-id', 'hourly-check', 'weather', 'news', 'now-playing-dig', 'curiosity', 'album-anniversary', 'library-deep-cut', 'web-search']);
+// Voice kinds the DJ recap remembers. The fixed channels are always present;
+// every skill kind (built-in + custom) is registered at skill-load time via
+// registerSkillKinds() — so a new skill is recapped without editing this list.
+const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check']);
+// Kinds whose recap entries are de-duped. Skills are added at load time too.
+const DEDUPE_KINDS = new Set(['station-id', 'hourly-check']);
 const KIND_LABEL: Record<string, string> = {
   'dj-speak': 'intro',
   'link': 'link',
   'station-id': 'ident',
   'hourly-check': 'hourly',
-  'weather': 'weather',
-  'news': 'news',
-  'now-playing-dig': 'now-playing',
-  'curiosity': 'curiosity',
-  'album-anniversary': 'anniversary',
-  'library-deep-cut': 'deep-cut',
-  'web-search': 'web',
 };
+
+// Register the loaded skill kinds (built-in + custom) as recap voice/dedupe
+// kinds. Called by skills/loader.js after each (re)load; idempotent (Sets).
+export function registerSkillKinds(kinds: string[]): void {
+  for (const k of kinds) {
+    if (!k) continue;
+    VOICE_KINDS.add(k);
+    DEDUPE_KINDS.add(k);
+  }
+}
 
 function formatAgo(ms: number) {
   const s = Math.floor(ms / 1000);

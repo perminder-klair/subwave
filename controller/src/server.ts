@@ -147,25 +147,21 @@ app.listen(config.server.port, async () => {
     console.error('[budget] seed failed:', err.message);
   }
 
-  // Scaffold the built-in skills as editable files under state/skills/<kind>/
-  // (idempotent — never clobbers operator edits) so loadCustomSkills below picks
-  // them up as overrides. Must run before the load. Never fatal.
+  // Load the shipped built-in skills (src/skills/builtins/<kind>/), then scaffold
+  // each as an editable state/skills/<kind>/SKILL.md override (idempotent — never
+  // clobbers operator edits), then load operator custom skills + brief overrides
+  // from state/skills. Built-ins must load first so kinds classify correctly.
+  // None of this is fatal.
   try {
+    const { loadBuiltins, loadCustomSkills } = await import('./skills/loader.js');
+    const builtins = await loadBuiltins();
+    if (builtins.length) console.log(`[skills] ${builtins.length} built-in(s): ${builtins.map((c: any) => c.kind).join(', ')}`);
     const { scaffoldBuiltinSkills } = await import('./skills/scaffold.js');
     await scaffoldBuiltinSkills();
-  } catch (err: any) {
-    console.error('[skills] scaffold failed:', err.message);
-  }
-
-  // Load operator-dropped custom skills + built-in overrides from state/skills —
-  // merged into the segment director's capability set (see skills/loader.js).
-  // Never fatal.
-  try {
-    const { loadCustomSkills } = await import('./skills/loader.js');
     const caps = await loadCustomSkills();
     if (caps.length) console.log(`[skills] ${caps.length} custom skill(s): ${caps.map((c: any) => c.kind).join(', ')}`);
   } catch (err: any) {
-    console.error('[skills] custom load failed:', err.message);
+    console.error('[skills] load failed:', err.message);
   }
 
   // First-run banner — operators glancing at `docker compose logs` should

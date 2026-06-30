@@ -11,8 +11,8 @@ import * as subsonic from '../music/subsonic.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, refreshAutoPlaylist } from '../broadcast/scheduler.js';
-import { skillCatalog, runCapability, CAPABILITIES, effectiveContextFields } from '../skills/_agent.js';
-import { loadCustomSkills, parseFrontmatter, BUILTIN_KINDS, RESERVED_KINDS, SLUG_RE } from '../skills/loader.js';
+import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
+import { loadCustomSkills, parseFrontmatter, BUILTIN_KINDS, RESERVED_KINDS, SLUG_RE, builtinBaseCaps } from '../skills/loader.js';
 import { writeSkillFile, msToCooldownStr } from '../skills/scaffold.js';
 import { readFile, rm, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -128,11 +128,11 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
   const cat = skillCatalog().find(s => s.kind === kind);
 
   if (BUILTIN_KINDS.has(kind)) {
-    // Shipped defaults from the RAW CAPABILITIES entry (NOT the override-merged
-    // catalogue), so the admin "Reset to default" restores the as-shipped brief
-    // even after the SKILL.md has been edited. News seeds its feed from config
-    // (env-or-BBC), mirroring the scaffolder.
-    const rawCap = CAPABILITIES.find((c: any) => c.kind === kind);
+    // Shipped defaults from the built-in's directory default (NOT the
+    // override-merged catalogue), so the admin "Reset to default" restores the
+    // as-shipped brief even after the SKILL.md has been edited. News seeds its
+    // feed from config (env-or-BBC), mirroring the scaffolder.
+    const rawCap = builtinBaseCaps().find((c: any) => c.kind === kind);
     const defaults = rawCap ? {
       label: rawCap.label || kind,
       cooldown: msToCooldownStr(rawCap.cooldownMs || 0),

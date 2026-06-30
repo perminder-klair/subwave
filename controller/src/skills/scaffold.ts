@@ -1,11 +1,11 @@
-// Scaffold the 7 built-in skills as editable files under state/skills/<kind>/.
+// Scaffold the built-in skills as editable files under state/skills/<kind>/.
 //
-// On first boot we write one SKILL.md per built-in capability, seeded from the
-// hardcoded CAPABILITIES table (skills/_agent.js) — the single source of truth.
-// From then on the operator can edit those files (or use /admin/skills), and
-// the loader (skills/loader.js) merges their contents back over the built-in as
-// an override. The `news` file additionally carries a `feed:` line so the feed
-// source + tone are operator-editable without touching .env (issue #193).
+// On first boot we write one SKILL.md per shipped built-in, seeded from its
+// directory (src/skills/builtins/<kind>/, loaded by skills/loader.js — the
+// source of truth). From then on the operator can edit those files (or use
+// /admin/skills), and the loader merges their contents back over the shipped
+// default as an override. The `news` file additionally carries a `feed:` line
+// seeded from NEWS_FEED_URL (env) so the feed is operator-editable (issue #193).
 //
 // Idempotent: an existing file is never clobbered, so hand-edits survive a
 // restart. Writes are best-effort — a failure is logged, never fatal to boot.
@@ -14,7 +14,8 @@ import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { STATE_DIR, config } from '../config.js';
 import { queue } from '../broadcast/queue.js';
-import { CAPABILITIES, effectiveContextFields } from './_agent.js';
+import { builtinBaseCaps, loadBuiltins } from './loader.js';
+import { effectiveContextFields } from './_agent.js';
 
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
 
@@ -76,11 +77,13 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-// Write a SKILL.md for any built-in that doesn't already have one. Seeds the
-// news feed from NEWS_FEED_URL (env) or the BBC default, preserving the
-// 12-factor story on a fresh install; after first boot the file wins.
+// Write a SKILL.md for any built-in that doesn't already have one, seeded from
+// its shipped directory default. Seeds the news feed from NEWS_FEED_URL (env) or
+// the BBC default, preserving the 12-factor story on a fresh install; after
+// first boot the file wins.
 export async function scaffoldBuiltinSkills(): Promise<void> {
-  for (const cap of CAPABILITIES) {
+  if (!builtinBaseCaps().length) await loadBuiltins();
+  for (const cap of builtinBaseCaps()) {
     try {
       const file = join(SKILLS_DIR, cap.kind, 'SKILL.md');
       if (await fileExists(file)) continue;
