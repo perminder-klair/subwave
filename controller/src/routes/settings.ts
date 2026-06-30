@@ -19,6 +19,7 @@ import { restartLiquidsoap, startStream, stopStream, streamStatus } from '../bro
 import { invalidateWeatherCache } from '../context.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../setup/secrets.js';
+import { loadSetupConfig } from '../setup/config.js';
 import { generateText, createGateway } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -64,6 +65,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
     // (issue #230) — only those with a matching .onnx.json manifest are listed.
     const piperVoices = await piper.listPiperVoices();
     const voiceDir = chatterbox.voiceDir();
+    const setupCfg = await loadSetupConfig();
     res.json({
       autoPick: queue.autoPick,
       pickerBusy: queue.pickerBusy,
@@ -76,6 +78,10 @@ router.get('/settings', requireAdmin, async (req, res) => {
       // What the configured zone resolves to when timezone is '' (Auto) —
       // lets the UI label the Auto option with the actual server zone.
       serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+      setup: {
+        navidrome: { url: setupCfg.navidrome?.url || '', user: setupCfg.navidrome?.user || '' },
+        plex: { url: setupCfg.plex?.url || '' },
+      },
       values: {
         jingleRatio: s.jingleRatio,
         crossfadeDuration: s.crossfadeDuration,
@@ -103,6 +109,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         sfx: s.sfx,
         ui: s.ui,
         scrobble: s.scrobble,
+        music: s.music,
       },
       defaults: {
         // The built-in prompt template — the UI shows this when djPrompt is "".
