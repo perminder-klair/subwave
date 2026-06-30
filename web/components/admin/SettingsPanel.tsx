@@ -5956,18 +5956,14 @@ function MusicSection({ data, form, setForm, busy, saveSettings, adminFetch }: M
         body: JSON.stringify({ navidrome: form.music.navidrome }),
       });
     }
-    if (!isNavidrome && form.music.plex.url) {
+    if (!isNavidrome && (form.music.plex.url || form.musicKeyInput)) {
+      const plexBody: Record<string, string> = {};
+      if (form.music.plex.url) plexBody.url = form.music.plex.url;
+      if (form.musicKeyInput) plexBody.token = form.musicKeyInput;
       await adminFetch('/onboarding/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plex: { url: form.music.plex.url } }),
-      });
-    }
-    if (!isNavidrome && form.musicKeyInput) {
-      await adminFetch('/settings/secrets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ PLEX_TOKEN: form.musicKeyInput }),
+        body: JSON.stringify({ plex: plexBody }),
       });
     }
   };

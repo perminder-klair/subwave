@@ -81,7 +81,7 @@ interface SettingsResponse {
   tagger?: TaggerState;
   libraryStats?: LibraryStatsLite;
   // Only the slice this panel needs from the full settings payload.
-  values?: { audio?: { embeddings?: boolean; vocalActivity?: boolean } };
+  values?: { audio?: { embeddings?: boolean; vocalActivity?: boolean }; music?: { source?: string } };
 }
 
 type Tab = 'recent' | 'browse' | 'search' | 'untagged';
@@ -143,6 +143,8 @@ export default function LibraryPanel() {
   const [audioEnabled, setAudioEnabled] = useState<boolean | null>(null);
   // settings.audio.vocalActivity — null until the first /settings poll lands.
   const [vocalEnabled, setVocalEnabled] = useState<boolean | null>(null);
+  // active music source — drives the Search tab hint label.
+  const [musicSource, setMusicSource] = useState<string>('navidrome');
   const [logOpen, setLogOpen] = useState(false);
   const [queuing, setQueuing] = useState<string | null>(null);
   const [retagging, setRetagging] = useState<string | null>(null);
@@ -208,6 +210,7 @@ export default function LibraryPanel() {
         setAudioEnabled(!!j.values.audio.embeddings);
         setVocalEnabled(!!j.values.audio.vocalActivity);
       }
+      if (j.values?.music?.source) setMusicSource(j.values.music.source);
     } catch { /* transient */ }
   }, [adminFetch, ready]);
 
@@ -590,7 +593,7 @@ export default function LibraryPanel() {
       });
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `reconcile failed (${r.status})`);
-      notify.ok('reconcile started, scanning Navidrome');
+      notify.ok('reconcile started, scanning music library');
       setLogOpen(true);
       await loadTagger();
     } catch (err) {
@@ -723,7 +726,7 @@ export default function LibraryPanel() {
         onVocalBackfill={vocalBackfill}
       />
 
-      <Tabs tab={tab} setTab={setTab} counts={counts} />
+      <Tabs tab={tab} setTab={setTab} counts={counts} musicSource={musicSource} />
 
       {/* contextual controls */}
       {tab === 'browse' && (
@@ -866,15 +869,16 @@ export default function LibraryPanel() {
 // ---------------------------------------------------------------------------
 // tabs
 // ---------------------------------------------------------------------------
-function Tabs({ tab, setTab, counts }: {
+function Tabs({ tab, setTab, counts, musicSource }: {
   tab: Tab;
   setTab: (t: Tab) => void;
   counts: { browse: number | null; untagged: number | null; recent: number | null };
+  musicSource: string;
 }) {
   const items: { id: Tab; name: string; hint: string; badge: number | null }[] = [
     { id: 'recent', name: 'Recently added', hint: 'newest first', badge: counts.recent },
     { id: 'browse', name: 'Browse', hint: 'tagged index', badge: counts.browse },
-    { id: 'search', name: 'Search', hint: 'navidrome', badge: null },
+    { id: 'search', name: 'Search', hint: musicSource, badge: null },
     { id: 'untagged', name: 'Untagged', hint: 'needs tags', badge: counts.untagged },
   ];
   return (

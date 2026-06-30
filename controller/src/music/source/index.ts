@@ -37,13 +37,16 @@ export function getSourceSync(): any {
 }
 
 // Pre-warm both backends at startup so getSource() is synchronous in routes.
+// Both are always loaded — plex.ts is safe to import without credentials
+// (no network calls at import time) and reads config at call time, so a
+// source switch is instant without needing to reload the module.
 export async function warmSourceCache() {
   await loadNavidrome();
-  // Plex only loaded if configured (avoids import errors when plex.ts has no config).
-  if ((settings.get() as any).music?.source === 'plex') await loadPlex();
+  await loadPlex().catch(() => { /* no-op if plex.ts fails to import */ });
 }
 
 export function invalidateSourceCache() {
-  _plex = null;
-  // Navidrome is always available; keep it cached.
+  // Both modules read config.plex at call time — no need to clear _plex.
+  // Re-warm eagerly so a source switch to Plex is immediately ready.
+  warmSourceCache().catch(console.error);
 }
