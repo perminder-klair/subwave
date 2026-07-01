@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { Fraunces, Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google';
 import { GoogleAnalytics } from '@next/third-parties/google';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
+import { LITE_INIT_SCRIPT } from '@/lib/lite';
 import { SITE_URL } from '@/lib/site';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import MotionProvider from '@/components/MotionProvider';
@@ -120,6 +121,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         {/* Apply stored theme before paint to avoid flash of wrong palette.
             Script body is a static constant from lib/theme — no untrusted input. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+
+        {/* Resolve low-power "lite" mode (?lite=… or stored pref) before paint
+            so a pinned kiosk never flashes the heavy, blur-heavy build. Static
+            constant from lib/lite — no untrusted input. */}
+        <script dangerouslySetInnerHTML={{ __html: LITE_INIT_SCRIPT }} />
 
         {/* Site-wide structured data (WebSite + Organization). */}
         <JsonLd data={SITE_JSONLD} />

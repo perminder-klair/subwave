@@ -42,9 +42,10 @@ export default function HowTheDjWorks() {
         <h2>Local voices, or the cloud.</h2>
         <p>
           The DJ's words are written by the language model, but turning them into speech
-          is a separate job. Five text-to-speech engines render the voice: Piper and
-          Kokoro run locally, Chatterbox and PocketTTS in an optional sidecar, and a Cloud
-          engine reaches OpenAI, ElevenLabs, or any self-hosted server. The operator can
+          is a separate job. Six text-to-speech engines render the voice: Piper and
+          Kokoro run locally, Chatterbox and PocketTTS in an optional sidecar, a Cloud
+          engine reaches OpenAI or ElevenLabs, and a Remote engine points at a TTS server
+          you run yourself. The operator can
           mix them <em>per kind</em> of segment, and if one ever fails the station drops
           to a local voice automatically, so the DJ never goes silent.
         </p>

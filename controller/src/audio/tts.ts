@@ -8,12 +8,13 @@ import * as piper from './piper.js';
 import * as kokoro from './kokoro.js';
 import * as chatterbox from './chatterbox.js';
 import * as pocketTts from './pocketTts.js';
+import * as remoteTts from './remoteTts.js';
 import * as cloud from '../llm/speech.js';
 import * as settings from '../settings.js';
 import { recordTts } from '../stats.js';
 import { energyForDaypart } from '../context.js';
 
-export const ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud'];
+export const ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud', 'remote'];
 
 // Voice kinds the system speaks. `kind` is passed by the caller and used to
 // look up an engine override in settings. Unknown kinds fall back to default.
@@ -24,7 +25,7 @@ export const VOICE_KINDS = [
   'hourly-check',   // top-of-hour time/weather mention
   'weather',        // weather change announcements (segment capability)
   'news',           // headline read (segment capability)
-  'traffic',        // tongue-in-cheek traffic filler (segment capability)
+  'now-playing-dig',   // search-grounded detail about the on-air track (segment capability)
   'curiosity',      // on-this-day / oddly-specific factoid (segment capability)
   'album-anniversary', // round-number anniversary of the on-air album (segment capability)
   'library-deep-cut',  // tease a forgotten track by the on-air artist (segment capability)
@@ -32,7 +33,7 @@ export const VOICE_KINDS = [
   'default',        // fallback when a kind isn't explicitly mapped
 ];
 
-// Every spoken segment — track intros, links, idents, weather, news, traffic,
+// Every spoken segment — track intros, links, idents, weather, news, digs,
 // facts — is voiced by the persona on air: engine and voice come from the
 // effective persona's `tts` config. Only jingle rendering (a pre-recorded,
 // persona-agnostic stinger) falls back to the global defaultEngine.
@@ -76,6 +77,19 @@ function resolveEngine(kind: string, personaTts: any) {
   // universal local fallback).
   if (chosen === 'pocket-tts' && !pocketTts.isAvailable()) {
     return tts.defaultEngine && tts.defaultEngine !== 'pocket-tts' ? tts.defaultEngine : 'piper';
+  }
+  // Kokoro ships in the default image, but its model/voices files are pulled at
+  // build time and can be missing if that download failed. isAvailable() now
+  // existsSyncs them, so route around a broken Kokoro install instead of
+  // spawning a worker that just dies on load and falls back per segment.
+  if (chosen === 'kokoro' && !kokoro.isAvailable()) {
+    return tts.defaultEngine && tts.defaultEngine !== 'kokoro' ? tts.defaultEngine : 'piper';
+  }
+  // The remote engine needs a configured URL and a reachable sidecar — unlike
+  // the local engines, which gate on installed venvs/models. When the URL is
+  // blank or the /health probe hasn't succeeded yet, fall back to the default.
+  if (chosen === 'remote' && !remoteTts.isAvailable()) {
+    return tts.defaultEngine && tts.defaultEngine !== 'remote' ? tts.defaultEngine : 'piper';
   }
   return chosen;
 }
@@ -129,6 +143,15 @@ async function speakWith(engine: string, text: string, opts: any, personaTts: an
       ? { provider: personaTts.cloudProvider, voice: personaTts.voice }
       : null;
     return cloud.speak(text, { ...opts, cloudOverride });
+  }
+  if (engine === 'remote') {
+    // Remote engine — persona's `voice` is forwarded as-is to the endpoint,
+    // which interprets it (built-in id, reference-wav filename, or VoiceDesign
+    // prompt). No global fallback voice — the endpoint owns its defaults.
+    const voice = (personaTts && personaTts.engine === 'remote' && personaTts.voice)
+      ? personaTts.voice
+      : undefined;
+    return remoteTts.speak(text, { ...opts, voice });
   }
   // For piper, persona's `voice` is an .onnx filename (resolved by piper.ts
   // against config.voices.dir). Empty/missing → the baked-in default voice.
@@ -292,6 +315,7 @@ export function availableEngines() {
     // silently revert to a built-in when cloning is unavailable (issue #238).
     pocketTtsCloning: pocketTts.cloningAvailable(),
     cloud: cloud.isConfigured(),
+    remote: remoteTts.isAvailable(),
     // Per-provider — a persona's cloud voice is only usable if *its* provider
     // is configured, which can differ from the global Cloud-engine provider.
     cloudByProvider: {
@@ -340,6 +364,10 @@ export function describeRouting() {
   } else if (engine === 'piper') {
     // For piper, `voice` is the .onnx filename; empty → baked-in default.
     voice = (personaTts?.engine === 'piper' && personaTts.voice)
+      ? personaTts.voice
+      : null;
+  } else if (engine === 'remote') {
+    voice = (personaTts?.engine === 'remote' && personaTts.voice)
       ? personaTts.voice
       : null;
   }

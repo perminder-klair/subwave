@@ -34,7 +34,7 @@ import {
 import { Card, Btn, Eyebrow, Pill, Seg } from './ui';
 import { cn } from '../../lib/cn';
 import TaggingPanel, { num } from './LibraryTaggingPanel';
-import type { Coverage, TaggerState, LibraryStatsLite, Batch, RescanOpts } from './LibraryTaggingPanel';
+import type { Coverage, TaggerState, LibraryStatsLite, Batch, RescanOpts, TagSteps } from './LibraryTaggingPanel';
 
 // ---------------------------------------------------------------------------
 // types
@@ -485,14 +485,18 @@ export default function LibraryPanel() {
   // -----------------------------------------------------------------------
   const remaining = coverage?.total != null ? Math.max(0, coverage.total - coverage.tagged) : null;
 
-  const startTagger = async () => {
+  const startTagger = async (steps?: TagSteps) => {
     setTaggerBusy(true);
     try {
       const limit = batch === 'all' ? null : parseInt(batch, 10);
+      const body: Record<string, unknown> = limit && limit > 0 ? { limit } : {};
+      // Forward-run step toggles from the modal's Run tab; absent on the legacy
+      // "Tag all" quick action, which then sends a plain full run.
+      if (steps) Object.assign(body, steps);
       const r = await adminFetch('/tag-library', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(limit && limit > 0 ? { limit } : {}),
+        body: JSON.stringify(body),
       });
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `tagger start failed (${r.status})`);
@@ -619,6 +623,50 @@ export default function LibraryPanel() {
     }
   };
 
+  // Flip settings.audio.vocalActivity — the Demucs vocal-activity opt-in (#646).
+  // Mirrors toggleAudio; env ANALYZE_VOCAL_ACTIVITY still wins "on".
+  const toggleVocal = async () => {
+    if (vocalEnabled == null) return;
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio: { vocalActivity: !vocalEnabled } }),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
+      setVocalEnabled(!vocalEnabled);
+      notify.ok(!vocalEnabled ? 'vocal-activity analysis enabled' : 'vocal-activity analysis disabled');
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
+  // Backfill Demucs vocal ranges on tracks that lack them — POST with vocal:true
+  // so the analyze pass forces the vocal scope (#646).
+  const vocalBackfill = async () => {
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/library/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vocal: true }),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `vocal analysis start failed (${r.status})`);
+      notify.ok('vocal analysis started');
+      setLogOpen(true);
+      await loadTagger();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
   // -----------------------------------------------------------------------
   // derived
   // -----------------------------------------------------------------------
@@ -671,6 +719,8 @@ export default function LibraryPanel() {
         onToggleAudio={toggleAudio}
         onAnalyzeAudio={analyzeAudio}
         vocalEnabled={vocalEnabled}
+        onToggleVocal={toggleVocal}
+        onVocalBackfill={vocalBackfill}
       />
 
       <Tabs tab={tab} setTab={setTab} counts={counts} />
@@ -760,7 +810,7 @@ export default function LibraryPanel() {
         }
         right={
           tab === 'untagged' && untagged.length > 0 ? (
-            <Btn sm tone="accent" onClick={startTagger} disabled={tagger?.running || taggerBusy}>
+            <Btn sm tone="accent" onClick={() => startTagger()} disabled={tagger?.running || taggerBusy}>
               <Sparkles size={11} /> Tag all
             </Btn>
           ) : tab === 'recent' ? (

@@ -435,6 +435,26 @@ body::after {
 .v3-modal-pop {
     animation: v3-modal-pop 160ms cubic-bezier(0.2, 0.7, 0.2, 1);
 }
+
+/* V3 AlertDialog — smooth fade + zoom on open AND close, keyed on Radix's
+   data-state (the shadcn pattern). Centering is the static -translate-* (CSS
+   `translate` property), so the keyframe's `transform: scale()` composes with
+   it and the box zooms from its own centre. Radix's Presence waits for the
+   `closed` animation before unmounting. */
+@keyframes v3-alert-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes v3-alert-overlay-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes v3-alert-pop-in {
+    from { opacity: 0; transform: scale(0.96); }
+    to { opacity: 1; transform: scale(1); }
+}
+@keyframes v3-alert-pop-out {
+    from { opacity: 1; transform: scale(1); }
+    to { opacity: 0; transform: scale(0.96); }
+}
+.v3-alert-overlay[data-state="open"] { animation: v3-alert-overlay-in 160ms ease-out; }
+.v3-alert-overlay[data-state="closed"] { animation: v3-alert-overlay-out 140ms ease-in; }
+.v3-alert-content[data-state="open"] { animation: v3-alert-pop-in 170ms cubic-bezier(0.2, 0.7, 0.2, 1); }
+.v3-alert-content[data-state="closed"] { animation: v3-alert-pop-out 140ms ease-in; }
 .v3-blink {
     animation: v3-blink 1s steps(1) infinite;
 }
@@ -736,8 +756,20 @@ body::after {
 
 /* Reduced motion — collapse anything that animates. */
 @media (prefers-reduced-motion: reduce) {
+    /* Low-power concession: the frosted backdrop blur is the single biggest GPU
+       cost on weak devices, and listeners who ask for reduced motion are often
+       on exactly those devices — drop it too. (Lite mode does the same wholesale
+       via html.lite below.) */
+    *,
+    *::before,
+    *::after {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
     .v3-drawer-content,
     .v3-drawer-overlay,
+    .v3-alert-overlay,
+    .v3-alert-content,
     .v3-blink,
     .v3-tunein-pulse,
     .v3-connecting-pulse,
@@ -774,6 +806,20 @@ body::after {
     .fz-scale .fz-needle {
         transition: none;
     }
+}
+
+/* Lite (low-power) mode — toggled from the player theme menu or pinned with
+   ?lite=1 (see lib/lite.ts). Drops every backdrop-filter blur and disables
+   animations so weak GPUs (kiosks, Raspberry Pi) stop re-compositing frosted
+   layers and looping effects every frame — the measured Pi 4 win is ~170% →
+   ~40% Chromium CPU. Transitions are intentionally left alone: they only fire
+   on interaction and aren't the continuous repaint cost. */
+html.lite *,
+html.lite *::before,
+html.lite *::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    animation: none !important;
 }
 
 /* Player title — Fraunces display serif (see the type-roles block up top).
@@ -2800,6 +2846,27 @@ body::after {
 .admin-root .card-body.loose {
     padding: 18px;
 }
+/* Flat — used inside EditorDialog so stacked sections read as one continuous
+   modal form separated by hairline dividers, not boxed cards. No border/bg, no
+   side padding (the dialog supplies the gutter); a top rule divides each section
+   from the previous one. The first section in a group has no rule. */
+.admin-root .card.is-flat {
+    border: 0;
+    background: transparent;
+    border-top: 1px solid var(--soft-border);
+    padding: 26px 0;
+}
+.admin-root .card.is-flat:first-child {
+    border-top: 0;
+    padding-top: 0;
+}
+.admin-root .card.is-flat > .card-head {
+    padding: 0 0 14px;
+    border-bottom: 0;
+}
+.admin-root .card.is-flat > .card-body {
+    padding: 0;
+}
 /* Spotlight — lifts a card above the plain stack with an accent rail + faint
    wash. Used for DJ Doc's verdict ("DJ Doc says") so the operator's eye lands
    on the producer's read before the raw findings. */
@@ -3263,6 +3330,20 @@ body::after {
     word-break: break-word;
     font-family: inherit;
     overflow: auto;
+}
+
+/* CRT modifier — a minimal phosphor look for the live tagging-log drawer:
+   fixed scanlines (don't scroll with content), a faint accent glow on the
+   text, and a soft inset vignette. Theme-aware via tokens. */
+.admin-root .term-crt {
+    background-image: repeating-linear-gradient(
+        color-mix(in srgb, var(--ink) 9%, transparent) 0px,
+        color-mix(in srgb, var(--ink) 9%, transparent) 1px,
+        transparent 1px,
+        transparent 3px
+    );
+    text-shadow: 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+    box-shadow: inset 0 0 36px color-mix(in srgb, var(--ink) 55%, transparent);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -4279,3 +4360,24 @@ body::after {
     .observatory-root .cmap-ripple,
     .observatory-root .wire-line { animation: none !important; }
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Skill Edit Card ("segment sheet") typography — /admin/skills. The SkillEditModal
+   body now renders inside the shared full-screen EditorDialog, which carries the
+   `sw-seg` class so these descendant rules still resolve (focus accents, muted
+   placeholders, the brief drop-cap). Scoped to .sw-seg so they can't leak into
+   the rest of the admin. The old sheet's spin/ring/blink keyframes went with the
+   bespoke overlay — the flash now uses the shared `v3-blink`.
+   ─────────────────────────────────────────────────────────────────────────── */
+.sw-seg textarea:focus, .sw-seg input:focus { border-color: var(--accent) !important; }
+.sw-seg ::placeholder { color: var(--muted); opacity: 0.75; }
+.sw-seg .sw-ghost:hover { background: var(--ink-soft); }
+.sw-seg .sw-title:focus { border-bottom-color: var(--accent) !important; }
+.sw-seg .sw-dropcap::first-letter {
+    font-size: 2.7em; font-weight: 800; float: left; line-height: 0.74;
+    color: var(--accent); padding: 4px 9px 0 0;
+}
+/* Body sections — hairline dividers between them, matching .card.is-flat, so the
+   skills editor reads as one continuous modal form rather than spaced blocks. */
+.sw-seg .sw-section { border-top: 1px solid var(--soft-border); padding: 26px 0; }
+.sw-seg .sw-section:first-child { border-top: 0; padding-top: 0; }

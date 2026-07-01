@@ -1,15 +1,18 @@
 // Example custom-skill data tool for SUB/WAVE.
 //
 // The default export is wrapped as an AI SDK tool the segment director can call
-// before deciding whether to air this skill's line. It is invoked with the
-// moment's context (`ctx` — the same shape as getFullContext(): time, weather,
-// festival, dominantMood, clock) and the cross-tick dedup `state`. Return any
-// JSON-serialisable object; a `{ available: false }` convention tells the agent
-// there is nothing worth airing. Keep it fast — the call is timeout-guarded at
-// 8s and any throw degrades cleanly to "no data".
+// before deciding whether to air this skill's line. Full signature:
+//   (ctx, state, services, config) => data
+//   ctx      — the moment (time, weather, festival, dominantMood, clock)
+//   state    — cross-tick dedup memory
+//   services — the station facade (searchWeb, library, nowPlaying, onThisDay, …)
+//   config   — this skill's own SKILL.md frontmatter
+// Return any JSON-serialisable object; a `{ available: false }` convention tells
+// the agent there is nothing worth airing. Keep it fast — a custom skill's call
+// is timeout-guarded at 8s and any throw degrades cleanly to "no data".
 //
-// This one needs no API key and no network: it computes the lunar phase from
-// the current date with a simple synodic-month approximation.
+// This one uses none of those args — no API key, no network: it computes the
+// lunar phase from the current date with a simple synodic-month approximation.
 
 const SYNODIC = 29.530588853; // mean length of a lunar month, days
 const KNOWN_NEW_MOON = Date.UTC(2000, 0, 6, 18, 14); // 2000-01-06 18:14 UTC

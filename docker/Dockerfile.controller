@@ -76,6 +76,14 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
 ENV HF_HOME=/opt/chatterbox/hf-cache
 ARG WITH_CHATTERBOX=0
 ARG CHATTERBOX_PIP_PKG=chatterbox-tts
+# GPU opt-in, mirroring docker/Dockerfile.tts-heavy. Defaults keep the CPU-only
+# build. Point CHATTERBOX_TORCH_INDEX_URL at a cuXXX wheel index, and for
+# RTX 50-series (Blackwell) also set CHATTERBOX_TORCH_SPEC to a newer torch
+# (e.g. "torch==2.9.1 torchaudio==2.9.1") to override chatterbox's ==2.6.0 pin.
+# The in-process route still needs a GPU device reservation on the controller
+# service itself — see docs/gpu-tts.md.
+ARG CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG CHATTERBOX_TORCH_SPEC=
 # Image size: the default PyPI `torch` wheel is the CUDA build, which drags in
 # ~3.6GB of NVIDIA libraries (nvidia-*, triton, cusparselt) that are dead weight
 # on a CPU-only station. torch + torchaudio + chatterbox-tts are therefore all
@@ -87,13 +95,20 @@ ARG CHATTERBOX_PIP_PKG=chatterbox-tts
 # second resolve sees only PyPI and re-pulls the CUDA torch. The final cleanup
 # strips compiled bytecode and torch's C++ headers/test suite (unused at runtime).
 RUN if [ "$WITH_CHATTERBOX" = "1" ]; then \
-      echo "Bundling Chatterbox Turbo (PyTorch, CPU-only) — adds ~3-4GB to the image" && \
+      echo "Bundling Chatterbox Turbo (PyTorch) — adds ~3-4GB to the image" && \
       python3 -m venv /opt/chatterbox/venv && \
       /opt/chatterbox/venv/bin/pip install --no-cache-dir --upgrade pip && \
       /opt/chatterbox/venv/bin/pip install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cpu \
+        --index-url ${CHATTERBOX_TORCH_INDEX_URL} \
         --extra-index-url https://pypi.org/simple \
         torch torchaudio "${CHATTERBOX_PIP_PKG}" && \
+      if [ -n "${CHATTERBOX_TORCH_SPEC}" ]; then \
+        echo "Overriding chatterbox torch pin with: ${CHATTERBOX_TORCH_SPEC}" && \
+        /opt/chatterbox/venv/bin/pip install --no-cache-dir --force-reinstall \
+          --index-url ${CHATTERBOX_TORCH_INDEX_URL} \
+          --extra-index-url https://pypi.org/simple \
+          ${CHATTERBOX_TORCH_SPEC} ; \
+      fi && \
       /opt/chatterbox/venv/bin/python -c \
         "from chatterbox.tts_turbo import ChatterboxTurboTTS; ChatterboxTurboTTS.from_pretrained(device='cpu')" && \
       find /opt/chatterbox/venv -depth -type d -name __pycache__ -exec rm -rf {} + && \
@@ -144,10 +159,19 @@ ENV POCKET_TTS_PYTHON=/opt/pocket-tts/venv/bin/python \
 
 # --- Controller app -------------------------------------------------------
 WORKDIR /app
-COPY controller/package*.json ./
+# .npmrc carries `legacy-peer-deps=true` (OpenRouter provider still declares a
+# stale `peer ai@^6` after the AI SDK v7 upgrade); it must land before install
+# or npm hits ERESOLVE.
+COPY controller/package*.json controller/.npmrc ./
 RUN npm install --omit=dev
 COPY controller/src ./src
 COPY controller/scripts ./scripts
+
+# Version reported by the controller (e.g. the backup manifest). Set from `git
+# describe` by scripts/update.sh and the publish-images CI; unset → falls back
+# to controller/package.json (see routes/backup.ts).
+ARG SUBWAVE_BUILD_VERSION
+ENV SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION}
 
 # Bake repo-bundled audio (emergency loop + studio bed + sfx). Prod no longer
 # bind-mounts ../sounds — operators install via the image-only path. Dev

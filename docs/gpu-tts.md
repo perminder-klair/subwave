@@ -133,6 +133,29 @@ echo 'CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124' >> .env
 This is scoped to the Chatterbox venv. PocketTTS and the analyzer stay on CPU
 wheels, so the image only grows by the one CUDA torch it actually needs.
 
+#### RTX 50-series (Blackwell / sm_120)
+
+The index swap alone is **not enough** on a 50-series card. `chatterbox-tts`
+hard-pins `torch==2.6.0`, whose CUDA kernels stop at sm_90 — so on Blackwell the
+model loads but every synthesis fails with `CUDA error: no kernel image is
+available`, surfacing as a 500 from the sidecar. pip won't bump torch past that
+exact pin in a single resolve, even with a cu128 index. Set **both** a cu128
+index and a newer torch spec to override the pin:
+
+```bash
+echo 'CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128' >> .env
+echo 'CHATTERBOX_TORCH_SPEC=torch==2.9.1 torchaudio==2.9.1' >> .env
+```
+
+`CHATTERBOX_TORCH_SPEC` is reinstalled over chatterbox's deps (kept intact) once
+the normal install finishes, so the matching `nvidia-*` cu128 runtime libs come
+with it. The worker (`chatterbox_worker.py`) carries the two shims torch 2.9
+needs against a 2.6-era chatterbox: it writes WAVs via `soundfile` instead of
+`torchaudio.save` (which on torch ≥ 2.8 wants the absent `torchcodec`), and it
+coerces librosa's audio output back to `float32` (2.9 rejects the `float64` that
+chatterbox's loudness-normalisation introduces). Both are no-ops on CPU and on
+older cards.
+
 ### 2. Build + start with the GPU overlay
 
 Layer `docker-compose.tts-heavy-gpu.yml` on top of your prod compose file. The
@@ -160,10 +183,16 @@ Voice cloning works exactly as on CPU: drop a reference WAV into
 page in the in-app manual for the cloning workflow).
 
 > The overlay only covers the sidecar. The legacy in-process build
-> (`--build-arg WITH_CHATTERBOX=1` in `docker/Dockerfile.controller`) still
-> installs CPU PyTorch and has no equivalent build arg yet, so running *that*
-> variant on a GPU needs a manual torch-index swap there plus a device
-> reservation on the `controller` service.
+> (`--build-arg WITH_CHATTERBOX=1` in `docker/Dockerfile.controller`) honours the
+> same `CHATTERBOX_TORCH_INDEX_URL` / `CHATTERBOX_TORCH_SPEC` build args, but has
+> no compose overlay — running *that* variant on a GPU means passing those build
+> args yourself plus adding a device reservation on the `controller` service.
+
+> **Legacy NVIDIA runtime?** If `docker compose up` fails the device reservation
+> with *"could not select device driver nvidia"*, your host registers the NVIDIA
+> runtime in legacy mode. Drop the overlay's `deploy:` block and use
+> `runtime: nvidia` with `NVIDIA_VISIBLE_DEVICES=all` instead — the overlay
+> comments spell out the swap.
 
 ---
 

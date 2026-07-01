@@ -38,10 +38,20 @@ let consecutiveStatusFailures = 0;          // resets to 0 on every successful p
 export interface StreamStatus {
   online: boolean;
   listeners: { current: number; peak: number };
-  /** Bitrate (kbps) of the first attached broadcast mount, null when offline. */
+  /** Bitrate (kbps) of the primary (mp3) broadcast mount, null when offline. */
   bitrate: number | null;
+  /** Sample rate (Hz) of the primary mount, null when offline/unknown. */
+  sampleRate: number | null;
+  /** Channel count of the primary mount, null when offline/unknown. */
+  channels: number | null;
 }
-let lastStatus: StreamStatus = { online: false, listeners: { current: 0, peak: 0 }, bitrate: null };
+let lastStatus: StreamStatus = {
+  online: false,
+  listeners: { current: 0, peak: 0 },
+  bitrate: null,
+  sampleRate: null,
+  channels: null,
+};
 
 // How many *consecutive* failed status polls before we stop trusting the last
 // known `online` and report the broadcast as offline. Below this we hold the
@@ -66,7 +76,7 @@ export function statusAfterFailure(
   peak: number,
 ): StreamStatus {
   if (consecutiveFailures >= limit) {
-    return { online: false, listeners: { current: 0, peak }, bitrate: null };
+    return { online: false, listeners: { current: 0, peak }, bitrate: null, sampleRate: null, channels: null };
   }
   return { ...prev, listeners: { ...prev.listeners, peak } };
 }
@@ -78,9 +88,22 @@ export function statusAfterFailure(
 const HISTORY_FILE = join(config.stateDir, 'listeners.jsonl');
 let lastPersistedMinute = -1;
 
+// Pull samplerate / channels off an Icecast status source. Icecast exposes
+// these either as top-level numeric fields or folded into the semicolon-
+// delimited `audio_info` string ("samplerate=44100;channels=2;quality=…"),
+// depending on build and encoder — try the direct field first, then the string.
+function audioParam(src: any, key: 'samplerate' | 'channels'): number | null {
+  const direct = Number(src?.[key]);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const m = String(src?.audio_info || '').match(new RegExp(`${key}=([0-9]+)`, 'i'));
+  return m ? Number(m[1]) : null;
+}
+
 async function fetchCount() {
   let online = false;
   let bitrate: number | null = null;
+  let sampleRate: number | null = null;
+  let channels: number | null = null;
   let rawCount = 0; // un-deduped status sum — the fallback when admin is unreachable
   try {
     const ctrl = new AbortController();
@@ -97,10 +120,19 @@ async function fetchCount() {
     online = broadcastSources.length > 0;
     rawCount = broadcastSources.reduce(
       (sum: number, s: any) => sum + Number(s.listeners || 0), 0);
-    // Bitrate from the first attached mount — both share the same `radio` bus,
-    // so one figure represents the broadcast. Comes free off this same poll.
-    const firstBitrate = Number(broadcastSources[0]?.bitrate);
+    // Describe the broadcast off the *primary* mount — /stream.mp3, the
+    // always-served universal floor — rather than whichever source Icecast
+    // happened to list first (Opus, when enabled, is a different 96k/48kHz
+    // encode and would misreport the figures listeners actually receive). Falls
+    // back to the first attached source if the mp3 mount isn't found. All comes
+    // free off this same poll.
+    const primarySource =
+      broadcastSources.find((s: any) => String(s?.listenurl || '').includes('/stream.mp3')) ??
+      broadcastSources[0];
+    const firstBitrate = Number(primarySource?.bitrate);
     bitrate = Number.isFinite(firstBitrate) ? firstBitrate : null;
+    sampleRate = audioParam(primarySource, 'samplerate');
+    channels = audioParam(primarySource, 'channels');
 
     // Dedupe by IP+UA off the admin per-connection feed (Safari double-counts —
     // see dedupeListeners). Only worth a call when someone's actually attached;
@@ -117,7 +149,7 @@ async function fetchCount() {
 
     lastCount = current;
     peakSeen = Math.max(peakSeen, current);
-    lastStatus = { online, listeners: { current, peak: peakSeen }, bitrate };
+    lastStatus = { online, listeners: { current, peak: peakSeen }, bitrate, sampleRate, channels };
     consecutiveStatusFailures = 0;
   } catch {
     lastCount = null;
@@ -239,7 +271,7 @@ export interface ListenerConnection {
   connections?: number;
 }
 
-const BROADCAST_MOUNTS = ['/stream.mp3', '/stream.opus'];
+const BROADCAST_MOUNTS = ['/stream.mp3', '/stream.opus', '/stream.flac', '/stream.aac'];
 let cachedAdminPassword: string | null = null;
 
 // Resolve the Icecast admin password: explicit env wins, otherwise read the

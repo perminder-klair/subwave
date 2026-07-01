@@ -11,6 +11,7 @@ import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
+import { vocalActivityWanted } from './analyze.js';
 
 const STALE_MS = 6 * 60 * 60 * 1000; // 6 h
 // Acoustic-analysis backend availability is probed separately: analyzer
@@ -100,6 +101,7 @@ export async function get() {
   const tagged = library.allTaggedIds().length;
   const analysed = db.analysedCount();
   const audioEmbedded = db.audioVectorCount();
+  const vocalAnalyzed = db.vocalAnalyzedCount();
   const total = cache.scannedAt ? cache.total : null;
   const percent =
     total != null && total > 0 ? Math.round((tagged / total) * 100) : null;
@@ -107,16 +109,24 @@ export async function get() {
     total != null && total > 0 ? Math.round((analysed / total) * 100) : null;
   const audioEmbeddedPercent =
     total != null && total > 0 ? Math.round((audioEmbedded / total) * 100) : null;
+  const vocalAnalyzedPercent =
+    total != null && total > 0 ? Math.round((vocalAnalyzed / total) * 100) : null;
   return {
     tagged,
     analysed,
     audioEmbedded,
+    vocalAnalyzed,
     total,
     percent,
     analysedPercent,
     audioEmbeddedPercent,
+    vocalAnalyzedPercent,
     scannedAt: cache.scannedAt,
     scanning: cache.scanning,
+    // Whether vocal-activity analysis is wanted (env ANALYZE_VOCAL_ACTIVITY or
+    // settings.audio.vocalActivity). Drives whether the UI shows the vocal
+    // coverage row at all — hidden by default for the common case (#646).
+    vocalWanted: vocalActivityWanted(),
     // Whether an acoustic-analysis backend (tts-heavy sidecar / local librosa
     // venv) is reachable. When false, acoustic coverage stays 0 by design —
     // the UI surfaces this rather than showing a misleading 0%.

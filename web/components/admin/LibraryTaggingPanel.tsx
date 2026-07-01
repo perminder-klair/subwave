@@ -8,13 +8,11 @@
 // stays over there.
 
 import { useEffect, useRef, useState } from 'react';
-import {
-  Sparkles, Activity, Play, Square, ChevronDown, ChevronRight, Terminal, RefreshCw,
-} from 'lucide-react';
+import { Sparkles, Activity, Play, Square, Terminal } from 'lucide-react';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { Btn, Eyebrow } from './ui';
-import { V3AlertDialog } from '../ui/alert-dialog';
 import { cn } from '../../lib/cn';
+import LibraryTaggingModal from './LibraryTaggingModal';
 
 // ---------------------------------------------------------------------------
 // shared types (also consumed by LibraryPanel)
@@ -25,10 +23,17 @@ export interface Coverage {
   // Tracks with a CLAP audio (sounds-like) embedding. Same analysis backend,
   // gated on ANALYZE_AUDIO_EMBEDDING — 0 when that's off even if bpm/key runs.
   audioEmbedded?: number;
+  // Tracks with Demucs vocal-activity ranges (vocal_ranges_json NOT NULL). Only
+  // surfaced when vocalWanted; hidden by default for the common case (#646).
+  vocalAnalyzed?: number;
   total: number | null;
   percent: number | null;
   analysedPercent: number | null;
   audioEmbeddedPercent?: number | null;
+  vocalAnalyzedPercent?: number | null;
+  // Vocal analysis is wanted via env ANALYZE_VOCAL_ACTIVITY or
+  // settings.audio.vocalActivity — drives whether the vocal coverage row shows.
+  vocalWanted?: boolean;
   scannedAt: string | null;
   scanning: boolean;
   // null = still probing; false = no analysis backend (sidecar/librosa) running.
@@ -54,6 +59,9 @@ export interface TaggerProgress {
   round?: number;        // active-learn round
   errors?: number;
   llm?: { legs: Record<string, number> };
+  // Cumulative ms per phase, attached to the terminal 'done' event so the panel
+  // can show where the last run spent its time.
+  timings?: Record<string, number>;
   updatedAt: string;
 }
 
@@ -81,13 +89,30 @@ export interface LibraryStatsLite {
   updatedAt: string | null;
 }
 
-export type Batch = '100' | '500' | 'all';
+export type Batch = '100' | '500' | '5000' | '10000' | 'all';
 
 export type RescanOpts = {
   reseed?: boolean;
   reEnrich?: boolean;
   reAnalyze?: boolean;
   upgrade?: boolean;
+  // Whether a Re-analyse-acoustics pass also redoes the slow Demucs vocal pass.
+  // false → --no-vocal (re-do bpm/key + sounds-like, keep existing vocal ranges).
+  vocal?: boolean;
+};
+
+// Forward-run step toggles from the modal's Run tab. All default true; an
+// unchecked box sends `false`, which the controller maps to a skip flag
+// (enrich→--skip-enrich, tagMoods→--skip-tag, analyze→--skip-analyze,
+// reconcile→--no-prune). Only-reconcile is routed to onReconcile instead.
+export type TagSteps = {
+  reconcile: boolean;
+  enrich: boolean;
+  tagMoods: boolean;
+  analyze: boolean;
+  // Per-run Demucs vocal pass — only sent/honoured when analyze is on and vocal
+  // is enabled in settings; lets a run do bpm/key + CLAP without the slow Demucs.
+  vocal: boolean;
 };
 
 export function num(n: number | null | undefined): string {
@@ -106,7 +131,7 @@ interface TaggingPanelProps {
   busy: boolean;
   logOpen: boolean;
   setLogOpen: (fn: (o: boolean) => boolean) => void;
-  onStart: () => void;
+  onStart: (steps?: TagSteps) => void;
   onStop: () => void;
   onRescan: (opts: RescanOpts) => void;
   // Walk Navidrome and prune library entries for tracks that no longer exist.
@@ -115,6 +140,9 @@ interface TaggingPanelProps {
   audioEnabled: boolean | null;
   onToggleAudio: () => void;
   onAnalyzeAudio: () => void;
+  // Vocal-activity (Demucs) controls — parallel to the sounds-like pair (#646).
+  onToggleVocal: () => void;
+  onVocalBackfill: () => void;
   // Whether vocal-activity (Demucs) analysis is enabled — null until the first
   // settings poll lands. Drives the "build WITH_DEMUCS=1" warning when on but
   // the backend can't produce vocal ranges.
@@ -134,26 +162,112 @@ const PHASE_HINT: Record<TaggerProgress['phase'], string> = {
   done: 'Wrapping up.',
 };
 
+// Short labels for the post-run phase breakdown (keys match the tagger's
+// timings map, which includes 'setup'/'walk' that aren't user-facing phases).
+const PHASE_LABEL: Record<string, string> = {
+  setup: 'setup',
+  walk: 'scan',
+  enrich: 'enrich',
+  embed: 'embed',
+  seed: 'seed-tag',
+  propagate: 'spread',
+  learn: 're-tag',
+  analyze: 'acoustics',
+};
+
+// ms → compact "2m 5s" / "40s" for the breakdown line.
+function fmtDur(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r ? `${m}m ${r}s` : `${m}m`;
+}
+
+// Make a raw tagger log line human for the drawer: strip the [tag]/[analyze]
+// noise, add a phase emoji, lightly rephrase the common lines, and tint by kind.
+// Backend logs stay machine-greppable; only the operator's view is dressed up.
+const grp = (s: string | undefined): string => {
+  const n = Number(String(s ?? '').replace(/[, ]/g, ''));
+  return Number.isFinite(n) ? n.toLocaleString('en-GB') : String(s ?? '');
+};
+// Rename the breakdown phase keys to the friendly labels (walk→scan, etc.).
+const humanBreakdown = (s: string | undefined): string =>
+  String(s ?? '').replace(/\b(setup|walk|enrich|embed|seed|propagate|learn|analyze)\b/g, k => PHASE_LABEL[k] ?? k);
+
+const LOG_RULES: { re: RegExp; to: (m: RegExpMatchArray) => string; cls: string }[] = [
+  { re: /^done in (\d+)s\..*?llm_tagged=(\d+)/, to: m => `✅  Done in ${fmtDur(Number(m[1]) * 1000)} — ${m[2]} tracks tagged`, cls: 'text-emerald-500 font-semibold' },
+  { re: /^phase breakdown:\s*(.+)$/, to: m => `⏱️  Time per phase — ${humanBreakdown(m[1])}`, cls: 'text-ink' },
+  { re: /^([\d,]+) tagged · (.+)$/, to: m => `📊  Library now: ${grp(m[1])} tagged · ${m[2]}`, cls: 'text-ink' },
+  { re: /^walked ([\d,]+) total tracks/, to: m => `🔍  Scanned ${grp(m[1])} tracks`, cls: 'text-muted' },
+  { re: /^walked ([\d,]+) tracks/, to: m => `🔍  Scanning library… ${grp(m[1])}`, cls: 'text-muted' },
+  { re: /^([\d,]+) untagged tracks in scope.*?\(of ([\d,]+)/, to: m => `📋  ${grp(m[1])} new tracks to tag (${grp(m[2])} still untagged)`, cls: 'text-ink' },
+  { re: /^enriched (\d+)\/(\d+) \(lastfm: (\d+), lyrics: (\d+)\)/, to: m => `🌐  Enriched ${m[1]}/${m[2]} — ${m[3]} Last.fm, ${m[4]} lyrics`, cls: 'text-muted' },
+  { re: /^phase-0 done.*?enriched (\d+)/, to: m => `🌐  Metadata fetched for ${m[1]} tracks`, cls: 'text-muted' },
+  { re: /^phase-1 embedding (\d+) tracks/, to: m => `🧬  Building similarity vectors for ${m[1]} tracks…`, cls: 'text-muted' },
+  { re: /^embedded (\d+)\/(\d+)/, to: m => `🧬  Vectors ${m[1]}/${m[2]}`, cls: 'text-muted' },
+  { re: /^LLM-tagged (\d+)\/(\d+)/, to: m => `🏷️  DJ tagged ${m[1]}/${m[2]}`, cls: 'text-muted' },
+  { re: /^phase-2 done: (\d+)\/(\d+) seeded/, to: m => `✓  Mood tagging done — ${m[1]}/${m[2]}`, cls: 'text-emerald-500' },
+  { re: /^phase-3 propagated (\d+) tracks; (\d+) uncertain/, to: m => `🔗  Spread tags to ${m[1]} similar tracks (${m[2]} unsure)`, cls: 'text-muted' },
+  { re: /^phase-4 round (\d+).*?LLM-tagging (\d+)/, to: m => `🔁  Round ${m[1]}: re-checking ${m[2]} unsure tracks…`, cls: 'text-muted' },
+  { re: /^(\d+) tracks to analyse/, to: m => `🔊  Analysing audio for ${m[1]} tracks…`, cls: 'text-muted' },
+  { re: /^(\d+)\/(\d+) \(ok=\d+ fail=(\d+)\)/, to: m => `🔊  Audio ${m[1]}/${m[2]}${Number(m[3]) ? ` · ${m[3]} failed` : ''}`, cls: 'text-muted' },
+  { re: /^done — analyzed=(\d+).*?audio-embedded=(\d+)/, to: m => `✓  Audio analysed — ${m[1]} tracks, ${m[2]} sounds-like`, cls: 'text-emerald-500' },
+  { re: /^backend: (\w+)/, to: m => `🔊  Audio engine: ${m[1]}`, cls: 'text-muted' },
+  { re: /^LLM model: (.+)/, to: m => `🤖  Tagging model — ${m[1]}`, cls: 'text-muted' },
+  { re: /^embedding model: (.+)/, to: m => `🧬  Embedding model — ${m[1]}`, cls: 'text-muted' },
+  { re: /^starting\b/, to: () => '▶️  Starting up…', cls: 'text-muted' },
+];
+
+function beautifyLog(raw: string): { text: string; cls: string } {
+  if (/^\[exit 0\]/.test(raw)) return { text: '✅  Finished', cls: 'text-emerald-500 font-semibold' };
+  if (/^\[exit/.test(raw)) return { text: `⏹  Stopped (${raw.replace(/^\[exit\s*|\]\s*$/g, '')})`, cls: 'text-vermilion font-semibold' };
+  const s = raw.replace(/^\[(tag|analyze|stats|scheduler|error)\]\s*/, '');
+  // Raw LLM-request dumps (the `[llm-debug-raw]` header and its JSON body) are
+  // verbose debug output, not status lines — never keyword-scan them. A song
+  // title carried inside the body (e.g. "Closer (Cotto's Can't Stop Remix)")
+  // would otherwise false-trigger the failure warning below.
+  if (/^\[llm-debug-raw\]/.test(s) || /^\s*\{/.test(s)) return { text: s, cls: 'text-muted' };
+  const low = s.toLowerCase();
+  // Real failures (but not "0 failed" / "fail=0") → vermilion warning.
+  if (/(fail(ed)?|error|unreachable|can'?t|missing)/.test(low) && !/fail=0|0 failed/.test(low)) {
+    return { text: `⚠️  ${s}`, cls: 'text-vermilion' };
+  }
+  for (const r of LOG_RULES) {
+    const m = s.match(r.re);
+    if (m) return { text: r.to(m), cls: r.cls };
+  }
+  return { text: s, cls: 'text-muted' };
+}
+
 export default function TaggingPanel(p: TaggingPanelProps) {
-  const [maintOpen, setMaintOpen] = useState(false);
-  const [confirmRescan, setConfirmRescan] = useState(false);
-  const [passes, setPasses] = useState<RescanOpts>({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false });
+  const [modalOpen, setModalOpen] = useState(false);
+  // Intent carried into the modal when opened from a contextual prompt — the
+  // "embeddings missing" nudge jumps straight to a pre-ticked re-embed.
+  const [modalIntent, setModalIntent] = useState<'reembed' | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
   const moodFillRef = useRef<HTMLSpanElement>(null);
   const acousticFillRef = useRef<HTMLSpanElement>(null);
   const audioFillRef = useRef<HTMLSpanElement>(null);
+  const vocalFillRef = useRef<HTMLSpanElement>(null);
   const runFillRef = useRef<HTMLSpanElement>(null);
 
   const tagged = p.coverage?.tagged ?? p.libStats?.total ?? null;
   const total = p.coverage?.total ?? null;
   const analysed = p.coverage?.analysed ?? null;
   const audioEmbedded = p.coverage?.audioEmbedded ?? null;
+  const vocalAnalyzed = p.coverage?.vocalAnalyzed ?? null;
   const pct = p.coverage?.percent ?? null;
   const apct = p.coverage?.analysedPercent ?? null;
   const audpct = p.coverage?.audioEmbeddedPercent ?? null;
+  const vpct = p.coverage?.vocalAnalyzedPercent ?? null;
   // Audio embeddings only exist once at least one is written; until then the
   // row reads "not enabled" rather than a misleading 0% (CLAP is opt-in).
   const audioOn = (audioEmbedded ?? 0) > 0;
+  // Vocal row is hidden unless the operator opted in (env or settings) — the
+  // common case never sees it. Backend resolves env-vs-settings precedence.
+  const vocalWanted = p.coverage?.vocalWanted === true;
+  const vocalOn = (vocalAnalyzed ?? 0) > 0;
   const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
   const running = !!p.tagger?.running;
   const analysisOff = p.coverage?.analysisAvailable === false;
@@ -166,9 +280,26 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // pass would skip vocal backfill (no-op), so warn rather than silently never
   // filling vocal ranges. Mirrors the CLAP `audioIncapable` warning above.
   const vocalIncapable = !analysisOff && p.coverage?.vocalAnalysisAvailable === false;
+  // "Starved" = the bpm/key pass HAS run (analysed > 0) but this heavier
+  // sub-output is still 0 while enabled. The engine processed tracks and produced
+  // none → it can't make them (an older sidecar without CLAP/Demucs that reports
+  // capability as null, so the *Incapable flags above never fire). Honest label
+  // instead of a forever-"not yet analysed" that never comes true.
+  const ranAnalysis = (analysed ?? 0) > 0;
+  // Only treat it as "starved" when the engine doesn't ADVERTISE the capability
+  // (null/unknown — an older sidecar). If it reports capable=true the honest read
+  // is "not yet analysed" (run a backfill); capable=false is the *Incapable path.
+  const audioStarved =
+    !analysisOff && p.coverage?.audioAnalysisAvailable == null && !!p.audioEnabled && !audioOn && ranAnalysis;
+  const vocalStarved =
+    !analysisOff && p.coverage?.vocalAnalysisAvailable == null && vocalWanted && !vocalOn && ranAnalysis;
+  // A backfill is worth offering only while there's headroom — nothing written
+  // yet, or coverage below 100%. Gates the per-row "Backfill" action so a fully
+  // covered dimension doesn't show a dead button.
+  const audioGap = !audioOn || (audpct != null && audpct < 100);
+  const vocalGap = !vocalOn || (vpct != null && vpct < 100);
   const moodCount = p.libStats ? Object.keys(p.libStats.byMood || {}).length : 0;
   const lastTag = p.libStats?.updatedAt ? new Date(p.libStats.updatedAt).toLocaleString('en-GB') : '—';
-  const anySel = !!(passes.reseed || passes.reEnrich || passes.reAnalyze || passes.upgrade);
 
   // Embeddings present but no vectors → likely a model swap dropped them.
   const embeddingMissing = (tagged ?? 0) > 0 && p.libStats != null && p.libStats.withEmbedding === 0;
@@ -183,29 +314,27 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const runIndeterminate = !!progress && progress.total == null && progress.phase !== 'done';
   const legEntries = progress?.llm ? Object.entries(progress.llm.legs) : [];
 
+  // After a run ends, the child's final 'done' event sticks around (broadcast/
+  // tagger.ts keeps it post-exit) — surface its per-phase breakdown when idle so
+  // the operator can see where the time went (usually the chat-model seed/re-tag
+  // phases, not embeddings) without scraping the log.
+  const lastTimings =
+    !running && p.tagger?.progress?.phase === 'done' ? p.tagger.progress.timings : undefined;
+  const lastTimingEntries = lastTimings
+    ? Object.entries(lastTimings).filter(([, ms]) => ms > 0).sort((a, b) => b[1] - a[1])
+    : [];
+
   useDynamicStyle(moodFillRef, { width: pct != null ? `${Math.min(100, pct)}%` : '0%' });
   useDynamicStyle(acousticFillRef, { width: !analysisOff && apct != null ? `${Math.min(100, apct)}%` : '0%' });
   useDynamicStyle(audioFillRef, { width: audioOn && audpct != null ? `${Math.min(100, audpct)}%` : '0%' });
+  useDynamicStyle(vocalFillRef, { width: vocalOn && vpct != null ? `${Math.min(100, vpct)}%` : '0%' });
   useDynamicStyle(runFillRef, { width: runPct != null ? `${runPct}%` : null });
 
   useEffect(() => {
     if (p.logOpen && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [p.logOpen, p.tagger?.lastLog?.length]);
 
-  const togglePass = (k: keyof RescanOpts) => setPasses(prev => ({ ...prev, [k]: !prev[k] }));
-  const allSelected = !!(passes.reseed && passes.reEnrich && passes.reAnalyze && passes.upgrade);
-  const toggleAll = () => {
-    const on = !allSelected;
-    setPasses({ reseed: on, reEnrich: on, reAnalyze: on, upgrade: on });
-  };
-  const clearPasses = () => setPasses({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false });
-  // Re-embedding re-spends embedding calls — guard those runs behind a confirm;
-  // the lighter passes (re-enrich / re-analyse / re-decide) run straight away.
-  const runRescan = () => {
-    if (passes.reseed) { setConfirmRescan(true); return; }
-    p.onRescan(passes);
-    clearPasses();
-  };
+  const openModal = (intent: 'reembed' | null = null) => { setModalIntent(intent); setModalOpen(true); };
 
   return (
     <section className="card">
@@ -248,13 +377,128 @@ export default function TaggingPanel(p: TaggingPanelProps) {
               <button
                 type="button"
                 className="font-bold text-vermilion underline-offset-2 hover:underline"
-                onClick={() => { setMaintOpen(true); setPasses(s => ({ ...s, reseed: true })); }}
+                onClick={() => openModal('reembed')}
               >
                 Set up a re-embed →
               </button>
             </div>
           )}
         </div>
+      </div>
+
+      {/* acoustic & audio coverage — status meter on each row, plus the controls
+          that change it: bpm/key is always-on (engine permitting); sounds-like
+          (CLAP) and vocal (Demucs) are opt-in, so they carry Enable/Disable + a
+          contextual Backfill (shown only while enabled, capable, and < 100%). */}
+      <div className="flex flex-col gap-3 border-b border-ink px-6 py-4">
+        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
+          <span className="caption flex items-center gap-2"><Activity size={13} /> Acoustic analysis · bpm / key</span>
+          <span className="lib-opt-tag">optional</span>
+          <span className="lib-minibar"><span ref={acousticFillRef} /></span>
+          <span className="caption mono-num !tracking-[0.04em]">
+            {analysisOff ? 'engine off' : <>{num(analysed)} / {num(total)} · {apct != null ? `${apct}%` : '…'}</>}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong pt-3">
+          <span className="caption flex items-center gap-2"><Activity size={13} /> Audio fingerprint · sounds-like</span>
+          <span className="lib-opt-tag">optional</span>
+          <span className="lib-minibar"><span ref={audioFillRef} /></span>
+          <span className="caption mono-num !tracking-[0.04em]">
+            {analysisOff ? 'engine off'
+              : audioIncapable ? 'engine missing CLAP'
+              : audioOn ? <>{num(audioEmbedded)} / {num(total)} · {audpct != null ? `${audpct}%` : '…'}</>
+              : audioStarved ? 'engine can’t fingerprint — needs a CLAP build'
+              : p.audioEnabled ? 'enabled, not yet analysed' : 'off'}
+          </span>
+          {!analysisOff && (
+            <span className="ml-auto flex items-center gap-2">
+              {p.audioEnabled && !audioIncapable && audioGap && (
+                <Btn sm tone="accent" onClick={p.onAnalyzeAudio} disabled={p.busy || running}
+                  title="Fingerprint the tracks still missing a “sounds-like” vector — without redoing bpm/key.">
+                  <Play size={12} /> {audioOn ? 'Backfill' : 'Analyze'}
+                </Btn>
+              )}
+              <Btn sm onClick={p.onToggleAudio} disabled={p.busy || running}
+                title={p.audioEnabled
+                  ? 'Pause fingerprinting newly-added tracks. Existing “sounds-like” data stays and keeps driving picks.'
+                  : 'Start fingerprinting new tracks for “sounds-like” picks (~1-2s each on the analysis engine).'}>
+                {p.audioEnabled ? 'Pause' : 'Enable'}
+              </Btn>
+            </span>
+          )}
+          {!analysisOff && (
+            <span className="caption basis-full !tracking-[0.04em] !normal-case">
+              {p.audioEnabled
+                ? 'Auto-fingerprints new tracks for “sounds-like” picks (~1-2s each). Pausing stops new analysis only — existing fingerprints stay and keep driving picks.'
+                : 'Fingerprints how each track sounds for “sounds-like” picks (~1-2s each on the analysis engine).'}
+            </span>
+          )}
+        </div>
+        {/* Vocal (Demucs) row — the opt-in entry point now that the modal tab is
+            gone. Collapsed to a single "off · Enable" line until opted in (#646);
+            once wanted it shows the full meter + Disable + Backfill. */}
+        {(vocalWanted || !analysisOff) && (
+          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong pt-3">
+            <span className="caption flex items-center gap-2"><Activity size={13} /> Vocal activity · instrumental detection</span>
+            <span className="lib-opt-tag">optional</span>
+            {vocalWanted ? (
+              <>
+                <span className="lib-minibar"><span ref={vocalFillRef} /></span>
+                <span className="caption mono-num !tracking-[0.04em]">
+                  {analysisOff ? 'engine off'
+                    : vocalIncapable ? 'engine missing Demucs'
+                    : vocalOn ? <>{num(vocalAnalyzed)} / {num(total)} · {vpct != null ? `${vpct}%` : '…'}</>
+                    : vocalStarved ? 'engine can’t separate vocals — needs a Demucs build'
+                    : 'enabled, not yet analysed'}
+                </span>
+                {!analysisOff && (
+                  <span className="ml-auto flex items-center gap-2">
+                    {!vocalIncapable && vocalGap && (
+                      <Btn sm tone="accent" onClick={p.onVocalBackfill} disabled={p.busy || running}
+                        title="Separate vocals for the tracks still missing it — without redoing bpm/key.">
+                        <Play size={12} /> {vocalOn ? 'Backfill' : 'Analyze'}
+                      </Btn>
+                    )}
+                    <Btn sm onClick={p.onToggleVocal} disabled={p.busy || running}
+                      title="Pause Demucs separation on newly-added tracks. Existing vocal data stays and keeps being used.">
+                      Pause
+                    </Btn>
+                  </span>
+                )}
+                {!analysisOff && (
+                  <span className="caption basis-full !tracking-[0.04em] !normal-case">
+                    Auto-separates vocals on new tracks (Demucs, ~10-30s each — CPU-heavy). Pausing stops new analysis only — existing data stays and keeps being used.
+                  </span>
+                )}
+              </>
+            ) : (
+              <>
+                <span className="caption mono-num !tracking-[0.04em]">off</span>
+                <span className="ml-auto">
+                  <Btn sm onClick={p.onToggleVocal} disabled={p.busy || running}
+                    title="Start Demucs vocal separation on new tracks (~10-30s each — CPU-heavy).">
+                    Enable
+                  </Btn>
+                </span>
+                <span className="caption basis-full !tracking-[0.04em] !normal-case">
+                  Separates vocals so the DJ can talk before lyrics (Demucs, ~10-30s/track — CPU-heavy). Off by default.
+                </span>
+              </>
+            )}
+          </div>
+        )}
+        {audioIncapable && p.audioEnabled ? (
+          <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
+            <b>Sounds-like is on, but the analysis engine can’t fingerprint audio.</b> Pull the latest
+            tts-heavy image and recreate the sidecar to enable CLAP embeddings.
+          </div>
+        ) : null}
+        {vocalIncapable && p.vocalEnabled ? (
+          <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
+            <b>Vocal-activity is on, but the analysis engine can’t separate vocals.</b> Pull the latest
+            tts-heavy image and recreate the sidecar to enable vocal ranges.
+          </div>
+        ) : null}
       </div>
 
       {/* action zone — idle vs running */}
@@ -268,24 +512,8 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 : <>Start tagging new tracks so the DJ can play them.</>}
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
-            <div className="lib-batch">
-              <label htmlFor="lib-batch">Tag</label>
-              <select id="lib-batch" value={p.batch} onChange={e => p.setBatch(e.target.value as Batch)}>
-                <option value="100">next 100</option>
-                <option value="500">next 500</option>
-                <option value="all">all{remaining != null ? ` ${num(remaining)}` : ''} remaining</option>
-              </select>
-            </div>
-            <Btn lg tone="accent" onClick={p.onStart} disabled={p.busy || remaining === 0}>
-              <Play size={13} /> Start tagging
-            </Btn>
-            <Btn
-              lg
-              onClick={p.onReconcile}
-              disabled={p.busy}
-              title="Walk Navidrome and remove library entries for tracks that no longer exist (deleted files or IDs changed by a full rescan). No tagging cost."
-            >
-              <RefreshCw size={13} /> Reconcile with Navidrome
+            <Btn lg tone="accent" onClick={() => openModal()} disabled={p.busy}>
+              <Play size={13} /> Start tagging…
             </Btn>
           </div>
         </div>
@@ -339,15 +567,19 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         </div>
       )}
 
-      {/* footer — progressive disclosure */}
+      {/* last-run phase breakdown — only when idle and the child reported timings */}
+      {lastTimingEntries.length > 0 && (
+        <div className="border-t border-dashed border-separator-strong px-6 py-3 text-[11px] text-muted">
+          <span className="font-bold text-ink">Last run</span>
+          <span className="!normal-case">
+            {' · '}
+            {lastTimingEntries.map(([ph, ms]) => `${PHASE_LABEL[ph] ?? ph} ${fmtDur(ms)}`).join(' · ')}
+          </span>
+        </div>
+      )}
+
+      {/* footer */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-dashed border-separator-strong px-6 py-3">
-        <button
-          type="button"
-          className={cn('inline-flex items-center gap-1.5 text-[11px] font-bold', maintOpen ? 'text-ink' : 'text-muted hover:text-ink')}
-          onClick={() => setMaintOpen(o => !o)}
-        >
-          {maintOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Maintenance &amp; advanced
-        </button>
         <button
           type="button"
           className={cn('inline-flex items-center gap-1.5 text-[11px] font-bold', p.logOpen ? 'text-ink' : 'text-muted hover:text-ink')}
@@ -357,152 +589,33 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         </button>
       </div>
 
-      {/* maintenance & advanced disclosure */}
-      {maintOpen && (
-        <div className="flex flex-col gap-3.5 border-t border-ink bg-[var(--ink-soft)] p-6">
-          {/* optional acoustic / audio-fingerprint passes — tucked away here so
-              the default view stays focused on mood & energy */}
-          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
-            <span className="caption flex items-center gap-2">
-              <Activity size={13} /> Acoustic analysis · bpm / key
-            </span>
-            <span className="lib-opt-tag">optional</span>
-            <span className="lib-minibar"><span ref={acousticFillRef} /></span>
-            <span className="caption mono-num !tracking-[0.04em]">
-              {analysisOff ? 'engine off' : <>{num(analysed)} / {num(total)} · {apct != null ? `${apct}%` : '…'}</>}
-            </span>
-            <span className="caption basis-full !tracking-[0.04em] !normal-case">
-              {analysisOff
-                ? <>
-                    No analysis engine running. Start the tts-heavy sidecar (docker compose --profile tts-heavy up -d) or configure a local librosa venv.{' '}
-                    <a
-                      href="https://github.com/perminder-klair/subwave/blob/main/docs/tts-heavy.md"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
-                    >
-                      How to turn it on ↗
-                    </a>
-                  </>
-                : 'Improves beat-matching between tracks; tagging works fine without it.'}
-            </span>
-          </div>
-          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong pt-3.5">
-            <span className="caption flex items-center gap-2">
-              <Activity size={13} /> Audio fingerprint · sounds-like
-            </span>
-            <span className="lib-opt-tag">optional</span>
-            <span className="lib-minibar"><span ref={audioFillRef} /></span>
-            <span className="caption mono-num !tracking-[0.04em]">
-              {analysisOff
-                ? 'engine off'
-                : audioIncapable
-                  ? 'engine missing CLAP'
-                  : audioOn
-                    ? <>{num(audioEmbedded)} / {num(total)} · {audpct != null ? `${audpct}%` : '…'}</>
-                    : p.audioEnabled ? 'enabled, not yet analysed' : 'off'}
-            </span>
-            {!analysisOff && p.audioEnabled != null && (
-              <span className="flex items-center gap-2">
-                {p.audioEnabled && (
-                  <Btn sm tone="accent" onClick={p.onAnalyzeAudio} disabled={running || p.busy || audioIncapable}>
-                    <Play size={12} /> {audioOn ? 'Analyze new tracks' : 'Analyze library'}
-                  </Btn>
-                )}
-                <Btn sm onClick={p.onToggleAudio} disabled={running || p.busy}>
-                  {p.audioEnabled ? 'Disable' : 'Enable'}
-                </Btn>
-              </span>
-            )}
-            {audioIncapable && p.audioEnabled ? (
-              <span className="basis-full border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
-                <b>Sounds-like is on, but the analysis engine can’t fingerprint audio.</b> Your
-                tts-heavy image predates audio fingerprinting, so a run would only fill bpm/key and
-                leave this at 0. Pull the latest image and recreate the sidecar, then run the analysis:
-                <code className="mt-1 block font-mono text-[10.5px] text-muted">docker compose pull tts-heavy &amp;&amp; docker compose --profile tts-heavy up -d tts-heavy</code>
-              </span>
-            ) : (
-              <span className="caption basis-full !tracking-[0.04em] !normal-case">
-                {analysisOff
-                  ? 'Needs the analysis engine above.'
-                  : 'Listens to each track and fingerprints how it sounds, enabling “sounds-like” picks and sonic journeys.'}
-              </span>
-            )}
-          </div>
-
-          {vocalIncapable && p.vocalEnabled ? (
-            <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
-              <b>Vocal-activity is on, but the analysis engine can’t separate vocals.</b> Your
-              tts-heavy image predates vocal separation, so the pass skips vocal ranges (it won’t
-              re-scan the whole library chasing them). Pull the latest image and recreate the sidecar, then run the analysis:
-              <code className="mt-1 block font-mono text-[10.5px] text-muted">docker compose pull tts-heavy &amp;&amp; docker compose --profile tts-heavy up -d tts-heavy</code>
-            </div>
-          ) : null}
-
-          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1.5 border-t border-dashed border-separator-strong pt-3.5">
-            <span className="max-w-[64ch] text-[12px] leading-[1.55] text-muted">
-              <b className="text-ink">Re-scan.</b> Only needed after changing the LLM, embedding model, or analysis
-              engine. Pick the passes to redo (tick all for a full rebuild); existing mood tags are kept as seeds.
-            </span>
-            <button
-              type="button"
-              className="shrink-0 text-[11px] font-bold text-vermilion underline-offset-2 hover:underline disabled:opacity-40"
-              disabled={p.busy || running}
-              onClick={allSelected ? clearPasses : toggleAll}
-            >
-              {allSelected ? 'Clear all' : 'Select all'}
-            </button>
-          </div>
-          <div className="grid gap-2.5 sm:grid-cols-2">
-            <Pass on={!!passes.reseed} onClick={() => togglePass('reseed')} name="Re-embed all tracks"
-              hint="Drop & rebuild every vector. Run after changing the embedding model." />
-            <Pass on={!!passes.reEnrich} onClick={() => togglePass('reEnrich')} name="Re-enrich metadata"
-              hint="Re-fetch Last.fm tags + lyrics that feed the tagging." />
-            <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics"
-              hint="Redo BPM / key for every track. Also refreshes sounds-like fingerprints when enabled." />
-            <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods"
-              hint="Re-tag tracks whose prompt or model is now stale." />
-          </div>
-          <div className="flex flex-wrap items-center justify-end gap-3">
-            <Btn sm tone="accent" disabled={!anySel || p.busy || running} onClick={runRescan}>
-              <RefreshCw size={12} /> {allSelected ? 'Run full re-scan' : 'Run re-scan'}
-            </Btn>
-          </div>
-        </div>
-      )}
-
-      {/* log drawer — reuses the theme-aware .term surface */}
+      {/* log drawer — reuses the theme-aware .term surface; each line is dressed
+          up for humans (emoji + friendly phrasing + tint) via beautifyLog */}
       {p.logOpen && (
-        <pre ref={logRef} className="term m-0 max-h-56 overflow-y-auto !border-t !border-l-0 border-separator-strong">
-          {(p.tagger?.lastLog || []).join('\n') || '(no log output yet, start a tagging run to see the booth think)'}
+        <pre ref={logRef} className="term term-crt m-0 max-h-56 overflow-y-auto !border-t !border-l-0 border-separator-strong">
+          {(p.tagger?.lastLog ?? []).length
+            ? (p.tagger?.lastLog ?? []).map((line, i) => {
+                const f = beautifyLog(line);
+                return <div key={i} className={cn('whitespace-pre-wrap', f.cls)}>{f.text}</div>;
+              })
+            : 'No log output yet — start a tagging run to watch the booth think.'}
         </pre>
       )}
 
-      <V3AlertDialog
-        open={confirmRescan}
-        onOpenChange={setConfirmRescan}
-        title="Re-embed the whole library?"
-        description="This pass drops and rebuilds every similarity vector from scratch, which re-spends embedding calls and can take several minutes on a large library. Existing mood tags are kept and reused as seeds. Only needed after changing the embedding model."
-        confirmLabel="re-scan"
-        danger
-        onConfirm={() => { p.onRescan(passes); clearPasses(); }}
+      <LibraryTaggingModal
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        intent={modalIntent}
+        batch={p.batch}
+        setBatch={p.setBatch}
+        busy={p.busy || running}
+        remaining={remaining}
+        analysisOff={analysisOff}
+        vocalWanted={vocalWanted}
+        onStart={p.onStart}
+        onReconcile={p.onReconcile}
+        onRescan={p.onRescan}
       />
     </section>
-  );
-}
-
-function Pass({ on, onClick, name, hint }: { on: boolean; onClick: () => void; name: string; hint: string }) {
-  return (
-    <button type="button" className={cn('lib-pass', on && 'on')} onClick={onClick}>
-      <span className="box">
-        <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-          <path d="M2.5 6.2L4.8 8.5L9.5 3.5" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </span>
-      <span>
-        <span className="lib-pass-name">{name}</span>
-        <span className="lib-pass-hint">{hint}</span>
-      </span>
-    </button>
   );
 }

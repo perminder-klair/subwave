@@ -18,7 +18,10 @@ import { withTransientRetry } from '../core/retry.js';
 import { stripThinking, extractJson, usageOf, failureDiagnostics } from '../core/pure.js';
 import { needsToolCallObject, providerOptions, samplingWithNumCtx } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
+import { resolveMaxOutputTokens } from '../../../settings.js';
 
+// Operator-overridable via settings.llm.maxOutputTokens (issue #712); 0 keeps
+// this default.
 const MAX_TOKENS_OBJECT = 8000;
 
 export async function djObject({
@@ -26,7 +29,7 @@ export async function djObject({
   prompt,
   schema,
   temperature = 0.4,
-  maxOutputTokens = MAX_TOKENS_OBJECT,
+  maxOutputTokens = resolveMaxOutputTokens(MAX_TOKENS_OBJECT),
   kind = 'sdk.djObject',
   leg = undefined,
 }: any): Promise<any> {

@@ -174,6 +174,12 @@ router.post('/onboarding/test-llm', requireAdmin, async (req, res) => {
       model: m,
       prompt: 'Reply with the single word OK.',
       maxOutputTokens: 8,
+      // A test must always answer. Without a bound an unreachable/stalled model
+      // hangs this handler forever, the wizard's fetch never resolves, and the
+      // button is stuck on "Asking…" with no feedback (issue #682). maxRetries:0
+      // so the operator sees the first real error fast instead of silent backoff.
+      maxRetries: 0,
+      abortSignal: AbortSignal.timeout(45_000),
     });
     res.json({ ok: true, sample: (out.text || '').trim().slice(0, 60) });
   } catch (err: any) {
@@ -235,6 +241,9 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
     if (Array.isArray(b.personas)) settingsPatch.personas = b.personas;
     if (b.weather && typeof b.weather === 'object') settingsPatch.weather = b.weather;
     if (typeof b.station === 'string') settingsPatch.station = b.station;
+    // Timezone rides along from the wizard's location picker (Open-Meteo returns
+    // the IANA zone for the picked city). settings.update() validates it.
+    if (typeof b.timezone === 'string') settingsPatch.timezone = b.timezone;
     if (Object.keys(settingsPatch).length) await settings.update(settingsPatch);
 
     // Mark setup complete so the wizard exits even if Navidrome was skipped.

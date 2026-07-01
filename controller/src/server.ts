@@ -9,6 +9,7 @@ import * as jingles from './broadcast/jingles.js';
 import * as sfx from './broadcast/sfx.js';
 import { queue } from './broadcast/queue.js';
 import * as session from './broadcast/session.js';
+import * as remoteTts from './audio/remoteTts.js';
 import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
 import { startScheduler } from './broadcast/scheduler.js';
@@ -125,6 +126,15 @@ app.listen(config.server.port, async () => {
     console.error('[settings] load failed:', err.message);
   }
 
+  // Start the remote-TTS /health probe loop now that settings are loaded — its
+  // URL lives in settings (not env), so it can't self-start at import time the
+  // way the env-configured tts-heavy probe does. Best-effort; never fatal.
+  try {
+    remoteTts.start();
+  } catch (err: any) {
+    console.error('[remote] tts probe start failed:', err.message);
+  }
+
   // Seed today's LLM token tally from the durable event log so a mid-day
   // restart resumes the daily budget count instead of resetting it. Must run
   // once, before any new model call records (re-seeding would double-count).
@@ -137,25 +147,22 @@ app.listen(config.server.port, async () => {
     console.error('[budget] seed failed:', err.message);
   }
 
-  // Scaffold the built-in skills as editable files under state/skills/<kind>/
-  // (idempotent — never clobbers operator edits) so loadCustomSkills below picks
-  // them up as overrides. Must run before the load. Never fatal.
+  // Seed the shipped built-ins (src/skills/builtins/<kind>/ templates) into
+  // state/skills/<kind>/ as full editable skills — SKILL.md + tool.mjs, idempotent
+  // (never clobbers operator edits) — then load state/skills as the single load
+  // root. Built-ins are no longer special at load time; the seeder just runs first
+  // so their files exist when the scan happens. None of this is fatal.
   try {
-    const { scaffoldBuiltinSkills } = await import('./skills/scaffold.js');
-    await scaffoldBuiltinSkills();
+    const { loadSkills } = await import('./skills/loader.js');
+    const { seedBuiltinSkills } = await import('./skills/scaffold.js');
+    await seedBuiltinSkills();
+    const caps = await loadSkills();
+    const seeded = caps.filter((c: any) => c.seeded);
+    if (seeded.length) console.log(`[skills] ${seeded.length} built-in(s): ${seeded.map((c: any) => c.kind).join(', ')}`);
+    const custom = caps.filter((c: any) => !c.seeded);
+    if (custom.length) console.log(`[skills] ${custom.length} custom skill(s): ${custom.map((c: any) => c.kind).join(', ')}`);
   } catch (err: any) {
-    console.error('[skills] scaffold failed:', err.message);
-  }
-
-  // Load operator-dropped custom skills + built-in overrides from state/skills —
-  // merged into the segment director's capability set (see skills/loader.js).
-  // Never fatal.
-  try {
-    const { loadCustomSkills } = await import('./skills/loader.js');
-    const caps = await loadCustomSkills();
-    if (caps.length) console.log(`[skills] ${caps.length} custom skill(s): ${caps.map((c: any) => c.kind).join(', ')}`);
-  } catch (err: any) {
-    console.error('[skills] custom load failed:', err.message);
+    console.error('[skills] load failed:', err.message);
   }
 
   // First-run banner — operators glancing at `docker compose logs` should

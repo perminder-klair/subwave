@@ -89,6 +89,8 @@ export function buildPickerTools({
   resolveReferences = false,
   genreLock = null,
   eraLock = null,
+  playlistLock = null,
+  playlistTracks = null,
 }: {
   recentIds?: Set<string>;
   recentKeys?: Set<string>;        // lowercased "title|artist" — backfilled entries lack ids
@@ -119,6 +121,18 @@ export function buildPickerTools({
   // library. No-op unless a web-search provider is ready (searchReady()). Never
   // set on the per-track picker — see the gating note on the tool below.
   resolveReferences?: boolean;
+  // Hard playlist constraint for a strict playlist-anchored show. The id set is
+  // the union of the show's pinned Navidrome playlists; when set, every tool's
+  // candidates are intersected with it (HARD — no never-starve to off-playlist,
+  // unlike genreLock, because a playlist is an exact set and the showPlaylistTracks
+  // tool below is the guaranteed in-set source). So the agent's `seen` map only
+  // ever holds playlist tracks — it cannot return an off-playlist id. null = no lock.
+  // Deliberately NOT set on the request path: an explicit listener ask wins.
+  playlistLock?: Set<string> | null;
+  // The show's playlist union tracks. Registers the showPlaylistTracks tool —
+  // the agent's window into the operator's curation. Set in BOTH strict (with
+  // playlistLock) and soft (no lock, just a strong prompt preference) modes.
+  playlistTracks?: any[] | null;
 } = {}) {
   const seen = new Map<string, any>(); // id → slim song, accumulated across all tool calls
 
@@ -137,6 +151,11 @@ export function buildPickerTools({
     let pool = shuffle((list || []) as any[]);
     if (genreLock) pool = preferGenre(pool, genreLock);
     if (eraLock) pool = preferEra(pool, eraLock);
+    // Strict playlist: HARD-intersect with the lock set, with NO never-starve to
+    // off-playlist (a playlist is an exact set, so a tool with no overlap simply
+    // contributes nothing). The guaranteed in-set source is showPlaylistTracks
+    // below, so `seen` is never empty and the agent's pick is always in-playlist.
+    if (playlistLock) pool = pool.filter((s: any) => s?.id && playlistLock.has(s.id));
     const accepted = filterPickerCandidates(pool, {
       recentIds,
       recentKeys,
@@ -243,8 +262,13 @@ export function buildPickerTools({
       description: 'Songs tagged with a mood: energetic, calm, reflective, celebratory, romantic, spiritual, focus, workout, driving, cooking, rainy, sunny, night, morning, evening, festival, cultural. Optionally constrain by energy level (low|medium|high).',
       inputSchema: z.object({
         mood: z.string(),
-        energy: z.enum(['low', 'medium', 'high']).optional()
-          .describe('Optional energy filter — narrows the result to that tempo/intensity band.'),
+        // nullable (not optional): under AI SDK v7's `tool()` an optional field
+        // makes the Zod object's input/output types diverge, collapsing the
+        // schema generic to `never`. nullable keeps the key required-but-`| null`
+        // (symmetric), which the model fills with null to skip the filter — the
+        // `if (energy)` guard below already treats null as "no filter".
+        energy: z.enum(['low', 'medium', 'high']).nullable()
+          .describe('Optional energy filter — narrows the result to that tempo/intensity band. Pass null for no filter.'),
       }),
       execute: async ({ mood, energy }) => {
         try {
@@ -372,6 +396,22 @@ export function buildPickerTools({
         catch (err) { return { error: err.message }; }
       },
     }),
+
+    // Only registered when the active show is anchored to Navidrome playlist(s).
+    // Returns a sample of the operator's hand-picked tracks for this show. In a
+    // STRICT playlist show this is the only source that's guaranteed to return
+    // in-set tracks (every other tool is hard-intersected with the lock), so the
+    // agent should lead with it; in a SOFT show it's the strongly-preferred source.
+    ...(playlistTracks && playlistTracks.length ? {
+      showPlaylistTracks: tool({
+        description: "Tracks from the show's pinned playlist(s) — the operator's hand-picked selection for this show. Prefer these: call this first and choose from what it returns. Takes no input.",
+        inputSchema: z.object({}),
+        execute: async () => {
+          try { return collect(playlistTracks, 12); }
+          catch (err) { return { error: err.message }; }
+        },
+      }),
+    } : {}),
 
     // Only registered while a sonic journey is active (the event message tells
     // the agent when that is). Closes over the journey's current waypoint, so

@@ -92,11 +92,20 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
+      args:
+        # Version reported by the controller (backup manifest). Same source as
+        # the web build arg below; unset → falls back to controller/package.json.
+        - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
     depends_on:
       broadcast:
         condition: service_healthy
+      # Bring the socket-proxy up whenever the controller is (re)created — even a
+      # selective \`up -d controller\` — so the Stats system panel works without a
+      # separate full \`up -d\`. Remove this entry too if you drop the proxy below.
+      docker-socket-proxy:
+        condition: service_started
     environment:
       # Enables the production-only admin gate: refuses to boot unless
       # ADMIN_USER + ADMIN_PASS are set in .env.
@@ -137,7 +146,8 @@ services:
   # CPU/memory through it via DOCKER_HOST=tcp://docker-socket-proxy:2375, so the
   # controller image itself never holds the socket. No host port — only
   # reachable on the internal compose network. Optional: remove this service
-  # (and the controller's DOCKER_HOST above) to drop the Stats system panel.
+  # (plus the controller's DOCKER_HOST and its docker-socket-proxy depends_on
+  # entry above) to drop the Stats system panel.
   docker-socket-proxy:
     image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
     container_name: sub-wave-docker-proxy
@@ -161,6 +171,10 @@ services:
         - SITE_URL=\${SITE_URL:-}
         # NEXT_PUBLIC_* is inlined into the client bundle at BUILD time.
         - NEXT_PUBLIC_GA_ID=\${NEXT_PUBLIC_GA_ID:-}
+        # Version shown in the admin console footer, inlined at BUILD time.
+        # scripts/update.sh sets it from \`git describe\`; unset → falls back to
+        # web/package.json (see web/next.config.js).
+        - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
     depends_on:
@@ -219,6 +233,10 @@ services:
         # and layer on docker-compose.tts-heavy-gpu.yml (device reservation +
         # TTS_HEAVY_DEVICE=cuda). Source build only. See docs/gpu-tts.md.
         CHATTERBOX_TORCH_INDEX_URL: \${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        # RTX 50-series (Blackwell) only: chatterbox-tts pins torch==2.6.0, which
+        # has no sm_120 kernels. Set a newer spec to override the pin, paired with
+        # a cu128 index above, e.g. CHATTERBOX_TORCH_SPEC="torch==2.9.1 torchaudio==2.9.1".
+        CHATTERBOX_TORCH_SPEC: \${CHATTERBOX_TORCH_SPEC:-}
     # amd64-only image (heavy PyTorch stack); pinned so it runs under emulation
     # on arm64 hosts. The other services are multi-arch and auto-select.
     platform: linux/amd64
@@ -339,11 +357,20 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
+      args:
+        # Version reported by the controller (backup manifest). Same source as
+        # the web build arg below; unset → falls back to controller/package.json.
+        - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
     depends_on:
       broadcast:
         condition: service_healthy
+      # Bring the socket-proxy up whenever the controller is (re)created — even a
+      # selective \`up -d controller\` — so the Stats system panel works without a
+      # separate full \`up -d\`. Remove this entry too if you drop the proxy below.
+      docker-socket-proxy:
+        condition: service_started
     environment:
       - NODE_ENV=production
       - TZ=\${TZ:-Europe/London}
@@ -374,7 +401,8 @@ services:
   # CPU/memory through it via DOCKER_HOST=tcp://docker-socket-proxy:2375, so the
   # controller image itself never holds the socket. No host port — only
   # reachable on the internal compose network. Optional: remove this service
-  # (and the controller's DOCKER_HOST above) to drop the Stats system panel.
+  # (plus the controller's DOCKER_HOST and its docker-socket-proxy depends_on
+  # entry above) to drop the Stats system panel.
   docker-socket-proxy:
     image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
     container_name: sub-wave-docker-proxy
@@ -395,6 +423,10 @@ services:
       args:
         - SITE_URL=\${SITE_URL:-}
         - NEXT_PUBLIC_GA_ID=\${NEXT_PUBLIC_GA_ID:-}
+        # Version shown in the admin console footer, inlined at BUILD time.
+        # scripts/update.sh sets it from \`git describe\`; unset → falls back to
+        # web/package.json (see web/next.config.js).
+        - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
     depends_on:
@@ -440,6 +472,10 @@ services:
         # layer on docker-compose.tts-heavy-gpu.yml. Defaults to CPU wheels.
         # Source build only. See docs/gpu-tts.md.
         CHATTERBOX_TORCH_INDEX_URL: \${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        # RTX 50-series (Blackwell) only: override chatterbox-tts's torch==2.6.0
+        # pin (no sm_120 kernels) with a newer spec + a cu128 index above, e.g.
+        # CHATTERBOX_TORCH_SPEC="torch==2.9.1 torchaudio==2.9.1". See docs/gpu-tts.md.
+        CHATTERBOX_TORCH_SPEC: \${CHATTERBOX_TORCH_SPEC:-}
     # amd64-only image (heavy PyTorch stack); pinned so it runs under emulation
     # on arm64 hosts. The other services are multi-arch and auto-select.
     platform: linux/amd64
@@ -546,12 +582,22 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
+      args:
+        # Version reported by the controller (backup manifest); unset → falls
+        # back to controller/package.json. The dev web UI runs \`npm run dev\`
+        # outside Docker, where next.config.js resolves it via \`git describe\`.
+        - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     platform: linux/amd64
     container_name: sub-wave-controller
     restart: unless-stopped
     depends_on:
       broadcast:
         condition: service_healthy
+      # Bring the socket-proxy up whenever the controller is (re)created — even a
+      # selective \`up -d controller\` — so the Stats system panel works without a
+      # separate full \`up -d\`. Remove this entry too if you drop the proxy below.
+      docker-socket-proxy:
+        condition: service_started
     environment:
       - TZ=\${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
@@ -597,7 +643,8 @@ services:
   # other section refused by default). The controller reads per-container
   # CPU/memory through it via DOCKER_HOST=tcp://docker-socket-proxy:2375, so the
   # controller never holds the socket. No host port. Optional: remove this
-  # service (and the controller's DOCKER_HOST above) to drop the Stats panel.
+  # service (plus the controller's DOCKER_HOST and its docker-socket-proxy
+  # depends_on entry above) to drop the Stats panel.
   docker-socket-proxy:
     image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
     container_name: sub-wave-docker-proxy
@@ -632,6 +679,10 @@ services:
         # layer on docker-compose.tts-heavy-gpu.yml. Defaults to CPU wheels.
         # Source build only. See docs/gpu-tts.md.
         CHATTERBOX_TORCH_INDEX_URL: \${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        # RTX 50-series (Blackwell) only: override chatterbox-tts's torch==2.6.0
+        # pin (no sm_120 kernels) with a newer spec + a cu128 index above, e.g.
+        # CHATTERBOX_TORCH_SPEC="torch==2.9.1 torchaudio==2.9.1". See docs/gpu-tts.md.
+        CHATTERBOX_TORCH_SPEC: \${CHATTERBOX_TORCH_SPEC:-}
     platform: linux/amd64
     container_name: sub-wave-tts-heavy
     restart: unless-stopped
@@ -684,6 +735,13 @@ export const COMPOSE_TTS_HEAVY_GPU_YML = `# GPU opt-in overlay for the tts-heavy
 #
 # (BYO reverse-proxy hosts: swap docker-compose.yml for docker-compose.byo.yml.)
 #
+# RTX 50-series (Blackwell / sm_120): chatterbox-tts pins torch==2.6.0, which has
+# no sm_120 kernels, so the default cu124 build loads but 500s at synthesis. Use
+# a cu128 index AND override the pin:
+#
+#   echo 'CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128' >> .env
+#   echo 'CHATTERBOX_TORCH_SPEC=torch==2.9.1 torchaudio==2.9.1' >> .env
+#
 # Requirements: an NVIDIA GPU with the driver + NVIDIA Container Toolkit
 # installed. Pick the cuXXX wheel tag that matches your driver — see
 # https://pytorch.org/get-started/locally/. Full guide: docs/gpu-tts.md.
@@ -696,6 +754,17 @@ services:
       # CUDA isn't actually visible, so a misconfigured host degrades, not fails.
       - TTS_HEAVY_DEVICE=cuda
     # Hand the GPU into the container (needs the NVIDIA Container Toolkit).
+    #
+    # The deploy.resources reservation below is the modern (CDI) path. On hosts
+    # where the NVIDIA runtime is registered in LEGACY mode, that reservation
+    # fails with "could not select device driver nvidia"; there, delete the
+    # \`deploy:\` block and instead use the legacy runtime:
+    #
+    #   runtime: nvidia
+    #   environment:
+    #     - TTS_HEAVY_DEVICE=cuda
+    #     - NVIDIA_VISIBLE_DEVICES=all
+    #     - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     deploy:
       resources:
         reservations:
@@ -794,13 +863,14 @@ SITE_URL=
 
 # ───────── Acoustic analysis (CLAP audio-similarity + Demucs vocals) ─────────
 # The analysis pass (npm run analyze / admin "Analyze audio") computes bpm, key,
-# loudness, structure, pace and a beat grid for every track. Two heavier,
-# opt-in dimensions need extra deps baked into the tts-heavy image at BUILD time
-# and switched on at RUN time.
+# loudness, structure, pace and a beat grid for every track. Two heavier
+# dimensions need extra deps baked into the tts-heavy image at BUILD time and
+# switched on at RUN time. They ship ON by default (the published image carries
+# them, ~1.5GB each); set the build arg to 0 for a leaner self-built image.
 #
 # Build args — pass to \`docker compose build tts-heavy\` (env or here):
-# WITH_CLAP=0     # 1 = build the CLAP "sounds-like" audio-embedding backend
-# WITH_DEMUCS=0   # 1 = build the Demucs source-separation (vocal-presence) backend
+# WITH_CLAP=1     # default 1 = build CLAP "sounds-like" backend; 0 = skip (leaner)
+# WITH_DEMUCS=1   # default 1 = build Demucs vocal-separation backend; 0 = skip
 #
 # Runtime flags — env wins ON over the admin toggles (settings.audio.*), never
 # off. A flag with no matching backend in the image is a clean no-op.
@@ -819,4 +889,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version`).
-export const CLI_VERSION = `0.30.0`; // x-release-please-version
+export const CLI_VERSION = `0.33.0`; // x-release-please-version

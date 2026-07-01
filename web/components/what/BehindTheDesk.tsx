@@ -18,7 +18,7 @@ const PANELS = [
     eyebrow: 'SKILLS',
     title: 'What the DJ does between tracks.',
     body:
-      'Each skill is an autonomous segment: a weather check, a news headline, an absurd traffic update, an oddly-specific fact. Toggle each one on, assign it to a persona, or run any one now as an operator override.',
+      'Each skill is an autonomous segment: a weather check, a news headline, a dig on the song playing, an oddly-specific fact. Toggle each one on, assign it to a persona, or run any one now as an operator override.',
     fig: {
       src: '/screenshots/admin-skills.webp',
       label: 'Admin — Skills',

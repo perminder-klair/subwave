@@ -9,12 +9,14 @@ import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
 import { stripThinking, usageOf, failureDiagnostics } from '../core/pure.js';
 import { providerOptions, repeatPenaltyApplies, samplingWithNumCtx } from '../provider/capabilities.js';
+import { resolveMaxOutputTokens } from '../../../settings.js';
 
 // Hard output-token cap. A reasoning model with no cap can generate until it
 // fills the whole context window — one runaway <think> ramble then ties up the
 // inference slot for minutes. Generous backstop for normal output (idents are
 // ~150 tokens); raise it if you turn `llm.reasoning` on and need room for the
-// chain-of-thought.
+// chain-of-thought. The operator can override via settings.llm.maxOutputTokens
+// (issue #712); 0 there keeps this default.
 const MAX_TOKENS_TEXT = 4000;
 
 export async function djText({
@@ -24,7 +26,7 @@ export async function djText({
   topP = 0.95,
   repeatPenalty = 1.15,
   seed = null,
-  maxOutputTokens = MAX_TOKENS_TEXT,
+  maxOutputTokens = resolveMaxOutputTokens(MAX_TOKENS_TEXT),
   kind = 'sdk.djText',
 }: any): Promise<string> {
   return withFailover(

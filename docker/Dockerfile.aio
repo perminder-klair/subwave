@@ -31,6 +31,11 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # SITE_URL env for live share-card tags.
 ARG SITE_URL
 ENV SITE_URL=${SITE_URL}
+# Admin-console footer version, inlined into the web bundle at build time. See
+# web/next.config.js. Set from `git describe` by the publish-images CI; unset →
+# falls back to web/package.json.
+ARG SUBWAVE_BUILD_VERSION
+ENV SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION}
 RUN npm run build
 
 # ---- caddy binary: lift the glibc build from the official Debian image ------
@@ -106,7 +111,10 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
 
 # --- Controller app ---------------------------------------------------------
 WORKDIR /app
-COPY controller/package*.json ./
+# .npmrc carries `legacy-peer-deps=true` (OpenRouter provider still declares a
+# stale `peer ai@^6` after the AI SDK v7 upgrade); it must land before install
+# or npm hits ERESOLVE.
+COPY controller/package*.json controller/.npmrc ./
 RUN npm install --omit=dev
 COPY controller/src ./src
 COPY controller/scripts ./scripts
@@ -128,9 +136,14 @@ RUN chmod +x /usr/local/bin/subwave-supervisor
 # Shared state dir (the supervisor re-asserts perms on every boot).
 RUN mkdir -p /var/sub-wave && chmod 777 /var/sub-wave
 
+# Re-declared for the final stage (ARGs don't cross stage boundaries) so the
+# controller process reports the same version (backup manifest) as the web
+# build above. Same source as the webbuild-stage arg.
+ARG SUBWAVE_BUILD_VERSION
 ENV NODE_ENV=production \
     STATE_DIR=/var/sub-wave \
-    SOUNDS_DIR=/sounds
+    SOUNDS_DIR=/sounds \
+    SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION}
 
 # Single public port: Caddy on :80. Health = the controller's liveness via the
 # edge, which only answers once web + controller are both up.

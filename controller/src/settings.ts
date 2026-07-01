@@ -131,13 +131,17 @@ export function effectsActive(persona: any = getEffectivePersona()): boolean {
 //
 // `cloud` routes through the AI SDK (OpenAI / ElevenLabs speech models) —
 // see llm/speech.js. `piper`, `kokoro`, `chatterbox`, and `pocket-tts` are
-// local engines. Chatterbox and PocketTTS are opt-in — the default controller
-// image doesn't bundle either; build the image with `--build-arg WITH_CHATTERBOX=1`
-// or `--build-arg WITH_POCKETTTS=1` (see docker/Dockerfile.controller) to
-// include the runtime. The dispatcher gates each engine on isAvailable() so
-// settings can reference it safely even when the runtime is absent (the
-// engine just falls back to Piper).
-export const TTS_ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud'];
+// local engines. `remote` is a first-class self-hosted HTTP engine: it POSTs
+// to a configurable /speak endpoint and gets the rendered audio back in the
+// response body (no shared volume, so the endpoint can live on any host),
+// gated on a /health probe. Configure the URL in settings.tts.remote.url.
+// Chatterbox and PocketTTS are opt-in — the
+// default controller image doesn't bundle either; build the image with
+// `--build-arg WITH_CHATTERBOX=1` or `--build-arg WITH_POCKETTTS=1` (see
+// docker/Dockerfile.controller) to include the runtime. The dispatcher gates
+// each engine on isAvailable() so settings can reference it safely even when
+// the runtime is absent (the engine just falls back to Piper).
+export const TTS_ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud', 'remote'];
 
 // DJ-voice level trim, in dB. A per-engine gain levels the loudness gap between
 // TTS engines (only PocketTTS self-normalises today, so it sits quieter than
@@ -278,6 +282,28 @@ function clampBudgetSoftPct(raw: any, def: number): number {
   return Math.min(100, Math.max(0, Math.floor(raw)));
 }
 
+// Per-call max output tokens (issue #712). 0 is a first-class value meaning
+// "off — use each strategy's built-in default", so it passes through unclamped.
+// Any other value is floored and clamped to [MAX_OUTPUT_TOKENS_MIN,
+// MAX_OUTPUT_TOKENS_MAX]; non-numeric/NaN falls back to `def`.
+export const MAX_OUTPUT_TOKENS_MIN = 500;
+export const MAX_OUTPUT_TOKENS_MAX = 8000;
+export function clampMaxOutputTokens(raw: any, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  const n = Math.floor(raw);
+  if (n <= 0) return 0;
+  return Math.min(MAX_OUTPUT_TOKENS_MAX, Math.max(MAX_OUTPUT_TOKENS_MIN, n));
+}
+
+// Resolve the effective per-call output-token cap. Returns the operator's
+// configured value when set (> 0), else `fallback` — the strategy's own
+// built-in default. The single read point for settings.llm.maxOutputTokens;
+// strategy/text|object|agent all default their maxOutputTokens param through it.
+export function resolveMaxOutputTokens(fallback: number): number {
+  const v = get().llm?.maxOutputTokens;
+  return typeof v === 'number' && v > 0 ? v : fallback;
+}
+
 // Count-based hard no-repeat window (distinct plays). Floored to an integer in
 // [0, 290]: 0 disables; the 290 ceiling stays under the 300-entry _recentPlays
 // cap so the requested window is never silently truncated by a too-short
@@ -308,11 +334,10 @@ function applyLlmLegPatch(target: any, patch: any, label: string): void {
     if (v.length > 100) throw new Error(`${label}.model must be 0-100 chars`);
     target.model = v;
   }
-  // 'set' is the redaction sentinel from getRedacted() — ignore it so a
-  // round-tripped settings form doesn't overwrite the real key.
-  if (l.apiKey !== undefined && l.apiKey !== 'set') {
-    target.apiKey = String(l.apiKey);
-  }
+  // NB: the inline API key is NOT handled here — it's routed per-provider into
+  // settings.llm.keys by applyInlineKey() at the call site, after the leg's
+  // provider has been resolved. Keeping it out of the shared leg patch is what
+  // stops one provider's key leaking into another's slot (issue #657).
   if (l.ollamaUrl !== undefined) {
     const v = String(l.ollamaUrl).trim();
     if (v.length > 200) throw new Error(`${label}.ollamaUrl must be 0-200 chars`);
@@ -344,6 +369,52 @@ function applyLlmLegPatch(target: any, patch: any, label: string): void {
     }
     target.toolChoice = v;
   }
+}
+
+// Route an incoming inline API key to its provider's slot in `llmHost.keys`
+// (issue #657). `provider` is the leg's already-resolved provider, so the key
+// lands under the identity it belongs to and can never shadow another
+// provider's key after a switch. '' clears that provider's entry; 'set' (the
+// getRedacted() sentinel) and undefined leave it untouched.
+function applyInlineKey(llmHost: any, provider: string, rawApiKey: any): void {
+  if (rawApiKey === undefined || rawApiKey === 'set') return;
+  const v = String(rawApiKey);
+  if (v.length > 1000) throw new Error('llm.apiKey must be 0-1000 chars');
+  if (!llmHost.keys || typeof llmHost.keys !== 'object') llmHost.keys = {};
+  if (v) llmHost.keys[provider] = v;
+  else delete llmHost.keys[provider];
+}
+
+// Build the per-provider inline-key map from a stored settings.llm blob.
+// Sanitises any persisted `keys` (string values, known providers only) and
+// migrates the two legacy single slots (settings.llm.apiKey /
+// settings.llm.fallback.apiKey). Those were only ever written by the
+// openai-compatible / locca inline-key path, so a value found while the leg's
+// provider is something else is a STALE compat token that leaked into the
+// shared slot (issue #657) — attribute it to its true owner (openai-compatible)
+// rather than the current provider, which both preserves the real key and keeps
+// the env-var provider's slot empty so it resolves from secrets.env again.
+function normalizeLlmKeys(storedLlm: any): Record<string, string> {
+  const out: Record<string, string> = {};
+  const raw = storedLlm?.keys;
+  if (raw && typeof raw === 'object') {
+    for (const p of Object.keys(raw)) {
+      if (LLM_PROVIDERS.includes(p) && typeof raw[p] === 'string' && raw[p]) out[p] = raw[p];
+    }
+  }
+  const ownerFor = (prov: any) =>
+    prov === 'openai-compatible' || prov === 'locca' ? prov : 'openai-compatible';
+  const legacyPrimary = typeof storedLlm?.apiKey === 'string' ? storedLlm.apiKey : '';
+  if (legacyPrimary) {
+    const owner = ownerFor(storedLlm?.provider);
+    if (!out[owner]) out[owner] = legacyPrimary;
+  }
+  const legacyFallback = typeof storedLlm?.fallback?.apiKey === 'string' ? storedLlm.fallback.apiKey : '';
+  if (legacyFallback) {
+    const owner = ownerFor(storedLlm?.fallback?.provider);
+    if (!out[owner]) out[owner] = legacyFallback;
+  }
+  return out;
 }
 
 // Cloud TTS vendors usable by the `cloud` engine. `openai-compatible` targets
@@ -441,8 +512,29 @@ const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
 
 const PERSONA_LIMIT = 12;
 const SHOWS_LIMIT = 64;
+const PLAYLISTS_PER_SHOW = 10;
 const SKILLS_PER_PERSONA_LIMIT = 20;
 const WEBHOOKS_LIMIT = 16;
+
+// A show can anchor to one or more Navidrome playlists: the playlist union
+// becomes the show's candidate pool. Stored as Subsonic playlist ids; deduped,
+// trimmed, capped. Never validated against the live Navidrome here (offline
+// validation, same as `genre` free-text) — an id that no longer exists simply
+// contributes nothing at pick time (never-starve). Empty = no anchor.
+function coercePlaylistIds(raw: any): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const id = v.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= PLAYLISTS_PER_SHOW) break;
+  }
+  return out;
+}
 
 // Event names the outbound webhook fan-out can subscribe to. Kept in sync
 // with broadcast/webhooks.ts WEBHOOK_EVENTS — duplicated here so settings.ts
@@ -569,10 +661,16 @@ export const SEED_PERSONAS = [
   },
 ];
 
-// Allowed archive bitrates. Matches the literal branches in radio.liq —
+// Allowed MP3 bitrates — shared by the hourly archive and the live
+// /stream.mp3 mount. Matches the literal branches in radio.liq —
 // %mp3(bitrate=…) needs a parse-time int, so the encoder is pre-baked for
 // this small set. Add a branch in radio.liq if you add a value here.
-export const ARCHIVE_BITRATES = [64, 96, 128, 160, 192, 320] as const;
+export const MP3_BITRATES = [64, 96, 128, 160, 192, 320] as const;
+// Opus + AAC encoders share the same parse-time-literal constraint as %mp3, so
+// each is pre-baked for a small set in radio.liq. Add a branch there if you add
+// a value here.
+export const OPUS_BITRATES = [96, 128, 192, 256, 320] as const;
+export const AAC_BITRATES = [128, 192, 256] as const;
 
 const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
@@ -595,7 +693,14 @@ const DEFAULTS = {
   // Safari/iOS/Firefox on MP3), and it adds a continuous Opus encoder + a
   // 44.1→48k resample, so operators opt in rather than pay that CPU unasked.
   // The mandatory /stream.mp3 mount always serves everyone.
-  stream: { opusEnabled: false },
+  stream: {
+    opusEnabled: false,
+    opusBitrate: 96,
+    flacEnabled: false,
+    aacEnabled: false,
+    aacBitrate: 192,
+    bitrate: 192,
+  },
   weather: { lat: 30.7333, lng: 76.7794, locationName: 'Punjab', units: 'metric' as 'metric' | 'imperial' },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
   // placeholder and returned by GET /dj for the landing page. The product is
@@ -666,22 +771,36 @@ const DEFAULTS = {
       // provider === 'openai-compatible'.
       baseUrl: '',
     },
+    // Remote engine — a user-configured self-hosted TTS endpoint that renders
+    // audio over HTTP (POST /speak → audio body, gated on a /health probe).
+    // The TTS equivalent of the LLM's custom base URL. Empty → engine reports
+    // unavailable; the dispatcher falls back.
+    remote: { url: '' },
     // Per-engine voice level trim (dB), applied via Liquidsoap's liq_amplify on
     // every spoken segment that resolves to that engine. Levels the loudness gap
     // between engines (e.g. boost PocketTTS to match raw Piper). Stacks with each
     // persona's own tts.gainDb. All 0 = unity = today's behaviour. See
     // TTS_GAIN_CLAMP_DB and audio/tts.ts:voiceGainDb().
-    gainDb: { piper: 0, kokoro: 0, chatterbox: 0, 'pocket-tts': 0, cloud: 0 },
+    gainDb: { piper: 0, kokoro: 0, chatterbox: 0, 'pocket-tts': 0, cloud: 0, remote: 0 },
     // Per-engine speech-rate multiplier (0.5–2.0×, 1.0 = no change), composed
     // on top of the daypart energy and each persona's own tts.speed in
     // audio/tts.ts:speak(). Only Piper/Kokoro/cloud honour it; chatterbox/
-    // pocket-tts ignore speed so their entries are inert. See clampTtsSpeed().
-    speed: { piper: 1, kokoro: 1, chatterbox: 1, 'pocket-tts': 1, cloud: 1 },
+    // pocket-tts/remote ignore speed so their entries are inert. See clampTtsSpeed().
+    speed: { piper: 1, kokoro: 1, chatterbox: 1, 'pocket-tts': 1, cloud: 1, remote: 1 },
   },
   llm: {
     provider: 'ollama',
     model: '',
+    // Legacy single inline-key slot. Superseded by `keys` (per-provider) — kept
+    // only so an old settings.json migrates cleanly. Always '' after load();
+    // resolution reads `keys`, never this. See llmKeyFor() / normalizeLlmKeys().
     apiKey: '',
+    // Per-provider inline API keys, keyed by provider id (issue #657). Only the
+    // inline-key providers (openai-compatible, locca) ever populate this from the
+    // UI — env-var providers (openrouter, anthropic, …) keep their key in
+    // state/secrets.env. Namespacing by provider means switching providers can
+    // never leave one provider's key in the slot another provider then reads.
+    keys: {},
     // Ollama server URL. Empty → fall back to config.ollama.url. Only used
     // when provider === 'ollama'.
     ollamaUrl: '',
@@ -767,6 +886,15 @@ const DEFAULTS = {
     // over the cap fall through to the stateless matcher cascade like every
     // other LLM path. No effect until dailyTokenCap is set.
     exemptRequests: true,
+    // Per-call max OUTPUT tokens — distinct from dailyTokenCap (a cumulative
+    // daily budget). This caps the size of each individual model response. The
+    // strategy primitives default to generous built-ins (4000 text / 8000
+    // object / 8000 agent); 0 = use those defaults. Set a value (clamped
+    // 500–8000) to override all three — the lever for a local model on a small
+    // context window, where an 8000-token response allowance can crowd out the
+    // system prompt / tool listing and risk truncation, and is pure waste with
+    // reasoning off. Resolved via resolveMaxOutputTokens(); see issue #712.
+    maxOutputTokens: 0,
     // When on (or when LLM_DEBUG_RAW is set in the env), every outbound model
     // request's exact body is captured to ${STATE_DIR}/logs/llm-debug.log (the
     // last 10, newest first) and dumped to stderr — a copy-pasteable view of
@@ -909,7 +1037,9 @@ const BOUNDS = {
   maxTrackSeconds: { min: 0, max: 36000, type: 'int' },
 };
 
-const ARCHIVE_BITRATE_SET = new Set<number>(ARCHIVE_BITRATES);
+const MP3_BITRATE_SET = new Set<number>(MP3_BITRATES);
+const OPUS_BITRATE_SET = new Set<number>(OPUS_BITRATES);
+const AAC_BITRATE_SET = new Set<number>(AAC_BITRATES);
 
 let cache: any = null;
 
@@ -977,9 +1107,11 @@ function normalizeTts(raw: any) {
     voice = '';
   // openai-compatible voices are server-specific (often arbitrary cloning ref
   // names) — no canonical default; leave empty so generateSpeech omits the
-  // field and the server picks its own.
+  // field and the server picks its own. Remote engine voices likewise:
+  // server-specific (id, reference-wav filename, or VoiceDesign prompt), no
+  // Subwave-side default.
   if (!voice && engine === 'cloud' && cloudProvider !== 'openai-compatible') voice = 'alloy';
-  if (!voice && engine !== 'cloud' && engine !== 'chatterbox' && engine !== 'piper') voice = 'bf_isabella';
+  if (!voice && engine !== 'cloud' && engine !== 'chatterbox' && engine !== 'piper' && engine !== 'remote') voice = 'bf_isabella';
   return { engine, cloudProvider, voice, gainDb: clampTtsGain(raw?.gainDb), speed: clampTtsSpeed(raw?.speed) };
 }
 
@@ -1065,6 +1197,12 @@ function normalizeShows(raw: any, personaIds: string[]) {
     // maxTrackSeconds; 0 = unlimited (opt this show back out of the cap so a
     // long-form mix show can air hour-long sets); >0 = this show's own cap.
     const maxTrackSeconds = coerceMaxTrackSeconds(rawMaxTrackSec(item), true);
+    // Optional Navidrome playlist anchor — the union of these playlists becomes
+    // the show's candidate pool. playlistStrict (default off) makes the playlist
+    // the show's ENTIRE universe; soft just lets it dominate. Both default empty
+    // so existing shows are byte-for-byte unchanged.
+    const playlistIds = coercePlaylistIds(item.playlistIds);
+    const playlistStrict = item.playlistStrict === true;
     out.push({
       id,
       name,
@@ -1078,6 +1216,8 @@ function normalizeShows(raw: any, personaIds: string[]) {
       energy,
       genreStrict,
       maxTrackSeconds,
+      playlistIds,
+      playlistStrict,
     });
     if (out.length >= SHOWS_LIMIT) break;
   }
@@ -1152,7 +1292,7 @@ export async function load() {
   );
 
   const archiveBitrate =
-    typeof stored.archive?.bitrate === 'number' && ARCHIVE_BITRATE_SET.has(stored.archive.bitrate)
+    typeof stored.archive?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.archive.bitrate)
       ? stored.archive.bitrate
       : DEFAULTS.archive.bitrate;
 
@@ -1172,6 +1312,28 @@ export async function load() {
         typeof stored.stream?.opusEnabled === 'boolean'
           ? stored.stream.opusEnabled
           : DEFAULTS.stream.opusEnabled,
+      opusBitrate:
+        typeof stored.stream?.opusBitrate === 'number' &&
+        OPUS_BITRATE_SET.has(stored.stream.opusBitrate)
+          ? stored.stream.opusBitrate
+          : DEFAULTS.stream.opusBitrate,
+      flacEnabled:
+        typeof stored.stream?.flacEnabled === 'boolean'
+          ? stored.stream.flacEnabled
+          : DEFAULTS.stream.flacEnabled,
+      aacEnabled:
+        typeof stored.stream?.aacEnabled === 'boolean'
+          ? stored.stream.aacEnabled
+          : DEFAULTS.stream.aacEnabled,
+      aacBitrate:
+        typeof stored.stream?.aacBitrate === 'number' &&
+        AAC_BITRATE_SET.has(stored.stream.aacBitrate)
+          ? stored.stream.aacBitrate
+          : DEFAULTS.stream.aacBitrate,
+      bitrate:
+        typeof stored.stream?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.stream.bitrate)
+          ? stored.stream.bitrate
+          : DEFAULTS.stream.bitrate,
     },
     weather: {
       lat: stored.weather?.lat ?? DEFAULTS.weather.lat,
@@ -1274,6 +1436,12 @@ export async function load() {
             ? stored.tts.cloud.baseUrl.trim()
             : DEFAULTS.tts.cloud.baseUrl,
       },
+      remote: {
+        url:
+          typeof stored.tts?.remote?.url === 'string'
+            ? stored.tts.remote.url.trim()
+            : DEFAULTS.tts.remote.url,
+      },
       // Per-engine gain map — one clean gain per known engine, missing keys → 0,
       // unknown keys dropped. So an older save (no gainDb) loads at unity.
       gainDb: normalizeTtsGainMap(stored.tts?.gainDb),
@@ -1286,7 +1454,10 @@ export async function load() {
         ? stored.llm.provider
         : DEFAULTS.llm.provider,
       model: typeof stored.llm?.model === 'string' ? stored.llm.model.trim() : DEFAULTS.llm.model,
-      apiKey: typeof stored.llm?.apiKey === 'string' ? stored.llm.apiKey : DEFAULTS.llm.apiKey,
+      // Legacy single slot is migrated into `keys` below, then cleared — there
+      // is exactly one source of truth for inline keys (issue #657).
+      apiKey: '',
+      keys: normalizeLlmKeys(stored.llm),
       ollamaUrl:
         typeof stored.llm?.ollamaUrl === 'string'
           ? stored.llm.ollamaUrl.trim()
@@ -1323,6 +1494,9 @@ export async function load() {
       // up the defaults (0 = disabled, so they behave exactly as before).
       dailyTokenCap: clampDailyTokenCap(stored.llm?.dailyTokenCap, DEFAULTS.llm.dailyTokenCap),
       budgetSoftPct: clampBudgetSoftPct(stored.llm?.budgetSoftPct, DEFAULTS.llm.budgetSoftPct),
+      // Per-call output cap (issue #712) — pre-existing settings.json lacks the
+      // field and picks up the 0 default (= built-in per-strategy defaults).
+      maxOutputTokens: clampMaxOutputTokens(stored.llm?.maxOutputTokens, DEFAULTS.llm.maxOutputTokens),
       exemptRequests:
         typeof stored.llm?.exemptRequests === 'boolean'
           ? stored.llm.exemptRequests
@@ -1340,7 +1514,9 @@ export async function load() {
             ? fb.provider
             : DEFAULTS.llm.fallback.provider,
           model: typeof fb.model === 'string' ? fb.model.trim() : DEFAULTS.llm.fallback.model,
-          apiKey: typeof fb.apiKey === 'string' ? fb.apiKey : DEFAULTS.llm.fallback.apiKey,
+          // Legacy fallback slot migrated into settings.llm.keys above, then
+          // cleared. The fallback resolves its key from `keys[fb.provider]`.
+          apiKey: '',
           ollamaUrl:
             typeof fb.ollamaUrl === 'string' ? fb.ollamaUrl.trim() : DEFAULTS.llm.fallback.ollamaUrl,
           baseUrl:
@@ -1517,11 +1693,31 @@ export function getDefaults() {
   return DEFAULTS;
 }
 
+// Resolve the operator-entered inline API key for a provider from the
+// per-provider map (issue #657). Returns '' when none is stored, in which case
+// the registry/embedding layer falls through to the provider's env var
+// (OPENROUTER_API_KEY etc.) exactly as before. This is the single resolution
+// chokepoint — leg assembly (registry.llmCfg / legs.fallbackLeg) and the
+// openai-compatible probe/discovery routes all go through it.
+export function llmKeyFor(provider: string): string {
+  const keys = get().llm?.keys || {};
+  const v = keys[provider];
+  return typeof v === 'string' ? v : '';
+}
+
 // Settings with secret fields masked — for the admin /settings response.
 export function getRedacted() {
   const s = get();
   const clone = JSON.parse(JSON.stringify(s));
-  if (clone.llm) clone.llm.apiKey = s.llm?.apiKey ? 'set' : '';
+  if (clone.llm) {
+    clone.llm.apiKey = s.llm?.apiKey ? 'set' : '';
+    // Per-provider inline keys masked to 'set' | '' per entry, so the admin UI
+    // can show which providers have a key on file without exposing the value.
+    clone.llm.keys = {};
+    for (const p of Object.keys(s.llm?.keys || {})) {
+      clone.llm.keys[p] = s.llm.keys[p] ? 'set' : '';
+    }
+  }
   if (clone.llm?.fallback) clone.llm.fallback.apiKey = s.llm?.fallback?.apiKey ? 'set' : '';
   if (clone.tts?.cloud) clone.tts.cloud.apiKey = s.tts?.cloud?.apiKey ? 'set' : '';
   if (clone.search) clone.search.apiKey = s.search?.apiKey ? 'set' : '';
@@ -1589,6 +1785,11 @@ function validateTtsBlock(raw, where) {
     } else if (voice.length < 1 || voice.length > 100) {
       throw new Error(`${where}.tts.voice must be 1-100 chars`);
     }
+  } else if (t.engine === 'remote') {
+    // Remote engine voices are server-specific — the sidecar interprets them
+    // (built-in id, reference-wav filename, or VoiceDesign prompt). Empty is
+    // valid: the sidecar picks its own default.
+    if (voice.length > 100) throw new Error(`${where}.tts.voice must be 0-100 chars`);
   } else {
     // piper: empty = use the baked-in default voice. Otherwise the value must
     // be an .onnx filename (no path separators) referencing a model the operator
@@ -1791,10 +1992,27 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
       }
       maxTrackSeconds = n;
     }
+    // Optional Navidrome playlist anchor. Shape-checked only (array of strings,
+    // capped) — ids are resolved against the live Navidrome at pick time, never
+    // here, so a stale id is tolerated. playlistStrict is a plain boolean.
+    let playlistIds: string[] = [];
+    if (item.playlistIds !== undefined && item.playlistIds !== null) {
+      if (!Array.isArray(item.playlistIds)) {
+        throw new Error(`shows[${i}].playlistIds must be an array of strings`);
+      }
+      if (item.playlistIds.length > PLAYLISTS_PER_SHOW) {
+        throw new Error(`shows[${i}].playlistIds must have at most ${PLAYLISTS_PER_SHOW} entries`);
+      }
+      for (const v of item.playlistIds) {
+        if (typeof v !== 'string') throw new Error(`shows[${i}].playlistIds entries must be strings`);
+      }
+      playlistIds = coercePlaylistIds(item.playlistIds);
+    }
+    const playlistStrict = item.playlistStrict === true;
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId, genre, fromYear, toYear, energy, genreStrict, maxTrackSeconds };
+    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId, genre, fromYear, toYear, energy, genreStrict, maxTrackSeconds, playlistIds, playlistStrict };
   });
 }
 
@@ -1940,9 +2158,9 @@ export async function update(patch) {
     }
     if (a.bitrate !== undefined) {
       const v = parseInt(a.bitrate, 10);
-      if (!Number.isFinite(v) || !ARCHIVE_BITRATE_SET.has(v)) {
+      if (!Number.isFinite(v) || !MP3_BITRATE_SET.has(v)) {
         throw new Error(
-          `archive.bitrate must be one of: ${ARCHIVE_BITRATES.join(', ')}`,
+          `archive.bitrate must be one of: ${MP3_BITRATES.join(', ')}`,
         );
       }
       if (v !== cur.archive.bitrate) {
@@ -1957,6 +2175,56 @@ export async function update(patch) {
       const v = !!st.opusEnabled;
       if (v !== cur.stream.opusEnabled) {
         next.stream.opusEnabled = v;
+        restart = true;
+      }
+    }
+    if (st.opusBitrate !== undefined) {
+      const v = parseInt(st.opusBitrate, 10);
+      if (!Number.isFinite(v) || !OPUS_BITRATE_SET.has(v)) {
+        throw new Error(
+          `stream.opusBitrate must be one of: ${OPUS_BITRATES.join(', ')}`,
+        );
+      }
+      if (v !== cur.stream.opusBitrate) {
+        next.stream.opusBitrate = v;
+        restart = true;
+      }
+    }
+    if (st.flacEnabled !== undefined) {
+      const v = !!st.flacEnabled;
+      if (v !== cur.stream.flacEnabled) {
+        next.stream.flacEnabled = v;
+        restart = true;
+      }
+    }
+    if (st.aacEnabled !== undefined) {
+      const v = !!st.aacEnabled;
+      if (v !== cur.stream.aacEnabled) {
+        next.stream.aacEnabled = v;
+        restart = true;
+      }
+    }
+    if (st.aacBitrate !== undefined) {
+      const v = parseInt(st.aacBitrate, 10);
+      if (!Number.isFinite(v) || !AAC_BITRATE_SET.has(v)) {
+        throw new Error(
+          `stream.aacBitrate must be one of: ${AAC_BITRATES.join(', ')}`,
+        );
+      }
+      if (v !== cur.stream.aacBitrate) {
+        next.stream.aacBitrate = v;
+        restart = true;
+      }
+    }
+    if (st.bitrate !== undefined) {
+      const v = parseInt(st.bitrate, 10);
+      if (!Number.isFinite(v) || !MP3_BITRATE_SET.has(v)) {
+        throw new Error(
+          `stream.bitrate must be one of: ${MP3_BITRATES.join(', ')}`,
+        );
+      }
+      if (v !== cur.stream.bitrate) {
+        next.stream.bitrate = v;
         restart = true;
       }
     }
@@ -2152,6 +2420,28 @@ export async function update(patch) {
         throw new Error('tts.cloud.baseUrl is required when provider is "openai-compatible"');
       }
     }
+    if (t.remote !== undefined) {
+      const r = t.remote || {};
+      if (r.url !== undefined) {
+        const v = String(r.url).trim();
+        if (v.length > 200) throw new Error('tts.remote.url must be 0-200 chars');
+        if (v) {
+          // Full parse (not just a prefix test) so a malformed host/port —
+          // e.g. http://host:notaport or http://host:99999 — is rejected at
+          // save time instead of silently failing the /health probe later.
+          let parsed: URL;
+          try {
+            parsed = new URL(v);
+          } catch {
+            throw new Error('tts.remote.url must be a valid http:// or https:// URL');
+          }
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            throw new Error('tts.remote.url must start with http:// or https://');
+          }
+        }
+        next.tts.remote.url = v.replace(/\/+$/, ''); // strip trailing slashes
+      }
+    }
     if (t.gainDb !== undefined) {
       if (typeof t.gainDb !== 'object' || t.gainDb === null || Array.isArray(t.gainDb)) {
         throw new Error('tts.gainDb must be an object keyed by engine');
@@ -2178,6 +2468,9 @@ export async function update(patch) {
   if ('llm' in patch) {
     const l = patch.llm || {};
     applyLlmLegPatch(next.llm, l, 'llm');
+    // Route the primary inline key into keys[provider] AFTER the provider is
+    // resolved, so it's stored under the identity it belongs to (issue #657).
+    applyInlineKey(next.llm, next.llm.provider, l.apiKey);
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
     }
@@ -2199,6 +2492,9 @@ export async function update(patch) {
     if (l.budgetSoftPct !== undefined) {
       next.llm.budgetSoftPct = clampBudgetSoftPct(Number(l.budgetSoftPct), next.llm.budgetSoftPct);
     }
+    if (l.maxOutputTokens !== undefined) {
+      next.llm.maxOutputTokens = clampMaxOutputTokens(Number(l.maxOutputTokens), next.llm.maxOutputTokens);
+    }
     if (l.exemptRequests !== undefined) {
       next.llm.exemptRequests = !!l.exemptRequests;
     }
@@ -2218,6 +2514,10 @@ export async function update(patch) {
         next.llm.fallback.enabled = !!fb.enabled;
       }
       applyLlmLegPatch(next.llm.fallback, fb, 'llm.fallback');
+      // Fallback inline key shares the same per-provider map (keys live at
+      // next.llm.keys, not under the fallback) — routed by the fallback's
+      // resolved provider.
+      applyInlineKey(next.llm, next.llm.fallback.provider, fb.apiKey);
       if (
         next.llm.fallback.enabled &&
         next.llm.fallback.provider === 'openai-compatible' &&
@@ -2508,6 +2808,11 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     // Per-show track-length cap override (seconds). null = inherit the station
     // default; 0 = unlimited; >0 = own cap. See effectiveMaxTrackSec().
     maxTrackSeconds: show.maxTrackSeconds != null ? show.maxTrackSeconds : null,
+    // Navidrome playlist anchor: the union of these playlists becomes the show's
+    // candidate pool (music/show-playlist.ts). playlistStrict makes it the show's
+    // entire universe; soft just lets it dominate. Empty array = no anchor.
+    playlistIds: Array.isArray(show.playlistIds) ? show.playlistIds.filter((v: any) => typeof v === 'string') : [],
+    playlistStrict: show.playlistStrict === true,
     // Empty string means "fall back to the station-wide default". The route
     // layer is responsible for resolving an empty/stale id against the live
     // theme registry; we just surface what the show declares.
@@ -2614,6 +2919,11 @@ const LIQ_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_crossfade.txt`;
 const LIQ_ARCHIVE_ENABLED_PATH = `${STATE_DIR}/liquidsoap_archive_enabled.txt`;
 const LIQ_ARCHIVE_BITRATE_PATH = `${STATE_DIR}/liquidsoap_archive_bitrate.txt`;
 const LIQ_OPUS_ENABLED_PATH = `${STATE_DIR}/liquidsoap_opus_enabled.txt`;
+const LIQ_OPUS_BITRATE_PATH = `${STATE_DIR}/liquidsoap_opus_bitrate.txt`;
+const LIQ_FLAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_flac_enabled.txt`;
+const LIQ_AAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_aac_enabled.txt`;
+const LIQ_AAC_BITRATE_PATH = `${STATE_DIR}/liquidsoap_aac_bitrate.txt`;
+const LIQ_STREAM_BITRATE_PATH = `${STATE_DIR}/liquidsoap_stream_bitrate.txt`;
 const LIQ_STATION_NAME_PATH = `${STATE_DIR}/liquidsoap_station_name.txt`;
 
 export async function writeLiquidsoapSettings(s) {
@@ -2622,6 +2932,11 @@ export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_ARCHIVE_ENABLED_PATH, s.archive.enabled ? 'true' : 'false');
   await writeFile(LIQ_ARCHIVE_BITRATE_PATH, String(s.archive.bitrate));
   await writeFile(LIQ_OPUS_ENABLED_PATH, s.stream.opusEnabled ? 'true' : 'false');
+  await writeFile(LIQ_OPUS_BITRATE_PATH, String(s.stream.opusBitrate));
+  await writeFile(LIQ_FLAC_ENABLED_PATH, s.stream.flacEnabled ? 'true' : 'false');
+  await writeFile(LIQ_AAC_ENABLED_PATH, s.stream.aacEnabled ? 'true' : 'false');
+  await writeFile(LIQ_AAC_BITRATE_PATH, String(s.stream.aacBitrate));
+  await writeFile(LIQ_STREAM_BITRATE_PATH, String(s.stream.bitrate));
   await writeFile(LIQ_STATION_NAME_PATH, s.station || DEFAULTS.station);
 }
 
@@ -2634,7 +2949,8 @@ export async function ensureLiquidsoapSettingsFile() {
     !existsSync(LIQ_CROSSFADE_PATH) ||
     !existsSync(LIQ_ARCHIVE_ENABLED_PATH) ||
     !existsSync(LIQ_ARCHIVE_BITRATE_PATH) ||
-    !existsSync(LIQ_OPUS_ENABLED_PATH)
+    !existsSync(LIQ_OPUS_ENABLED_PATH) ||
+    !existsSync(LIQ_STREAM_BITRATE_PATH)
   ) {
     await writeLiquidsoapSettings(s);
   }

@@ -13,6 +13,7 @@ import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
 import { normGenre, genreMatches, preferGenre, inYearRange, preferEnergy } from './show-filter.js';
+import { resolveShowPlaylistPool, type PlaylistPool } from './show-playlist.js';
 
 const CANDIDATE_CAP = 18;
 const HISTORY_DEPTH = 4;
@@ -35,6 +36,11 @@ const CAP_SHOW_GENRE = 12;
 // larger cap than the soft path so genre matches fill most of the final pool
 // (CANDIDATE_CAP) even after dedup / artist-cap / recency trims it.
 const CAP_SHOW_GENRE_STRICT = 24;
+// A show anchored to Navidrome playlist(s): the union is the dominant source
+// (soft) or — after the strict end-filter below — the show's entire universe.
+// Mirrors the show-genre caps so playlist tracks fill most of the final pool.
+const CAP_SHOW_PLAYLIST = 12;
+const CAP_SHOW_PLAYLIST_STRICT = 24;
 const SHOW_NARROW_FACTOR = 0.5;
 
 // TTL cache for sources that don't change between picks. Without this, every
@@ -135,7 +141,7 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set()) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false) {
   await library.load();
   const pool: any[] = [];
   const sources: Record<string, number> = {};
@@ -144,9 +150,13 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     pool.push(...items.map((t: any) => ({ ...t, _source: label })));
     sources[label] = (sources[label] || 0) + items.length;
   };
-  // When a show pins a genre/decade, shrink the unrelated discovery sources so
-  // the dedicated show-genre source dominates the candidate list (soft lean).
-  const narrow = hasMusicFilter(showFilter);
+  // A non-empty playlist anchor on this show: the union of its tracks. Strict
+  // mode (below) hard-filters the final pool to it; soft just lets it dominate.
+  const hasPlaylist = !!playlistPool?.tracks?.length;
+  const strictPlaylist = hasPlaylist && playlistStrict;
+  // When a show pins a genre/decade OR a playlist, shrink the unrelated
+  // discovery sources so the dedicated show source dominates the candidate list.
+  const narrow = hasMusicFilter(showFilter) || hasPlaylist;
   const nz = (cap: number) => (narrow ? Math.max(2, Math.ceil(cap * SHOW_NARROW_FACTOR)) : cap);
 
   // Strict genre: resolve the show's free-text genre to the library's exact tag
@@ -257,14 +267,26 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     } catch {}
   }
 
+  // 1f. Show-anchored Navidrome playlist(s) — the operator's explicit per-show
+  // curation. In strict mode this is the show's entire universe (the final pool
+  // is hard-filtered to its ids below); in soft mode it's just the dominant
+  // source, with the discovery sources contributing a (narrowed) minority.
+  if (hasPlaylist) {
+    add('show-playlist', sampleWithRecentFallback(shuffle(playlistPool!.tracks), recentIds, strictPlaylist ? CAP_SHOW_PLAYLIST_STRICT : CAP_SHOW_PLAYLIST));
+  }
+
   // 2. Mood-tagged library (LLM-built tags, may be sparse).
   if (mood) {
     const moodHits = shuffle(lean(preferEnergy(library.songsByMood(mood), showFilter?.energy)));
     add('mood-library', sampleWithRecentFallback(moodHits, recentIds, CAP_MOOD_LIBRARY));
   }
 
-  // 3. Mood-matched Navidrome playlists — operator's hand curation.
-  if (mood) {
+  // 3. Mood-matched Navidrome playlists — operator's hand curation. Skipped when
+  // the show already pins its own playlist(s) (1f): the operator has named exactly
+  // which playlists to use, so also grabbing every playlist whose name merely
+  // contains the mood word would leak other shows' same-mood playlists into the
+  // pool (#642). Autonomous hours (no pinned playlists) keep the mood match.
+  if (mood && !hasPlaylist) {
     try {
       const playlists = await memo('playlists', CACHE_TTL_MS, () => subsonic.getPlaylists());
       const matched = playlists.filter((p: any) => p.name?.toLowerCase().includes(mood.toLowerCase()));
@@ -347,6 +369,19 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     } catch {}
   }
 
+  // Strict playlist: the playlist union is the show's whole universe, so drop
+  // every off-playlist candidate (the discovery sources above) before ranking.
+  // The dedicated show-playlist source guarantees in-playlist tracks are here,
+  // so this is normally a clean filter; never-starve to the unfiltered pool only
+  // if NOT ONE playlist track survived (a true dead-air guard). Recency / no-
+  // repeat still apply below — they relax within the filtered set as usual.
+  let selectionPool = pool;
+  let playlistInfo: { names: string[]; matched: number; total: number } | null = null;
+  if (strictPlaylist) {
+    const inPl = pool.filter((t: any) => t?.id && playlistPool!.ids.has(t.id));
+    if (inPl.length) selectionPool = inPl;
+  }
+
   // De-dup by id, cap per artist so one name can't dominate the pool (the LLM
   // can only rotate artists across what it's handed), shuffle, cap.
   const MAX_PER_ARTIST = 3;
@@ -362,7 +397,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // current track's own analysis when no run is active.
   const curAnalysis = rankTarget
     || (currentTrack?.id ? analysisFor(currentTrack) : { bpm: null, key: null });
-  const final = filterPickerCandidates(softRankByCompat(pool, curAnalysis), {
+  const final = filterPickerCandidates(softRankByCompat(selectionPool, curAnalysis), {
     recentIds,
     recentArtists,
     hardRecentIds,
@@ -386,7 +421,18 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     };
   }
 
-  return { candidates: final, sources, strictInfo };
+  // Playlist-anchor diagnostics for the caller's log: how much of the final pool
+  // is actually in-playlist. In strict mode this is the never-starve audit; in
+  // soft mode it shows how strongly the anchor dominated.
+  if (hasPlaylist) {
+    playlistInfo = {
+      names: playlistPool!.names,
+      matched: final.filter((t: any) => t?.id && playlistPool!.ids.has(t.id)).length,
+      total: final.length,
+    };
+  }
+
+  return { candidates: final, sources, strictInfo, playlistInfo };
 }
 
 function summariseRecent(queue: any) {
@@ -429,7 +475,11 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const showFilter: ShowFilter = activeShow
     ? { genre: activeShow.genre, fromYear: activeShow.fromYear, toYear: activeShow.toYear, energy: activeShow.energy, strict: activeShow.genreStrict }
     : null;
-  const { candidates, sources, strictInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys);
+  // Resolve the show's anchored Navidrome playlist(s), if any, into a deduped
+  // track pool. Null when the show pins none (the common case → pool unchanged).
+  const playlistPool = activeShow ? await resolveShowPlaylistPool(activeShow) : null;
+  const playlistStrict = !!activeShow?.playlistStrict;
+  const { candidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict);
 
   if (candidates.length === 0) {
     queue.log('picker', 'no candidates available, skipping LLM pick');
@@ -454,6 +504,17 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
       queue.log('picker', `strict genre ${strictInfo.resolved}: ${strictInfo.matched}/${strictInfo.total} in-genre (off-genre allowed as fallback)`);
     } else {
       queue.log('picker', `strict genre ${strictInfo.resolved}: ${strictInfo.matched}/${strictInfo.total} in-genre`);
+    }
+  }
+
+  // Playlist-anchor visibility — same idea: surface how much of the pool came
+  // from the show's pinned playlist(s), and whether strict had to never-starve.
+  if (playlistInfo) {
+    const tag = playlistInfo.names.length ? playlistInfo.names.join(', ') : `${activeShow!.playlistIds.length} playlist(s)`;
+    if (playlistStrict && playlistInfo.matched === 0) {
+      queue.log('picker', `strict playlist [${tag}]: 0 in-playlist candidates — falling back to keep the stream alive`);
+    } else {
+      queue.log('picker', `playlist [${tag}]: ${playlistInfo.matched}/${playlistInfo.total} in-playlist${playlistStrict ? ' (strict)' : ''}`);
     }
   }
 

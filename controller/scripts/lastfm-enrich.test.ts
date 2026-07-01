@@ -68,6 +68,38 @@ async function main() {
     assert.deepEqual(ids, ['a', 'b', 'c', 'd']);
   });
 
+  // ---- selectEnrichIds: re-scan scope (option B — redo only what's done) ----
+  console.log('selectEnrichIds (re-scan re-enrich must NOT widen past the already-enriched set):');
+  await test('re-scan re-enrich scopes to the enriched set, NOT the full catalogue', () => {
+    const ids = selectEnrichIds({
+      reEnrich: true, rescan: true, limit: Infinity,
+      liveIds: live, enrichedIds: ['a', 'c'], targetUntagged: [],
+    });
+    // 'b' and 'd' are live but never enriched — a re-scan must leave them alone.
+    assert.deepEqual(ids, ['a', 'c']);
+  });
+  await test('re-scan re-enrich on a never-enriched library is a clean no-op', () => {
+    const ids = selectEnrichIds({
+      reEnrich: true, rescan: true, limit: Infinity,
+      liveIds: live, enrichedIds: [], targetUntagged: [],
+    });
+    assert.deepEqual(ids, []);
+  });
+  await test('re-scan re-enrich still honours --limit over the enriched set', () => {
+    const ids = selectEnrichIds({
+      reEnrich: true, rescan: true, limit: 1,
+      liveIds: live, enrichedIds: ['a', 'c'], targetUntagged: [],
+    });
+    assert.deepEqual(ids, ['a']);
+  });
+  await test('rescan flag without reEnrich still returns the (empty) untagged scope', () => {
+    const ids = selectEnrichIds({
+      reEnrich: false, rescan: true, limit: Infinity,
+      liveIds: live, enrichedIds: ['a'], targetUntagged: [],
+    });
+    assert.deepEqual(ids, []);
+  });
+
   if (failures > 0) {
     console.error(`\n${failures} test(s) failed`);
     process.exit(1);

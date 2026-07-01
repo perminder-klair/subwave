@@ -1,5 +1,5 @@
 'use client';
-// Radio-card grid for picking a TTS engine. Replaces the cramped 5-button
+// Radio-card grid for picking a TTS engine. Replaces the cramped 6-button
 // segmented control on both the Personas voice card and the Settings voice tab:
 // every engine is a selectable card showing its name, a one-line blurb and a
 // live status badge (ready / sidecar off / no key) so availability is visible
@@ -11,7 +11,7 @@ import { ENGINE_META, engineStatus } from './engineMeta';
 interface EngineSelectorProps {
   // Currently selected engine id.
   value: string;
-  // Which engines to show as cards (Personas: all 5; Settings: data.tts.engines).
+  // Which engines to show as cards (Personas: all 6; Settings: data.tts.engines).
   engineIds: string[];
   // SettingsResponse.tts.available — drives the per-card status badge.
   available?: Record<string, boolean>;

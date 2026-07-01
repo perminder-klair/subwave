@@ -761,13 +761,18 @@ export function needsAnalysisIds(limit?: number): string[] {
   return rows.map(r => r.id);
 }
 
-export function clearAnalysis(): void {
+// Drop the acoustic analysis so a --re-analyze can recompute it. `keepVocal`
+// preserves vocal_ranges_json — used when re-analysing bpm/key + sounds-like
+// WITHOUT redoing the (very slow) Demucs vocal pass, so existing vocal data
+// isn't wiped and left NULL (it wouldn't be rebuilt that run). #646-adjacent.
+export function clearAnalysis(opts: { keepVocal?: boolean } = {}): void {
   const d = requireDb();
+  const vocalCol = opts.keepVocal ? '' : ' vocal_ranges_json = NULL,';
   d.prepare(
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
       analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
       structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
-      key_ranges_json = NULL, vocal_ranges_json = NULL, analysis_version = NULL`,
+      key_ranges_json = NULL,${vocalCol} analysis_version = NULL`,
   ).run();
   // The audio (CLAP) vectors are written in the same pass, so a --re-analyze
   // that redoes bpm/key drops them too — the next pass re-embeds from scratch.
@@ -942,6 +947,15 @@ export function audioVectorCount(): number {
   }).n;
 }
 
+// Tracks with vocal-activity analysis done — vocal_ranges_json IS NOT NULL,
+// where a stored "[]" (analysed instrumental) counts as done. The inverse of
+// needsVocalIds, surfaced as a coverage meter (#646).
+export function vocalAnalyzedCount(): number {
+  return (requireDb().prepare(
+    'SELECT COUNT(*) AS n FROM tracks WHERE vocal_ranges_json IS NOT NULL',
+  ).get() as { n: number }).n;
+}
+
 // Ids that have no audio vector yet (never embedded). Resumable, ordered for
 // stable resumption, independent of the bpm/key analysis scope so the audio
 // backfill can run on its own cadence. LEFT JOIN where the vector row is absent.
@@ -1013,6 +1027,17 @@ export function analysedCount(): number {
   }).n;
 }
 
+// IDs of tracks that already carry acoustic analysis (bpm filled). The re-scan
+// "Re-analyse" scope — capture BEFORE clearAnalysis() so the redo targets only
+// the previously-analysed population, not the whole (mostly un-analysed) library.
+export function analysedIds(): string[] {
+  return (
+    requireDb()
+      .prepare('SELECT id FROM tracks WHERE bpm IS NOT NULL ORDER BY id')
+      .all() as Array<{ id: string }>
+  ).map(r => r.id);
+}
+
 // ---------------------------------------------------------------------------
 // Mood-keyed reads (drop-in replacements for the old library.ts in-memory loops)
 // ---------------------------------------------------------------------------
@@ -1044,6 +1069,35 @@ export function allTaggedIds(): string[] {
   ).map(r => r.id);
 }
 
+// Tagged rows whose LLM provenance has gone stale — their prompt_hash or model
+// differs from the current ones (or is NULL, e.g. a legacy-v1 import). Drives
+// the re-scan "Re-decide moods" pass: re-LLM-tag only what a prompt/model change
+// invalidated. NEVER source='manual' — operator-set tags are ground truth and
+// don't go stale. With no prompt/model change this returns [], so re-decide is a
+// clean no-op. `IS NOT ?` is SQLite's null-safe inequality (NULL counts stale).
+export function staleTaggedIds(promptHash: string, model: string, limit?: number): string[] {
+  const sql =
+    `SELECT id FROM tracks
+       WHERE ${SQL_HAS_MOODS}
+         AND (source IS NULL OR source != 'manual')
+         AND (prompt_hash IS NOT ? OR model IS NOT ?)
+       ORDER BY id` + (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
+  const rows = requireDb().prepare(sql).all(promptHash, model) as Array<{ id: string }>;
+  return rows.map(r => r.id);
+}
+
+// Tracks that already carry enrichment (Last.fm tags / lyrics fetched at least
+// once). The re-scan "Re-enrich" scope — redo metadata only for what was done,
+// never the untouched remainder. Distinct from the raw --re-enrich widening,
+// which spans the full live catalogue (issue #531).
+export function enrichedIds(): string[] {
+  return (
+    requireDb()
+      .prepare('SELECT id FROM tracks WHERE enriched_at IS NOT NULL')
+      .all() as Array<{ id: string }>
+  ).map(r => r.id);
+}
+
 export function untaggedIds(limit?: number): string[] {
   const q = limit
     ? `SELECT id FROM tracks WHERE ${SQL_NO_MOODS} LIMIT ?`
@@ -1062,6 +1116,17 @@ export function unembeddedIds(limit?: number): string[] {
   return rows.map(r => r.id);
 }
 
+// Tracks that currently have a vector. The re-scan "Re-embed" scope — capture
+// this BEFORE dropVectors() (after the drop every track looks unembedded), then
+// rebuild exactly these, never the untouched untagged remainder.
+export function embeddedIds(): string[] {
+  return (
+    requireDb()
+      .prepare('SELECT id FROM track_vectors')
+      .all() as Array<{ id: string }>
+  ).map(r => r.id);
+}
+
 // Bucket every untagged track by (genre, decade). Used by seed-selector to
 // stratify so rare-mood corners of the library each get a seed pick.
 export function trackIdsByGenreDecade(): Map<string, string[]> {
@@ -1077,6 +1142,45 @@ export function trackIdsByGenreDecade(): Map<string, string[]> {
     const list = out.get(key) ?? [];
     list.push(r.id);
     out.set(key, list);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Per-genre embedding centroids — the mean text-embedding vector across every
+// tagged+embedded track in each genre. Powers the genre-cloud 2D projection
+// (music/genre-cloud.ts): semantically similar genres land near each other.
+// One streaming SQL join so a multi-thousand-track library stays light on
+// memory — vectors are accumulated into per-genre running sums, never all held
+// at once.
+// ---------------------------------------------------------------------------
+export function genreCentroids(): Array<{ genre: string; count: number; centroid: Float32Array }> {
+  const stmt = requireDb().prepare(
+    `SELECT t.genre AS genre, v.embedding AS embedding
+       FROM tracks t JOIN track_vectors v ON v.id = t.id
+      WHERE t.genre IS NOT NULL AND TRIM(t.genre) != ''`,
+  );
+  const sums = new Map<string, { sum: Float64Array; count: number }>();
+  let dim = 0;
+  for (const row of stmt.iterate() as Iterable<{ genre: string; embedding: Buffer }>) {
+    const b = row.embedding;
+    const vec = new Float32Array(b.buffer, b.byteOffset, Math.floor(b.byteLength / 4));
+    if (!dim) dim = vec.length;
+    if (vec.length !== dim) continue; // defensive: skip any stray off-dim rows
+    let acc = sums.get(row.genre);
+    if (!acc) {
+      acc = { sum: new Float64Array(dim), count: 0 };
+      sums.set(row.genre, acc);
+    }
+    for (let i = 0; i < dim; i++) acc.sum[i] += vec[i];
+    acc.count++;
+  }
+  const out: Array<{ genre: string; count: number; centroid: Float32Array }> = [];
+  for (const [genre, { sum, count }] of sums) {
+    if (!count) continue;
+    const centroid = new Float32Array(dim);
+    for (let i = 0; i < dim; i++) centroid[i] = sum[i] / count;
+    out.push({ genre, count, centroid });
   }
   return out;
 }

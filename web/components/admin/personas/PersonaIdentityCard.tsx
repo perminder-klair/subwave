@@ -6,7 +6,7 @@ import type { ChangeEvent } from 'react';
 import type { Persona } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
 import { NAME_MAX, TAGLINE_MAX, SOUL_MAX, LANGUAGE_MAX } from './constants';
-import { Card, Btn, Pill } from '../ui';
+import { Card } from '../ui';
 import { Input } from '../../ui/input';
 import { Textarea } from '../../ui/textarea';
 import { Label } from '../../ui/label';
@@ -16,61 +16,35 @@ import { cn } from '../../../lib/cn';
 
 interface PersonaIdentityCardProps {
   persona: Persona;
-  index: number;        // 0-based, for the "persona X of Y" sub
-  personaCount: number;
-  // The admin-selected default. `isOnAir` is whether this persona is the one
-  // actually broadcasting right now (a scheduled show can override the default).
-  isActive: boolean;
-  isOnAir: boolean;
-  canRemove: boolean;
+  isNew: boolean;       // show the AI-draft field only while creating
   adminFetch: AdminAuth['adminFetch'];
   avatarTick: number;
   uploading: boolean;
   update: (patch: Partial<Persona>) => void;
-  onSetActive: () => void;
-  onRemove: () => void;
   onPickAvatar: (file: File) => void;
   onGenerateAvatar: () => void;
   onClearAvatar: () => void;
 }
 
 export function PersonaIdentityCard({
-  persona, index, personaCount, isActive, isOnAir, canRemove, adminFetch, avatarTick, uploading,
-  update, onSetActive, onRemove, onPickAvatar, onGenerateAvatar, onClearAvatar,
+  persona, isNew, adminFetch, avatarTick, uploading,
+  update, onPickAvatar, onGenerateAvatar, onClearAvatar,
 }: PersonaIdentityCardProps) {
   const soulLen = persona.soul.trim().length;
   const soulOver = soulLen > SOUL_MAX;
   return (
-    <Card
-      title={`Editing · ${persona.name.trim() || `Persona ${index + 1}`}`}
-      sub={`persona ${index + 1} of ${personaCount}`}
-      right={
-        <>
-          {isOnAir && <Pill tone="accent" className="text-[8px]">on air</Pill>}
-          {isActive
-            ? <Pill className="text-[8px]">default</Pill>
-            : <Btn sm onClick={onSetActive}>Set as default</Btn>}
-          <Btn
-            sm
-            tone="danger"
-            onClick={onRemove}
-            disabled={!canRemove}
-            title={canRemove ? 'Remove this persona' : 'At least one persona is required'}
-          >
-            Remove
-          </Btn>
-        </>
-      }
-    >
-      <div className="mb-4">
-        <AiFill<Partial<Persona>>
-          endpoint="/generate/persona"
-          resultKey="persona"
-          adminFetch={adminFetch}
-          placeholder="e.g. a late-night jazz host with a dry wit"
-          onApply={(p) => update(p)}
-        />
-      </div>
+    <Card flat title="Identity">
+      {isNew && (
+        <div className="mb-4">
+          <AiFill<Partial<Persona>>
+            endpoint="/generate/persona"
+            resultKey="persona"
+            adminFetch={adminFetch}
+            placeholder="e.g. a late-night jazz host with a dry wit"
+            onApply={(p) => update(p)}
+          />
+        </div>
+      )}
 
       <div className="lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-8">
         {/* LEFT — avatar, name, tagline, language */}

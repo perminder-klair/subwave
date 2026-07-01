@@ -11,6 +11,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as lastfm from '../music/lastfm.js';
 import * as settings from '../settings.js';
 import * as embeddings from '../music/embeddings.js';
+import { buildGenreSuggest } from '../music/genre-suggest.js';
 import { tagBatch, TAGGER_BATCH_SYSTEM } from '../music/tagger-core.js';
 import { promptVocabHash } from '../music/embeddings.js';
 import { activeModelLabel } from '../llm/provider.js';
@@ -93,6 +94,22 @@ router.get('/library/genres', requireAdmin, async (req, res) => {
       .map(([value, songCount]) => ({ value, songCount }))
       .sort((a, b) => b.songCount - a.songCount);
     res.json({ genres: list });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /library/genres/related — genre suggestions for the show editor. Returns
+// the full genre list (by track count) plus, per genre, its nearest genres by
+// embedding similarity (cosine over each genre's mean text-embedding). Powers
+// the related-genre chips: popular quick-picks when empty, semantic neighbours
+// once a genre is chosen. Cached until the library changes.
+// ---------------------------------------------------------------------------
+router.get('/library/genres/related', requireAdmin, async (_req, res) => {
+  try {
+    await library.load();
+    res.json(buildGenreSuggest());
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -341,7 +358,12 @@ router.get('/library/coverage', requireAdmin, async (req, res) => {
 router.post('/library/analyze', requireAdmin, (req, res) => {
   if (tagger.running) return res.status(409).json({ error: 'a tagger/analyzer run is already active', tagger });
   const limit = parseIntSafe(req.body?.limit, null);
-  startAnalyzer({ limit: limit ?? undefined, audio: true });
+  // `vocal:true` (the "Backfill vocal analysis" button, #646) forces the Demucs
+  // vocal pass on tracks missing ranges; the default path backfills CLAP audio
+  // vectors. During a vocal run audio is left to its env default so the two
+  // backfills stay independently triggerable.
+  const vocal = req.body?.vocal === true;
+  startAnalyzer({ limit: limit ?? undefined, audio: vocal ? undefined : true, vocal: vocal || undefined });
   res.json({ ok: true, tagger });
 });
 

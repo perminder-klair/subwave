@@ -20,13 +20,15 @@
 
 :80 {
 	# -------------------------------------------------------------------------
-	# /stream.mp3 + /stream.opus — Icecast broadcast endpoints
+	# /stream.mp3 + /stream.opus + /stream.flac + /stream.aac — Icecast endpoints
 	# -------------------------------------------------------------------------
-	# Both mounts are served by the same Icecast on broadcast:7702 (Liquidsoap
-	# encodes the same source bus into MP3 192 kbps and Ogg-Opus 96 kbps in
-	# parallel). flush_interval -1 disables buffering so the audio stays live.
-	# Query strings (e.g. ?t=12345 cache-busters) pass through automatically.
-	@streams path /stream.mp3 /stream.opus
+	# All mounts are served by the same Icecast on broadcast:7702 (Liquidsoap
+	# encodes the same source bus into MP3, Ogg-Opus, Ogg-FLAC lossless and
+	# AAC-LC in parallel; Opus/FLAC/AAC are off by default and their bitrates
+	# are operator-configurable). flush_interval -1 disables buffering so the
+	# audio stays live. Query strings (e.g. ?t=12345 cache-busters) pass
+	# through automatically.
+	@streams path /stream.mp3 /stream.opus /stream.flac /stream.aac
 	handle @streams {
 		reverse_proxy broadcast:7702 {
 			flush_interval -1
@@ -48,16 +50,27 @@
 	}
 
 	# -------------------------------------------------------------------------
+	# /listen.pls + /listen.m3u — one-paste tune-in files (VLC, Sonos, hardware)
+	# -------------------------------------------------------------------------
+	# Served by the controller at its root (NOT under /api), so use a plain
+	# handle with no path stripping. Without this they fall through to the
+	# Next.js catch-all below and 404.
+	@listen path /listen.pls /listen.m3u
+	handle @listen {
+		reverse_proxy controller:7701
+	}
+
+	# -------------------------------------------------------------------------
 	# Everything else → Next.js web UI
 	# -------------------------------------------------------------------------
 	handle {
 		reverse_proxy web:7700
 	}
 
-	# Don't compress the live audio mounts — MP3/Opus are already compressed
-	# (gzip just burns CPU on incompressible data) and an encoder layer on the
-	# never-ending body fights the `flush_interval -1` live path above.
-	@compressible not path /stream.mp3 /stream.opus
+	# Don't compress the live audio mounts — MP3/Opus/FLAC/AAC are already
+	# compressed (gzip just burns CPU on incompressible data) and an encoder
+	# layer on the never-ending body fights the `flush_interval -1` live path.
+	@compressible not path /stream.mp3 /stream.opus /stream.flac /stream.aac
 	encode @compressible gzip zstd
 
 	log {

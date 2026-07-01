@@ -89,6 +89,31 @@ function defaultEmbeddingDimFor(model: string): number {
   return 768; // homelab default until a probe says otherwise
 }
 
+// Heuristic: is this a "heavy" embedding model — large + slow on CPU relative to
+// the light homelab default (nomic-embed-text, ~137M / 768d)? Name-based only,
+// drives a perf advisory (doctor) — so unknown models default to NOT heavy, no
+// false alarms. The common heavy local picks are bge-m3 (~567M / 1024d,
+// multilingual) and mxbai-embed-large (~335M / 1024d); the OpenAI/BGE "-large"
+// variants and Qwen embeddings are heavy too (only flagged when run locally —
+// see embeddingPerfAdvisory, which gates on provider).
+export function isHeavyEmbeddingModel(model: string): boolean {
+  const bare = (model || '').toLowerCase();
+  if (!bare) return false;
+  if (bare.includes('bge-m3')) return true;
+  if (bare.includes('large')) return true;       // mxbai-embed-large, *-embedding-3-large, bge-large-*
+  if (/qwen3?-?embed/.test(bare)) return true;    // qwen embeddings
+  return false;
+}
+
+// Does this embedding provider run on the operator's own hardware (so model
+// weight is a CPU/RAM concern they pay for), vs a cloud API that does the work
+// off-box? Gates the heavy-model perf advisory — a big model on OpenAI/Google is
+// not the operator's performance problem. ollama / locca / openai-compatible are
+// the self-hosted transports.
+export function isLocalEmbeddingProvider(provider: string): boolean {
+  return provider === 'ollama' || provider === 'locca' || provider === 'openai-compatible';
+}
+
 // Resolved embedding config. `settings.embedding` overrides settings.llm field
 // by field; `overrides` (e.g. unsaved form values from the probe endpoint) win
 // over both. Mirrors the precedence in embeddingCfg().

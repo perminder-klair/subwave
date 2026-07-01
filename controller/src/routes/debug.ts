@@ -20,6 +20,7 @@ import * as session from '../broadcast/session.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
 import * as requestLog from '../broadcast/request-log.js';
 import { getStationTimezone } from '../time.js';
+import { publicOrigin } from './public.js';
 import { requireAdmin } from '../middleware/auth.js';
 
 export const router = express.Router();
@@ -76,11 +77,14 @@ router.get('/debug', requireAdmin, async (req, res) => {
     pickerBusy: queue.pickerBusy,
   };
 
-  // 3. Icecast status
+  // 3. Icecast status — capture the full source array so the per-mount block
+  // below can reuse it (one status-json fetch, not two).
+  let icecastSources: any[] = [];
   try {
     const r = await fetch(config.icecast.statusUrl);
     const ic: any = (await r.json() as any).icestats;
-    const src = Array.isArray(ic.source) ? ic.source[0] : ic.source;
+    icecastSources = Array.isArray(ic.source) ? ic.source : ic.source ? [ic.source] : [];
+    const src = icecastSources[0];
     out.icecast = src ? {
       title: src.title,
       bitrate: src.bitrate,
@@ -92,6 +96,60 @@ router.get('/debug', requireAdmin, async (req, res) => {
     } : { error: 'no source connected' };
   } catch (err) {
     out.icecast = { error: err.message };
+  }
+
+  // 3b. Listen mounts — per-mount config vs. live Icecast status, plus the
+  // tune-in files. `configured` is the operator's intent (mp3 is the mandatory
+  // floor; opus/flac/aac are opt-in); `live` is whether Icecast actually has a
+  // source on that mount. configured-but-not-live = encoder didn't connect /
+  // needs a mixer restart — the diagnostic this surfaces.
+  {
+    const st = settingsSnapshot?.stream || {};
+    const origin = publicOrigin(req);
+    const audioParam = (src: any, key: 'samplerate' | 'channels'): number | null => {
+      const direct = Number(src?.[key]);
+      if (Number.isFinite(direct) && direct > 0) return direct;
+      const m = String(src?.audio_info || '').match(new RegExp(`${key}=([0-9]+)`, 'i'));
+      return m ? Number(m[1]) : null;
+    };
+    const mountEntry = (
+      path: string,
+      codec: string,
+      configured: boolean,
+      configuredBitrate: number | null,
+    ) => {
+      const src = icecastSources.find((s: any) =>
+        String(s?.listenurl || '').includes(path),
+      );
+      const live = !!src;
+      const liveBitrate = Number(src?.bitrate);
+      return {
+        path,
+        codec,
+        configured,
+        live,
+        bitrate: live && Number.isFinite(liveBitrate) ? liveBitrate : configuredBitrate,
+        listeners: live ? Number(src.listeners || 0) : null,
+        sampleRate: live ? audioParam(src, 'samplerate') : null,
+        channels: live ? audioParam(src, 'channels') : null,
+        contentType: live ? src.server_type || null : null,
+        url: `${origin}${path}`,
+      };
+    };
+    const list = [
+      mountEntry('/stream.mp3', 'MP3', true, st.bitrate ?? 192),
+      mountEntry('/stream.opus', 'Opus', st.opusEnabled === true, st.opusBitrate ?? 96),
+      mountEntry('/stream.flac', 'FLAC', st.flacEnabled === true, null),
+      mountEntry('/stream.aac', 'AAC-LC', st.aacEnabled === true, st.aacBitrate ?? 192),
+    ];
+    out.mounts = {
+      list,
+      tuneIn: {
+        entryCount: list.filter(m => m.configured).length,
+        pls: `${origin}/listen.pls`,
+        m3u: `${origin}/listen.m3u`,
+      },
+    };
   }
 
   // 4. Liquidsoap log tail — Liquidsoap writes radio.log into the shared

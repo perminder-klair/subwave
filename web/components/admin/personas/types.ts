@@ -2,7 +2,7 @@
 // PersonasPanel so the presentational sub-components can share one shape.
 
 export interface PersonaTts {
-  engine: 'piper' | 'kokoro' | 'chatterbox' | 'pocket-tts' | 'cloud' | string;
+  engine: 'piper' | 'kokoro' | 'chatterbox' | 'pocket-tts' | 'cloud' | 'remote' | string;
   cloudProvider: string;
   voice: string;
   // Per-persona voice-level trim in dB (−12..+12, default 0 = no change). Stacks

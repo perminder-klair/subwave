@@ -22,7 +22,7 @@ export interface WizardData {
   llmTest: { ok: boolean | null; msg?: string };
 
   tts: {
-    defaultEngine: 'piper' | 'kokoro' | 'cloud' | 'chatterbox' | 'pocket-tts';
+    defaultEngine: 'piper' | 'kokoro' | 'cloud' | 'chatterbox' | 'pocket-tts' | 'remote';
     // Advisory toggle — does the operator intend to run the optional
     // tts-heavy sidecar (Chatterbox + PocketTTS)? Persisted via
     // /onboarding/save into settings.tts.heavyEnabled. The web wizard can't
@@ -40,6 +40,9 @@ export interface WizardData {
     // range-checked by the controller's settings.update() on save.
     lat: string;
     lng: string;
+    // IANA zone, auto-filled when a city is picked in the location step. '' =
+    // Auto (server zone), matching the admin sentinel.
+    timezone: string;
     frequency: 'quiet' | 'moderate' | 'aggressive';
   };
 
@@ -73,6 +76,7 @@ export const DEFAULT_DATA: WizardData = {
     locationName: 'Punjab',
     lat: '30.7333',
     lng: '76.7794',
+    timezone: '',
     frequency: 'moderate',
   },
   apiKeys: {},
@@ -89,6 +93,18 @@ export const STEP_LABELS: Record<StepId, string> = {
   dj: 'DJ persona',
   review: 'Review',
 };
+
+// Turn a thrown fetch failure into a human-readable pill message. AbortSignal
+// timeouts reject with a TimeoutError; everything else (connection refused,
+// DNS, CORS/TLS) is a bare "Failed to fetch" that means nothing to an operator
+// — so we point them at the real culprit: reaching the controller.
+function fetchErrorMsg(err: unknown): string {
+  if (err instanceof DOMException && err.name === 'TimeoutError') {
+    return 'timed out — the controller did not respond';
+  }
+  const m = err instanceof Error ? err.message : '';
+  return `could not reach the controller${m ? ` (${m})` : ''}`;
+}
 
 export function useWizard() {
   const auth = useAdminAuth();
@@ -111,29 +127,52 @@ export function useWizard() {
   }, []);
 
   // POST helpers — every wizard write goes through adminFetch so the same
-  // 401-handling that the admin shell uses applies here.
+  // 401-handling that the admin shell uses applies here. Both test helpers
+  // catch their own failures into the result pill: a rejected/timed-out
+  // browser→controller fetch must surface as a red pill, never as an
+  // unhandled throw that wedges the button on "Testing…" (issue #682).
   const testNavidrome = useCallback(async () => {
-    const r = await auth.adminFetch('/onboarding/test-navidrome', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(data.navidrome),
-    });
-    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; serverType?: string; serverVersion?: string; error?: string };
-    const result = { ok: !!j.ok, msg: j.ok ? `${j.serverType || 'Subsonic'} v${j.serverVersion || ''}` : j.error };
-    patch({ navidromeTest: result });
-    return result;
+    // The browser→controller hop has no default timeout; without one a request
+    // that never gets a response leaves the button stuck forever. 15s clears
+    // the 5s server-side Subsonic probe with margin.
+    try {
+      const r = await auth.adminFetch('/onboarding/test-navidrome', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(data.navidrome),
+        signal: AbortSignal.timeout(15000),
+      });
+      const j = (await r.json().catch(() => ({}))) as { ok?: boolean; serverType?: string; serverVersion?: string; error?: string };
+      const result = { ok: !!j.ok, msg: j.ok ? `${j.serverType || 'Subsonic'} v${j.serverVersion || ''}` : (j.error || `controller returned HTTP ${r.status}`) };
+      patch({ navidromeTest: result });
+      return result;
+    } catch (err: unknown) {
+      const result = { ok: false, msg: fetchErrorMsg(err) };
+      patch({ navidromeTest: result });
+      return result;
+    }
   }, [auth, data.navidrome, patch]);
 
   const testLlm = useCallback(async () => {
-    const r = await auth.adminFetch('/onboarding/test-llm', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(data.llm),
-    });
-    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; sample?: string; error?: string };
-    const result = { ok: !!j.ok, msg: j.ok ? `responded: "${j.sample}"` : j.error };
-    patch({ llmTest: result });
-    return result;
+    // 60s client cap sits just above the controller's 45s generateText abort,
+    // so a slow/unreachable model surfaces the server's error rather than a
+    // bare client timeout — and the button can never hang forever.
+    try {
+      const r = await auth.adminFetch('/onboarding/test-llm', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(data.llm),
+        signal: AbortSignal.timeout(60000),
+      });
+      const j = (await r.json().catch(() => ({}))) as { ok?: boolean; sample?: string; error?: string };
+      const result = { ok: !!j.ok, msg: j.ok ? `responded: "${j.sample}"` : (j.error || `controller returned HTTP ${r.status}`) };
+      patch({ llmTest: result });
+      return result;
+    } catch (err: unknown) {
+      const result = { ok: false, msg: fetchErrorMsg(err) };
+      patch({ llmTest: result });
+      return result;
+    }
   }, [auth, data.llm, patch]);
 
   // Probe a locca / openai-compatible server for its loaded model list so the
@@ -191,6 +230,8 @@ export function useWizard() {
       },
       weather: { locationName: data.dj.locationName, lat: data.dj.lat, lng: data.dj.lng },
       station: data.dj.stationName,
+      // '' = Auto; only sent so a picked city's zone reaches settings.update().
+      timezone: data.dj.timezone,
       apiKeys,
     };
     const r = await auth.adminFetch('/onboarding/save', {

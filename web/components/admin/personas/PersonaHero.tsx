@@ -1,9 +1,8 @@
 'use client';
 // Hero header + live/active strip for /admin/personas.
 import type { Persona } from './types';
-import { PERSONA_MAX } from './constants';
 import { engineLabel } from './helpers';
-import { Btn, Eyebrow } from '../ui';
+import { Eyebrow } from '../ui';
 
 interface PersonaHeroProps {
   // The persona actually broadcasting (show override aware) — what the live
@@ -16,37 +15,22 @@ interface PersonaHeroProps {
   onAirShow: { id: string; name: string } | null;
   defaultEngine: string;
   onAirCloudIssue: string | null;
-  personaCount: number;
-  showPrompt: boolean;
-  onTogglePrompt: () => void;
-  onAdd: () => void;
 }
 
 export function PersonaHero({
   onAirPersona, defaultPersona, onAirShow, defaultEngine, onAirCloudIssue,
-  personaCount, showPrompt, onTogglePrompt, onAdd,
 }: PersonaHeroProps) {
   const overridden = !!onAirShow && defaultPersona?.id !== onAirPersona?.id;
   return (
     <section className="card">
-      <div className="stack-mobile grid grid-cols-[1fr_auto] items-center gap-4 border-b border-ink p-4">
-        <div>
-          <Eyebrow className="text-vermilion">personas</Eyebrow>
-          <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
-            The voices on your station.
-          </div>
-          <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            One persona is on air at a time. A scheduled show can hand the hour to a different one.
-            Every change applies live; no mixer restart.
-          </div>
+      <div className="border-b border-ink p-4">
+        <Eyebrow className="text-vermilion">personas</Eyebrow>
+        <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
+          The voices on your station.
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Btn onClick={onTogglePrompt}>
-            {showPrompt ? 'Hide system prompt' : 'System prompt'}
-          </Btn>
-          <Btn tone="accent" onClick={onAdd} disabled={personaCount >= PERSONA_MAX}>
-            + Add persona
-          </Btn>
+        <div className="mt-1 text-[11px] leading-[1.6] text-muted">
+          One persona is on air at a time. A scheduled show can hand the hour to a different one.
+          Every change applies live; no mixer restart.
         </div>
       </div>
 

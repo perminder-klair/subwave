@@ -54,7 +54,7 @@ https://github.com/user-attachments/assets/fac7b723-c54f-438d-8440-bad1e0471e85
 - **Plain-language requests.** "Play something more upbeat" or "anything by Radiohead" works.
 - **Your own music library.** Pulls from Navidrome over the Subsonic API. No external catalogue.
 - **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy.
-- **Five TTS engines.** Piper and Kokoro in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) is also available. Pick a different engine per kind of speech.
+- **Six TTS engines.** Piper and Kokoro in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) and a Remote engine (any self-hosted HTTP endpoint, audio over the wire) round it out. Pick a different engine per kind of speech.
 - **Multiple DJ personas.** Up to 10 souls in rotation, each with its own voice and writing style.
 - **Dual-codec broadcast.** MP3 128 kbps for Sonos, hardware radios, and cars; Ogg-Opus 96 kbps for modern browsers. The web player picks automatically.
 - **Native apps and PWA.** Native iOS (on the App Store) and Android (on Google Play) players — background audio, lock-screen / CarPlay / Android Auto controls, multi-station — plus an installable PWA on phone and desktop.
@@ -232,6 +232,15 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
   call goes through the Vercel AI SDK.
 - **There is no `/skip` for listeners.** Track-end is the only natural
   transition; operators have an admin-only skip endpoint.
+- **Add to Sonos / VLC with one link.** Hardware and software players take a
+  playlist file, not a raw stream URL — paste `https://<your-station>/listen.pls`
+  (or `/listen.m3u`) into Sonos, VLC, moOde, or a car receiver and it tunes
+  straight in. Both are public (no auth), point at the always-served MP3 mount
+  (plus Opus when you've enabled it), and resolve the origin from `SITE_URL`
+  when set, otherwise the address you reached the station on (LAN / Tailscale /
+  custom domain). `/api/now-playing` also carries a `stream` block
+  (`mount`, `format`, `bitrate`, `sampleRate`, `channels`) for clients that want
+  the broadcast's shape.
 - **Navidrome ≥0.62 is recommended.** It ships several security hardening
   fixes (internet-radio management now admin-gated, transcode-config
   disclosure restricted to admins, concurrent-transcode DoS limits) and the

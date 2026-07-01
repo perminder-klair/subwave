@@ -97,6 +97,10 @@ export function personaValid(p: Persona): boolean {
     const v = p.tts.voice.trim();
     return v.length >= 1 && v.length <= 100;
   }
+  if (e === 'remote') {
+    const v = p.tts.voice.trim();
+    return v.length <= 100;
+  }
   return true; // piper — voice ignored
 }
 
@@ -110,6 +114,7 @@ export function voiceForSave(engine: string, voice: string): string {
   if (engine === 'chatterbox') return CHATTERBOX_VOICE_RE.test(voice) ? voice : '';
   // Built-in id or a .wav clone filename both pass through; anything else → default.
   if (engine === 'pocket-tts') return (POCKET_TTS_VOICE_RE.test(voice) || CHATTERBOX_VOICE_RE.test(voice)) ? voice : 'alba';
+  if (engine === 'remote') return voice; // free text, forwarded as-is
   return voice; // piper ignores voice; cloud carries its own
 }
 
@@ -137,5 +142,6 @@ export function engineLabel(p: Persona): string {
   if (p.tts.engine === 'chatterbox') return `chatterbox / ${p.tts.voice.trim() || 'built-in'}`;
   if (p.tts.engine === 'pocket-tts') return `pocket-tts / ${p.tts.voice.trim() || 'alba'}`;
   if (p.tts.engine === 'cloud') return `cloud / ${p.tts.cloudProvider} / ${p.tts.voice.trim() || '—'}`;
+  if (p.tts.engine === 'remote') return `remote / ${p.tts.voice.trim() || '—'}`;
   return `piper / ${p.tts.voice.trim() || 'built-in'}`;
 }

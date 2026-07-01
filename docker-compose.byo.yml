@@ -67,11 +67,20 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
+      args:
+        # Version reported by the controller (backup manifest). Same source as
+        # the web build arg below; unset → falls back to controller/package.json.
+        - SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
     depends_on:
       broadcast:
         condition: service_healthy
+      # Bring the socket-proxy up whenever the controller is (re)created — even a
+      # selective `up -d controller` — so the Stats system panel works without a
+      # separate full `up -d`. Remove this entry too if you drop the proxy below.
+      docker-socket-proxy:
+        condition: service_started
     environment:
       - NODE_ENV=production
       - TZ=${TZ:-Europe/London}
@@ -102,7 +111,8 @@ services:
   # CPU/memory through it via DOCKER_HOST=tcp://docker-socket-proxy:2375, so the
   # controller image itself never holds the socket. No host port — only
   # reachable on the internal compose network. Optional: remove this service
-  # (and the controller's DOCKER_HOST above) to drop the Stats system panel.
+  # (plus the controller's DOCKER_HOST and its docker-socket-proxy depends_on
+  # entry above) to drop the Stats system panel.
   docker-socket-proxy:
     image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
     container_name: sub-wave-docker-proxy
@@ -123,6 +133,10 @@ services:
       args:
         - SITE_URL=${SITE_URL:-}
         - NEXT_PUBLIC_GA_ID=${NEXT_PUBLIC_GA_ID:-}
+        # Version shown in the admin console footer, inlined at BUILD time.
+        # scripts/update.sh sets it from `git describe`; unset → falls back to
+        # web/package.json (see web/next.config.js).
+        - SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
     depends_on:
@@ -168,6 +182,10 @@ services:
         # layer on docker-compose.tts-heavy-gpu.yml. Defaults to CPU wheels.
         # Source build only. See docs/gpu-tts.md.
         CHATTERBOX_TORCH_INDEX_URL: ${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        # RTX 50-series (Blackwell) only: override chatterbox-tts's torch==2.6.0
+        # pin (no sm_120 kernels) with a newer spec + a cu128 index above, e.g.
+        # CHATTERBOX_TORCH_SPEC="torch==2.9.1 torchaudio==2.9.1". See docs/gpu-tts.md.
+        CHATTERBOX_TORCH_SPEC: ${CHATTERBOX_TORCH_SPEC:-}
     # amd64-only image (heavy PyTorch stack); pinned so it runs under emulation
     # on arm64 hosts. The other services are multi-arch and auto-select.
     platform: linux/amd64

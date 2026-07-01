@@ -9,6 +9,7 @@ import * as library from '../music/library.js';
 import * as jingles from '../broadcast/jingles.js';
 import * as settings from '../settings.js';
 import * as tts from '../audio/tts.js';
+import * as remoteTts from '../audio/remoteTts.js';
 import * as chatterbox from '../audio/chatterbox.js';
 import * as piper from '../audio/piper.js';
 import * as llmProvider from '../llm/provider.js';
@@ -190,6 +191,12 @@ router.post('/settings', requireAdmin, async (req, res) => {
     }
     if (result.requiresRestart) {
       queue.log('scheduler', `mixer settings changed — Liquidsoap restart required`);
+    }
+    // A changed remote-TTS URL re-probes immediately so availability (and the
+    // admin "ready/unreachable" badge) reflects the new endpoint on the next
+    // /settings fetch instead of waiting for the 30s probe tick.
+    if (req.body?.tts?.remote?.url !== undefined) {
+      await remoteTts.refresh();
     }
     res.json(result);
   } catch (err) {
@@ -492,15 +499,15 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
     if (!resolvedApiKey) {
       await settings.load();
       const s = settings.get();
-      const _primaryUrl = (s.llm?.baseUrl || '').trim().replace(/\/+$/, '');
       const fallbackUrl = (s.llm?.fallback?.baseUrl || '').trim().replace(/\/+$/, '');
       const targetUrl = baseUrl.trim().replace(/\/+$/, '');
-
-      if (targetUrl === fallbackUrl && s.llm?.fallback?.apiKey) {
-        resolvedApiKey = s.llm.fallback.apiKey;
-      } else if (s.llm?.apiKey) {
-        resolvedApiKey = s.llm.apiKey;
-      }
+      // Match the target server to a leg, then read that leg's provider's inline
+      // key from the per-provider map (issue #657). Falls back to the
+      // openai-compatible slot when neither leg's URL matches.
+      const legProvider = (targetUrl && targetUrl === fallbackUrl)
+        ? s.llm?.fallback?.provider
+        : s.llm?.provider;
+      resolvedApiKey = settings.llmKeyFor(legProvider || 'openai-compatible');
     }
 
     const m = createOpenAI({
@@ -558,15 +565,10 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
           || (provider === 'locca' ? llmProvider.DEFAULT_LOCCA_BASE_URL : '');
         if (!url) throw new Error('baseUrl is required for openai-compatible');
         await settings.load();
-        const s = settings.get();
-        // Resolve the key the way probe-compat does: a discovery aimed at the
-        // fallback server's URL uses the fallback key; otherwise the primary's.
-        // `url` and `baseUrl` are already trailing-slash-stripped above.
-        const fallbackUrl = (s.llm?.fallback?.baseUrl || '').trim().replace(/\/+$/, '');
-        const apiKey =
-          (url === fallbackUrl && typeof s.llm?.fallback?.apiKey === 'string' && s.llm.fallback.apiKey)
-            ? s.llm.fallback.apiKey
-            : (typeof s.llm?.apiKey === 'string' ? s.llm.apiKey : '');
+        // Inline key for this provider from the per-provider map (issue #657).
+        // Primary and fallback inline legs of the same provider share one entry,
+        // so the key resolves by provider id without a baseUrl match.
+        const apiKey = settings.llmKeyFor(provider);
         const headers: Record<string, string> = {};
         if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
         const r = await fetch(`${url}/models`, { signal: ctrl.signal, headers });

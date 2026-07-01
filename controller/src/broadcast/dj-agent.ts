@@ -15,6 +15,7 @@ import { z } from 'zod';
 import * as settings from '../settings.js';
 import * as session from './session.js';
 import * as picker from '../music/picker.js';
+import { resolveShowPlaylistPool } from '../music/show-playlist.js';
 import * as library from '../music/library.js';
 import * as mix from '../music/mix.js';
 import * as journey from '../music/journey.js';
@@ -166,7 +167,7 @@ export function runActive(): boolean {
 export const PICK_SCHEMA = z.object({
   id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
   reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just note what makes THIS pick a fresh step (new artist, a shift in energy/era/texture), not a vibe label you would recycle pick after pick (e.g. "new artist, lifts the energy", never a repeated "mellow reflective step")'),
-  say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice (back-announce what just played, ease into what is coming, vary your opener); when the event says stay silent, set this to null'),
+  say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). When the event says stay silent, set this to null'),
   // Transition effects (only honoured when the system prompt offers them — DJ mode + effects on).
   transition: z.enum(['normal', 'sweep', 'washout']).nullable().describe('special transition effect for this pick, used RARELY: "sweep" muffles the music under a lowpass that opens across the crossfade INTO this pick (it surfaces from far away) — for a big mood/energy jump; "washout" dissolves THIS track into a wide ping-pong echo tail as it ENDS, bleeding into the next track — for closing a segment or a dreamy/ambient pick; "normal" or null for an ordinary crossfade'),
 });
@@ -218,9 +219,19 @@ export function pickSystem() {
   // instead of a soft lean, so both pick paths honour strict the same way. Lives
   // in the system prompt for the same session-window reason as the show brief.
   const musicLean = dj.showMusicLean(activeShow);
+  // Playlist anchor: a separate steer from genre/era. Strict → every pick MUST
+  // come from the pinned playlist (the tools already enforce this in code, but
+  // saying so keeps the agent reaching for showPlaylistTracks instead of
+  // burning steps on tools that come back empty); soft → strong preference,
+  // occasional steps outside allowed for flow.
+  const playlistLean = activeShow?.playlistIds?.length
+    ? (activeShow.playlistStrict
+        ? `\n\nThis show is anchored to a curated playlist: every track you pick MUST come from it. Call showPlaylistTracks first and choose from what it returns.`
+        : `\n\nThis show leans on a curated playlist: call showPlaylistTracks first and strongly prefer those tracks; only step outside occasionally when the flow calls for it.`)
+    : '';
   return `${settings.agentPersonaPreamble(persona, { rules: false })}
 
-You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}${musicLean}
+You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}${musicLean}${playlistLean}
 
 ${dj.PICKER_CRITERIA}
 
@@ -292,7 +303,7 @@ export const pickerAgent = defineAgent({
   maxSteps: 4,
   timeoutMs: agentDeadline,
   buildSystem: () => pickSystem(),
-  buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint }) => {
+  buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, playlistLock, playlistTracks }) => {
     // Resolve the active show live (a show that just came on air takes effect):
     // for a strict show, hard genre + era locks the discovery tools enforce on
     // candidates — not just the prompt. Era rides the same genreStrict flag (no
@@ -304,7 +315,9 @@ export const pickerAgent = defineAgent({
     const eraLock = strict && (activeShow?.fromYear != null || activeShow?.toYear != null)
       ? { fromYear: activeShow.fromYear, toYear: activeShow.toYear }
       : null;
-    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock });
+    // playlistLock / playlistTracks are pre-resolved by pickViaAgent (the
+    // Navidrome fetch is async; buildTools is sync) and threaded through run().
+    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock, playlistLock, playlistTracks });
     return { tools, extras: { seen } };
   },
 });
@@ -349,9 +362,13 @@ function trackFields(song) {
 // AND the durable picks-log record so neither reports a phantom pick that never
 // aired (push() has already logged the dedup-skip). Callers fall back on -1
 // (agent → pool → auto.m3u) instead of recording a session turn for a no-op.
+// `linkPrev` is the track the link back-announces (the one on-air when the pick
+// was made); the queue uses it to drop the link if a request jumps ahead and it
+// would otherwise air a stale "that was X" over the wrong transition.
 async function enqueuePick(
   queue, song, reason, source,
   link: string | null = null,
+  linkPrev: any = null,
   { sweep = false, washout = false }: { sweep?: boolean; washout?: boolean } = {},
 ): Promise<number> {
   const track: any = trackFields(song);
@@ -368,6 +385,7 @@ async function enqueuePick(
     introScript: link,
     introKind: 'link',
     aiPicked: true,
+    linkPrev,
   });
   if (pos === -1) return -1;
   queue.log('ai-pick', `${song.title} — ${song.artist}`, { reason, source });
@@ -379,7 +397,7 @@ async function enqueuePick(
 // Track event — a track started; pick the next one and maybe air a link.
 // ---------------------------------------------------------------------------
 
-async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLink: boolean; audioWaypoint?: number[] | null }): Promise<boolean> {
+async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = null }: { wantLink: boolean; audioWaypoint?: number[] | null; current?: any }): Promise<boolean> {
   await library.load();
   const stats = library.stats();
   const windows = recencyWindowsForLibrary(stats.distinctArtists);
@@ -401,6 +419,16 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLin
   const effN = effectiveNoRepeatWindow(settings.get().llm?.noRepeatWindow ?? 0, stats.total);
   const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
 
+  // Show playlist anchor: resolve the union here (async Navidrome fetch) and
+  // thread it into the agent's tools. Strict → a hard lock set so every tool's
+  // results are intersected with the playlist (the agent can only pick in-set);
+  // soft → just the tracks, exposed via showPlaylistTracks for a strong prompt
+  // preference, no lock. Null when the show pins no playlists.
+  const activeShow = settings.resolveActiveShow();
+  const playlistPool = activeShow ? await resolveShowPlaylistPool(activeShow) : null;
+  const playlistLock = playlistPool && activeShow?.playlistStrict ? playlistPool.ids : null;
+  const playlistTracks = playlistPool?.tracks ?? null;
+
   const { object, steps, toolCalls, extras } = await pickerAgent.run({
     messages: session.windowMessages(),
     recentIds,
@@ -411,6 +439,8 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLin
     // over the run's current waypoint, so the agent path drifts the sound the
     // same way the pool path does. The event text tells the agent to use it.
     audioWaypoint,
+    playlistLock,
+    playlistTracks,
   });
 
   const song = object?.id ? extras.seen.get(object.id) : null;
@@ -437,7 +467,9 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null }: { wantLin
   const washout = settings.effectsActive() && object.transition === 'washout';
   // Attach the link to the pick so it airs as the pick starts (back-announcing
   // the track on-air now), instead of immediately over that on-air track (#189).
-  const queued = await enqueuePick(queue, song, object.reason, 'agent', link, { sweep, washout });
+  // Stamp `current` as the link's back-announce target so the queue can drop the
+  // link if a request jumps ahead of this pick before it airs.
+  const queued = await enqueuePick(queue, song, object.reason, 'agent', link, current, { sweep, washout });
   // Pick was already queued/on-air and got deduped — don't record a session turn
   // for a track that never airs. Returning false lets runTrackEvent fall through
   // to the pool for a fresh pick.
@@ -480,7 +512,9 @@ async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm:
       queue.log('error', `DJ link failed: ${err.message}`);
     }
   }
-  const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link);
+  // `current` is the link's back-announce target (passed to generateLink as
+  // `previous`); stamp it so the queue drops the link if a request jumps ahead.
+  const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link, current);
   // Even the pool landed on an already-queued track (a tiny library whose pool
   // collapsed to recents). Skip the session turn and let auto.m3u backstop the
   // slot — the next track-start re-triggers runTrackEvent for a fresh pick.
@@ -528,10 +562,15 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     const { rankTarget, audioWaypoint } = advanceRun(djMode, current);
     const inRun = runActive();
 
-    // The link clause differs in DJ mode: a working DJ doesn't just ease into
-    // the next track, they TEASE it — name the artist or capture its feel so
+    // The link clause differs in DJ mode: a working DJ doesn't just announce the
+    // next track, they TEASE it — name the artist or capture its feel so
     // listeners know what's coming. The agent already knows its own pick when
-    // it writes `say`, so this costs nothing extra.
+    // it writes `say`, so this costs nothing extra. The link is FORWARD-LOOKING
+    // only — it introduces the pick, never back-announces "${current?.title}".
+    // The link airs when the pick starts, but a listener request can slip ahead
+    // of the pick in the meantime, so naming what "just played" goes stale (it
+    // names a track one older than reality); introducing the pick is always
+    // correct whatever aired before it.
     // The "nod to it in the link" half only makes sense when a link is actually
     // being written — gate it on wantLink so a silent mid-run pick ("Stay silent
     // — no link this time.") doesn't also get told it may phrase something in a
@@ -547,10 +586,24 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     const journeyClause = audioWaypoint && audioWaypoint.length
       ? ' A sonic journey is active: call tracksTowardJourney and lean toward one of its tracks — each carries the sound a step toward where this arc is heading. If it comes back thin, pick via the library mood/genre/audio tools and keep the energy heading the same way. Never mention the journey on air.'
       : '';
+    // Opener variety for the link. The free-text pool path gets a rotating angle
+    // + an anti-repeat opener list via decoratePrompt; the agent `say` path
+    // didn't, so its links settled into the same shape ("here's…", "coming
+    // up…"). Feed it the same two signals through the event message: one random
+    // forward-looking angle to vary the approach, and the recent openers to
+    // steer clear of. Only when a link is actually being written.
+    const linkAngle = wantLink ? dj.pickAngle('link') : null;
+    const recentOpeners = wantLink ? queue.getRecentOpeners() : [];
+    const varietyClause = wantLink
+      ? ` Approach for this link: ${linkAngle} Vary your first words — don't default to "here's", "this is", or "coming up".`
+        + (recentOpeners.length
+            ? ` You opened recent lines with ${recentOpeners.slice(0, 6).map(o => `"${o}…"`).join(', ')} — start this one differently.`
+            : '')
+      : '';
     const linkClause = wantLink
       ? (djMode
-          ? ` Also write a short link that airs as your pick starts: back-announce "${current?.title}", then tease what's next — name the artist or capture the feel of the track you pick so listeners know what's coming. If the track you pick shows an intro_ms, keep the link short enough to finish before then, so you land just as the vocals come in.`
-          : ` Also write a short link that airs as your pick starts: back-announce "${current?.title}" and lead into the track you pick.`)
+          ? ` Also write a short link that airs as your pick starts: introduce what's coming — name the artist or capture the feel of the track you pick so listeners know what's next. Do not back-announce or name the track that just played. If the track you pick shows an intro_ms, keep the link short enough to finish before then, so you land just as the vocals come in.${varietyClause}`
+          : ` Also write a short link that airs as your pick starts: lead into the track you pick. Do not back-announce or name the track that just played.${varietyClause}`)
       : ' Stay silent — no link this time.';
     // Surface the current track's real Subsonic id so similarSongs /
     // tracksLikeThis ("pass the currently-playing song id") actually have one
@@ -569,7 +622,7 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     // and go straight to the one-call pool picker below to stretch the budget.
     if (settings.get().llm?.pickerAgent && !cheap && !breakerOpen()) {
       try {
-        const queued = await pickViaAgent(queue, { wantLink, audioWaypoint });
+        const queued = await pickViaAgent(queue, { wantLink, audioWaypoint, current });
         breakerSuccess();
         if (queued) return;
         // The agent produced a valid pick but it was already queued/on-air, so

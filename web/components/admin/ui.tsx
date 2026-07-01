@@ -34,11 +34,15 @@ export interface CardProps {
   className?: string;
   bodyClass?: string;
   headClass?: string;
+  // `flat` drops the box border/background and side padding so the section
+  // reads as part of a continuous form separated by hairline dividers — used
+  // inside EditorDialog (.card.is-flat in globals.css).
+  flat?: boolean;
 }
 
-export function Card({ title, sub, right, children, className, bodyClass, headClass }: CardProps) {
+export function Card({ title, sub, right, children, className, bodyClass, headClass, flat }: CardProps) {
   return (
-    <section className={cn('card', className)}>
+    <section className={cn('card', flat && 'is-flat', className)}>
       {(title || right) && (
         <div className={cn('card-head', headClass)}>
           {title && <span className="title">{title}</span>}

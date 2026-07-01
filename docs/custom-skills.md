@@ -1,11 +1,22 @@
 # Custom skills
 
 SUB/WAVE's **skills** are the things the AI DJ does *between* tracks — a weather
-check, a headline, a tongue-in-cheek traffic gag. The built-in ones are defined in
-`controller/src/skills/_agent.ts` and **scaffolded as editable files** into
-`state/skills/<kind>/SKILL.md` on first boot — so you can change what they say (and,
-for news, which feed they read) without touching the codebase. You can also add
-entirely new skills by dropping a folder into `state/skills/`.
+check, a headline, a dig on the song playing. The built-in ones ship as
+read-only templates under `controller/src/skills/builtins/<kind>/` and are
+**seeded as full, editable skills** — both `SKILL.md` **and** `tool.mjs` — into
+`state/skills/<kind>/` on first boot. From then on `state/skills/` is the single
+place skills load from: a built-in is just a pre-installed skill, no different
+from one you add yourself, so you can change what it says, which feed it reads,
+**and how it fetches its data** — without touching the codebase. Add entirely new
+skills the same way: from the admin UI, or by dropping a folder into
+`state/skills/`.
+
+> **TL;DR — want a brand-new segment?** Open **/admin/skills → New skill**, fill in
+> a name, a brief, and a cooldown, then **Create skill**. It writes
+> `state/skills/<slug>/SKILL.md` for you (and arrives **disabled** — enable it when
+> you're happy). Custom skills can also be **edited** and **deleted** from the same
+> page. The form is prompt-only; a `tool.mjs` data fetcher is still a disk-drop (see
+> [tool.mjs (optional)](#toolmjs-optional) below).
 
 > **TL;DR — News reads UK/BBC and you want something local?** Open
 > **/admin/skills → News → Edit**, paste your own RSS feed URL and rewrite the
@@ -90,7 +101,7 @@ You can also set this from the admin UI: **/admin/skills → Edit** shows a
 tick-box per field. An empty selection resets the skill to the default profile.
 
 For a **new** skill the `name` must be a lowercase slug that isn't a built-in kind
-(`weather`, `news`, `traffic`, `curiosity`, `album-anniversary`, `library-deep-cut`,
+(`weather`, `news`, `now-playing-dig`, `curiosity`, `album-anniversary`, `library-deep-cut`,
 `web-search`). Naming a folder after a built-in kind instead *edits* that built-in —
 see [Editing the built-in skills](#editing-the-built-in-skills). Bad frontmatter is
 logged and skipped — it never crashes the controller.
@@ -98,47 +109,86 @@ logged and skipped — it never crashes the controller.
 ## tool.mjs (optional)
 
 If present, the default export is wrapped as an [AI SDK](https://sdk.vercel.ai)
-tool the segment director can call **before** writing the line — the same
-mechanism the built-in weather/news skills use to look at real data.
+tool the segment director can call **before** writing the line. This is the
+**exact same mechanism the built-ins use** — the seven shipped skills are just
+directories with a `SKILL.md` and a `tool.mjs`, loaded the same way as yours.
 
 ```js
-export default async function (ctx, state) {
-  // ctx   — the moment: { time, weather, festival, dominantMood, clock }
-  // state — cross-tick dedup memory (persists between firings)
+export default async function (ctx, state, services, config) {
+  // ctx      — the moment: { time, weather, festival, dominantMood, clock }
+  // state    — cross-tick dedup memory (persists between firings)
+  // services — the curated station facade (see below)
+  // config   — this skill's own SKILL.md frontmatter (e.g. a custom `feed:`)
   // Return any JSON-serialisable object. The `{ available: false }` convention
   // tells the agent there's nothing worth airing right now.
   return { available: true, foo: 'bar' };
 }
+
+// OPTIONAL: a richer tool description shown to the agent (else a generic one).
+export const description = 'Fetch X for the … segment.';
+
+// OPTIONAL: gate the whole skill on a runtime condition — when this returns
+// false the skill is never even offered (e.g. no search provider configured).
+export const ready = (services) => services.searchReady();
 ```
 
-The call is **timeout-guarded (8 s)** and any throw degrades cleanly to "no
-data" — a slow or broken skill can never hang the between-track tick. With no
-`tool.mjs`, the skill is pure generation (like the built-in `traffic`): the DJ
-writes from the brief alone.
+### `services` — the station facade
 
-> **Security.** `tool.mjs` runs operator-supplied code inside the controller
-> container — the same trust model as a locally-installed Claude Code skill.
-> Only drop in code you've read and trust.
+The one way a tool reaches the world, so built-in and custom skills run on
+identical footing. It's read-mostly (no settings writes, no secrets):
+
+| call | what it does |
+|---|---|
+| `services.searchWeb(query, opts?)` | web search via the configured provider (DuckDuckGo / Tavily / SearXNG) |
+| `services.searchReady()` | `true` when a search provider is usable |
+| `services.nowPlaying()` | the track on air — `{ artist, title, album, year, id }` or `null` |
+| `services.recentPlays(hours)` | play-log dedup sets `{ ids, keys }` over the last *hours* |
+| `services.library.getArtist(id)` / `.getAlbum(id)` / `.searchArtists(name, opts?)` | Navidrome/Subsonic reads |
+| `services.onThisDay()` | Wikipedia "on this day" events for today |
+| `services.fetchHeadlines({ feedUrl?, maxItems? })` | fetch + parse an RSS feed |
+| `services.recall.seen(key)` / `.remember(key)` | durable, cross-restart dedup ledger |
+| `services.log(msg)` | append a line to the station event log |
+
+Every skill's `tool.mjs` is **timeout-guarded (8 s)** and any throw degrades
+cleanly to "no data" — a slow or broken skill can never hang the between-track
+tick. This applies to the seeded built-ins too (their network calls — search,
+RSS, on-this-day — must finish within 8 s or that tick simply yields no segment).
+With no `tool.mjs`, the skill is pure generation: the DJ writes from the brief
+alone.
+
+> **Security.** A `tool.mjs` runs operator-supplied code inside the controller
+> container, and `services` lets it spend your search-provider quota and read
+> your library — the same trust model as a locally-installed Claude Code skill.
+> Only drop in code you've read and trust. (Skills you add stay disabled until
+> you enable them in `/admin/skills`.)
 
 ## Editing the built-in skills
 
-The 7 built-ins — `weather`, `news`, `traffic`, `curiosity`, `album-anniversary`,
-`library-deep-cut`, `web-search` — are written into `state/skills/<kind>/SKILL.md`
-the first time the controller boots. A file **named after a built-in kind** is an
-**override**: it edits that skill's brief / cooldown / label / `context:` in place
-rather than being rejected as a name clash. (For everything else, a built-in kind in
-`name:` is still off-limits.) The scaffolded files already carry a `context:` line
-showing each built-in's current fields — `weather` ships with weather ticked on, the
-rest with the default (no-weather) profile.
+The 7 built-ins — `weather`, `news`, `now-playing-dig`, `curiosity`, `album-anniversary`,
+`library-deep-cut`, `web-search` — ship as read-only templates under
+`controller/src/skills/builtins/<kind>/` and are **seeded** into
+`state/skills/<kind>/` — both `SKILL.md` and `tool.mjs` — the first time the
+controller boots. After that they're ordinary editable skills: edit the brief /
+cooldown / label / `context:` in `/admin/skills`, and edit the **`tool.mjs` on
+disk + Rescan** exactly as you would for a skill you wrote. The seeded files carry
+a `context:` line showing each built-in's current fields — `weather` ships with
+weather ticked on, the rest with the default (no-weather) profile.
 
-Differences from a custom skill:
+How a built-in still differs from a skill you add:
 
-- **The body may be empty.** An empty brief means "keep the built-in default" — handy
-  when you only want to change the `feed:` or `cooldown` and leave the wording alone.
-- **No `tool.mjs`.** Built-ins already have their data tools wired in code (by kind),
-  so a `tool.mjs` dropped next to a built-in override is ignored.
-- **Stays enabled-by-default.** Editing a built-in doesn't flip it to the
-  discovered-but-disabled state that *new* custom skills start in.
+- **Enabled by default.** A built-in airs out of the box; a *new* skill starts in
+  the discovered-but-disabled state until you enable it.
+- **Can't be deleted, only disabled.** Toggle it off to silence it. If you delete
+  its folder on disk, the seeder restores it (both files) on the next boot.
+- **Reset to default.** `/admin/skills → <built-in> → ↺ Reset to default`
+  overwrites both `SKILL.md` and `tool.mjs` from the shipped template. This is the
+  way back from a broken edit — and the way to pull in a newer image's `tool.mjs`
+  (the seeder never overwrites a file that already exists, so a shipped fix only
+  reaches an existing install when you reset).
+
+> The seeder never clobbers a file that already exists, so your edits survive a
+> restart and an upgrade. Only **Reset to default** (or deleting the file on disk)
+> brings the shipped version back.
 
 ### News: swapping the feed
 

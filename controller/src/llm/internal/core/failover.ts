@@ -4,13 +4,14 @@
 // inside withFailover(): the primary leg is tried first, and the call retries
 // once against the optional fallback leg when the primary leg can't recover this
 // call — either its host is unreachable (connection refused / DNS / timeout —
-// see isUnreachable) or it refused with a quota/usage-limit/auth error (see
-// isQuotaOrAuthError; issue #438). record* lives here so a call is logged
-// exactly once, with the leg that actually ran.
+// see isUnreachable), it refused with a quota/usage-limit/auth error (see
+// isQuotaOrAuthError; issue #438), or a reachable gateway relayed a saturated
+// upstream that survived same-leg retries (see isUpstreamOverloaded; issue #671).
+// record* lives here so a call is logged exactly once, with the leg that ran.
 
 import { primaryLeg, fallbackLeg } from '../provider/legs.js';
 import { record } from '../telemetry/log.js';
-import { isUnreachable, isQuotaOrAuthError } from './pure.js';
+import { isUnreachable, isQuotaOrAuthError, isUpstreamOverloaded } from './pure.js';
 
 // Centralised success/failure record writers. Every LLM call goes through one
 // of each. The required-shape args (kind/started/via/sampling/usage for
@@ -68,8 +69,9 @@ export interface AttemptResult<T> {
 // it throws on error, optionally tagging the error with `__via` so the failure
 // record attributes to the right sub-path (djObject/djAgent set this). The
 // primary leg is tried first; only when the primary leg can't recover this call
-// — host unreachable OR a quota/usage-limit/auth rejection — and only when a
-// fallback is configured, is `attempt` retried once against the backup leg.
+// — host unreachable OR a quota/usage-limit/auth rejection OR a reachable
+// gateway relaying a saturated upstream (#671) — and only when a fallback is
+// configured, is `attempt` retried once against the backup leg.
 // On a failover the primary's failure is also recorded (via `…:failover→<backup>`)
 // so /debug shows the switch happened.
 //
@@ -108,13 +110,14 @@ export async function withFailover<T>(
   } catch (err: any) {
     const primaryVia = err?.__via || 'ai-sdk';
     const quotaOrAuth = isQuotaOrAuthError(err);
-    const backup = (isUnreachable(err) || quotaOrAuth) ? fallbackLeg() : null;
+    const upstreamOverloaded = isUpstreamOverloaded(err);
+    const backup = (isUnreachable(err) || quotaOrAuth || upstreamOverloaded) ? fallbackLeg() : null;
     if (!backup) {
       logFailurePreview(kind, err);
       recordFailure({ kind, started: primaryStarted, via: primaryVia, model: primary.label, error: err?.message, extra: failExtra(err) });
       throw err;
     }
-    const reason = quotaOrAuth ? 'refused (quota/auth)' : 'unreachable';
+    const reason = quotaOrAuth ? 'refused (quota/auth)' : upstreamOverloaded ? 'upstream overloaded' : 'unreachable';
     const detail = err?.statusCode || err?.cause?.statusCode || err?.code || err?.cause?.code || err?.name || 'unknown';
     console.log(`[${kind}] primary LLM (${primary.label}) ${reason} (${detail}) — failing over to ${backup.label}`);
     recordFailure({ kind, started: primaryStarted, via: `${primaryVia}:failover→${backup.label}`, model: primary.label, error: err?.message, extra: failExtra(err) });
