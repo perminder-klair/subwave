@@ -379,6 +379,42 @@ export class PostgresAdapter implements LibraryDbAdapter {
         await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS key_ranges_json JSONB`;
         await sql`INSERT INTO schema_migrations VALUES (9)`;
       }
+
+      // v10: IVFFlat → HNSW on both vector tables. IVFFlat centroids are
+      // trained at CREATE INDEX time; our indexes are created on EMPTY tables
+      // (before the tagger fills them), so the lists are untrained and the
+      // default probes=1 silently drops rows from KNN results — the
+      // postgres-adapter integration test catches a 3-row table returning 2
+      // neighbours. HNSW builds incrementally and needs no training step, so
+      // recall stays high regardless of insert order. DROP + recreate is cheap
+      // relative to a re-embed and runs once per install.
+      if (userVersion < 10) {
+        await sql`DROP INDEX IF EXISTS idx_track_vectors_embedding`;
+        await sql`DROP INDEX IF EXISTS idx_track_audio_vectors_embedding`;
+        const [tv] = await sql<[{ exists: boolean }]>`
+          SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables WHERE table_name = 'track_vectors'
+          ) AS exists
+        `;
+        if (tv.exists) {
+          await sql`
+            CREATE INDEX idx_track_vectors_embedding
+              ON track_vectors USING hnsw (embedding vector_cosine_ops)
+          `;
+        }
+        const [av] = await sql<[{ exists: boolean }]>`
+          SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables WHERE table_name = 'track_audio_vectors'
+          ) AS exists
+        `;
+        if (av.exists) {
+          await sql`
+            CREATE INDEX idx_track_audio_vectors_embedding
+              ON track_audio_vectors USING hnsw (embedding vector_cosine_ops)
+          `;
+        }
+        await sql`INSERT INTO schema_migrations VALUES (10)`;
+      }
     });
   }
 
@@ -443,8 +479,7 @@ export class PostgresAdapter implements LibraryDbAdapter {
       `);
       await sql.unsafe(`
         CREATE INDEX IF NOT EXISTS idx_track_vectors_embedding
-          ON track_vectors USING ivfflat (embedding vector_cosine_ops)
-          WITH (lists = 100)
+          ON track_vectors USING hnsw (embedding vector_cosine_ops)
       `);
     }
 
@@ -464,8 +499,7 @@ export class PostgresAdapter implements LibraryDbAdapter {
       `);
       await sql.unsafe(`
         CREATE INDEX IF NOT EXISTS idx_track_audio_vectors_embedding
-          ON track_audio_vectors USING ivfflat (embedding vector_cosine_ops)
-          WITH (lists = 100)
+          ON track_audio_vectors USING hnsw (embedding vector_cosine_ops)
       `);
     }
 
@@ -687,8 +721,7 @@ export class PostgresAdapter implements LibraryDbAdapter {
     `);
     await this.sql.unsafe(`
       CREATE INDEX IF NOT EXISTS idx_track_vectors_embedding
-        ON track_vectors USING ivfflat (embedding vector_cosine_ops)
-        WITH (lists = 100)
+        ON track_vectors USING hnsw (embedding vector_cosine_ops)
     `);
   }
 
@@ -717,8 +750,7 @@ export class PostgresAdapter implements LibraryDbAdapter {
     `);
     await this.sql.unsafe(`
       CREATE INDEX IF NOT EXISTS idx_track_audio_vectors_embedding
-        ON track_audio_vectors USING ivfflat (embedding vector_cosine_ops)
-        WITH (lists = 100)
+        ON track_audio_vectors USING hnsw (embedding vector_cosine_ops)
     `);
   }
 
