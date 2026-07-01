@@ -74,6 +74,35 @@ async function main() {
     db.close();
   });
 
+  await test('dim-change reseed: embeddedIds() is empty but unembeddedIds() is the whole library', async () => {
+    // Fresh DB for this scenario (the tests above left vectors around).
+    db.close();
+    for (const f of ['library.db', 'library.db-wal', 'library.db-shm']) {
+      rmSync(join(stateDir, f), { force: true });
+    }
+    // A populated 768-d index: three tracks, each embedded.
+    await db.open({ embeddingDim: 768, reseed: false });
+    for (const id of ['a', 'b', 'c']) {
+      db.upsertTrackMeta(id, { title: id, artist: 'x', album: 'y', year: 2020, genre: 'z' });
+      db.upsertTrackVector(id, vec(768));
+    }
+    assert.equal(db.embeddedIds().length, 3);
+    db.close();
+
+    // Model swap to a 1024-d model → the tagger opens with reseed:true. migrate
+    // drops the mismatched populated table, so the OLD snapshot source (the set
+    // captured AFTER open) comes back empty — which is why "Re-embed all tracks"
+    // silently rebuilt 0 vectors on exactly the model swap it advertises.
+    await db.open({ embeddingDim: 1024, reseed: true });
+    assert.deepEqual(db.embeddedIds(), []);
+    // The fix's fallback source yields the whole library to re-embed instead.
+    const reembed = db.unembeddedIds();
+    assert.deepEqual([...reembed].sort(), ['a', 'b', 'c']);
+    for (const id of reembed) db.upsertTrackVector(id, vec(1024));
+    assert.equal(db.embeddedIds().length, 3);
+    db.close();
+  });
+
   rmSync(stateDir, { recursive: true, force: true });
 
   if (failures) {

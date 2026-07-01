@@ -285,15 +285,23 @@ async function main() {
       `moodVote=${moodVoteThreshold} confidence=${confidenceThreshold}`,
   );
 
-  // A re-scan re-embed rebuilds vectors only for the already-embedded population —
-  // snapshot it BEFORE the drop (afterwards every track looks unembedded). A
-  // normal --reseed run rebuilds vectors as part of its forward pass and doesn't
-  // need the snapshot. Used by the plan.reEmbed branch below.
+  // A re-scan re-embed rebuilds the vector population; a normal --reseed run does
+  // it as part of its forward pass and doesn't need the snapshot below.
   let reembedIds: string[] = [];
   if (flags.reseed) {
+    // Snapshot the set to rebuild. A SAME-dim reseed still has the old vectors
+    // here, so embeddedIds() captures exactly the already-embedded population. A
+    // DIM-CHANGE reseed already had track_vectors dropped inside open()/migrate
+    // (the old vectors are unusable at the new width), so this comes back empty.
     if (flags.rescan) reembedIds = db.embeddedIds();
     console.log('[tag] --reseed: dropping track_vectors, re-embedding from scratch');
     db.dropVectors();
+    // Dim change wiped the vectors before we could snapshot them. The UI pass is
+    // "Re-embed all tracks" (its whole purpose is a model change, which usually
+    // changes the dim), so rebuild every track that now needs a vector — after
+    // the reset that's the whole library. Without this the pass silently rebuilt
+    // 0 vectors on exactly the model swap it advertises.
+    if (flags.rescan && reembedIds.length === 0) reembedIds = db.unembeddedIds();
   }
 
   const promptHash = embeddings.promptVocabHash(TAGGER_BATCH_SYSTEM);
@@ -572,10 +580,12 @@ async function main() {
   } // end forward "Tag moods" step (plan.forwardTag)
 
   // ---- Re-scan: RE-EMBED (model swap) ------------------------------------
-  // Rebuild vectors for the already-embedded population only (snapshotted before
-  // the drop above) — never the untagged remainder. phaseEmbed also re-embeds any
-  // tagged row that lost its vector, so the KNN graph the existing tags anchor is
-  // fully restored under the new model.
+  // Rebuild vectors under the new embedding model. A same-dim swap rebuilds the
+  // already-embedded population (snapshotted before the drop above); a dim-change
+  // swap rebuilds every track that needs a vector (the whole library) because the
+  // old vectors were dropped at open() before they could be snapshotted. Either
+  // way the KNN graph the existing tags anchor is fully restored under the new
+  // model.
   if (plan.reEmbed) {
     console.log(`[tag] re-embed: rebuilding ${reembedIds.length} vectors from scratch`);
     await phaseEmbed(reembedIds, flags.batchSize);
