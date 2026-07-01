@@ -3,7 +3,7 @@
  * Spins entirely in-process — no Navidrome, no server, no LLM.
  * Requires a live Postgres with pgvector at DATABASE_URL.
  *
- * Run: DATABASE_URL=postgres://postgres:subwave_test@localhost:5433/postgres tsx scripts/test-pg-adapter.ts
+ * Run: DATABASE_URL=postgres://postgres:<password>@localhost:5433/postgres tsx scripts/test-pg-adapter.ts
  */
 
 import { PostgresAdapter } from '../src/music/db/postgres.js';

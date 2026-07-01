@@ -50,6 +50,20 @@ environment:
   DATABASE_URL: postgres://subwave:${POSTGRES_PASSWORD}@db:5432/subwave
 ```
 
+### TLS / SSL
+
+For remote or cloud-managed Postgres (RDS, Cloud SQL, Neon, Supabase, etc.) append
+`?sslmode=require` to encrypt the connection:
+
+```bash
+DATABASE_URL=postgres://subwave:secret@db.example.com:5432/subwave?sslmode=require
+```
+
+Use `?sslmode=verify-full` for full certificate chain verification (recommended for
+production). Local or Docker installs that don't expose Postgres externally typically
+don't need `sslmode`. The `postgres` npm package passes the parameter through to the
+underlying TLS handshake.
+
 ---
 
 ## Schema Migrations
