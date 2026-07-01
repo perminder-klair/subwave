@@ -966,7 +966,7 @@ async function runConsumer(
   total: number,
   state: TagState,
   phaseInfo: TagPhaseInfo,
-  onDrop: (() => number) | null,
+  onDrop: ((err: any) => number) | null,
 ): Promise<void> {
   for (;;) {
     const batch = batches.shift();
@@ -975,12 +975,17 @@ async function runConsumer(
       const n = await processBatch(batch, consumer, promptHash, source, state);
       state.tagged += n;
       state.byLeg[consumer.label] = (state.byLeg[consumer.label] || 0) + n;
-    } catch {
-      // processBatch only throws on a pinned-leg host outage.
+    } catch (err: any) {
+      // processBatch rethrows only when a pinned leg can't recover this run:
+      // the host is down (isUnreachable) OR the provider refused the leg with a
+      // quota / credit / usage-limit / auth error (isQuotaOrAuthError, #438).
+      // Name the real reason — logging every drop as "unreachable" misdirected an
+      // operator whose OpenRouter credits had simply run out (Discord).
       batches.unshift(batch);
-      const remaining = onDrop ? onDrop() : 0;
+      const remaining = onDrop ? onDrop(err) : 0;
+      const reason = isQuotaOrAuthError(err) ? 'quota/credit/auth rejected' : 'host unreachable';
       console.log(
-        `[tag] LLM leg ${consumer.label} unreachable — dropping it (${remaining} leg(s) left)`,
+        `[tag] LLM leg ${consumer.label} dropped — ${reason}: ${err.message} (${remaining} leg(s) left)`,
       );
       return;
     }
@@ -1028,13 +1033,20 @@ async function llmTagInBatches(
     await runConsumer(batches, consumers[0], promptHash, source, ids.length, state, phaseInfo, null);
   } else {
     let alive = consumers.length;
+    let quotaOrAuthDrop = false;
     await Promise.all(
       consumers.map(c =>
-        runConsumer(batches, c, promptHash, source, ids.length, state, phaseInfo, () => --alive)),
+        runConsumer(batches, c, promptHash, source, ids.length, state, phaseInfo, (err: any) => {
+          if (isQuotaOrAuthError(err)) quotaOrAuthDrop = true;
+          return --alive;
+        })),
     );
     if (batches.length > 0) {
       const abandoned = batches.reduce((n, b) => n + b.length, 0);
-      console.log(`[tag] all LLM legs unreachable — ${abandoned} tracks left for next run`);
+      const hint = quotaOrAuthDrop
+        ? ' — a leg was refused for quota/credit/auth; check the provider credit balance, spend cap, or API key'
+        : '';
+      console.log(`[tag] all LLM legs dropped — ${abandoned} tracks left for next run${hint}`);
     }
   }
   return { tagged: state.tagged, callCount: state.callCount, byLeg: state.byLeg };
