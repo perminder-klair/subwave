@@ -161,8 +161,8 @@ just run **admin → Library → Rescan** (tick *re-analyse*). If the **acoustic
 engine reads "off"**, the analyzer container was stopped — `Pull & Up` (split
 stack) or check its logs.
 
-**"Sounds-like" + vocal ranges (the heavy dimensions)** need a ~1.4 GB CPU-torch
-stack that isn't in the lean image:
+**"Sounds-like" + vocal ranges (the heavy dimensions)** need a CPU-torch stack
+that isn't in the lean image (the `-heavy` images are ~1.9 GB):
 
 - **Split stack (Compose Manager).** Add `ANALYZER_HEAVY=1` to your **.env**,
   **Save**, then **Pull & Up** — the `analyzer` container re-pulls as

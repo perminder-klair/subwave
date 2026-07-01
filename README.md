@@ -140,9 +140,9 @@ works if you already have a custom-built controller image — see
 Acoustic analysis (tempo/key/loudness) does **not** need the heavy TTS sidecar —
 it runs in its own `subwave-analyzer` service, which **starts by default**
 alongside the controller and web. The default image is **lean and multi-arch**
-(~370 MB, so it runs natively on arm64 NAS/Pi/Apple-Silicon). The two heavier
-dimensions — CLAP **"sounds-like"** embeddings and **Demucs** vocal ranges —
-are the opt-in tier; enable them by pulling the heavy image, no rebuild:
+(~1.1 GB, no PyTorch — so it runs natively on arm64 NAS/Pi/Apple-Silicon). The
+two heavier dimensions — CLAP **"sounds-like"** embeddings and **Demucs** vocal
+ranges — are the opt-in tier; enable them by pulling the heavy image, no rebuild:
 
 ```bash
 # in your root .env
@@ -150,7 +150,7 @@ ANALYZER_HEAVY=1
 ```
 
 That repoints the `analyzer` service at `subwave-analyzer-heavy` (CLAP + Demucs,
-~1.4 GB, amd64) on the next `docker compose up -d`. The `subwave setup` wizard
+~1.9 GB, amd64) on the next `docker compose up -d`. The `subwave setup` wizard
 also offers it, and Unraid one-click users pull the `subwave-aio-heavy` image
 instead. Only the expressive *voices* above need the separate `tts-heavy` sidecar.
 

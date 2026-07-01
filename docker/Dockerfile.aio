@@ -125,9 +125,10 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
 # analyze_worker.py copied with controller/scripts below is the single source of
 # truth; ffmpeg + libsndfile1 (installed above) give librosa codec coverage.
 #
-# CLAP ("sounds-like") + Demucs (vocal ranges) are the heavy tier (~1.5GB CPU
-# torch each) and are **OFF by default**, so the default `subwave-aio` image
-# stays lean (bpm/key/intro/loudness only). CI also publishes a `subwave-aio-heavy`
+# CLAP ("sounds-like") + Demucs (vocal ranges) are the heavy tier — they add a
+# shared CPU-torch stack (~900MB on top of the lean venv) and are **OFF by
+# default**, so the default `subwave-aio` image stays lean (bpm/key/intro/
+# loudness only). CI also publishes a `subwave-aio-heavy`
 # tag built with WITH_CLAP=1 WITH_DEMUCS=1 — Unraid one-click users who want the
 # extra dimensions repoint their container at that tag. When on, both lazy-load
 # their weights the first time the admin toggles them during a rescan (into

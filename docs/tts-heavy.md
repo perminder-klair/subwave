@@ -37,12 +37,12 @@ controller finds it automatically via `ANALYZE_URL=http://analyzer:8080`. After
 your first library scan (**admin → Library → Rescan**, tick *re-analyse*), tracks
 start getting tempo/key/loudness.
 
-- **Lean & multi-arch by default.** The published image is ~370 MB (librosa only)
-  and runs natively on amd64 **and arm64** (NAS/Pi/Apple-Silicon). It covers
-  bpm/key/intro/loudness with no PyTorch.
+- **Lean & multi-arch by default.** The published image is ~1.1 GB (librosa +
+  ffmpeg, **no PyTorch**) and runs natively on amd64 **and arm64**
+  (NAS/Pi/Apple-Silicon). It covers bpm/key/intro/loudness.
 - **"Sounds-like" + vocals are the heavy opt-in.** CLAP audio embeddings and
-  Demucs vocal ranges need a ~1.4 GB CPU-torch stack that isn't in the lean
-  image. Enable them with **one line in `.env`** —
+  Demucs vocal ranges add a CPU-torch stack (the `-heavy` image is ~1.9 GB) that
+  isn't in the lean image. Enable them with **one line in `.env`** —
   [see below](#enabling-sounds-like--vocals-the-heavy-tier).
 - **Turn it off.** If you don't want analysis at all, `docker compose stop
   analyzer` (it won't come back until the next explicit `up`).

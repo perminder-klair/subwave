@@ -176,7 +176,7 @@ export async function runSetupCommand(): Promise<void> {
     muted('First start pulls ~5–6 GB of PyTorch + model weights from GHCR.');
   }
   if (heavyAnalysis) {
-    muted('Heavy analysis enabled — next `docker compose up -d` pulls subwave-analyzer-heavy (~1.4 GB).');
+    muted('Heavy analysis enabled — next `docker compose up -d` pulls subwave-analyzer-heavy (~1.9 GB).');
   }
 
   // --- 7. Push everything through the controller via /onboarding/save -----
@@ -519,7 +519,7 @@ async function promptHeavyTts(): Promise<boolean> {
 async function promptHeavyAnalysis(): Promise<boolean> {
   header('Heavy acoustic analysis (optional)');
   muted('Basic analysis (bpm/key/loudness) is already on. This adds CLAP');
-  muted('"sounds-like" similarity + Demucs vocal ranges; pulls a ~1.4 GB image (amd64).');
+  muted('"sounds-like" similarity + Demucs vocal ranges; pulls a ~1.9 GB image (amd64).');
   return exitIfCancelled(await p.confirm({
     message: 'Enable heavy analysis (sounds-like + vocals)?',
     initialValue: false,

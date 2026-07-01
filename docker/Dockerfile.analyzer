@@ -21,9 +21,9 @@
 # tts-heavy's, so the controller treats the two interchangeably.
 #
 # Two published flavours (see .github/workflows/publish-images.yml):
-#   * subwave-analyzer        — LEAN (default), ~370MB, MULTI-ARCH (amd64+arm64).
-#       librosa only: bpm/key/intro/loudness. WITH_CLAP=0 WITH_DEMUCS=0.
-#   * subwave-analyzer-heavy  — CLAP + Demucs baked (~1.4GB), amd64-only.
+#   * subwave-analyzer        — LEAN (default), ~1.1GB, MULTI-ARCH (amd64+arm64).
+#       librosa + ffmpeg, no torch: bpm/key/intro/loudness. WITH_CLAP=0 WITH_DEMUCS=0.
+#   * subwave-analyzer-heavy  — CLAP + Demucs baked (~1.9GB), amd64-only.
 #       "sounds-like" embeddings + vocal ranges. WITH_CLAP=1 WITH_DEMUCS=1.
 # Operators switch to the heavy image with `ANALYZER_HEAVY=1` in .env (the
 # compose `analyzer` service pulls `subwave-analyzer${ANALYZER_HEAVY:+-heavy}`).
@@ -47,7 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # CLAP audio embeddings ("sounds-like" similarity) and Demucs vocal-activity
 # ranges are the heavy tier — CPU torch + transformers/torchaudio (~1.5GB each).
 # They are **OFF by default** so the published `subwave-analyzer` image stays
-# lean (~370MB) and multi-arch. Opt IN with `--build-arg WITH_CLAP=1` /
+# lean (~1.1GB, no torch) and multi-arch. Opt IN with `--build-arg WITH_CLAP=1` /
 # `WITH_DEMUCS=1`; the CI publishes that heavy build as the separate
 # `subwave-analyzer-heavy` image (see .github/workflows/publish-images.yml), and
 # operators switch to it with `ANALYZER_HEAVY=1` in their `.env` (the compose

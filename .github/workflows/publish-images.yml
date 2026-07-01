@@ -103,7 +103,7 @@ jobs:
               WITH_CLAP=0
               WITH_DEMUCS=0
           # Heavy analyzer — same image with the CLAP + Demucs CPU-torch stack
-          # baked in (~1.4GB). amd64-only (matching tts-heavy — the heavy PyTorch
+          # baked in (~1.9GB). amd64-only (matching tts-heavy — the heavy PyTorch
           # stack). Operators opt in with ANALYZER_HEAVY=1 in .env, which points
           # the compose `analyzer` service at this `-heavy` image. Lazy-loaded
           # weights at runtime, disk cost only.
