@@ -396,40 +396,62 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     d.pragma('user_version = 9');
   }
 
-  // The vec0 virtual table carries the embedding dim in its schema. If the
-  // stored dim doesn't match the requested one, the caller asked for a model
-  // swap — that's a --reseed operation, not an auto-migration.
+  // Reconcile the requested embedding dim against what physically exists.
+  //
+  // The vec0 table's `FLOAT[N]` schema is the authority for what inserts accept —
+  // NOT embedding_meta, which is written separately (by the tagger, post-probe)
+  // and can lag the table. Keying off the meta row alone misses the case that
+  // bit qwen3-embedding users: the live controller creates track_vectors at the
+  // name→dim GUESS (resolveEmbeddingDim → 768 for an unknown model) on a fresh
+  // DB and writes NO meta row; the tagger then probes the real dim (1024) but,
+  // because the meta was absent, the old check neither recreated the table nor
+  // errored — so every embed insert crashed with "Expected 768 dimensions but
+  // received 1024", and wiping the DB didn't help (the controller re-created the
+  // 768 table on the next boot). Read the real width from the table itself.
   const meta = d.prepare('SELECT model, dim FROM embedding_meta WHERE pk = 1').get() as
     | { model: string; dim: number }
     | undefined;
+  const tableDim = vecTableDim(d); // null when track_vectors doesn't exist yet
   // Effective dim for the vec0 table. Defaults to what the caller asked for; the
-  // branches below may adopt the stored dim or reseed at the new dim instead.
+  // branches below may adopt the on-disk dim or drop+recreate at the new dim.
   let effectiveDim = embeddingDim;
-  if (meta && meta.dim !== embeddingDim) {
+  if (tableDim !== null && tableDim !== embeddingDim) {
+    const modelHint = meta?.model ? ` (model: ${meta.model})` : '';
     if (adoptStoredDim) {
-      // Live controller: the stored vectors are authoritative. Honour their dim
-      // so the picker keeps working off a tagged index even when the model name
+      // Live controller: the physical index is authoritative. Honour its dim so
+      // the picker keeps working off a tagged index even when the model name
       // resolves to a different default. A real model swap is reconciled by the
       // tagger's --reseed path, not silently here (#319).
       console.warn(
-        `[library-db] adopting stored embedding dim ${meta.dim} (model: ${meta.model}); ` +
+        `[library-db] adopting on-disk embedding dim ${tableDim}${modelHint}; ` +
           `caller requested ${embeddingDim}. Re-tag with --reseed to switch models.`,
       );
-      effectiveDim = meta.dim;
+      effectiveDim = tableDim;
+    } else if (vecCount(d) === 0) {
+      // Empty index at the wrong width — nothing to protect, so recreate it at
+      // the requested dim without demanding --reseed. This self-heals the
+      // guessed-dim table the live controller created before the tagger probed
+      // the real one, so a plain tag run works for any embedding model / dim.
+      console.warn(
+        `[library-db] track_vectors is empty at ${tableDim}-d${modelHint}; ` +
+          `recreating at ${embeddingDim}-d for the current embedding model`,
+      );
+      runDdl(d, 'DROP TABLE IF EXISTS track_vectors');
+      d.prepare('DELETE FROM embedding_meta WHERE pk = 1').run();
     } else if (!reseed) {
       throw new Error(
-        `embedding dim mismatch: state/library.db has ${meta.dim}-d vectors (model: ${meta.model}), ` +
+        `embedding dim mismatch: state/library.db has ${tableDim}-d vectors${modelHint}, ` +
           `but the current settings ask for ${embeddingDim}-d. ` +
           `Run \`npm run tag -- --reseed\` to re-embed.`,
       );
     } else {
-      // Reseed across a model/dim change: the stored vectors are unusable at the
-      // new dim, so drop them (the table is recreated at `effectiveDim` just
-      // below) and clear the stale meta row so a later setEmbeddingMeta() seeds
-      // it fresh and the next open() sees a matching (or absent) dim.
+      // Reseed across a model/dim change on a POPULATED index: the stored vectors
+      // are unusable at the new dim, so drop them (the table is recreated at
+      // `effectiveDim` just below) and clear the stale meta row so a later
+      // setEmbeddingMeta() seeds it fresh and the next open() sees a matching dim.
       console.warn(
-        `[library-db] reseed: embedding dim ${meta.dim}→${embeddingDim} ` +
-          `(model: ${meta.model}); dropping vectors for re-embed`,
+        `[library-db] reseed: embedding dim ${tableDim}→${embeddingDim}${modelHint}; ` +
+          `dropping vectors for re-embed`,
       );
       runDdl(d, 'DROP TABLE IF EXISTS track_vectors');
       d.prepare('DELETE FROM embedding_meta WHERE pk = 1').run();
@@ -467,6 +489,25 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
 // identical to db.exec(sql).
 function runDdl(d: Database.Database, sql: string): void {
   (d as any).exec(sql);
+}
+
+// The embedding width baked into the track_vectors vec0 schema — the authority
+// for what inserts accept (embedding_meta is written separately and can lag).
+// Parsed from the stored CREATE statement; null when the table doesn't exist.
+function vecTableDim(d: Database.Database): number | null {
+  const row = d
+    .prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='track_vectors'`)
+    .get() as { sql: string | null } | undefined;
+  if (!row?.sql) return null;
+  const m = row.sql.match(/embedding\s+FLOAT\[(\d+)\]/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+// Row count of the text-vector index. Used to decide whether a dim mismatch can
+// self-heal (empty table → free to recreate) or must gate behind --reseed
+// (populated index → the operator's vectors are at stake).
+function vecCount(d: Database.Database): number {
+  return (d.prepare('SELECT COUNT(*) AS n FROM track_vectors').get() as { n: number }).n;
 }
 
 // ---------------------------------------------------------------------------
