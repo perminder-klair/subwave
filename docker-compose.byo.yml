@@ -232,20 +232,17 @@ services:
   # *voices* (Chatterbox/PocketTTS) stay opt-in under the `tts-heavy` profile;
   # acoustic analysis is default-on. To skip it, `docker compose stop analyzer`.
   analyzer:
-    image: ghcr.io/perminder-klair/subwave-analyzer:${SUBWAVE_VERSION:-latest}
+    # Default: the LEAN, multi-arch image. ANALYZER_HEAVY=1 in .env switches to
+    # the CLAP + Demucs `subwave-analyzer-heavy` image (amd64-only; on arm64 also
+    # set DOCKER_DEFAULT_PLATFORM=linux/amd64).
+    image: ghcr.io/perminder-klair/subwave-analyzer${ANALYZER_HEAVY:+-heavy}:${SUBWAVE_VERSION:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.analyzer
       args:
-        # CLAP ("sounds-like", ~1.5GB) + Demucs vocal ranges. Baked into the
-        # published image; source-build only, defaulted on to match. Both
-        # lazy-load at runtime. Set both to 0 for a lean ~400MB librosa-only
-        # image (bpm/key/intro/loudness).
-        WITH_CLAP: ${WITH_CLAP:-1}
-        WITH_DEMUCS: ${WITH_DEMUCS:-1}
-    # amd64-only published image; pinned for emulation on arm64 hosts, matching
-    # tts-heavy. A lean WITH_CLAP=0 / WITH_DEMUCS=0 source build is multi-arch.
-    platform: linux/amd64
+        # Local build mirrors the pulled image: lean unless ANALYZER_HEAVY is set.
+        WITH_CLAP: ${ANALYZER_HEAVY:+1}
+        WITH_DEMUCS: ${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
     restart: unless-stopped
     environment:

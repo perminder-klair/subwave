@@ -292,25 +292,26 @@ services:
   # controller resolves its analysis backend from ANALYZE_URL (this service)
   # first, then TTS_HEAVY_URL. Only the heavy *voices* (Chatterbox/PocketTTS)
   # stay opt-in — under the separate \`tts-heavy\` profile; acoustic analysis is
-  # default-on here. To skip it, \`docker compose up -d\` the services you want,
-  # or \`docker compose stop analyzer\` after boot.
+  # default-on here. To skip it, \`docker compose stop analyzer\` after boot.
+  #
+  # The default image is LEAN (bpm/key/intro/loudness, multi-arch). The CLAP
+  # "sounds-like" + Demucs vocal dimensions are the heavy opt-in: set
+  # ANALYZER_HEAVY=1 in .env to pull \`subwave-analyzer-heavy\` instead.
   analyzer:
-    image: ghcr.io/perminder-klair/subwave-analyzer:\${SUBWAVE_VERSION:-latest}
+    # Default: the LEAN, multi-arch image (librosa — bpm/key/intro/loudness).
+    # Set ANALYZER_HEAVY=1 in .env to switch to the CLAP "sounds-like" + Demucs
+    # vocal image (\`subwave-analyzer-heavy\`, amd64-only). No platform pin here so
+    # the lean image runs natively on arm64; if you set ANALYZER_HEAVY=1 on an
+    # arm64 host, also set DOCKER_DEFAULT_PLATFORM=linux/amd64 (runs emulated).
+    image: ghcr.io/perminder-klair/subwave-analyzer\${ANALYZER_HEAVY:+-heavy}:\${SUBWAVE_VERSION:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.analyzer
       args:
-        # CLAP audio-embedding stack ("sounds-like", ~1.5GB) + Demucs vocal
-        # ranges. Baked into the published image; these apply to a source build
-        # only, defaulted on to match. Both lazy-load at runtime (disk cost
-        # only). Set both to 0 for a lean ~400MB librosa-only image
-        # (bpm/key/intro/loudness).
-        WITH_CLAP: \${WITH_CLAP:-1}
-        WITH_DEMUCS: \${WITH_DEMUCS:-1}
-    # amd64-only published image (CPU-torch stack); pinned so it runs under
-    # emulation on arm64 hosts, matching tts-heavy. A lean WITH_CLAP=0 /
-    # WITH_DEMUCS=0 source build is multi-arch capable.
-    platform: linux/amd64
+        # Local \`docker compose build analyzer\` mirrors the pulled image: lean
+        # unless ANALYZER_HEAVY is set, then it builds the CLAP + Demucs stack.
+        WITH_CLAP: \${ANALYZER_HEAVY:+1}
+        WITH_DEMUCS: \${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
     restart: unless-stopped
     environment:
@@ -572,20 +573,17 @@ services:
   # *voices* (Chatterbox/PocketTTS) stay opt-in under the \`tts-heavy\` profile;
   # acoustic analysis is default-on. To skip it, \`docker compose stop analyzer\`.
   analyzer:
-    image: ghcr.io/perminder-klair/subwave-analyzer:\${SUBWAVE_VERSION:-latest}
+    # Default: the LEAN, multi-arch image. ANALYZER_HEAVY=1 in .env switches to
+    # the CLAP + Demucs \`subwave-analyzer-heavy\` image (amd64-only; on arm64 also
+    # set DOCKER_DEFAULT_PLATFORM=linux/amd64).
+    image: ghcr.io/perminder-klair/subwave-analyzer\${ANALYZER_HEAVY:+-heavy}:\${SUBWAVE_VERSION:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.analyzer
       args:
-        # CLAP ("sounds-like", ~1.5GB) + Demucs vocal ranges. Baked into the
-        # published image; source-build only, defaulted on to match. Both
-        # lazy-load at runtime. Set both to 0 for a lean ~400MB librosa-only
-        # image (bpm/key/intro/loudness).
-        WITH_CLAP: \${WITH_CLAP:-1}
-        WITH_DEMUCS: \${WITH_DEMUCS:-1}
-    # amd64-only published image; pinned for emulation on arm64 hosts, matching
-    # tts-heavy. A lean WITH_CLAP=0 / WITH_DEMUCS=0 source build is multi-arch.
-    platform: linux/amd64
+        # Local build mirrors the pulled image: lean unless ANALYZER_HEAVY is set.
+        WITH_CLAP: \${ANALYZER_HEAVY:+1}
+        WITH_DEMUCS: \${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
     restart: unless-stopped
     environment:
@@ -814,17 +812,15 @@ services:
   # ANALYZE_URL (this service) first, then TTS_HEAVY_URL. Only the heavy voices
   # (Chatterbox/PocketTTS) stay opt-in under \`tts-heavy\`; analysis is default-on.
   analyzer:
-    image: ghcr.io/perminder-klair/subwave-analyzer:\${SUBWAVE_VERSION:-latest}
+    # Default: LEAN, multi-arch. ANALYZER_HEAVY=1 → CLAP + Demucs heavy image.
+    image: ghcr.io/perminder-klair/subwave-analyzer\${ANALYZER_HEAVY:+-heavy}:\${SUBWAVE_VERSION:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.analyzer
       args:
-        # CLAP ("sounds-like", ~1.5GB) + Demucs vocal ranges. Source-build only,
-        # defaulted on to match the published image; both lazy-load at runtime.
-        # Set both to 0 for a lean ~400MB librosa-only image.
-        WITH_CLAP: \${WITH_CLAP:-1}
-        WITH_DEMUCS: \${WITH_DEMUCS:-1}
-    platform: linux/amd64
+        # Local build mirrors the pulled image: lean unless ANALYZER_HEAVY is set.
+        WITH_CLAP: \${ANALYZER_HEAVY:+1}
+        WITH_DEMUCS: \${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
     restart: unless-stopped
     environment:
@@ -988,19 +984,24 @@ SITE_URL=
 
 # ───────── Acoustic analysis (CLAP audio-similarity + Demucs vocals) ─────────
 # The analysis pass (npm run analyze / admin "Analyze audio") computes bpm, key,
-# loudness, structure, pace and a beat grid for every track. Two heavier
-# dimensions need extra deps baked into the tts-heavy image at BUILD time and
-# switched on at RUN time. They ship ON by default (the published image carries
-# them, ~1.5GB each); set the build arg to 0 for a leaner self-built image.
+# loudness, structure, pace and a beat grid for every track. This runs by
+# default in the lean, multi-arch \`analyzer\` sidecar — no config needed.
 #
-# Build args — pass to \`docker compose build tts-heavy\` (env or here):
-# WITH_CLAP=1     # default 1 = build CLAP "sounds-like" backend; 0 = skip (leaner)
-# WITH_DEMUCS=1   # default 1 = build Demucs vocal-separation backend; 0 = skip
+# Two heavier dimensions — CLAP "sounds-like" embeddings and Demucs vocal ranges
+# — need a CPU-torch stack that's NOT in the default image. Enable them by
+# pulling the heavy analyzer image (a one-liner, no rebuild):
+# ANALYZER_HEAVY=1   # switch the \`analyzer\` service to subwave-analyzer-heavy
+#                    # (CLAP + Demucs, ~1.4GB). amd64-only; on an arm64 host also
+#                    # set DOCKER_DEFAULT_PLATFORM=linux/amd64 (runs emulated).
+#                    # Unraid one-click (AIO) users instead pull subwave-aio-heavy.
 #
 # Runtime flags — env wins ON over the admin toggles (settings.audio.*), never
 # off. A flag with no matching backend in the image is a clean no-op.
-# ANALYZE_AUDIO_EMBEDDING=   # 1/true = fill CLAP audio vectors (needs WITH_CLAP)
-# ANALYZE_VOCAL_ACTIVITY=    # 1/true = fill Demucs vocal ranges (needs WITH_DEMUCS)
+# ANALYZE_AUDIO_EMBEDDING=   # 1/true = fill CLAP audio vectors (needs ANALYZER_HEAVY)
+# ANALYZE_VOCAL_ACTIVITY=    # 1/true = fill Demucs vocal ranges (needs ANALYZER_HEAVY)
+#
+# Building from source instead of pulling? \`docker compose build analyzer\` with
+# ANALYZER_HEAVY=1 bakes the stack (or pass WITH_CLAP=1 / WITH_DEMUCS=1 directly).
 #
 # Optional model overrides (sensible defaults shown):
 # CLAP_MODEL=laion-clap

@@ -35,24 +35,54 @@ Analysis lives in its own **`analyzer`** sidecar (`subwave-analyzer`), which
 `docker compose up -d` brings it up next to the controller and web, and the
 controller finds it automatically via `ANALYZE_URL=http://analyzer:8080`. After
 your first library scan (**admin → Library → Rescan**, tick *re-analyse*), tracks
-start getting tempo/key/loudness and "sounds-like" data.
+start getting tempo/key/loudness.
 
-- **Size / arch.** The published image is ~1.4 GB (the full CLAP + Demucs stack,
-  amd64-only). Model weights download lazily the first time you enable the
-  ["sounds-like"/vocals toggles](#two-extra-capabilities-both-opt-in), not at
-  boot. Want it leaner? Build with `--build-arg WITH_CLAP=0 WITH_DEMUCS=0` for a
-  ~370 MB librosa-only image (bpm/key/intro/loudness only).
+- **Lean & multi-arch by default.** The published image is ~370 MB (librosa only)
+  and runs natively on amd64 **and arm64** (NAS/Pi/Apple-Silicon). It covers
+  bpm/key/intro/loudness with no PyTorch.
+- **"Sounds-like" + vocals are the heavy opt-in.** CLAP audio embeddings and
+  Demucs vocal ranges need a ~1.4 GB CPU-torch stack that isn't in the lean
+  image. Enable them with **one line in `.env`** —
+  [see below](#enabling-sounds-like--vocals-the-heavy-tier).
 - **Turn it off.** If you don't want analysis at all, `docker compose stop
   analyzer` (it won't come back until the next explicit `up`).
 - **AIO.** The all-in-one image bundles the analyzer *in-process* (a local
   `librosa` venv the controller drives directly), so the one-click container has
-  analysis with no second service.
+  analysis with no second service. (`subwave-aio` is lean; `subwave-aio-heavy`
+  bakes CLAP + Demucs.)
 - **Fallbacks.** If the `analyzer` service isn't reachable, the controller falls
-  back to the `tts-heavy` sidecar (its image also carries the analyze worker),
+  back to the `tts-heavy` sidecar (its image carries the full analyze worker),
   then to a [local venv](#running-analysis-without-a-sidecar-dev--offline).
 
 Everything under [What analysis adds](#what-analysis-adds) applies here. The rest
-of this page is about the **voices** — the opt-in part.
+of this page is about the **voices** — a separate opt-in.
+
+### Enabling "sounds-like" + vocals (the heavy tier)
+
+The CLAP "sounds-like" embeddings and Demucs vocal ranges ship in a separate
+`subwave-analyzer-heavy` image. Switching to it is one line — **no rebuild**:
+
+```ini
+# root .env
+ANALYZER_HEAVY=1
+```
+
+Then `docker compose up -d` (Compose re-pulls the `analyzer` service as
+`subwave-analyzer-heavy`). By install type:
+
+- **Cloned install / CLI / raw compose.** Add the line to `.env` and `up -d`.
+  The `subwave setup` wizard also asks ("Enable heavy analysis?") and writes it
+  for you.
+- **Unraid split-stack (Compose Manager).** Add `ANALYZER_HEAVY=1` to your `.env`,
+  **Save**, then **Pull & Up**.
+- **Unraid one-click (AIO).** There's no second container to swap — instead point
+  the container's **Repository** at `ghcr.io/perminder-klair/subwave-aio-heavy`
+  and re-pull.
+
+The heavy image is **amd64-only** (the CPU-torch stack). On an arm64 host also
+set `DOCKER_DEFAULT_PLATFORM=linux/amd64` — it runs under emulation (slow, but
+analysis is a one-time per-track pass). Model weights download lazily into the
+analyzer's HF cache the first time you actually run a sounds-like/vocals rescan.
 
 ---
 

@@ -8,12 +8,11 @@
 # analysis had to pull the full ~6GB Chatterbox + PocketTTS image even though
 # analysis has nothing to do with speech synthesis.
 #
-# This image is the analyzer on its own. Operators enable it with
-# `docker compose --profile analyzer up -d`; the controller picks it up via
-# ANALYZE_URL and POSTs analysis requests to it. The analyze worker still ships
-# in the tts-heavy image too, so the controller's URL resolution (ANALYZE_URL
-# first, then TTS_HEAVY_URL) keeps existing `--profile tts-heavy` installs
-# working with zero config — see analyzer.ts.
+# This image is the analyzer on its own. It's a default-on service in every
+# compose file; the controller picks it up via ANALYZE_URL and POSTs analysis
+# requests to it. The analyze worker also ships in the tts-heavy image, so the
+# controller's URL resolution (ANALYZE_URL first, then TTS_HEAVY_URL) means a
+# tts-heavy-only install still gets analysis — see analyzer.ts.
 #
 # Architecture: a single librosa venv driven by the SAME stdio worker script
 # the controller + tts-heavy use (controller/scripts/analyze_worker.py), fronted
@@ -21,12 +20,17 @@
 # long-lived subprocess. Wire contract (/health + /analyze) is identical to
 # tts-heavy's, so the controller treats the two interchangeably.
 #
-# Image size: ~1.4GB with CLAP + Demucs (the default, matching the published
-# tts-heavy image); ~400MB lean (librosa only) with --build-arg WITH_CLAP=0
-# WITH_DEMUCS=0. CPU-only torch wheels — no CUDA build. Models are NOT baked:
-# the worker downloads CLAP/Demucs weights into the HF cache (HF_HOME) the first
-# time the analyze pass needs them. The compose files mount a named volume over
-# that cache so the download survives container recreates.
+# Two published flavours (see .github/workflows/publish-images.yml):
+#   * subwave-analyzer        — LEAN (default), ~370MB, MULTI-ARCH (amd64+arm64).
+#       librosa only: bpm/key/intro/loudness. WITH_CLAP=0 WITH_DEMUCS=0.
+#   * subwave-analyzer-heavy  — CLAP + Demucs baked (~1.4GB), amd64-only.
+#       "sounds-like" embeddings + vocal ranges. WITH_CLAP=1 WITH_DEMUCS=1.
+# Operators switch to the heavy image with `ANALYZER_HEAVY=1` in .env (the
+# compose `analyzer` service pulls `subwave-analyzer${ANALYZER_HEAVY:+-heavy}`).
+# CPU-only torch wheels — no CUDA build. Models are NOT baked: the heavy worker
+# downloads CLAP/Demucs weights into the HF cache (HF_HOME) the first time the
+# analyze pass needs them; the compose files mount a named volume over that
+# cache so the download survives container recreates.
 
 FROM python:3.11-slim-bookworm
 
@@ -40,20 +44,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # --- Analyzer venv (librosa — bpm/key/intro/loudness; optional CLAP + Demucs) -
 # librosa/numba ship as wheels (no g++ needed). The base trio is always present.
 #
-# CLAP audio embeddings ("sounds-like" similarity) ship ON by default — opt OUT
-# with `--build-arg WITH_CLAP=0` for a leaner image. They pull CPU torch +
-# transformers (+ onnxruntime), ~1.5GB. At runtime they only activate when
-# ANALYZE_AUDIO_EMBEDDING=1 is also set (or the admin per-request toggle); with
-# the build arg off that env is a no-op (the model import fails and the worker
-# cleanly emits bpm/key only).
-#
-# Vocal-activity ranges (Demucs source separation) likewise ship ON by default —
-# opt OUT with `--build-arg WITH_DEMUCS=0`. Pulls CPU torch + torchaudio +
-# demucs, ~1.5GB. Runtime-gated by ANALYZE_VOCAL_ACTIVITY=1. The two flags are
-# independent but share the same CPU-torch index. Kept byte-for-byte in sync
-# with the analyzer block in docker/Dockerfile.tts-heavy.
-ARG WITH_CLAP=1
-ARG WITH_DEMUCS=1
+# CLAP audio embeddings ("sounds-like" similarity) and Demucs vocal-activity
+# ranges are the heavy tier — CPU torch + transformers/torchaudio (~1.5GB each).
+# They are **OFF by default** so the published `subwave-analyzer` image stays
+# lean (~370MB) and multi-arch. Opt IN with `--build-arg WITH_CLAP=1` /
+# `WITH_DEMUCS=1`; the CI publishes that heavy build as the separate
+# `subwave-analyzer-heavy` image (see .github/workflows/publish-images.yml), and
+# operators switch to it with `ANALYZER_HEAVY=1` in their `.env` (the compose
+# `analyzer` service resolves `subwave-analyzer${ANALYZER_HEAVY:+-heavy}`). At
+# runtime each still needs its own flag (ANALYZE_AUDIO_EMBEDDING /
+# ANALYZE_VOCAL_ACTIVITY, or the admin toggle); with the stack absent those are
+# clean no-ops (bpm/key/loudness only). Kept in sync with the analyzer block in
+# docker/Dockerfile.tts-heavy (which stays heavy — it's the voices image).
+ARG WITH_CLAP=0
+ARG WITH_DEMUCS=0
 ENV ANALYZER_HF_HOME=/opt/analyzer/hf-cache
 RUN python3 -m venv /opt/analyzer/venv && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \

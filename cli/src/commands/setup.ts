@@ -144,6 +144,12 @@ export async function runSetupCommand(): Promise<void> {
   // /onboarding/save as tts.heavyEnabled, mirroring the web wizard.
   const heavyTts = await promptHeavyTts();
 
+  // --- 4c. Heavy acoustic analysis -----------------------------------------
+  // Opt-in to the CLAP "sounds-like" + Demucs vocal image. When selected we set
+  // ANALYZER_HEAVY=1 in .env, which repoints the analyzer service at
+  // subwave-analyzer-heavy on the next `docker compose up -d`.
+  const heavyAnalysis = await promptHeavyAnalysis();
+
   // --- 5. Timezone ---------------------------------------------------------
   const tz = await promptTimezone();
 
@@ -162,11 +168,15 @@ export async function runSetupCommand(): Promise<void> {
     const merged = mergeCsv(existingRoot.COMPOSE_PROFILES, 'tts-heavy');
     envValues.COMPOSE_PROFILES = merged;
   }
+  if (heavyAnalysis) envValues.ANALYZER_HEAVY = '1';
   writeEnvFile(getRootEnv(), envValues, { templateFallback: getRootEnvExample() });
   ok(`wrote ${pc.dim('.env')} (${Object.keys(envValues).length} keys)`);
   if (heavyTts) {
     muted('Heavy TTS enabled — next `docker compose up -d` will start the tts-heavy sidecar.');
     muted('First start pulls ~5–6 GB of PyTorch + model weights from GHCR.');
+  }
+  if (heavyAnalysis) {
+    muted('Heavy analysis enabled — next `docker compose up -d` pulls subwave-analyzer-heavy (~1.4 GB).');
   }
 
   // --- 7. Push everything through the controller via /onboarding/save -----
@@ -497,6 +507,21 @@ async function promptHeavyTts(): Promise<boolean> {
   muted('Adds a separate container; first start pulls ~5–6 GB.');
   return exitIfCancelled(await p.confirm({
     message: 'Enable the tts-heavy sidecar?',
+    initialValue: false,
+  }), { backOnCancel: false });
+}
+
+// Ask whether to enable the heavy acoustic-analysis dimensions. Basic analysis
+// (bpm/key/loudness) runs by default in the lean `analyzer` sidecar; CLAP
+// "sounds-like" embeddings + Demucs vocal ranges need the CPU-torch stack, which
+// ships in a separate `subwave-analyzer-heavy` image. Setting ANALYZER_HEAVY=1
+// in .env points the analyzer service at that image on the next `up -d`.
+async function promptHeavyAnalysis(): Promise<boolean> {
+  header('Heavy acoustic analysis (optional)');
+  muted('Basic analysis (bpm/key/loudness) is already on. This adds CLAP');
+  muted('"sounds-like" similarity + Demucs vocal ranges; pulls a ~1.4 GB image (amd64).');
+  return exitIfCancelled(await p.confirm({
+    message: 'Enable heavy analysis (sounds-like + vocals)?',
     initialValue: false,
   }), { backOnCancel: false });
 }

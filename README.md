@@ -137,13 +137,22 @@ to Piper. The old `docker build --build-arg WITH_CHATTERBOX=1` path still
 works if you already have a custom-built controller image — see
 `docker/Dockerfile.controller`.
 
-Acoustic analysis (tempo/key/loudness + "sounds-like" fingerprints) does **not**
-need the heavy TTS sidecar — it runs in its own `subwave-analyzer` service,
-which **starts by default** alongside the controller and web (a ~1.4 GB image,
-the same CLAP + Demucs stack, just without Chatterbox/PocketTTS). The controller
-discovers it automatically via `ANALYZE_URL`. To skip it, `docker compose stop
-analyzer`; to build it lean (bpm/key/loudness only, ~370 MB) use `--build-arg
-WITH_CLAP=0 WITH_DEMUCS=0`. Only the expressive *voices* above are opt-in.
+Acoustic analysis (tempo/key/loudness) does **not** need the heavy TTS sidecar —
+it runs in its own `subwave-analyzer` service, which **starts by default**
+alongside the controller and web. The default image is **lean and multi-arch**
+(~370 MB, so it runs natively on arm64 NAS/Pi/Apple-Silicon). The two heavier
+dimensions — CLAP **"sounds-like"** embeddings and **Demucs** vocal ranges —
+are the opt-in tier; enable them by pulling the heavy image, no rebuild:
+
+```bash
+# in your root .env
+ANALYZER_HEAVY=1
+```
+
+That repoints the `analyzer` service at `subwave-analyzer-heavy` (CLAP + Demucs,
+~1.4 GB, amd64) on the next `docker compose up -d`. The `subwave setup` wizard
+also offers it, and Unraid one-click users pull the `subwave-aio-heavy` image
+instead. Only the expressive *voices* above need the separate `tts-heavy` sidecar.
 
 ### Local dev (contributors)
 
@@ -206,7 +215,7 @@ Icecast stream on `:7702` (all configurable). Point your proxy at those three.
 `docker/Caddyfile` is a working reference for the route table you need to
 replicate. Details in [`DEPLOY.md`](DEPLOY.md#bring-your-own-reverse-proxy).
 
-**Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-{caddy,broadcast,controller,web}`, the default-on `subwave-analyzer` (acoustic analysis) sidecar, and the opt-in `subwave-tts-heavy` (expressive voices) sidecar.
+**Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-{caddy,broadcast,controller,web}`, the default-on `subwave-analyzer` (lean, multi-arch acoustic analysis) sidecar, and the opt-in `subwave-tts-heavy` (expressive voices) sidecar. Heavy-analysis variants — `subwave-analyzer-heavy` and `subwave-aio-heavy` (CLAP + Demucs, amd64) — are published for operators who enable "sounds-like"/vocals.
 All compose files pull `:latest` by default; pin a version with
 `SUBWAVE_VERSION=v1.2.3` in the root `.env`.
 

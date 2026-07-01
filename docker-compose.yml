@@ -283,25 +283,26 @@ services:
   # controller resolves its analysis backend from ANALYZE_URL (this service)
   # first, then TTS_HEAVY_URL. Only the heavy *voices* (Chatterbox/PocketTTS)
   # stay opt-in — under the separate `tts-heavy` profile; acoustic analysis is
-  # default-on here. To skip it, `docker compose up -d` the services you want,
-  # or `docker compose stop analyzer` after boot.
+  # default-on here. To skip it, `docker compose stop analyzer` after boot.
+  #
+  # The default image is LEAN (bpm/key/intro/loudness, multi-arch). The CLAP
+  # "sounds-like" + Demucs vocal dimensions are the heavy opt-in: set
+  # ANALYZER_HEAVY=1 in .env to pull `subwave-analyzer-heavy` instead.
   analyzer:
-    image: ghcr.io/perminder-klair/subwave-analyzer:${SUBWAVE_VERSION:-latest}
+    # Default: the LEAN, multi-arch image (librosa — bpm/key/intro/loudness).
+    # Set ANALYZER_HEAVY=1 in .env to switch to the CLAP "sounds-like" + Demucs
+    # vocal image (`subwave-analyzer-heavy`, amd64-only). No platform pin here so
+    # the lean image runs natively on arm64; if you set ANALYZER_HEAVY=1 on an
+    # arm64 host, also set DOCKER_DEFAULT_PLATFORM=linux/amd64 (runs emulated).
+    image: ghcr.io/perminder-klair/subwave-analyzer${ANALYZER_HEAVY:+-heavy}:${SUBWAVE_VERSION:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.analyzer
       args:
-        # CLAP audio-embedding stack ("sounds-like", ~1.5GB) + Demucs vocal
-        # ranges. Baked into the published image; these apply to a source build
-        # only, defaulted on to match. Both lazy-load at runtime (disk cost
-        # only). Set both to 0 for a lean ~400MB librosa-only image
-        # (bpm/key/intro/loudness).
-        WITH_CLAP: ${WITH_CLAP:-1}
-        WITH_DEMUCS: ${WITH_DEMUCS:-1}
-    # amd64-only published image (CPU-torch stack); pinned so it runs under
-    # emulation on arm64 hosts, matching tts-heavy. A lean WITH_CLAP=0 /
-    # WITH_DEMUCS=0 source build is multi-arch capable.
-    platform: linux/amd64
+        # Local `docker compose build analyzer` mirrors the pulled image: lean
+        # unless ANALYZER_HEAVY is set, then it builds the CLAP + Demucs stack.
+        WITH_CLAP: ${ANALYZER_HEAVY:+1}
+        WITH_DEMUCS: ${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
     restart: unless-stopped
     environment:

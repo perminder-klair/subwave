@@ -18,11 +18,12 @@
 # gracefully — TTS falls back to the bundled Piper voice, the Stats system panel
 # simply hides. Piper + Kokoro are included, so the DJ has a natural voice.
 #
-# Bundled by default: the acoustic analyzer (librosa + CLAP + Demucs). In the
-# split stack it's a separate `analyzer` sidecar; the AIO is one container with
-# no sidecars, so it bakes the same venv in and runs it via the controller's
-# in-process local backend (ANALYZE_PYTHON). Build --build-arg WITH_CLAP=0
-# WITH_DEMUCS=0 for a lean AIO (bpm/key/loudness only, no torch).
+# Bundled by default: the lean acoustic analyzer (librosa — bpm/key/intro/
+# loudness). In the split stack it's a separate `analyzer` sidecar; the AIO is
+# one container with no sidecars, so it bakes the venv in and runs it via the
+# controller's in-process local backend (ANALYZE_PYTHON). The heavy CLAP
+# "sounds-like" + Demucs vocal stack is OFF here (kept lean/small); CI publishes
+# a `subwave-aio-heavy` tag (WITH_CLAP=1 WITH_DEMUCS=1) for operators who want it.
 
 # ---- web build: Next.js standalone (mirrors web/Dockerfile) ----------------
 FROM node:22-bookworm-slim AS webbuild
@@ -124,12 +125,15 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
 # analyze_worker.py copied with controller/scripts below is the single source of
 # truth; ffmpeg + libsndfile1 (installed above) give librosa codec coverage.
 #
-# CLAP ("sounds-like") + Demucs (vocal ranges) ship ON to match the published
-# analyzer image (~1.5GB CPU torch each); both lazy-load their weights only when
-# the admin toggles them during a rescan (into HF_HOME, under the persisted
-# state dir). Build --build-arg WITH_CLAP=0 WITH_DEMUCS=0 for a lean AIO.
-ARG WITH_CLAP=1
-ARG WITH_DEMUCS=1
+# CLAP ("sounds-like") + Demucs (vocal ranges) are the heavy tier (~1.5GB CPU
+# torch each) and are **OFF by default**, so the default `subwave-aio` image
+# stays lean (bpm/key/intro/loudness only). CI also publishes a `subwave-aio-heavy`
+# tag built with WITH_CLAP=1 WITH_DEMUCS=1 — Unraid one-click users who want the
+# extra dimensions repoint their container at that tag. When on, both lazy-load
+# their weights the first time the admin toggles them during a rescan (into
+# HF_HOME, under the persisted state dir).
+ARG WITH_CLAP=0
+ARG WITH_DEMUCS=0
 RUN python3 -m venv /opt/analyzer/venv && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir librosa soundfile pyloudnorm && \

@@ -153,17 +153,28 @@ where the ollama container publishes `11434`. (The one-click template adds the
 
 Two heavier capabilities, now packaged separately:
 
-**Acoustic analysis** — tempo, key, loudness, and "sounds-like" fingerprints
-behind the Library Observatory — runs in the **`analyzer`** container, which
-**starts by default**. On the split stack (the recommended Unraid setup via
-Compose Manager) it comes up with the rest of the services; on the **all-in-one**
-image it's baked in-process, so there's nothing to enable. Just run **admin →
-Library → Rescan** (tick *re-analyse*) to populate the data. If the **acoustic
+**Acoustic analysis** — tempo, key, and loudness — runs in the **`analyzer`**
+container, which **starts by default** (a lean, multi-arch image, so it also
+runs on arm64 Unraid boxes). On the split stack it comes up with the rest of the
+services; on the **all-in-one** image it's baked in-process. Nothing to enable —
+just run **admin → Library → Rescan** (tick *re-analyse*). If the **acoustic
 engine reads "off"**, the analyzer container was stopped — `Pull & Up` (split
 stack) or check its logs.
 
+**"Sounds-like" + vocal ranges (the heavy dimensions)** need a ~1.4 GB CPU-torch
+stack that isn't in the lean image:
+
+- **Split stack (Compose Manager).** Add `ANALYZER_HEAVY=1` to your **.env**,
+  **Save**, then **Pull & Up** — the `analyzer` container re-pulls as
+  `subwave-analyzer-heavy`.
+- **All-in-one.** Point the container's **Repository** at
+  `ghcr.io/perminder-klair/subwave-aio-heavy` and re-pull.
+
+Both heavy images are **amd64-only**; on an arm64 box you'd also need
+`DOCKER_DEFAULT_PLATFORM=linux/amd64` (emulated).
+
 > Verify with `docker ps --filter name=sub-wave-analyzer`. Full details, the
-> opt-in `ANALYZE_AUDIO_EMBEDDING`/`ANALYZE_VOCAL_ACTIVITY` flags, and
+> `ANALYZE_AUDIO_EMBEDDING`/`ANALYZE_VOCAL_ACTIVITY` runtime flags, and
 > troubleshooting are in [`tts-heavy.md`](tts-heavy.md).
 
 **Expressive voices** — Chatterbox / PocketTTS — stay opt-in in the separate
