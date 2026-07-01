@@ -14,7 +14,7 @@ import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
 import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
 import { DEFAULT_LOCCA_EMBED_BASE_URL } from '../src/llm/internal/provider/registry.js';
-import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict, clampTtsSpeed, TTS_SPEED_DEFAULT } from '../src/settings.js';
+import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict, clampTtsSpeed, TTS_SPEED_DEFAULT, clampMaxOutputTokens, resolveMaxOutputTokens, MAX_OUTPUT_TOKENS_MIN, MAX_OUTPUT_TOKENS_MAX } from '../src/settings.js';
 import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
 
 let failures = 0;
@@ -398,6 +398,36 @@ async function main() {
     assert.match(out, /Soul-only/);   // strict genre lock (#618)
     assert.match(out, /Music steer for this show — prefer tracks from 1970–1979; favour medium-energy tracks/);
     assert.doesNotMatch(out, /lean toward Soul/);  // genre is the hard rule, not a soft part
+  });
+
+  // ---- clampMaxOutputTokens / resolveMaxOutputTokens (per-call cap, #712) ----
+  console.log('clampMaxOutputTokens / resolveMaxOutputTokens (per-call output cap):');
+  await test('0 and negatives mean "off" — pass through as 0, not the floor', () => {
+    assert.equal(clampMaxOutputTokens(0, 4000), 0);
+    assert.equal(clampMaxOutputTokens(-5, 4000), 0);
+  });
+  await test('non-numeric / NaN falls back to def (leaves the stored value untouched)', () => {
+    assert.equal(clampMaxOutputTokens('nope', 4000), 4000);
+    assert.equal(clampMaxOutputTokens(NaN, 8000), 8000);
+    assert.equal(clampMaxOutputTokens(undefined, 1234), 1234);
+    assert.equal(clampMaxOutputTokens(Infinity, 4000), 4000);
+  });
+  await test('1..499 rounds up to the 500 floor; over-max clamps to 8000', () => {
+    assert.equal(clampMaxOutputTokens(1, 4000), MAX_OUTPUT_TOKENS_MIN);
+    assert.equal(clampMaxOutputTokens(499, 4000), 500);
+    assert.equal(clampMaxOutputTokens(9000, 4000), MAX_OUTPUT_TOKENS_MAX);
+  });
+  await test('in-range values pass through, floored to an int', () => {
+    assert.equal(clampMaxOutputTokens(500, 4000), 500);
+    assert.equal(clampMaxOutputTokens(2000, 4000), 2000);
+    assert.equal(clampMaxOutputTokens(8000, 4000), 8000);
+    assert.equal(clampMaxOutputTokens(2000.9, 4000), 2000);
+  });
+  await test('resolveMaxOutputTokens returns the strategy fallback when unset (default 0)', () => {
+    // No update() has run in this pure harness, so settings.get() is DEFAULTS
+    // (maxOutputTokens: 0) → each strategy keeps its own built-in default.
+    assert.equal(resolveMaxOutputTokens(4000), 4000);
+    assert.equal(resolveMaxOutputTokens(8000), 8000);
   });
 
   console.log(failures === 0 ? '\nAll llm-pure tests passed.' : `\n${failures} test(s) FAILED.`);
