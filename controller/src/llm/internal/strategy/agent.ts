@@ -33,7 +33,11 @@ import { stripThinking, extractJson, usageOf, flattenToolCalls, failureDiagnosti
 import { needsToolCallObject, providerOptions, samplingWithNumCtx, forcedToolChoice } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { agentPlan } from './plan.js';
+import { resolveMaxOutputTokens } from '../../../settings.js';
 
+// Operator-overridable via settings.llm.maxOutputTokens (issue #712); 0 keeps
+// this default. Resolved here and threaded down to objectViaToolCall and the
+// ToolLoopAgent, so the cap is uniform across the agent's sub-paths.
 const MAX_TOKENS_AGENT = 8000;
 
 // prepareStep pins activeTools so EVERY step is a cornered single-purpose
@@ -94,7 +98,7 @@ export async function djAgent({
   schema,
   maxSteps = 8,
   temperature = 0.6,
-  maxOutputTokens = MAX_TOKENS_AGENT,
+  maxOutputTokens = resolveMaxOutputTokens(MAX_TOKENS_AGENT),
   kind = 'sdk.djAgent',
   timeoutMs,
 }: any): Promise<{ object: any; steps: number; toolCalls: any[] }> {

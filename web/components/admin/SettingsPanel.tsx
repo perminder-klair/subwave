@@ -161,6 +161,7 @@ interface LlmForm {
   dailyTokenCap: number;
   budgetSoftPct: number;
   exemptRequests: boolean;
+  maxOutputTokens: number;
   fallback: LlmFallbackForm;
 }
 
@@ -495,6 +496,7 @@ export default function SettingsPanel() {
         dailyTokenCap: typeof v.llm?.dailyTokenCap === 'number' ? v.llm.dailyTokenCap : 0,
         budgetSoftPct: typeof v.llm?.budgetSoftPct === 'number' ? v.llm.budgetSoftPct : 80,
         exemptRequests: v.llm?.exemptRequests !== false,
+        maxOutputTokens: typeof v.llm?.maxOutputTokens === 'number' ? v.llm.maxOutputTokens : 0,
         fallback: {
           enabled: !!v.llm?.fallback?.enabled,
           provider: v.llm?.fallback?.provider ?? 'ollama',
@@ -2553,6 +2555,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         dailyTokenCap: form.llm.dailyTokenCap,
         budgetSoftPct: form.llm.budgetSoftPct,
         exemptRequests: form.llm.exemptRequests,
+        maxOutputTokens: form.llm.maxOutputTokens,
         ...(form.llm.provider === 'openai-compatible' && compatKeyInput.trim()
           ? { apiKey: compatKeyInput.trim() }
           : {}),
@@ -3177,6 +3180,31 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             ]}
             onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, reasoning: v === 'on' } }))}
           />
+        </div>
+
+        <div className="field mt-4">
+          <Label>Max response size (tokens)</Label>
+          <Input
+            type="number"
+            min={0}
+            max={8000}
+            step={500}
+            value={form.llm.maxOutputTokens}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setForm(f => ({ ...f, llm: { ...f.llm, maxOutputTokens: Math.min(8000, Math.max(0, Number(e.target.value))) } }))
+            }
+            placeholder="0"
+            className="max-w-[200px]"
+          />
+          <div className="field-hint">
+            Caps the tokens the model may generate per response &mdash; the size
+            of each reply, not a daily total. <strong>0 = use the built-in
+            defaults</strong> (the default). Set a value (500&ndash;8000) to
+            shrink it: useful on a local model with a small context window, where
+            an oversized response allowance crowds out the system prompt and tool
+            list and risks truncation &mdash; especially with reasoning off, where
+            replies are short anyway. Values between 1 and 499 round up to 500.
+          </div>
         </div>
       </Card>
 
