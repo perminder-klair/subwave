@@ -1,12 +1,10 @@
 # PostgreSQL Backend for Sub/Wave
 
-> **Scope — Phase 1 (this PR):** Postgres handles all **write-path** operations:
-> tagging (`npm run tag`), acoustic analysis (`npm run analyze`), and embedding
-> storage. The **live read-path** — the picker, genre recommendations, and
-> coverage stats — still reads from SQLite via `library.ts`. Setting
-> `DATABASE_URL` without completing the Phase 2 async cascade means the tagger
-> writes to Postgres while the live controller reads a separate SQLite file.
-> See the [Phase 2 roadmap](#phase-2-roadmap-full-read-path-migration) below.
+> **Postgres backend is fully operational as of Phase 2.** Setting `DATABASE_URL`
+> routes all read and write operations through PostgreSQL + pgvector. The tagger,
+> analyzer, acoustic pipeline, picker, genre recommendations, and coverage stats
+> all use the same Postgres backend. SQLite remains the default when `DATABASE_URL`
+> is unset.
 
 Sub/Wave ships a SQLite + sqlite-vec library store by default. Setting
 `DATABASE_URL` switches the write-path to a PostgreSQL + pgvector backend.
@@ -106,9 +104,16 @@ Dim-negotiation logic (adopt/reseed) mirrors SQLite:
 - Mismatch without either flag → throws an actionable error with the
   `--reseed` hint.
 
-KNN uses the cosine-distance operator `<=>` with an `ivfflat` index
+KNN uses the cosine-distance operator `<=>` with an `HNSW` index
 (`vector_cosine_ops`). Similarity is computed as `1 - distance`, matching
 the `KnnHit.similarity` contract from the SQLite path.
+
+HNSW (not IVFFlat) because the index is created on an empty table and filled
+incrementally by the tagger: IVFFlat trains its list centroids at
+`CREATE INDEX` time, so an index built before the data exists has untrained
+lists and the default `probes = 1` silently drops rows from KNN results.
+HNSW builds incrementally with no training step. Migration v10 converts
+existing IVFFlat indexes automatically on the next `open()`.
 
 ### Vector format
 
@@ -146,74 +151,44 @@ SQLite files that are meaningless to the Postgres backend.
 
 ---
 
-## Caller Migration: Sync → Async
+## API Convention: Everything Is Async
 
-### What changed
+`controller/src/music/library-db.ts` and `controller/src/music/library.ts`
+export **async** functions that return Promises, regardless of the active
+backend. Function names, parameters, and return types are identical to the
+old synchronous API — only the calling convention changed (the Phase 2
+cascade). The `SqliteAdapter` wraps its sync better-sqlite3 calls in
+Promises, so both backends satisfy the same `LibraryDbAdapter` interface.
 
-`controller/src/music/library-db.ts` previously exported **synchronous**
-functions. It now exports **async** functions that return Promises,
-regardless of the active backend (SQLite or Postgres). The function names,
-parameters, and return types are identical — only the calling convention
-changed.
+Two helpers deliberately stayed synchronous for hot-path use, with the data
+hydrated up front instead of looked up per call:
 
-### Files that need `await` added
+- **Queue tracks** are hydrated once at `queue.push()` (`hydrateAcoustics`):
+  bpm / key / introMs / loudness / energy / genre are merged onto the track
+  object from the library, so `mixAnalysisFor`, `applyLoudnessGain`, and the
+  intro-budget prompt helpers stay sync and read straight off the object.
+- **`preferEnergyHydrated`** backfills `energy` for Subsonic-sourced
+  candidate lists before the show-energy lean (`show-filter.ts`).
 
-Every file that imports `library-db.ts` and calls its exports synchronously
-must have `await` added in front of each call. The imports themselves
-require no changes (`import * as db from './library-db.js'` still works).
-
-The affected files as of this PR are listed below, with example patterns:
-
-| File | Pattern needing `await` |
-|---|---|
-| `controller/src/music/library.ts` | `db.getTrack(id)`, `db.hasTags(id)`, `db.songsByMood(m)`, `db.knnById(id,k)`, `db.filter({...})`, `db.stats()`, etc. |
-| `controller/src/music/tag-library.ts` | `db.getTrack`, `db.upsertTrackMeta`, `db.upsertTrackTags`, `db.untaggedIds`, `db.staleTaggedIds`, `db.pruneMissingTracks`, etc. |
-| `controller/src/music/analyze-library.ts` | `db.needsAnalysisIds`, `db.upsertTrackAnalysis`, `db.clearAnalysis`, `db.trackCount`, etc. |
-| `controller/src/music/journey.ts` | `db.getTrack`, `db.knnById`, `db.knnAudioById` |
-| `controller/src/music/analyze.ts` | `db.upsertTrackVector`, `db.hasVector` |
-| `controller/src/music/library-coverage.ts` | `db.trackCount`, `db.analysedCount`, `db.vectorCount`, etc. |
-| `controller/src/music/genre-suggest.ts` | `db.genreCentroids` |
-| `controller/src/music/seed-selector.ts` | `db.trackIdsByGenreDecade`, `db.untaggedIds` |
-| `controller/src/routes/library.ts` | `db.upsertTrackMeta`, `db.allTagged`, `db.allTaggedSampled`, `db.filter`, `db.getVector`, `db.getAudioVector` |
-| `controller/src/routes/backup.ts` | `db.backup`, `db.isOpen` |
-
-### Cascade to library.ts callers
-
-`library.ts` exposes a higher-level sync API (`get()`, `has()`,
-`songsByMood()`, `filter()`, `stats()`, `tracksLikeThis()`, etc.) that is
-called **synchronously** by `picker.ts`, LLM tools, and route handlers. Once
-`library.ts` adds `await` to its `db.*` calls (making those calls async),
-its own exported functions must also become `async`. That cascades to
-**all callers of `library.ts`**:
-
-| File | Sync calls to library.ts that will need `await` |
-|---|---|
-| `controller/src/music/picker.ts` | `library.get()`, `library.songsByMood()`, `library.tracksLikeThis()`, `library.tracksLikeThisAudio()`, `library.tracksByAudioVector()`, `library.stats()` |
-| `controller/src/routes/library.ts` | `library.filter()`, `library.stats()` |
-| LLM tools (`controller/src/llm/`) | Various `library.*` calls |
-
-This cascade is intentional: the SQLite backend was synchronous; the async
-wrapper is the correct long-term API for both backends. The migration is
-straightforward — all affected call sites are inside `async` functions
-already; only `await` needs to be inserted.
-
-### SQLite path during migration
-
-While callers are being migrated, the **SQLite path remains functionally
-correct**: the `SqliteAdapter` wraps every sync call in
-`Promise.resolve(...)`, so awaited calls work exactly as they did
-synchronously. The only breakage is in call sites that have NOT yet been
-migrated to `await` — those receive `Promise` objects instead of values,
-which will silently misbehave. **Prioritise migrating callers before
-enabling `DATABASE_URL` in production.**
+When adding a new caller: `await` every `library.*` / `db.*` call, or — if
+the call site must stay synchronous — hydrate the fields you need at the
+nearest async boundary, following the two patterns above.
 
 ---
 
 ## Performance Notes
 
-- The `ivfflat` index is created with `lists = 100`. For libraries larger
-  than ~100,000 vectors, tune `lists` to `sqrt(row_count)` and run
-  `ANALYZE track_vectors` after a bulk re-embed.
+- The `HNSW` index uses pgvector's defaults (`m = 16, ef_construction = 64`),
+  which hold up well past 100k vectors. Run `ANALYZE track_vectors` after a
+  bulk re-embed. If recall matters more than latency on very large libraries,
+  raise `hnsw.ef_search` (default 40) per session.
+- Rebuilding the HNSW index over a large populated library (the one-time v10
+  migration, or a `--reseed`) is much faster with more
+  `maintenance_work_mem` — Postgres logs a NOTICE when the graph no longer
+  fits (default 64MB caps out around ~10k × 1536-d vectors). For a 100k-track
+  library, `SET maintenance_work_mem = '2GB'` (or the equivalent server
+  setting) before the migration is worth it; the build still completes fine
+  without it, just slower.
 - JSONB queries on `moods` and `vocal_ranges_json` benefit from GIN indexes.
   Add them if `filter()` becomes slow on large libraries:
 
@@ -246,56 +221,40 @@ vector tables.
 
 ---
 
-## Phase 2 Roadmap: Full Read-Path Migration
+## Testing
 
-The cascade that makes the live picker, genre recommendations, and coverage
-stats read from Postgres is intentionally deferred. It requires making
-`library.ts` async, which ripples to all of its callers.
+`scripts/postgres-adapter.test.ts` is an integration test that exercises the
+full `LibraryDbAdapter` contract against a **real** Postgres + pgvector
+instance: schema migration idempotency, track/tag/enrichment/analysis writes,
+text + audio KNN ordering and seed exclusion, filter facets and pagination,
+stats aggregation, prune, and the reseed / adoptStoredDim dim-negotiation
+guards.
 
-### Files to update in Phase 2
+```bash
+# Point it at a scratch database (the test wipes subwave tables — it refuses
+# to run unless the db name contains "test", or SUBWAVE_PG_TEST_FORCE=1):
+docker run -d --name pg-test -e POSTGRES_PASSWORD=test -p 5433:5432 pgvector/pgvector:pg16
+docker exec pg-test psql -U postgres -c "CREATE DATABASE subwave_test"
 
-**`controller/src/music/library.ts`** — the main blocker.
+TEST_DATABASE_URL=postgres://postgres:test@localhost:5433/subwave_test npm run test:pg
+```
 
-Change the import from `'./library-db-core.js'` to `'./library-db.js'` and
-add `await` to every `db.*` call. Then make all exported functions `async`:
+It is part of `npm test` and **skips cleanly** (exit 0) when
+`TEST_DATABASE_URL` is unset, so contributors without Postgres stay green.
 
-| Function | `db.*` calls to await |
-|---|---|
-| `load()` | `db.open()`, `db.trackCount()`, `db.getEmbeddingMeta()` etc. |
-| `reload()` | `db.close()`, then call `load()` |
-| `get(id)` | `db.getTrack(id)` |
-| `set(id, tags)` | `db.upsertTrackMeta()`, `db.upsertTrackTags()` |
-| `has(id)` | `db.hasTags(id)` |
-| `allTaggedIds()` | `db.allTaggedIds()` |
-| `songsByMood(m)` | `db.songsByMood(m)` |
-| `songsByEnergy(e)` | `db.songsByEnergy(e)` |
-| `tracksLikeThis(id, k)` | `db.knnById(id, k)`, `db.getTrack()` |
-| `tracksLikeThisAudio(id, k)` | `db.knnAudioById(id, k)`, `db.getTrack()` |
-| `tracksByVector(vec, k)` | `db.knnByVector(vec, k)`, `db.getTrack()` |
-| `tracksByAudioVector(vec, k)` | `db.knnByAudioVector(vec, k)`, `db.getTrack()` |
-| `filter(opts)` | `db.filter(opts)` |
-| `stats()` | `db.stats()` |
+---
 
-**`controller/src/music/journey.ts`** and
-**`controller/src/music/genre-suggest.ts`** — same pattern: change import to
-`library-db.js`, add `await`.
+## What Remains (Post-Phase 2)
 
-### Cascade to library.ts callers
+Phase 2 completed the async cascade. The remaining work is optional cleanup
+and polish, not blocking functionality:
 
-Once `library.ts` exports become `async`, these files need `await` added:
-
-| File | Calls to update |
-|---|---|
-| `controller/src/music/picker.ts` | `library.get()`, `library.songsByMood()`, `library.tracksLikeThis()`, `library.tracksLikeThisAudio()`, `library.tracksByAudioVector()`, `library.stats()` |
-| `controller/src/routes/library.ts` | `library.filter()`, `library.stats()`, `library.has()` |
-| LLM tool files (`src/llm/`) | Various `library.*` calls |
-
-All call sites are already inside `async` functions; only `await` needs to be
-inserted. TypeScript will catch any missed sites as type errors once the
-signatures become `Promise<T>`.
-
-### After Phase 2
-
-With the cascade complete, set `DATABASE_URL` and Postgres handles both reads
-and writes. At that point `better-sqlite3` and `sqlite-vec` can be removed
-from `package.json` and `SqliteAdapter` / `library-db-core.ts` deprecated.
+- **Migration script** — No committed tool for moving an existing `library.db`
+  to Postgres without re-tagging. The recommended path is a fresh `npm run tag`
+  run. A one-off script using `better-sqlite3` + `postgres` to copy rows is
+  straightforward but not included.
+- **Backup/restore admin routes** — Return a `501`-equivalent when Postgres is
+  active (documented above). Use `pg_dump` / `pg_restore` instead.
+- **SQLite removal** — `better-sqlite3`, `sqlite-vec`, and `SqliteAdapter` can
+  be removed once Postgres is the only target. Not done — SQLite remains the
+  default for installs without `DATABASE_URL`.
