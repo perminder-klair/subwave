@@ -184,7 +184,10 @@ async function refreshAutoPlaylistInner() {
   }
 
   // 2. Navidrome playlists whose name matches the mood — operator's hand curation.
-  if (mood) {
+  // Skipped when the show already pins its own playlist(s) (0b): mood-substring
+  // matching would otherwise leak other shows' same-mood playlists into the
+  // fallback pool (#642). Autonomous hours (no pinned playlists) keep it.
+  if (mood && !hasPlaylist) {
     try {
       const playlists = await subsonic.getPlaylists();
       const matched = playlists.filter((p: any) => p.name?.toLowerCase().includes(mood.toLowerCase()));
