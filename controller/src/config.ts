@@ -36,6 +36,11 @@ const VOICES_DIR = process.env.TTS_VOICE_DIR
   || `${STATE_DIR}/voices`;
 const LEGACY_VOICES_DIR = `${STATE_DIR}/chatterbox-voices`;
 
+// When DATABASE_URL is set, the library store switches from SQLite to
+// PostgreSQL (+ pgvector). Format: postgres://user:pass@host:port/dbname
+// Leave unset (the default) to keep the existing SQLite/sqlite-vec backend.
+export const DATABASE_URL = process.env.DATABASE_URL || '';
+
 export const config = {
   // Absolute path to the shared state dir — modules build their own file
   // paths from this rather than hardcoding /var/sub-wave.

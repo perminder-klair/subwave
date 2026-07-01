@@ -38,7 +38,7 @@ export interface SelectorOpts {
 const MOOD_WORDS = new Set(SHOW_MOODS.map(s => s.toLowerCase()));
 
 export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
-  const alreadyTagged = new Set(db.allTaggedIds());
+  const alreadyTagged = new Set(await db.allTaggedIds());
   const layerCounts: Record<string, number> = {
     alreadyTagged: alreadyTagged.size,
     operatorStarred: 0,
@@ -122,9 +122,7 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
   // Allocate up to budget*0.35 — give every (genre, decade) bucket at least
   // one representative so rare-mood corners can't be invisible to seeds.
   const stratCap = Math.ceil(budget * 0.35) + chosen.size;
-  const buckets = db.trackIdsByGenreDecade
-    ? db.trackIdsByGenreDecade()
-    : new Map<string, string[]>();
+  const buckets = await db.trackIdsByGenreDecade();
   // Round-robin: pick one id per bucket per round, repeat until cap or buckets empty
   const bucketKeys = [...buckets.keys()].sort();
   let added = true;
@@ -151,7 +149,7 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
     // smaller window — saves building a 6k-id array just to filter it down.
     const basePool = opts.untaggedPool
       ? [...opts.untaggedPool]
-      : db.untaggedIds();
+      : await db.untaggedIds();
     const candidatePool = basePool
       .filter(id => !chosen.has(id) && !alreadyTagged.has(id));
     if (opts.embeddingForId) {

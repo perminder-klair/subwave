@@ -143,7 +143,7 @@ async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<string> }
   let walked = 0;
   const liveIds = new Set<string>();
   for await (const song of subsonic.iterateAllSongs()) {
-    db.upsertTrackMeta(song.id, {
+    await db.upsertTrackMeta(song.id, {
       title: song.title,
       artist: song.artist,
       album: song.album,
@@ -171,7 +171,7 @@ async function reconcileOnly() {
   const { walked, liveIds } = await walkNavidrome();
   let pruned = 0;
   if (walked > 0) {
-    pruned = db.pruneMissingTracks(liveIds);
+    pruned = await db.pruneMissingTracks(liveIds);
     console.log(`[tag] reconcile pruned ${pruned} orphaned tracks no longer in Navidrome`);
   } else {
     // A transient empty Navidrome response must never wipe the DB.
@@ -264,7 +264,7 @@ async function main() {
   await db.open({ embeddingDim, reseed: flags.reseed });
 
   // The DB upserts emit when the model changes; record the current one.
-  db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim);
+  await db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim);
 
   // Tunables from settings.embedding, CLI flags override where present.
   const embedCfg: any = (settings.get() as any).embedding ?? {};
@@ -277,7 +277,7 @@ async function main() {
       ? embedCfg.seedCount
       : null;
 
-  console.log(`[tag] starting. ${db.allTaggedIds().length} tracks already tagged.`);
+  console.log(`[tag] starting. ${(await db.allTaggedIds()).length} tracks already tagged.`);
   console.log(`[tag] LLM model: ${activeModelLabel()}`);
   console.log(`[tag] embedding model: ${embeddings.activeModelLabel()} (dim=${embeddingDim})`);
   console.log(
@@ -291,9 +291,9 @@ async function main() {
   // need the snapshot. Used by the plan.reEmbed branch below.
   let reembedIds: string[] = [];
   if (flags.reseed) {
-    if (flags.rescan) reembedIds = db.embeddedIds();
+    if (flags.rescan) reembedIds = await db.embeddedIds();
     console.log('[tag] --reseed: dropping track_vectors, re-embedding from scratch');
-    db.dropVectors();
+    await db.dropVectors();
   }
 
   const promptHash = embeddings.promptVocabHash(TAGGER_BATCH_SYSTEM);
@@ -322,7 +322,7 @@ async function main() {
   if (flags.noPrune) {
     console.log('[tag] --no-prune: skipping orphan prune (reconcile step deselected)');
   } else if (walked > 0) {
-    const pruned = db.pruneMissingTracks(liveIds);
+    const pruned = await db.pruneMissingTracks(liveIds);
     if (pruned > 0) {
       console.log(`[tag] pruned ${pruned} orphaned tracks no longer in Navidrome`);
     }
@@ -340,7 +340,7 @@ async function main() {
   // artifact (enriched / embedded / analysed / tagged), never the remainder.
   // Honour --limit on a forward run by capping how many NEW tracks we work on;
   // ones beyond the cap wait for the next run.
-  const allUntagged = db.untaggedIds();
+  const allUntagged = await db.untaggedIds();
   const targetUntagged = flags.rescan
     ? []
     : flags.limit === Infinity
@@ -372,7 +372,7 @@ async function main() {
       limit: flags.limit,
       liveIds,
       // Re-scan re-enrich redoes only the already-enriched population.
-      enrichedIds: flags.rescan ? db.enrichedIds() : undefined,
+      enrichedIds: flags.rescan ? await db.enrichedIds() : undefined,
       targetUntagged,
     });
     if (flags.reEnrich) {
@@ -449,7 +449,7 @@ async function main() {
 
     if (flags.noPropagate) {
       console.log('[tag] --no-propagate: stopping after seed phase');
-      return finish(startedAt, llmCalls, llmTagged, byLeg, timings);
+      return await finish(startedAt, llmCalls, llmTagged, byLeg, timings);
     }
 
     // ---- Phase 3: PROPAGATE ------------------------------------------------
@@ -470,13 +470,19 @@ async function main() {
       if (scanned % 500 === 0) {
         reportProgress({ phase: 'propagate', label: 'Propagating tags to neighbours', done: scanned, total: targetUntagged.length });
       }
-      if (db.hasTags(id)) continue;        // already seeded
-      if (!db.hasVector(id)) continue;     // no embedding → can't propagate
-      const neighbours = db.knnById(id, knnK);
+      if (await db.hasTags(id)) continue;        // already seeded
+      if (!(await db.hasVector(id))) continue;    // no embedding → can't propagate
+      const neighbours = await db.knnById(id, knnK);
+      // Pre-fetch neighbour records for the sync vote() callback.
+      const nbrTracks = new Map<string, db.TrackRecord>();
+      for (const hit of neighbours) {
+        const t = await db.getTrack(hit.id);
+        if (t) nbrTracks.set(hit.id, t);
+      }
       const result = vote(
         neighbours,
         (nId) => {
-          const t = db.getTrack(nId);
+          const t = nbrTracks.get(nId);
           if (!t || t.moods.length === 0) return null;
           return { moods: t.moods, energy: t.energy };
         },
@@ -487,7 +493,7 @@ async function main() {
         result.confidence >= confidenceThreshold &&
         result.moods.length > 0
       ) {
-        db.upsertTrackTags(id, {
+        await db.upsertTrackTags(id, {
           moods: result.moods,
           energy: result.energy,
           source: 'propagated',
@@ -524,13 +530,19 @@ async function main() {
       let extra = 0;
       const stillUncertain: string[] = [];
       for (const id of targetUntagged) {
-        if (db.hasTags(id)) continue;
-        if (!db.hasVector(id)) continue;
-        const neighbours = db.knnById(id, knnK);
+        if (await db.hasTags(id)) continue;
+        if (!(await db.hasVector(id))) continue;
+        const neighbours = await db.knnById(id, knnK);
+        // Pre-fetch neighbour records for the sync vote() callback.
+        const nbrTracks = new Map<string, db.TrackRecord>();
+        for (const hit of neighbours) {
+          const t = await db.getTrack(hit.id);
+          if (t) nbrTracks.set(hit.id, t);
+        }
         const result = vote(
           neighbours,
           (nId) => {
-            const t = db.getTrack(nId);
+            const t = nbrTracks.get(nId);
             if (!t || t.moods.length === 0) return null;
             return { moods: t.moods, energy: t.energy };
           },
@@ -541,7 +553,7 @@ async function main() {
           result.confidence >= confidenceThreshold &&
           result.moods.length > 0
         ) {
-          db.upsertTrackTags(id, {
+          await db.upsertTrackTags(id, {
             moods: result.moods,
             energy: result.energy,
             source: 'propagated',
@@ -587,7 +599,7 @@ async function main() {
   // no prompt/model change nothing is stale → clean no-op. Scoped to the existing
   // tagged set, so it never reaches into the untagged remainder.
   if (plan.reDecide) {
-    const stale = db.staleTaggedIds(
+    const stale = await db.staleTaggedIds(
       promptHash,
       modelLabel,
       flags.limit === Infinity ? undefined : flags.limit,
@@ -629,20 +641,20 @@ async function main() {
   }
   lap('analyze');
 
-  finish(startedAt, llmCalls, llmTagged, byLeg, timings);
+  await finish(startedAt, llmCalls, llmTagged, byLeg, timings);
 }
 
 function autoSeedCount(librarySize: number): number {
   return Math.max(200, Math.ceil(Math.sqrt(librarySize)));
 }
 
-function finish(
+async function finish(
   startedAt: number,
   llmCalls: number,
   llmTagged: number,
   byLeg: Record<string, number>,
   timings: Record<string, number> = {},
-) {
+): Promise<void> {
   const elapsed = (Date.now() - startedAt) / 1000;
   console.log(
     `\n[tag] done in ${elapsed.toFixed(0)}s. llm_calls=${llmCalls} llm_tagged=${llmTagged}`,
@@ -665,7 +677,7 @@ function finish(
   }
   // Compact one-line summary — the full per-genre/per-mood breakdown was far too
   // noisy for the run log + the admin log drawer (it buried the phase breakdown).
-  const s: any = db.stats();
+  const s: any = await db.stats();
   const moods = Object.keys(s.byMood || {}).length;
   const genres = Object.keys(s.byGenre || {}).length;
   const src = Object.entries(s.bySource || {}).map(([k, v]) => `${k}=${v}`).join(' ');
@@ -727,7 +739,7 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
   );
 
   await mapPool(ids, concurrency, async (id) => {
-    const t = db.getTrack(id);
+    const t = await db.getTrack(id);
     if (!t) return;
     if (!reEnrich && t.enrichedAt) return;
 
@@ -747,7 +759,7 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
       } catch { /* ignore */ }
     }
 
-    db.upsertTrackEnrichment(id, { lastfmTags, lyricExcerpt });
+    await db.upsertTrackEnrichment(id, { lastfmTags, lyricExcerpt });
     enrichedTracks += 1;
     if (lastfmTags && lastfmTags.length) enrichedTags += 1;
     if (lyricExcerpt) enrichedLyrics += 1;
@@ -773,12 +785,12 @@ async function phaseEmbed(targetIds: string[], batchSize: number): Promise<void>
   // already-tagged tracks (legacy v1) so they can serve as KNN neighbours.
   const needsEmbed: string[] = [];
   for (const id of targetIds) {
-    if (!db.hasVector(id)) needsEmbed.push(id);
+    if (!(await db.hasVector(id))) needsEmbed.push(id);
   }
   // Also embed all already-tagged tracks that don't have vectors yet (legacy
   // v1 imports). Without this they can't anchor the KNN graph.
-  for (const id of db.allTaggedIds()) {
-    if (!db.hasVector(id)) needsEmbed.push(id);
+  for (const id of await db.allTaggedIds()) {
+    if (!(await db.hasVector(id))) needsEmbed.push(id);
   }
   // Dedup
   const unique = [...new Set(needsEmbed)];
@@ -792,7 +804,7 @@ async function phaseEmbed(targetIds: string[], batchSize: number): Promise<void>
   const embedBatchSize = Math.max(8, Math.min(64, batchSize * 2));
   for (let i = 0; i < unique.length; i += embedBatchSize) {
     const batch = unique.slice(i, i + embedBatchSize);
-    const songs = batch.map(id => db.getTrack(id)).filter((t): t is db.TrackRecord => !!t);
+    const songs = (await Promise.all(batch.map(id => db.getTrack(id)))).filter((t): t is db.TrackRecord => !!t);
     const texts = songs.map(t =>
       embeddings.formatTrackText(
         { title: t.title, artist: t.artist, album: t.album, year: t.year, genre: t.genre },
@@ -807,7 +819,7 @@ async function phaseEmbed(targetIds: string[], batchSize: number): Promise<void>
       throw err;
     }
     for (let j = 0; j < songs.length; j++) {
-      db.upsertTrackVector(songs[j].id, vecs[j]);
+      await db.upsertTrackVector(songs[j].id, vecs[j]);
     }
     if ((i + batch.length) % 500 === 0 || i + batch.length === unique.length) {
       console.log(`[tag] embedded ${i + batch.length}/${unique.length}`);
@@ -859,7 +871,7 @@ async function processBatch(
   source: db.TagSource,
   state: TagState,
 ): Promise<number> {
-  const songs = batch.map(id => db.getTrack(id)).filter((t): t is db.TrackRecord => !!t);
+  const songs = (await Promise.all(batch.map(id => db.getTrack(id)))).filter((t): t is db.TrackRecord => !!t);
   if (songs.length === 0) return 0;
   const input = songs.map(t => ({
     title: t.title ?? undefined,
@@ -907,7 +919,7 @@ async function processBatch(
       continue;
     }
     const { moods, energy } = result;
-    db.upsertTrackTags(songs[j].id, {
+    await db.upsertTrackTags(songs[j].id, {
       moods,
       energy,
       source,

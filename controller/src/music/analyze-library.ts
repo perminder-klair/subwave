@@ -82,7 +82,7 @@ async function main() {
 
   // Walk only when forced, or when the catalogue is empty (bootstrap).
   // --skip-walk hard-disables either way.
-  const count = db.trackCount();
+  const count = await db.trackCount();
   const shouldWalk = !skipWalk && (forceWalk || count === 0);
   if (skipWalk) {
     console.log('[analyze] --skip-walk: not refreshing track metadata');
@@ -103,7 +103,7 @@ async function main() {
     let walked = 0;
     const liveIds = new Set<string>();
     for await (const song of subsonic.iterateAllSongs()) {
-      db.upsertTrackMeta(song.id, {
+      await db.upsertTrackMeta(song.id, {
         title: song.title,
         artist: song.artist,
         album: song.album,
@@ -124,7 +124,7 @@ async function main() {
     // scope reflects the live catalogue, not orphans from past full rescans.
     // Guarded on a non-empty walk (a complete, authoritative pass).
     if (walked > 0) {
-      const pruned = db.pruneMissingTracks(liveIds);
+      const pruned = await db.pruneMissingTracks(liveIds);
       if (pruned > 0) {
         console.log(`[analyze] pruned ${pruned} orphaned tracks no longer in Navidrome`);
       }

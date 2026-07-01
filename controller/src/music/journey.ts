@@ -13,7 +13,7 @@
 // back to its tempo/key behaviour. Audio vectors are written L2-normalised, so
 // the spherical interpolation below stays on the embedding manifold.
 
-import * as db from './library-db.js';
+import * as db from './library-db-core.js';
 
 const EPS = 1e-6;
 

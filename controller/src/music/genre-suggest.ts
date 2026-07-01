@@ -12,7 +12,7 @@
 // operator types — both useful even with no embeddings, where `related` is
 // simply empty and `hasEmbeddings` is false.
 
-import * as db from './library-db.js';
+import * as db from './library-db-core.js';
 import * as library from './library.js';
 
 export interface GenreItem {

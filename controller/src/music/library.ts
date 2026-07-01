@@ -9,7 +9,7 @@
 // library-db.songsByMood query — the DB layer is intentionally vocabulary-
 // agnostic.
 
-import * as db from './library-db.js';
+import * as db from './library-db-core.js';
 import { resolveEmbeddingDim } from './embeddings.js';
 
 let loaded = false;

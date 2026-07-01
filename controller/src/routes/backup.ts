@@ -27,7 +27,7 @@ import { mkdtemp, rm, readdir, stat, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { STATE_DIR } from '../config.js';
+import { STATE_DIR, DATABASE_URL } from '../config.js';
 import * as settings from '../settings.js';
 import * as library from '../music/library.js';
 import * as libraryDb from '../music/library-db.js';
@@ -86,6 +86,13 @@ function isSafeEntry(entryName: string): boolean {
 // GET /backup/export — download a zip snapshot of station config + tag DB.
 // ---------------------------------------------------------------------------
 router.get('/backup/export', requireAdmin, async (req, res) => {
+  if (DATABASE_URL) {
+    res.status(501).json({
+      error: 'Library backup is not supported in Postgres mode. Use pg_dump instead.',
+      hint: `pg_dump "${DATABASE_URL}" -Fc -f subwave-library.dump`,
+    });
+    return;
+  }
   let tmpDir: string | null = null;
   try {
     await settings.load();
@@ -202,6 +209,13 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
     // 2) Tag DB — extract to tmp, swap the live file, reopen.
     const dbEntry = zip.getEntry('library.db');
     if (dbEntry) {
+      if (DATABASE_URL) {
+        return {
+          ok: false,
+          status: 501,
+          error: 'library.db restore is not supported in Postgres mode. Use pg_restore instead.',
+        };
+      }
       tmpDir = await mkdtemp(join(tmpdir(), 'subwave-restore-'));
       const dbTmp = join(tmpDir, 'library.db');
       zip.extractEntryTo(dbEntry, tmpDir, false, true);

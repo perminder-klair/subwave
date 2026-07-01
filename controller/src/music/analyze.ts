@@ -107,8 +107,8 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // returns everything once the version markers are cleared).
   let reAnalyzeScope: string[] | null = null;
   if (opts.reAnalyze) {
-    if (opts.rescan) reAnalyzeScope = db.analysedIds();
-    db.clearAnalysis({ keepVocal: !vocalBackfill });
+    if (opts.rescan) reAnalyzeScope = await db.analysedIds();
+    await db.clearAnalysis({ keepVocal: !vocalBackfill });
     console.log(
       `[analyze] --re-analyze: cleared existing analysis${vocalBackfill ? '' : ' (kept vocal ranges)'}` +
         (reAnalyzeScope ? ` — re-scan scope: ${reAnalyzeScope.length} already-analysed tracks` : ''),
@@ -118,7 +118,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   const cap = opts.limit && opts.limit > 0 ? opts.limit : undefined;
   const bpmIds = reAnalyzeScope
     ? (cap ? reAnalyzeScope.slice(0, cap) : reAnalyzeScope)
-    : db.needsAnalysisIds(cap);
+    : await db.needsAnalysisIds(cap);
   let ids = bpmIds;
 
   // Audio backfill: also target already-analysed tracks that lack a CLAP audio
@@ -133,7 +133,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   const audioBackfill = opts.audioBackfill ?? audioBackfillDefault();
   if (audioBackfill && !reAnalyzeScope) {
     const seen = new Set(bpmIds);
-    const audioIds = db.unanalysedAudioIds(cap).filter(id => !seen.has(id));
+    const audioIds = (await db.unanalysedAudioIds(cap)).filter(id => !seen.has(id));
     ids = cap ? [...bpmIds, ...audioIds].slice(0, cap) : [...bpmIds, ...audioIds];
     if (audioIds.length > 0) {
       console.log(`[analyze] audio backfill: +${ids.length - bpmIds.length} already-analysed tracks missing an audio vector`);
@@ -157,7 +157,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // in-scope tracks, so vocal ranges are rebuilt without dragging in the remainder.
   if (vocalBackfill && !reAnalyzeScope) {
     const seen = new Set(ids);
-    const vocalIds = db.needsVocalIds(cap).filter(id => !seen.has(id));
+    const vocalIds = (await db.needsVocalIds(cap)).filter(id => !seen.has(id));
     const before = ids.length;
     ids = cap ? [...ids, ...vocalIds].slice(0, cap) : [...ids, ...vocalIds];
     if (ids.length > before) {
@@ -235,7 +235,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       const a = localPath
         ? await analyzer.analyzePath(localPath, { embed, vocal })
         : await analyzer.analyze(id, { embed, vocal });
-      db.upsertTrackAnalysis(id, {
+      await db.upsertTrackAnalysis(id, {
         bpm: a.bpm,
         musicalKey: a.musicalKey,
         introMs: a.introMs,
@@ -257,9 +257,9 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       // audio-embedding provenance row.
       if (a.audioEmbedding && a.audioEmbedding.length === db.AUDIO_EMBEDDING_DIM) {
         try {
-          db.upsertTrackAudioVector(id, a.audioEmbedding);
+          await db.upsertTrackAudioVector(id, a.audioEmbedding);
           if (!audioMetaStamped) {
-            db.setAudioEmbeddingMeta(audioModelLabel, db.AUDIO_EMBEDDING_DIM);
+            await db.setAudioEmbeddingMeta(audioModelLabel, db.AUDIO_EMBEDDING_DIM);
             audioMetaStamped = true;
           }
           audioEmbedded += 1;

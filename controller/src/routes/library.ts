@@ -147,7 +147,7 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
       Math.max(500, Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : OBSERVATORY_DEFAULT_MAX),
     );
     const sampled = total > max;
-    const all = sampled ? db.allTaggedSampled(max, total) : db.allTagged();
+    const all = sampled ? await db.allTaggedSampled(max, total) : await db.allTagged();
     const truncated = sampled;
     const tracks = all
       .filter((t) => !subsonic.isStationArchive(t))
@@ -211,11 +211,11 @@ router.get('/library/observatory/track/:id', requireAdmin, async (req, res) => {
   try {
     await library.load();
     const id = req.params.id;
-    const t = db.getTrack(id);
+    const t = await db.getTrack(id);
     if (!t) return res.status(404).json({ error: 'track not found' });
 
-    const textVec = db.getVector(id);
-    const audioVec = db.getAudioVector(id);
+    const textVec = await db.getVector(id);
+    const audioVec = await db.getAudioVector(id);
     const mixNext = library
       .tracksLikeThis(id, 8)
       .map((n: any) => ({
@@ -423,7 +423,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
 
     // 1. Make sure the track row exists in library-db with current metadata so
     //    upsertTrackEnrichment / upsertTrackVector below have a row to attach to.
-    db.upsertTrackMeta(id, {
+    await db.upsertTrackMeta(id, {
       title: song.title,
       artist: song.artist,
       album: song.album,
@@ -453,7 +453,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       }
     }
     if (lastfmEnabled || lyricsEnabled) {
-      db.upsertTrackEnrichment(id, {
+      await db.upsertTrackEnrichment(id, {
         lastfmTags: lastfmTags && lastfmTags.length ? lastfmTags : null,
         lyricExcerpt,
       });
@@ -473,7 +473,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
           { lastfmTags, lyricExcerpt },
         );
         const [vec] = await embeddings.embedTexts([text]);
-        if (vec) db.upsertTrackVector(id, vec);
+        if (vec) await db.upsertTrackVector(id, vec);
       } catch (err: any) {
         queue.log('warn', `/library/retag embed ${id}: ${err.message}`);
       }
@@ -541,7 +541,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
     let song: any = null;
     try { song = await subsonic.getSong(id); } catch {}
     if (!song) {
-      const row = db.getTrack(id);
+      const row = await db.getTrack(id);
       if (row) song = { id: row.id, title: row.title, artist: row.artist, album: row.album, year: row.year, genre: row.genre, duration: row.durationSec };
     }
     if (!song) return res.status(404).json({ error: 'track not found' });
@@ -556,7 +556,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
     for (const t of targets) {
       // Album siblings may be brand-new to library-db — make sure a row exists
       // before tagging it.
-      db.upsertTrackMeta(t.id, {
+      await db.upsertTrackMeta(t.id, {
         title: t.title,
         artist: t.artist,
         album: t.album,
@@ -565,9 +565,9 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
         duration: t.duration ?? null,
       });
       if (clearing) {
-        db.clearTrackTags(t.id);
+        await db.clearTrackTags(t.id);
       } else {
-        db.upsertTrackTags(t.id, {
+        await db.upsertTrackTags(t.id, {
           moods,
           energy,
           source: 'manual',

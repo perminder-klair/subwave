@@ -27,6 +27,7 @@
     "ai": "^7.0.4",
     "ai-sdk-ollama": "^4.0.0",
     "better-sqlite3": "^11.10.0",
+    "postgres": "^3.4.4",
     "express": "^4.21.0",
     "multer": "^2.0.1",
     "node-cron": "^3.0.3",
