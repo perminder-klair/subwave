@@ -149,42 +149,39 @@ where the ollama container publishes `11434`. (The one-click template adds the
 
 ---
 
-## Acoustic analysis & expressive voices: the tts-heavy sidecar
+## Acoustic analysis (default-on) & expressive voices (opt-in)
 
-The optional **`tts-heavy`** container powers two things: the expressive
-Chatterbox / PocketTTS voices, and **acoustic analysis** — the tempo, key,
-loudness, and "sounds-like" fingerprints behind the Library Observatory. It's
-**off by default** and profile-gated, so a normal start (or an Unraid reboot)
-leaves it down. If the **acoustic engine reads "off"** in admin → Library, this
-is why.
+Two heavier capabilities, now packaged separately:
 
-> **Only want the analysis, not the voices?** Use `COMPOSE_PROFILES=analyzer`
-> instead of `tts-heavy` below. That starts the leaner standalone
-> `subwave-analyzer` image (~1.4 GB vs ~6 GB) — same tempo/key/loudness +
-> "sounds-like" analysis, without the Chatterbox/PocketTTS speech models. Pick
-> one: `tts-heavy` gives you voices *and* analysis; `analyzer` gives you
-> analysis alone.
+**Acoustic analysis** — tempo, key, loudness, and "sounds-like" fingerprints
+behind the Library Observatory — runs in the **`analyzer`** container, which
+**starts by default**. On the split stack (the recommended Unraid setup via
+Compose Manager) it comes up with the rest of the services; on the **all-in-one**
+image it's baked in-process, so there's nothing to enable. Just run **admin →
+Library → Rescan** (tick *re-analyse*) to populate the data. If the **acoustic
+engine reads "off"**, the analyzer container was stopped — `Pull & Up` (split
+stack) or check its logs.
 
-On Unraid you can't pass `--profile tts-heavy` to the `up` Compose Manager runs
-for you, so activate the profile from the **.env** instead:
+> Verify with `docker ps --filter name=sub-wave-analyzer`. Full details, the
+> opt-in `ANALYZE_AUDIO_EMBEDDING`/`ANALYZE_VOCAL_ACTIVITY` flags, and
+> troubleshooting are in [`tts-heavy.md`](tts-heavy.md).
+
+**Expressive voices** — Chatterbox / PocketTTS — stay opt-in in the separate
+**`tts-heavy`** sidecar. On Unraid you can't pass `--profile tts-heavy` to the
+`up` Compose Manager runs for you, so activate the profile from the **.env**:
 
 ```ini
 COMPOSE_PROFILES=tts-heavy
 ```
 
-**Save**, then **Pull & Up** the stack. `COMPOSE_PROFILES` is read by Docker
-Compose directly, so the sidecar starts with no CLI flag — and survives reboots
+**Save**, then **Pull & Up**. `COMPOSE_PROFILES` is read by Docker Compose
+directly, so the voices sidecar starts with no CLI flag — and survives reboots
 as long as it stays in `.env`. The controller is already wired to it
-(`TTS_HEAVY_URL`), so nothing else is needed. First pull adds ~1–2 GB.
+(`TTS_HEAVY_URL`); nothing else is needed. First pull adds ~5–6 GB.
 
-Verify with `docker ps --filter name=tts-heavy`, then run **admin → Library →
-Rescan** (tick *re-analyse*) to populate acoustic data. Full details, the
-opt-in `ANALYZE_AUDIO_EMBEDDING` flag, and troubleshooting are in
-[`tts-heavy.md`](tts-heavy.md).
-
-> The sidecar wants real CPU (or a GPU). Analysis on a low-power Unraid box
-> works but is slow — it's a one-time per-track pass cached in `library.db`, so
-> let it churn in the background.
+> The analyzer (and `tts-heavy`) want real CPU (or a GPU). Analysis on a
+> low-power Unraid box works but is slow — a one-time per-track pass cached in
+> `library.db`, so let it churn in the background.
 
 ---
 

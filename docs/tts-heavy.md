@@ -1,56 +1,83 @@
-# The heavy sidecar: expressive voices + acoustic analysis
+# Heavy voices & acoustic analysis
 
 SUB/WAVE ships lean. The default install runs the fast, local **Piper** voice
-and tags your library from text alone. Two heavier capabilities live in a
-single optional container — the **`tts-heavy` sidecar** — and are switched
-**off by default**:
+and tags your library from text alone. Two heavier capabilities go beyond that —
+and they're now packaged **separately**, because they have very different
+weights:
 
-1. **Expressive TTS voices** — Chatterbox and PocketTTS, which sound noticeably
-   more natural than Piper.
-2. **Acoustic analysis** — measuring each track's tempo, key, and loudness, and
+1. **Acoustic analysis** — measuring each track's tempo, key, and loudness, and
    fingerprinting *how it sounds* so the DJ can mix on feel, not just tags. This
-   is what powers the energy/pace/loudness signals you see in the
-   [Library Observatory](#what-analysis-adds).
+   powers the energy/pace/loudness signals in the
+   [Library Observatory](#what-analysis-adds). It runs in the **`analyzer`**
+   sidecar, which **starts by default** — so on a normal install it's already on
+   and most operators need to do nothing.
+2. **Expressive TTS voices** — Chatterbox and PocketTTS, which sound noticeably
+   more natural than Piper. These carry multi-gigabyte speech models and stay
+   **opt-in**, in the separate **`tts-heavy`** sidecar you turn on yourself.
 
-Both come from the same container, so **turning either one on is the same
-operation**: bring up the `tts-heavy` profile. If your "acoustic engine" shows
-as **off**, this page is how you turn it on.
+So the two headings below split accordingly: [the analyzer](#acoustic-analysis-runs-by-default)
+is already running, and [turning on the voices](#turn-on-the-voices) is the
+one-line change. (The AIO one-click image bundles the analyzer in-process, so it
+has analysis too, without a second container.)
 
 > **The data is never lost when the engine is off.** Your tags and analysis
 > live in `state/library.db` (`/var/sub-wave/library.db` inside the container).
 > The "acoustic engine on/off" indicator is a *live reachability check* for the
-> analysis backend — not a stored setting. When the sidecar is down, existing
+> analysis backend — not a stored setting. When the analyzer is down, existing
 > data stays put; you just can't run *new* analysis until it's back up.
 
-> **Only want analysis, not voices?** Acoustic analysis also ships as a
-> standalone **`analyzer`** profile — a leaner image (~1.4 GB, or ~370 MB built
-> with `WITH_CLAP=0 WITH_DEMUCS=0`) that drops Chatterbox/PocketTTS. Enable it
-> with `docker compose --profile analyzer up -d`. Everything below about
-> *analysis* applies to it unchanged; the controller checks `ANALYZE_URL` first
-> and falls back to the `tts-heavy` sidecar, so either image serves it. See
-> [Running analysis without the heavy voices](#running-analysis-without-the-heavy-voices).
+---
+
+## Acoustic analysis runs by default
+
+Analysis lives in its own **`analyzer`** sidecar (`subwave-analyzer`), which
+**starts with the rest of the stack** — no flag, no profile. A default
+`docker compose up -d` brings it up next to the controller and web, and the
+controller finds it automatically via `ANALYZE_URL=http://analyzer:8080`. After
+your first library scan (**admin → Library → Rescan**, tick *re-analyse*), tracks
+start getting tempo/key/loudness and "sounds-like" data.
+
+- **Size / arch.** The published image is ~1.4 GB (the full CLAP + Demucs stack,
+  amd64-only). Model weights download lazily the first time you enable the
+  ["sounds-like"/vocals toggles](#two-extra-capabilities-both-opt-in), not at
+  boot. Want it leaner? Build with `--build-arg WITH_CLAP=0 WITH_DEMUCS=0` for a
+  ~370 MB librosa-only image (bpm/key/intro/loudness only).
+- **Turn it off.** If you don't want analysis at all, `docker compose stop
+  analyzer` (it won't come back until the next explicit `up`).
+- **AIO.** The all-in-one image bundles the analyzer *in-process* (a local
+  `librosa` venv the controller drives directly), so the one-click container has
+  analysis with no second service.
+- **Fallbacks.** If the `analyzer` service isn't reachable, the controller falls
+  back to the `tts-heavy` sidecar (its image also carries the analyze worker),
+  then to a [local venv](#running-analysis-without-a-sidecar-dev--offline).
+
+Everything under [What analysis adds](#what-analysis-adds) applies here. The rest
+of this page is about the **voices** — the opt-in part.
 
 ---
 
-## Why it's off by default
+## Voices: why they're off by default
 
-The sidecar carries PyTorch and the analysis models — it's a multi-gigabyte
-image and wants real CPU (or a GPU). Most people running a small radio station
-on a NAS or a spare box don't want that weight by default, so SUB/WAVE gates it
-behind a Docker Compose **profile**. The controller is *already wired* to talk
-to it (`TTS_HEAVY_URL=http://tts-heavy:8080` in all three compose files); the
-only thing missing on a default boot is the container itself.
+The `tts-heavy` sidecar carries PyTorch and the Chatterbox/PocketTTS speech
+models — it's a multi-gigabyte image and wants real CPU (or a GPU). Most people
+running a small radio station on a NAS or a spare box don't want that weight by
+default, so SUB/WAVE gates the *voices* behind a Docker Compose **profile**. The
+controller is *already wired* to talk to it
+(`TTS_HEAVY_URL=http://tts-heavy:8080` in all three compose files); the only
+thing missing on a default boot is the container itself.
 
 When the profile is off, the URL is unreachable, the controller's `isAvailable()`
-probe returns false within ~30s, the DJ falls back to Piper, and the analysis
-phase skips cleanly. Nothing breaks — you just get the light path.
+probe returns false within ~30s, and the DJ falls back to Piper. Nothing
+breaks — you just get the light path. (Analysis is unaffected: it has its own
+default-on `analyzer` service, above.)
 
 ---
 
-## Turn it on
+## Turn on the voices
 
-The container exists in every compose file under the `tts-heavy` profile. You
-enable a profile in one of two ways, depending on how you start the stack.
+The `tts-heavy` container exists in every compose file under the `tts-heavy`
+profile. You enable a profile in one of two ways, depending on how you start the
+stack.
 
 ### Cloned install / raw `docker compose`
 
@@ -124,27 +151,6 @@ heatmap.
   on an **older `tts-heavy` image** built without the full stack — pull the
   latest image and recreate the sidecar.
 
-### Running analysis without the heavy voices
-
-If you want the analysis but not Chatterbox/PocketTTS, run the standalone
-**`analyzer`** sidecar instead of `tts-heavy`:
-
-```bash
-docker compose --profile analyzer up -d
-# dev:  docker compose -f docker-compose.dev.yml --profile analyzer up -d
-# byo:  docker compose -f docker-compose.byo.yml  --profile analyzer up -d
-```
-
-It's the same analysis worker (bpm/key/intro/loudness, CLAP "sounds-like",
-Demucs vocals) in a `subwave-analyzer` image that skips the ~5 GB of speech
-models. The controller reaches it via `ANALYZE_URL` (defaulted to
-`http://analyzer:8080` in all three compose files) and falls back to
-`TTS_HEAVY_URL` — so if you already run `--profile tts-heavy`, analysis keeps
-working and you don't need this profile. Run **one** of the two; running both
-just means the dedicated analyzer wins. Everything in
-[Verify it's running](#verify-its-running) applies, swapping `tts-heavy` for
-`analyzer` in the container/hostname.
-
 ### Running analysis without a sidecar (dev / offline)
 
 The analyzer has a third backend: a **local Python venv** with `librosa`
@@ -156,17 +162,20 @@ contributors on a dev machine; production should use a sidecar.
 
 ## Troubleshooting: "acoustic engine is off"
 
-1. **Is the sidecar running?** `docker ps --filter name=tts-heavy`. If nothing
-   lists, the profile isn't active — re-read [Turn it on](#turn-it-on). The most
-   common miss is restarting the stack *without* the profile (a plain
-   `docker compose up -d`, or an Unraid restart with no `COMPOSE_PROFILES` set),
-   which leaves the sidecar down.
-2. **Is it reachable?** `docker exec sub-wave-controller wget -qO- http://tts-heavy:8080/health`.
-   No answer → check the sidecar's logs: `docker logs sub-wave-tts-heavy`.
-3. **Did the model still warm up?** First boot downloads model weights into the
-   `tts-heavy-*-cache` volumes; the `/health` probe may report not-ready for a
-   minute or two on a cold start. Give it time, then re-check the admin panel —
-   the probe re-runs every ~30s, so it flips to available on its own.
+1. **Is the analyzer running?** `docker ps --filter name=sub-wave-analyzer`. It's
+   a default service, so a plain `docker compose up -d` should start it — if
+   nothing lists, it was stopped or scaled out. Bring it back with
+   `docker compose up -d analyzer`. (On the AIO there's no separate container —
+   analysis runs in-process; skip to step 3.) If you only run the `tts-heavy`
+   sidecar for its analysis, check `docker ps --filter name=tts-heavy` instead.
+2. **Is it reachable?** `docker exec sub-wave-controller wget -qO- http://analyzer:8080/health`
+   (or `http://tts-heavy:8080/health`). No answer → check the logs:
+   `docker logs sub-wave-analyzer`.
+3. **Did the model still warm up?** The first *sounds-like/vocals* run downloads
+   CLAP/Demucs weights into the analyzer's HF cache; the `/health` probe may
+   report not-ready for a minute or two on a cold start. Give it time, then
+   re-check the admin panel — the probe re-runs every ~30s, so it flips to
+   available on its own. (Plain bpm/key/loudness needs no download.)
 4. **Lost your tags after a restart?** That's a *separate* issue from the engine
    being off — it means `state/` didn't come back on the same path, so the
    controller created a fresh empty `library.db`. See the data-persistence note

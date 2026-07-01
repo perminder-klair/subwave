@@ -17,6 +17,12 @@
 # (Chatterbox / PocketTTS) and the docker-socket-proxy Stats panel. Both degrade
 # gracefully — TTS falls back to the bundled Piper voice, the Stats system panel
 # simply hides. Piper + Kokoro are included, so the DJ has a natural voice.
+#
+# Bundled by default: the acoustic analyzer (librosa + CLAP + Demucs). In the
+# split stack it's a separate `analyzer` sidecar; the AIO is one container with
+# no sidecars, so it bakes the same venv in and runs it via the controller's
+# in-process local backend (ANALYZE_PYTHON). Build --build-arg WITH_CLAP=0
+# WITH_DEMUCS=0 for a lean AIO (bpm/key/loudness only, no torch).
 
 # ---- web build: Next.js standalone (mirrors web/Dockerfile) ----------------
 FROM node:22-bookworm-slim AS webbuild
@@ -108,6 +114,46 @@ RUN mkdir -p /opt/kokoro/models && \
 ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
     KOKORO_VOICES=/opt/kokoro/models/voices-v1.0.bin \
     KOKORO_PYTHON=/opt/kokoro/venv/bin/python
+
+# --- Acoustic analyzer (librosa + optional CLAP + Demucs) -------------------
+# The controller's analyze pass (bpm/key/intro/loudness, "sounds-like" CLAP
+# embeddings, Demucs vocal ranges) runs librosa, which isn't in the base
+# controller image — the split stack ships it as the separate `analyzer`
+# sidecar. The AIO has no sidecars, so we bake the same venv in and point the
+# controller at it via ANALYZE_PYTHON (music/analyzer.ts's local backend). The
+# analyze_worker.py copied with controller/scripts below is the single source of
+# truth; ffmpeg + libsndfile1 (installed above) give librosa codec coverage.
+#
+# CLAP ("sounds-like") + Demucs (vocal ranges) ship ON to match the published
+# analyzer image (~1.5GB CPU torch each); both lazy-load their weights only when
+# the admin toggles them during a rescan (into HF_HOME, under the persisted
+# state dir). Build --build-arg WITH_CLAP=0 WITH_DEMUCS=0 for a lean AIO.
+ARG WITH_CLAP=1
+ARG WITH_DEMUCS=1
+RUN python3 -m venv /opt/analyzer/venv && \
+    /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /opt/analyzer/venv/bin/pip install --no-cache-dir librosa soundfile pyloudnorm && \
+    if [ "$WITH_CLAP" = "1" ]; then \
+      /opt/analyzer/venv/bin/pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --extra-index-url https://pypi.org/simple \
+        torch transformers onnxruntime && \
+      /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
+    fi && \
+    if [ "$WITH_DEMUCS" = "1" ]; then \
+      /opt/analyzer/venv/bin/pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --extra-index-url https://pypi.org/simple \
+        torch torchaudio demucs && \
+      /opt/analyzer/venv/bin/python -c "import torch, demucs" ; \
+    fi && \
+    find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
+# ANALYZE_PYTHON flips on the controller's local analyze backend; HF_HOME points
+# CLAP/Demucs weight downloads at the persisted state dir so they survive
+# recreates. ANALYZE_WORKER defaults to /app/scripts/analyze_worker.py (copied
+# below), so it needs no override here.
+ENV ANALYZE_PYTHON=/opt/analyzer/venv/bin/python \
+    HF_HOME=/var/sub-wave/hf-cache
 
 # --- Controller app ---------------------------------------------------------
 WORKDIR /app

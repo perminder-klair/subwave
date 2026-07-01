@@ -63,6 +63,12 @@ jobs:
           - image: subwave-aio
             dockerfile: docker/Dockerfile.aio
             platforms: linux/amd64
+            # Bake the analyzer's CLAP + Demucs stack (same as the standalone
+            # analyzer image) so the one-click AIO gets acoustic analysis
+            # out of the box; both lazy-load their weights at runtime.
+            build_args: |
+              WITH_CLAP=1
+              WITH_DEMUCS=1
           - image: subwave-tts-heavy
             dockerfile: docker/Dockerfile.tts-heavy
             platforms: linux/amd64

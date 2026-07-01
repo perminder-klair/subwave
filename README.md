@@ -137,17 +137,13 @@ to Piper. The old `docker build --build-arg WITH_CHATTERBOX=1` path still
 works if you already have a custom-built controller image — see
 `docker/Dockerfile.controller`.
 
-Acoustic analysis (tempo/key/loudness + "sounds-like" fingerprints) ships in
-the same `tts-heavy` sidecar, but if analysis is *all* you want, the leaner
-`subwave-analyzer` image (~1.4 GB vs ~6 GB) runs it standalone:
-
-```bash
-docker compose --profile analyzer up -d
-```
-
-The controller discovers it automatically (`ANALYZE_URL`, falling back to the
-`tts-heavy` sidecar), so an existing `--profile tts-heavy` install keeps its
-analysis with no change.
+Acoustic analysis (tempo/key/loudness + "sounds-like" fingerprints) does **not**
+need the heavy TTS sidecar — it runs in its own `subwave-analyzer` service,
+which **starts by default** alongside the controller and web (a ~1.4 GB image,
+the same CLAP + Demucs stack, just without Chatterbox/PocketTTS). The controller
+discovers it automatically via `ANALYZE_URL`. To skip it, `docker compose stop
+analyzer`; to build it lean (bpm/key/loudness only, ~370 MB) use `--build-arg
+WITH_CLAP=0 WITH_DEMUCS=0`. Only the expressive *voices* above are opt-in.
 
 ### Local dev (contributors)
 
@@ -210,7 +206,7 @@ Icecast stream on `:7702` (all configurable). Point your proxy at those three.
 `docker/Caddyfile` is a working reference for the route table you need to
 replicate. Details in [`DEPLOY.md`](DEPLOY.md#bring-your-own-reverse-proxy).
 
-**Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-{caddy,broadcast,controller,web}`, plus the optional sidecar images `subwave-tts-heavy` (voices + analysis) and `subwave-analyzer` (analysis only).
+**Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-{caddy,broadcast,controller,web}`, the default-on `subwave-analyzer` (acoustic analysis) sidecar, and the opt-in `subwave-tts-heavy` (expressive voices) sidecar.
 All compose files pull `:latest` by default; pin a version with
 `SUBWAVE_VERSION=v1.2.3` in the root `.env`.
 
@@ -271,7 +267,7 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 
 - **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
 - **[`docs/unraid.md`](docs/unraid.md):** running on Unraid — one-click from Community Applications, or the Compose Manager Plus stack.
-- **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the optional sidecars — expressive voices (`tts-heavy`) and acoustic analysis (bundled in `tts-heavy`, or the leaner standalone `analyzer` profile), and how to turn them on.
+- **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the opt-in `tts-heavy` voices and the default-on acoustic `analyzer` service — what each does and how to toggle them.
 - **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
   non-obvious constraints behind each subsystem.
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.
