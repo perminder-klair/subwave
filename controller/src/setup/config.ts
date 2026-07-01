@@ -23,6 +23,7 @@ export interface SetupConfig {
     user?: string;
     pass?: string;
   };
+  plex?: { url?: string; token?: string };
   // ISO timestamp written when the wizard saves successfully.
   setupCompletedAt?: string;
 }
@@ -44,11 +45,12 @@ export async function loadSetupConfig(): Promise<SetupConfig> {
 
 export async function saveSetupConfig(patch: Partial<SetupConfig>): Promise<SetupConfig> {
   const current = await loadSetupConfig();
-  // Shallow-merge top level, deep-merge navidrome to allow partial updates.
+  // Shallow-merge top level, deep-merge navidrome & plex to allow partial updates.
   const next: SetupConfig = {
     ...current,
     ...patch,
     navidrome: { ...(current.navidrome || {}), ...(patch.navidrome || {}) },
+    plex: { ...(current.plex || {}), ...(patch.plex || {}) },
   };
   await mkdir(dirname(PATH), { recursive: true });
   await writeFile(PATH, JSON.stringify(next, null, 2));

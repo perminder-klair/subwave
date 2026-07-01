@@ -5,6 +5,7 @@ import express from 'express';
 import { stat, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import * as subsonic from '../music/subsonic.js';
+import * as plexSource from '../music/plex.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { getFullContext, geocodePlace } from '../context.js';
@@ -72,7 +73,7 @@ router.get('/cover/:id', async (req, res) => {
   const { id } = req.params;
   // Subsonic ids are short alphanumerics (Navidrome uses base32 hashes).
   // Reject anything else to keep this from being a generic SSRF surface.
-  if (!/^[\w-]{1,64}$/.test(id)) return res.status(400).end();
+  if (!/^[\w:.-]{1,80}$/.test(id)) return res.status(400).end();
 
   const sendCover = (entry: { buf: Buffer; contentType: string }) => {
     res.setHeader('Content-Type', entry.contentType);
@@ -92,7 +93,10 @@ router.get('/cover/:id', async (req, res) => {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 5000);
-    const r = await fetch(subsonic.getCoverArtUrl(id, 512), { signal: ctrl.signal });
+    const coverUrl = id.startsWith('plex:')
+      ? await plexSource.getCoverArtUrl(id, 512)
+      : subsonic.getCoverArtUrl(id, 512);
+    const r = await fetch(coverUrl, { signal: ctrl.signal });
     clearTimeout(timer);
     if (!r.ok) return res.status(502).end();
     const entry = {

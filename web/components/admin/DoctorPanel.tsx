@@ -226,7 +226,7 @@ export default function DoctorPanel() {
                 </li>
                 <li>
                   <span className="font-bold">The crate</span>{' '}
-                  <span className="text-muted">— Navidrome + your mood tags: connected, and stocked so the picks aren&apos;t blind.</span>
+                  <span className="text-muted">— your music library + mood tags: connected, and stocked so the picks aren&apos;t blind.</span>
                 </li>
                 <li>
                   <span className="font-bold">The mix</span>{' '}
@@ -286,7 +286,7 @@ export default function DoctorPanel() {
           <div>
             <div className="min-w-0 flex-1">
               <p className="text-[14px] leading-[1.6] text-muted">
-                Full assessment of the station — the LLM, Navidrome &amp; library, the broadcast chain,
+                Full assessment of the station — the LLM, music source &amp; library, the broadcast chain,
                 voices, capabilities, content, resources and storage. Where a safe fix exists you can
                 apply it in one click.
               </p>

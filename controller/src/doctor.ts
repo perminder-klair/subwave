@@ -12,9 +12,9 @@
 
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { z } from 'zod';
-import { config, STATE_DIR } from './config.js';
+import { STATE_DIR } from './config.js';
 import * as settings from './settings.js';
-import * as subsonic from './music/subsonic.js';
+import { getSource } from './music/source/index.js';
 import * as subsonicLog from './music/subsonic-log.js';
 import * as library from './music/library.js';
 import * as embeddings from './music/embeddings.js';
@@ -97,7 +97,7 @@ export async function runDoctor(): Promise<DoctorReport> {
   // Each check swallows its own errors and degrades to a 'skip'/'fail' finding,
   // so one failing subsystem never blanks the whole report.
   sections.push({ name: 'LLM', findings: await safe(() => checkLlm(s)) });
-  sections.push({ name: 'Navidrome & library', findings: await safe(checkNavidrome) });
+  sections.push({ name: 'Music source & library', findings: await safe(checkMusicSource) });
   sections.push({ name: 'Broadcast', findings: await safe(checkBroadcast) });
   sections.push({ name: 'Voice (TTS)', findings: await safe(() => checkTts(s)) });
   sections.push({ name: 'Capabilities', findings: await safe(() => checkCapabilities(s)) });
@@ -257,17 +257,18 @@ async function checkLlm(s: any): Promise<Finding[]> {
   return out;
 }
 
-async function checkNavidrome(): Promise<Finding[]> {
+async function checkMusicSource(): Promise<Finding[]> {
   const out: Finding[] = [];
 
-  const p = await subsonic.ping();
+  const source = (settings.get() as any).music?.source || 'navidrome';
+  const p = await getSource().ping();
   out.push({
     label: 'connectivity',
     status: p.ok ? 'ok' : 'fail',
-    detail: p.ok ? `${config.navidrome.url} · authenticated` : p.reason || 'unreachable',
-    hint: p.ok
-      ? undefined
-      : 'The picker has no music source without Navidrome. Check the URL / username / password in setup, and that Navidrome is up.',
+    detail: p.ok
+      ? `${source} · authenticated`
+      : p.reason || 'unreachable',
+    hint: p.ok ? undefined : `The picker has no music source. Check the ${source} URL and credentials in Settings -> Music.`,
   });
 
   // Recent call error rate across all endpoints.
@@ -568,7 +569,7 @@ async function checkSetup(): Promise<Finding[]> {
     out.push({
       label: 'configuration',
       status: st.needsSetup ? 'fail' : 'ok',
-      detail: st.needsSetup ? 'incomplete — Navidrome not configured' : `complete (${st.navidromeSource})`,
+      detail: st.needsSetup ? 'incomplete — music source not configured' : `complete (${st.navidromeSource})`,
       hint: st.needsSetup ? 'Finish the wizard at /onboarding (or run `subwave setup`).' : undefined,
     });
   } catch (err: any) {
@@ -623,7 +624,7 @@ const REVIEW_SYSTEM = [
   'muddy signal, and total confidence. You talk like a producer in the booth — a little swagger,',
   'the odd studio metaphor ("the low end\'s clean", "that channel\'s clipping", "tighten the mix")',
   '— but every call you make is technically correct. You review an automated health report for a',
-  'personal internet radio station (Navidrome library, an LLM DJ, Liquidsoap mixer, Icecast stream,',
+  'personal internet radio station (music library — Navidrome or Plex — an LLM DJ, Liquidsoap mixer, Icecast stream,',
   'local/cloud TTS).',
   'A knowledge base about how SUB/WAVE works is provided below — USE IT. Ground every recommendation',
   'in it, and tailor model / picker / chain-of-thought / agent-deadline / TTS-engine advice to the',
@@ -632,7 +633,7 @@ const REVIEW_SYSTEM = [
   'Interpret the findings for a non-expert operator: what is fine, what needs attention, what to do',
   'first. Be concrete and brief — keep the swagger to a light seasoning, no fluff, don\'t restate',
   'every finding. Prioritise anything that takes the station off air or starves the DJ (stream',
-  'offline, Navidrome unreachable, LLM unreachable) above cosmetic warnings. Where it fits, nudge',
+  'offline, music source unreachable, LLM unreachable) above cosmetic warnings. Where it fits, nudge',
   'the operator toward good hygiene like taking a backup. If everything is healthy, say so plainly',
   'and return an empty priorities array.',
 ].join(' ');

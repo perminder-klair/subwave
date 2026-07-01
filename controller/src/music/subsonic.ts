@@ -565,44 +565,32 @@ export function getPlayableUri(song) {
   return getLocalPath(song) || getStreamUrl(song.id);
 }
 
+// Shared annotate-URI builder used by both Navidrome and Plex backends.
+// Encodes song metadata into the annotate: prefix Liquidsoap reads on intake.
+export function buildAnnotatedUri(
+  song: { id: string; title: string; artist: string; album: string; year?: any; genre?: any; crossSec?: any; gainDb?: any },
+  streamUri: string,
+  opts: { maxDurationSec?: number | null } = {},
+): string {
+  const esc = (v: any) => String(v ?? '').replace(/"/g, '\\"');
+  const fields = [
+    `title="${esc(song.title)}"`,
+    `artist="${esc(song.artist)}"`,
+    `album="${esc(song.album)}"`,
+    `subsonic_id="${esc(song.id)}"`,
+  ];
+  if (song.year) fields.push(`year="${esc(song.year)}"`);
+  if (song.genre) fields.push(`genre="${esc(song.genre)}"`);
+  if (song.crossSec != null) fields.push(`liq_cross_duration="${esc(song.crossSec)}"`);
+  if (song.gainDb != null) fields.push(`liq_amplify="${esc(song.gainDb)} dB"`);
+  if (opts.maxDurationSec != null && opts.maxDurationSec > 0) {
+    fields.push(`liq_cue_out="${esc(opts.maxDurationSec)}"`);
+  }
+  return `annotate:${fields.join(',')}:${streamUri}`;
+}
+
 // Liquidsoap `annotate:` URI — embeds metadata up front so on_track_change
 // reports real artist/title/album rather than waiting on stream-level ID3.
-function escAnnotate(s) {
-  return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
-export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } = {}) {
-  const fields = [
-    `title="${escAnnotate(song.title)}"`,
-    `artist="${escAnnotate(song.artist)}"`,
-    `album="${escAnnotate(song.album)}"`,
-    `subsonic_id="${escAnnotate(song.id)}"`,
-  ];
-  if (song.year) fields.push(`year="${escAnnotate(song.year)}"`);
-  if (song.genre) fields.push(`genre="${escAnnotate(song.genre)}"`);
-  // DJ-mode adaptive blend: the queue stashes a per-transition crossfade length
-  // (seconds) on the track when the persona is in DJ mode and both tracks are
-  // analysed. Liquidsoap's `cross` honours `liq_cross_duration` to size the
-  // blend for this transition (radio.liq dj_transition reads the same key for
-  // its fades, keeping fade == buffer). Absent → Liquidsoap uses its startup
-  // crossfade_duration(), i.e. today's behaviour.
-  if (song.crossSec != null) fields.push(`liq_cross_duration="${escAnnotate(song.crossSec)}"`);
-  // Loudness normalisation: the queue stashes a per-track gain offset (dB,
-  // clamped) toward the loudness target when the track has a measured LUFS.
-  // Emitted in the "<n> dB" form Liquidsoap's amplify override parses natively
-  // (the same shape as replaygain_track_gain). radio.liq applies it via
-  // amplify(override="liq_amplify") before the ducking layers so quiet and loud
-  // tracks play at even perceived volume — masters untouched, no bus
-  // normaliser. Absent → no gain applied, i.e. unity / today's behaviour.
-  if (song.gainDb != null) fields.push(`liq_amplify="${escAnnotate(song.gainDb)} dB"`);
-  // Hard track-length cap (issue #447 / max-track-length). When the caller passes
-  // a positive cap, stamp `liq_cue_out` so radio.liq's `cue_cut` stops the track
-  // at that second offset — a real ceiling that fires no matter how the track
-  // reached the stream, not just a selection bias. Only the capped paths set it
-  // (autonomous picks in queue.drainToLiquidsoap + the auto.m3u fallback);
-  // explicit listener requests pass null and play in full. A cue_out past a
-  // shorter track's end is a Liquidsoap no-op, so sub-cap tracks play untouched.
-  if (opts.maxDurationSec != null && opts.maxDurationSec > 0) {
-    fields.push(`liq_cue_out="${escAnnotate(opts.maxDurationSec)}"`);
-  }
-  return `annotate:${fields.join(',')}:${getPlayableUri(song)}`;
+export function getAnnotatedUri(song: any, opts: { maxDurationSec?: number | null } = {}) {
+  return buildAnnotatedUri(song, getPlayableUri(song), opts);
 }

@@ -14,7 +14,7 @@
 // API is generous and the tagger loop is already sequential + per-artist cached).
 
 import * as settings from '../settings.js';
-import * as subsonic from './subsonic.js';
+import { getSource } from './source/index.js';
 
 const TIMEOUT_MS = 5000;
 const LASTFM_API = 'https://ws.audioscrobbler.com/2.0/';
@@ -103,6 +103,151 @@ export async function getArtistTopTags(
   }
 }
 
+// Similar artists for a given artist from Last.fm. Returns up to `count`
+// (default 10) artist name strings. Returns [] on missing key, no coverage, or
+// any request failure — same fire-and-forget contract as getArtistTopTags.
+export async function getSimilarArtists(
+  artist: string,
+  opts: { count?: number } = {},
+): Promise<string[]> {
+  const count = opts.count ?? 10;
+  const apiKey = resolveKey();
+  if (!apiKey || !artist || !artist.trim()) return [];
+
+  const params = new URLSearchParams({
+    method: 'artist.getSimilar',
+    artist,
+    limit: String(count),
+    api_key: apiKey,
+    format: 'json',
+  });
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const r = await fetch(`${LASTFM_API}?${params.toString()}`, {
+      method: 'GET',
+      headers: { 'User-Agent': 'sub-wave/tags' },
+      signal: ctrl.signal,
+    });
+    if (!r.ok) {
+      console.warn(`[lastfm] artist.getSimilar → ${r.status} for "${artist}"`);
+      return [];
+    }
+    const data = (await r.json()) as any;
+    if (data?.error) return [];
+    const raw = data?.similarartists?.artist ?? [];
+    const arr = Array.isArray(raw) ? raw : [raw];
+    return arr
+      .map((a: any) => (typeof a === 'string' ? a : a?.name))
+      .filter((s: any): s is string => typeof s === 'string' && s.trim().length > 0)
+      .map((s: string) => s.trim())
+      .slice(0, count);
+  } catch (err: any) {
+    console.warn(`[lastfm] artist.getSimilar failed for "${artist}": ${err?.message || err}`);
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Top tracks for an artist from Last.fm. Returns up to `count` (default 10)
+// objects with { title, artist }. Returns [] on missing key, no coverage, or
+// any request failure.
+export async function getTopTracks(
+  artist: string,
+  opts: { count?: number } = {},
+): Promise<{ title: string; artist: string }[]> {
+  const count = opts.count ?? 10;
+  const apiKey = resolveKey();
+  if (!apiKey || !artist || !artist.trim()) return [];
+
+  const params = new URLSearchParams({
+    method: 'artist.getTopTracks',
+    artist,
+    limit: String(count),
+    api_key: apiKey,
+    format: 'json',
+  });
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const r = await fetch(`${LASTFM_API}?${params.toString()}`, {
+      method: 'GET',
+      headers: { 'User-Agent': 'sub-wave/tags' },
+      signal: ctrl.signal,
+    });
+    if (!r.ok) {
+      console.warn(`[lastfm] artist.getTopTracks → ${r.status} for "${artist}"`);
+      return [];
+    }
+    const data = (await r.json()) as any;
+    if (data?.error) return [];
+    const raw = data?.toptracks?.track ?? [];
+    const arr = Array.isArray(raw) ? raw : [raw];
+    return arr
+      .map((t: any) => ({ title: String(t?.name || '').trim(), artist }))
+      .filter((t: { title: string; artist: string }) => t.title.length > 0)
+      .slice(0, count);
+  } catch (err: any) {
+    console.warn(`[lastfm] artist.getTopTracks failed for "${artist}": ${err?.message || err}`);
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Bio and genre tags for an artist from Last.fm. Returns null on missing key,
+// no coverage, or any request failure. Bio HTML is stripped to plain text.
+export async function getArtistInfo(
+  artist: string,
+): Promise<{ bio?: string; tags?: string[] } | null> {
+  const apiKey = resolveKey();
+  if (!apiKey || !artist || !artist.trim()) return null;
+
+  const params = new URLSearchParams({
+    method: 'artist.getInfo',
+    artist,
+    autocorrect: '1',
+    api_key: apiKey,
+    format: 'json',
+  });
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const r = await fetch(`${LASTFM_API}?${params.toString()}`, {
+      method: 'GET',
+      headers: { 'User-Agent': 'sub-wave/tags' },
+      signal: ctrl.signal,
+    });
+    if (!r.ok) {
+      console.warn(`[lastfm] artist.getInfo → ${r.status} for "${artist}"`);
+      return null;
+    }
+    const data = (await r.json()) as any;
+    if (data?.error) return null;
+    const a = data?.artist;
+    if (!a) return null;
+    const bio = String(a?.bio?.summary || '')
+      .replace(/<[^>]*>/g, '')
+      .trim() || undefined;
+    const rawTags = a?.tags?.tag ?? [];
+    const tagsArr = Array.isArray(rawTags) ? rawTags : [rawTags];
+    const tags = tagsArr
+      .map((t: any) => (typeof t === 'string' ? t : t?.name))
+      .filter((s: any): s is string => typeof s === 'string' && s.trim().length > 0)
+      .map((s: string) => s.toLowerCase().trim());
+    return { bio, tags: tags.length > 0 ? tags : undefined };
+  } catch (err: any) {
+    console.warn(`[lastfm] artist.getInfo failed for "${artist}": ${err?.message || err}`);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Best-available crowd tags for an artist. Prefers the direct Last.fm API when
 // an api_key is configured (works on vanilla Navidrome); otherwise routes
 // through Navidrome's getArtistInfo2, which only surfaces tag[] on a custom
@@ -122,10 +267,11 @@ export async function getArtistTags(
     return getArtistTopTags(artist, { count });
   }
   try {
-    const matches = await subsonic.searchArtists(artist, { artistCount: 1 });
+    const source = getSource();
+    const matches = await source.searchArtists(artist, { artistCount: 1 });
     const artistId = matches?.[0]?.id;
     if (!artistId) return [];
-    const tags = await subsonic.getArtistLastfmTags(artistId, { count });
+    const tags = await source.getArtistLastfmTags(artistId, { count });
     return Array.isArray(tags) ? tags : [];
   } catch {
     return [];

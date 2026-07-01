@@ -109,6 +109,35 @@ router.post('/onboarding/test-navidrome', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /onboarding/test-plex — body: { url, token }
+// ---------------------------------------------------------------------------
+router.post('/onboarding/test-plex', requireAdmin, async (req, res) => {
+  const { url, token } = req.body || {};
+  if (!url || !token) {
+    return res.status(400).json({ ok: false, error: 'url and token required' });
+  }
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const r = await fetch(`${String(url).replace(/\/$/, '')}/identity`, {
+      headers: { 'X-Plex-Token': String(token), 'Accept': 'application/json' },
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!r.ok) return res.json({ ok: false, error: `HTTP ${r.status}` });
+    const data: any = await r.json();
+    const mc = data?.MediaContainer;
+    return res.json({
+      ok: true,
+      version: mc?.version || '',
+      machineIdentifier: mc?.machineIdentifier || '',
+    });
+  } catch (err: any) {
+    return res.json({ ok: false, error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // POST /onboarding/test-llm — body: { provider, model, apiKey?, baseUrl? }
 // Constructs a one-off AI SDK model and asks it for a single token. Does NOT
 // touch the live llm settings.
@@ -208,18 +237,40 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
   try {
     // Navidrome — only the wizard-managed overlay; never mutate the live env.
     if (b.navidrome && typeof b.navidrome === 'object') {
+      const navidromePatch: Record<string, string> = {};
+      if (b.navidrome.url !== undefined) {
+        navidromePatch.url = String(b.navidrome.url || '').trim().replace(/\/$/, '');
+      }
+      if (b.navidrome.user !== undefined) {
+        navidromePatch.user = String(b.navidrome.user || '').trim();
+      }
+      const passVal = String(b.navidrome.pass || '').trim();
+      if (passVal) {
+        navidromePatch.pass = passVal;
+      }
+
       await saveSetupConfig({
-        navidrome: {
-          url: String(b.navidrome.url || '').trim().replace(/\/$/, ''),
-          user: String(b.navidrome.user || '').trim(),
-          pass: String(b.navidrome.pass || ''),
-        },
+        navidrome: navidromePatch,
       });
       // Apply to the live config so subsonic calls work without a restart.
-      if (b.navidrome.url) config.navidrome.url = String(b.navidrome.url).trim().replace(/\/$/, '');
-      if (b.navidrome.user) config.navidrome.user = String(b.navidrome.user).trim();
-      if (b.navidrome.pass !== undefined) config.navidrome.password = String(b.navidrome.pass);
+      if (navidromePatch.url) config.navidrome.url = navidromePatch.url;
+      if (navidromePatch.user) config.navidrome.user = navidromePatch.user;
+      if (passVal) config.navidrome.password = passVal;
       clearSetupConfigCache();
+    }
+
+    if (b.plex && typeof b.plex === 'object') {
+      const plexPatch: any = {};
+      if (b.plex.url !== undefined) {
+        plexPatch.url = String(b.plex.url || '').trim().replace(/\/$/, '');
+      }
+      const tokenVal = String(b.plex.token || '').trim();
+      if (tokenVal) {
+        plexPatch.token = tokenVal;
+      }
+      await saveSetupConfig({ plex: plexPatch });
+      if (plexPatch.url) config.plex.url = plexPatch.url;
+      if (tokenVal) config.plex.token = tokenVal;
     }
 
     // API keys — persisted to state/secrets.env (mode 0600), also set on

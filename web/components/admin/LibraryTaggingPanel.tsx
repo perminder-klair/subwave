@@ -152,7 +152,7 @@ interface TaggingPanelProps {
 // One friendly sentence per pipeline phase — shown under the live progress so
 // the operator knows what the run is actually doing right now.
 const PHASE_HINT: Record<TaggerProgress['phase'], string> = {
-  walk: 'Reading the track list from Navidrome.',
+  walk: 'Reading the track list from your music library.',
   enrich: 'Fetching Last.fm tags and lyrics that help the DJ understand each track.',
   embed: 'Computing similarity vectors so tags can spread between similar tracks.',
   seed: 'The DJ is deciding mood & energy for a representative set of tracks.',
@@ -534,7 +534,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 </>
               ) : (
                 p.tagger?.mode === 'analyze' ? 'Audio analysis in progress…'
-                  : p.tagger?.mode === 'reconcile' ? 'Reconciling with Navidrome…'
+                  : p.tagger?.mode === 'reconcile' ? 'Reconciling library…'
                   : 'Tagging in progress…'
               )}
             </span>
@@ -560,7 +560,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
               (p.tagger?.mode === 'analyze'
                 ? 'The analysis engine is listening to each track: measuring tempo and key, and fingerprinting how it sounds.'
                 : p.tagger?.mode === 'reconcile'
-                  ? 'Checking every track against Navidrome and removing entries for files that no longer exist.'
+                  ? 'Checking every track against your music source and removing entries for files that no longer exist.'
                   : 'The DJ is listening to each new track and deciding its mood & energy.')}
             {' '}You can keep browsing. This runs in the background.
           </div>

@@ -37,9 +37,12 @@ import { router as audienceRoutes } from './routes/audience.js';
 import { router as systemRoutes } from './routes/system.js';
 import { router as generateRoutes } from './routes/generate.js';
 import { router as doctorRoutes } from './routes/doctor.js';
+import { warmSourceCache } from './music/source/index.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
 import { loadSetupConfig } from './setup/config.js';
 import { getSetupStatus } from './setup/firstRun.js';
+import { migrationFlags } from './music/library-db.js';
+import { startTagger, tagger } from './broadcast/tagger.js';
 
 // Fail fast in production if the admin gate isn't configured.
 assertAdminConfigured();
@@ -96,7 +99,7 @@ app.listen(config.server.port, async () => {
     console.error('[secrets] load failed:', err.message);
   }
 
-  // Wizard overlay — Navidrome creds the operator typed in. Env wins; this
+  // Wizard overlay — music source creds the operator typed in. Env wins; this
   // only fills in fields that env didn't already provide.
   try {
     const sc = await loadSetupConfig();
@@ -105,6 +108,10 @@ app.listen(config.server.port, async () => {
       if (!process.env.NAVIDROME_USER && sc.navidrome.user) config.navidrome.user = sc.navidrome.user;
       if (!process.env.NAVIDROME_PASS && sc.navidrome.pass)
         config.navidrome.password = sc.navidrome.pass;
+    }
+    if (sc.plex) {
+      if (!process.env.PLEX_URL && sc.plex.url) config.plex.url = sc.plex.url;
+      if (!process.env.PLEX_TOKEN && sc.plex.token) config.plex.token = sc.plex.token;
     }
   } catch (err: any) {
     console.error('[setup-config] load failed:', err.message);
@@ -124,6 +131,21 @@ app.listen(config.server.port, async () => {
     );
   } catch (err) {
     console.error('[settings] load failed:', err.message);
+  }
+
+  // Warm the source cache so the first request picker call returns instantly.
+  try {
+    await warmSourceCache();
+  } catch (err: any) {
+    console.error('[source] warm cache failed:', err.message);
+  }
+
+  // Migration backfill: if migration 11 just ran, plex_thumb is NULL for all
+  // existing tracks. Auto-start a tagger walk to populate it without any
+  // manual action needed from the operator.
+  if (migrationFlags.needsPlexThumbBackfill && !tagger.running) {
+    console.log('[migration] backfilling plex_thumb — starting tagger walk...');
+    startTagger();
   }
 
   // Start the remote-TTS /health probe loop now that settings are loaded — its

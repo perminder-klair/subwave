@@ -1,4 +1,4 @@
-// Library coverage — total Navidrome song count vs tagged tracks, plus
+// Library coverage — total music-source song count vs tagged tracks, plus
 // acoustic-analysis coverage (tracks with bpm/key/intro) against that same
 // total.
 // `total` requires walking iterateAllSongs() once (one Subsonic call per
@@ -7,7 +7,7 @@
 // after a manual refresh. Concurrent /coverage requests share the in-flight
 // scan via a single promise.
 
-import * as subsonic from './subsonic.js';
+import { getSource } from './source/index.js';
 import * as library from './library.js';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
@@ -64,13 +64,23 @@ async function doScan() {
   cache.scanning = true;
   try {
     let count = 0;
-    for await (const _song of subsonic.iterateAllSongs()) count++;
+    for await (const _song of getSource().iterateAllSongs()) count++;
     cache.total = count;
     cache.scannedAt = new Date().toISOString();
   } finally {
     cache.scanning = false;
     inflight = null;
   }
+}
+
+// Return the last known cached total (null if never scanned).
+export function getTotal(): number | null {
+  return cache.scannedAt ? cache.total : null;
+}
+
+// Invalidate the cache so the next get() triggers a fresh scan.
+export function invalidate() {
+  cache.scannedAt = null;
 }
 
 // Kick off a scan if one isn't running. Non-blocking — callers read the

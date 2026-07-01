@@ -10,7 +10,7 @@
 
 import { tool } from 'ai';
 import { z } from 'zod';
-import * as subsonic from '../../../music/subsonic.js';
+import { getSource } from '../../../music/source/index.js';
 import * as library from '../../../music/library.js';
 import * as embeddings from '../../../music/embeddings.js';
 import { filterPickerCandidates, durationSeconds } from '../../../music/recency.js';
@@ -192,13 +192,13 @@ export function buildPickerTools({
       }),
       execute: async ({ query }) => {
         try {
-          let songs = await subsonic.search(query, { songCount: 25 });
+          let songs = await getSource().search(query, { songCount: 25 });
           // A lexical miss is often just a spelling/transliteration variance —
           // resolve the query as an artist and retry with the library's actual
           // spelling ("Sikandar Kahlon" → the tagged "Sikander Kahlon").
           if (songs.length === 0) {
-            const artist = await subsonic.resolveArtist(query);
-            if (artist) songs = await subsonic.search(artist.name, { songCount: 25 });
+            const artist = await getSource().resolveArtist(query);
+            if (artist) songs = await getSource().search(artist.name, { songCount: 25 });
           }
           const out = collect(songs);
           if (out.length > 0) return out;
@@ -219,7 +219,7 @@ export function buildPickerTools({
       description: 'Find songs similar to a given song id. Pass the currently-playing song id to keep the flow going.',
       inputSchema: z.object({ songId: z.string() }),
       execute: async ({ songId }) => {
-        try { return collect(await subsonic.getSimilarSongs(songId, { count: 20 })); }
+        try { return collect(await getSource().getSimilarSongs(songId, { count: 20 })); }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -228,7 +228,7 @@ export function buildPickerTools({
       description: 'Top songs for a named artist — good for staying in an artist\'s orbit without repeating a track.',
       inputSchema: z.object({ artist: z.string() }),
       execute: async ({ artist }) => {
-        try { return collect(await subsonic.getTopSongs(artist, { count: 15 })); }
+        try { return collect(await getSource().getTopSongs(artist, { count: 15 })); }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -240,7 +240,7 @@ export function buildPickerTools({
         // Keep the source list tight (newest ~6 tracks): collect() shuffles, so
         // a wide pool would let the shuffle drop the actual-newest tracks,
         // defeating "latest".
-        try { return collect(await subsonic.getRecentSongsByArtist(artist, { albums: 2, count: 6 })); }
+        try { return collect(await getSource().getRecentSongsByArtist(artist, { albums: 2, count: 6 })); }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -250,9 +250,9 @@ export function buildPickerTools({
       inputSchema: z.object({ genre: z.string().describe('a genre, language, or country word, e.g. "jazz", "turkish", "punjabi"') }),
       execute: async ({ genre }) => {
         try {
-          const name = await subsonic.resolveGenreName(genre);
+          const name = await getSource().resolveGenreName(genre);
           if (!name) return { error: `no library genre matching "${genre}"` };
-          return collect(await subsonic.getSongsByGenre(name, { count: 50 }));
+          return collect(await getSource().getSongsByGenre(name, { count: 50 }));
         }
         catch (err) { return { error: err.message }; }
       },
@@ -369,10 +369,10 @@ export function buildPickerTools({
       inputSchema: z.object({}),
       execute: async () => {
         try {
-          const albums = await subsonic.getRecentlyAddedAlbums({ size: 8 });
+          const albums = await getSource().getRecentlyAddedAlbums({ size: 8 });
           const out: any[] = [];
           for (const a of albums.slice(0, 5)) {
-            try { out.push(...(await subsonic.getAlbum(a.id)).slice(0, 3)); } catch {}
+            try { out.push(...(await getSource().getAlbum(a.id)).slice(0, 3)); } catch {}
           }
           return collect(out);
         } catch (err) { return { error: err.message }; }
@@ -383,7 +383,7 @@ export function buildPickerTools({
       description: "The operator's starred / favourite songs — always a safe, on-brand pick.",
       inputSchema: z.object({}),
       execute: async () => {
-        try { return collect(await subsonic.getStarred()); }
+        try { return collect(await getSource().getStarred()); }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -392,7 +392,7 @@ export function buildPickerTools({
       description: 'A random sample of songs from the library — use to break a predictable run.',
       inputSchema: z.object({}),
       execute: async () => {
-        try { return collect(await subsonic.getRandomSongs({ size: 18 })); }
+        try { return collect(await getSource().getRandomSongs({ size: 18 })); }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -457,14 +457,14 @@ export function buildPickerTools({
             // lands in `seen`. Try "artist title", then a resolved-artist retry
             // (spelling/transliteration), then title-only.
             const q = [guess.artist, guess.title].filter(Boolean).join(' ');
-            let songs = await subsonic.search(q, { songCount: 25 });
+            let songs = await getSource().search(q, { songCount: 25 });
             if (songs.length === 0 && guess.artist) {
-              const a = await subsonic.resolveArtist(guess.artist);
-              if (a) songs = await subsonic.search(`${a.name} ${guess.title}`, { songCount: 25 });
+              const a = await getSource().resolveArtist(guess.artist);
+              if (a) songs = await getSource().search(`${a.name} ${guess.title}`, { songCount: 25 });
             }
-            if (songs.length === 0) songs = await subsonic.search(guess.title, { songCount: 25 });
+            if (songs.length === 0) songs = await getSource().search(guess.title, { songCount: 25 });
             if (songs.length === 0 && guess.keyword && guess.keyword !== guess.title) {
-              songs = await subsonic.search(guess.keyword, { songCount: 25 });
+              songs = await getSource().search(guess.keyword, { songCount: 25 });
             }
             return { identified: guess, candidates: collect(songs) };
           } catch (err) { return { error: err.message }; }

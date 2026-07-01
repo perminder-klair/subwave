@@ -33,7 +33,7 @@ import WebhooksPanel from './WebhooksPanel';
 import BackupPanel from './BackupPanel';
 import {
   Radio, Palette, Cpu, Mic, Library, Search, Music, AudioLines,
-  Activity, Archive, Webhook, Save, AlertTriangle,
+  Activity, Archive, Webhook, Save, AlertTriangle, Music2, HelpCircle,
 } from 'lucide-react';
 
 const SECTIONS = [
@@ -45,6 +45,7 @@ const SECTIONS = [
   { id: 'search',   label: 'Web search', hint: 'live-facts backend', icon: Search },
   { id: 'jingles',  label: 'Jingles', hint: 'stingers', icon: Music },
   { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers', icon: AudioLines },
+  { id: 'music',    label: 'Music', hint: 'source · library', icon: Music2 },
   { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz', icon: Activity },
   { id: 'archives', label: 'Archives', hint: 'hourly recordings', icon: Archive },
   { id: 'webhooks', label: 'Webhooks', hint: 'outbound events', icon: Webhook },
@@ -230,6 +231,22 @@ const MP3_BITRATES = [64, 96, 128, 160, 192, 320] as const;
 const OPUS_BITRATES = [96, 128, 192, 256, 320] as const;
 const AAC_BITRATES = [128, 192, 256] as const;
 
+interface MusicNavidromeForm {
+  url: string;
+  user: string;
+  pass: string;
+}
+
+interface MusicPlexForm {
+  url: string;
+}
+
+interface MusicForm {
+  source: string;
+  navidrome: MusicNavidromeForm;
+  plex: MusicPlexForm;
+}
+
 interface FormState {
   jingleRatio: string;
   crossfadeDuration: string;
@@ -245,6 +262,8 @@ interface FormState {
   search: SearchForm;
   embedding: EmbeddingForm;
   scrobble: ScrobbleForm;
+  music: MusicForm;
+  musicKeyInput: string;
 }
 
 interface JingleEntry {
@@ -321,6 +340,7 @@ interface SettingsData {
       lastfm?: Partial<ScrobbleLastfmForm>;
       listenbrainz?: Partial<ScrobbleListenbrainzForm>;
     };
+    music?: { source?: string };
   };
   tts?: {
     engines?: string[];
@@ -363,6 +383,12 @@ interface SettingsData {
   streamOnAir?: boolean;
   // What timezone '' (Auto) resolves to — the controller's own zone.
   serverTimezone?: string;
+  // Setup config — navidrome/plex credentials from state/setup-config.json.
+  // Returned by /settings when available; used to pre-populate the Music section.
+  setup?: {
+    navidrome?: { url?: string; user?: string };
+    plex?: { url?: string };
+  };
 }
 
 interface SfxForm {
@@ -545,6 +571,18 @@ export default function SettingsPanel() {
           username: v.scrobble?.listenbrainz?.username ?? '',
         },
       },
+      music: {
+        source: v.music?.source || 'navidrome',
+        navidrome: {
+          url: data.setup?.navidrome?.url ?? '',
+          user: data.setup?.navidrome?.user ?? '',
+          pass: '',
+        },
+        plex: {
+          url: data.setup?.plex?.url ?? '',
+        },
+      },
+      musicKeyInput: '',
     });
   }, [data, form]);
 
@@ -817,6 +855,12 @@ export default function SettingsPanel() {
               <ScrobbleSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} adminFetch={adminFetch} refresh={refresh}
+              />
+            )}
+            {activeSection === 'music' && (
+              <MusicSection
+                data={data} form={form} setForm={updateForm} busy={busy}
+                saveSettings={saveSettings} adminFetch={adminFetch}
               />
             )}
           </>
@@ -5875,6 +5919,241 @@ function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch, 
           }
         />
       </Card>
+    </>
+  );
+}
+
+/* ── Music source ────────────────────────────────────────────────────── */
+
+interface MusicSectionProps extends SectionProps {
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+}
+
+function MusicSection({ data, form, setForm, busy, saveSettings, adminFetch }: MusicSectionProps) {
+  const [testResult, setTestResult] = useState<{ ok: boolean; detail?: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [showTokenGuide, setShowTokenGuide] = useState(false);
+  const isNavidrome = form.music.source === 'navidrome';
+
+  const testConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      if (isNavidrome) {
+        const r = await adminFetch('/onboarding/test-navidrome', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: form.music.navidrome.url,
+            user: form.music.navidrome.user,
+            pass: form.music.navidrome.pass,
+          }),
+        });
+        const j = (await r.json().catch(() => ({}))) as { ok?: boolean; serverVersion?: string; error?: string };
+        setTestResult({
+          ok: r.ok && j.ok !== false,
+          detail: r.ok && j.ok !== false
+            ? `Navidrome ${j.serverVersion || ''}`.trim()
+            : (j.error || `failed (${r.status})`),
+        });
+      } else {
+        const r = await adminFetch('/onboarding/test-plex', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: form.music.plex.url, token: form.musicKeyInput }),
+        });
+        const j = (await r.json().catch(() => ({}))) as { ok?: boolean; version?: string; error?: string };
+        setTestResult({
+          ok: r.ok && j.ok !== false,
+          detail: r.ok && j.ok !== false
+            ? `Plex ${j.version || ''}`.trim()
+            : (j.error || `failed (${r.status})`),
+        });
+      }
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const save = async () => {
+    await saveSettings({ music: { source: form.music.source } });
+    if (isNavidrome && (form.music.navidrome.url || form.music.navidrome.user || form.music.navidrome.pass)) {
+      await adminFetch('/onboarding/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ navidrome: form.music.navidrome }),
+      });
+    }
+    if (!isNavidrome && (form.music.plex.url || form.musicKeyInput)) {
+      const plexBody: Record<string, string> = {};
+      if (form.music.plex.url) plexBody.url = form.music.plex.url;
+      if (form.musicKeyInput) plexBody.token = form.musicKeyInput;
+      await adminFetch('/onboarding/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plex: plexBody }),
+      });
+    }
+  };
+
+  return (
+    <>
+      <SectionHeader
+        eyebrow="music"
+        title="Music source backend."
+        sub="Choose between Navidrome and Plex as the music library backend. Navidrome uses the Subsonic API; Plex uses X-Plex-Token auth. Only one backend is active at a time."
+        metrics={[
+          { n: data.values?.music?.source || 'navidrome', l: 'source', accent: true },
+        ]}
+      />
+
+      <Card title="Music source" sub="one backend at a time">
+        <div className="rule-label">backend</div>
+        <Seg
+          value={form.music.source}
+          options={[{ id: 'navidrome', label: 'Navidrome' }, { id: 'plex', label: 'Plex' }]}
+          onChange={(v: string) => setForm(f => ({ ...f, music: { ...f.music, source: v } }))}
+        />
+        <div className="field-hint mt-2">
+          {isNavidrome
+            ? 'Navidrome via the Subsonic API. Configure URL and credentials below.'
+            : 'Plex Media Server via X-Plex-Token auth. Enter your server URL and token below.'}
+        </div>
+
+        {isNavidrome && (
+          <>
+            <div className="rule-label">Navidrome</div>
+            <div className="field mt-3.5">
+              <Label>Server URL</Label>
+              <Input
+                value={form.music.navidrome.url}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, music: { ...f.music, navidrome: { ...f.music.navidrome, url: e.target.value } } }))
+                }
+                placeholder="http://navidrome:4533"
+                className="max-w-[360px]"
+              />
+            </div>
+            <div className="field mt-3.5">
+              <Label>Username</Label>
+              <Input
+                value={form.music.navidrome.user}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, music: { ...f.music, navidrome: { ...f.music.navidrome, user: e.target.value } } }))
+                }
+                placeholder="admin"
+                className="max-w-[360px]"
+              />
+            </div>
+            <div className="field mt-3.5">
+              <Label>Password</Label>
+              <Input
+                type="password"
+                value={form.music.navidrome.pass}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, music: { ...f.music, navidrome: { ...f.music.navidrome, pass: e.target.value } } }))
+                }
+                placeholder="leave blank to keep existing"
+                className="max-w-[360px]"
+              />
+            </div>
+          </>
+        )}
+
+        {!isNavidrome && (
+          <>
+            <div className="rule-label">Plex Media Server</div>
+            <div className="field mt-3.5">
+              <Label>Server URL</Label>
+              <Input
+                value={form.music.plex.url}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, music: { ...f.music, plex: { url: e.target.value } } }))
+                }
+                placeholder="http://192.168.0.158:32400"
+                className="max-w-[360px]"
+              />
+              <div className="field-hint">Base URL of your Plex Media Server including port.</div>
+            </div>
+            <div className="field mt-3.5">
+              <div className="flex items-center gap-2">
+                <Label>X-Plex-Token</Label>
+                <button
+                  type="button"
+                  onClick={() => setShowTokenGuide(true)}
+                  className="flex items-center gap-1 text-[11px] text-muted transition-colors hover:text-ink"
+                  aria-label="How to find your Plex token"
+                >
+                  <HelpCircle size={12} />
+                  <span>How to find</span>
+                </button>
+              </div>
+              <Input
+                type="password"
+                value={form.musicKeyInput}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, musicKeyInput: e.target.value }))
+                }
+                placeholder={data.setup?.plex?.url ? 'set — leave blank to keep' : 'paste your Plex token'}
+                className="max-w-[360px]"
+              />
+            </div>
+          </>
+        )}
+
+        <Modal
+          open={showTokenGuide}
+          onOpenChange={setShowTokenGuide}
+          title="Finding your X-Plex-Token"
+          sub="one-time setup"
+          width={500}
+          footer={<Btn onClick={() => setShowTokenGuide(false)}>Done</Btn>}
+        >
+          <div className="space-y-4 text-sm">
+            <div>
+              <div className="eyebrow mb-2">Method 1 — Plex Web App</div>
+              <ol className="list-decimal space-y-1.5 pl-4 leading-relaxed text-ink/80">
+                <li>Open your Plex Web App (e.g. <code className="caption rounded bg-[var(--ink-softer)] px-1">{form.music.plex.url || 'http://your-plex:32400'}/web</code>)</li>
+                <li>Click on any song, album, or movie</li>
+                <li>Click the <strong>...</strong> (three-dot) menu on the item</li>
+                <li>Click <strong>Get Info</strong></li>
+                <li>In the dialog, click <strong>View XML</strong></li>
+                <li>Look at the URL in the new tab — copy the value after <code className="caption rounded bg-[var(--ink-softer)] px-1">X-Plex-Token=</code></li>
+              </ol>
+            </div>
+            <div className="border-t border-ink/20 pt-4">
+              <div className="eyebrow mb-2">Method 2 — Preferences.xml (server)</div>
+              <p className="mb-2 text-ink/70">SSH into your Plex server and run:</p>
+              <pre className="caption overflow-x-auto rounded bg-[var(--ink-softer)] p-2">grep PlexOnlineToken &quot;/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Preferences.xml&quot;</pre>
+              <p className="field-hint mt-1">The token is the value of the <code>PlexOnlineToken</code> attribute.</p>
+            </div>
+          </div>
+        </Modal>
+
+        <div className="flex items-center gap-3 pt-1">
+          <Btn sm onClick={testConnection} disabled={testing || busy}>
+            {testing ? 'Testing…' : 'Test connection'}
+          </Btn>
+          {testResult && (
+            <span
+              className={
+                testResult.ok
+                  ? 'text-[12px] text-[color:var(--accent)]'
+                  : 'text-[12px] text-[var(--danger)]'
+              }
+            >
+              {testResult.ok ? '✓ ' : '✗ '}{testResult.detail}
+            </span>
+          )}
+        </div>
+      </Card>
+
+      <SaveBar
+        note="Applies on the next track pick, no restart needed."
+        busy={busy}
+        onSave={save}
+        saveLabel="Save music source"
+      />
     </>
   );
 }

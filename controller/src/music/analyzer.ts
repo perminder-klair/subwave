@@ -19,7 +19,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdirSync, createWriteStream, readFileSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
-import * as subsonic from './subsonic.js';
+import { getSource } from './source/index.js';
 
 // A structural span over the track, in milliseconds (span shape). Spans
 // are contiguous and cover the analysed window; the first is the intro/leading
@@ -440,7 +440,7 @@ export async function refreshCapabilities(): Promise<void> {
 export async function analyze(songId: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
-  const url = subsonic.getRawStreamUrl(songId);
+  const url = getSource().getRawStreamUrl(songId);
   return backend === 'sidecar' ? analyzeViaSidecar(url, opts) : analyzeViaLocal(url, opts);
 }
 
@@ -480,7 +480,7 @@ function subsonicErrorMessage(body: string): string {
 export async function downloadCapped(songId: string): Promise<string> {
   mkdirSync(ANALYZE_TMP_DIR, { recursive: true });
   const dest = `${ANALYZE_TMP_DIR}/${encodeURIComponent(songId)}.audio`;
-  const url = subsonic.getRawStreamUrl(songId);
+  const url = getSource().getRawStreamUrl(songId);
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), config.analyzer.requestTimeoutMs);
   try {
