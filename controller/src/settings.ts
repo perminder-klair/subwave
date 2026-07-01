@@ -1110,7 +1110,7 @@ function normalizeTts(raw: any) {
 function normalizePersona(raw: any) {
   if (!raw || typeof raw !== 'object') return null;
   const name = typeof raw.name === 'string' ? raw.name.trim().slice(0, 40) : '';
-  const soul = typeof raw.soul === 'string' ? raw.soul.trim().slice(0, 400) : '';
+  const soul = typeof raw.soul === 'string' ? raw.soul.trim().slice(0, 1000) : '';
   if (!name || !soul) return null;
   // Avatar — stored as a bare basename. Reset to '' if the persisted value
   // doesn't match the strict basename shape, so a hand-edited settings.json
@@ -1811,8 +1811,8 @@ export function validatePersonasStrict(raw) {
     if (name.length < 1 || name.length > 40)
       throw new Error(`personas[${i}].name must be 1-40 chars`);
     const soul = String(item.soul ?? '').trim();
-    if (soul.length < 1 || soul.length > 400)
-      throw new Error(`personas[${i}].soul must be 1-400 chars`);
+    if (soul.length < 1 || soul.length > 1000)
+      throw new Error(`personas[${i}].soul must be 1-1000 chars`);
     const tagline = String(item.tagline ?? '').trim();
     if (tagline.length > 80) throw new Error(`personas[${i}].tagline must be 0-80 chars`);
     // language — optional free text ("Turkish", "Türkçe", …). Absent/empty →
