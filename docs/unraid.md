@@ -158,6 +158,13 @@ loudness, and "sounds-like" fingerprints behind the Library Observatory. It's
 leaves it down. If the **acoustic engine reads "off"** in admin → Library, this
 is why.
 
+> **Only want the analysis, not the voices?** Use `COMPOSE_PROFILES=analyzer`
+> instead of `tts-heavy` below. That starts the leaner standalone
+> `subwave-analyzer` image (~1.4 GB vs ~6 GB) — same tempo/key/loudness +
+> "sounds-like" analysis, without the Chatterbox/PocketTTS speech models. Pick
+> one: `tts-heavy` gives you voices *and* analysis; `analyzer` gives you
+> analysis alone.
+
 On Unraid you can't pass `--profile tts-heavy` to the `up` Compose Manager runs
 for you, so activate the profile from the **.env** instead:
 

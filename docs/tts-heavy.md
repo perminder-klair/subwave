@@ -22,6 +22,14 @@ as **off**, this page is how you turn it on.
 > analysis backend — not a stored setting. When the sidecar is down, existing
 > data stays put; you just can't run *new* analysis until it's back up.
 
+> **Only want analysis, not voices?** Acoustic analysis also ships as a
+> standalone **`analyzer`** profile — a leaner image (~1.4 GB, or ~370 MB built
+> with `WITH_CLAP=0 WITH_DEMUCS=0`) that drops Chatterbox/PocketTTS. Enable it
+> with `docker compose --profile analyzer up -d`. Everything below about
+> *analysis* applies to it unchanged; the controller checks `ANALYZE_URL` first
+> and falls back to the `tts-heavy` sidecar, so either image serves it. See
+> [Running analysis without the heavy voices](#running-analysis-without-the-heavy-voices).
+
 ---
 
 ## Why it's off by default
@@ -116,12 +124,33 @@ heatmap.
   on an **older `tts-heavy` image** built without the full stack — pull the
   latest image and recreate the sidecar.
 
-### Running analysis without the sidecar (dev / offline)
+### Running analysis without the heavy voices
 
-The analyzer has a second backend: a **local Python venv** with `librosa`
+If you want the analysis but not Chatterbox/PocketTTS, run the standalone
+**`analyzer`** sidecar instead of `tts-heavy`:
+
+```bash
+docker compose --profile analyzer up -d
+# dev:  docker compose -f docker-compose.dev.yml --profile analyzer up -d
+# byo:  docker compose -f docker-compose.byo.yml  --profile analyzer up -d
+```
+
+It's the same analysis worker (bpm/key/intro/loudness, CLAP "sounds-like",
+Demucs vocals) in a `subwave-analyzer` image that skips the ~5 GB of speech
+models. The controller reaches it via `ANALYZE_URL` (defaulted to
+`http://analyzer:8080` in all three compose files) and falls back to
+`TTS_HEAVY_URL` — so if you already run `--profile tts-heavy`, analysis keeps
+working and you don't need this profile. Run **one** of the two; running both
+just means the dedicated analyzer wins. Everything in
+[Verify it's running](#verify-its-running) applies, swapping `tts-heavy` for
+`analyzer` in the container/hostname.
+
+### Running analysis without a sidecar (dev / offline)
+
+The analyzer has a third backend: a **local Python venv** with `librosa`
 installed. Point the controller at it with `ANALYZE_PYTHON=/path/to/venv/bin/python`
 and it runs analysis in-process, no sidecar needed. This is mainly for
-contributors on a dev machine; production should use the sidecar.
+contributors on a dev machine; production should use a sidecar.
 
 ---
 

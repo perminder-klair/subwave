@@ -490,13 +490,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         {audioIncapable && p.audioEnabled ? (
           <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
             <b>Sounds-like is on, but the analysis engine can’t fingerprint audio.</b> Pull the latest
-            tts-heavy image and recreate the sidecar to enable CLAP embeddings.
+            analyzer (or tts-heavy) image and recreate the sidecar to enable CLAP embeddings.
           </div>
         ) : null}
         {vocalIncapable && p.vocalEnabled ? (
           <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
             <b>Vocal-activity is on, but the analysis engine can’t separate vocals.</b> Pull the latest
-            tts-heavy image and recreate the sidecar to enable vocal ranges.
+            analyzer (or tts-heavy) image and recreate the sidecar to enable vocal ranges.
           </div>
         ) : null}
       </div>

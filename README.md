@@ -137,6 +137,18 @@ to Piper. The old `docker build --build-arg WITH_CHATTERBOX=1` path still
 works if you already have a custom-built controller image — see
 `docker/Dockerfile.controller`.
 
+Acoustic analysis (tempo/key/loudness + "sounds-like" fingerprints) ships in
+the same `tts-heavy` sidecar, but if analysis is *all* you want, the leaner
+`subwave-analyzer` image (~1.4 GB vs ~6 GB) runs it standalone:
+
+```bash
+docker compose --profile analyzer up -d
+```
+
+The controller discovers it automatically (`ANALYZE_URL`, falling back to the
+`tts-heavy` sidecar), so an existing `--profile tts-heavy` install keeps its
+analysis with no change.
+
 ### Local dev (contributors)
 
 ```bash
@@ -198,7 +210,7 @@ Icecast stream on `:7702` (all configurable). Point your proxy at those three.
 `docker/Caddyfile` is a working reference for the route table you need to
 replicate. Details in [`DEPLOY.md`](DEPLOY.md#bring-your-own-reverse-proxy).
 
-**Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-{caddy,broadcast,controller,web}`.
+**Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-{caddy,broadcast,controller,web}`, plus the optional sidecar images `subwave-tts-heavy` (voices + analysis) and `subwave-analyzer` (analysis only).
 All compose files pull `:latest` by default; pin a version with
 `SUBWAVE_VERSION=v1.2.3` in the root `.env`.
 
@@ -259,7 +271,7 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 
 - **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
 - **[`docs/unraid.md`](docs/unraid.md):** running on Unraid — one-click from Community Applications, or the Compose Manager Plus stack.
-- **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the optional heavy sidecar — expressive voices and acoustic analysis, and how to turn it on.
+- **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the optional sidecars — expressive voices (`tts-heavy`) and acoustic analysis (bundled in `tts-heavy`, or the leaner standalone `analyzer` profile), and how to turn them on.
 - **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
   non-obvious constraints behind each subsystem.
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.
