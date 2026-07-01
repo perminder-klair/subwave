@@ -269,9 +269,11 @@ async function main() {
   // Tunables from settings.embedding, CLI flags override where present.
   const embedCfg: any = (settings.get() as any).embedding ?? {};
   const maxRounds = flags.maxRounds ?? Math.max(0, embedCfg.maxActiveLearningRounds ?? 3);
-  const knnK = Math.max(1, embedCfg.knnNeighbours ?? 5);
-  const moodVoteThreshold = clamp01(embedCfg.moodVoteThreshold ?? 0.6);
-  const confidenceThreshold = clamp01(embedCfg.confidenceThreshold ?? 0.6);
+  // Fallbacks kept in sync with DEFAULTS.embedding in settings.ts (settings.get()
+  // normally supplies these; the ?? only bites if the field is entirely absent).
+  const knnK = Math.max(1, embedCfg.knnNeighbours ?? 10);
+  const moodVoteThreshold = clamp01(embedCfg.moodVoteThreshold ?? 0.4);
+  const confidenceThreshold = clamp01(embedCfg.confidenceThreshold ?? 0.35);
   const seedCountCfg =
     typeof embedCfg.seedCount === 'number' && embedCfg.seedCount > 0
       ? embedCfg.seedCount
@@ -643,7 +645,14 @@ async function main() {
 }
 
 function autoSeedCount(librarySize: number): number {
-  return Math.max(200, Math.ceil(Math.sqrt(librarySize)));
+  // ~4% of the library, floored at 200 (small libraries still get a workable
+  // anchor set) and capped at 2500 (a 100k-track library shouldn't pay for 10k
+  // LLM seed tags — propagation carries the rest). Denser than the old
+  // ceil(sqrt(N)), which flatlined at 200 for everything up to ~40k tracks and
+  // left too few anchors for KNN propagation to fire before active-learning.
+  // A denser seed set is often net-cheaper: more seeds → higher propagation
+  // coverage → a smaller (expensive) active-learning residual.
+  return Math.max(200, Math.min(2500, Math.round(librarySize * 0.04)));
 }
 
 function finish(

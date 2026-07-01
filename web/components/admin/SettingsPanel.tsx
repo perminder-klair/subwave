@@ -521,9 +521,9 @@ export default function SettingsPanel() {
         baseUrl: v.embedding?.baseUrl ?? '',
         ollamaUrl: v.embedding?.ollamaUrl ?? '',
         seedCount: String(v.embedding?.seedCount ?? 0),
-        knnNeighbours: String(v.embedding?.knnNeighbours ?? 5),
-        moodVoteThreshold: String(v.embedding?.moodVoteThreshold ?? 0.6),
-        confidenceThreshold: String(v.embedding?.confidenceThreshold ?? 0.6),
+        knnNeighbours: String(v.embedding?.knnNeighbours ?? 10),
+        moodVoteThreshold: String(v.embedding?.moodVoteThreshold ?? 0.4),
+        confidenceThreshold: String(v.embedding?.confidenceThreshold ?? 0.35),
         maxActiveLearningRounds: String(v.embedding?.maxActiveLearningRounds ?? 3),
         enrichment: {
           lastfmTags: v.embedding?.enrichment?.lastfmTags ?? false,
@@ -3688,9 +3688,9 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
         baseUrl: e.baseUrl,
         ollamaUrl: e.ollamaUrl,
         seedCount: parseInt(e.seedCount, 10) || 0,
-        knnNeighbours: parseInt(e.knnNeighbours, 10) || 5,
-        moodVoteThreshold: parseFloat(e.moodVoteThreshold) || 0.6,
-        confidenceThreshold: parseFloat(e.confidenceThreshold) || 0.6,
+        knnNeighbours: parseInt(e.knnNeighbours, 10) || 10,
+        moodVoteThreshold: parseFloat(e.moodVoteThreshold) || 0.4,
+        confidenceThreshold: parseFloat(e.confidenceThreshold) || 0.35,
         maxActiveLearningRounds: parseInt(e.maxActiveLearningRounds, 10) || 0,
         enrichment: {
           lastfmTags: e.enrichment.lastfmTags,
@@ -4208,8 +4208,10 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
             />
             <div className="field-hint">
               How many tracks the LLM tags by hand before propagation kicks in.
-              <code> 0</code> = auto: <code>max(200, ceil(sqrt(library)))</code>.
-              For a 5k library that&apos;s ~70; for 50k, ~220. CLI{' '}
+              <code> 0</code> = auto: <code>~4% of the library</code> (floored at
+              200, capped at 2500). For a 5k library that&apos;s 200; for 50k,
+              2000. A denser seed set is often net-cheaper — more anchors means a
+              smaller (expensive) active-learning residual. CLI{' '}
               <code>--seeds N</code> overrides this.
             </div>
           </div>
@@ -4235,8 +4237,9 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
             />
             <div className="field-hint">
               How many nearest tagged neighbours vote on an untagged track&apos;s
-              moods + energy. 5 is the well-tuned default; higher values smooth
-              over noise but blur edge cases.
+              moods + energy. Default <code>10</code> — a broader, steadier vote
+              than the old 5. Very high values dilute the vote on a sparsely-tagged
+              library (coverage below counts against confidence).
             </div>
           </div>
 
@@ -4258,8 +4261,8 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
             />
             <div className="field-hint">
               Fraction of voting neighbours that must carry a mood for it to
-              propagate. <code>0.6</code> ≈ 3-out-of-5 with the default
-              neighbour count. Higher = stricter, fewer propagated tags;
+              propagate. Default <code>0.4</code> — a mood shared by ~a third of
+              the voters carries. Higher = stricter, fewer propagated tags;
               lower = looser, more drift.
             </div>
           </div>
@@ -4281,9 +4284,13 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
               className="max-w-[180px]"
             />
             <div className="field-hint">
-              Minimum aggregate confidence (similarity × agreement) for a
-              propagated tag to be accepted. Below this, the track is queued
-              for LLM tagging instead.
+              Minimum confidence for a propagated tag to be accepted; below it the
+              track is queued for (pricier) LLM tagging. Confidence is{' '}
+              <code>topSim × coverage</code> — the nearest tagged neighbour&apos;s
+              similarity times the fraction of neighbours that were tagged. Being a
+              product of two sub-1 numbers it compounds fast, so the default is{' '}
+              <code>0.35</code>, not 0.6 (0.6 rejected even strong matches and sent
+              most tracks to the LLM).
             </div>
           </div>
 

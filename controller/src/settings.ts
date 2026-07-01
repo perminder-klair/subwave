@@ -939,10 +939,18 @@ const DEFAULTS = {
     baseUrl: '',          // openai-compatible / locca embedding server URL (with /v1)
     ollamaUrl: '',        // Ollama embedding server URL (ollama provider)
     apiKey: '',           // empty -> inherit settings.llm.apiKey
-    seedCount: 0,         // 0 → auto max(200, ceil(sqrt(library)))
-    knnNeighbours: 5,
-    moodVoteThreshold: 0.6,
-    confidenceThreshold: 0.6,
+    seedCount: 0,         // 0 → auto (see autoSeedCount in tag-library.ts: ~4% of
+                          //   the library, floored 200 / capped 2500)
+    // Propagation defaults. These were 5 / 0.6 / 0.6 and propagated almost
+    // nothing: confidence is topSim×coverage (a product of two sub-1 terms — see
+    // tag-propagator.ts), so a 0.6 gate rejected even strong matches and dumped
+    // the library into expensive active-learning. Loosened so KNN propagation
+    // actually carries the bulk of tagging. NOTE: only affects NEW installs / a
+    // reset — an existing settings.json keeps its saved values (loadWithDefaults
+    // below prefers a stored value), so operators are never silently overridden.
+    knnNeighbours: 10,        // was 5 — a broader, more stable neighbour vote
+    moodVoteThreshold: 0.4,   // was 0.6 — a mood carried by ~a third propagates
+    confidenceThreshold: 0.35, // was 0.6 — see the topSim×coverage note above
     maxActiveLearningRounds: 3,
     enrichment: {
       // Last.fm crowd tags. Tri-state: true = always fetch, false = never,
