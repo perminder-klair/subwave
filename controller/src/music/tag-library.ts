@@ -45,7 +45,7 @@ import { config } from '../config.js';
 import { loadSecretsIntoEnv } from '../setup/secrets.js';
 import { loadSetupConfig } from '../setup/config.js';
 import { activeModelLabel, primaryLeg, fallbackLeg, probeLegReachable } from '../llm/provider.js';
-import { isUnreachable, isQuotaOrAuthError } from '../llm/sdk.js';
+import { isUnreachable, isQuotaOrAuthError, errReason } from '../llm/sdk.js';
 import { tagBatch, tagOne, TAGGER_BATCH_SYSTEM, type TagResult } from './tagger-core.js';
 import { runAnalysisPass } from './analyze.js';
 import { reportProgress, formatPhaseBreakdown, sortedPhaseTimings } from './tagger-progress.js';
@@ -985,7 +985,7 @@ async function runConsumer(
       const remaining = onDrop ? onDrop(err) : 0;
       const reason = isQuotaOrAuthError(err) ? 'quota/credit/auth rejected' : 'host unreachable';
       console.log(
-        `[tag] LLM leg ${consumer.label} dropped — ${reason}: ${err.message} (${remaining} leg(s) left)`,
+        `[tag] LLM leg ${consumer.label} dropped — ${reason}: ${errReason(err)} (${remaining} leg(s) left)`,
       );
       return;
     }

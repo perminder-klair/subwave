@@ -7,7 +7,7 @@
 // node:assert-via-tsx style of scripts/picker-recency-regression.ts.
 
 import assert from 'node:assert/strict';
-import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded } from '../src/llm/internal/core/pure.js';
+import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, errReason } from '../src/llm/internal/core/pure.js';
 import { withDeadline } from '../src/llm/internal/core/retry.js';
 import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
@@ -125,6 +125,26 @@ async function main() {
     assert.equal(isUpstreamOverloaded({ statusCode: 429, message: 'rate limit exceeded, slow down' }), false);
     assert.equal(isUpstreamOverloaded({ code: 'ECONNRESET' }), false);
     assert.equal(isUpstreamOverloaded(null), false);
+  });
+
+  // ---- errReason: turn undici's opaque "fetch failed" into an actionable log ----
+  console.log('errReason (log-friendly cause; digs the errno out of err.cause):');
+  await test('undici "fetch failed" surfaces the errno from err.cause.code, not "unknown"', () => {
+    // The Discord shape: the request never reached OpenRouter, so there is no
+    // HTTP status — the real reason (ECONNRESET / ENOTFOUND / ETIMEDOUT) is on
+    // the cause. The old retry log only read err.code and printed "unknown".
+    const e: any = new TypeError('fetch failed');
+    e.cause = { code: 'ECONNRESET' };
+    assert.equal(errReason(e), 'fetch failed (ECONNRESET)');
+    const dns: any = new TypeError('fetch failed');
+    dns.cause = { code: 'ENOTFOUND' };
+    assert.equal(errReason(dns), 'fetch failed (ENOTFOUND)');
+  });
+  await test('prefers a status when there is no errno, and never double-prints', () => {
+    assert.equal(errReason({ statusCode: 503 }), '503');
+    assert.equal(errReason({ message: '503 Service Unavailable', statusCode: 503 }), '503 Service Unavailable');
+    assert.equal(errReason(new Error('Insufficient credits. Add more credits and retry.')), 'Insufficient credits. Add more credits and retry.');
+    assert.equal(errReason(null), 'unknown');
   });
 
   // ---- per-provider thinking knob (the single most regression-prone mapping) ----

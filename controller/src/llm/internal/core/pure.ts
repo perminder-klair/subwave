@@ -207,6 +207,23 @@ export function isUpstreamOverloaded(err: any): boolean {
   return UPSTREAM_OVERLOAD_RE.test(msg);
 }
 
+// A short, actionable reason string for logs. A network-transport failure
+// surfaces as undici's opaque `TypeError: fetch failed` — the real errno
+// (ECONNRESET / ENOTFOUND / ETIMEDOUT / UND_ERR_*) lives on err.cause.code,
+// NOT err.code, so a log that only reads err.code/status prints "unknown" for
+// exactly the case an operator most needs to see (a request that never reached
+// the provider — Discord: "it's not even seeing requests"). Digs into the cause
+// and appends the errno/status to the message when it adds something.
+export function errReason(err: any): string {
+  if (!err) return 'unknown';
+  const msg = String(err.message || err.cause?.message || '').trim();
+  const code = err.code ?? err.cause?.code;
+  const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
+  const detail = typeof code === 'string' ? code : typeof status === 'number' ? String(status) : '';
+  if (msg && detail && !msg.includes(detail)) return `${msg.slice(0, 100)} (${detail})`;
+  return msg.slice(0, 100) || detail || 'unknown';
+}
+
 // ---------------------------------------------------------------------------
 // Tool-call / diagnostics extraction
 // ---------------------------------------------------------------------------
