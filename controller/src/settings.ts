@@ -502,7 +502,7 @@ export const AVATAR_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'] as const;
 // source of truth for which slugs exist; settings only checks the shape.
 const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
 
-const PERSONA_LIMIT = 12;
+const PERSONA_LIMIT = 24;
 const SHOWS_LIMIT = 64;
 const PLAYLISTS_PER_SHOW = 10;
 const SKILLS_PER_PERSONA_LIMIT = 20;
