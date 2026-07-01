@@ -18,7 +18,7 @@ import { preferGenre, preferEra } from '../../../music/show-filter.js';
 import { searchWeb, searchReady } from '../../../skills/web-search.js';
 import { identifyTrackFromText } from '../prompts/request.js';
 
-function slim(s: any) {
+async function slim(s: any) {
   const base = {
     id: s.id,
     title: s.title,
@@ -36,7 +36,7 @@ function slim(s: any) {
   // PICKER_CRITERIA in llm/dj.ts.
   const src = (s.bpm != null || s.musicalKey != null || s.introMs != null)
     ? s
-    : (s.id ? library.get(s.id) : null);
+    : (s.id ? await library.get(s.id) : null);
   // Length reads from whichever field the raw candidate carries (Subsonic
   // `duration`, library `durationSec`), so it's present even for an un-tagged
   // Subsonic track whose library lookup came back empty.
@@ -80,7 +80,7 @@ function shuffle<T>(arr: T[]): T[] {
 // neighbours — so an artist-recency strip gutted them to ~1 result while the
 // 12h track guard already prevents literal repeats (issue: thin picker pools on
 // niche catalogues). Track-recency alone is enough.
-export function buildPickerTools({
+export async function buildPickerTools({
   recentIds = new Set<string>(),
   recentKeys = new Set<string>(),
   hardRecentIds = new Set<string>(),
@@ -143,7 +143,7 @@ export function buildPickerTools({
   // lower for the picker agent — see picker-latency notes in dj-agent.js. The
   // seen map still accumulates across the whole loop, so the agent's id space
   // grows with each tool call regardless.
-  const collect = (list: any, cap = 8) => {
+  const collect = async (list: any, cap = 8) => {
     // Strict show: filter candidates BEFORE recency + cap, so the 8 the agent
     // sees are genre-/era-pure. Both never-starve (fall back to the full list
     // when a tool returns no match), so a thin genre/era degrades to off-target
@@ -166,7 +166,7 @@ export function buildPickerTools({
     });
     const out: any[] = [];
     for (const s of accepted) {
-      const slimmed = slim(s);
+      const slimmed = await slim(s);
       seen.set(s.id, slimmed);
       out.push(slimmed);
     }
@@ -179,7 +179,7 @@ export function buildPickerTools({
   // Tools whose backing index is empty are conditionally registered below:
   // offering a dead tool steers the model into a ~75 s timeout before the
   // pool-fallback rescues it (the "DJ Latency 75s" spike, 18% pick failure).
-  const _stats = library.stats();
+  const _stats = await library.stats();
   const hasTextEmbeddings  = (_stats.withEmbedding      ?? 0) > 0;
   const hasAudioEmbeddings = (_stats.withAudioEmbedding ?? 0) > 0;
   const hasEmbeddingProvider = embeddings.isAvailable();
@@ -200,7 +200,7 @@ export function buildPickerTools({
             const artist = await subsonic.resolveArtist(query);
             if (artist) songs = await subsonic.search(artist.name, { songCount: 25 });
           }
-          const out = collect(songs);
+          const out = await collect(songs);
           if (out.length > 0) return out;
           // Lexical search3 found nothing — fall back to semantic embedding
           // search over the library (same path as searchByLyrics) so vibe
@@ -209,7 +209,7 @@ export function buildPickerTools({
           await library.load();
           const [vec] = await embeddings.embedTexts([query.trim()]);
           if (!vec) return out;
-          return collect(library.tracksByVector(vec, 20));
+          return await collect(await library.tracksByVector(vec, 20));
         }
         catch (err) { return { error: err.message }; }
       },
@@ -219,7 +219,7 @@ export function buildPickerTools({
       description: 'Find songs similar to a given song id. Pass the currently-playing song id to keep the flow going.',
       inputSchema: z.object({ songId: z.string() }),
       execute: async ({ songId }) => {
-        try { return collect(await subsonic.getSimilarSongs(songId, { count: 20 })); }
+        try { return await collect(await subsonic.getSimilarSongs(songId, { count: 20 })); }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -228,7 +228,7 @@ export function buildPickerTools({
       description: 'Top songs for a named artist — good for staying in an artist\'s orbit without repeating a track.',
       inputSchema: z.object({ artist: z.string() }),
       execute: async ({ artist }) => {
-        try { return collect(await subsonic.getTopSongs(artist, { count: 15 })); }
+        try { return await collect(await subsonic.getTopSongs(artist, { count: 15 })); }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -240,7 +240,7 @@ export function buildPickerTools({
         // Keep the source list tight (newest ~6 tracks): collect() shuffles, so
         // a wide pool would let the shuffle drop the actual-newest tracks,
         // defeating "latest".
-        try { return collect(await subsonic.getRecentSongsByArtist(artist, { albums: 2, count: 6 })); }
+        try { return await collect(await subsonic.getRecentSongsByArtist(artist, { albums: 2, count: 6 })); }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -252,7 +252,7 @@ export function buildPickerTools({
         try {
           const name = await subsonic.resolveGenreName(genre);
           if (!name) return { error: `no library genre matching "${genre}"` };
-          return collect(await subsonic.getSongsByGenre(name, { count: 50 }));
+          return await collect(await subsonic.getSongsByGenre(name, { count: 50 }));
         }
         catch (err) { return { error: err.message }; }
       },
@@ -273,9 +273,9 @@ export function buildPickerTools({
       execute: async ({ mood, energy }) => {
         try {
           await library.load();
-          let rows = library.songsByMood(mood);
+          let rows = await library.songsByMood(mood);
           if (energy) rows = rows.filter((r: any) => r.energy === energy);
-          return collect(rows);
+          return await collect(rows);
         }
         catch (err) { return { error: err.message }; }
       },
@@ -285,7 +285,7 @@ export function buildPickerTools({
       description: 'Songs tagged with a specific energy level: low (slow / mellow / ambient), medium (mid-tempo / steady), or high (uptempo / driving). Use for time-of-day or activity-based picks the mood vocab alone can\'t express — e.g. high for a workout, low for a wind-down, medium for a commute.',
       inputSchema: z.object({ energy: z.enum(['low', 'medium', 'high']) }),
       execute: async ({ energy }) => {
-        try { await library.load(); return collect(library.songsByEnergy(energy)); }
+        try { await library.load(); return await collect(await library.songsByEnergy(energy)); }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -310,7 +310,7 @@ export function buildPickerTools({
           songId: z.string().describe('a song id (preferred) or a track title'),
         }),
         execute: async ({ songId }) => {
-          try { await library.load(); return collect(library.tracksLikeThis(songId, 60)); }
+          try { await library.load(); return await collect(await library.tracksLikeThis(songId, 60)); }
           catch (err) { return { error: err.message }; }
         },
       }),
@@ -331,7 +331,7 @@ export function buildPickerTools({
           songId: z.string().describe('a song id (preferred) or a track title'),
         }),
         execute: async ({ songId }) => {
-          try { await library.load(); return collect(library.tracksLikeThisAudio(songId, 60)); }
+          try { await library.load(); return await collect(await library.tracksLikeThisAudio(songId, 60)); }
           catch (err) { return { error: err.message }; }
         },
       }),
@@ -357,7 +357,7 @@ export function buildPickerTools({
             await library.load();
             const [vec] = await embeddings.embedTexts([query.trim()]);
             if (!vec) return { error: 'embedding query failed' };
-            return collect(library.tracksByVector(vec, 60));
+            return await collect(await library.tracksByVector(vec, 60));
           }
           catch (err) { return { error: err.message }; }
         },
@@ -374,7 +374,7 @@ export function buildPickerTools({
           for (const a of albums.slice(0, 5)) {
             try { out.push(...(await subsonic.getAlbum(a.id)).slice(0, 3)); } catch {}
           }
-          return collect(out);
+          return await collect(out);
         } catch (err) { return { error: err.message }; }
       },
     }),
@@ -383,7 +383,7 @@ export function buildPickerTools({
       description: "The operator's starred / favourite songs — always a safe, on-brand pick.",
       inputSchema: z.object({}),
       execute: async () => {
-        try { return collect(await subsonic.getStarred()); }
+        try { return await collect(await subsonic.getStarred()); }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -392,7 +392,7 @@ export function buildPickerTools({
       description: 'A random sample of songs from the library — use to break a predictable run.',
       inputSchema: z.object({}),
       execute: async () => {
-        try { return collect(await subsonic.getRandomSongs({ size: 18 })); }
+        try { return await collect(await subsonic.getRandomSongs({ size: 18 })); }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -407,7 +407,7 @@ export function buildPickerTools({
         description: "Tracks from the show's pinned playlist(s) — the operator's hand-picked selection for this show. Prefer these: call this first and choose from what it returns. Takes no input.",
         inputSchema: z.object({}),
         execute: async () => {
-          try { return collect(playlistTracks, 12); }
+          try { return await collect(playlistTracks, 12); }
           catch (err) { return { error: err.message }; }
         },
       }),
@@ -425,7 +425,7 @@ export function buildPickerTools({
           // Pull a wide KNN (60) around the waypoint: the nearest neighbours
           // cluster tightly and many will be recently-played, so a small k left
           // the agent with ~1 candidate. collect() still caps to 8 fresh ones.
-          try { await library.load(); return collect(library.tracksByAudioVector(audioWaypoint, 60)); }
+          try { await library.load(); return await collect(await library.tracksByAudioVector(audioWaypoint, 60)); }
           catch (err) { return { error: err.message }; }
         },
       }),
@@ -466,7 +466,7 @@ export function buildPickerTools({
             if (songs.length === 0 && guess.keyword && guess.keyword !== guess.title) {
               songs = await subsonic.search(guess.keyword, { songCount: 25 });
             }
-            return { identified: guess, candidates: collect(songs) };
+            return { identified: guess, candidates: await collect(songs) };
           } catch (err) { return { error: err.message }; }
         },
       }),

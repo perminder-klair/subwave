@@ -70,7 +70,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
       streamOnAir,
       onAir,
       jingles: await jingles.list(),
-      libraryStats: library.stats(),
+      libraryStats: await library.stats(),
       tagger: { ...tagger, lastLog: tagger.lastLog.slice(-30) },
       ollama: { url: config.ollama.url, model: config.ollama.model },
       // What the configured zone resolves to when timezone is '' (Auto) —

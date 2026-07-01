@@ -218,7 +218,7 @@ router.get('/debug', requireAdmin, async (req, res) => {
   // 6b. Library tagging stats
   try {
     await library.load();
-    out.library = library.stats();
+    out.library = await library.stats();
   } catch (err) {
     out.library = { error: err.message };
   }

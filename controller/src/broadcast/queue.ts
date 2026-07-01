@@ -82,6 +82,31 @@ export function playAlreadyRecorded(
   return false;
 }
 
+// Backfill acoustic-analysis fields (bpm/key/introMs/loudness/energy) onto a
+// track object from the library, in place. Library-sourced picks (slimTrack)
+// already carry them; Subsonic-sourced picks and listener requests don't.
+// Called once per track at queue.push() so every downstream consumer — mix
+// transitions, loudness gain, intro budgets, DJ-agent run targets — reads a
+// fully-populated object without needing its own (now async) library lookup.
+// Missing library row (untagged/un-analysed track) leaves the object as-is.
+async function hydrateAcoustics(track: any): Promise<void> {
+  if (!track?.id) return;
+  if (track.bpm != null && track.introMs != null && track.loudnessLufs != null) return;
+  try {
+    const rec = await library.get(track.id);
+    if (!rec) return;
+    if (track.bpm == null) track.bpm = rec.bpm ?? null;
+    if (track.musicalKey == null) track.musicalKey = rec.musicalKey ?? null;
+    if (track.introMs == null) track.introMs = rec.introMs ?? null;
+    if (track.loudnessLufs == null) track.loudnessLufs = rec.loudnessLufs ?? null;
+    if (track.energy == null) track.energy = rec.energy ?? null;
+    if (track.genre == null) track.genre = rec.genre ?? null;
+  } catch {
+    // Never let a library hiccup block an enqueue — the fields stay null and
+    // every consumer already treats null as "un-analysed".
+  }
+}
+
 class Queue {
   upcoming: any[] = [];        // request items pushed by listeners, not yet playing
   current: any = null;         // what's broadcasting right now (request or auto)
@@ -356,6 +381,14 @@ class Queue {
     allowDuplicate?: boolean;
     linkPrev?: { id?: string | null; title?: string | null; artist?: string | null } | null;
   }) {
+    // Hydrate acoustic fields from the library once, at enqueue time. Subsonic-
+    // sourced tracks (genre pulls, playlists, listener requests) carry only
+    // id/title/artist/album/genre; the sync helpers downstream (mixAnalysisFor,
+    // applyLoudnessGain, applyMixTransition, the intro-budget prompt helpers)
+    // now read straight off the track object — the old per-call library
+    // fallback went away with the Phase 2 async cascade. Happens BEFORE the
+    // dedup guard below so no await lands between the guard and upcoming.push().
+    await hydrateAcoustics(track);
     // Dedup guard. Applies to AI picks AND listener requests: two listener
     // requests resolving to the same song over the 25-45s identify/match window
     // each read queuedIds() before either reaches push(), so the early read
@@ -394,15 +427,11 @@ class Queue {
     return this.upcoming.length;
   }
 
-  // Resolve {bpm, key} for a queued track: from the track object if it carries
-  // analysis, else a library lookup (queued items hold only id/title/artist).
+  // Resolve {bpm, key} for a queued track from the track object (slimTrack /
+  // agent candidates carry these when analysed; un-analysed tracks return null).
   mixAnalysisFor(track: any): { bpm: number | null; key: string | null } {
     if (!track) return { bpm: null, key: null };
-    if (track.bpm != null || track.musicalKey != null) {
-      return { bpm: track.bpm ?? null, key: track.musicalKey ?? null };
-    }
-    const rec = track.id ? library.get(track.id) : null;
-    return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
+    return { bpm: track.bpm ?? null, key: track.musicalKey ?? null };
   }
 
   // Resolve a track's integrated loudness (track object first, else a library
@@ -411,8 +440,7 @@ class Queue {
   // getAnnotatedUri emits no liq_amplify and the track plays at unity gain.
   applyLoudnessGain(track: any) {
     if (!track) return;
-    let lufs = track.loudnessLufs;
-    if (lufs == null && track.id) lufs = library.get(track.id)?.loudnessLufs ?? null;
+    const lufs = track.loudnessLufs ?? null;
     const gain = mix.gainForLoudness(lufs);
     if (gain != null) track.gainDb = gain;
   }
@@ -447,8 +475,7 @@ class Queue {
     // vocals (the incoming track's instrumental intro, resolved like analysis).
     let energyDelta = 0;
     try { energyDelta = energyForDaypart().speed - 1; } catch {}
-    let nextIntroMs = item.track.introMs;
-    if (nextIntroMs == null && item.track.id) nextIntroMs = library.get(item.track.id)?.introMs ?? null;
+    const nextIntroMs = item.track.introMs ?? null;
     // Cap the adaptive blend at the operator's configured crossfade length so the
     // admin slider acts as a real ceiling on DJ-mode transitions too.
     const maxSec = settings.get()?.crossfadeDuration ?? null;

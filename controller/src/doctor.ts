@@ -291,7 +291,7 @@ async function checkNavidrome(): Promise<Finding[]> {
   // Mood-tag coverage — the picker leans on these tags to match the vibe.
   try {
     await library.load();
-    const st = library.stats();
+    const st = await library.stats();
     out.push({
       label: 'mood-tag coverage',
       status: st.total > 0 ? 'ok' : 'warn',
