@@ -82,6 +82,17 @@ async function main() {
     assert.equal(isQuotaOrAuthError({ cause: { statusCode: 402 } }), true);
     assert.equal(isQuotaOrAuthError({ cause: { message: 'quota exceeded' } }), true);
   });
+  await test('OpenRouter out-of-credit 402 classifies by message when status is flattened', () => {
+    // Canonical 402 — caught by the existing insufficient-credit branch.
+    assert.equal(isQuotaOrAuthError(new Error('Your account or API key has insufficient credits. Add more credits and retry the request.')), true);
+    // Per-request affordability 402 — no "insufficient"/"quota" token, so before
+    // this it classified ONLY while the 402 status survived (Discord: run died as
+    // "unreachable" once the SDK flattened the status into the message).
+    const afford: any = new Error('This request requires more credits, or fewer max_tokens. You requested up to 4096 tokens, but can only afford 118.');
+    assert.equal(isQuotaOrAuthError(afford), true);
+    assert.equal(isTransient(afford), false);    // fail over, not same-leg retry
+    assert.equal(isUnreachable(afford), false);   // host answered — not a network outage
+  });
   await test('plain 5xx / socket errors are NOT quota/auth (still same-leg retry)', () => {
     assert.equal(isQuotaOrAuthError({ statusCode: 503 }), false);
     assert.equal(isQuotaOrAuthError({ code: 'ECONNRESET' }), false);

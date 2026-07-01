@@ -161,7 +161,10 @@ export function isUnreachable(err: any): boolean {
 // leg (issue #438). Detected by message because providers surface quota/auth
 // differently and the AI SDK often flattens the status into the message text;
 // a bare 429 with no quota signature stays a plain transient rate-limit.
-const QUOTA_RE = /usage limit|quota|exceeded your current|insufficient[ _]?(quota|funds|credit|balance)|upgrade for higher|out of credit|payment required/i;
+// "requires more credits" / "can only afford" are OpenRouter's per-request
+// affordability 402 — no "insufficient"/"quota" token, so it only classified
+// while the 402 status survived; match it by text too (Discord out-of-credit run).
+const QUOTA_RE = /usage limit|quota|exceeded your current|insufficient[ _]?(quota|funds|credit|balance)|requires more credits|can only afford|upgrade for higher|out of credit|payment required/i;
 const AUTH_RE = /invalid[ _]?api[ _]?key|incorrect[ _]?api[ _]?key|unauthorized|authentication (failed|error)|forbidden|api key (not|is|was) /i;
 
 export function isQuotaOrAuthError(err: any): boolean {
