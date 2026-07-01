@@ -98,10 +98,10 @@ export async function get() {
   // background and serve the last-known value.
   if (analysisAvail == null) await refreshAnalysisAvail();
   else if (analysisAvailStale() && !analysisProbeInflight) refreshAnalysisAvail();
-  const tagged = library.allTaggedIds().length;
-  const analysed = db.analysedCount();
-  const audioEmbedded = db.audioVectorCount();
-  const vocalAnalyzed = db.vocalAnalyzedCount();
+  const tagged = (await db.allTaggedIds()).length;
+  const analysed = await db.analysedCount();
+  const audioEmbedded = await db.audioVectorCount();
+  const vocalAnalyzed = await db.vocalAnalyzedCount();
   const total = cache.scannedAt ? cache.total : null;
   const percent =
     total != null && total > 0 ? Math.round((tagged / total) * 100) : null;

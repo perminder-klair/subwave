@@ -507,8 +507,8 @@ router.get('/dj/search', requireAdmin, async (req, res) => {
   try {
     await library.load();
     const songs = await subsonic.search(q, { songCount: 12 });
-    const results = songs.map(s => {
-      const tag = library.get(s.id);
+    const results = await Promise.all(songs.map(async s => {
+      const tag = await library.get(s.id);
       return {
         id: s.id,
         title: s.title,
@@ -527,7 +527,7 @@ router.get('/dj/search', requireAdmin, async (req, res) => {
         energy: tag?.energy ?? null,
         source: tag?.source ?? null,
       };
-    });
+    }));
     res.json({ results });
   } catch (err) {
     queue.log('error', `/dj/search failed: ${err.message}`);
@@ -567,8 +567,8 @@ router.get('/dj/recent', requireAdmin, async (req, res) => {
     const songLists = await Promise.all(
       albums.map((a: any) => subsonic.getAlbum(a.id).catch(() => [])),
     );
-    const results = songLists.flat().slice(0, limit).map((s: any) => {
-      const tag = library.get(s.id);
+    const results = await Promise.all(songLists.flat().slice(0, limit).map(async (s: any) => {
+      const tag = await library.get(s.id);
       return {
         id: s.id,
         title: s.title,
@@ -584,7 +584,7 @@ router.get('/dj/recent', requireAdmin, async (req, res) => {
         energy: tag?.energy ?? null,
         source: tag?.source ?? null,
       };
-    });
+    }));
     res.json({ results });
   } catch (err) {
     queue.log('error', `/dj/recent failed: ${err.message}`);

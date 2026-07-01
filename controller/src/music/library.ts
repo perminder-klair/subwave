@@ -1,4 +1,4 @@
-// Library facade — thin wrapper over library-db.ts.
+// Library facade — thin async wrapper over library-db.ts.
 //
 // Public surface preserved for back-compat with the picker, scheduler, llm
 // tools, request route, debug route, etc. Only the backing store moves from
@@ -8,8 +8,12 @@
 // The mood-widening logic (MOOD_NEIGHBOURS) lives here, on top of the raw
 // library-db.songsByMood query — the DB layer is intentionally vocabulary-
 // agnostic.
+//
+// Phase 2: all exports are now async — they delegate to library-db.ts which
+// routes to the active backend (SqliteAdapter or PostgresAdapter).
 
 import * as db from './library-db.js';
+import type { TrackRecord } from './library-db-core.js';
 import { resolveEmbeddingDim } from './embeddings.js';
 
 let loaded = false;
@@ -31,7 +35,7 @@ export async function load() {
 // library.db file underneath us, so the live picker/tools see the restored
 // tags without a controller restart.
 export async function reload() {
-  if (db.isOpen()) db.close();
+  if (db.isOpen()) await db.close();
   loaded = false;
   await load();
 }
@@ -42,9 +46,9 @@ export async function save() {
   // no-op
 }
 
-export function get(songId: string): any {
+export async function get(songId: string): Promise<any> {
   if (!loaded) return null;
-  const t = db.getTrack(songId);
+  const t = await db.getTrack(songId);
   if (!t) return null;
   return {
     title: t.title,
@@ -63,6 +67,7 @@ export function get(songId: string): any {
     bpm: t.bpm,
     musicalKey: t.musicalKey,
     introMs: t.introMs,
+    loudnessLufs: t.loudnessLufs,
     // Phase 2/4 acoustic surface for the agent picker's Subsonic-fallback path
     // (slim() in llm/tools.ts). Library-sourced candidates already carry these
     // via slimTrack; this keeps Subsonic-sourced candidates symmetric.
@@ -76,8 +81,8 @@ export function get(songId: string): any {
 // Back-compat shim. Old callers pass {title, artist, album, year, genre,
 // moods, energy} in one shot. The DB has split write surfaces (metadata +
 // tags + enrichment) but for a single-track legacy write we collapse them.
-export function set(songId: string, data: any) {
-  db.upsertTrackMeta(songId, {
+export async function set(songId: string, data: any): Promise<void> {
+  await db.upsertTrackMeta(songId, {
     title: data.title,
     artist: data.artist,
     album: data.album,
@@ -86,10 +91,10 @@ export function set(songId: string, data: any) {
     duration: data.duration ?? null,
   });
   if (Array.isArray(data.moods) || data.energy !== undefined) {
-    db.upsertTrackTags(songId, {
+    await db.upsertTrackTags(songId, {
       moods: Array.isArray(data.moods) ? data.moods : [],
       energy: data.energy ?? null,
-      source: (data.source as db.TagSource) ?? 'llm',
+      source: data.source ?? 'llm',
       confidence: data.confidence ?? null,
       promptHash: data.promptHash ?? null,
       model: data.model ?? null,
@@ -97,11 +102,11 @@ export function set(songId: string, data: any) {
   }
 }
 
-export function has(songId: string): boolean {
+export async function has(songId: string): Promise<boolean> {
   return loaded ? db.hasTags(songId) : false;
 }
 
-export function allTaggedIds(): string[] {
+export async function allTaggedIds(): Promise<string[]> {
   return loaded ? db.allTaggedIds() : [];
 }
 
@@ -131,9 +136,9 @@ const MOOD_NEIGHBOURS: Record<string, string[]> = {
 // 12 leaves comfortable margin above the picker's CAP_MOOD_LIBRARY (10).
 const MOOD_MIN_EXACT = 12;
 
-export function songsByMood(mood: string | null | undefined): any[] {
+export async function songsByMood(mood: string | null | undefined): Promise<any[]> {
   if (!mood || !loaded) return [];
-  const flatten = (rows: db.TrackRecord[]) =>
+  const flatten = (rows: TrackRecord[]) =>
     rows.map(r => ({
       id: r.id,
       title: r.title,
@@ -149,13 +154,13 @@ export function songsByMood(mood: string | null | undefined): any[] {
       durationSec: r.durationSec,
     }));
 
-  const exact = flatten(db.songsByMood(mood));
+  const exact = flatten(await db.songsByMood(mood));
   if (exact.length >= MOOD_MIN_EXACT) return exact;
 
   const seen = new Set(exact.map(s => s.id));
   const widened = [...exact];
   for (const neighbour of MOOD_NEIGHBOURS[mood] || []) {
-    for (const row of flatten(db.songsByMood(neighbour))) {
+    for (const row of flatten(await db.songsByMood(neighbour))) {
       if (seen.has(row.id)) continue;
       widened.push(row);
       seen.add(row.id);
@@ -176,7 +181,7 @@ export function paceMeanOf(pace: Array<{ value: number }> | null | undefined): n
 
 // plus the two tagger axes. Matches what songsByMood returns above; pulled
 // out so the new embedding-similar helpers can share the same projection.
-function slimTrack(r: db.TrackRecord) {
+function slimTrack(r: TrackRecord) {
   return {
     id: r.id,
     title: r.title,
@@ -204,10 +209,10 @@ function slimTrack(r: db.TrackRecord) {
   };
 }
 
-export function songsByEnergy(energy: string | null | undefined): any[] {
+export async function songsByEnergy(energy: string | null | undefined): Promise<any[]> {
   if (!energy || !loaded) return [];
   if (energy !== 'low' && energy !== 'medium' && energy !== 'high') return [];
-  return db.songsByEnergy(energy).map(slimTrack);
+  return (await db.songsByEnergy(energy as 'low' | 'medium' | 'high')).map(slimTrack);
 }
 
 // KNN over the embedding space — finds tracks whose metadata + lyrics +
@@ -220,20 +225,21 @@ export function songsByEnergy(energy: string | null | undefined): any[] {
 // scoped to tagged tracks — the same set that carries embeddings) and KNN from
 // the first candidate that has one. Tracks with no embedding and no title match
 // return []; callers fall back to other sources.
-export function tracksLikeThis(seed: string, k: number): any[] {
+export async function tracksLikeThis(seed: string, k: number): Promise<any[]> {
   if (!loaded || !seed) return [];
-  let hits = db.knnById(seed, k);
+  let hits = await db.knnById(seed, k);
   if (hits.length === 0) {
     // Treat `seed` as a title — find the best embedded match and KNN from it.
-    for (const row of db.filter({ q: seed, limit: 8 }).rows) {
+    const candidates = (await db.filter({ q: seed, limit: 8 })).rows;
+    for (const row of candidates) {
       if (row.id === seed) continue;            // already tried as an id above
-      hits = db.knnById(row.id, k);
+      hits = await db.knnById(row.id, k);
       if (hits.length) break;
     }
   }
   const out: any[] = [];
   for (const hit of hits) {
-    const t = db.getTrack(hit.id);
+    const t = await db.getTrack(hit.id);
     if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
   }
   return out;
@@ -246,21 +252,22 @@ export function tracksLikeThis(seed: string, k: number): any[] {
 // (the agent often passes a title rather than an id). Returns [] when the seed
 // has no audio vector — un-analysed library, or analysis backend without CLAP —
 // so callers fall through to the other sources exactly like the text path.
-export function tracksLikeThisAudio(seed: string, k: number): any[] {
+export async function tracksLikeThisAudio(seed: string, k: number): Promise<any[]> {
   if (!loaded || !seed) return [];
-  let hits = db.knnAudioById(seed, k);
+  let hits = await db.knnAudioById(seed, k);
   if (hits.length === 0) {
     // Treat `seed` as a title — find the best matching track that HAS an audio
     // vector and KNN from it.
-    for (const row of db.filter({ q: seed, limit: 8 }).rows) {
+    const candidates = (await db.filter({ q: seed, limit: 8 })).rows;
+    for (const row of candidates) {
       if (row.id === seed) continue;            // already tried as an id above
-      hits = db.knnAudioById(row.id, k);
+      hits = await db.knnAudioById(row.id, k);
       if (hits.length) break;
     }
   }
   const out: any[] = [];
   for (const hit of hits) {
-    const t = db.getTrack(hit.id);
+    const t = await db.getTrack(hit.id);
     if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
   }
   return out;
@@ -270,14 +277,14 @@ export function tracksLikeThisAudio(seed: string, k: number): any[] {
 // embeds a free-text query and calls this to find tracks semantically close
 // to the query — including ones whose lyrics don't literally contain those
 // words.
-export function tracksByVector(vec: number[] | Float32Array, k: number): any[] {
+export async function tracksByVector(vec: number[] | Float32Array, k: number): Promise<any[]> {
   if (!loaded) return [];
   // Guard against an embedding model/provider drift: if the live query vector's
   // length no longer matches the dim the index was built at, knnByVector would
-  // throw a raw "Dimension mismatch" from sqlite-vec (surfaced to the DJ agent
-  // as a tool error). Degrade to an empty semantic result instead — the picker
-  // falls through to its lexical/other sources — and log an actionable hint.
-  const meta = db.getEmbeddingMeta();
+  // throw a raw "Dimension mismatch" error. Degrade to an empty semantic result
+  // instead — the picker falls through to its lexical/other sources — and log
+  // an actionable hint.
+  const meta = await db.getEmbeddingMeta();
   const got = (vec as { length?: number }).length;
   if (meta?.dim && got && meta.dim !== got) {
     console.warn(
@@ -287,10 +294,10 @@ export function tracksByVector(vec: number[] | Float32Array, k: number): any[] {
     );
     return [];
   }
-  const hits = db.knnByVector(vec, k);
+  const hits = await db.knnByVector(vec, k);
   const out: any[] = [];
   for (const hit of hits) {
-    const t = db.getTrack(hit.id);
+    const t = await db.getTrack(hit.id);
     if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
   }
   return out;
@@ -300,22 +307,22 @@ export function tracksByVector(vec: number[] | Float32Array, k: number): any[] {
 // counterpart to tracksByVector. Used by the picker when a journey waypoint is
 // the audio anchor instead of the current track. Returns [] on an empty audio
 // index, so the picker falls through to its other sources.
-export function tracksByAudioVector(vec: number[] | Float32Array, k: number): any[] {
+export async function tracksByAudioVector(vec: number[] | Float32Array, k: number): Promise<any[]> {
   if (!loaded) return [];
-  const hits = db.knnByAudioVector(vec, k);
+  const hits = await db.knnByAudioVector(vec, k);
   const out: any[] = [];
   for (const hit of hits) {
-    const t = db.getTrack(hit.id);
+    const t = await db.getTrack(hit.id);
     if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
   }
   return out;
 }
 
-export function stats() {
+export async function stats() {
   if (!loaded) {
-    return { total: 0, distinctArtists: 0, byMood: {}, byEnergy: {}, byGenre: {}, updatedAt: null, embeddingMeta: null };
+    return { total: 0, distinctArtists: 0, byMood: {}, byEnergy: {}, byGenre: {}, bySource: {}, withEmbedding: 0, withAudioEmbedding: 0, updatedAt: null, embeddingMeta: null };
   }
-  const s = db.stats();
+  const s = await db.stats();
   return {
     total: s.total,
     distinctArtists: s.distinctArtists,
@@ -329,7 +336,7 @@ export function stats() {
     // Provenance of the text-embedding index ({model, dim} or null) so the admin
     // UI can warn before a chat-provider switch silently changes the embedding
     // model out from under an existing index.
-    embeddingMeta: db.getEmbeddingMeta(),
+    embeddingMeta: await db.getEmbeddingMeta(),
   };
 }
 
@@ -371,9 +378,9 @@ export interface FilteredRow {
   instrumental?: boolean | null;
 }
 
-export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRow[] } {
+export async function filter(opts: FilterOpts = {}): Promise<{ total: number; rows: FilteredRow[] }> {
   if (!loaded) return { total: 0, rows: [] };
-  const res = db.filter(opts);
+  const res = await db.filter(opts);
   return {
     total: res.total,
     rows: res.rows.map(r => ({

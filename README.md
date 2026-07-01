@@ -137,6 +137,23 @@ to Piper. The old `docker build --build-arg WITH_CHATTERBOX=1` path still
 works if you already have a custom-built controller image — see
 `docker/Dockerfile.controller`.
 
+Acoustic analysis (tempo/key/loudness) does **not** need the heavy TTS sidecar —
+it runs in its own `subwave-analyzer` service, which **starts by default**
+alongside the controller and web. The default image is **lean and multi-arch**
+(~1.1 GB, no PyTorch — so it runs natively on arm64 NAS/Pi/Apple-Silicon). The
+two heavier dimensions — CLAP **"sounds-like"** embeddings and **Demucs** vocal
+ranges — are the opt-in tier; enable them by pulling the heavy image, no rebuild:
+
+```bash
+# in your root .env
+ANALYZER_HEAVY=1
+```
+
+That repoints the `analyzer` service at `subwave-analyzer-heavy` (CLAP + Demucs,
+~1.9 GB, amd64) on the next `docker compose up -d`. The `subwave setup` wizard
+also offers it, and Unraid one-click users pull the `subwave-aio-heavy` image
+instead. Only the expressive *voices* above need the separate `tts-heavy` sidecar.
+
 ### Local dev (contributors)
 
 ```bash
@@ -198,7 +215,7 @@ Icecast stream on `:7702` (all configurable). Point your proxy at those three.
 `docker/Caddyfile` is a working reference for the route table you need to
 replicate. Details in [`DEPLOY.md`](DEPLOY.md#bring-your-own-reverse-proxy).
 
-**Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-{caddy,broadcast,controller,web}`.
+**Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-{caddy,broadcast,controller,web}`, the default-on `subwave-analyzer` (lean, multi-arch acoustic analysis) sidecar, and the opt-in `subwave-tts-heavy` (expressive voices) sidecar. Heavy-analysis variants — `subwave-analyzer-heavy` and `subwave-aio-heavy` (CLAP + Demucs, amd64) — are published for operators who enable "sounds-like"/vocals.
 All compose files pull `:latest` by default; pin a version with
 `SUBWAVE_VERSION=v1.2.3` in the root `.env`.
 
@@ -259,7 +276,7 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 
 - **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
 - **[`docs/unraid.md`](docs/unraid.md):** running on Unraid — one-click from Community Applications, or the Compose Manager Plus stack.
-- **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the optional heavy sidecar — expressive voices and acoustic analysis, and how to turn it on.
+- **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the opt-in `tts-heavy` voices and the default-on acoustic `analyzer` service — what each does and how to toggle them.
 - **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
   non-obvious constraints behind each subsystem.
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.

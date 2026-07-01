@@ -12,7 +12,7 @@ import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { artistKey } from '../music/recency.js';
-import { normGenre, genreMatches, inYearRange, preferEnergy } from '../music/show-filter.js';
+import { normGenre, genreMatches, inYearRange, preferEnergy, preferEnergyHydrated } from '../music/show-filter.js';
 import { resolveShowPlaylistPool } from '../music/show-playlist.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
@@ -163,7 +163,7 @@ async function refreshAutoPlaylistInner() {
         const ranged = inYearRange(g, { fromYear, toYear });
         collected.push(...(ranged.length ? ranged : g));
       }
-      const leaned = preferEnergy(collected, showEnergy);
+      const leaned = await preferEnergyHydrated(collected, showEnergy);
       take('show-genre', shuffle(leaned), strict ? SHOW_GENRE_STRICT_WEIGHT : SHOW_GENRE_WEIGHT);
     } catch (err) {
       queue.log('error', `Show-genre fetch failed: ${err.message}`);
@@ -180,11 +180,14 @@ async function refreshAutoPlaylistInner() {
 
   // 1. Mood-tagged from the LLM-built library (only if tagger has run).
   if (mood) {
-    take('mood', enforce(shuffle(preferEnergy(library.songsByMood(mood), showEnergy))), nz(MOOD_WEIGHT));
+    take('mood', enforce(shuffle(preferEnergy(await library.songsByMood(mood), showEnergy))), nz(MOOD_WEIGHT));
   }
 
   // 2. Navidrome playlists whose name matches the mood — operator's hand curation.
-  if (mood) {
+  // Skipped when the show already pins its own playlist(s) (0b): mood-substring
+  // matching would otherwise leak other shows' same-mood playlists into the
+  // fallback pool (#642). Autonomous hours (no pinned playlists) keep it.
+  if (mood && !hasPlaylist) {
     try {
       const playlists = await subsonic.getPlaylists();
       const matched = playlists.filter((p: any) => p.name?.toLowerCase().includes(mood.toLowerCase()));

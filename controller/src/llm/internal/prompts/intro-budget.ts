@@ -4,22 +4,14 @@
 // no-ops for un-analysed tracks — the post is a bonus when the data exists,
 // never a precondition.
 
-import * as library from '../../../music/library.js';
-
 // Intro runway (ms to where the track 'comes in') for a track, from the track
-// object or a library lookup. Null when un-analysed.
+// object. Null when un-analysed.
 export function introMsFor(track: any): number | null {
-  if (track?.introMs != null) return track.introMs;
-  const rec = track?.id ? library.get(track.id) : null;
-  return rec?.introMs ?? null;
+  return track?.introMs ?? null;
 }
 
 export function bpmKeyFor(track: any): { bpm: number | null; key: string | null } {
-  if (track && (track.bpm != null || track.musicalKey != null)) {
-    return { bpm: track.bpm ?? null, key: track.musicalKey ?? null };
-  }
-  const rec = track?.id ? library.get(track.id) : null;
-  return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
+  return { bpm: track?.bpm ?? null, key: track?.musicalKey ?? null };
 }
 
 // Advisory spoken-line budget (Stage A.3 phase 1). Returns '' when there's no

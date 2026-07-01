@@ -14,12 +14,10 @@ export function normGenre(s: any): string {
   return String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-// Per-track genre — from the track itself (Subsonic + slimTrack library sources
-// both carry it) or a library lookup. null when the track has no genre tag.
+// Per-track genre — from the track object (Subsonic and slimTrack library
+// sources both carry it). null when the track has no genre tag.
 export function trackGenre(t: any): string | null {
-  if (t?.genre) return t.genre;
-  const rec = t?.id ? library.get(t.id) : null;
-  return rec?.genre ?? null;
+  return t?.genre ?? null;
 }
 
 // True when a track's genre matches the (already library-resolved) target genre.
@@ -74,12 +72,10 @@ export function preferEra(tracks: any[], f: YearRange): any[] {
 
 // ── Energy band ──────────────────────────────────────────────────────────────
 
-// Per-track energy band — from the track itself (library sources carry it) or a
-// library lookup (Subsonic sources don't). null when un-analysed.
+// Per-track energy band — from the track object (library sources carry it;
+// Subsonic-only tracks without a library record return null). null when un-analysed.
 export function trackEnergy(t: any): string | null {
-  if (t?.energy) return t.energy;
-  const rec = t?.id ? library.get(t.id) : null;
-  return rec?.energy ?? null;
+  return t?.energy ?? null;
 }
 
 // Soft-prefer tracks matching the show's energy band; unknown-energy tracks
@@ -92,4 +88,22 @@ export function preferEnergy(tracks: any[], energy?: string | null): any[] {
     return e == null || e === energy;
   });
   return match.length ? match : tracks;
+}
+
+// preferEnergy for Subsonic-sourced tracks, which don't carry `energy` on the
+// track object. Backfills it from the library (tagged tracks only) before the
+// lean, so a show's energy band still steers getSongsByGenre results — the
+// pre-async behaviour, where trackEnergy did a per-track library lookup inline.
+// Library-sourced tracks (songsByMood / slimTrack) already carry energy; call
+// the sync preferEnergy directly for those and skip the lookups.
+export async function preferEnergyHydrated(tracks: any[], energy?: string | null): Promise<any[]> {
+  if (!energy) return tracks;
+  const hydrated = await Promise.all(
+    tracks.map(async (t: any) => {
+      if (!t || t.energy != null || !t.id) return t;
+      const rec = await library.get(t.id);
+      return rec?.energy ? { ...t, energy: rec.energy } : t;
+    }),
+  );
+  return preferEnergy(hydrated, energy);
 }

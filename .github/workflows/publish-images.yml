@@ -63,6 +63,22 @@ jobs:
           - image: subwave-aio
             dockerfile: docker/Dockerfile.aio
             platforms: linux/amd64
+            # Lean by default: the bundled analyzer is librosa-only
+            # (bpm/key/intro/loudness), no torch. The subwave-aio-heavy entry
+            # below bakes CLAP + Demucs for operators who want "sounds-like".
+            build_args: |
+              WITH_CLAP=0
+              WITH_DEMUCS=0
+          # Heavy AIO — same one-click container with the CLAP "sounds-like" +
+          # Demucs vocal stack baked in (~1.5GB torch each). Unraid one-click
+          # users who want those dimensions repoint their container at the
+          # `-heavy` tag; everyone else uses the lean subwave-aio above.
+          - image: subwave-aio-heavy
+            dockerfile: docker/Dockerfile.aio
+            platforms: linux/amd64
+            build_args: |
+              WITH_CLAP=1
+              WITH_DEMUCS=1
           - image: subwave-tts-heavy
             dockerfile: docker/Dockerfile.tts-heavy
             platforms: linux/amd64
@@ -73,6 +89,27 @@ jobs:
             # for operators who never enable them. Baking them in is what lets
             # `--profile tts-heavy` users pull a ready image instead of having to
             # rebuild from source (issue #393).
+            build_args: |
+              WITH_CLAP=1
+              WITH_DEMUCS=1
+          # The default-on acoustic-analysis sidecar. LEAN + MULTI-ARCH: librosa
+          # only (bpm/key/intro/loudness), no torch — small enough to ship on by
+          # default and run natively on arm64 (NAS/Pi/Apple-Silicon). CLAP
+          # "sounds-like" + Demucs vocals are the heavy opt-in below.
+          - image: subwave-analyzer
+            dockerfile: docker/Dockerfile.analyzer
+            platforms: linux/amd64,linux/arm64
+            build_args: |
+              WITH_CLAP=0
+              WITH_DEMUCS=0
+          # Heavy analyzer — same image with the CLAP + Demucs CPU-torch stack
+          # baked in (~1.9GB). amd64-only (matching tts-heavy — the heavy PyTorch
+          # stack). Operators opt in with ANALYZER_HEAVY=1 in .env, which points
+          # the compose `analyzer` service at this `-heavy` image. Lazy-loaded
+          # weights at runtime, disk cost only.
+          - image: subwave-analyzer-heavy
+            dockerfile: docker/Dockerfile.analyzer
+            platforms: linux/amd64
             build_args: |
               WITH_CLAP=1
               WITH_DEMUCS=1

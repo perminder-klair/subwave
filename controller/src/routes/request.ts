@@ -469,7 +469,7 @@ async function resolveRequest(entry) {
   // tagger writes moods like "calm", "rainy", "night" to state/moods.json;
   // matchRequest's "mood" field uses the same vocabulary.
   if (!pick && matched.mood) {
-    const moodPool = library.songsByMood(matched.mood);
+    const moodPool = await library.songsByMood(matched.mood);
     pick = randomFresh(moodPool);
     if (pick) pickSource = `library-mood:${matched.mood}`;
   }
@@ -489,7 +489,7 @@ async function resolveRequest(entry) {
   // but the station has a mood for the current moment (weather/time/festival),
   // play something that fits the room rather than refusing.
   if (!pick && ctx.dominantMood) {
-    const moodPool = library.songsByMood(ctx.dominantMood);
+    const moodPool = await library.songsByMood(ctx.dominantMood);
     pick = randomFresh(moodPool);
     if (pick) pickSource = `library-mood:${ctx.dominantMood}(context)`;
   }

@@ -37,13 +37,13 @@ const MIN_FOR_EMBEDDINGS = 3;
 
 let cache: { key: string; payload: GenreSuggest } | null = null;
 
-export function buildGenreSuggest(): GenreSuggest {
-  const stats = library.stats();
+export async function buildGenreSuggest(): Promise<GenreSuggest> {
+  const stats = await library.stats();
   const byGenre = stats.byGenre || {};
-  const key = `${stats.updatedAt ?? ''}:${db.vectorCount()}`;
+  const key = `${stats.updatedAt ?? ''}:${await db.vectorCount()}`;
   if (cache && cache.key === key) return cache.payload;
 
-  const centroids = db.genreCentroids();
+  const centroids = await db.genreCentroids();
   const centroidCount = new Map(centroids.map((c) => [c.genre, c.count]));
   const countOf = (g: string) => byGenre[g] ?? centroidCount.get(g) ?? 0;
 

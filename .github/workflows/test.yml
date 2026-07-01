@@ -1,0 +1,62 @@
+name: Test
+
+# Runs the controller unit suite plus the LibraryDbAdapter contract tests on
+# every PR and on pushes to main/develop. The same contract suite
+# (controller/scripts/adapter-contract.ts) runs against BOTH storage backends:
+#   - SqliteAdapter   — better-sqlite3 + sqlite-vec in a temp STATE_DIR
+#   - PostgresAdapter — a real pgvector service container
+# so the two implementations cannot drift on semantics.
+#
+# Security note: no untrusted user input (PR title/body/commit message)
+# flows into any `run:` step.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: test (controller)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: controller
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: subwave_ci
+          POSTGRES_DB: subwave_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: controller/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+
+      - run: npm test
+        env:
+          TEST_DATABASE_URL: postgres://postgres:subwave_ci@localhost:5432/subwave_test

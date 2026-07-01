@@ -75,11 +75,11 @@ export function interpolate(start: number[], end: number[], n: number): number[]
 // of a mood/energy bucket in audio space. null when none of the ids carry a
 // vector. Ids without a vector are skipped (the centroid reflects whatever the
 // index actually covers).
-export function audioCentroid(ids: string[]): number[] | null {
+export async function audioCentroid(ids: string[]): Promise<number[] | null> {
+  const vecs = await Promise.all(ids.map(id => db.getAudioVector(id)));
   let acc: number[] | null = null;
   let count = 0;
-  for (const id of ids) {
-    const v = db.getAudioVector(id);
+  for (const v of vecs) {
     if (!v) continue;
     if (!acc) acc = new Array(v.length).fill(0);
     for (let i = 0; i < v.length; i++) acc[i] += v[i];
@@ -109,17 +109,17 @@ export interface Journey {
 //   - the start track has no audio vector,
 //   - the destination can't be resolved to a vector, or
 //   - start and destination are essentially the same point (nothing to travel).
-export function buildJourney(opts: JourneyOpts): Journey | null {
-  const startVec = db.getAudioVector(opts.startId);
+export async function buildJourney(opts: JourneyOpts): Promise<Journey | null> {
+  const startVec = await db.getAudioVector(opts.startId);
   if (!startVec) return null;
   const start = Array.from(startVec);
 
   let end: number[] | null = null;
   if (opts.endId) {
-    const v = db.getAudioVector(opts.endId);
+    const v = await db.getAudioVector(opts.endId);
     end = v ? Array.from(v) : null;
   } else if (opts.endIds && opts.endIds.length) {
-    end = audioCentroid(opts.endIds);
+    end = await audioCentroid(opts.endIds);
   }
   if (!end) return null;
 

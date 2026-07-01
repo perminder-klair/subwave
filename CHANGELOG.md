@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **db:** PostgreSQL + pgvector write-path backend. Set `DATABASE_URL` to route
+  tagging, acoustic analysis, and embedding writes to Postgres. SQLite remains
+  the default and is unchanged. See [POSTGRES.md](POSTGRES.md) for setup,
+  migration notes, and the Phase 2 read-path roadmap.
+
 ## [0.33.0](https://github.com/perminder-klair/subwave/compare/v0.32.0...v0.33.0) (2026-06-30)
 
 

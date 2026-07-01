@@ -89,6 +89,10 @@ services:
       # Optional sidecar for Chatterbox + PocketTTS. Gated by --profile tts-heavy
       # below; unreachable URL → fall back to Piper (no harm done).
       - TTS_HEAVY_URL=${TTS_HEAVY_URL:-http://tts-heavy:8080}
+      # Acoustic-analysis sidecar (the `analyzer` service below, default-on).
+      # Probed before TTS_HEAVY_URL, then a local venv; falls through cleanly to
+      # NULL analysis if none is reachable.
+      - ANALYZE_URL=${ANALYZE_URL:-http://analyzer:8080}
       # Per-container CPU/memory for the admin Stats page (GET /system) is read
       # from the docker-socket-proxy sidecar over TCP — the controller never
       # touches the raw Docker socket. Unset this to disable the panel.
@@ -219,7 +223,41 @@ services:
       # are enabled and no local CLAP_MODEL_PATH is given).
       - tts-heavy-analyzer-cache:/opt/analyzer/hf-cache
 
+  # -------------------------------------------------------------------------
+  # ANALYZER — acoustic-analysis sidecar (bpm / key / intro / loudness;
+  # + CLAP "sounds-like" embeddings and Demucs vocal-activity ranges).
+  # -------------------------------------------------------------------------
+  # Starts by default alongside the core services. The controller probes
+  # ANALYZE_URL (this service) first, then TTS_HEAVY_URL. Only the heavy
+  # *voices* (Chatterbox/PocketTTS) stay opt-in under the `tts-heavy` profile;
+  # acoustic analysis is default-on. To skip it, `docker compose stop analyzer`.
+  analyzer:
+    # Default: the LEAN, multi-arch image. ANALYZER_HEAVY=1 in .env switches to
+    # the CLAP + Demucs `subwave-analyzer-heavy` image (amd64-only; on arm64 also
+    # set DOCKER_DEFAULT_PLATFORM=linux/amd64).
+    image: ghcr.io/perminder-klair/subwave-analyzer${ANALYZER_HEAVY:+-heavy}:${SUBWAVE_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.analyzer
+      args:
+        # Local build mirrors the pulled image: lean unless ANALYZER_HEAVY is set.
+        WITH_CLAP: ${ANALYZER_HEAVY:+1}
+        WITH_DEMUCS: ${ANALYZER_HEAVY:+1}
+    container_name: sub-wave-analyzer
+    restart: unless-stopped
+    environment:
+      # Force CLAP / Demucs on for the whole pass. Usually unnecessary — the
+      # admin toggles drive these per request.
+      - ANALYZE_AUDIO_EMBEDDING=${ANALYZE_AUDIO_EMBEDDING:-}
+      - ANALYZE_VOCAL_ACTIVITY=${ANALYZE_VOCAL_ACTIVITY:-}
+      - CLAP_MODEL=${CLAP_MODEL:-}
+      - CLAP_MODEL_PATH=${CLAP_MODEL_PATH:-}
+    volumes:
+      - *state-mount
+      - analyzer-cache:/opt/analyzer/hf-cache
+
 volumes:
   tts-heavy-chatterbox-cache:
   tts-heavy-pocket-cache:
   tts-heavy-analyzer-cache:
+  analyzer-cache:

@@ -12,7 +12,7 @@ import * as dj from '../llm/dj.js';
 import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
-import { normGenre, genreMatches, preferGenre, inYearRange, preferEnergy } from './show-filter.js';
+import { normGenre, genreMatches, preferGenre, inYearRange, preferEnergy, preferEnergyHydrated } from './show-filter.js';
 import { resolveShowPlaylistPool, type PlaylistPool } from './show-playlist.js';
 
 const CANDIDATE_CAP = 18;
@@ -68,11 +68,11 @@ function shuffle<T>(arr: T[]): T[] {
 
 // Pull bpm/musical_key for a candidate, from the candidate itself (library
 // sources carry it via slimTrack) or a library lookup (Subsonic sources).
-function analysisFor(t: any): { bpm: number | null; key: string | null } {
+async function analysisFor(t: any): Promise<{ bpm: number | null; key: string | null }> {
   if (t && (t.bpm != null || t.musicalKey != null)) {
     return { bpm: t.bpm ?? null, key: t.musicalKey ?? null };
   }
-  const rec = t?.id ? library.get(t.id) : null;
+  const rec = t?.id ? await library.get(t.id) : null;
   return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
 }
 
@@ -82,16 +82,16 @@ function analysisFor(t: any): { bpm: number | null; key: string | null } {
 // Order the pool by a random base nudged up for tempo/harmonic compatibility
 // with the current track. Random stays dominant so the pool keeps its variety
 // and a NULL-analysis pool is indistinguishable from shuffle().
-function softRankByCompat(pool: any[], current: { bpm: number | null; key: string | null }): any[] {
+async function softRankByCompat(pool: any[], current: { bpm: number | null; key: string | null }): Promise<any[]> {
   if (current.bpm == null && current.key == null) return shuffle(pool);
-  return pool
-    .map((t: any) => {
-      const a = analysisFor(t);
+  const scored = await Promise.all(
+    pool.map(async (t: any) => {
+      const a = await analysisFor(t);
       const bonus = 0.4 * bpmCompat(current.bpm, a.bpm) + 0.3 * keyCompat(current.key, a.key);
       return { t, score: Math.random() + bonus };
-    })
-    .sort((x, y) => y.score - x.score)
-    .map((s) => s.t);
+    }),
+  );
+  return scored.sort((x, y) => y.score - x.score).map((s) => s.t);
 }
 
 // --- Show music-steering filters -------------------------------------------
@@ -193,7 +193,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // run), so the picker silently falls through to the other sources.
   if (currentTrack?.id) {
     try {
-      const knn = library.tracksLikeThis(currentTrack.id, 15);
+      const knn = await library.tracksLikeThis(currentTrack.id, 15);
       add('embedding-similar', sampleWithRecentFallback(lean(knn), recentIds, nz(CAP_EMBEDDING_SIMILAR)));
     } catch {}
   }
@@ -226,12 +226,12 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // drifts toward the destination vibe instead of hugging the current sound.
   if (audioWaypoint && audioWaypoint.length) {
     try {
-      const knn = library.tracksByAudioVector(audioWaypoint, 15);
+      const knn = await library.tracksByAudioVector(audioWaypoint, 15);
       add('audio-journey', sampleWithRecentFallback(lean(knn), recentIds, nz(CAP_AUDIO_SIMILAR)));
     } catch {}
   } else if (currentTrack?.id) {
     try {
-      const knn = library.tracksLikeThisAudio(currentTrack.id, 15);
+      const knn = await library.tracksLikeThisAudio(currentTrack.id, 15);
       add('audio-similar', sampleWithRecentFallback(lean(knn), recentIds, nz(CAP_AUDIO_SIMILAR)));
     } catch {}
   }
@@ -261,7 +261,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
         const ranged = inYearRange(g, showFilter!);
         collected.push(...(ranged.length ? ranged : g));
       }
-      const leaned = preferEnergy(collected, showFilter!.energy);
+      const leaned = await preferEnergyHydrated(collected, showFilter!.energy);
       // Strict bumps the cap so this genre-native source dominates the merged pool.
       add('show-genre', sampleWithRecentFallback(shuffle(leaned), recentIds, strict ? CAP_SHOW_GENRE_STRICT : CAP_SHOW_GENRE));
     } catch {}
@@ -277,12 +277,16 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
 
   // 2. Mood-tagged library (LLM-built tags, may be sparse).
   if (mood) {
-    const moodHits = shuffle(lean(preferEnergy(library.songsByMood(mood), showFilter?.energy)));
+    const moodHits = shuffle(lean(preferEnergy(await library.songsByMood(mood), showFilter?.energy)));
     add('mood-library', sampleWithRecentFallback(moodHits, recentIds, CAP_MOOD_LIBRARY));
   }
 
-  // 3. Mood-matched Navidrome playlists — operator's hand curation.
-  if (mood) {
+  // 3. Mood-matched Navidrome playlists — operator's hand curation. Skipped when
+  // the show already pins its own playlist(s) (1f): the operator has named exactly
+  // which playlists to use, so also grabbing every playlist whose name merely
+  // contains the mood word would leak other shows' same-mood playlists into the
+  // pool (#642). Autonomous hours (no pinned playlists) keep the mood match.
+  if (mood && !hasPlaylist) {
     try {
       const playlists = await memo('playlists', CACHE_TTL_MS, () => subsonic.getPlaylists());
       const matched = playlists.filter((p: any) => p.name?.toLowerCase().includes(mood.toLowerCase()));
@@ -392,8 +396,8 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // journey rather than just hugging the current track. Falls back to the
   // current track's own analysis when no run is active.
   const curAnalysis = rankTarget
-    || (currentTrack?.id ? analysisFor(currentTrack) : { bpm: null, key: null });
-  const final = filterPickerCandidates(softRankByCompat(selectionPool, curAnalysis), {
+    || (currentTrack?.id ? await analysisFor(currentTrack) : { bpm: null, key: null });
+  const final = filterPickerCandidates(await softRankByCompat(selectionPool, curAnalysis), {
     recentIds,
     recentArtists,
     hardRecentIds,
@@ -431,21 +435,22 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   return { candidates: final, sources, strictInfo, playlistInfo };
 }
 
-function summariseRecent(queue: any) {
+async function summariseRecent(queue: any) {
   const items: any[] = [];
   if (queue.current) items.push(queue.current);
   items.push(...queue.history.slice(0, HISTORY_DEPTH));
-  return items
-    .filter((i: any) => i?.track?.title)
-    .map((i: any) => {
-      const tags = i.track.id ? library.get(i.track.id) : null;
+  const filtered = items.filter((i: any) => i?.track?.title);
+  return Promise.all(
+    filtered.map(async (i: any) => {
+      const tags = i.track.id ? await library.get(i.track.id) : null;
       return {
         title: i.track.title,
         artist: i.track.artist,
         moods: tags?.moods || [],
         energy: tags?.energy || null,
       };
-    });
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -455,7 +460,7 @@ function summariseRecent(queue: any) {
 
 export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null) {
   await library.load();
-  const stats = library.stats();
+  const stats = await library.stats();
   const windows = recencyWindowsForLibrary(stats.distinctArtists);
   const recentIds = queue.recentlyPlayedIds(windows.trackHours);
   const recentArtists = queue.recentArtistsSince(windows.artistHours);
@@ -514,7 +519,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     }
   }
 
-  const recentPlays = summariseRecent(queue);
+  const recentPlays = await summariseRecent(queue);
 
   let pickRaw;
   try {
@@ -532,8 +537,8 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
             genreStrict: activeShow.genreStrict,
           }
         : null,
-      candidates: candidates.map(c => {
-        const a = analysisFor(c);
+      candidates: await Promise.all(candidates.map(async c => {
+        const a = await analysisFor(c);
         return {
           id: c.id,
           title: c.title,
@@ -562,7 +567,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           // close match" vs "loose neighbour".
           similarity: c._similarity != null ? Math.round(c._similarity * 100) / 100 : undefined,
         };
-      }),
+      })),
       recentPlays,
       context: ctx,
     });

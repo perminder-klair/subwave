@@ -166,7 +166,7 @@ router.get('/now-playing', async (req, res) => {
     // reader of now-playing.json. A not-yet-tagged track (or unloaded DB)
     // yields null here and the fields are simply omitted.
     if (nowPlaying?.subsonic_id) {
-      const rec = library.get(nowPlaying.subsonic_id);
+      const rec = await library.get(nowPlaying.subsonic_id);
       if (rec) {
         nowPlaying.genre = rec.genre ?? null;
         nowPlaying.bpm = rec.bpm ?? null;

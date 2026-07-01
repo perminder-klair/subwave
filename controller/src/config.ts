@@ -36,6 +36,11 @@ const VOICES_DIR = process.env.TTS_VOICE_DIR
   || `${STATE_DIR}/voices`;
 const LEGACY_VOICES_DIR = `${STATE_DIR}/chatterbox-voices`;
 
+// When DATABASE_URL is set, the library store switches from SQLite to
+// PostgreSQL (+ pgvector). Format: postgres://user:pass@host:port/dbname
+// Leave unset (the default) to keep the existing SQLite/sqlite-vec backend.
+export const DATABASE_URL = process.env.DATABASE_URL || '';
+
 export const config = {
   // Absolute path to the shared state dir — modules build their own file
   // paths from this rather than hardcoding /var/sub-wave.
@@ -64,10 +69,16 @@ export const config = {
   },
   // Acoustic analysis (bpm/key/intro) — runs librosa, which deliberately does
   // NOT live in the controller image. Two backends, resolved in music/
-  // analyzer.ts: the tts-heavy sidecar (production) or a local Python venv
+  // analyzer.ts: an analysis sidecar (production) or a local Python venv
   // (offline/dev — set ANALYZE_PYTHON to a venv with librosa installed). When
   // neither is reachable the analysis phase skips cleanly.
   analyzer: {
+    // Ordered candidate base URLs for the analysis sidecar. ANALYZE_URL (the
+    // dedicated `--profile analyzer` image) is tried first; TTS_HEAVY_URL second
+    // so existing `--profile tts-heavy` installs (whose image still carries the
+    // analyze worker) keep working with zero config. analyzer.ts probes each
+    // /health in order and uses the first that reports the 'analyze' engine.
+    urls: [process.env.ANALYZE_URL, process.env.TTS_HEAVY_URL].filter((u): u is string => !!u),
     python: process.env.ANALYZE_PYTHON || '',   // empty → no local backend
     workerScript: process.env.ANALYZE_WORKER || '/app/scripts/analyze_worker.py',
     // 60s is enough for stable BPM (beat_track) / key (chroma); intro

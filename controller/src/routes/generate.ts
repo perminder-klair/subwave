@@ -45,7 +45,7 @@ router.post('/generate/show', requireAdmin, async (req, res) => {
     let genres: string[] = [];
     try {
       await library.load();
-      genres = Object.keys(library.stats().byGenre || {});
+      genres = Object.keys((await library.stats()).byGenre || {});
     } catch {}
 
     const out = await dj.generateShow(description, { personas, themes, genres });

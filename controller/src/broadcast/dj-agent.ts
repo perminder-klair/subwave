@@ -79,15 +79,15 @@ function takeWaypoint(rs: RunState): number[] | null {
 // in the same direction the tempo/key target already nudges. No-op (leaves the
 // run a plain tempo/key run) when the current track or the destination has no
 // audio coverage. `totalSteps` is the number of picks the run will influence.
-function maybeAttachJourney(rs: RunState, current: any, totalSteps: number): void {
+async function maybeAttachJourney(rs: RunState, current: any, totalSteps: number): Promise<void> {
   const startId = current?.id;
   if (!startId) return;
   try {
     const destEnergy = energyForDaypart().speed >= 1 ? 'high' : 'low';
-    const destIds = shuffle(library.songsByEnergy(destEnergy).map((s: any) => s.id))
+    const destIds = shuffle((await library.songsByEnergy(destEnergy)).map((s: any) => s.id))
       .slice(0, JOURNEY_DEST_SAMPLE);
     if (destIds.length === 0) return;
-    const j = journey.buildJourney({ startId, endIds: destIds, steps: totalSteps });
+    const j = await journey.buildJourney({ startId, endIds: destIds, steps: totalSteps });
     if (!j) return;
     rs.waypoints = j.waypoints;
     rs.step = 0;
@@ -100,23 +100,17 @@ function shuffle<T>(arr: T[]): T[] {
   return [...arr].sort(() => Math.random() - 0.5);
 }
 
-// Resolve {bpm, key} for a track via the library DB (queued/agent picks carry
-// only id/title/artist).
+// Resolve {bpm, key} for a track from the track object (slimTrack / agent
+// candidates carry these when analysed). Sync — no DB fallback needed since
+// un-analysed tracks return null from both paths.
 function analysisOf(track: any): { bpm: number | null; key: string | null } {
   if (!track) return { bpm: null, key: null };
-  if (track.bpm != null || track.musicalKey != null) {
-    return { bpm: track.bpm ?? null, key: track.musicalKey ?? null };
-  }
-  const rec = track.id ? library.get(track.id) : null;
-  return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
+  return { bpm: track.bpm ?? null, key: track.musicalKey ?? null };
 }
 
-// Resolve a track's measured intro runway (ms), for the talk-within-the-intro
-// budget enforcement.
+// Resolve a track's measured intro runway (ms) from the track object.
 function introMsOf(track: any): number | null {
-  if (track?.introMs != null) return track.introMs;
-  const rec = track?.id ? library.get(track.id) : null;
-  return rec?.introMs ?? null;
+  return track?.introMs ?? null;
 }
 
 // Probability of STARTING a run on a given pick, by chattiness. Quiet personas
@@ -135,7 +129,7 @@ function runStartProbability(): number {
 // anything in DJ mode with an analysed current track.
 const NO_RUN: RunStep = { rankTarget: null, audioWaypoint: null };
 
-function advanceRun(djMode: boolean, current: any): RunStep {
+async function advanceRun(djMode: boolean, current: any): Promise<RunStep> {
   if (!djMode) { runState = null; return NO_RUN; }
   if (runState && runState.remaining > 0) {
     runState.remaining--;
@@ -155,8 +149,10 @@ function advanceRun(djMode: boolean, current: any): RunStep {
   const extra = 1 + Math.floor(Math.random() * 2); // 1-2 more picks after this
   runState = { bpm: target.bpm, key: target.key, remaining: extra };
   // Overlay a sonic journey if the audio index can support one (this pick + the
-  // `extra` that follow → extra + 1 total waypoints). No-op otherwise.
-  maybeAttachJourney(runState, current, extra + 1);
+  // `extra` that follow → extra + 1 total waypoints). No-op otherwise. Awaited
+  // so the run's FIRST pick already sees waypoint 0 from takeWaypoint below —
+  // fire-and-forget would race and hand the opening pick a null waypoint.
+  await maybeAttachJourney(runState, current, extra + 1);
   return { rankTarget: target, audioWaypoint: takeWaypoint(runState) };
 }
 
@@ -293,7 +289,7 @@ export const pickerAgent = defineAgent({
   maxSteps: 4,
   timeoutMs: agentDeadline,
   buildSystem: () => pickSystem(),
-  buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, playlistLock, playlistTracks }) => {
+  buildTools: async ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, playlistLock, playlistTracks }) => {
     // Resolve the active show live (a show that just came on air takes effect):
     // for a strict show, hard genre + era locks the discovery tools enforce on
     // candidates — not just the prompt. Era rides the same genreStrict flag (no
@@ -306,8 +302,8 @@ export const pickerAgent = defineAgent({
       ? { fromYear: activeShow.fromYear, toYear: activeShow.toYear }
       : null;
     // playlistLock / playlistTracks are pre-resolved by pickViaAgent (the
-    // Navidrome fetch is async; buildTools is sync) and threaded through run().
-    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock, playlistLock, playlistTracks });
+    // Navidrome fetch is async; buildTools awaited in agent-factory.run()) and threaded through run().
+    const { tools, seen } = await buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock, playlistLock, playlistTracks });
     return { tools, extras: { seen } };
   },
 });
@@ -323,8 +319,8 @@ export const requestAgent = defineAgent({
   // settings.llm.requestWebResolve. (Artists are no longer filtered on any pick
   // path — see the buildPickerTools note — so a request for a recently-played
   // artist resolves naturally.)
-  buildTools: ({ recentIds }) => {
-    const { tools, seen } = buildPickerTools({
+  buildTools: async ({ recentIds }) => {
+    const { tools, seen } = await buildPickerTools({
       recentIds,
       resolveReferences: settings.get().llm?.requestWebResolve ?? false,
     });
@@ -377,7 +373,7 @@ async function enqueuePick(queue, song, reason, source, link: string | null = nu
 
 async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = null }: { wantLink: boolean; audioWaypoint?: number[] | null; current?: any }): Promise<boolean> {
   await library.load();
-  const stats = library.stats();
+  const stats = await library.stats();
   const windows = recencyWindowsForLibrary(stats.distinctArtists);
   // Scale the track-recency window to the tagged library's artist diversity:
   // dense catalogues keep the long anti-repeat guard, while small-artist
@@ -532,7 +528,7 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     // Feature 4 + Phase 2 — advance/maybe-start a mini-run; get the tempo/key
     // re-rank target and (when the audio index supports it) a sonic-journey
     // waypoint for the pool's audio anchor.
-    const { rankTarget, audioWaypoint } = advanceRun(djMode, current);
+    const { rankTarget, audioWaypoint } = await advanceRun(djMode, current);
     const inRun = runActive();
 
     // The link clause differs in DJ mode: a working DJ doesn't just announce the

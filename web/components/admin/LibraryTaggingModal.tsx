@@ -157,7 +157,7 @@ export default function LibraryTaggingModal(p: Props) {
               <Pass on={effSteps.analyze} onClick={() => toggleStep('analyze')} disabled={analyzeLocked}
                 name="Analyze acoustics" tag="slow"
                 hint={analyzeLocked
-                  ? 'No analysis engine running — start the tts-heavy sidecar or a local librosa venv.'
+                  ? 'No analysis engine running — start the analyzer or tts-heavy sidecar (or a local librosa venv).'
                   : 'Tempo, key & intro, plus sounds-like fingerprints when enabled. The slow step; vocal separation is split out below.'} />
               {p.vocalWanted && (
                 <div className="pl-6">

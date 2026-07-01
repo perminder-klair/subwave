@@ -274,6 +274,28 @@ function clampBudgetSoftPct(raw: any, def: number): number {
   return Math.min(100, Math.max(0, Math.floor(raw)));
 }
 
+// Per-call max output tokens (issue #712). 0 is a first-class value meaning
+// "off — use each strategy's built-in default", so it passes through unclamped.
+// Any other value is floored and clamped to [MAX_OUTPUT_TOKENS_MIN,
+// MAX_OUTPUT_TOKENS_MAX]; non-numeric/NaN falls back to `def`.
+export const MAX_OUTPUT_TOKENS_MIN = 500;
+export const MAX_OUTPUT_TOKENS_MAX = 8000;
+export function clampMaxOutputTokens(raw: any, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  const n = Math.floor(raw);
+  if (n <= 0) return 0;
+  return Math.min(MAX_OUTPUT_TOKENS_MAX, Math.max(MAX_OUTPUT_TOKENS_MIN, n));
+}
+
+// Resolve the effective per-call output-token cap. Returns the operator's
+// configured value when set (> 0), else `fallback` — the strategy's own
+// built-in default. The single read point for settings.llm.maxOutputTokens;
+// strategy/text|object|agent all default their maxOutputTokens param through it.
+export function resolveMaxOutputTokens(fallback: number): number {
+  const v = get().llm?.maxOutputTokens;
+  return typeof v === 'number' && v > 0 ? v : fallback;
+}
+
 // Count-based hard no-repeat window (distinct plays). Floored to an integer in
 // [0, 290]: 0 disables; the 290 ceiling stays under the 300-entry _recentPlays
 // cap so the requested window is never silently truncated by a too-short
@@ -856,6 +878,15 @@ const DEFAULTS = {
     // over the cap fall through to the stateless matcher cascade like every
     // other LLM path. No effect until dailyTokenCap is set.
     exemptRequests: true,
+    // Per-call max OUTPUT tokens — distinct from dailyTokenCap (a cumulative
+    // daily budget). This caps the size of each individual model response. The
+    // strategy primitives default to generous built-ins (4000 text / 8000
+    // object / 8000 agent); 0 = use those defaults. Set a value (clamped
+    // 500–8000) to override all three — the lever for a local model on a small
+    // context window, where an 8000-token response allowance can crowd out the
+    // system prompt / tool listing and risk truncation, and is pure waste with
+    // reasoning off. Resolved via resolveMaxOutputTokens(); see issue #712.
+    maxOutputTokens: 0,
     // When on (or when LLM_DEBUG_RAW is set in the env), every outbound model
     // request's exact body is captured to ${STATE_DIR}/logs/llm-debug.log (the
     // last 10, newest first) and dumped to stderr — a copy-pasteable view of
@@ -1455,6 +1486,9 @@ export async function load() {
       // up the defaults (0 = disabled, so they behave exactly as before).
       dailyTokenCap: clampDailyTokenCap(stored.llm?.dailyTokenCap, DEFAULTS.llm.dailyTokenCap),
       budgetSoftPct: clampBudgetSoftPct(stored.llm?.budgetSoftPct, DEFAULTS.llm.budgetSoftPct),
+      // Per-call output cap (issue #712) — pre-existing settings.json lacks the
+      // field and picks up the 0 default (= built-in per-strategy defaults).
+      maxOutputTokens: clampMaxOutputTokens(stored.llm?.maxOutputTokens, DEFAULTS.llm.maxOutputTokens),
       exemptRequests:
         typeof stored.llm?.exemptRequests === 'boolean'
           ? stored.llm.exemptRequests
@@ -2449,6 +2483,9 @@ export async function update(patch) {
     }
     if (l.budgetSoftPct !== undefined) {
       next.llm.budgetSoftPct = clampBudgetSoftPct(Number(l.budgetSoftPct), next.llm.budgetSoftPct);
+    }
+    if (l.maxOutputTokens !== undefined) {
+      next.llm.maxOutputTokens = clampMaxOutputTokens(Number(l.maxOutputTokens), next.llm.maxOutputTokens);
     }
     if (l.exemptRequests !== undefined) {
       next.llm.exemptRequests = !!l.exemptRequests;
