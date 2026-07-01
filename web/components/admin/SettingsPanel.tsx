@@ -3826,6 +3826,32 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
     }
   };
 
+  // What the tagger will actually embed with right now — resolved from the LIVE
+  // form (not saved state). "Follow LLM" resolves the provider; a blank Model
+  // field resolves to that provider's default. This is the line that stops
+  // operators reverse-engineering "what am I actually using?" — e.g. a DeepSeek
+  // DJ routed through OpenRouter embeds via openai/text-embedding-3-small, which
+  // isn't obvious from any field (Discord report).
+  const embeddedMeta = data.libraryStats?.embeddingMeta || null;
+  const suggestedDefault = EMBED_MODEL_SUGGESTIONS[effectiveProvider]?.[0];
+  // Defaults for the providers not carried in EMBED_MODEL_SUGGESTIONS (they have
+  // no combobox suggestions but still resolve to a sensible model server-side).
+  const OTHER_EMBED_DEFAULTS: Record<string, string> = {
+    'openai-compatible': 'text-embedding-3-small',
+    locca: 'nomic-embed-text',
+    anthropic: 'text-embedding-3-small',
+  };
+  const effectiveModel =
+    e.model?.trim() || suggestedDefault?.id || OTHER_EMBED_DEFAULTS[effectiveProvider] || '';
+  // Prefer a real measurement (a green probe, or the dim the library was actually
+  // embedded at) over the name→dim guess.
+  const effectiveDim =
+    probe?.dim ??
+    embeddedMeta?.dim ??
+    EMBED_MODEL_SUGGESTIONS[effectiveProvider]?.find(m => m.id === effectiveModel)?.dim ??
+    suggestedDefault?.dim ??
+    null;
+
   return (
     <>
       <SectionHeader
@@ -3909,7 +3935,21 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
               provider, so Ollama-local users get <code>nomic-embed-text</code> free.
               Anthropic has no first-party embedding API; if your LLM is Anthropic,
               pick OpenAI here (needs <code>OPENAI_API_KEY</code>).
-              {' '}Effective: <code>{llmProviderLabel(effectiveProvider)}</code>.
+            </div>
+            <div className="field-hint">
+              <strong>Embedding now:</strong> <code>{llmProviderLabel(effectiveProvider)}</code>
+              {effectiveModel && <> · <code>{effectiveModel}</code></>}
+              {effectiveDim != null && <> · {effectiveDim}-d</>}
+              {!e.provider && (
+                <> — follows your DJ provider, so switching the DJ provider changes
+                  this too (and needs a re-embed once the library is tagged). Pin a
+                  provider here to lock it.</>
+              )}
+              {embeddedMeta && embeddedMeta.model !== effectiveModel && (
+                <> Your library is currently embedded with{' '}
+                  <code>{embeddedMeta.model}</code> ({embeddedMeta.dim}-d) — changing
+                  the model means a full re-embed.</>
+              )}
             </div>
 
             {!canEmbed && (

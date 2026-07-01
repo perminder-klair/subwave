@@ -891,9 +891,24 @@ async function processBatch(
     // 429s) against a leg that won't answer. The surviving consumer redoes the
     // requeued batch.
     if (consumer.pin && (isUnreachable(err) || isQuotaOrAuthError(err))) throw err;
-    console.error(
-      `[tag] LLM batch failed (${songs.length} tracks) on ${consumer.label}: ${err.message} — falling back to per-track`,
-    );
+    // A "batch length mismatch" is NOT a failure. Some models (e.g. Mercury, and
+    // small local models) don't return one structured-output entry per input
+    // track, so we tag each track individually this batch — same seed set, same
+    // cost envelope (only the seeds ever hit the LLM), just slower. Log it as an
+    // expected degrade, not an error, so it doesn't read as something broken.
+    // Genuine batch errors keep the error-level line with their message.
+    const perTrackDegrade = /batch length mismatch/i.test(err.message || '');
+    if (perTrackDegrade) {
+      console.warn(
+        `[tag] ${consumer.label} didn't return one entry per track — tagging ` +
+          `${songs.length} tracks individually this batch (expected for some ` +
+          `models; not an error, just slower)`,
+      );
+    } else {
+      console.error(
+        `[tag] LLM batch failed (${songs.length} tracks) on ${consumer.label}: ${err.message} — falling back to per-track`,
+      );
+    }
     results = [];
     for (const song of input) {
       try {
