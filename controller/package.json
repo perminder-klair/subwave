@@ -11,10 +11,12 @@
     "lastfm-session": "tsx scripts/lastfm-session.ts",
     "test:embed": "tsx scripts/embedding-preflight-test.ts",
     "test:llm": "tsx scripts/llm-pure.test.ts",
-    "test": "tsx scripts/llm-pure.test.ts && tsx scripts/picker-recency-regression.ts && tsx scripts/recent-plays.test.ts && tsx scripts/listeners-status.test.ts && tsx scripts/lastfm-enrich.test.ts && tsx scripts/web-search-searxng.test.ts && tsx scripts/request-dedup.test.ts && tsx scripts/stale-link.test.ts && tsx scripts/embedding-heavy.test.ts && tsx scripts/tagger-perf.test.ts && tsx scripts/rescan-scope.test.ts && tsx scripts/show-playlist.test.ts",
+    "test": "tsx scripts/llm-pure.test.ts && tsx scripts/picker-recency-regression.ts && tsx scripts/recent-plays.test.ts && tsx scripts/listeners-status.test.ts && tsx scripts/lastfm-enrich.test.ts && tsx scripts/web-search-searxng.test.ts && tsx scripts/request-dedup.test.ts && tsx scripts/stale-link.test.ts && tsx scripts/embedding-heavy.test.ts && tsx scripts/tagger-perf.test.ts && tsx scripts/rescan-scope.test.ts && tsx scripts/show-playlist.test.ts && tsx scripts/sqlite-adapter.test.ts && tsx scripts/postgres-adapter.test.ts",
     "lint": "eslint . && tsc --noEmit",
     "lint:fix": "eslint . --fix",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:pg": "tsx scripts/postgres-adapter.test.ts",
+    "test:sqlite": "tsx scripts/sqlite-adapter.test.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.1",
