@@ -3414,6 +3414,13 @@ html.lite *::after {
     border: 0; background: transparent; font-family: inherit; font-size: 12px; font-weight: 700;
     color: var(--ink); padding: 10px 12px; cursor: pointer; outline: none;
 }
+/* The native option popup ignores the select's transparent background and (on
+   Linux Chromium) the inherited color-scheme, falling back to a white surface
+   with our light --ink text on it — unreadable in dark mode. Give the options
+   an explicit theme-driven surface so the dropdown matches the palette. */
+.admin-root select option {
+    background: var(--bg); color: var(--ink);
+}
 
 /* live dot */
 .admin-root .lib-livedot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex: none; position: relative; }
