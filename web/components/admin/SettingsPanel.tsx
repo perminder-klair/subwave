@@ -3698,10 +3698,9 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
         },
       },
     });
-    // Save embedding API key if typed
-    const embeddingNeedsKey = e.provider &&
-      !['', 'ollama', 'openai-compatible', 'locca'].includes(e.provider);
-    if (embeddingNeedsKey && embeddingKeyInput.trim()) {
+    // Save embedding API key override if typed (cloud embedding providers only —
+    // embedKeyVar is set only for providers that use a conventional key).
+    if (embedKeyVar && embeddingKeyInput.trim()) {
       const ok = await saveKey('EMBEDDING_API_KEY', embeddingKeyInput);
       if (ok) { notify.ok('API key saved'); setEmbeddingKeyInput(''); refresh(); }
     }
@@ -3715,10 +3714,10 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
   // Provider list is the embedding-capable subset (/settings.embedding.providers),
   // NOT the full LLM list — chat-only providers (deepseek, gateway) have no
   // embeddings endpoint and can't be picked here (#493). OpenRouter shipped an
-  // embeddings endpoint so it's back in (#522); anthropic stays in too, routing
-  // to OpenAI as flagged in the hint.
+  // embeddings endpoint so it's back in (#522). Anthropic was dropped — it has no
+  // embedding API and only worked by routing to OpenAI, which was confusing.
   const embedProviders = data.embedding?.providers ||
-    ['ollama', 'openai-compatible', 'locca', 'anthropic', 'openai', 'google', 'openrouter', 'requesty'];
+    ['ollama', 'openai-compatible', 'locca', 'openrouter', 'openai', 'google', 'requesty'];
   // Keep a stale explicit choice (a chat-only provider saved before this list
   // shrank) visible so the Select isn't blank and the warning below makes sense.
   const providers = e.provider && !embedProviders.includes(e.provider)
@@ -3736,14 +3735,17 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
   const [probing, setProbing] = useState(false);
   const [detecting, setDetecting] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [tagBusy, setTagBusy] = useState(false);
-  const taggerRunning = !!data.tagger?.running;
   // Local servers (llama.cpp/locca) need a dedicated embedding endpoint; cloud
   // and Ollama providers serve embeddings on the same endpoint as chat.
   const needsServerUrl = effectiveProvider === 'locca' || effectiveProvider === 'openai-compatible';
 
   const embedKeyVar = LLM_ENV_VARS[effectiveProvider];
   const embedKeySet = !!(embedKeyVar && data.env?.[embedKeyVar]);
+  // Embeddings reuse the DJ provider's own key automatically, so the key is
+  // "present" if that provider's env var is set OR the optional EMBEDDING_API_KEY
+  // override is. The warning must key off this — not EMBEDDING_API_KEY alone, or
+  // it cries "missing" for a provider whose key is already set for the DJ.
+  const embedKeyPresent = embedKeySet || !!data.env?.['EMBEDDING_API_KEY'];
 
   const embedDiscoveryEnabled =
     effectiveProvider === 'ollama'
@@ -3812,20 +3814,6 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
     }
   };
 
-  const startTagging = async () => {
-    setTagBusy(true);
-    try {
-      const r = await adminFetch('/tag-library', { method: 'POST' });
-      const j = await r.json().catch(() => ({}));
-      if (r.ok) notify.ok('tagging started, watch progress on the Library tab');
-      else notify.err(j.error || 'could not start the tagger');
-    } catch (err) {
-      notify.err(errorMessage(err));
-    } finally {
-      setTagBusy(false);
-    }
-  };
-
   // What the tagger will actually embed with right now — resolved from the LIVE
   // form (not saved state). "Follow LLM" resolves the provider; a blank Model
   // field resolves to that provider's default. This is the line that stops
@@ -3873,25 +3861,6 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
         manualLabel="How embeddings work"
       />
 
-      {/* Plain-language intro + at-a-glance readiness. */}
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <p className="max-w-[560px] text-[12px] leading-[1.6] text-muted">
-          Auto-tagging reads each track once and labels its mood + energy so the DJ
-          picks tracks that fit the room. It needs a small <strong>embedding</strong>{' '}
-          model, separate from your chat LLM. Set it up below, hit{' '}
-          <strong>Test</strong>, then run the tagger.
-        </p>
-        {probing || detecting ? (
-          <Pill tone="default" dot>checking…</Pill>
-        ) : probe?.ok ? (
-          <Pill tone="accent" dot>ready{probe.dim ? ` · ${probe.dim}-dim` : ''}</Pill>
-        ) : probe ? (
-          <Pill tone="ink" dot className="!border-red-400 !text-red-400">needs attention</Pill>
-        ) : (
-          <Pill tone="default">not tested</Pill>
-        )}
-      </div>
-
       <Card title="Tagger" sub="enabled?">
         <div className="grid grid-cols-[1fr_auto] items-center gap-4">
           <div>
@@ -3918,12 +3887,30 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
 
       <Card title="Embedding server" sub="where embeddings come from">
         <div className="grid gap-[18px]">
+          {/* Affirmative "you're set up" line for new users — the effective
+              provider/model/dim resolve to a working default even when both
+              fields are blank, so surface that instead of leaving the tab
+              looking unconfigured. Hidden when the effective provider can't
+              embed (the warning below the Provider field covers that case). */}
+          {canEmbed && effectiveModel && (
+            <div className="flex items-start gap-x-2 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] p-3 text-[11px] leading-[1.5] text-ink">
+              <span className="flex-none text-[12px] leading-[1.5] text-[var(--accent)]">✓</span>
+              <span className="min-w-0">
+                Ready to tag with defaults — <code>{llmProviderLabel(effectiveProvider)}</code>
+                {!e.provider && <span className="text-muted"> (your DJ&rsquo;s provider)</span>}
+                {' · '}<code>{effectiveModel}</code>
+                {effectiveDim != null && <span className="text-muted"> · {effectiveDim}-d</span>}.
+                <span className="text-muted"> Change the provider or model below to override.</span>
+              </span>
+            </div>
+          )}
           <div className="field">
             <Label>Provider</Label>
             <EmbeddingProviderSelector
-              value={e.provider || ''}
+              // A blank stored provider resolves to the DJ's provider, so the
+              // grid always shows an explicit selection (no "Follow LLM" card).
+              value={effectiveProvider}
               providerIds={providers}
-              llmProvider={llmProvider}
               env={data.env}
               onChange={v =>
                 setForm(f => ({ ...f, embedding: { ...f.embedding, provider: v } }))
@@ -3931,26 +3918,22 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
               className="max-w-[560px]"
             />
             <div className="field-hint">
-              Where the text embeddings come from. Default follows your LLM
+              Where the text embeddings come from. Defaults to your DJ&rsquo;s
               provider, so Ollama-local users get <code>nomic-embed-text</code> free.
               Anthropic has no first-party embedding API; if your LLM is Anthropic,
               pick OpenAI here (needs <code>OPENAI_API_KEY</code>).
             </div>
-            <div className="field-hint">
-              <strong>Embedding now:</strong> <code>{llmProviderLabel(effectiveProvider)}</code>
-              {effectiveModel && <> · <code>{effectiveModel}</code></>}
-              {effectiveDim != null && <> · {effectiveDim}-d</>}
-              {!e.provider && (
-                <> — follows your DJ provider, so switching the DJ provider changes
-                  this too (and needs a re-embed once the library is tagged). Pin a
-                  provider here to lock it.</>
-              )}
-              {embeddedMeta && embeddedMeta.model !== effectiveModel && (
-                <> Your library is currently embedded with{' '}
-                  <code>{embeddedMeta.model}</code> ({embeddedMeta.dim}-d) — changing
-                  the model means a full re-embed.</>
-              )}
-            </div>
+            {/* The resolved provider/model/dim is stated in the "Ready to tag
+                with defaults" banner above, so no "Embedding now:" line here —
+                only the specific warning that the library is already embedded
+                with a different model (a full re-embed on change). */}
+            {embeddedMeta && embeddedMeta.model !== effectiveModel && (
+              <div className="field-hint">
+                Your library is currently embedded with{' '}
+                <code>{embeddedMeta.model}</code> ({embeddedMeta.dim}-d) — changing
+                the model means a full re-embed.
+              </div>
+            )}
 
             {!canEmbed && (
               <div
@@ -3967,7 +3950,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
                   {e.provider ? (
                     <><code>{llmProviderLabel(effectiveProvider)}</code> is a chat-only provider, with no embeddings endpoint, so the tagger can’t use it.</>
                   ) : (
-                    <>"Follow LLM provider" resolves to <code>{llmProviderLabel(llmProvider)}</code>, which is chat-only and has no embeddings endpoint.</>
+                    <>Your DJ provider <code>{llmProviderLabel(llmProvider)}</code> is chat-only and has no embeddings endpoint.</>
                   )}{' '}
                   Pick a real embedding provider above. <strong>Ollama</strong> is local
                   and free (<code>nomic-embed-text</code>, auto-pulled on first run), or
@@ -3986,7 +3969,10 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
                   models={embedDiscovery.models}
                   value={e.model}
                   onChange={v => setForm(f => ({ ...f, embedding: { ...f.embedding, model: v } }))}
-                  placeholder="Select a model"
+                  // Blank field still means "follow the provider default"; show
+                  // that default (e.g. nomic-embed-text) rather than an empty
+                  // "Select a model" that reads as unconfigured.
+                  placeholder={effectiveModel ? `${effectiveModel} · default` : 'Select a model'}
                 />
               ) : (
                 <Input
@@ -3994,15 +3980,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
                   onChange={(ev: ChangeEvent<HTMLInputElement>) =>
                     setForm(f => ({ ...f, embedding: { ...f.embedding, model: ev.target.value } }))
                   }
-                  placeholder={
-                    effectiveProvider === 'ollama' || effectiveProvider === 'locca'
-                      ? 'nomic-embed-text'
-                      : effectiveProvider === 'openai' || effectiveProvider === 'openai-compatible'
-                        ? 'text-embedding-3-small'
-                        : effectiveProvider === 'google'
-                          ? 'text-embedding-004'
-                          : 'model id'
-                  }
+                  placeholder={effectiveModel ? `${effectiveModel} · default` : 'model id'}
                   className="max-w-[360px]"
                 />
               )}
@@ -4015,7 +3993,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
             </div>
             <div className="field-hint">
               {embedDiscovery.models.length > 0
-                ? `${embedDiscovery.models.length} model${embedDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                ? `${embedDiscovery.models.length} model${embedDiscovery.models.length !== 1 ? 's' : ''} discovered. Keep the default${effectiveModel ? ` (${effectiveModel})` : ''} or pick another.`
                 : !embedDiscoveryEnabled
                   ? (effectiveProvider === 'openai-compatible'
                       ? 'Set a base URL above to discover available models.'
@@ -4108,24 +4086,30 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
             </div>
           )}
 
-          {/* Embedding API key override -- only for cloud providers that need one */}
-          {e.provider && !['', 'ollama', 'openai-compatible', 'locca'].includes(e.provider) && (
+          {/* Embedding key — cloud embedding providers only (embedKeyVar is
+              undefined for ollama / openai-compatible / locca, which need no
+              conventional key). Embeddings reuse the DJ provider's own key, so
+              the status keys off that (embedKeyPresent), not EMBEDDING_API_KEY
+              alone; the override is only for running embeddings on a different
+              provider than the DJ. */}
+          {embedKeyVar && (
             <>
               <div className="field">
                 <Label>Embedding API key override</Label>
                 <Input
                   type="password"
                   value={embeddingKeyInput}
-                  placeholder={data.env?.['EMBEDDING_API_KEY'] ? '•••••• (on file)' : 'optional -- defaults to chat key'}
+                  placeholder={embedKeyPresent ? '•••••• (reusing your DJ key)' : `${embedKeyVar} — or set it in .env`}
                   onChange={(ev: ChangeEvent<HTMLInputElement>) => setEmbeddingKeyInput(ev.target.value)}
                   className="max-w-[360px]"
                 />
                 <div className="field-hint">
-                  Only needed when the embedding provider uses a different API key than the chat provider.
+                  Optional. Embeddings reuse your DJ&rsquo;s <code>{embedKeyVar}</code> automatically —
+                  only set this to run embeddings on a different provider than your DJ.
                   Stored in <code>state/secrets.env</code>.
                 </div>
               </div>
-              <KeyStatus envVar="EMBEDDING_API_KEY" present={!!data.env?.['EMBEDDING_API_KEY']} />
+              <KeyStatus envVar={embedKeyVar} present={embedKeyPresent} />
             </>
           )}
 
@@ -4134,7 +4118,11 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
             <div className="flex flex-wrap items-center gap-2">
               {needsServerUrl && (
                 <Btn sm onClick={detect} disabled={detecting || probing}>
-                  {detecting ? 'Detecting…' : 'Detect locca server'}
+                  {detecting
+                    ? 'Detecting…'
+                    : effectiveProvider === 'locca'
+                      ? 'Detect locca server'
+                      : 'Detect server'}
                 </Btn>
               )}
               <Btn sm tone="accent" onClick={runProbe} disabled={probing || detecting}>
@@ -4159,25 +4147,9 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
         </div>
       </Card>
 
-      {/* Run the tagger — gated on a green probe so it can't fail mid-job. */}
-      <Card title="Tag the library" sub="run the bulk tagger">
-        <div className="grid grid-cols-[1fr_auto] items-center gap-4">
-          <div className="max-w-[480px] text-[11px] leading-[1.5] text-muted">
-            {taggerRunning
-              ? 'A tagging run is in progress, watch live progress on the Library tab.'
-              : probe?.ok
-                ? 'Embeddings look good. Start the bulk tagger; it runs in the background, and you can watch progress on the Library tab.'
-                : 'Test the embedding endpoint above first. The tagger needs a working embedding server.'}
-          </div>
-          <Btn
-            tone="accent"
-            onClick={startTagging}
-            disabled={tagBusy || taggerRunning || !probe?.ok}
-          >
-            {taggerRunning ? 'Tagging…' : tagBusy ? 'Starting…' : 'Start tagging'}
-          </Btn>
-        </div>
-      </Card>
+      {/* The bulk tagger is launched from the Library page's "Start tagging"
+          flow (with its per-run step + batch controls), so there's no run
+          button here — this tab is just the embedding config + advanced knobs. */}
 
       {/* Advanced knobs — collapsed by default so newcomers see only the basics. */}
       <button

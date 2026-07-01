@@ -8,7 +8,7 @@
 // stays over there.
 
 import { useEffect, useRef, useState } from 'react';
-import { Sparkles, Activity, Play, Square, Terminal } from 'lucide-react';
+import { Sparkles, Activity, Play, Square, Terminal, Loader2 } from 'lucide-react';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { Btn, Eyebrow } from './ui';
 import { cn } from '../../lib/cn';
@@ -55,8 +55,8 @@ export interface TaggerProgress {
   phase: 'walk' | 'enrich' | 'embed' | 'seed' | 'propagate' | 'learn' | 'analyze' | 'done';
   label: string;
   done?: number;
-  total?: number;        // absent → indeterminate (e.g. the Navidrome walk)
-  round?: number;        // active-learn round
+  total?: number; // absent → indeterminate (e.g. the Navidrome walk)
+  round?: number; // active-learn round
   errors?: number;
   llm?: { legs: Record<string, number> };
   // Cumulative ms per phase, attached to the terminal 'done' event so the panel
@@ -193,26 +193,89 @@ const grp = (s: string | undefined): string => {
 };
 // Rename the breakdown phase keys to the friendly labels (walk→scan, etc.).
 const humanBreakdown = (s: string | undefined): string =>
-  String(s ?? '').replace(/\b(setup|walk|enrich|embed|seed|propagate|learn|analyze)\b/g, k => PHASE_LABEL[k] ?? k);
+  String(s ?? '').replace(
+    /\b(setup|walk|enrich|embed|seed|propagate|learn|analyze)\b/g,
+    k => PHASE_LABEL[k] ?? k,
+  );
 
 const LOG_RULES: { re: RegExp; to: (m: RegExpMatchArray) => string; cls: string }[] = [
-  { re: /^done in (\d+)s\..*?llm_tagged=(\d+)/, to: m => `✅  Done in ${fmtDur(Number(m[1]) * 1000)} — ${m[2]} tracks tagged`, cls: 'text-emerald-500 font-semibold' },
-  { re: /^phase breakdown:\s*(.+)$/, to: m => `⏱️  Time per phase — ${humanBreakdown(m[1])}`, cls: 'text-ink' },
-  { re: /^([\d,]+) tagged · (.+)$/, to: m => `📊  Library now: ${grp(m[1])} tagged · ${m[2]}`, cls: 'text-ink' },
-  { re: /^walked ([\d,]+) total tracks/, to: m => `🔍  Scanned ${grp(m[1])} tracks`, cls: 'text-muted' },
-  { re: /^walked ([\d,]+) tracks/, to: m => `🔍  Scanning library… ${grp(m[1])}`, cls: 'text-muted' },
-  { re: /^([\d,]+) untagged tracks in scope.*?\(of ([\d,]+)/, to: m => `📋  ${grp(m[1])} new tracks to tag (${grp(m[2])} still untagged)`, cls: 'text-ink' },
-  { re: /^enriched (\d+)\/(\d+) \(lastfm: (\d+), lyrics: (\d+)\)/, to: m => `🌐  Enriched ${m[1]}/${m[2]} — ${m[3]} Last.fm, ${m[4]} lyrics`, cls: 'text-muted' },
-  { re: /^phase-0 done.*?enriched (\d+)/, to: m => `🌐  Metadata fetched for ${m[1]} tracks`, cls: 'text-muted' },
-  { re: /^phase-1 embedding (\d+) tracks/, to: m => `🧬  Building similarity vectors for ${m[1]} tracks…`, cls: 'text-muted' },
+  {
+    re: /^done in (\d+)s\..*?llm_tagged=(\d+)/,
+    to: m => `✅  Done in ${fmtDur(Number(m[1]) * 1000)} — ${m[2]} tracks tagged`,
+    cls: 'text-emerald-500 font-semibold',
+  },
+  {
+    re: /^phase breakdown:\s*(.+)$/,
+    to: m => `⏱️  Time per phase — ${humanBreakdown(m[1])}`,
+    cls: 'text-ink',
+  },
+  {
+    re: /^([\d,]+) tagged · (.+)$/,
+    to: m => `📊  Library now: ${grp(m[1])} tagged · ${m[2]}`,
+    cls: 'text-ink',
+  },
+  {
+    re: /^walked ([\d,]+) total tracks/,
+    to: m => `🔍  Scanned ${grp(m[1])} tracks`,
+    cls: 'text-muted',
+  },
+  {
+    re: /^walked ([\d,]+) tracks/,
+    to: m => `🔍  Scanning library… ${grp(m[1])}`,
+    cls: 'text-muted',
+  },
+  {
+    re: /^([\d,]+) untagged tracks in scope.*?\(of ([\d,]+)/,
+    to: m => `📋  ${grp(m[1])} new tracks to tag (${grp(m[2])} still untagged)`,
+    cls: 'text-ink',
+  },
+  {
+    re: /^enriched (\d+)\/(\d+) \(lastfm: (\d+), lyrics: (\d+)\)/,
+    to: m => `🌐  Enriched ${m[1]}/${m[2]} — ${m[3]} Last.fm, ${m[4]} lyrics`,
+    cls: 'text-muted',
+  },
+  {
+    re: /^phase-0 done.*?enriched (\d+)/,
+    to: m => `🌐  Metadata fetched for ${m[1]} tracks`,
+    cls: 'text-muted',
+  },
+  {
+    re: /^phase-1 embedding (\d+) tracks/,
+    to: m => `🧬  Building similarity vectors for ${m[1]} tracks…`,
+    cls: 'text-muted',
+  },
   { re: /^embedded (\d+)\/(\d+)/, to: m => `🧬  Vectors ${m[1]}/${m[2]}`, cls: 'text-muted' },
   { re: /^LLM-tagged (\d+)\/(\d+)/, to: m => `🏷️  DJ tagged ${m[1]}/${m[2]}`, cls: 'text-muted' },
-  { re: /^phase-2 done: (\d+)\/(\d+) seeded/, to: m => `✓  Mood tagging done — ${m[1]}/${m[2]}`, cls: 'text-emerald-500' },
-  { re: /^phase-3 propagated (\d+) tracks; (\d+) uncertain/, to: m => `🔗  Spread tags to ${m[1]} similar tracks (${m[2]} unsure)`, cls: 'text-muted' },
-  { re: /^phase-4 round (\d+).*?LLM-tagging (\d+)/, to: m => `🔁  Round ${m[1]}: re-checking ${m[2]} unsure tracks…`, cls: 'text-muted' },
-  { re: /^(\d+) tracks to analyse/, to: m => `🔊  Analysing audio for ${m[1]} tracks…`, cls: 'text-muted' },
-  { re: /^(\d+)\/(\d+) \(ok=\d+ fail=(\d+)\)/, to: m => `🔊  Audio ${m[1]}/${m[2]}${Number(m[3]) ? ` · ${m[3]} failed` : ''}`, cls: 'text-muted' },
-  { re: /^done — analyzed=(\d+).*?audio-embedded=(\d+)/, to: m => `✓  Audio analysed — ${m[1]} tracks, ${m[2]} sounds-like`, cls: 'text-emerald-500' },
+  {
+    re: /^phase-2 done: (\d+)\/(\d+) seeded/,
+    to: m => `✓  Mood tagging done — ${m[1]}/${m[2]}`,
+    cls: 'text-emerald-500',
+  },
+  {
+    re: /^phase-3 propagated (\d+) tracks; (\d+) uncertain/,
+    to: m => `🔗  Spread tags to ${m[1]} similar tracks (${m[2]} unsure)`,
+    cls: 'text-muted',
+  },
+  {
+    re: /^phase-4 round (\d+).*?LLM-tagging (\d+)/,
+    to: m => `🔁  Round ${m[1]}: re-checking ${m[2]} unsure tracks…`,
+    cls: 'text-muted',
+  },
+  {
+    re: /^(\d+) tracks to analyse/,
+    to: m => `🔊  Analysing audio for ${m[1]} tracks…`,
+    cls: 'text-muted',
+  },
+  {
+    re: /^(\d+)\/(\d+) \(ok=\d+ fail=(\d+)\)/,
+    to: m => `🔊  Audio ${m[1]}/${m[2]}${Number(m[3]) ? ` · ${m[3]} failed` : ''}`,
+    cls: 'text-muted',
+  },
+  {
+    re: /^done — analyzed=(\d+).*?audio-embedded=(\d+)/,
+    to: m => `✓  Audio analysed — ${m[1]} tracks, ${m[2]} sounds-like`,
+    cls: 'text-emerald-500',
+  },
   { re: /^backend: (\w+)/, to: m => `🔊  Audio engine: ${m[1]}`, cls: 'text-muted' },
   { re: /^LLM model: (.+)/, to: m => `🤖  Tagging model — ${m[1]}`, cls: 'text-muted' },
   { re: /^embedding model: (.+)/, to: m => `🧬  Embedding model — ${m[1]}`, cls: 'text-muted' },
@@ -220,8 +283,13 @@ const LOG_RULES: { re: RegExp; to: (m: RegExpMatchArray) => string; cls: string 
 ];
 
 function beautifyLog(raw: string): { text: string; cls: string } {
-  if (/^\[exit 0\]/.test(raw)) return { text: '✅  Finished', cls: 'text-emerald-500 font-semibold' };
-  if (/^\[exit/.test(raw)) return { text: `⏹  Stopped (${raw.replace(/^\[exit\s*|\]\s*$/g, '')})`, cls: 'text-vermilion font-semibold' };
+  if (/^\[exit 0\]/.test(raw))
+    return { text: '✅  Finished', cls: 'text-emerald-500 font-semibold' };
+  if (/^\[exit/.test(raw))
+    return {
+      text: `⏹  Stopped (${raw.replace(/^\[exit\s*|\]\s*$/g, '')})`,
+      cls: 'text-vermilion font-semibold',
+    };
   const s = raw.replace(/^\[(tag|analyze|stats|scheduler|error)\]\s*/, '');
   // Raw LLM-request dumps (the `[llm-debug-raw]` header and its JSON body) are
   // verbose debug output, not status lines — never keyword-scan them. A song
@@ -270,6 +338,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const vocalOn = (vocalAnalyzed ?? 0) > 0;
   const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
   const running = !!p.tagger?.running;
+  // The first library count (walking Navidrome for a total) is in flight — size
+  // still unknown. This is distinct from a *failed* scan, where `scanning` is
+  // back to false but `total` stays null; only an active count should show the
+  // "checking…" affordance and gate the Start button. A failed/never-run scan
+  // falls through to "Library size unknown" rather than a forever-"updating".
+  const scanning = !!p.coverage?.scanning;
+  const libraryCounting = scanning && total == null;
   const analysisOff = p.coverage?.analysisAvailable === false;
   // Engine is up but on an image without the CLAP stack (an older tts-heavy
   // predating baked-in fingerprinting) — "sounds-like" can't be produced until
@@ -290,19 +365,30 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // (null/unknown — an older sidecar). If it reports capable=true the honest read
   // is "not yet analysed" (run a backfill); capable=false is the *Incapable path.
   const audioStarved =
-    !analysisOff && p.coverage?.audioAnalysisAvailable == null && !!p.audioEnabled && !audioOn && ranAnalysis;
+    !analysisOff &&
+    p.coverage?.audioAnalysisAvailable == null &&
+    !!p.audioEnabled &&
+    !audioOn &&
+    ranAnalysis;
   const vocalStarved =
-    !analysisOff && p.coverage?.vocalAnalysisAvailable == null && vocalWanted && !vocalOn && ranAnalysis;
+    !analysisOff &&
+    p.coverage?.vocalAnalysisAvailable == null &&
+    vocalWanted &&
+    !vocalOn &&
+    ranAnalysis;
   // A backfill is worth offering only while there's headroom — nothing written
   // yet, or coverage below 100%. Gates the per-row "Backfill" action so a fully
   // covered dimension doesn't show a dead button.
   const audioGap = !audioOn || (audpct != null && audpct < 100);
   const vocalGap = !vocalOn || (vpct != null && vpct < 100);
   const moodCount = p.libStats ? Object.keys(p.libStats.byMood || {}).length : 0;
-  const lastTag = p.libStats?.updatedAt ? new Date(p.libStats.updatedAt).toLocaleString('en-GB') : '—';
+  const lastTag = p.libStats?.updatedAt
+    ? new Date(p.libStats.updatedAt).toLocaleString('en-GB')
+    : '—';
 
   // Embeddings present but no vectors → likely a model swap dropped them.
-  const embeddingMissing = (tagged ?? 0) > 0 && p.libStats != null && p.libStats.withEmbedding === 0;
+  const embeddingMissing =
+    (tagged ?? 0) > 0 && p.libStats != null && p.libStats.withEmbedding === 0;
 
   // Structured live-run progress from the tagger child — survives page
   // reloads and runs started elsewhere (no client-captured baseline). Null
@@ -321,20 +407,31 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const lastTimings =
     !running && p.tagger?.progress?.phase === 'done' ? p.tagger.progress.timings : undefined;
   const lastTimingEntries = lastTimings
-    ? Object.entries(lastTimings).filter(([, ms]) => ms > 0).sort((a, b) => b[1] - a[1])
+    ? Object.entries(lastTimings)
+        .filter(([, ms]) => ms > 0)
+        .sort((a, b) => b[1] - a[1])
     : [];
 
   useDynamicStyle(moodFillRef, { width: pct != null ? `${Math.min(100, pct)}%` : '0%' });
-  useDynamicStyle(acousticFillRef, { width: !analysisOff && apct != null ? `${Math.min(100, apct)}%` : '0%' });
-  useDynamicStyle(audioFillRef, { width: audioOn && audpct != null ? `${Math.min(100, audpct)}%` : '0%' });
-  useDynamicStyle(vocalFillRef, { width: vocalOn && vpct != null ? `${Math.min(100, vpct)}%` : '0%' });
+  useDynamicStyle(acousticFillRef, {
+    width: !analysisOff && apct != null ? `${Math.min(100, apct)}%` : '0%',
+  });
+  useDynamicStyle(audioFillRef, {
+    width: audioOn && audpct != null ? `${Math.min(100, audpct)}%` : '0%',
+  });
+  useDynamicStyle(vocalFillRef, {
+    width: vocalOn && vpct != null ? `${Math.min(100, vpct)}%` : '0%',
+  });
   useDynamicStyle(runFillRef, { width: runPct != null ? `${runPct}%` : null });
 
   useEffect(() => {
     if (p.logOpen && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [p.logOpen, p.tagger?.lastLog?.length]);
 
-  const openModal = (intent: 'reembed' | null = null) => { setModalIntent(intent); setModalOpen(true); };
+  const openModal = (intent: 'reembed' | null = null) => {
+    setModalIntent(intent);
+    setModalOpen(true);
+  };
 
   return (
     <section className="card">
@@ -342,9 +439,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
       <div className="border-b border-ink p-6">
         <Eyebrow className="text-vermilion">library · tagging</Eyebrow>
         <h1 className="lib-hero-title">
-          {pct != null
-            ? <>Your DJ knows <span className="pct mono-num">{pct}%</span> of your library.</>
-            : <>Manage the music your station plays.</>}
+          {pct != null ? (
+            <>
+              Your DJ knows <span className="pct mono-num">{pct}%</span> of your library.
+            </>
+          ) : (
+            <>Manage the music your station plays.</>
+          )}
         </h1>
         <p className="lib-hero-sub">
           The DJ reads each track&rsquo;s <b>mood</b> and <b>energy</b> to pick the right song for
@@ -363,17 +464,36 @@ export default function TaggingPanel(p: TaggingPanelProps) {
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="lib-cov-big mono-num">{num(tagged)}</span>
-            <span className="text-[13px] text-muted">/ {total != null ? num(total) : (p.coverage?.scanning ? 'scanning…' : '—')} tracks</span>
+            <span className="text-[13px] text-muted">
+              / {total != null ? num(total) : p.coverage?.scanning ? 'scanning…' : '—'} tracks
+            </span>
           </div>
-          <div className="lib-bar mt-3"><span ref={moodFillRef} /></div>
+          <div className="lib-bar mt-3">
+            <span ref={moodFillRef} />
+          </div>
           <div className="mt-2.5 text-[11px] text-muted">
-            {remaining != null && remaining > 0
-              ? <><b className="mono-num text-ink">{num(remaining)}</b> tracks still need tags · <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}</>
-              : <>{remaining === 0 ? 'Every track is tagged' : 'Coverage updating…'} · <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}</>}
+            {remaining != null && remaining > 0 ? (
+              <>
+                <b className="mono-num text-ink">{num(remaining)}</b> tracks still need tags ·{' '}
+                <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}
+              </>
+            ) : (
+              <>
+                {remaining === 0
+                  ? 'Every track is tagged'
+                  : scanning
+                    ? 'Coverage updating…'
+                    : 'Library size unknown'}{' '}
+                · <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}
+              </>
+            )}
           </div>
           {embeddingMissing && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] text-ink">
-              <span><b>Embeddings missing.</b> Your embedding model may have changed. Re-embed to restore similarity-based picks.</span>
+              <span>
+                <b>Embeddings missing.</b> Your embedding model may have changed. Re-embed to
+                restore similarity-based picks.
+              </span>
               <button
                 type="button"
                 className="font-bold text-vermilion underline-offset-2 hover:underline"
@@ -392,36 +512,71 @@ export default function TaggingPanel(p: TaggingPanelProps) {
           contextual Backfill (shown only while enabled, capable, and < 100%). */}
       <div className="flex flex-col gap-3 border-b border-ink px-6 py-4">
         <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
-          <span className="caption flex items-center gap-2"><Activity size={13} /> Acoustic analysis · bpm / key</span>
+          <span className="caption flex items-center gap-2">
+            <Activity size={13} /> Acoustic analysis · bpm / key
+          </span>
           <span className="lib-opt-tag">optional</span>
-          <span className="lib-minibar"><span ref={acousticFillRef} /></span>
+          <span className="lib-minibar">
+            <span ref={acousticFillRef} />
+          </span>
           <span className="caption mono-num !tracking-[0.04em]">
-            {analysisOff ? 'engine off' : <>{num(analysed)} / {num(total)} · {apct != null ? `${apct}%` : '…'}</>}
+            {analysisOff ? (
+              'engine off'
+            ) : (
+              <>
+                {num(analysed)} / {num(total)} · {apct != null ? `${apct}%` : '…'}
+              </>
+            )}
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong pt-3">
-          <span className="caption flex items-center gap-2"><Activity size={13} /> Audio fingerprint · sounds-like</span>
+          <span className="caption flex items-center gap-2">
+            <Activity size={13} /> Audio fingerprint · sounds-like
+          </span>
           <span className="lib-opt-tag">optional</span>
-          <span className="lib-minibar"><span ref={audioFillRef} /></span>
+          <span className="lib-minibar">
+            <span ref={audioFillRef} />
+          </span>
           <span className="caption mono-num !tracking-[0.04em]">
-            {analysisOff ? 'engine off'
-              : audioIncapable ? 'engine missing CLAP'
-              : audioOn ? <>{num(audioEmbedded)} / {num(total)} · {audpct != null ? `${audpct}%` : '…'}</>
-              : audioStarved ? 'engine can’t fingerprint — needs a CLAP build'
-              : p.audioEnabled ? 'enabled, not yet analysed' : 'off'}
+            {analysisOff ? (
+              'engine off'
+            ) : audioIncapable ? (
+              'engine missing CLAP'
+            ) : audioOn ? (
+              <>
+                {num(audioEmbedded)} / {num(total)} · {audpct != null ? `${audpct}%` : '…'}
+              </>
+            ) : audioStarved ? (
+              'engine can’t fingerprint — needs a CLAP build'
+            ) : p.audioEnabled ? (
+              'enabled, not yet analysed'
+            ) : (
+              'off'
+            )}
           </span>
           {!analysisOff && (
             <span className="ml-auto flex items-center gap-2">
               {p.audioEnabled && !audioIncapable && audioGap && (
-                <Btn sm tone="accent" onClick={p.onAnalyzeAudio} disabled={p.busy || running}
-                  title="Fingerprint the tracks still missing a “sounds-like” vector — without redoing bpm/key.">
+                <Btn
+                  sm
+                  tone="accent"
+                  onClick={p.onAnalyzeAudio}
+                  disabled={p.busy || running}
+                  title="Fingerprint the tracks still missing a “sounds-like” vector — without redoing bpm/key."
+                >
                   <Play size={12} /> {audioOn ? 'Backfill' : 'Analyze'}
                 </Btn>
               )}
-              <Btn sm onClick={p.onToggleAudio} disabled={p.busy || running}
-                title={p.audioEnabled
-                  ? 'Pause fingerprinting newly-added tracks. Existing “sounds-like” data stays and keeps driving picks.'
-                  : 'Start fingerprinting new tracks for “sounds-like” picks (~1-2s each on the analysis engine).'}>
+              <Btn
+                sm
+                onClick={p.onToggleAudio}
+                disabled={p.busy || running}
+                title={
+                  p.audioEnabled
+                    ? 'Pause fingerprinting newly-added tracks. Existing “sounds-like” data stays and keeps driving picks.'
+                    : 'Start fingerprinting new tracks for “sounds-like” picks (~1-2s each on the analysis engine).'
+                }
+              >
                 {p.audioEnabled ? 'Pause' : 'Enable'}
               </Btn>
             </span>
@@ -439,35 +594,57 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             once wanted it shows the full meter + Disable + Backfill. */}
         {(vocalWanted || !analysisOff) && (
           <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong pt-3">
-            <span className="caption flex items-center gap-2"><Activity size={13} /> Vocal activity · instrumental detection</span>
+            <span className="caption flex items-center gap-2">
+              <Activity size={13} /> Vocal activity · instrumental detection
+            </span>
             <span className="lib-opt-tag">optional</span>
             {vocalWanted ? (
               <>
-                <span className="lib-minibar"><span ref={vocalFillRef} /></span>
+                <span className="lib-minibar">
+                  <span ref={vocalFillRef} />
+                </span>
                 <span className="caption mono-num !tracking-[0.04em]">
-                  {analysisOff ? 'engine off'
-                    : vocalIncapable ? 'engine missing Demucs'
-                    : vocalOn ? <>{num(vocalAnalyzed)} / {num(total)} · {vpct != null ? `${vpct}%` : '…'}</>
-                    : vocalStarved ? 'engine can’t separate vocals — needs a Demucs build'
-                    : 'enabled, not yet analysed'}
+                  {analysisOff ? (
+                    'engine off'
+                  ) : vocalIncapable ? (
+                    'engine missing Demucs'
+                  ) : vocalOn ? (
+                    <>
+                      {num(vocalAnalyzed)} / {num(total)} · {vpct != null ? `${vpct}%` : '…'}
+                    </>
+                  ) : vocalStarved ? (
+                    'engine can’t separate vocals — needs a Demucs build'
+                  ) : (
+                    'enabled, not yet analysed'
+                  )}
                 </span>
                 {!analysisOff && (
                   <span className="ml-auto flex items-center gap-2">
                     {!vocalIncapable && vocalGap && (
-                      <Btn sm tone="accent" onClick={p.onVocalBackfill} disabled={p.busy || running}
-                        title="Separate vocals for the tracks still missing it — without redoing bpm/key.">
+                      <Btn
+                        sm
+                        tone="accent"
+                        onClick={p.onVocalBackfill}
+                        disabled={p.busy || running}
+                        title="Separate vocals for the tracks still missing it — without redoing bpm/key."
+                      >
                         <Play size={12} /> {vocalOn ? 'Backfill' : 'Analyze'}
                       </Btn>
                     )}
-                    <Btn sm onClick={p.onToggleVocal} disabled={p.busy || running}
-                      title="Pause Demucs separation on newly-added tracks. Existing vocal data stays and keeps being used.">
+                    <Btn
+                      sm
+                      onClick={p.onToggleVocal}
+                      disabled={p.busy || running}
+                      title="Pause Demucs separation on newly-added tracks. Existing vocal data stays and keeps being used."
+                    >
                       Pause
                     </Btn>
                   </span>
                 )}
                 {!analysisOff && (
                   <span className="caption basis-full !tracking-[0.04em] !normal-case">
-                    Auto-separates vocals on new tracks (Demucs, ~10-30s each — CPU-heavy). Pausing stops new analysis only — existing data stays and keeps being used.
+                    Auto-separates vocals on new tracks (Demucs, ~10-30s each — CPU-heavy). Pausing
+                    stops new analysis only — existing data stays and keeps being used.
                   </span>
                 )}
               </>
@@ -475,13 +652,18 @@ export default function TaggingPanel(p: TaggingPanelProps) {
               <>
                 <span className="caption mono-num !tracking-[0.04em]">off</span>
                 <span className="ml-auto">
-                  <Btn sm onClick={p.onToggleVocal} disabled={p.busy || running}
-                    title="Start Demucs vocal separation on new tracks (~10-30s each — CPU-heavy).">
+                  <Btn
+                    sm
+                    onClick={p.onToggleVocal}
+                    disabled={p.busy || running}
+                    title="Start Demucs vocal separation on new tracks (~10-30s each — CPU-heavy)."
+                  >
                     Enable
                   </Btn>
                 </span>
                 <span className="caption basis-full !tracking-[0.04em] !normal-case">
-                  Separates vocals so the DJ can talk before lyrics (Demucs, ~10-30s/track — CPU-heavy). Off by default.
+                  Separates vocals so the DJ can talk before lyrics (Demucs, ~10-30s/track —
+                  CPU-heavy). Off by default.
                 </span>
               </>
             )}
@@ -489,14 +671,14 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         )}
         {audioIncapable && p.audioEnabled ? (
           <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
-            <b>Sounds-like is on, but the analysis engine can’t fingerprint audio.</b> Pull the latest
-            analyzer (or tts-heavy) image and recreate the sidecar to enable CLAP embeddings.
+            <b>Sounds-like is on, but the analysis engine can’t fingerprint audio.</b> Pull the
+            latest analyzer (or tts-heavy) image and recreate the sidecar to enable CLAP embeddings.
           </div>
         ) : null}
         {vocalIncapable && p.vocalEnabled ? (
           <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
-            <b>Vocal-activity is on, but the analysis engine can’t separate vocals.</b> Pull the latest
-            analyzer (or tts-heavy) image and recreate the sidecar to enable vocal ranges.
+            <b>Vocal-activity is on, but the analysis engine can’t separate vocals.</b> Pull the
+            latest analyzer (or tts-heavy) image and recreate the sidecar to enable vocal ranges.
           </div>
         ) : null}
       </div>
@@ -505,15 +687,29 @@ export default function TaggingPanel(p: TaggingPanelProps) {
       {!running ? (
         <div className="flex flex-wrap items-center gap-4 p-6">
           <div className="min-w-[220px] flex-1 text-[13px]">
-            {remaining != null && remaining > 0
-              ? <><b>{num(remaining)}</b> tracks are waiting. Tag them and they become DJ-ready.</>
-              : remaining === 0
-                ? <>Library fully tagged. Run a re-scan below if you&rsquo;ve changed the model.</>
-                : <>Start tagging new tracks so the DJ can play them.</>}
+            {libraryCounting ? (
+              <>Counting your library&hellip; this only takes a moment.</>
+            ) : remaining != null && remaining > 0 ? (
+              <>
+                <b>{num(remaining)}</b> tracks are waiting. Tag them and they become DJ-ready.
+              </>
+            ) : remaining === 0 ? (
+              <>Library fully tagged. Run a re-scan below if you&rsquo;ve changed the model.</>
+            ) : (
+              <>Start tagging new tracks so the DJ can play them.</>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
-            <Btn lg tone="accent" onClick={() => openModal()} disabled={p.busy}>
-              <Play size={13} /> Start tagging…
+            <Btn lg tone="accent" onClick={() => openModal()} disabled={p.busy || libraryCounting}>
+              {libraryCounting ? (
+                <>
+                  <Loader2 size={13} className="animate-spin" /> Checking library…
+                </>
+              ) : (
+                <>
+                  <Play size={13} /> Start tagging
+                </>
+              )}
             </Btn>
           </div>
         </div>
@@ -528,31 +724,44 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                   {progress.round != null && ` · round ${progress.round}`}
                   {progress.done != null && (
                     <span className="mono-num">
-                      &nbsp;· {num(progress.done)}{progress.total != null && <> / {num(progress.total)}</>}
+                      &nbsp;· {num(progress.done)}
+                      {progress.total != null && <> / {num(progress.total)}</>}
                     </span>
                   )}
                 </>
+              ) : p.tagger?.mode === 'analyze' ? (
+                'Audio analysis in progress…'
+              ) : p.tagger?.mode === 'reconcile' ? (
+                'Reconciling with Navidrome…'
               ) : (
-                p.tagger?.mode === 'analyze' ? 'Audio analysis in progress…'
-                  : p.tagger?.mode === 'reconcile' ? 'Reconciling with Navidrome…'
-                  : 'Tagging in progress…'
+                'Tagging in progress…'
               )}
             </span>
             <span className="caption mono-num !tracking-[0.04em]">
               {runPct != null && `${runPct}% · `}
               {p.tagger?.pid ? `pid ${p.tagger.pid}` : ''}
-              {p.tagger?.startedAt ? ` · started ${new Date(p.tagger.startedAt).toLocaleTimeString('en-GB')}` : ''}
+              {p.tagger?.startedAt
+                ? ` · started ${new Date(p.tagger.startedAt).toLocaleTimeString('en-GB')}`
+                : ''}
             </span>
-            <Btn sm tone="danger" onClick={p.onStop} disabled={p.busy}><Square size={11} /> Stop</Btn>
+            <Btn sm tone="danger" onClick={p.onStop} disabled={p.busy}>
+              <Square size={11} /> Stop
+            </Btn>
           </div>
           {(runPct != null || runIndeterminate) && (
-            <div className={cn('lib-bar !h-1.5', runIndeterminate && 'indet')}><span ref={runFillRef} /></div>
+            <div className={cn('lib-bar !h-1.5', runIndeterminate && 'indet')}>
+              <span ref={runFillRef} />
+            </div>
           )}
           {(legEntries.length > 1 || (progress?.errors ?? 0) > 0) && (
             <div className="caption mono-num !tracking-[0.04em]">
-              {legEntries.length > 1 && <>dual-LLM · {legEntries.map(([m, n]) => `${m} ${num(n)}`).join(' · ')}</>}
+              {legEntries.length > 1 && (
+                <>dual-LLM · {legEntries.map(([m, n]) => `${m} ${num(n)}`).join(' · ')}</>
+              )}
               {legEntries.length > 1 && (progress?.errors ?? 0) > 0 && ' · '}
-              {(progress?.errors ?? 0) > 0 && <span className="text-vermilion">{num(progress!.errors)} failed</span>}
+              {(progress?.errors ?? 0) > 0 && (
+                <span className="text-vermilion">{num(progress!.errors)} failed</span>
+              )}
             </div>
           )}
           <div className="caption !tracking-[0.04em] !normal-case">
@@ -561,8 +770,8 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 ? 'The analysis engine is listening to each track: measuring tempo and key, and fingerprinting how it sounds.'
                 : p.tagger?.mode === 'reconcile'
                   ? 'Checking every track against Navidrome and removing entries for files that no longer exist.'
-                  : 'The DJ is listening to each new track and deciding its mood & energy.')}
-            {' '}You can keep browsing. This runs in the background.
+                  : 'The DJ is listening to each new track and deciding its mood & energy.')}{' '}
+            You can keep browsing. This runs in the background.
           </div>
         </div>
       )}
@@ -573,7 +782,9 @@ export default function TaggingPanel(p: TaggingPanelProps) {
           <span className="font-bold text-ink">Last run</span>
           <span className="!normal-case">
             {' · '}
-            {lastTimingEntries.map(([ph, ms]) => `${PHASE_LABEL[ph] ?? ph} ${fmtDur(ms)}`).join(' · ')}
+            {lastTimingEntries
+              .map(([ph, ms]) => `${PHASE_LABEL[ph] ?? ph} ${fmtDur(ms)}`)
+              .join(' · ')}
           </span>
         </div>
       )}
@@ -582,7 +793,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-dashed border-separator-strong px-6 py-3">
         <button
           type="button"
-          className={cn('inline-flex items-center gap-1.5 text-[11px] font-bold', p.logOpen ? 'text-ink' : 'text-muted hover:text-ink')}
+          className={cn(
+            'inline-flex items-center gap-1.5 text-[11px] font-bold',
+            p.logOpen ? 'text-ink' : 'text-muted hover:text-ink',
+          )}
           onClick={() => p.setLogOpen(o => !o)}
         >
           <Terminal size={13} /> {p.logOpen ? 'Hide log' : 'View log'}
@@ -592,11 +806,18 @@ export default function TaggingPanel(p: TaggingPanelProps) {
       {/* log drawer — reuses the theme-aware .term surface; each line is dressed
           up for humans (emoji + friendly phrasing + tint) via beautifyLog */}
       {p.logOpen && (
-        <pre ref={logRef} className="term term-crt m-0 max-h-56 overflow-y-auto !border-t !border-l-0 border-separator-strong">
+        <pre
+          ref={logRef}
+          className="term term-crt m-0 max-h-56 overflow-y-auto !border-t !border-l-0 border-separator-strong"
+        >
           {(p.tagger?.lastLog ?? []).length
             ? (p.tagger?.lastLog ?? []).map((line, i) => {
                 const f = beautifyLog(line);
-                return <div key={i} className={cn('whitespace-pre-wrap', f.cls)}>{f.text}</div>;
+                return (
+                  <div key={i} className={cn('whitespace-pre-wrap', f.cls)}>
+                    {f.text}
+                  </div>
+                );
               })
             : 'No log output yet — start a tagging run to watch the booth think.'}
         </pre>
@@ -612,6 +833,9 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         remaining={remaining}
         analysisOff={analysisOff}
         vocalWanted={vocalWanted}
+        // sounds-like only runs when the dimension is on AND the engine can do
+        // it — otherwise the acoustics steps are bpm/key-only (honest hints).
+        soundsLikeActive={!analysisOff && !audioIncapable && !!p.audioEnabled}
         onStart={p.onStart}
         onReconcile={p.onReconcile}
         onRescan={p.onRescan}

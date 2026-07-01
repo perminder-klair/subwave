@@ -224,17 +224,17 @@ export const LLM_PROVIDERS = [
 // to a local Ollama and failed with a misleading "can't reach <provider>" error
 // (#493). `openrouter` was originally in that chat-only set, but OpenRouter
 // shipped an OpenAI-compatible embeddings endpoint, so it's back in (#522) and
-// routes through llm/internal/provider/embedding.ts. `anthropic` stays in too —
-// it has no first-party embedding model, but embedding.ts routes it to OpenAI
-// (needs OPENAI_API_KEY), as the picker hint already explains.
+// routes through llm/internal/provider/embedding.ts. `anthropic` was dropped —
+// it has no first-party embedding model and only worked by transparently routing
+// to OpenAI (needs OPENAI_API_KEY), which confused operators; pick OpenAI (or any
+// other embedding provider) directly instead.
 export const EMBEDDING_PROVIDERS = [
   'ollama',
   'openai-compatible',
   'locca',
-  'anthropic',
+  'openrouter',
   'openai',
   'google',
-  'openrouter',
   'requesty',
 ];
 

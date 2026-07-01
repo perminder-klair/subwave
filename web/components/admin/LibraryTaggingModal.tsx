@@ -33,6 +33,11 @@ interface Props {
   // hidden until the operator opts vocal in on the panel (#646).
   analysisOff: boolean;
   vocalWanted: boolean;
+  // Whether the acoustic pass will actually emit sounds-like (CLAP) fingerprints:
+  // the dimension is enabled AND the engine can produce them. false → the
+  // "Analyze acoustics" / "Re-analyse acoustics" steps run bpm/key only, so their
+  // hints drop the sounds-like promise rather than advertising a no-op.
+  soundsLikeActive: boolean;
   // when set, the modal opens straight to the matching tab/selection
   intent: 'reembed' | null;
   // handlers
@@ -158,7 +163,9 @@ export default function LibraryTaggingModal(p: Props) {
                 name="Analyze acoustics" tag="slow"
                 hint={analyzeLocked
                   ? 'No analysis engine running — start the analyzer or tts-heavy sidecar (or a local librosa venv).'
-                  : 'Tempo, key & intro, plus sounds-like fingerprints when enabled. The slow step; vocal separation is split out below.'} />
+                  : p.soundsLikeActive
+                    ? 'Tempo, key & intro, plus sounds-like fingerprints. The slow step; vocal separation is split out below.'
+                    : 'Tempo, key & intro for every track — the slow step. Sounds-like fingerprints are off; enable them on the library page to include them.'} />
               {p.vocalWanted && (
                 <div className="pl-6">
                   <Pass on={effAnalyze && steps.vocal} onClick={() => toggleStep('vocal')}
@@ -219,7 +226,9 @@ export default function LibraryTaggingModal(p: Props) {
               <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods" tag="AI · billed"
                 hint="Re-tag already-tagged rows whose prompt or model has gone stale (never your manual tags). No model change → nothing to redo. Uses model calls." />
               <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics" tag="slow"
-                hint="Redo bpm/key + sounds-like for tracks you've already analysed. Drops their acoustic data and rebuilds it." />
+                hint={p.soundsLikeActive
+                  ? "Redo bpm/key + sounds-like for tracks you've already analysed. Drops their acoustic data and rebuilds it."
+                  : "Redo bpm/key for tracks you've already analysed. Drops their acoustic data and rebuilds it. Sounds-like is off."} />
               {p.vocalWanted && (
                 <div className="pl-6">
                   <Pass on={!!passes.reAnalyze && reAnalyzeVocal} onClick={() => setReAnalyzeVocal(v => !v)}
