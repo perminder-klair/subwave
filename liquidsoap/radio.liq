@@ -322,21 +322,30 @@ def dj_transition(a, b) =
         e = source.elapsed(sweep_src)
         e = if e < 0. then 0. else e end
         t_close = 0.45 * d
-        x = if e >= t_close then 1.0 else e / t_close end
-        depth = 3.0 * x * x - 2.0 * x * x * x     # smoothstep 0→1
-        9000.0 * pow(600.0 / 9000.0, depth)       # 9 kHz open → 600 Hz floor
+        t_hold  = 0.55 * d
+        t_back  = 0.85 * d
+        # Dive to the floor, touch it briefly, then PARTIALLY re-open as the
+        # incoming takes over: a sustained floor reads as "the track went
+        # quiet"; a brief bottom with the outgoing re-emerging under the new
+        # track reads as the gesture (second on-air 'goes quiet' report).
+        depth =
+          if e < t_close then
+            x = e / t_close
+            3.0 * x * x - 2.0 * x * x * x
+          elsif e < t_hold then
+            1.0
+          elsif e < t_back then
+            x = (e - t_hold) / (t_back - t_hold)
+            1.0 - 0.6 * (3.0 * x * x - 2.0 * x * x * x)
+          else
+            0.4
+          end
+        9000.0 * pow(1100.0 / 9000.0, depth)       # 9 kHz open → 600 Hz floor
       end
       # Wet ramps 0→1 over the first ~15% of the blend: an RC at 9 kHz is NOT
       # transparent (−dB at the cutoff + roll-off), so engaging it full-wet at
       # the cross start lands as an instant dulling — the filter must fade IN,
       # then the closing cutoff does the work (found on-air).
-      def sweep_wet() =
-        e = source.elapsed(sweep_src)
-        e = if e < 0. then 0. else e end
-        t_on = 0.15 * d
-        x = if e >= t_on then 1.0 else e / t_on end
-        3.0 * x * x - 2.0 * x * x * x             # smoothstep 0→1
-      end
       # Makeup on the choked branch: the filter guts the outgoing's energy
       # right when the incoming is only half-faded, and the mid-blend went
       # near-quiet (twice, by ear). Lift the choked residual +2.6 dB as the
@@ -355,10 +364,16 @@ def dj_transition(a, b) =
           1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
         end
       end
-      amplify(sweep_gain,
-        filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
-          filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
-            filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet, a_source))))
+      # PARALLEL DRY BLEED — the "never goes quiet" guarantee. Wetness on
+      # cascaded stages multiplies the dry path (0.35 × 0.35 ≈ 12% ≈ −18 dB),
+      # which is why every wetness-cap attempt still cratered the mid-band.
+      # An explicit dry branch around a full-wet chain gives a HARD floor:
+      # 30% of the untouched track always reaches the mix (≈ −10 dB, ≈ −8 dB
+      # after makeup), no matter how deep the cutoff dives.
+      swept = filter.rc(frequency=sweep_cut, mode="low", wetness=1.,
+                filter.rc(frequency=sweep_cut, mode="low", wetness=1., a_source))
+      amplify(sweep_gain, add(normalize=false,
+        [amplify(0.30, a_source), amplify(0.75, swept)]))
     else
       a_source
     end
@@ -384,7 +399,7 @@ def dj_transition(a, b) =
       def wash_fb() =
         e = source.elapsed(wash_src)
         e = if e < 0. then 0. else e end
-        fb_max = -1.2            # peak feedback dB (nearer 0 = longer tail; <unity)
+        fb_max = -1.0            # peak feedback dB (nearer 0 = longer tail; <unity)
         fb_off = -90.0           # idle/silent
         t_swell = 0.10 * d
         t_hold  = 0.85 * d
@@ -409,7 +424,7 @@ def dj_transition(a, b) =
       def wash_gain() =
         e = source.elapsed(wash_src)
         e = if e < 0. then 0. else e end
-        g_max = 1.5              # ≈ +3.5 dB on the ringing tail
+        g_max = 1.95             # ≈ +5.8 dB — the tail must sit OVER a dense incoming mix
         t_from = 0.30 * d
         t_to   = 0.55 * d
         if e <= t_from then 1.0
@@ -429,11 +444,11 @@ def dj_transition(a, b) =
       def tail_cut() =
         e = source.elapsed(wash_src)
         e = if e < 0. then 0. else e end
-        t_from = 0.20 * d
+        t_from = 0.35 * d
         t_to   = 0.90 * d
         x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
         s = 3.0 * x * x - 2.0 * x * x * x
-        9000.0 * pow(1500.0 / 9000.0, s)
+        9000.0 * pow(3000.0 / 9000.0, s)
       end
       def tail_wet() =
         e = source.elapsed(wash_src)

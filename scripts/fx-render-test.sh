@@ -166,16 +166,25 @@ def t(a, b) =
         e = source.elapsed(sweep_src)
         e = if e < 0. then 0. else e end
         t_close = 0.45 * d
-        x = if e >= t_close then 1.0 else e / t_close end
-        depth = 3.0 * x * x - 2.0 * x * x * x
-        9000.0 * pow(600.0 / 9000.0, depth)
-      end
-      def sweep_wet() =
-        e = source.elapsed(sweep_src)
-        e = if e < 0. then 0. else e end
-        t_on = 0.15 * d
-        x = if e >= t_on then 1.0 else e / t_on end
-        3.0 * x * x - 2.0 * x * x * x
+        t_hold  = 0.55 * d
+        t_back  = 0.85 * d
+        # Dive to the floor, touch it briefly, then PARTIALLY re-open as the
+        # incoming takes over: a sustained floor reads as "the track went
+        # quiet"; a brief bottom with the outgoing re-emerging under the new
+        # track reads as the gesture (second on-air 'goes quiet' report).
+        depth =
+          if e < t_close then
+            x = e / t_close
+            3.0 * x * x - 2.0 * x * x * x
+          elsif e < t_hold then
+            1.0
+          elsif e < t_back then
+            x = (e - t_hold) / (t_back - t_hold)
+            1.0 - 0.6 * (3.0 * x * x - 2.0 * x * x * x)
+          else
+            0.4
+          end
+        9000.0 * pow(1100.0 / 9000.0, depth)
       end
       def sweep_gain() =
         e = source.elapsed(sweep_src)
@@ -190,10 +199,16 @@ def t(a, b) =
           1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
         end
       end
-      amplify(sweep_gain,
-        filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
-          filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
-            filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet, a_src))))
+      # PARALLEL DRY BLEED — the "never goes quiet" guarantee. Wetness on
+      # cascaded stages multiplies the dry path (0.35 × 0.35 ≈ 12% ≈ −18 dB),
+      # which is why every wetness-cap attempt still cratered the mid-band.
+      # An explicit dry branch around a full-wet chain gives a HARD floor:
+      # 30% of the untouched track always reaches the mix (≈ −10 dB, ≈ −8 dB
+      # after makeup), no matter how deep the cutoff dives.
+      swept = filter.rc(frequency=sweep_cut, mode="low", wetness=1.,
+                filter.rc(frequency=sweep_cut, mode="low", wetness=1., a_src))
+      amplify(sweep_gain, add(normalize=false,
+        [amplify(0.30, a_src), amplify(0.75, swept)]))
     else a_src end
   a_src =
     if washout_on then
@@ -201,7 +216,7 @@ def t(a, b) =
       def wash_fb() =
         e = source.elapsed(wash_src)
         e = if e < 0. then 0. else e end
-        fb_max = -1.2
+        fb_max = -1.0
         fb_off = -90.0
         t_swell = 0.10 * d
         t_hold  = 0.85 * d
@@ -217,7 +232,7 @@ def t(a, b) =
       def wash_gain() =
         e = source.elapsed(wash_src)
         e = if e < 0. then 0. else e end
-        g_max = 1.5
+        g_max = 1.95
         t_from = 0.30 * d
         t_to   = 0.55 * d
         if e <= t_from then 1.0
@@ -230,11 +245,11 @@ def t(a, b) =
       def tail_cut() =
         e = source.elapsed(wash_src)
         e = if e < 0. then 0. else e end
-        t_from = 0.20 * d
+        t_from = 0.35 * d
         t_to   = 0.90 * d
         x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
         s = 3.0 * x * x - 2.0 * x * x * x
-        9000.0 * pow(1500.0 / 9000.0, s)
+        9000.0 * pow(3000.0 / 9000.0, s)
       end
       def tail_wet() =
         e = source.elapsed(wash_src)
