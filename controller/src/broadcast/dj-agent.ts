@@ -172,6 +172,16 @@ export const PICK_SCHEMA = z.object({
   transition: z.enum(['normal', 'blend', 'sweep', 'washout']).nullable().describe('transition treatment for this pick: "blend" — spectral handover: your pick and the track before it trade the spectrum in complementary bands across a long crossfade so they feel like ONE continuous piece; choose it for a same-lane pick (similar tempo/energy/mood). "sweep" — the track playing before your pick sinks under a slowly closing filter while your pick rises clean; choose it for a real gear-change (big jump in energy, tempo, or mood). "washout" — THIS pick dissolves into a pulsing echo tail as it ENDS, ringing out into whatever follows; choose it to close a chapter (end of a themed run, before a talk break, or out of a dreamy track). "normal" or null for a plain crossfade'),
 });
 
+// Same shape, transition coaching stripped. Zod field descriptions travel to
+// the model as part of the structured-output contract even when every prompt
+// mention is gated off, so with DJ mode off the description above kept talking
+// the model into "blend"/"sweep" picks that runTrackEvent silently discarded —
+// the LLM log showed effects that could never air. The enum stays identical
+// (validation must not depend on persona state); only the description flips.
+export const PICK_SCHEMA_NO_FX = PICK_SCHEMA.extend({
+  transition: z.enum(['normal', 'blend', 'sweep', 'washout']).nullable().describe('always set to null — transition effects are not available for this persona'),
+});
+
 const REQUEST_SCHEMA = z.object({
   id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
   ack: z.string().describe('short on-air acknowledgement of the listener, in character — max 20 words; no "thank you for listening" or self-intros'),
@@ -298,7 +308,9 @@ function agentDeadline(): number {
 
 export const pickerAgent = defineAgent({
   kind: 'djAgentPick',
-  schema: PICK_SCHEMA,
+  // Resolved per run: the effects coaching in the transition field follows
+  // the on-air persona's djMode, same reason effectsGuidance() is dynamic.
+  schema: () => (settings.effectsActive() ? PICK_SCHEMA : PICK_SCHEMA_NO_FX),
   // The done-tool path ends the loop at step 1 (COMMIT_AFTER_STEPS in sdk.js)
   // on every provider now; maxSteps is just the backstop.
   maxSteps: 4,
@@ -471,9 +483,16 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   // Transition effects on this pick (persona djMode via settings.effectsActive),
   // independent of whether a link airs.
   const link = (wantLink && say) ? say : null;
-  const sweep = settings.effectsActive() && object.transition === 'sweep';
-  const washout = settings.effectsActive() && object.transition === 'washout';
-  const blend = settings.effectsActive() && object.transition === 'blend';
+  const fxActive = settings.effectsActive();
+  // The no-FX schema tells the model to leave transition null, but a model can
+  // ignore a field description — say so in the log instead of discarding
+  // silently (a "blend" in the LLM log that never airs reads as a broken mixer).
+  if (!fxActive && object.transition && object.transition !== 'normal') {
+    queue.log('mix', `transition "${object.transition}" ignored (persona not in DJ mode)`);
+  }
+  const sweep = fxActive && object.transition === 'sweep';
+  const washout = fxActive && object.transition === 'washout';
+  const blend = fxActive && object.transition === 'blend';
   // Attach the link to the pick so it airs as the pick starts (back-announcing
   // the track on-air now), instead of immediately over that on-air track (#189).
   // Stamp `current` as the link's back-announce target so the queue can drop the
