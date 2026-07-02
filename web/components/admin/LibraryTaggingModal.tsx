@@ -27,6 +27,10 @@ interface Props {
   setBatch: (b: Batch) => void;
   busy: boolean;
   remaining: number | null;
+  // Total tracks in the library — used to spell out the re-embed scope ("all N
+  // tracks"), since a model-change reseed rebuilds the whole library, not just
+  // the tagged set. null while the coverage scan is still counting.
+  libraryTotal: number | null;
   // coverage-derived availability. analysisOff locks the Run tab's "Analyze
   // acoustics" step; vocalWanted gates the per-run "Vocal activity" sub-checkbox
   // (Run tab) + the "Re-analyse vocal" sub-toggle (Re-scan tab) so they stay
@@ -222,7 +226,7 @@ export default function LibraryTaggingModal(p: Props) {
               <Pass on={!!passes.reEnrich} onClick={() => togglePass('reEnrich')} name="Re-enrich metadata" tag="network"
                 hint="Re-fetch Last.fm tags + lyrics for tracks you've already enriched. External API calls — slow on a big library." />
               <Pass on={!!passes.reseed} onClick={() => togglePass('reseed')} name="Re-embed all tracks" tag="slow"
-                hint="Drop & rebuild the similarity vectors you already have — re-spends embedding calls. Only after changing the embedding model." />
+                hint={`Drop & rebuild the similarity vectors for your whole library${p.libraryTotal != null ? ` (${num(p.libraryTotal)} tracks)` : ''} at the current embedding model — not just tagged tracks. Re-spends embedding calls; only needed after a model change. Your mood tags are kept.`} />
               <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods" tag="AI · billed"
                 hint="Re-tag already-tagged rows whose prompt or model has gone stale (never your manual tags). No model change → nothing to redo. Uses model calls." />
               <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics" tag="slow"
@@ -252,8 +256,8 @@ export default function LibraryTaggingModal(p: Props) {
       <V3AlertDialog
         open={confirmRescan}
         onOpenChange={setConfirmRescan}
-        title="Re-embed the whole library?"
-        description="This pass drops and rebuilds every similarity vector from scratch, which re-spends embedding calls and can take several minutes on a large library. Existing mood tags are kept and reused as seeds. Only needed after changing the embedding model."
+        title={p.libraryTotal != null ? `Re-embed all ${num(p.libraryTotal)} tracks?` : 'Re-embed the whole library?'}
+        description={`This rebuilds ${p.libraryTotal != null ? `all ${num(p.libraryTotal)} ` : 'every '}similarity vectors from scratch — the whole library, not just tagged tracks — re-spending embedding calls (can take several minutes on a large library, longer with a heavier model). Existing mood tags are kept and reused as seeds. Only needed after changing the embedding model.`}
         confirmLabel="re-scan"
         danger
         onConfirm={() => { p.onRescan(rescanPayload()); clearPasses(); setConfirmRescan(false); p.onOpenChange(false); }}

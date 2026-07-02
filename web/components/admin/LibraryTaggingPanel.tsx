@@ -505,8 +505,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 <b>Embedding model changed — tagging is blocked.</b> Your library is embedded with{' '}
                 <code>{p.coverage?.embeddedModel}</code>
                 {p.coverage?.embeddedDim ? ` (${p.coverage.embeddedDim}-d)` : ''}, but you&rsquo;ve
-                selected <code>{p.coverage?.currentEmbeddingModel}</code>. Re-embed at the new model
-                to continue — your mood tags are kept.
+                selected <code>{p.coverage?.currentEmbeddingModel}</code>. Re-embedding rebuilds{' '}
+                {total != null ? (
+                  <>all <b className="mono-num">{num(total)}</b> vectors</>
+                ) : (
+                  'every vector'
+                )}{' '}
+                at the new model (not just tagged tracks) — your mood tags are kept.
               </span>
               <button
                 type="button"
@@ -860,6 +865,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         setBatch={p.setBatch}
         busy={p.busy || running}
         remaining={remaining}
+        libraryTotal={total}
         analysisOff={analysisOff}
         vocalWanted={vocalWanted}
         // sounds-like only runs when the dimension is on AND the engine can do
