@@ -72,7 +72,12 @@ def t(a, b) =
   a_src = filter.rc(frequency={fx_cut()}, mode="low", wetness=1.,
             filter.rc(frequency={fx_cut()}, mode="low", wetness=1., a_src))
   a_src = comb(delay=0.3, feedback={fx_fb()}, a_src)
-  add(normalize=false, [a_src, fade.in(duration=d, b.source)])
+  # INCOMING branch too: the bass-swap HPF + surfacing LPF live on b — prove
+  # the same operator class instantiates on the incoming side of the callback.
+  b_src = fade.in(duration=d, b.source)
+  b_src = filter.rc(frequency={fx_cut()}, mode="high", wetness=1.,
+            filter.rc(frequency={fx_cut()}, mode="low", wetness=1., b_src))
+  add(normalize=false, [a_src, b_src])
 end
 
 music = cross(duration=4., t, q)
@@ -149,6 +154,8 @@ def t(a, b) =
   a_src =
     if washout_on then
       fade.out(duration=d, type="exp", a.source)
+    elsif sweep_on then
+      fade.out(duration=d, type="log", a.source)
     else
       fade.out(duration=d, a.source)
     end
@@ -158,10 +165,10 @@ def t(a, b) =
       def sweep_cut() =
         e = source.elapsed(sweep_src)
         e = if e < 0. then 0. else e end
-        t_close = 0.7 * d
+        t_close = 0.45 * d
         x = if e >= t_close then 1.0 else e / t_close end
         depth = 3.0 * x * x - 2.0 * x * x * x
-        9000.0 * pow(400.0 / 9000.0, depth)
+        9000.0 * pow(300.0 / 9000.0, depth)
       end
       def sweep_wet() =
         e = source.elapsed(sweep_src)
@@ -171,7 +178,8 @@ def t(a, b) =
         3.0 * x * x - 2.0 * x * x * x
       end
       filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
-        filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet, a_src))
+        filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
+          filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet, a_src)))
     else a_src end
   a_src =
     if washout_on then
@@ -205,9 +213,61 @@ def t(a, b) =
           1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
         end
       end
-      amplify(wash_gain, comb(delay=0.28, feedback=wash_fb, a_src))
+      def tail_cut() =
+        e = source.elapsed(wash_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.20 * d
+        t_to   = 0.90 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        s = 3.0 * x * x - 2.0 * x * x * x
+        9000.0 * pow(1500.0 / 9000.0, s)
+      end
+      def tail_wet() =
+        e = source.elapsed(wash_src)
+        e = if e < 0. then 0. else e end
+        t_on = 0.20 * d
+        x = if e >= t_on then 1.0 else e / t_on end
+        3.0 * x * x - 2.0 * x * x * x
+      end
+      washed = comb(delay=0.28, feedback=wash_fb, a_src)
+      washed = filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet,
+                 filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet, washed))
+      amplify(wash_gain, washed)
     else a_src end
-  add(normalize=false, [a_src, fade.in(duration=d, b.source)])
+  b_src = fade.in(duration=d, b.source)
+  b_src =
+    if sweep_on then
+      in_src = b_src
+      def surf_cut() =
+        e = source.elapsed(in_src)
+        e = if e < 0. then 0. else e end
+        t_open = 0.35 * d
+        x = if e >= t_open then 1.0 else e / t_open end
+        s = 3.0 * x * x - 2.0 * x * x * x
+        500.0 * pow(9000.0 / 500.0, s)
+      end
+      def surf_wet() =
+        e = source.elapsed(in_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.25 * d
+        t_to   = 0.40 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        1.0 - (3.0 * x * x - 2.0 * x * x * x)
+      end
+      def bass_wet() =
+        e = source.elapsed(in_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.55 * d
+        t_to   = 0.75 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        1.0 - (3.0 * x * x - 2.0 * x * x * x)
+      end
+      bsf = filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet,
+              filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet, in_src))
+      filter.rc(frequency=160., mode="high", wetness=bass_wet,
+        filter.rc(frequency=160., mode="high", wetness=bass_wet, bsf))
+    else b_src end
+  add(normalize=false, [a_src, b_src])
 end
 
 music = cross(duration=12., t, (q:source))

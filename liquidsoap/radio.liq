@@ -292,6 +292,13 @@ def dj_transition(a, b) =
   a_source =
     if washing then
       fade.out(duration=d, type="exp", initial_metadata=a.metadata, a.source)
+    elsif sweeping then
+      # A real filter-kill: the FILTER does the removal, not the fader. A log
+      # fade holds the outgoing's level up longer so the closing filter is
+      # heard choking a still-loud track — with the default fade the track was
+      # already quiet by the time the cutoff got dramatic and the sweep felt
+      # powerless (found on-air).
+      fade.out(duration=d, type="log", initial_metadata=a.metadata, a.source)
     else
       fade.out(duration=d, initial_metadata=a.metadata, a.source)
     end
@@ -307,18 +314,22 @@ def dj_transition(a, b) =
     if sweeping then
       log("DJ sweep: closing the filter over the outgoing track (d=#{d}s)")
       sweep_src = a_source
+      # Close FAST and DEEP — over the first 45% of the blend down to 300 Hz,
+      # through three RC stages (18 dB/oct), so the choke arrives while the
+      # outgoing is still loud (the log fade above holds its level up). A
+      # slower/shallower close spread over 70% was inaudible under the fade.
       def sweep_cut() =
         e = source.elapsed(sweep_src)
         e = if e < 0. then 0. else e end
-        t_close = 0.7 * d
+        t_close = 0.45 * d
         x = if e >= t_close then 1.0 else e / t_close end
         depth = 3.0 * x * x - 2.0 * x * x * x     # smoothstep 0→1
-        9000.0 * pow(400.0 / 9000.0, depth)       # 9 kHz open → 400 Hz floor
+        9000.0 * pow(300.0 / 9000.0, depth)       # 9 kHz open → 300 Hz floor
       end
-      # Wet ramps 0→1 over the first ~15% of the blend: a 2-stage RC at 9 kHz
-      # is NOT transparent (−6 dB at the cutoff + roll-off), so engaging it
-      # full-wet at the cross start lands as an instant dulling — the filter
-      # must fade IN, then the closing cutoff does the work (found on-air).
+      # Wet ramps 0→1 over the first ~15% of the blend: an RC at 9 kHz is NOT
+      # transparent (−dB at the cutoff + roll-off), so engaging it full-wet at
+      # the cross start lands as an instant dulling — the filter must fade IN,
+      # then the closing cutoff does the work (found on-air).
       def sweep_wet() =
         e = source.elapsed(sweep_src)
         e = if e < 0. then 0. else e end
@@ -327,7 +338,8 @@ def dj_transition(a, b) =
         3.0 * x * x - 2.0 * x * x * x             # smoothstep 0→1
       end
       filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
-        filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet, a_source))
+        filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
+          filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet, a_source)))
     else
       a_source
     end
@@ -388,11 +400,84 @@ def dj_transition(a, b) =
           1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
         end
       end
-      amplify(wash_gain, comb(delay=wd, feedback=wash_fb, a_source))
+      # Darkening tail — a real dub/DJ delay feeds back through a filter, so
+      # every repeat comes back darker. The comb's loop is fixed, so instead a
+      # lowpass AFTER it closes across the window (9 kHz → 1.5 kHz, log space):
+      # later repeats occur later in time, so they arrive darker — the tail
+      # recedes into the dark instead of ringing at full brightness. Wet ramps
+      # in over the first 20% (an RC at 9 kHz is not transparent — engaging it
+      # full-wet would dull the still-audible dry, same lesson as the sweep).
+      def tail_cut() =
+        e = source.elapsed(wash_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.20 * d
+        t_to   = 0.90 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        s = 3.0 * x * x - 2.0 * x * x * x
+        9000.0 * pow(1500.0 / 9000.0, s)
+      end
+      def tail_wet() =
+        e = source.elapsed(wash_src)
+        e = if e < 0. then 0. else e end
+        t_on = 0.20 * d
+        x = if e >= t_on then 1.0 else e / t_on end
+        3.0 * x * x - 2.0 * x * x * x
+      end
+      washed = comb(delay=wd, feedback=wash_fb, a_source)
+      washed = filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet,
+                 filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet, washed))
+      amplify(wash_gain, washed)
     else
       a_source
     end
   b_source = fade.in(duration=d, initial_metadata=b.metadata, b.source)
+  # INCOMING side of a sweep — two real-DJ moves, both fully transparent well
+  # before the outgoing track is gone (release = wetness → 0, because an RC
+  # filter at its "open" cutoff still is not transparent):
+  #   1. SURFACING — the pick materialises from far away: a lowpass opens
+  #      500 Hz → 9 kHz over the first 35% of the blend and is fully OUT by
+  #      40%, while the old track still dominates. (The v1 mistake was a
+  #      muffle that outlived the transition; opening fast and early keeps
+  #      the "approaching" feel without the broken-sounding landing.)
+  #   2. BASS SWAP — a highpass holds the pick's low end back so two
+  #      basslines never fight across the long blend, then releases at
+  #      ~55–75% and the bass lands like a small drop — the most
+  #      professional-sounding instant of the whole move.
+  # Net arc: mid-band → highs bloom (35%) → bass drops (65%) → standalone.
+  b_source =
+    if sweeping then
+      in_src = b_source
+      def surf_cut() =
+        e = source.elapsed(in_src)
+        e = if e < 0. then 0. else e end
+        t_open = 0.35 * d
+        x = if e >= t_open then 1.0 else e / t_open end
+        s = 3.0 * x * x - 2.0 * x * x * x
+        500.0 * pow(9000.0 / 500.0, s)            # 500 Hz → open, log space
+      end
+      def surf_wet() =
+        e = source.elapsed(in_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.25 * d
+        t_to   = 0.40 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        1.0 - (3.0 * x * x - 2.0 * x * x * x)     # wet 1 → 0 (fully dry by 40%)
+      end
+      def bass_wet() =
+        e = source.elapsed(in_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.55 * d
+        t_to   = 0.75 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        1.0 - (3.0 * x * x - 2.0 * x * x * x)     # wet 1 → 0 (bass lands by 75%)
+      end
+      bs = filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet,
+             filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet, in_src))
+      filter.rc(frequency=160., mode="high", wetness=bass_wet,
+        filter.rc(frequency=160., mode="high", wetness=bass_wet, bs))
+    else
+      b_source
+    end
   add(normalize=false, [a_source, b_source])
 end
 
