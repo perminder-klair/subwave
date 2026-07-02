@@ -146,11 +146,13 @@ RUN python3 -m venv /opt/analyzer/venv && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
     fi && \
     if [ "$WITH_DEMUCS" = "1" ]; then \
+      # diffq: decompressor for demucs' quantized checkpoints (mdx_q, …). Tiny,
+      # but without it a DEMUCS_MODEL=*_q override makes demucs fatal() at load.
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
         --extra-index-url https://pypi.org/simple \
-        torch torchaudio demucs && \
-      /opt/analyzer/venv/bin/python -c "import torch, demucs" ; \
+        torch torchaudio demucs diffq && \
+      /opt/analyzer/venv/bin/python -c "import torch, demucs, diffq" ; \
     fi && \
     find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
 # ANALYZE_PYTHON flips on the controller's local analyze backend; HF_HOME points

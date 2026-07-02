@@ -466,8 +466,12 @@ def get_vocal_detector(force=False):
             d = VocalActivityDetector()
             d.load()
             _vocal_detector = d
-        except Exception as ex:  # noqa: BLE001 — degrade, never crash the worker
-            log(f"Demucs load failed ({ex}); vocal activity disabled for this run")
+        # BaseException, not Exception: demucs' fatal() raises SystemExit on an
+        # unusable model (e.g. a *_q quantized checkpoint without diffq), which
+        # sails past `except Exception` and killed the whole worker — every
+        # later request (bpm/key included) then 500'd "worker not ready".
+        except BaseException as ex:  # noqa: BLE001 — degrade, never crash the worker
+            log(f"Demucs load failed ({ex or type(ex).__name__}); vocal activity disabled for this run")
             _vocal_failed = True
             return None
     return _vocal_detector
