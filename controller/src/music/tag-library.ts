@@ -48,9 +48,14 @@ import { activeModelLabel, primaryLeg, fallbackLeg, probeLegReachable } from '..
 import { isUnreachable, isQuotaOrAuthError, errReason } from '../llm/sdk.js';
 import { tagBatch, tagOne, TAGGER_BATCH_SYSTEM, type TagResult } from './tagger-core.js';
 import { runAnalysisPass } from './analyze.js';
-import { reportProgress, formatPhaseBreakdown, sortedPhaseTimings } from './tagger-progress.js';
+import { reportProgress, formatPhaseBreakdown, sortedPhaseTimings, makeEventLogger } from './tagger-progress.js';
 import { planRun } from './rescan-scope.js';
 import { mapPool, memoizeByKey } from '../util/async-pool.js';
+import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
+
+// Emit the terse `[tag] …` console line AND the structured event sentinel the
+// controller relays to the panel — one call site per notable milestone.
+const logEvent = makeEventLogger('tag');
 
 // ---------------------------------------------------------------------------
 // CLI arg parsing
@@ -158,7 +163,7 @@ async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<string> }
       reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: walked });
     }
   }
-  console.log(`[tag] walked ${walked} total tracks`);
+  logEvent('info', `Scanned ${walked.toLocaleString('en-GB')} tracks`);
   return { walked, liveIds };
 }
 
@@ -219,6 +224,19 @@ async function main() {
   const flags = parseFlags();
   const startedAt = Date.now();
 
+  // Belt-and-braces single-flight: a controller-spawned run is already covered by
+  // the pidfile the controller wrote (MANAGED_ENV set → this is a no-op). A manual
+  // `npm run tag` on a host checkout claims the lock itself and refuses if another
+  // live run holds it, so it can't become a second writer on the same DB.
+  let ownsLock = false;
+  try {
+    ownsLock = acquireStandaloneLock(flags.reconcileOnly ? 'reconcile' : 'tag', process.argv.slice(2));
+  } catch (err: any) {
+    console.error(`[tag] ${err.message}`);
+    process.exit(1);
+  }
+  if (ownsLock) installPidfileCleanup();
+
   // Per-phase wall-clock. `lap(name)` attributes the time since the previous lap
   // to `name`, so the breakdown in finish() shows where a slow run actually went
   // (almost always the chat-model seed/learn phases, not embeddings).
@@ -241,7 +259,7 @@ async function main() {
   }
 
   if (!embeddings.isAvailable()) {
-    console.error('[tag] embeddings not available — set settings.embedding.enabled / provider');
+    logEvent('error', 'Embeddings not available — set settings.embedding.enabled / provider');
     process.exit(1);
   }
 
@@ -253,7 +271,7 @@ async function main() {
   // name→dim guess, so an arbitrarily-named embedding model just works.
   const probe = await embeddings.ensureReady();
   if (probe.code !== 'ok') {
-    console.error(`[tag] embedding preflight failed (${probe.code}):\n${probe.message}`);
+    logEvent('error', `Embedding preflight failed (${probe.code}): ${probe.message}`);
     process.exit(1);
   }
   const embeddingDim = probe.dim ?? embeddings.resolveEmbeddingDim();
@@ -279,9 +297,9 @@ async function main() {
       ? embedCfg.seedCount
       : null;
 
-  console.log(`[tag] starting. ${db.allTaggedIds().length} tracks already tagged.`);
-  console.log(`[tag] LLM model: ${activeModelLabel()}`);
-  console.log(`[tag] embedding model: ${embeddings.activeModelLabel()} (dim=${embeddingDim})`);
+  logEvent('info', `Starting up — ${db.allTaggedIds().length.toLocaleString('en-GB')} tracks already tagged`);
+  logEvent('info', `Tagging model — ${activeModelLabel()}`);
+  logEvent('info', `Embedding model — ${embeddings.activeModelLabel()} (dim=${embeddingDim})`);
   console.log(
     `[tag] batch=${flags.batchSize} maxRounds=${maxRounds} knnK=${knnK} ` +
       `moodVote=${moodVoteThreshold} confidence=${confidenceThreshold}`,
@@ -362,8 +380,10 @@ async function main() {
         `(not forward-processing ${allUntagged.length} untagged)`,
     );
   } else {
-    console.log(
-      `[tag] ${targetUntagged.length} untagged tracks in scope this run (of ${allUntagged.length} total untagged)`,
+    logEvent(
+      'info',
+      `${targetUntagged.length.toLocaleString('en-GB')} new tracks to tag ` +
+        `(${allUntagged.length.toLocaleString('en-GB')} still untagged)`,
     );
   }
 
@@ -453,7 +473,7 @@ async function main() {
       llmCalls += tagged.callCount;
       llmTagged += tagged.tagged;
       mergeByLeg(tagged.byLeg);
-      console.log(`[tag] phase-2 done: ${tagged.tagged}/${seedSelection.seeds.length} seeded`);
+      logEvent('success', `Mood tagging done — ${tagged.tagged}/${seedSelection.seeds.length}`);
     }
     lap('seed');
 
@@ -510,14 +530,14 @@ async function main() {
         uncertain.push(id);
       }
     }
-    console.log(`[tag] phase-3 propagated ${propagated} tracks; ${uncertain.length} uncertain (in scope)`);
+    logEvent('info', `Spread tags to ${propagated.toLocaleString('en-GB')} similar tracks (${uncertain.length} unsure)`);
     reportProgress({ phase: 'propagate', label: 'Propagating tags to neighbours', done: targetUntagged.length, total: targetUntagged.length });
     lap('propagate');
 
     // ---- Phase 4: ACTIVE-LEARN --------------------------------------------
     for (let round = 1; round <= maxRounds; round++) {
       if (uncertain.length === 0) break;
-      console.log(`[tag] phase-4 round ${round}: LLM-tagging ${uncertain.length} uncertain`);
+      logEvent('info', `Round ${round}: re-checking ${uncertain.length} unsure tracks…`);
       const tagged = await llmTagInBatches(
         uncertain,
         flags.batchSize,
@@ -636,7 +656,7 @@ async function main() {
         vocalBackfill: flags.vocal ? true : flags.noVocal ? false : undefined,
       });
     } catch (err: any) {
-      console.error(`[tag] analysis phase failed (non-fatal): ${err?.message || err}`);
+      logEvent('warning', `Acoustic analysis phase failed (non-fatal): ${err?.message || err}`);
     }
   }
   lap('analyze');
@@ -663,14 +683,16 @@ function finish(
   timings: Record<string, number> = {},
 ) {
   const elapsed = (Date.now() - startedAt) / 1000;
-  console.log(
-    `\n[tag] done in ${elapsed.toFixed(0)}s. llm_calls=${llmCalls} llm_tagged=${llmTagged}`,
+  logEvent(
+    'success',
+    `Done in ${elapsed.toFixed(0)}s — ${llmTagged.toLocaleString('en-GB')} tracks tagged ` +
+      `(${llmCalls.toLocaleString('en-GB')} LLM calls)`,
   );
   // Phase breakdown, slowest first — turns "tagging is slow" into "phase X is
   // 90% of the time" so the operator knows what to actually tune.
   const timed = sortedPhaseTimings(timings);
   const breakdown = formatPhaseBreakdown(timings);
-  if (breakdown) console.log(`[tag] phase breakdown: ${breakdown}`);
+  if (breakdown) logEvent('info', `Time per phase — ${breakdown}`);
   reportProgress({
     phase: 'done',
     label: 'Finished',
@@ -688,9 +710,10 @@ function finish(
   const moods = Object.keys(s.byMood || {}).length;
   const genres = Object.keys(s.byGenre || {}).length;
   const src = Object.entries(s.bySource || {}).map(([k, v]) => `${k}=${v}`).join(' ');
-  console.log(
-    `[stats] ${s.total ?? 0} tagged · ${moods} moods · ${genres} genres · ` +
-    `${s.withEmbedding ?? 0} embedded${src ? ` · ${src}` : ''}`,
+  logEvent(
+    'info',
+    `Library now: ${(s.total ?? 0).toLocaleString('en-GB')} tagged · ${moods} moods · ${genres} genres · ` +
+      `${(s.withEmbedding ?? 0).toLocaleString('en-GB')} embedded${src ? ` · ${src}` : ''}`,
   );
 }
 
@@ -778,8 +801,10 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
     }
   });
 
-  console.log(
-    `[tag] phase-0 done: enriched ${enrichedTracks} tracks (lastfm: ${enrichedTags}, lyrics: ${enrichedLyrics})`,
+  logEvent(
+    'info',
+    `Metadata fetched for ${enrichedTracks.toLocaleString('en-GB')} tracks ` +
+      `(${enrichedTags} Last.fm, ${enrichedLyrics} lyrics)`,
   );
 }
 
@@ -805,7 +830,7 @@ async function phaseEmbed(targetIds: string[], batchSize: number): Promise<void>
     console.log('[tag] phase-1 nothing to embed');
     return;
   }
-  console.log(`[tag] phase-1 embedding ${unique.length} tracks (batch=${batchSize})`);
+  logEvent('info', `Building similarity vectors for ${unique.length.toLocaleString('en-GB')} tracks…`);
   reportProgress({ phase: 'embed', label: 'Embedding tracks', done: 0, total: unique.length });
 
   const embedBatchSize = Math.max(8, Math.min(64, batchSize * 2));
@@ -908,14 +933,15 @@ async function processBatch(
     // Genuine batch errors keep the error-level line with their message.
     const perTrackDegrade = /batch length mismatch/i.test(err.message || '');
     if (perTrackDegrade) {
-      console.warn(
-        `[tag] ${consumer.label} didn't return one entry per track — tagging ` +
-          `${songs.length} tracks individually this batch (expected for some ` +
-          `models; not an error, just slower)`,
+      logEvent(
+        'warning',
+        `${consumer.label} didn't return one entry per track — tagging ` +
+          `${songs.length} tracks individually this batch (expected for some models; just slower)`,
       );
     } else {
-      console.error(
-        `[tag] LLM batch failed (${songs.length} tracks) on ${consumer.label}: ${err.message} — falling back to per-track`,
+      logEvent(
+        'error',
+        `LLM batch failed (${songs.length} tracks) on ${consumer.label}: ${err.message} — falling back to per-track`,
       );
     }
     results = [];
@@ -984,8 +1010,9 @@ async function runConsumer(
       batches.unshift(batch);
       const remaining = onDrop ? onDrop(err) : 0;
       const reason = isQuotaOrAuthError(err) ? 'quota/credit/auth rejected' : 'host unreachable';
-      console.log(
-        `[tag] LLM leg ${consumer.label} dropped — ${reason}: ${errReason(err)} (${remaining} leg(s) left)`,
+      logEvent(
+        'error',
+        `LLM leg ${consumer.label} dropped — ${reason}: ${errReason(err)} (${remaining} leg(s) left)`,
       );
       return;
     }
@@ -1046,7 +1073,7 @@ async function llmTagInBatches(
       const hint = quotaOrAuthDrop
         ? ' — a leg was refused for quota/credit/auth; check the provider credit balance, spend cap, or API key'
         : '';
-      console.log(`[tag] all LLM legs dropped — ${abandoned} tracks left for next run${hint}`);
+      logEvent('warning', `All LLM legs dropped — ${abandoned} tracks left for next run${hint}`);
     }
   }
   return { tagged: state.tagged, callCount: state.callCount, byLeg: state.byLeg };
@@ -1065,16 +1092,16 @@ async function resolveTagConsumers(): Promise<TagConsumer[]> {
     (primary.cfg.ollamaUrl || '') === (fb.cfg.ollamaUrl || '') &&
     (primary.cfg.baseUrl || '') === (fb.cfg.baseUrl || '');
   if (fb.label === primary.label && sameHost) {
-    console.log('[tag] fallback LLM identical to primary — single-LLM mode');
+    logEvent('info', 'Fallback LLM identical to primary — single-LLM mode');
     return [{ label: primary.label }];
   }
 
   if (!(await probeLegReachable(fb))) {
-    console.log(`[tag] fallback LLM (${fb.label}) unreachable — single-LLM mode`);
+    logEvent('info', `Fallback LLM (${fb.label}) unreachable — single-LLM mode`);
     return [{ label: primary.label }];
   }
 
-  console.log(`[tag] dual-LLM mode active: primary=${primary.label} + fallback=${fb.label}`);
+  logEvent('info', `Dual-LLM mode active: primary=${primary.label} + fallback=${fb.label}`);
   return [
     { pin: 'primary', label: primary.label },
     { pin: 'fallback', label: fb.label },

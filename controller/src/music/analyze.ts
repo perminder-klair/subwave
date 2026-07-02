@@ -14,7 +14,11 @@ import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
 import * as settings from '../settings.js';
 import { config } from '../config.js';
-import { reportProgress } from './tagger-progress.js';
+import { reportProgress, makeEventLogger } from './tagger-progress.js';
+
+// Structured status events for the panel, mirrored to the terse `[analyze] …`
+// console line. Shared by the tagger's analyze phase and the standalone CLI.
+const logEvent = makeEventLogger('analyze');
 
 export interface AnalyzeOptions {
   limit?: number;        // cap tracks this run (default: all that need it)
@@ -92,7 +96,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     return { available: false, backend: 'none', analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0, vocalAnalyzed: 0 };
   }
   const backend = analyzer.backendLabel();
-  console.log(`[analyze] backend: ${backend}`);
+  logEvent('info', `Audio engine: ${backend}`);
 
   // Resolve the vocal (Demucs) decision up front: a --re-analyze that is NOT
   // redoing vocal preserves existing vocal_ranges rather than wiping them (they
@@ -183,7 +187,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     console.log('[analyze] nothing to analyse — all tracks current');
     return { available: true, backend, analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0, vocalAnalyzed: 0 };
   }
-  console.log(`[analyze] ${ids.length} tracks to analyse`);
+  logEvent('info', `Analysing audio for ${ids.length.toLocaleString('en-GB')} tracks…`);
   reportProgress({ phase: 'analyze', label: 'Analysing audio', done: 0, total: ids.length });
 
   let analyzed = 0;
@@ -301,10 +305,12 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // (e.g. a download that resolved after its analyze slot already errored).
   await rm(`${config.stateDir}/analyze-tmp`, { recursive: true, force: true }).catch(() => {});
 
-  console.log(
-    `[analyze] done — analyzed=${analyzed} failed=${failed}` +
-      (audioEmbedded > 0 ? ` audio-embedded=${audioEmbedded}` : '') +
-      (vocalAnalyzed > 0 ? ` vocal-analyzed=${vocalAnalyzed}` : ''),
+  logEvent(
+    'success',
+    `Audio analysed — ${analyzed.toLocaleString('en-GB')} tracks` +
+      (audioEmbedded > 0 ? `, ${audioEmbedded.toLocaleString('en-GB')} sounds-like` : '') +
+      (vocalAnalyzed > 0 ? `, ${vocalAnalyzed.toLocaleString('en-GB')} vocal` : '') +
+      (failed > 0 ? ` · ${failed.toLocaleString('en-GB')} failed` : ''),
   );
   return { available: true, backend, analyzed, failed, scope: ids.length, audioEmbedded, vocalAnalyzed };
 }
