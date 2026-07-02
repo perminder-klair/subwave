@@ -51,8 +51,8 @@ start getting tempo/key/loudness.
   analysis with no second service. (`subwave-aio` is lean; `subwave-aio-heavy`
   bakes CLAP + Demucs.)
 - **Fallbacks.** If the `analyzer` service isn't reachable, the controller falls
-  back to the `tts-heavy` sidecar (its image carries the full analyze worker),
-  then to a [local venv](#running-analysis-without-a-sidecar-dev--offline).
+  back to a [local venv](#running-analysis-without-a-sidecar-dev--offline).
+  (`tts-heavy` is TTS-only now — it no longer carries the analyzer.)
 
 Everything under [What analysis adds](#what-analysis-adds) applies here. The rest
 of this page is about the **voices** — a separate opt-in.
@@ -176,10 +176,12 @@ heatmap.
   The admin Rescan toggles it per-run; set `ANALYZE_AUDIO_EMBEDDING=1` in your
   root `.env` to make it always-on.
 - **Vocal-activity detection (Demucs)** — separates vocal vs instrumental
-  energy. Built into the published sidecar image (`WITH_DEMUCS=1`). If you see
-  basic BPM/key working but vocal or "sounds-like" data missing, you're likely
-  on an **older `tts-heavy` image** built without the full stack — pull the
-  latest image and recreate the sidecar.
+  energy.
+
+Both ship only in the **heavy** analyzer image (`subwave-analyzer-heavy`). If you
+see basic BPM/key working but vocal or "sounds-like" data missing, you're on the
+lean analyzer — enable the heavy tier with `ANALYZER_HEAVY=1`
+([above](#enabling-sounds-like--vocals-the-heavy-tier)), not by pulling `tts-heavy`.
 
 ### Running analysis without a sidecar (dev / offline)
 
