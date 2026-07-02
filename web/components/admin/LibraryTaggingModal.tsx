@@ -218,8 +218,8 @@ export default function LibraryTaggingModal(p: Props) {
                 hint="Drop & rebuild the similarity vectors you already have — re-spends embedding calls. Only after changing the embedding model." />
               <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods" tag="AI · billed"
                 hint="Re-tag already-tagged rows whose prompt or model has gone stale (never your manual tags). No model change → nothing to redo. Uses model calls." />
-              <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics" tag="slow"
-                hint="Redo bpm/key + sounds-like for tracks you've already analysed. Drops their acoustic data and rebuilds it." />
+              <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} disabled={p.analysisOff} name="Re-analyse acoustics" tag="slow"
+                hint={p.analysisOff ? 'No analysis engine running — start the tts-heavy sidecar or a local librosa venv.' : 'Redo bpm/key + sounds-like for tracks you\'ve already analysed. Drops their acoustic data and rebuilds it.'} />
               {p.vocalWanted && (
                 <div className="pl-6">
                   <Pass on={!!passes.reAnalyze && reAnalyzeVocal} onClick={() => setReAnalyzeVocal(v => !v)}
