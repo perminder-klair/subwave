@@ -405,9 +405,10 @@ class Queue {
   // Drop any transition-effect flags from a track (with a logged reason) so
   // getAnnotatedUri never stamps an effect the gate rejected.
   stripEffect(track: any, reason: string) {
-    const kind = track.sweep ? 'sweep' : 'washout';
+    const kind = track.sweep ? 'sweep' : track.blend ? 'blend' : 'washout';
     delete track.sweep;
     delete track.washout;
+    delete track.blend;
     this.log('mix', `${kind} dropped (${reason})`);
   }
 
@@ -422,7 +423,7 @@ class Queue {
     // Persona flipped out of DJ mode between the pick and the drain: the
     // effects gate below never runs, so make sure no flag survives to annotate.
     if (!persona?.djMode) {
-      if (item.track.sweep || item.track.washout) this.stripEffect(item.track, 'dj mode off');
+      if (item.track.sweep || item.track.washout || item.track.blend) this.stripEffect(item.track, 'dj mode off');
       return;
     }
 
@@ -431,7 +432,7 @@ class Queue {
     if (!prevTrack) {
       // Nothing on-air to validate against (first track after boot) — an
       // effect on a cold start would garnish silence; drop it.
-      if (item.track.sweep || item.track.washout) this.stripEffect(item.track, 'no predecessor');
+      if (item.track.sweep || item.track.washout || item.track.blend) this.stripEffect(item.track, 'no predecessor');
       return;
     }
 
@@ -494,13 +495,21 @@ class Queue {
       this.log('mix', 'sweep dropped (tracks too compatible — beat-blend beats a sweep)');
     }
     if (item.track.sweep) this.log('mix', `sweep armed → ${item.track.title}`);
+    // blend is the sweep's mirror (entry-side, flagged on the incoming pick):
+    // it only makes sense between COMPATIBLE tracks — the handover exposes a
+    // clash rather than hiding it.
+    if (item.track.blend && !mix.effectAllowedFor('blend', cur, next)) {
+      delete item.track.blend;
+      this.log('mix', 'blend dropped (tracks clash — a handover needs a compatible pair)');
+    }
+    if (item.track.blend) this.log('mix', `blend armed → ${item.track.title}`);
     if (item.track.washout) {
       item.track.crossSec = mix.washoutCrossSecondsFor(next, maxSec);
       item.track.washoutDelay = mix.washoutDelayFor(next.bpm);
       const why = item.track.washoutAuto ? ' (length-cap exit)' : '';
       this.log('mix', `washout armed${why}: ${item.track.crossSec}s canvas, ${item.track.washoutDelay}s tap → ${item.track.title}`);
     }
-    const effectFired = !!(item.track.sweep || item.track.washout);
+    const effectFired = !!(item.track.sweep || item.track.washout || item.track.blend);
 
     // Feature 2 — transition FX, spaced by the chattiness ladder and gated on
     // settings.sfx.enabled; never two transitions in a row, and never a riser

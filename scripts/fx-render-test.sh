@@ -140,9 +140,10 @@ render() {
 settings.log.stdout := true
 settings.log.level := 3
 
-mode = environment.get("MODE")   # dry | sweep | washout | both
+mode = environment.get("MODE")   # dry | sweep | washout | both | blend
 sweep_on   = mode == "sweep"   or mode == "both"
 washout_on = mode == "washout" or mode == "both"
+blend_on   = mode == "blend"
 
 q = request.queue(id="q")
 q.push(request.create("/work/ra.wav"))
@@ -159,6 +160,20 @@ def t(a, b) =
     else
       fade.out(duration=d, a.source)
     end
+  a_src =
+    if blend_on then
+      ha_src = a_src
+      def blend_hp() =
+        e = source.elapsed(ha_src)
+        e = if e < 0. then 0. else e end
+        t_end = 0.65 * d
+        x = if e >= t_end then 1.0 else e / t_end end
+        sxx = 3.0 * x * x - 2.0 * x * x * x
+        30.0 * pow(1800.0 / 30.0, sxx)
+      end
+      blend_low = filter.rc(frequency=blend_hp, mode="low", wetness=1., a_src)
+      add(normalize=false, [a_src, amplify(-1., blend_low)])
+    else a_src end
   a_src =
     if sweep_on then
       sweep_src = a_src
@@ -265,6 +280,28 @@ def t(a, b) =
     else a_src end
   b_src = fade.in(duration=d, b.source)
   b_src =
+    if blend_on then
+      bin_src = b_src
+      def blend_lp() =
+        e = source.elapsed(bin_src)
+        e = if e < 0. then 0. else e end
+        t_open = 0.70 * d
+        x = if e >= t_open then 1.0 else e / t_open end
+        sxx = 3.0 * x * x - 2.0 * x * x * x
+        250.0 * pow(9000.0 / 250.0, sxx)
+      end
+      def blend_lp_wet() =
+        e = source.elapsed(bin_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.70 * d
+        t_to   = 0.82 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        1.0 - (3.0 * x * x - 2.0 * x * x * x)
+      end
+      filter.rc(frequency=blend_lp, mode="low", wetness=blend_lp_wet,
+        filter.rc(frequency=blend_lp, mode="low", wetness=blend_lp_wet, bin_src))
+    else b_src end
+  b_src =
     if sweep_on then
       in_src = b_src
       def surf_cut() =
@@ -283,18 +320,18 @@ def t(a, b) =
         x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
         1.0 - (3.0 * x * x - 2.0 * x * x * x)
       end
-      def bass_wet() =
+      def bass_amt() =
         e = source.elapsed(in_src)
         e = if e < 0. then 0. else e end
         t_from = 0.38 * d
         t_to   = 0.55 * d
         x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
-        1.0 - (3.0 * x * x - 2.0 * x * x * x)
+        0.0 - (1.0 - (3.0 * x * x - 2.0 * x * x * x))
       end
       bsf = filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet,
               filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet, in_src))
-      filter.rc(frequency=160., mode="high", wetness=bass_wet,
-        filter.rc(frequency=160., mode="high", wetness=bass_wet, bsf))
+      bsf_low = filter.rc(frequency=160., mode="low", wetness=1., bsf)
+      add(normalize=false, [bsf, amplify(bass_amt, bsf_low)])
     else b_src end
   add(normalize=false, [a_src, b_src])
 end
@@ -308,7 +345,7 @@ LIQ
 
   local modes
   case "$mode" in
-    all) modes="dry sweep washout both" ;;
+    all) modes="dry sweep washout both blend" ;;
     *)   modes="$mode" ;;
   esac
   for m in $modes; do

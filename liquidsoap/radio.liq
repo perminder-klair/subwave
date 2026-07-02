@@ -384,6 +384,38 @@ def dj_transition(a, b) =
   # a still-full-level song. Feedback releases to silent by 0.95*d — the
   # transition source is truncated at d, so the tail must decay before the
   # window closes or it clicks off. Same closure pattern as the sweep.
+  # BLEND (spectral handover) — the continuity move, the sweep's mirror: the
+  # OUTGOING track hands its bass (by ~25%), then its mids (by ~65%), to the
+  # incoming, keeping only its highs to the end; the incoming arrives
+  # lows-first underneath (see the b-side block below). At every moment the
+  # sum reads as ONE full-spectrum piece of music whose ingredients are
+  # swapping — the club "EQ mixing" technique for seamless long blends. The
+  # controller only arms it between COMPATIBLE tracks (mix.effectAllowedFor).
+  # At e=0 the HPF sits at 30 Hz ≈ transparent, so the engage is seamless.
+  blending = b.metadata["liq_blend"] == "true"
+  a_source =
+    if blending then
+      log("DJ blend: spectral handover into the next track (d=#{d}s)")
+      ha_src = a_source
+      def blend_hp() =
+        e = source.elapsed(ha_src)
+        e = if e < 0. then 0. else e end
+        t_end = 0.65 * d
+        x = if e >= t_end then 1.0 else e / t_end end
+        sxx = 3.0 * x * x - 2.0 * x * x * x
+        30.0 * pow(1800.0 / 30.0, sxx)            # 30 Hz → 1.8 kHz (log space)
+      end
+      # SUBTRACT-HPF: filter.rc mode="high" is BROKEN in this v2.2.5 build —
+      # even a static 400 Hz high-pass collapses music to −115 dB (verified by
+      # render; same defect family as the `echo` no-op). High-pass is built
+      # from proven parts instead: dry − lowpass(dry). Polarity inversion and
+      # twin-consumer frame alignment verified: src + amplify(-1., src)
+      # renders exact silence.
+      blend_low = filter.rc(frequency=blend_hp, mode="low", wetness=1., a_source)
+      add(normalize=false, [a_source, amplify(-1., blend_low)])
+    else
+      a_source
+    end
   a_source =
     if washing then
       wd = float_of_string(default=0.30, a.metadata["liq_washout_delay"])
@@ -480,6 +512,36 @@ def dj_transition(a, b) =
   #      earlier than a club bass-swap so the incoming fills the middle of
   #      the blend — with both tracks processed, ~50% went near-silent.)
   # Net arc: mid-band → highs bloom (35%) → bass drops (65%) → standalone.
+  # BLEND, incoming side: the pick arrives lows-first — a lowpass opens
+  # 250 Hz → 9 kHz over the first 70% (log space) as the outgoing HPF climbs,
+  # so the two trade the spectrum in complementary bands. Wetness releases to
+  # 0 by 82% (release must be wet→0: an RC at its open cutoff is never fully
+  # transparent, and the branch operators vanish at the d boundary — the
+  # track must already be bit-clean before then).
+  b_source =
+    if blending then
+      bin_src = b_source
+      def blend_lp() =
+        e = source.elapsed(bin_src)
+        e = if e < 0. then 0. else e end
+        t_open = 0.70 * d
+        x = if e >= t_open then 1.0 else e / t_open end
+        sxx = 3.0 * x * x - 2.0 * x * x * x
+        250.0 * pow(9000.0 / 250.0, sxx)
+      end
+      def blend_lp_wet() =
+        e = source.elapsed(bin_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.70 * d
+        t_to   = 0.82 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        1.0 - (3.0 * x * x - 2.0 * x * x * x)
+      end
+      filter.rc(frequency=blend_lp, mode="low", wetness=blend_lp_wet,
+        filter.rc(frequency=blend_lp, mode="low", wetness=blend_lp_wet, bin_src))
+    else
+      b_source
+    end
   b_source =
     if sweeping then
       in_src = b_source
@@ -499,18 +561,23 @@ def dj_transition(a, b) =
         x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
         1.0 - (3.0 * x * x - 2.0 * x * x * x)     # wet 1 → 0 (fully dry by 40%)
       end
-      def bass_wet() =
+      # Bass swap via SUBTRACT-HPF (mode="high" is broken — see the blend
+      # block above; it was silencing the whole incoming track while its
+      # wetness was up, the real culprit behind the mid-blend dropouts):
+      # subtract `bass_amt` of the track's own <160 Hz content, releasing
+      # amt 1 → 0 over 38–55% so the bass lands as the outgoing bows out.
+      def bass_amt() =
         e = source.elapsed(in_src)
         e = if e < 0. then 0. else e end
         t_from = 0.38 * d
         t_to   = 0.55 * d
         x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
-        1.0 - (3.0 * x * x - 2.0 * x * x * x)     # wet 1 → 0 (bass lands by 75%)
+        0.0 - (1.0 - (3.0 * x * x - 2.0 * x * x * x))
       end
       bs = filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet,
              filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet, in_src))
-      filter.rc(frequency=160., mode="high", wetness=bass_wet,
-        filter.rc(frequency=160., mode="high", wetness=bass_wet, bs))
+      bs_low = filter.rc(frequency=160., mode="low", wetness=1., bs)
+      add(normalize=false, [bs, amplify(bass_amt, bs_low)])
     else
       b_source
     end

@@ -102,6 +102,15 @@ async function main() {
     assert.equal(effectAllowedFor('sweep', { bpm: 124, key: '8A' }, { bpm: null, key: null }), true);
   });
 
+  await test('blend is the sweep mirror — compatible pairs only', () => {
+    // Locked tempo + key → handover territory.
+    assert.equal(effectAllowedFor('blend', { bpm: 124, key: '8A' }, { bpm: 124, key: '8A' }), true);
+    // Full clash → the handover would expose it.
+    assert.equal(effectAllowedFor('blend', { bpm: 80, key: '3B' }, { bpm: 128, key: '9A' }), false);
+    // Un-analysed → trust the DJ.
+    assert.equal(effectAllowedFor('blend', { bpm: null, key: null }, { bpm: 124, key: '8A' }), true);
+  });
+
   await test('washout is never data-gated (cooldown rations it)', () => {
     assert.equal(effectAllowedFor('washout', { bpm: 124, key: '8A' }, { bpm: 124, key: '8A' }), true);
     assert.equal(effectAllowedFor('washout', { bpm: null, key: null }, { bpm: null, key: null }), true);

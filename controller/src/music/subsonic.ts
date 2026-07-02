@@ -608,6 +608,10 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } =
   // OUTGOING track's metadata. Absent → normal cross.
   if (song.washout) fields.push('liq_washout="true"');
   if (song.washoutDelay != null) fields.push(`liq_washout_delay="${escAnnotate(song.washoutDelay)}"`);
+  // DJ blend (spectral handover): validated same-lane picks trade the spectrum
+  // with their predecessor across the cross — dj_transition reads liq_blend on
+  // the INCOMING track, like the sweep.
+  if (song.blend) fields.push('liq_blend="true"');
   // Hard track-length cap (issue #447 / max-track-length). When the caller passes
   // a positive cap, stamp `liq_cue_out` so radio.liq's `cue_cut` stops the track
   // at that second offset — a real ceiling that fires no matter how the track

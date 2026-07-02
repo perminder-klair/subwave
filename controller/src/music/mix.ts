@@ -210,10 +210,16 @@ export function washoutDelayFor(bpm: number | null): number {
 // tracks pass (the data can't contradict the DJ). Washout is an editorial
 // "close the chapter" gesture, not a compatibility repair: always allowed —
 // the caller's cooldown rations it.
-export function effectAllowedFor(kind: 'sweep' | 'washout', cur: Analysis, next: Analysis): boolean {
+export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend', cur: Analysis, next: Analysis): boolean {
   if (kind === 'washout') return true;
   if (!analysed(cur) || !analysed(next)) return true;
-  return mixCompat(cur, next) < 0.6;
+  const compat = mixCompat(cur, next);
+  // blend (spectral handover) is the sweep's mirror: it makes COMPATIBLE
+  // tracks feel like one continuous piece — between clashing tracks the
+  // complementary-band trade just exposes the clash, so a long wash (or a
+  // sweep) serves better there.
+  if (kind === 'blend') return compat >= 0.4;
+  return compat < 0.6;
 }
 
 // --- Feature 2: transition FX ----------------------------------------------
