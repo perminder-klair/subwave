@@ -105,6 +105,33 @@ export function isHeavyEmbeddingModel(model: string): boolean {
   return false;
 }
 
+// Task prefixes some embedding models are trained with. Name-based like
+// isHeavyEmbeddingModel — unknown models get no prefixes.
+//
+// nomic-embed-text (the shipped Ollama default) REQUIRES them: the model card
+// marks `search_document:` / `search_query:` as mandatory for retrieval, and
+// embedding bare measurably degrades neighbour quality. Its document prefix
+// changes the stored vectors, so the index records which mode it was built in
+// (embedding_meta.text_mode) and queries follow suit.
+//
+// mxbai-embed-large wants a query-side instruction only — documents embed
+// bare, so its query prefix is always safe to apply regardless of index mode.
+export interface EmbeddingTextPrefixes {
+  document: string; // prepended to indexed track texts; '' = embed bare
+  query: string;    // prepended to search queries; '' = embed bare
+}
+
+export function embeddingTextPrefixes(model: string): EmbeddingTextPrefixes {
+  const bare = (model || '').toLowerCase();
+  if (bare.includes('nomic-embed')) {
+    return { document: 'search_document: ', query: 'search_query: ' };
+  }
+  if (bare.includes('mxbai-embed-large')) {
+    return { document: '', query: 'Represent this sentence for searching relevant passages: ' };
+  }
+  return { document: '', query: '' };
+}
+
 // Does this embedding provider run on the operator's own hardware (so model
 // weight is a CPU/RAM concern they pay for), vs a cloud API that does the work
 // off-box? Gates the heavy-model perf advisory — a big model on OpenAI/Google is

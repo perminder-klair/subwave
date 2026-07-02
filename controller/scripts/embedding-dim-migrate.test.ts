@@ -103,6 +103,17 @@ async function main() {
     db.close();
   });
 
+  await test('embedding_meta round-trips text_mode; legacy rows read as null', async () => {
+    await db.open({ embeddingDim: 1024, adoptStoredDim: true });
+    // Legacy write (no mode) — reads back null, which resolveIndexTextMode
+    // treats as 'plain' on a populated index.
+    db.setEmbeddingMeta('ollama:nomic-embed-text', 1024);
+    assert.equal(db.getEmbeddingMeta()?.textMode, null);
+    db.setEmbeddingMeta('ollama:nomic-embed-text', 1024, 'prefixed');
+    assert.equal(db.getEmbeddingMeta()?.textMode, 'prefixed');
+    db.close();
+  });
+
   rmSync(stateDir, { recursive: true, force: true });
 
   if (failures) {

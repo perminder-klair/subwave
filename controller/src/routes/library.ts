@@ -483,7 +483,13 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
           },
           { lastfmTags, lyricExcerpt },
         );
-        const [vec] = await embeddings.embedTexts([text]);
+        // Document embed — must match the task-prefix mode the rest of the
+        // index was built in, or this one track drifts in the KNN space.
+        const textMode = embeddings.resolveIndexTextMode(
+          db.getEmbeddingMeta()?.textMode,
+          db.vectorCount(),
+        );
+        const [vec] = await embeddings.embedDocTexts([text], textMode);
         if (vec) db.upsertTrackVector(id, vec);
       } catch (err: any) {
         queue.log('warn', `/library/retag embed ${id}: ${err.message}`);

@@ -14,14 +14,14 @@ export interface NeighbourTags {
 }
 
 export interface VoteResult {
-  moods: string[];                        // moods present in ≥ threshold of voting neighbours
-  energy: EnergyValue;                    // plurality vote, tie-break by top similarity
+  moods: string[];                        // moods holding ≥ threshold of the voting weight
+  energy: EnergyValue;                    // weighted plurality, tie-break by proximity
   confidence: number;                     // 0..1; combines neighbour proximity + tag coverage
   votingNeighbours: number;               // how many of the K neighbours actually had tags
 }
 
 export interface VoteOpts {
-  moodVoteThreshold: number;              // fraction of voting neighbours that must carry a mood
+  moodVoteThreshold: number;              // fraction of the total voting WEIGHT a mood must carry
   k: number;                              // how many neighbours were requested (so confidence can
                                           // discount for missing tags)
 }
@@ -29,7 +29,16 @@ export interface VoteOpts {
 // Vote on moods + energy from a KNN result. Caller supplies a lookup function
 // so we don't have to import library-db here (keeps this file unit-testable).
 //
-// Confidence formula:
+// Votes are SIMILARITY-WEIGHTED: each voting neighbour contributes
+// max(0, similarity) rather than a flat 1. Under flat counting a 0.9-similar
+// neighbour was outvoted by two 0.3-similar ones — exactly backwards at the
+// propagation frontier, where the far tail of the K list is barely related to
+// the track being tagged. A mood now passes when it carries
+// ≥ moodVoteThreshold of the total voting weight; energy is the weighted
+// plurality with ties broken by the closest neighbour carrying one.
+//
+// Confidence formula (deliberately unchanged by the weighting — the operator's
+// confidenceThreshold default was tuned against it):
 //   coverage    = votingNeighbours / k          (penalises sparse coverage early in propagation)
 //   topSim      = max(0, neighbours[0].similarity)   (penalises far-away matches)
 //   confidence  = topSim * coverage
@@ -45,47 +54,51 @@ export function vote(
   getTags: (id: string) => NeighbourTags | null,
   opts: VoteOpts,
 ): VoteResult {
-  const voting: Array<KnnHit & NeighbourTags> = [];
+  const voting: Array<KnnHit & NeighbourTags & { weight: number }> = [];
   for (const n of neighbours) {
     const tags = getTags(n.id);
     if (!tags) continue;
     if (tags.moods.length === 0 && tags.energy === null) continue;
-    voting.push({ ...n, ...tags });
+    voting.push({ ...n, ...tags, weight: Math.max(0, n.similarity) });
   }
 
-  if (voting.length === 0) {
+  const totalWeight = voting.reduce((s, v) => s + v.weight, 0);
+  if (voting.length === 0 || totalWeight <= 0) {
+    // No tagged neighbours, or every one is orthogonal-or-worse to the track —
+    // there's no real evidence to propagate from either way.
     return { moods: [], energy: null, confidence: 0, votingNeighbours: 0 };
   }
 
-  // Mood vote: count occurrences across voting neighbours.
-  const moodCounts = new Map<string, number>();
+  // Mood vote: sum each mood's neighbour weight; it passes when it carries
+  // enough of the total voting weight.
+  const moodWeights = new Map<string, number>();
   for (const v of voting) {
     for (const m of v.moods) {
-      moodCounts.set(m, (moodCounts.get(m) ?? 0) + 1);
+      moodWeights.set(m, (moodWeights.get(m) ?? 0) + v.weight);
     }
   }
-  const moodThreshold = Math.max(1, Math.ceil(opts.moodVoteThreshold * voting.length));
-  const moods = [...moodCounts.entries()]
-    .filter(([, n]) => n >= moodThreshold)
+  const moodThreshold = opts.moodVoteThreshold * totalWeight;
+  const moods = [...moodWeights.entries()]
+    .filter(([, w]) => w > 0 && w >= moodThreshold)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3) // mood vocab arrays cap at 3
     .map(([m]) => m);
 
-  // Energy vote: plurality across voting neighbours, tie-break by similarity.
-  const energyCounts = new Map<string, number>();
+  // Energy vote: weighted plurality. `voting` is in KNN order (closest first),
+  // so on an exact tie the energy that appeared on a closer neighbour wins —
+  // strictly-greater comparison keeps the earlier (closer) winner.
+  const energyWeights = new Map<string, number>();
   for (const v of voting) {
-    if (v.energy) energyCounts.set(v.energy, (energyCounts.get(v.energy) ?? 0) + 1);
+    if (v.energy) energyWeights.set(v.energy, (energyWeights.get(v.energy) ?? 0) + v.weight);
   }
   let energy: EnergyValue = null;
-  let bestCount = 0;
-  for (const [e, c] of energyCounts.entries()) {
-    if (c > bestCount) {
-      bestCount = c;
-      energy = e as EnergyValue;
-    } else if (c === bestCount) {
-      // Tie — take the energy of the closest neighbour that has any energy.
-      const closer = voting.find(v => v.energy && (v.energy === e || v.energy === energy));
-      if (closer?.energy) energy = closer.energy;
+  let bestWeight = 0;
+  for (const v of voting) {
+    if (!v.energy) continue;
+    const w = energyWeights.get(v.energy) ?? 0;
+    if (w > bestWeight) {
+      bestWeight = w;
+      energy = v.energy;
     }
   }
 

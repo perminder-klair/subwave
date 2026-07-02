@@ -266,6 +266,14 @@ export function tracksLikeThisAudio(seed: string, k: number): any[] {
   return out;
 }
 
+// The task-prefix mode the text-embedding index was built in — query embeds
+// must match it (embeddings.embedQueryText). 'plain' when the DB isn't loaded
+// or the meta predates mode tracking (legacy indexes were embedded bare).
+export function embeddingIndexTextMode(): 'plain' | 'prefixed' {
+  if (!loaded) return 'plain';
+  return db.getEmbeddingMeta()?.textMode ?? 'plain';
+}
+
 // KNN against an externally-computed query vector. The lyric-search tool
 // embeds a free-text query and calls this to find tracks semantically close
 // to the query — including ones whose lyrics don't literally contain those

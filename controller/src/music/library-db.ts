@@ -396,6 +396,16 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     d.pragma('user_version = 9');
   }
 
+  if (userVersion < 10) {
+    // Task-prefix mode of the text-embedding index: 'plain' (texts embedded
+    // bare) or 'prefixed' (embedded with the model's document prefix, e.g.
+    // nomic's `search_document:`). NULL (legacy rows) = 'plain'. Lives with the
+    // index provenance because query embeds must match how the documents were
+    // embedded (music/embeddings.ts resolveIndexTextMode).
+    runDdl(d, `ALTER TABLE embedding_meta ADD COLUMN text_mode TEXT;`);
+    d.pragma('user_version = 10');
+  }
+
   // Reconcile the requested embedding dim against what physically exists.
   //
   // The vec0 table's `FLOAT[N]` schema is the authority for what inserts accept —
@@ -588,20 +598,39 @@ async function archiveMoodsJson(): Promise<void> {
 // Embedding meta
 // ---------------------------------------------------------------------------
 
-export function getEmbeddingMeta(): { model: string; dim: number } | null {
+// `textMode` records whether the vectors were embedded with the model's
+// document prefix ('prefixed') or bare ('plain'); null = legacy row from
+// before mode tracking (equivalent to 'plain' — see resolveIndexTextMode).
+export type EmbeddingTextMode = 'plain' | 'prefixed';
+
+export function getEmbeddingMeta(): {
+  model: string;
+  dim: number;
+  textMode: EmbeddingTextMode | null;
+} | null {
   const row = requireDb()
-    .prepare('SELECT model, dim FROM embedding_meta WHERE pk = 1')
-    .get() as { model: string; dim: number } | undefined;
-  return row || null;
+    .prepare('SELECT model, dim, text_mode FROM embedding_meta WHERE pk = 1')
+    .get() as { model: string; dim: number; text_mode: string | null } | undefined;
+  if (!row) return null;
+  return {
+    model: row.model,
+    dim: row.dim,
+    textMode: row.text_mode === 'prefixed' || row.text_mode === 'plain' ? row.text_mode : null,
+  };
 }
 
-export function setEmbeddingMeta(model: string, dim: number): void {
+export function setEmbeddingMeta(
+  model: string,
+  dim: number,
+  textMode: EmbeddingTextMode | null = null,
+): void {
   requireDb()
     .prepare(
-      `INSERT INTO embedding_meta (pk, model, dim, set_at) VALUES (1, ?, ?, ?)
-       ON CONFLICT(pk) DO UPDATE SET model = excluded.model, dim = excluded.dim, set_at = excluded.set_at`,
+      `INSERT INTO embedding_meta (pk, model, dim, set_at, text_mode) VALUES (1, ?, ?, ?, ?)
+       ON CONFLICT(pk) DO UPDATE SET model = excluded.model, dim = excluded.dim,
+         set_at = excluded.set_at, text_mode = excluded.text_mode`,
     )
-    .run(model, dim, new Date().toISOString());
+    .run(model, dim, new Date().toISOString(), textMode);
 }
 
 // Audio-embedding provenance — which CLAP model wrote the current audio

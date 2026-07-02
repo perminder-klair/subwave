@@ -287,8 +287,22 @@ async function main() {
   // runs (the bug in #307). On a same-dim run this is a no-op.
   await db.open({ embeddingDim, reseed: flags.reseed });
 
-  // The DB upserts emit when the model changes; record the current one.
-  db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim);
+  // The DB upserts emit when the model changes; record the current one, plus
+  // the task-prefix mode this run embeds documents in. A reseed re-embeds
+  // everything, so it adopts the active model's preferred mode; otherwise stay
+  // consistent with how the existing vectors were embedded — query embeds must
+  // match the documents (a legacy meta row with no mode = embedded bare).
+  const textMode = flags.reseed
+    ? embeddings.preferredTextMode()
+    : embeddings.resolveIndexTextMode(db.getEmbeddingMeta()?.textMode, db.vectorCount());
+  db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim, textMode);
+  if (textMode === 'plain' && embeddings.preferredTextMode() === 'prefixed') {
+    logEvent(
+      'info',
+      `${embeddings.activeModelLabel()} retrieves better with task prefixes — run ` +
+        `“Re-embed all tracks” (admin Re-scan tab, or --reseed) once to upgrade the index.`,
+    );
+  }
 
   // Tunables from settings.embedding, CLI flags override where present.
   const embedCfg: any = (settings.get() as any).embedding ?? {};
@@ -432,7 +446,7 @@ async function main() {
   let llmTagged = 0;
   if (plan.forwardTag) {
     // ---- Phase 1: EMBED ----------------------------------------------------
-    await phaseEmbed(targetUntagged, flags.batchSize);
+    await phaseEmbed(targetUntagged, flags.batchSize, textMode);
     lap('embed');
 
     // ---- Phase 2: SEED -----------------------------------------------------
@@ -616,7 +630,7 @@ async function main() {
   // model.
   if (plan.reEmbed) {
     console.log(`[tag] re-embed: rebuilding ${reembedIds.length} vectors from scratch`);
-    await phaseEmbed(reembedIds, flags.batchSize);
+    await phaseEmbed(reembedIds, flags.batchSize, textMode);
     lap('embed');
   }
 
@@ -821,7 +835,13 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
 // Phase 1 — Embed
 // ---------------------------------------------------------------------------
 
-async function phaseEmbed(targetIds: string[], batchSize: number): Promise<void> {
+async function phaseEmbed(
+  targetIds: string[],
+  batchSize: number,
+  // The index's task-prefix mode (resolved once in run()) — every document
+  // this phase writes must match the vectors already in the index.
+  textMode: embeddings.IndexTextMode,
+): Promise<void> {
   // Embed any track in scope that doesn't already have a vector. Includes
   // already-tagged tracks (legacy v1) so they can serve as KNN neighbours.
   const needsEmbed: string[] = [];
@@ -854,7 +874,7 @@ async function phaseEmbed(targetIds: string[], batchSize: number): Promise<void>
     );
     let vecs: number[][];
     try {
-      vecs = await embeddings.embedTexts(texts);
+      vecs = await embeddings.embedDocTexts(texts, textMode);
     } catch (err: any) {
       console.error(`[tag] embedding batch failed at offset ${i}: ${err.message}`);
       throw err;

@@ -207,7 +207,7 @@ export function buildPickerTools({
           // queries still return tracks. No-op when embeddings aren't set up.
           if (!embeddings.isAvailable()) return out;
           await library.load();
-          const [vec] = await embeddings.embedTexts([query.trim()]);
+          const vec = await embeddings.embedQueryText(query.trim(), library.embeddingIndexTextMode());
           if (!vec) return out;
           return collect(library.tracksByVector(vec, 20));
         }
@@ -355,7 +355,7 @@ export function buildPickerTools({
           try {
             if (!embeddings.isAvailable()) return { error: 'embeddings not configured — set settings.embedding.enabled / provider' };
             await library.load();
-            const [vec] = await embeddings.embedTexts([query.trim()]);
+            const vec = await embeddings.embedQueryText(query.trim(), library.embeddingIndexTextMode());
             if (!vec) return { error: 'embedding query failed' };
             return collect(library.tracksByVector(vec, 60));
           }

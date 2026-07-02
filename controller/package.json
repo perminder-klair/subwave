@@ -11,7 +11,7 @@
     "lastfm-session": "tsx scripts/lastfm-session.ts",
     "test:embed": "tsx scripts/embedding-preflight-test.ts",
     "test:llm": "tsx scripts/llm-pure.test.ts",
-    "test": "tsx scripts/llm-pure.test.ts && tsx scripts/picker-recency-regression.ts && tsx scripts/recent-plays.test.ts && tsx scripts/listeners-status.test.ts && tsx scripts/lastfm-enrich.test.ts && tsx scripts/web-search-searxng.test.ts && tsx scripts/request-dedup.test.ts && tsx scripts/stale-link.test.ts && tsx scripts/embedding-heavy.test.ts && tsx scripts/tagger-perf.test.ts && tsx scripts/rescan-scope.test.ts && tsx scripts/show-playlist.test.ts && tsx scripts/embedding-dim-migrate.test.ts && tsx scripts/coverage-status.test.ts",
+    "test": "tsx scripts/llm-pure.test.ts && tsx scripts/picker-recency-regression.ts && tsx scripts/recent-plays.test.ts && tsx scripts/listeners-status.test.ts && tsx scripts/lastfm-enrich.test.ts && tsx scripts/web-search-searxng.test.ts && tsx scripts/request-dedup.test.ts && tsx scripts/stale-link.test.ts && tsx scripts/embedding-heavy.test.ts && tsx scripts/tagger-perf.test.ts && tsx scripts/rescan-scope.test.ts && tsx scripts/show-playlist.test.ts && tsx scripts/embedding-dim-migrate.test.ts && tsx scripts/coverage-status.test.ts && tsx scripts/tag-propagator.test.ts && tsx scripts/embedding-prefix.test.ts",
     "lint": "eslint . && tsc --noEmit",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit"
