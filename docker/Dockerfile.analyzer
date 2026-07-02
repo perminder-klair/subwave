@@ -72,11 +72,15 @@ RUN python3 -m venv /opt/analyzer/venv && \
     if [ "$WITH_DEMUCS" = "1" ]; then \
       # diffq: decompressor for demucs' quantized checkpoints (mdx_q, …). Tiny,
       # but without it a DEMUCS_MODEL=*_q override makes demucs fatal() at load.
+      # It ships sdist-only (Cython ext), so lend it gcc for the install and
+      # purge in the SAME layer — the lean image never pays for any of this.
+      apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
         --extra-index-url https://pypi.org/simple \
         torch torchaudio demucs diffq && \
-      /opt/analyzer/venv/bin/python -c "import torch, demucs, diffq" ; \
+      /opt/analyzer/venv/bin/python -c "import torch, demucs, diffq" && \
+      apt-get purge -y gcc libc6-dev && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* ; \
     fi && \
     find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
 
