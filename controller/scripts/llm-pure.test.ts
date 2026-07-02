@@ -7,8 +7,8 @@
 // node:assert-via-tsx style of scripts/picker-recency-regression.ts.
 
 import assert from 'node:assert/strict';
-import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, errReason } from '../src/llm/internal/core/pure.js';
-import { withDeadline } from '../src/llm/internal/core/retry.js';
+import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason } from '../src/llm/internal/core/pure.js';
+import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
 import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
@@ -125,6 +125,88 @@ async function main() {
     assert.equal(isUpstreamOverloaded({ statusCode: 429, message: 'rate limit exceeded, slow down' }), false);
     assert.equal(isUpstreamOverloaded({ code: 'ECONNRESET' }), false);
     assert.equal(isUpstreamOverloaded(null), false);
+  });
+
+  // ---- rate-limit gate: STAYS transient (retry first), THEN fails over (#738) ----
+  console.log('isRateLimited (bare 429 with no quota wording → retry, then fail over to keep a free tier on air):');
+  await test('bare 429 status with no message → rate-limited', () => {
+    assert.equal(isRateLimited({ statusCode: 429 }), true);
+  });
+  await test('a 429 with a plain "rate limit" message → rate-limited, stays transient, not quota/auth', () => {
+    const e: any = { statusCode: 429, message: 'rate limit exceeded, slow down' };
+    assert.equal(isRateLimited(e), true);
+    assert.equal(isTransient(e), true);
+    assert.equal(isQuotaOrAuthError(e), false);
+    assert.equal(isUnreachable(e), false);
+  });
+  await test('"too many requests" 429 message with no status field → rate-limited', () => {
+    assert.equal(isRateLimited({ message: '429 Too Many Requests' }), true);
+  });
+  await test('cause.statusCode is unwrapped', () => {
+    assert.equal(isRateLimited({ cause: { statusCode: 429 } }), true);
+  });
+  await test('a quota/usage-limit 429 is already isQuotaOrAuthError, not double-classified oddly', () => {
+    const e: any = { statusCode: 429, message: 'you have reached your weekly usage limit' };
+    assert.equal(isRateLimited(e), true);
+    assert.equal(isQuotaOrAuthError(e), true); // both true is fine — withFailover only needs one to trigger
+  });
+  await test('non-429 errors are NOT rate-limited', () => {
+    assert.equal(isRateLimited({ statusCode: 503 }), false);
+    assert.equal(isRateLimited({ code: 'ECONNRESET' }), false);
+    assert.equal(isRateLimited(null), false);
+  });
+
+  // ---- retryAfterMs: parses a provider's Retry-After header (#738) ----
+  console.log('retryAfterMs (Retry-After header sets the same-leg retry delay, capped at 30s):');
+  await test('a numeric Retry-After (seconds) converts to ms', () => {
+    assert.equal(retryAfterMs({ responseHeaders: { 'retry-after': '1' } }), 1000);
+    assert.equal(retryAfterMs({ responseHeaders: { 'retry-after': '5' } }), 5000);
+  });
+  await test('a Retry-After longer than 30s is clamped to the cap', () => {
+    assert.equal(retryAfterMs({ responseHeaders: { 'retry-after': '9999' } }), 30_000);
+  });
+  await test('cause.responseHeaders is unwrapped', () => {
+    assert.equal(retryAfterMs({ cause: { responseHeaders: { 'retry-after': '2' } } }), 2000);
+  });
+  await test('missing header, zero, or garbage value → null (falls back to the default delay)', () => {
+    assert.equal(retryAfterMs({}), null);
+    assert.equal(retryAfterMs({ responseHeaders: {} }), null);
+    assert.equal(retryAfterMs({ responseHeaders: { 'retry-after': '0' } }), null);
+    assert.equal(retryAfterMs({ responseHeaders: { 'retry-after': 'not-a-date' } }), null);
+    assert.equal(retryAfterMs(null), null);
+  });
+
+  // ---- withTransientRetry: wires retryAfterMs into the actual retry loop ----
+  console.log('withTransientRetry (uses Retry-After when present, else the default jittered delay):');
+  await test('a 429 with Retry-After: 1 waits ~1000ms instead of the default 500ms', async () => {
+    let calls = 0;
+    const started = Date.now();
+    await withTransientRetry('test', async () => {
+      calls++;
+      if (calls === 1) {
+        const err: any = new Error('rate limit exceeded, slow down');
+        err.statusCode = 429;
+        err.responseHeaders = { 'retry-after': '1' };
+        throw err;
+      }
+      return 'ok';
+    });
+    const elapsed = Date.now() - started;
+    assert.equal(calls, 2);
+    assert.ok(elapsed >= 950, `expected a ~1000ms wait, got ${elapsed}ms`);
+  });
+  await test('no Retry-After header falls back to the default jittered delay', async () => {
+    let calls = 0;
+    await withTransientRetry('test', async () => {
+      calls++;
+      if (calls === 1) {
+        const err: any = new Error('service unavailable');
+        err.statusCode = 503;
+        throw err;
+      }
+      return 'ok';
+    });
+    assert.equal(calls, 2);
   });
 
   // ---- errReason: turn undici's opaque "fetch failed" into an actionable log ----

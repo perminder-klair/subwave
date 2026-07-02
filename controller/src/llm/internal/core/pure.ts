@@ -207,6 +207,23 @@ export function isUpstreamOverloaded(err: any): boolean {
   return UPSTREAM_OVERLOAD_RE.test(msg);
 }
 
+// A plain rate-limit 429 with no quota/usage-limit wording (issue #738): the
+// free-tier daily/per-minute request cap on a provider like Gemini/Groq/
+// OpenRouter. This is the case isQuotaOrAuthError deliberately does NOT catch
+// (see its comment above), so it stays isTransient and gets same-leg retries
+// first via withTransientRetry. If those retries exhaust and the 429 is still
+// live, withFailover treats it the same as a quota/auth rejection and switches
+// to the backup leg — a request-per-minute/day cap on the primary provider is
+// exactly the "keep the station on air on a free tier" case the issue asks
+// for, and retrying the same exhausted leg forever will never recover it.
+export function isRateLimited(err: any): boolean {
+  if (!err) return false;
+  const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
+  if (status === 429) return true;
+  const msg = String(err.message || err.cause?.message || '');
+  return /\b429\b/.test(msg) && /rate.?limit|too many requests/i.test(msg);
+}
+
 // A short, actionable reason string for logs. A network-transport failure
 // surfaces as undici's opaque `TypeError: fetch failed` — the real errno
 // (ECONNRESET / ENOTFOUND / ETIMEDOUT / UND_ERR_*) lives on err.cause.code,
