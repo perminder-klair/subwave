@@ -71,6 +71,14 @@ export function vocalActivityWanted(): boolean {
   return vocalBackfillDefault();
 }
 
+// Whether CLAP "sounds-like" audio embeddings are *wanted* — env
+// ANALYZE_AUDIO_EMBEDDING wins on, else settings.audio.embeddings. The audio
+// twin of vocalActivityWanted(); /library/coverage feeds it into the per-dimension
+// status enum so the panel doesn't have to re-derive the enable precedence.
+export function audioEmbeddingWanted(): boolean {
+  return audioBackfillDefault();
+}
+
 export interface AnalyzeStats {
   available: boolean;
   backend: string;

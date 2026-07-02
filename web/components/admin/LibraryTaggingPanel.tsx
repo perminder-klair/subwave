@@ -54,7 +54,23 @@ export interface Coverage {
   embeddedDim?: number | null;
   currentEmbeddingModel?: string | null;
   embeddingStale?: boolean;
+  // Backend-computed per-dimension status enums (controller/src/music/coverage-
+  // status.ts) — the single source of truth for the sounds-like + vocal rows,
+  // replacing the frontend's incapable/starved/gap derivations. The panel pairs
+  // these with the optimistic enable prop for enabled-vs-disabled wording.
+  audioStatus?: DimensionStatus;
+  vocalStatus?: DimensionStatus;
 }
+
+// Mirrors controller/src/music/coverage-status.ts.
+export type DimensionStatus =
+  | 'off'
+  | 'pending-engine'
+  | 'pending-heavy'
+  | 'incapable'
+  | 'ready'
+  | 'partial'
+  | 'complete';
 
 // Mirrors controller/src/music/tagger-progress.ts — the structured sentinel
 // the tagger child emits and /settings relays.
@@ -235,6 +251,14 @@ function fmtDur(ms: number): string {
   return r ? `${m}m ${r}s` : `${m}m`;
 }
 
+// Mirror of controller/src/music/coverage-status.ts `isBackfillable` — whether a
+// backfill/analyze would help IF the dimension is enabled (headroom, no hard
+// block). The panel ANDs it with the optimistic enable prop so the button toggles
+// the instant the operator clicks Enable, ahead of the next /coverage poll.
+function canBackfill(s: DimensionStatus | undefined): boolean {
+  return s != null && s !== 'pending-heavy' && s !== 'pending-engine' && s !== 'complete';
+}
+
 // Coarser than fmtDur — a live ETA wobbles as the sampled rate drifts, so we
 // round hard (5s buckets under a minute, whole minutes above) to keep it calm:
 // "~40s left" / "~4m left".
@@ -309,8 +333,8 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // immediately, so drive them off the optimistic settings prop (p.vocalEnabled,
   // flipped on click in LibraryPanel) — mirroring how the audio row uses
   // p.audioEnabled. vocalWanted (from the polled /coverage) only lags, so it
-  // just fills the gap before /settings first loads. (The analysis-state bits
-  // below — vocalStarved, the modal's vocalWanted — stay coverage-driven.)
+  // just fills the gap before /settings first loads. (The analysis-state bits —
+  // vocalStatus, the modal's vocalWanted — stay coverage-driven.)
   const vocalOptedIn = p.vocalEnabled ?? vocalWanted;
   const vocalOn = (vocalAnalyzed ?? 0) > 0;
   const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
@@ -323,41 +347,17 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const scanning = !!p.coverage?.scanning;
   const libraryCounting = scanning && total == null;
   const analysisOff = p.coverage?.analysisAvailable === false;
-  // Engine is up but on an image without the CLAP stack (an older tts-heavy
-  // predating baked-in fingerprinting) — "sounds-like" can't be produced until
-  // the sidecar is pulled fresh. We warn actively rather than letting a run
-  // finish with the bar stuck at 0.
-  const audioIncapable = !analysisOff && p.coverage?.audioAnalysisAvailable === false;
-  // Vocal activity is on but the engine was built without Demucs — the analysis
-  // pass would skip vocal backfill (no-op), so warn rather than silently never
-  // filling vocal ranges. Mirrors the CLAP `audioIncapable` warning above.
-  const vocalIncapable = !analysisOff && p.coverage?.vocalAnalysisAvailable === false;
-  // "Starved" = the bpm/key pass HAS run (analysed > 0) but this heavier
-  // sub-output is still 0 while enabled. The engine processed tracks and produced
-  // none → it can't make them (an older sidecar without CLAP/Demucs that reports
-  // capability as null, so the *Incapable flags above never fire). Honest label
-  // instead of a forever-"not yet analysed" that never comes true.
-  const ranAnalysis = (analysed ?? 0) > 0;
-  // Only treat it as "starved" when the engine doesn't ADVERTISE the capability
-  // (null/unknown — an older sidecar). If it reports capable=true the honest read
-  // is "not yet analysed" (run a backfill); capable=false is the *Incapable path.
-  const audioStarved =
-    !analysisOff &&
-    p.coverage?.audioAnalysisAvailable == null &&
-    !!p.audioEnabled &&
-    !audioOn &&
-    ranAnalysis;
-  const vocalStarved =
-    !analysisOff &&
-    p.coverage?.vocalAnalysisAvailable == null &&
-    vocalWanted &&
-    !vocalOn &&
-    ranAnalysis;
-  // A backfill is worth offering only while there's headroom — nothing written
-  // yet, or coverage below 100%. Gates the per-row "Backfill" action so a fully
-  // covered dimension doesn't show a dead button.
-  const audioGap = !audioOn || (audpct != null && audpct < 100);
-  const vocalGap = !vocalOn || (vpct != null && vpct < 100);
+  // Per-dimension status enums from the backend (coverage-status.ts) — the single
+  // source of truth that replaced the four-nullable-boolean incapable/starved/gap
+  // derivations. 'pending-heavy' = today's `*Incapable` (lean/older engine that
+  // can't do this dimension); 'incapable' = today's `*Starved` (bpm/key ran,
+  // produced none, engine doesn't advertise the capability). Both are
+  // enable-independent, so the panel pairs them with the optimistic enable prop
+  // (p.audioEnabled / vocalOptedIn) below to pick "waiting…" vs "off · needs…"
+  // wording — reproducing every legacy string with no toggle lag. `undefined`
+  // for an old controller with no enum → the capability branches simply don't fire.
+  const audioStatus = p.coverage?.audioStatus;
+  const vocalStatus = p.coverage?.vocalStatus;
   // The library was embedded with a different model than the one now configured,
   // so a tag run would fail on a dim/model mismatch — surface a blocking, one-click
   // re-embed prompt instead of letting the operator hit a cryptic tagger error.
@@ -612,13 +612,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
           <span className="caption mono-num !tracking-[0.04em]">
             {analysisOff ? (
               'engine off'
-            ) : audioIncapable ? (
+            ) : audioStatus === 'pending-heavy' ? (
               p.audioEnabled ? 'waiting for the heavy analyzer' : 'off · needs the heavy analyzer'
             ) : audioOn ? (
               <>
                 {num(audioEmbedded)} / {num(total)} · {audpct != null ? `${audpct}%` : '…'}
               </>
-            ) : audioStarved ? (
+            ) : audioStatus === 'incapable' && p.audioEnabled ? (
               'engine can’t fingerprint — needs the heavy analyzer'
             ) : p.audioEnabled ? (
               'enabled, not yet analysed'
@@ -628,7 +628,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
           </span>
           {!analysisOff && (
             <span className="ml-auto flex items-center gap-2">
-              {p.audioEnabled && !audioIncapable && audioGap && (
+              {p.audioEnabled && canBackfill(audioStatus) && (
                 <Btn
                   sm
                   tone="accent"
@@ -646,7 +646,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 title={
                   p.audioEnabled
                     ? 'Pause fingerprinting newly-added tracks. Existing “sounds-like” data stays and keeps driving picks.'
-                    : audioIncapable
+                    : audioStatus === 'pending-heavy'
                       ? 'Needs the heavy analyzer (ANALYZER_HEAVY=1). You can enable now — fingerprinting starts automatically once it’s up.'
                       : 'Start fingerprinting new tracks for “sounds-like” picks (~1-2s each on the analysis engine).'
                 }
@@ -680,13 +680,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 <span className="caption mono-num !tracking-[0.04em]">
                   {analysisOff ? (
                     'engine off'
-                  ) : vocalIncapable ? (
+                  ) : vocalStatus === 'pending-heavy' ? (
                     'waiting for the heavy analyzer'
                   ) : vocalOn ? (
                     <>
                       {num(vocalAnalyzed)} / {num(total)} · {vpct != null ? `${vpct}%` : '…'}
                     </>
-                  ) : vocalStarved ? (
+                  ) : vocalStatus === 'incapable' ? (
                     'engine can’t separate vocals — needs the heavy analyzer'
                   ) : (
                     'enabled, not yet analysed'
@@ -694,7 +694,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 </span>
                 {!analysisOff && (
                   <span className="ml-auto flex items-center gap-2">
-                    {!vocalIncapable && vocalGap && (
+                    {canBackfill(vocalStatus) && (
                       <Btn
                         sm
                         tone="accent"
@@ -725,7 +725,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             ) : (
               <>
                 <span className="caption mono-num !tracking-[0.04em]">
-                  {vocalIncapable ? 'off · needs the heavy analyzer' : 'off'}
+                  {vocalStatus === 'pending-heavy' ? 'off · needs the heavy analyzer' : 'off'}
                 </span>
                 <span className="ml-auto">
                   <Btn
@@ -733,7 +733,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                     onClick={p.onToggleVocal}
                     disabled={p.busy || running}
                     title={
-                      vocalIncapable
+                      vocalStatus === 'pending-heavy'
                         ? 'Needs the heavy analyzer (ANALYZER_HEAVY=1). You can enable now — separation starts automatically once it’s up.'
                         : 'Start Demucs vocal separation on new tracks (~10-30s each — CPU-heavy).'
                     }
@@ -744,13 +744,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 <span className="caption basis-full !tracking-[0.04em] !normal-case">
                   Separates vocals so the DJ can talk before lyrics (Demucs, ~10-30s/track —
                   CPU-heavy). Off by default.
-                  {vocalIncapable && ' Needs the heavy analyzer (ANALYZER_HEAVY=1).'}
+                  {vocalStatus === 'pending-heavy' && ' Needs the heavy analyzer (ANALYZER_HEAVY=1).'}
                 </span>
               </>
             )}
           </div>
         )}
-        {audioIncapable && p.audioEnabled ? (
+        {audioStatus === 'pending-heavy' && p.audioEnabled ? (
           <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
             <b>Sounds-like is enabled — fingerprinting starts once your analyzer can do it.</b> The
             default analyzer is the lean image (bpm/key only); CLAP needs the heavy build. Set{' '}
@@ -762,7 +762,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             </a>
           </div>
         ) : null}
-        {vocalIncapable && p.vocalEnabled ? (
+        {vocalStatus === 'pending-heavy' && p.vocalEnabled ? (
           <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
             <b>Vocal-activity is enabled — separation starts once your analyzer can do it.</b> Demucs
             needs the heavy build. Set <code>ANALYZER_HEAVY=1</code> in <code>.env</code> and recreate
@@ -981,7 +981,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         vocalWanted={vocalWanted}
         // sounds-like only runs when the dimension is on AND the engine can do
         // it — otherwise the acoustics steps are bpm/key-only (honest hints).
-        soundsLikeActive={!analysisOff && !audioIncapable && !!p.audioEnabled}
+        soundsLikeActive={!analysisOff && audioStatus !== 'pending-heavy' && !!p.audioEnabled}
         onStart={p.onStart}
         onReconcile={p.onReconcile}
         onRescan={p.onRescan}

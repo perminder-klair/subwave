@@ -11,8 +11,9 @@ import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
-import { vocalActivityWanted } from './analyze.js';
+import { vocalActivityWanted, audioEmbeddingWanted } from './analyze.js';
 import { activeModelLabel } from './embeddings.js';
+import { dimensionStatus } from './coverage-status.js';
 
 const STALE_MS = 6 * 60 * 60 * 1000; // 6 h
 // Acoustic-analysis backend availability is probed separately: analyzer
@@ -122,6 +123,28 @@ export async function get() {
   const embeddingStale = !!(
     embeddedMeta && currentEmbeddingModel && embeddedMeta.model !== currentEmbeddingModel
   );
+  // Collapse the four nullable per-dimension signals into one status enum each
+  // (see coverage-status.ts). Single source of truth for the "sounds-like" and
+  // vocal rows so the panel — and the native app next — render off the enum
+  // instead of re-deriving incapable/starved/gap from raw booleans. The raw
+  // fields below stay on the payload for back-compat.
+  const analysisReachable = analysisAvail ? analysisAvail.available : null;
+  const audioStatus = dimensionStatus({
+    enabled: audioEmbeddingWanted(),
+    analysisAvailable: analysisReachable,
+    capable: analysisAvail ? analysisAvail.audioCapable : null,
+    analysed,
+    count: audioEmbedded,
+    percent: audioEmbeddedPercent,
+  });
+  const vocalStatus = dimensionStatus({
+    enabled: vocalActivityWanted(),
+    analysisAvailable: analysisReachable,
+    capable: analysisAvail ? analysisAvail.vocalCapable : null,
+    analysed,
+    count: vocalAnalyzed,
+    percent: vocalAnalyzedPercent,
+  });
   return {
     tagged,
     analysed,
@@ -160,5 +183,10 @@ export async function get() {
     embeddedDim: embeddedMeta?.dim ?? null,
     currentEmbeddingModel,
     embeddingStale,
+    // Per-dimension coverage status enums (coverage-status.ts). The panel renders
+    // the "sounds-like" and vocal rows from these + the optimistic enable toggle;
+    // the raw *AnalysisAvailable / *EmbeddedPercent fields above are retained.
+    audioStatus,
+    vocalStatus,
   };
 }
