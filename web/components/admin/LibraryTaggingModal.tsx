@@ -14,7 +14,7 @@ import { Modal } from '../ui/modal';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { Btn } from './ui';
 import { cn } from '../../lib/cn';
-import type { Batch, RescanOpts, TagSteps } from './LibraryTaggingPanel';
+import type { Batch, BudgetMode, RescanOpts, TagSteps } from './LibraryTaggingPanel';
 import { num } from './LibraryTaggingPanel';
 
 type Tab = 'run' | 'rescan';
@@ -42,6 +42,9 @@ interface Props {
   // "Analyze acoustics" / "Re-analyse acoustics" steps run bpm/key only, so their
   // hints drop the sounds-like promise rather than advertising a no-op.
   soundsLikeActive: boolean;
+  // Daily-token-budget tier from /settings — drives the pre-run spend warning.
+  // null (old controller / not yet polled) is treated as 'normal' (no warning).
+  budgetMode: BudgetMode | null;
   // when set, the modal opens straight to the matching tab/selection
   intent: 'reembed' | null;
   // handlers
@@ -103,6 +106,25 @@ export default function LibraryTaggingModal(p: Props) {
   const anyStep = effSteps.reconcile || effSteps.enrich || effSteps.tagMoods || effSteps.analyze;
   const onlyReconcile = effSteps.reconcile && !effSteps.enrich && !effSteps.tagMoods && !effSteps.analyze;
 
+  // ---- Run-tab cost preview (Item A) -------------------------------------
+  // Estimate the LLM spend before the operator commits. inScope = tracks this
+  // run will embed+tag = min(batch limit, untagged remaining); seedEst = the
+  // up-front LLM seed budget tag-library.ts spends before propagation carries
+  // the rest. Both need live counts, so the line is suppressed until the
+  // coverage scan has a total + remaining. Batch 25 mirrors tag-library's
+  // default --batch. See seedBudget() below for the mirrored autoSeedCount.
+  const limitNum = p.batch === 'all' ? Infinity : parseInt(p.batch, 10);
+  const inScope =
+    p.remaining == null
+      ? null
+      : limitNum === Infinity
+        ? p.remaining
+        : Math.min(limitNum, p.remaining);
+  const seedEst =
+    inScope != null && p.libraryTotal != null ? Math.min(seedBudget(p.libraryTotal), inScope) : null;
+  // 'normal' (or unknown) → no banner; soft/hard get a spend caution.
+  const budgetWarn = p.budgetMode === 'soft' || p.budgetMode === 'hard' ? p.budgetMode : null;
+
   const startRun = () => {
     if (!anyStep || p.busy) return;
     // A reconcile-only selection is the existing walk+prune endpoint.
@@ -146,6 +168,21 @@ export default function LibraryTaggingModal(p: Props) {
       </div>
 
       <div className="flex flex-col gap-4 p-5">
+        {/* Daily-token-budget caution — shown on both tabs when the day's spend
+            is near (soft) or past (hard) the cap, so a run's LLM steps won't
+            surprise the operator with extra spend or mid-run failures. */}
+        {budgetWarn && (
+          <div className="flex items-start gap-2 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2 text-[11px] leading-[1.5] text-ink">
+            {budgetWarn === 'soft' ? (
+              <span><b>Daily token budget nearly used</b> — this run will spend more against it.</span>
+            ) : (
+              <span>
+                <b>Daily token budget exhausted</b> — LLM steps will fail until tomorrow (UTC).
+                Non-LLM steps (reconcile, acoustics) still run.
+              </span>
+            )}
+          </div>
+        )}
         {/* ----------------------------------------------------------------- RUN */}
         {tab === 'run' && (
           <>
@@ -163,6 +200,13 @@ export default function LibraryTaggingModal(p: Props) {
               <Pass on={steps.tagMoods} onClick={() => toggleStep('tagMoods')}
                 name="Tag moods (LLM)" tag="AI · billed"
                 hint="The core step: embeds each track, then your LLM picks mood & energy and spreads tags to similar songs. Uses model calls." />
+              {steps.tagMoods && seedEst != null && inScope != null && (
+                <p className="-mt-1 pl-[26px] text-[11px] leading-[1.5] text-muted">
+                  ≈ <span className="mono-num">{num(seedEst)}</span> LLM seed calls in ~
+                  <span className="mono-num">{Math.ceil(seedEst / 25)}</span> batches, plus re-checks
+                  for uncertain tracks · ≈ <span className="mono-num">{num(inScope)}</span> embedding calls
+                </p>
+              )}
               <Pass on={effSteps.analyze} onClick={() => toggleStep('analyze')} disabled={analyzeLocked}
                 name="Analyze acoustics" tag="slow"
                 hint={analyzeLocked
@@ -229,6 +273,11 @@ export default function LibraryTaggingModal(p: Props) {
                 hint={`Drop & rebuild the similarity vectors for your whole library${p.libraryTotal != null ? ` (${num(p.libraryTotal)} tracks)` : ''} at the current embedding model — not just tagged tracks. Re-spends embedding calls; only needed after a model change. Your mood tags are kept.`} />
               <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods" tag="AI · billed"
                 hint="Re-tag already-tagged rows whose prompt or model has gone stale (never your manual tags). No model change → nothing to redo. Uses model calls." />
+              {passes.upgrade && (
+                <p className="-mt-1 pl-[26px] text-[11px] leading-[1.5] text-muted">
+                  Model calls only for rows with a stale prompt or model — often zero if nothing has changed.
+                </p>
+              )}
               <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics" tag="slow"
                 hint={p.soundsLikeActive
                   ? "Redo bpm/key + sounds-like for tracks you've already analysed. Drops their acoustic data and rebuilds it."
@@ -286,6 +335,15 @@ function Pass({ on, onClick, name, hint, disabled, tag }: {
       </span>
     </button>
   );
+}
+
+// Client mirror of controller/src/music/tag-library.ts `autoSeedCount` — the
+// up-front LLM seed budget (~4% of the library, floored 200, capped 2500). Kept
+// here so the Run-tab cost preview can show a figure without a round-trip; the
+// backend copy is authoritative. MIRROR: keep the 200 / 2500 / 0.04 constants in
+// sync with tag-library.ts (a comment there points back here).
+function seedBudget(librarySize: number): number {
+  return Math.max(200, Math.min(2500, Math.round(librarySize * 0.04)));
 }
 
 // Small uppercase cost/characteristic badge — quick / network / AI · billed /

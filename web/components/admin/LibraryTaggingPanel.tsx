@@ -138,6 +138,10 @@ export interface LibraryStatsLite {
 
 export type Batch = '100' | '500' | '5000' | '10000' | 'all';
 
+// Daily-token-budget tier, mirrors controller/src/broadcast/dj-budget.ts. Drives
+// the Tagging modal's pre-run "budget nearly/already used" warning.
+export type BudgetMode = 'normal' | 'soft' | 'hard';
+
 export type RescanOpts = {
   reseed?: boolean;
   reEnrich?: boolean;
@@ -194,6 +198,9 @@ interface TaggingPanelProps {
   // settings poll lands. Drives the "build WITH_DEMUCS=1" warning when on but
   // the backend can't produce vocal ranges.
   vocalEnabled: boolean | null;
+  // Daily-token-budget tier from /settings — null until the first slow poll lands.
+  // Forwarded to the modal for its pre-run spend warning.
+  budgetMode: BudgetMode | null;
 }
 
 // One friendly sentence per pipeline phase — shown under the live progress so
@@ -982,6 +989,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         // sounds-like only runs when the dimension is on AND the engine can do
         // it — otherwise the acoustics steps are bpm/key-only (honest hints).
         soundsLikeActive={!analysisOff && audioStatus !== 'pending-heavy' && !!p.audioEnabled}
+        budgetMode={p.budgetMode}
         onStart={p.onStart}
         onReconcile={p.onReconcile}
         onRescan={p.onRescan}

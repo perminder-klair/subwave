@@ -665,6 +665,9 @@ async function main() {
 }
 
 function autoSeedCount(librarySize: number): number {
+  // MIRROR: web/components/admin/LibraryTaggingModal.tsx `seedBudget` replicates
+  // this formula for the Run-tab cost preview — keep the 200 / 2500 / 0.04
+  // constants in sync there if they change here.
   // ~4% of the library, floored at 200 (small libraries still get a workable
   // anchor set) and capped at 2500 (a 100k-track library shouldn't pay for 10k
   // LLM seed tags — propagation carries the rest). Denser than the old

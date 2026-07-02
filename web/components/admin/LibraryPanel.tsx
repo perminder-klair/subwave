@@ -34,7 +34,7 @@ import {
 import { Card, Btn, Eyebrow, Pill, Seg } from './ui';
 import { cn } from '../../lib/cn';
 import TaggingPanel, { num } from './LibraryTaggingPanel';
-import type { Coverage, TaggerState, LibraryStatsLite, Batch, RescanOpts, TagSteps } from './LibraryTaggingPanel';
+import type { Coverage, TaggerState, LibraryStatsLite, Batch, BudgetMode, RescanOpts, TagSteps } from './LibraryTaggingPanel';
 
 // ---------------------------------------------------------------------------
 // types
@@ -82,6 +82,9 @@ interface SettingsResponse {
   libraryStats?: LibraryStatsLite;
   // Only the slice this panel needs from the full settings payload.
   values?: { audio?: { embeddings?: boolean; vocalActivity?: boolean } };
+  // Daily-token-budget tier — drives the "budget nearly/already used" warning in
+  // the Tagging modal. Absent on an old controller → treated as 'normal'.
+  budget?: { mode: BudgetMode };
 }
 
 type Tab = 'recent' | 'browse' | 'search' | 'untagged';
@@ -143,6 +146,8 @@ export default function LibraryPanel() {
   const [audioEnabled, setAudioEnabled] = useState<boolean | null>(null);
   // settings.audio.vocalActivity — null until the first /settings poll lands.
   const [vocalEnabled, setVocalEnabled] = useState<boolean | null>(null);
+  // Daily-token-budget tier from /settings — null until the first slow poll lands.
+  const [budgetMode, setBudgetMode] = useState<BudgetMode | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [queuing, setQueuing] = useState<string | null>(null);
   const [retagging, setRetagging] = useState<string | null>(null);
@@ -208,6 +213,7 @@ export default function LibraryPanel() {
         setAudioEnabled(!!j.values.audio.embeddings);
         setVocalEnabled(!!j.values.audio.vocalActivity);
       }
+      if (j.budget) setBudgetMode(j.budget.mode);
     } catch { /* transient */ }
   }, [adminFetch, ready]);
 
@@ -740,6 +746,7 @@ export default function LibraryPanel() {
         vocalEnabled={vocalEnabled}
         onToggleVocal={toggleVocal}
         onVocalBackfill={vocalBackfill}
+        budgetMode={budgetMode}
       />
 
       <Tabs tab={tab} setTab={setTab} counts={counts} />
