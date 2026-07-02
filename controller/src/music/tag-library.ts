@@ -41,6 +41,7 @@ import * as embeddings from './embeddings.js';
 import { selectSeeds } from './seed-selector.js';
 import { selectEnrichIds } from './enrich-scope.js';
 import { vote } from './tag-propagator.js';
+import { summariseEval, formatEvalSummary } from './propagation-eval.js';
 import { config } from '../config.js';
 import { loadSecretsIntoEnv } from '../setup/secrets.js';
 import { loadSetupConfig } from '../setup/config.js';
@@ -317,6 +318,36 @@ async function main() {
       ? embedCfg.seedCount
       : null;
 
+  // Shared vote plumbing for phase 3, the phase-4 re-propagation rounds and
+  // the post-run self-check: KNN → neighbour-tag lookup → similarity-weighted
+  // vote. Same-album+artist neighbours vote at half weight — a track's text
+  // embedding is dominated by artist/album, so its KNN list is mostly its own
+  // album mates; at full weight one mistagged seed swept its whole album, and
+  // cross-album corroboration never got a say (the same-album echo chamber).
+  const SAME_ALBUM_WEIGHT = 0.5;
+  const voteForTrack = (id: string) => {
+    const target = db.getTrack(id);
+    return vote(
+      db.knnById(id, knnK),
+      (nId) => {
+        const t = db.getTrack(nId);
+        if (!t || t.moods.length === 0) return null;
+        return { moods: t.moods, energy: t.energy };
+      },
+      {
+        moodVoteThreshold,
+        k: knnK,
+        weightOf: (nId) => {
+          if (!target?.album || !target?.artist) return 1;
+          const n = db.getTrack(nId);
+          return n?.album === target.album && n?.artist === target.artist
+            ? SAME_ALBUM_WEIGHT
+            : 1;
+        },
+      },
+    );
+  };
+
   logEvent('info', `Starting up — ${db.allTaggedIds().length.toLocaleString('en-GB')} tracks already tagged`);
   logEvent('info', `Tagging model — ${activeModelLabel()}`);
   logEvent('info', `Embedding model — ${embeddings.activeModelLabel()} (dim=${embeddingDim})`);
@@ -522,16 +553,7 @@ async function main() {
       }
       if (db.hasTags(id)) continue;        // already seeded
       if (!db.hasVector(id)) continue;     // no embedding → can't propagate
-      const neighbours = db.knnById(id, knnK);
-      const result = vote(
-        neighbours,
-        (nId) => {
-          const t = db.getTrack(nId);
-          if (!t || t.moods.length === 0) return null;
-          return { moods: t.moods, energy: t.energy };
-        },
-        { moodVoteThreshold, k: knnK },
-      );
+      const result = voteForTrack(id);
       if (
         result.votingNeighbours >= 1 &&
         result.confidence >= confidenceThreshold &&
@@ -576,16 +598,7 @@ async function main() {
       for (const id of targetUntagged) {
         if (db.hasTags(id)) continue;
         if (!db.hasVector(id)) continue;
-        const neighbours = db.knnById(id, knnK);
-        const result = vote(
-          neighbours,
-          (nId) => {
-            const t = db.getTrack(nId);
-            if (!t || t.moods.length === 0) return null;
-            return { moods: t.moods, energy: t.energy };
-          },
-          { moodVoteThreshold, k: knnK },
-        );
+        const result = voteForTrack(id);
         if (
           result.votingNeighbours >= 1 &&
           result.confidence >= confidenceThreshold &&
@@ -617,6 +630,35 @@ async function main() {
       uncertain = stillUncertain;
     }
     lap('learn');
+
+    // ---- Self-check: held-out propagation agreement ------------------------
+    // Re-run the production vote on a sample of directly-decided tracks (KNN
+    // excludes self, so a track's own tags never vote for it) and score
+    // against the stored truth. A relative signal for judging knob changes
+    // (knnK, thresholds, vote weighting) run-over-run — NOT a benchmark; see
+    // propagation-eval.ts for the circularity caveat. ~150 KNN scans,
+    // negligible next to phases 1-4. Best-effort: never fails the run.
+    try {
+      const truth = db.trustedTaggedIds();
+      if (truth.length >= 20) {
+        const SAMPLE = 150;
+        // Partial Fisher-Yates — shuffle just the head we sample.
+        const pool = [...truth];
+        const n = Math.min(SAMPLE, pool.length);
+        for (let i = 0; i < n; i++) {
+          const j = i + Math.floor(Math.random() * (pool.length - i));
+          [pool[i], pool[j]] = [pool[j], pool[i]];
+        }
+        const cases = pool.slice(0, n).map((id) => {
+          const t = db.getTrack(id)!;
+          return { actual: { moods: t.moods, energy: t.energy }, result: voteForTrack(id) };
+        });
+        logEvent('info', formatEvalSummary(summariseEval(cases, confidenceThreshold)));
+      }
+    } catch (err: any) {
+      console.log(`[tag] propagation self-check failed: ${err?.message || err}`);
+    }
+    lap('eval');
   } else if (flags.skipTag) {
     console.log('[tag] --skip-tag: skipping embed + mood tagging (phases 1-4)');
   } // end forward "Tag moods" step (plan.forwardTag)

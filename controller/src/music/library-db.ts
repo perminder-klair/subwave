@@ -1141,6 +1141,25 @@ export function allTaggedIds(): string[] {
   ).map(r => r.id);
 }
 
+// Directly-decided tags with a vector — the trusted sample for the propagation
+// self-check (music/propagation-eval.ts). Excludes 'propagated' rows (they ARE
+// the propagation output — scoring against them would be circular) and
+// vectorless rows (KNN can't run). Null source = legacy import, decided by an
+// LLM at the time, so it counts.
+export function trustedTaggedIds(): string[] {
+  return (
+    requireDb()
+      .prepare(
+        `SELECT id FROM tracks
+          WHERE ${SQL_HAS_MOODS}
+            AND (source IS NULL OR source != 'propagated')
+            AND id IN (SELECT id FROM track_vectors)
+          ORDER BY id`,
+      )
+      .all() as Array<{ id: string }>
+  ).map(r => r.id);
+}
+
 // Tagged rows whose LLM provenance has gone stale — their prompt_hash or model
 // differs from the current ones (or is NULL, e.g. a legacy-v1 import). Drives
 // the re-scan "Re-decide moods" pass: re-LLM-tag only what a prompt/model change

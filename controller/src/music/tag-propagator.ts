@@ -24,6 +24,11 @@ export interface VoteOpts {
   moodVoteThreshold: number;              // fraction of the total voting WEIGHT a mood must carry
   k: number;                              // how many neighbours were requested (so confidence can
                                           // discount for missing tags)
+  // Optional per-neighbour weight multiplier (clamped to 0..1). The caller's
+  // policy hook — tag-library halves same-album neighbours here so an album's
+  // tags need outside corroboration instead of echoing around it. Affects the
+  // vote weights only, never the confidence formula.
+  weightOf?: (id: string) => number;
 }
 
 // Vote on moods + energy from a KNN result. Caller supplies a lookup function
@@ -59,7 +64,8 @@ export function vote(
     const tags = getTags(n.id);
     if (!tags) continue;
     if (tags.moods.length === 0 && tags.energy === null) continue;
-    voting.push({ ...n, ...tags, weight: Math.max(0, n.similarity) });
+    const scale = opts.weightOf ? Math.min(1, Math.max(0, opts.weightOf(n.id))) : 1;
+    voting.push({ ...n, ...tags, weight: Math.max(0, n.similarity) * scale });
   }
 
   const totalWeight = voting.reduce((s, v) => s + v.weight, 0);
