@@ -35,15 +35,18 @@ import sys
 import tempfile
 import urllib.request
 
-# 60s is enough for stable BPM (beat_track) / key (chroma); intro
-# detection only needs the first ~20-30s. Env-overridable.
+# 40s is enough for stable BPM (beat_track) / key (chroma); intro detection
+# only needs the first ~20-30s. Env-overridable; the window is shared by
+# bpm/key, CLAP and Demucs, and Demucs cost scales linearly with it (60→40
+# measured ~1.5x faster) — keep the three defaults (here, config.ts,
+# docker/analyzer/server.py) in sync.
 #
 # Every env read here treats an EMPTY value as unset (`.strip() or default`,
 # like the CLAP_MODEL reads below): compose passes these through as
 # `VAR=${VAR:-}`, which injects empty strings for anything the operator didn't
 # set — a plain get(name, default) then returns "" and float("")/get_model("")
 # crash or corrupt the download path (the '' checkpoint hit Errno 21).
-ANALYZE_SECONDS = float(os.environ.get("ANALYZE_SECONDS", "").strip() or "60")
+ANALYZE_SECONDS = float(os.environ.get("ANALYZE_SECONDS", "").strip() or "40")
 ANALYZE_SR = int(os.environ.get("ANALYZE_SR", "").strip() or "22050")
 FETCH_TIMEOUT_S = float(os.environ.get("ANALYZE_FETCH_TIMEOUT_S", "").strip() or "60")
 

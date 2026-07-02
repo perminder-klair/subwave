@@ -966,10 +966,10 @@ SITE_URL=
 #                         # is also the fastest on CPU we've measured — the
 #                         # mdx*/*_q alternatives are bags of 4 sub-models and
 #                         # run ~3x SLOWER despite the smaller download
-# ANALYZE_SECONDS=60      # per-track analysis window (seconds), shared by
+# ANALYZE_SECONDS=40      # per-track analysis window (seconds), shared by
 #                         # bpm/key, CLAP and Demucs — the real speed lever
-#                         # (40 ≈ 1.5x faster vocal analysis). Ranges beyond
-#                         # the window aren't detected
+#                         # (cost scales linearly). Raise it if you want vocal
+#                         # ranges detected deeper into each track
 #
 # HuggingFace token — only to download gated model weights at build time
 # (PocketTTS cloning weights; some CLAP/Demucs checkpoints). ARG HF_TOKEN in

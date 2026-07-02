@@ -76,9 +76,11 @@ export const config = {
     urls: [process.env.ANALYZE_URL].filter((u): u is string => !!u),
     python: process.env.ANALYZE_PYTHON || '',   // empty → no local backend
     workerScript: process.env.ANALYZE_WORKER || '/app/scripts/analyze_worker.py',
-    // 60s is enough for stable BPM (beat_track) / key (chroma); intro
-    // detection only needs the first ~20-30s. Env-overridable.
-    seconds: parseFloat(process.env.ANALYZE_SECONDS || '60'),
+    // 40s is enough for stable BPM (beat_track) / key (chroma); intro
+    // detection only needs the first ~20-30s. Env-overridable; Demucs cost
+    // scales linearly with the window. Keep in sync with analyze_worker.py
+    // and docker/analyzer/server.py.
+    seconds: parseFloat(process.env.ANALYZE_SECONDS || '40'),
     requestTimeoutMs: parseInt(process.env.ANALYZE_REQUEST_TIMEOUT_MS || '120000', 10),
   },
   kokoro: {

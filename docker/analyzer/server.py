@@ -38,9 +38,11 @@ from pydantic import BaseModel
 # stdio worker the offline CLI uses (controller/scripts/analyze_worker.py).
 ANALYZE_PYTHON = os.environ.get("ANALYZE_PYTHON", "/opt/analyzer/venv/bin/python")
 ANALYZE_WORKER = os.environ.get("ANALYZE_WORKER", "/app/workers/analyze_worker.py")
-# 60s is enough for stable BPM (beat_track) / key (chroma); intro detection only
-# needs the first ~20-30s. Env-overridable.
-ANALYZE_SECONDS = os.environ.get("ANALYZE_SECONDS", "60")
+# 40s is enough for stable BPM (beat_track) / key (chroma); intro detection only
+# needs the first ~20-30s. Env-overridable (empty = unset — compose forwards
+# this as ${ANALYZE_SECONDS:-}); Demucs cost scales linearly with the window.
+# Keep in sync with analyze_worker.py and controller config.ts.
+ANALYZE_SECONDS = os.environ.get("ANALYZE_SECONDS", "").strip() or "40"
 # The analyzer only touches HF when CLAP embeddings are enabled
 # (ANALYZE_AUDIO_EMBEDDING=1 with a WITH_CLAP=1 image) and no local
 # CLAP_MODEL_PATH is given — transformers then pulls the CLAP weights here. The
