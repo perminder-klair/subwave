@@ -314,7 +314,7 @@ def dj_transition(a, b) =
     if sweeping then
       log("DJ sweep: closing the filter over the outgoing track (d=#{d}s)")
       sweep_src = a_source
-      # Close FAST and DEEP — over the first 45% of the blend down to 300 Hz,
+      # Close FAST and DEEP — over the first 45% of the blend down to 450 Hz,
       # through three RC stages (18 dB/oct), so the choke arrives while the
       # outgoing is still loud (the log fade above holds its level up). A
       # slower/shallower close spread over 70% was inaudible under the fade.
@@ -324,7 +324,7 @@ def dj_transition(a, b) =
         t_close = 0.45 * d
         x = if e >= t_close then 1.0 else e / t_close end
         depth = 3.0 * x * x - 2.0 * x * x * x     # smoothstep 0→1
-        9000.0 * pow(300.0 / 9000.0, depth)       # 9 kHz open → 300 Hz floor
+        9000.0 * pow(450.0 / 9000.0, depth)       # 9 kHz open → 450 Hz floor
       end
       # Wet ramps 0→1 over the first ~15% of the blend: an RC at 9 kHz is NOT
       # transparent (−dB at the cutoff + roll-off), so engaging it full-wet at
@@ -441,8 +441,10 @@ def dj_transition(a, b) =
   #      the "approaching" feel without the broken-sounding landing.)
   #   2. BASS SWAP — a highpass holds the pick's low end back so two
   #      basslines never fight across the long blend, then releases at
-  #      ~55–75% and the bass lands like a small drop — the most
-  #      professional-sounding instant of the whole move.
+  #      ~45–62% and the bass lands like a small drop — the most
+  #      professional-sounding instant of the whole move. (Releases sit
+  #      earlier than a club bass-swap so the incoming fills the middle of
+  #      the blend — with both tracks processed, ~50% went near-silent.)
   # Net arc: mid-band → highs bloom (35%) → bass drops (65%) → standalone.
   b_source =
     if sweeping then
@@ -450,7 +452,7 @@ def dj_transition(a, b) =
       def surf_cut() =
         e = source.elapsed(in_src)
         e = if e < 0. then 0. else e end
-        t_open = 0.35 * d
+        t_open = 0.30 * d
         x = if e >= t_open then 1.0 else e / t_open end
         s = 3.0 * x * x - 2.0 * x * x * x
         500.0 * pow(9000.0 / 500.0, s)            # 500 Hz → open, log space
@@ -458,16 +460,16 @@ def dj_transition(a, b) =
       def surf_wet() =
         e = source.elapsed(in_src)
         e = if e < 0. then 0. else e end
-        t_from = 0.25 * d
-        t_to   = 0.40 * d
+        t_from = 0.20 * d
+        t_to   = 0.32 * d
         x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
         1.0 - (3.0 * x * x - 2.0 * x * x * x)     # wet 1 → 0 (fully dry by 40%)
       end
       def bass_wet() =
         e = source.elapsed(in_src)
         e = if e < 0. then 0. else e end
-        t_from = 0.55 * d
-        t_to   = 0.75 * d
+        t_from = 0.45 * d
+        t_to   = 0.62 * d
         x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
         1.0 - (3.0 * x * x - 2.0 * x * x * x)     # wet 1 → 0 (bass lands by 75%)
       end

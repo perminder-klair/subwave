@@ -168,7 +168,7 @@ def t(a, b) =
         t_close = 0.45 * d
         x = if e >= t_close then 1.0 else e / t_close end
         depth = 3.0 * x * x - 2.0 * x * x * x
-        9000.0 * pow(300.0 / 9000.0, depth)
+        9000.0 * pow(450.0 / 9000.0, depth)
       end
       def sweep_wet() =
         e = source.elapsed(sweep_src)
@@ -241,7 +241,7 @@ def t(a, b) =
       def surf_cut() =
         e = source.elapsed(in_src)
         e = if e < 0. then 0. else e end
-        t_open = 0.35 * d
+        t_open = 0.30 * d
         x = if e >= t_open then 1.0 else e / t_open end
         s = 3.0 * x * x - 2.0 * x * x * x
         500.0 * pow(9000.0 / 500.0, s)
@@ -249,16 +249,16 @@ def t(a, b) =
       def surf_wet() =
         e = source.elapsed(in_src)
         e = if e < 0. then 0. else e end
-        t_from = 0.25 * d
-        t_to   = 0.40 * d
+        t_from = 0.20 * d
+        t_to   = 0.32 * d
         x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
         1.0 - (3.0 * x * x - 2.0 * x * x * x)
       end
       def bass_wet() =
         e = source.elapsed(in_src)
         e = if e < 0. then 0. else e end
-        t_from = 0.55 * d
-        t_to   = 0.75 * d
+        t_from = 0.45 * d
+        t_to   = 0.62 * d
         x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
         1.0 - (3.0 * x * x - 2.0 * x * x * x)
       end
