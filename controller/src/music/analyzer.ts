@@ -3,10 +3,9 @@
 //
 // Two backends, in priority order:
 //   1. analysis sidecar — POST {url} to its /analyze endpoint (production).
-//      The base URL is resolved from config.analyzer.urls: the dedicated
-//      `--profile analyzer` image (ANALYZE_URL) first, then the tts-heavy
-//      sidecar (TTS_HEAVY_URL), whose image still carries the analyze worker —
-//      so existing tts-heavy installs keep working with zero config.
+//      The base URL is config.analyzer.urls: the default-on `subwave-analyzer`
+//      image (ANALYZE_URL; `subwave-analyzer-heavy` for CLAP/Demucs). tts-heavy
+//      is TTS-only now and no longer carries the analyzer.
 //   2. local Python venv — spawn scripts/analyze_worker.py over stdio, the
 //      same persistent-worker pattern as audio/kokoro.ts (offline / dev; set
 //      ANALYZE_PYTHON to a venv that has librosa).

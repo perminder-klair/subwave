@@ -68,12 +68,12 @@ export const config = {
   // (offline/dev — set ANALYZE_PYTHON to a venv with librosa installed). When
   // neither is reachable the analysis phase skips cleanly.
   analyzer: {
-    // Ordered candidate base URLs for the analysis sidecar. ANALYZE_URL (the
-    // dedicated `--profile analyzer` image) is tried first; TTS_HEAVY_URL second
-    // so existing `--profile tts-heavy` installs (whose image still carries the
-    // analyze worker) keep working with zero config. analyzer.ts probes each
-    // /health in order and uses the first that reports the 'analyze' engine.
-    urls: [process.env.ANALYZE_URL, process.env.TTS_HEAVY_URL].filter((u): u is string => !!u),
+    // Base URL for the analysis sidecar — the default-on `subwave-analyzer`
+    // image (`subwave-analyzer-heavy` for CLAP/Demucs, via ANALYZER_HEAVY=1).
+    // analyzer.ts probes /health and uses it when it reports the 'analyze'
+    // engine. tts-heavy no longer carries the analyzer (it's TTS-only), so there
+    // is no TTS_HEAVY_URL fallback here anymore.
+    urls: [process.env.ANALYZE_URL].filter((u): u is string => !!u),
     python: process.env.ANALYZE_PYTHON || '',   // empty → no local backend
     workerScript: process.env.ANALYZE_WORKER || '/app/scripts/analyze_worker.py',
     // 60s is enough for stable BPM (beat_track) / key (chroma); intro

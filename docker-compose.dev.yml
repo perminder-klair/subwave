@@ -89,7 +89,7 @@ services:
       #   docker compose -f docker-compose.dev.yml --profile tts-heavy up -d
       - TTS_HEAVY_URL=${TTS_HEAVY_URL:-http://tts-heavy:8080}
       # Acoustic-analysis sidecar (the `analyzer` service below, default-on).
-      # Probed before TTS_HEAVY_URL, then a local venv.
+      # Probed, then a local venv. (tts-heavy is TTS-only — no analyzer there.)
       - ANALYZE_URL=${ANALYZE_URL:-http://analyzer:8080}
       # Per-container CPU/memory for the admin Stats page (GET /system) is read
       # from the docker-socket-proxy sidecar over TCP — the controller never
@@ -154,11 +154,6 @@ services:
       args:
         # Optional — bake the gated PocketTTS cloning weights in at build time.
         HF_TOKEN: ${HF_TOKEN:-}
-        # CLAP audio-embedding stack ("sounds-like", ~1.5GB) + Demucs vocal
-        # ranges. Baked into the published image; these apply to a source build
-        # only, defaulted on to match. Both lazy-load at runtime (disk cost only).
-        WITH_CLAP: ${WITH_CLAP:-1}
-        WITH_DEMUCS: ${WITH_DEMUCS:-1}
         # GPU opt-in for Chatterbox — point torch at a CUDA wheel index (e.g.
         # CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124) and
         # layer on docker-compose.tts-heavy-gpu.yml. Defaults to CPU wheels.
@@ -179,12 +174,6 @@ services:
       # are gated; accept terms at huggingface.co/kyutai/pocket-tts and set
       # HF_TOKEN in your .env. Built-in voices need no token.
       - HF_TOKEN=${HF_TOKEN:-}
-      # Optional — force CLAP embeddings on for the whole analyze pass. Usually
-      # unnecessary: the admin "sounds-like" toggle drives this per request and
-      # the published image already carries CLAP.
-      - ANALYZE_AUDIO_EMBEDDING=${ANALYZE_AUDIO_EMBEDDING:-}
-      - CLAP_MODEL=${CLAP_MODEL:-}
-      - CLAP_MODEL_PATH=${CLAP_MODEL_PATH:-}
     volumes:
       - *state-mount
       # Persist the per-engine Hugging Face caches across container recreates.
@@ -193,17 +182,15 @@ services:
       # recreate. With them it happens once.
       - tts-heavy-chatterbox-cache:/opt/chatterbox/hf-cache
       - tts-heavy-pocket-cache:/opt/pocket-tts/hf-cache
-      # CLAP weights for the analyzer (only populated when audio embeddings
-      # are enabled and no local CLAP_MODEL_PATH is given).
-      - tts-heavy-analyzer-cache:/opt/analyzer/hf-cache
 
   # -------------------------------------------------------------------------
   # ANALYZER — acoustic-analysis sidecar (bpm / key / intro / loudness;
   # + CLAP "sounds-like" embeddings and Demucs vocal-activity ranges).
   # -------------------------------------------------------------------------
   # Starts by default alongside the core services. The controller probes
-  # ANALYZE_URL (this service) first, then TTS_HEAVY_URL. Only the heavy voices
+  # ANALYZE_URL (this service), then a local venv. Only the heavy voices
   # (Chatterbox/PocketTTS) stay opt-in under `tts-heavy`; analysis is default-on.
+  # (tts-heavy is TTS-only — no analyzer there.)
   analyzer:
     # Default: LEAN, multi-arch. ANALYZER_HEAVY=1 → CLAP + Demucs heavy image.
     image: ghcr.io/perminder-klair/subwave-analyzer${ANALYZER_HEAVY:+-heavy}:${SUBWAVE_VERSION:-latest}
@@ -228,5 +215,4 @@ services:
 volumes:
   tts-heavy-chatterbox-cache:
   tts-heavy-pocket-cache:
-  tts-heavy-analyzer-cache:
   analyzer-cache:
