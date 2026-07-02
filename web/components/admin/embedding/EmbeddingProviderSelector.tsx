@@ -1,27 +1,23 @@
 'use client';
 // Radio-card grid for picking the library tagger's embedding provider. Mirrors
-// the LLM ProviderSelector / TTS EngineSelector card grids, with one extra card
-// up front: "Follow LLM" (value ''), the default, which routes embeddings through
-// whatever provider the DJ LLM already uses. Reuses the LLM provider descriptors
-// and status logic — embedding providers are a subset of the LLM list — so the
-// blurbs and key badges stay in lockstep with the LLM tab. Tailwind-only, no
-// inline styles (issue #50).
+// the LLM ProviderSelector / TTS EngineSelector card grids. The provider is an
+// explicit choice — a blank stored value defaults to (and is shown as) the DJ's
+// provider by the parent, so there is no separate "Follow LLM" card. Reuses the
+// LLM provider descriptors and status logic — embedding providers are a subset
+// of the LLM list — so the blurbs and key badges stay in lockstep with the LLM
+// tab. Tailwind-only, no inline styles (issue #50).
 import { cn } from '../../../lib/cn';
 import { PROVIDER_META, providerStatus, type ProviderStatus } from '../llm/providerMeta';
 
 interface EmbeddingProviderSelectorProps {
-  // Currently selected provider id; '' means "follow the LLM provider".
+  // Currently selected provider id. The parent resolves a blank stored value to
+  // the DJ's provider before passing it here, so one card is always active.
   value: string;
   // Embedding-capable provider ids to show as cards (SettingsResponse.embedding
-  // .providers, possibly with a stale explicit choice prepended). The "Follow
-  // LLM" card is always rendered first, on top of these.
+  // .providers, possibly with a stale explicit choice prepended).
   providerIds: string[];
-  // The LLM provider id the "Follow LLM" card resolves to right now — shown as
-  // that card's blurb so the operator sees what "follow" means before saving.
-  llmProvider: string;
   // SettingsResponse.env — which cloud key vars are present; drives the badge.
   env?: Record<string, unknown>;
-  // '' for the Follow card, otherwise the provider id.
   onChange: (id: string) => void;
   className?: string;
 }
@@ -29,27 +25,16 @@ interface EmbeddingProviderSelectorProps {
 export function EmbeddingProviderSelector({
   value,
   providerIds,
-  llmProvider,
   env,
   onChange,
   className,
 }: EmbeddingProviderSelectorProps) {
-  const followLabel = PROVIDER_META[llmProvider]?.label || llmProvider;
   return (
     <div
       role="radiogroup"
       aria-label="Embedding provider"
       className={cn('grid grid-cols-2 gap-2.5 md:grid-cols-3', className)}
     >
-      {/* Follow-LLM card — the default. Same card chrome as the rest, but its
-          blurb is the live resolved LLM provider, not a static descriptor. */}
-      <ProviderCard
-        active={value === ''}
-        label="Follow LLM"
-        blurb={`Same as DJ · ${followLabel}`}
-        status={{ label: 'default', tone: 'ok' }}
-        onClick={() => onChange('')}
-      />
       {providerIds.map(id => {
         const meta = PROVIDER_META[id];
         return (

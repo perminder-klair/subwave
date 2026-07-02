@@ -70,6 +70,15 @@ function redactUrl(raw: string): string {
   }
 }
 
+// Whether to also mirror each captured request to stderr. On by default (for
+// operators grepping container logs), but the standalone tagger flips it off so
+// its clean, formatted CLI output isn't drowned by raw request JSON — the
+// rolling llm-debug.log file still captures everything.
+let stderrMirror = true;
+export function setRawDebugStderrMirror(enabled: boolean): void {
+  stderrMirror = enabled;
+}
+
 // In-memory ring of the last LLM_DEBUG_MAX formatted entries, newest first.
 const entries: string[] = [];
 
@@ -106,10 +115,13 @@ export function recordRawRequest(method: string, url: string, body: string): voi
   if (entries.length > LLM_DEBUG_MAX) entries.length = LLM_DEBUG_MAX;
 
   // Keep the legacy "dump to stderr" behaviour too, for operators already
-  // grepping container logs.
-  try {
-    process.stderr.write(`[llm-debug-raw] ${entry}`);
-  } catch { /* never break a model call */ }
+  // grepping container logs — unless a caller (e.g. the standalone tagger) has
+  // muted the mirror to keep its formatted CLI output readable.
+  if (stderrMirror) {
+    try {
+      process.stderr.write(`[llm-debug-raw] ${entry}`);
+    } catch { /* never break a model call */ }
+  }
 
   const snapshot = entries.join('\n');
   writeChain = writeChain.then(async () => {

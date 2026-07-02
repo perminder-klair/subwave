@@ -6,4 +6,4 @@
 export { djText } from './internal/strategy/text.js';
 export { djObject } from './internal/strategy/object.js';
 export { djAgent } from './internal/strategy/agent.js';
-export { isUnreachable, isQuotaOrAuthError } from './internal/core/pure.js';
+export { isUnreachable, isQuotaOrAuthError, errReason } from './internal/core/pure.js';

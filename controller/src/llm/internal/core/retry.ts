@@ -3,7 +3,7 @@
 //   withTransientRetry — retries the SAME call on transient upstream blips.
 //   withDeadline       — a hard wall-clock ceiling (Promise.race + AbortSignal).
 
-import { isTransient } from './pure.js';
+import { isTransient, errReason } from './pure.js';
 
 // Retry transient upstream failures (gateway timeouts, dropped sockets). Local
 // Ollama — and anything proxying it — produces occasional 502/503/504 and TCP
@@ -25,8 +25,7 @@ export async function withTransientRetry<T>(kind: string, fn: () => Promise<T>):
       if (!isTransient(err) || attempt === delays.length) throw err;
       const jitter = Math.floor(Math.random() * 200);
       const wait = delays[attempt] + jitter;
-      const status = (err as any).statusCode ?? (err as any).status ?? (err as any).cause?.statusCode;
-      console.log(`[${kind}] transient upstream error (${status || (err as any).code || 'unknown'}) — retrying in ${wait}ms (attempt ${attempt + 1}/${delays.length})`);
+      console.log(`[${kind}] transient upstream error — ${errReason(err)} — retrying in ${wait}ms (attempt ${attempt + 1}/${delays.length})`);
       await new Promise(r => setTimeout(r, wait));
     }
   }

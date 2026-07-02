@@ -34,7 +34,7 @@ import {
 import { Card, Btn, Eyebrow, Pill, Seg } from './ui';
 import { cn } from '../../lib/cn';
 import TaggingPanel, { num } from './LibraryTaggingPanel';
-import type { Coverage, TaggerState, LibraryStatsLite, Batch, RescanOpts, TagSteps } from './LibraryTaggingPanel';
+import type { Coverage, TaggerState, LibraryStatsLite, Batch, BudgetMode, RescanOpts, TagSteps } from './LibraryTaggingPanel';
 
 // ---------------------------------------------------------------------------
 // types
@@ -82,6 +82,9 @@ interface SettingsResponse {
   libraryStats?: LibraryStatsLite;
   // Only the slice this panel needs from the full settings payload.
   values?: { audio?: { embeddings?: boolean; vocalActivity?: boolean } };
+  // Daily-token-budget tier — drives the "budget nearly/already used" warning in
+  // the Tagging modal. Absent on an old controller → treated as 'normal'.
+  budget?: { mode: BudgetMode };
 }
 
 type Tab = 'recent' | 'browse' | 'search' | 'untagged';
@@ -143,6 +146,8 @@ export default function LibraryPanel() {
   const [audioEnabled, setAudioEnabled] = useState<boolean | null>(null);
   // settings.audio.vocalActivity — null until the first /settings poll lands.
   const [vocalEnabled, setVocalEnabled] = useState<boolean | null>(null);
+  // Daily-token-budget tier from /settings — null until the first slow poll lands.
+  const [budgetMode, setBudgetMode] = useState<BudgetMode | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [queuing, setQueuing] = useState<string | null>(null);
   const [retagging, setRetagging] = useState<string | null>(null);
@@ -196,18 +201,34 @@ export default function LibraryPanel() {
     } catch { /* transient */ }
   }, [adminFetch, ready]);
 
-  const loadTagger = useCallback(async () => {
+  // Fast loop payload — just the live tagger snapshot (GET /library/tagger), so a
+  // 3s running poll doesn't drag the whole heavy /settings body across each time.
+  const loadTaggerState = useCallback(async () => {
+    if (!ready) return;
+    try {
+      const r = await adminFetch('/library/tagger');
+      if (!r.ok) return;
+      const j = (await r.json()) as { tagger?: TaggerState };
+      setTagger(j.tagger || null);
+    } catch { /* transient */ }
+  }, [adminFetch, ready]);
+
+  // Slow loop payload — the settings-derived bits the panel shows but that change
+  // rarely: library stats, the audio/vocal opt-in toggles, and the daily-budget
+  // tier. Deliberately does NOT touch tagger state (the fast loop owns that) so
+  // the two pollers never race on it.
+  const loadSettingsData = useCallback(async () => {
     if (!ready) return;
     try {
       const r = await adminFetch('/settings');
       if (!r.ok) return;
       const j = (await r.json()) as SettingsResponse;
-      setTagger(j.tagger || null);
       if (j.libraryStats) setLibStats(j.libraryStats);
       if (j.values?.audio) {
         setAudioEnabled(!!j.values.audio.embeddings);
         setVocalEnabled(!!j.values.audio.vocalActivity);
       }
+      if (j.budget) setBudgetMode(j.budget.mode);
     } catch { /* transient */ }
   }, [adminFetch, ready]);
 
@@ -218,13 +239,22 @@ export default function LibraryPanel() {
     return () => clearInterval(id);
   }, [ready, loadCoverage]);
 
+  // Fast: tagger state — 3s while a run is live so progress is snappy, 10s idle.
   useEffect(() => {
     if (!ready) return;
-    loadTagger();
+    loadTaggerState();
     const interval = tagger?.running ? 3_000 : 10_000;
-    const id = setInterval(loadTagger, interval);
+    const id = setInterval(loadTaggerState, interval);
     return () => clearInterval(id);
-  }, [ready, loadTagger, tagger?.running]);
+  }, [ready, loadTaggerState, tagger?.running]);
+
+  // Slow: settings-derived data (stats / audio toggles / budget) — 30s + on mount.
+  useEffect(() => {
+    if (!ready) return;
+    loadSettingsData();
+    const id = setInterval(loadSettingsData, 30_000);
+    return () => clearInterval(id);
+  }, [ready, loadSettingsData]);
 
   // While a run is live, poll coverage faster so the % visibly climbs.
   useEffect(() => {
@@ -502,7 +532,7 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `tagger start failed (${r.status})`);
       notify.ok('tagger started');
       setLogOpen(true);
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -517,7 +547,7 @@ export default function LibraryPanel() {
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `tagger stop failed (${r.status})`);
       notify.ok('stopping tagger…');
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -532,7 +562,9 @@ export default function LibraryPanel() {
   //   upgrade    re-LLM-tag only rows whose prompt/model is stale
   // Sends no limit — a partial reseed leaves the library in a mixed state KNN
   // can't use. Existing mood tags survive as seeds, so a reseed re-spends
-  // embedding calls, not LLM.
+  // embedding calls, not LLM. `thenTag` (reseed-only) rides along in opts: it
+  // continues into the forward tag pass after the whole-library re-embed, still
+  // with no limit so every untagged track is processed.
   const rescanTagger = async (opts: RescanOpts) => {
     setTaggerBusy(true);
     try {
@@ -545,7 +577,7 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `re-scan failed (${r.status})`);
       notify.ok('re-scan started…');
       setLogOpen(true);
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -567,7 +599,20 @@ export default function LibraryPanel() {
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
       setAudioEnabled(!audioEnabled);
-      notify.ok(!audioEnabled ? 'sounds-like analysis enabled' : 'sounds-like analysis disabled');
+      // When the analyzer can't fingerprint yet (lean image), frame enabling as
+      // pending rather than done — the incapable banner below explains the upgrade.
+      const audioPending =
+        coverage?.analysisAvailable !== false && coverage?.audioAnalysisAvailable === false;
+      notify.ok(
+        !audioEnabled
+          ? audioPending
+            ? 'sounds-like enabled — starts once the heavy analyzer is up'
+            : 'sounds-like analysis enabled'
+          : 'sounds-like analysis disabled',
+      );
+      // The toggle lives on the slow /settings loop — refresh it now so a manual
+      // re-open / status recompute doesn't wait up to 30s to reflect the flip.
+      void loadSettingsData();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -592,7 +637,7 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `reconcile failed (${r.status})`);
       notify.ok('reconcile started, scanning Navidrome');
       setLogOpen(true);
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -615,7 +660,7 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `analysis start failed (${r.status})`);
       notify.ok('audio analysis started');
       setLogOpen(true);
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -637,7 +682,18 @@ export default function LibraryPanel() {
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
       setVocalEnabled(!vocalEnabled);
-      notify.ok(!vocalEnabled ? 'vocal-activity analysis enabled' : 'vocal-activity analysis disabled');
+      // Mirrors toggleAudio: enabling on a lean analyzer is "armed", not active.
+      const vocalPending =
+        coverage?.analysisAvailable !== false && coverage?.vocalAnalysisAvailable === false;
+      notify.ok(
+        !vocalEnabled
+          ? vocalPending
+            ? 'vocal-activity enabled — starts once the heavy analyzer is up'
+            : 'vocal-activity analysis enabled'
+          : 'vocal-activity analysis disabled',
+      );
+      // Refresh the slow settings-derived state now rather than waiting for its tick.
+      void loadSettingsData();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -659,7 +715,7 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `vocal analysis start failed (${r.status})`);
       notify.ok('vocal analysis started');
       setLogOpen(true);
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -721,6 +777,7 @@ export default function LibraryPanel() {
         vocalEnabled={vocalEnabled}
         onToggleVocal={toggleVocal}
         onVocalBackfill={vocalBackfill}
+        budgetMode={budgetMode}
       />
 
       <Tabs tab={tab} setTab={setTab} counts={counts} />

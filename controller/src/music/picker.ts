@@ -281,8 +281,12 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     add('mood-library', sampleWithRecentFallback(moodHits, recentIds, CAP_MOOD_LIBRARY));
   }
 
-  // 3. Mood-matched Navidrome playlists — operator's hand curation.
-  if (mood) {
+  // 3. Mood-matched Navidrome playlists — operator's hand curation. Skipped when
+  // the show already pins its own playlist(s) (1f): the operator has named exactly
+  // which playlists to use, so also grabbing every playlist whose name merely
+  // contains the mood word would leak other shows' same-mood playlists into the
+  // pool (#642). Autonomous hours (no pinned playlists) keep the mood match.
+  if (mood && !hasPlaylist) {
     try {
       const playlists = await memo('playlists', CACHE_TTL_MS, () => subsonic.getPlaylists());
       const matched = playlists.filter((p: any) => p.name?.toLowerCase().includes(mood.toLowerCase()));

@@ -14,7 +14,11 @@ import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
 import * as settings from '../settings.js';
 import { config } from '../config.js';
-import { reportProgress } from './tagger-progress.js';
+import { reportProgress, makeEventLogger } from './tagger-progress.js';
+
+// Structured status events for the panel, mirrored to the terse `[analyze] …`
+// console line. Shared by the tagger's analyze phase and the standalone CLI.
+const logEvent = makeEventLogger('analyze');
 
 export interface AnalyzeOptions {
   limit?: number;        // cap tracks this run (default: all that need it)
@@ -67,6 +71,14 @@ export function vocalActivityWanted(): boolean {
   return vocalBackfillDefault();
 }
 
+// Whether CLAP "sounds-like" audio embeddings are *wanted* — env
+// ANALYZE_AUDIO_EMBEDDING wins on, else settings.audio.embeddings. The audio
+// twin of vocalActivityWanted(); /library/coverage feeds it into the per-dimension
+// status enum so the panel doesn't have to re-derive the enable precedence.
+export function audioEmbeddingWanted(): boolean {
+  return audioBackfillDefault();
+}
+
 export interface AnalyzeStats {
   available: boolean;
   backend: string;
@@ -92,7 +104,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     return { available: false, backend: 'none', analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0, vocalAnalyzed: 0 };
   }
   const backend = analyzer.backendLabel();
-  console.log(`[analyze] backend: ${backend}`);
+  logEvent('info', `Audio engine: ${backend}`);
 
   // Resolve the vocal (Demucs) decision up front: a --re-analyze that is NOT
   // redoing vocal preserves existing vocal_ranges rather than wiping them (they
@@ -125,12 +137,19 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // vector, so enabling embeddings on a previously-analysed library fills it in
   // without a full --re-analyze. Re-running analysis on these recomputes bpm/key
   // (same values, harmless) and stores the new audio vector from the same call.
-  // `audioBackfill` stays the "CLAP wanted" signal (drives the per-track embed
-  // flag below); the widening is gated separately on !reAnalyzeScope. A re-scan
-  // re-analyse already has a FIXED scope (the previously-analysed set) and
-  // re-embeds CLAP for those via embed:true — so it must NOT widen, or it'd pull
-  // the whole library back in (every track looks vector-less right after the clear).
-  const audioBackfill = opts.audioBackfill ?? audioBackfillDefault();
+  // `audioBackfill` stays the "CLAP wanted + producible" signal (drives the
+  // per-track embed flag below); the widening is gated separately on
+  // !reAnalyzeScope. A re-scan re-analyse already has a FIXED scope (the
+  // previously-analysed set) and re-embeds CLAP for those via embed:true — so it
+  // must NOT widen, or it'd pull the whole library back in (every track looks
+  // vector-less right after the clear).
+  // ...and ONLY when the backend can actually emit CLAP vectors. A lean sidecar
+  // (WITH_CLAP=0) never fills the vector column, so widening would re-analyse
+  // every already-analysed track on every run for a guaranteed no-vector — the
+  // same churn the vocal gate below prevents. `false` = definitively not built
+  // → skip; `null` (local backend / not yet probed) keeps today's behaviour.
+  const audioWanted = opts.audioBackfill ?? audioBackfillDefault();
+  const audioBackfill = audioWanted && analyzer.audioEmbeddingAvailable() !== false;
   if (audioBackfill && !reAnalyzeScope) {
     const seen = new Set(bpmIds);
     const audioIds = db.unanalysedAudioIds(cap).filter(id => !seen.has(id));
@@ -138,6 +157,8 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     if (audioIds.length > 0) {
       console.log(`[analyze] audio backfill: +${ids.length - bpmIds.length} already-analysed tracks missing an audio vector`);
     }
+  } else if (audioWanted && !reAnalyzeScope) {
+    console.log('[analyze] audio backfill skipped — backend has no CLAP (set ANALYZER_HEAVY=1 to enable sounds-like vectors)');
   }
 
   // Vocal backfill: same idea for tracks missing vocal-activity ranges. The
@@ -174,7 +195,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     console.log('[analyze] nothing to analyse — all tracks current');
     return { available: true, backend, analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0, vocalAnalyzed: 0 };
   }
-  console.log(`[analyze] ${ids.length} tracks to analyse`);
+  logEvent('info', `Analysing audio for ${ids.length.toLocaleString('en-GB')} tracks…`);
   reportProgress({ phase: 'analyze', label: 'Analysing audio', done: 0, total: ids.length });
 
   let analyzed = 0;
@@ -292,10 +313,12 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // (e.g. a download that resolved after its analyze slot already errored).
   await rm(`${config.stateDir}/analyze-tmp`, { recursive: true, force: true }).catch(() => {});
 
-  console.log(
-    `[analyze] done — analyzed=${analyzed} failed=${failed}` +
-      (audioEmbedded > 0 ? ` audio-embedded=${audioEmbedded}` : '') +
-      (vocalAnalyzed > 0 ? ` vocal-analyzed=${vocalAnalyzed}` : ''),
+  logEvent(
+    'success',
+    `Audio analysed — ${analyzed.toLocaleString('en-GB')} tracks` +
+      (audioEmbedded > 0 ? `, ${audioEmbedded.toLocaleString('en-GB')} sounds-like` : '') +
+      (vocalAnalyzed > 0 ? `, ${vocalAnalyzed.toLocaleString('en-GB')} vocal` : '') +
+      (failed > 0 ? ` · ${failed.toLocaleString('en-GB')} failed` : ''),
   );
   return { available: true, backend, analyzed, failed, scope: ids.length, audioEmbedded, vocalAnalyzed };
 }

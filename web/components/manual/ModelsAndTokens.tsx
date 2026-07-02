@@ -198,12 +198,23 @@ export default function ModelsAndTokens() {
             point embeddings at Ollama or OpenAI instead.
           </li>
           <li>
-            <strong>Some providers do chat only</strong> — DeepSeek and the Vercel AI
-            gateway have no embeddings endpoint at all. A DJ on one of those works fine, but
-            the tagger can't follow it, so the console only lists <em>embedding-capable</em>{' '}
-            providers in the tagger dropdown (Ollama, OpenAI, Google, OpenRouter, locca,
-            OpenAI-compatible). If you don't see your chat provider there, that's why — pick
-            Ollama (local and free) for the embedding step and leave the DJ where it is.
+            <strong>Some providers do chat only</strong> — the <code>deepseek</code> and
+            Vercel AI <code>gateway</code> <em>providers</em> have no embeddings endpoint at
+            all. A DJ on one of those works fine, but the tagger can't follow it, so the
+            console only lists <em>embedding-capable</em> providers in the tagger dropdown
+            (Ollama, OpenAI, Google, OpenRouter, locca, OpenAI-compatible). If you don't see
+            your chat provider there, that's why — pick Ollama (local and free) for the
+            embedding step and leave the DJ where it is.
+          </li>
+          <li>
+            <strong>Provider vs. model — mind the difference on a router.</strong> "DeepSeek"
+            is a <em>provider</em> (no embeddings), but it's also a <em>model</em> you can run{' '}
+            <em>through OpenRouter</em>. Those aren't the same: pick the <strong>OpenRouter</strong>{' '}
+            provider with a DeepSeek chat model and your DJ speaks via DeepSeek while embeddings
+            go through OpenRouter's own embeddings endpoint — by default{' '}
+            <code>openai/text-embedding-3-small</code>. OpenRouter, Requesty and the like carry
+            everything (chat and embeddings); the bare provider named after a chat-only company
+            does not.
           </li>
           <li>
             <strong>locca and OpenAI-compatible need a dedicated embedding server</strong> —
@@ -211,7 +222,26 @@ export default function ModelsAndTokens() {
             a second command, <code>locca embed</code>, on its own port; the console can
             detect it for you.
           </li>
+          <li>
+            <strong>Which one should I pick?</strong> Any embedding model at{' '}
+            <strong>768 dimensions or more</strong> is fine for mood similarity — favour a fast,
+            cheap one over a big "best-in-class" model. Good baselines:{' '}
+            <code>nomic-embed-text</code> (local, free, 768-d) if you run Ollama, or{' '}
+            <code>text-embedding-3-small</code> (cloud, cheap, 1536-d) otherwise. The exact
+            model matters far less than <em>picking one and sticking with it</em> — see the
+            next note.
+          </li>
         </ul>
+        <p>
+          <strong>One catch worth internalising:</strong> the vector index is built at your
+          embedding model's dimension, so <em>changing the embedding model means re-embedding
+          the whole library</em> (Admin &rarr; Library tagger &rarr; Re-scan &rarr; "Re-embed
+          all tracks"). Changing the <em>chat</em> model never needs this — but if embeddings
+          are set to "follow the LLM," switching your DJ <em>provider</em> quietly changes the
+          embedding model too. The console pins embeddings to your library's model and warns
+          you before that happens, so the safe move is to pin an embedding provider once and
+          leave it.
+        </p>
         <p>
           It all lives under <strong>Admin &rarr; Library tagger</strong>, and you can see
           the tagged library laid out in{' '}

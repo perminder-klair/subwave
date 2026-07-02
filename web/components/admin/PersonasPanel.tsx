@@ -372,9 +372,13 @@ export default function PersonasPanel() {
           promptOk={promptOk}
           promptText={promptText}
           busy={busy}
+          canSave={canSave}
+          allPersonasOk={allPersonasOk}
           onSetUseCustom={(custom) => setForm(f => f ? ({ ...f, useCustomPrompt: custom }) : f)}
           onChangePrompt={(text) => setForm(f => f ? ({ ...f, systemPrompt: text }) : f)}
           onRestore={() => setForm(f => f ? ({ ...f, systemPrompt: data?.defaults?.djPrompt || '' }) : f)}
+          onSave={() => { save(); }}
+          onDiscard={() => { load(); }}
         />
       )}
 

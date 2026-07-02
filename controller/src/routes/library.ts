@@ -16,7 +16,7 @@ import { tagBatch, TAGGER_BATCH_SYSTEM } from '../music/tagger-core.js';
 import { promptVocabHash } from '../music/embeddings.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
-import { tagger, startAnalyzer, startReconcile } from '../broadcast/tagger.js';
+import { tagger, taggerView, startAnalyzer, startReconcile } from '../broadcast/tagger.js';
 
 export const router = express.Router();
 
@@ -345,6 +345,17 @@ router.get('/library/coverage', requireAdmin, async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ---------------------------------------------------------------------------
+// GET /library/tagger — the tagger snapshot ALONE (same slicing as the /settings
+// payload's `tagger` slice, via the shared taggerView helper). The admin library
+// panel polls THIS on its fast loop (3s running / 10s idle) so live run progress
+// doesn't drag the whole heavy /settings payload down with it; /settings is left
+// to the slower loop that only needs libraryStats + audio + budget.
+// ---------------------------------------------------------------------------
+router.get('/library/tagger', requireAdmin, (_req, res) => {
+  res.json({ tagger: taggerView() });
 });
 
 // ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@ import { logEvent } from '../observability/events.js';
 import { djCallsAllowed } from './listeners.js';
 import * as webhooks from './webhooks.js';
 import * as scrobble from './scrobble.js';
+import * as liquidsoapControl from './liquidsoap-control.js';
 
 // Random gap between DJ links on auto-played tracks. The frequency setting
 // scales how chatty the DJ is:
@@ -34,6 +35,17 @@ function pickLinkInterval() {
   if (Math.random() < 0.15) return 10 + Math.floor(Math.random() * 6);
   return 1 + Math.floor(Math.random() * 9);
 }
+
+// How many consecutive reconcile checks may report an EMPTY dj_queue (while the
+// controller still holds sent items) before we treat those items as genuinely
+// gone and clear them. A single empty read is ambiguous — a just-sent pick may
+// be mid-poll, or Liquidsoap may have restarted and lost the queue — so we never
+// drop on one read. Unlike the old `_autoMisses` heuristic (which advanced on
+// benign metadata mismatches while the tracks were still in dj_queue, wrongly
+// wiping live queues — #632), this only advances when Liquidsoap AUTHORITATIVELY
+// reports no pending requests, so an interleaved jingle or artist-string variance
+// can't trip it.
+const EMPTY_DJ_QUEUE_CLEAR_THRESHOLD = 3;
 
 // Upper bound on how far a recordPlay end-stamp can sit after the play's start
 // for the events-backfill dedup (playAlreadyRecorded). recordPlay stamps
@@ -85,7 +97,7 @@ class Queue {
   _persistTimer: NodeJS.Timeout | null = null; // debounce for the queue.json snapshot
   _recentPlaysTimer: NodeJS.Timeout | null = null; // debounce for the recent-plays.json sidecar
   _recentPlays: { id: string | null; title: string | null; artist: string | null; endedAt: string }[] = [];
-  _autoMisses = 0;             // consecutive untracked plays — see onTrackStarted
+  _emptyDjQueueStreak = 0;      // consecutive reconcile checks seeing an empty dj_queue while sent items remain — see reconcileWithDjQueue
 
   // Snapshot upcoming/current/history to disk. The queue is otherwise purely
   // in-memory, so a controller restart (every `--build controller` rebuild)
@@ -149,6 +161,17 @@ class Queue {
       }
       this.log('scheduler',
         `Queue recovered: ${this.upcoming.length} upcoming, ${this.history.length} played`);
+
+      // Re-drain any items snapshotted as sent:false mid-TTS during a crash.
+      if (this.upcoming.some(i => !i.sent)) {
+        void this.drainToLiquidsoap();
+      }
+
+      // Reconcile sent:true items against the live dj_queue after a short
+      // delay so Liquidsoap has time to accept telnet connections on boot.
+      if (this.upcoming.some(i => i.sent)) {
+        setTimeout(() => { void this.reconcileWithDjQueue(); }, 3000);
+      }
     } catch (err: any) {
       console.error('[queue] recover failed:', err.message);
     }
@@ -362,6 +385,7 @@ class Queue {
       introAired: false,
       queuedAt: new Date().toISOString(),
       sent: false,
+      confirmedInLiquidsoap: false,
     };
     this.upcoming.push(item);
     this.log('queued', `${track.title} — ${track.artist}`, { requestedBy, queueDepth: this.upcoming.length });
@@ -657,7 +681,9 @@ class Queue {
       const source = item.aiPicked ? 'ai' : 'request';
       this.current = { ...item, startedAt: new Date().toISOString(), source };
       this.log('playing', `${np.title} — ${np.artist}`, { requestedBy: item.requestedBy, source });
-      this._autoMisses = 0;
+      // A tracked item matched → controller and Liquidsoap are in sync; clear any
+      // dj_queue-empty desync streak accumulated from prior untracked plays.
+      this._emptyDjQueueStreak = 0;
       // Air this track's intro/link now that it's actually on-air — deferred
       // from queue time so the voice lands over the right song (#189). Fire-
       // and-forget: airIntro's writeHandoff can block up to maxWaitMs and must
@@ -669,17 +695,11 @@ class Queue {
       void this.airIntro(this.current, this.history[0]?.track || null);
     } else {
       // Not a tracked request → auto-playlist or jingle.
-      // If we keep seeing untracked plays while `upcoming` is non-empty, those
-      // queued items aren't actually in Liquidsoap's dj_queue — the usual cause
-      // is a full-stack restart that wiped dj_queue while the controller
-      // recovered a stale queue.json. Drop the stale items so the auto-DJ
-      // (gated on `upcoming.length === 0`) starts picking again. The threshold
-      // tolerates an interleaved jingle without clearing a genuine pending pick.
-      this._autoMisses++;
-      if (this._autoMisses >= 3 && this.upcoming.length > 0) {
-        this.log('scheduler',
-          `Cleared ${this.upcoming.length} stale queue item(s) — not in Liquidsoap's dj_queue`);
-        this.upcoming = [];
+      // If we see untracked plays while there are sent items in `upcoming`,
+      // those items might no longer be in Liquidsoap's dj_queue (e.g. after a restart).
+      // Reconcile with the live dj_queue to clean up any stale entries.
+      if (this.upcoming.some(i => i.sent)) {
+        void this.reconcileWithDjQueue();
       }
       this.current = {
         track: {
@@ -774,6 +794,79 @@ class Queue {
           this.pickerBusy = false;
         }
       })();
+    }
+  }
+
+  // Reconcile Node's upcoming queue with Liquidsoap's actual dj_queue.
+  // Drops items that were confirmed present in dj_queue at least once and are
+  // now gone (played/consumed). Items never yet seen in dj_queue (the in-flight
+  // grace period) are kept so a just-sent pick isn't dropped before Liquidsoap's
+  // next poll (up to 1s after writeHandoff). An empty dj_queue is handled
+  // separately — see the consecutive-empty-reads guard below.
+  async reconcileWithDjQueue() {
+    const sentItems = this.upcoming.filter(i => i.sent);
+    if (sentItems.length === 0) {
+      this._emptyDjQueueStreak = 0;
+      return;
+    }
+
+    try {
+      const liveIds = await liquidsoapControl.getDjQueueIds();
+
+      // Empty dj_queue while we still hold sent items. On a single read this is
+      // ambiguous — a pick may be mid-poll (written to next.txt, not yet pulled
+      // in), Liquidsoap may have restarted and lost the queue, or the last item
+      // is on-air (popped from the queue) but its metadata didn't match in
+      // onTrackStarted so it never left `upcoming`. Don't drop on one read, but
+      // count consecutive empties: once the queue has been authoritatively empty
+      // for EMPTY_DJ_QUEUE_CLEAR_THRESHOLD checks the sent items are genuinely
+      // gone (restart) or stuck, so clear them and let the auto-DJ — gated on
+      // `upcoming.length === 0` — start picking again. This restores the restart
+      // self-heal the old `_autoMisses` clear provided, without its false wipes:
+      // it advances only on an authoritatively empty queue, so an interleaved
+      // jingle or an artist-string mismatch (with tracks still queued) resets it
+      // instead of tripping it.
+      if (liveIds.size === 0) {
+        this._emptyDjQueueStreak++;
+        if (this._emptyDjQueueStreak >= EMPTY_DJ_QUEUE_CLEAR_THRESHOLD) {
+          const cleared = sentItems.length;
+          this.upcoming = this.upcoming.filter(i => !i.sent);
+          this._emptyDjQueueStreak = 0;
+          this.log('scheduler',
+            `Cleared ${cleared} stale queue item(s) — dj_queue reported empty for ${EMPTY_DJ_QUEUE_CLEAR_THRESHOLD} consecutive checks (Liquidsoap restarted or queue desynced)`);
+          this.persist();
+        }
+        return;
+      }
+
+      // Non-empty read → the queue is live; reset the desync streak.
+      this._emptyDjQueueStreak = 0;
+
+      // Pass 1: confirm items that ARE currently in dj_queue.
+      for (const item of this.upcoming) {
+        if (item.sent && item.track?.id && liveIds.has(item.track.id)) {
+          item.confirmedInLiquidsoap = true;
+        }
+      }
+
+      // Pass 2: drop only items that were confirmed-present and are now gone.
+      const beforeCount = this.upcoming.length;
+      this.upcoming = this.upcoming.filter(item => {
+        if (!item.sent) return true;
+        if (!item.confirmedInLiquidsoap) return true;  // grace period — keep
+        const id = item.track?.id;
+        if (!id) return true;  // no id to match against — keep
+        return liveIds.has(id);
+      });
+
+      const droppedCount = beforeCount - this.upcoming.length;
+      if (droppedCount > 0) {
+        this.log('scheduler',
+          `Reconciled with Liquidsoap dj_queue: dropped ${droppedCount} stale queue item(s) not present in Liquidsoap`);
+        this.persist();
+      }
+    } catch (err: any) {
+      this.log('error', `reconcileWithDjQueue failed: ${err.message}`);
     }
   }
 

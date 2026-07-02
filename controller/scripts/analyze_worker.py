@@ -35,11 +35,20 @@ import sys
 import tempfile
 import urllib.request
 
-# 60s is enough for stable BPM (beat_track) / key (chroma); intro
-# detection only needs the first ~20-30s. Env-overridable.
-ANALYZE_SECONDS = float(os.environ.get("ANALYZE_SECONDS", "60"))
-ANALYZE_SR = int(os.environ.get("ANALYZE_SR", "22050"))
-FETCH_TIMEOUT_S = float(os.environ.get("ANALYZE_FETCH_TIMEOUT_S", "60"))
+# 40s is enough for stable BPM (beat_track) / key (chroma); intro detection
+# only needs the first ~20-30s. Env-overridable; the window is shared by
+# bpm/key, CLAP and Demucs, and Demucs cost scales linearly with it (60→40
+# measured ~1.5x faster) — keep the three defaults (here, config.ts,
+# docker/analyzer/server.py) in sync.
+#
+# Every env read here treats an EMPTY value as unset (`.strip() or default`,
+# like the CLAP_MODEL reads below): compose passes these through as
+# `VAR=${VAR:-}`, which injects empty strings for anything the operator didn't
+# set — a plain get(name, default) then returns "" and float("")/get_model("")
+# crash or corrupt the download path (the '' checkpoint hit Errno 21).
+ANALYZE_SECONDS = float(os.environ.get("ANALYZE_SECONDS", "").strip() or "40")
+ANALYZE_SR = int(os.environ.get("ANALYZE_SR", "").strip() or "22050")
+FETCH_TIMEOUT_S = float(os.environ.get("ANALYZE_FETCH_TIMEOUT_S", "").strip() or "60")
 
 # --- CLAP audio embedding (optional, opt-in) -------------------------------
 # Off unless ANALYZE_AUDIO_EMBEDDING is truthy. CLAP wants 48 kHz mono; the
@@ -59,7 +68,7 @@ VOCAL_ENABLED = os.environ.get("ANALYZE_VOCAL_ACTIVITY", "").strip().lower() in 
     "1", "true", "yes",
 )
 DEMUCS_SR = 44100
-DEMUCS_MODEL = os.environ.get("DEMUCS_MODEL", "htdemucs")
+DEMUCS_MODEL = os.environ.get("DEMUCS_MODEL", "").strip() or "htdemucs"
 
 # Krumhansl-Kessler key profiles (major/minor), indexed from the tonic.
 MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
@@ -466,8 +475,12 @@ def get_vocal_detector(force=False):
             d = VocalActivityDetector()
             d.load()
             _vocal_detector = d
-        except Exception as ex:  # noqa: BLE001 — degrade, never crash the worker
-            log(f"Demucs load failed ({ex}); vocal activity disabled for this run")
+        # BaseException, not Exception: demucs' fatal() raises SystemExit on an
+        # unusable model (e.g. a *_q quantized checkpoint without diffq), which
+        # sails past `except Exception` and killed the whole worker — every
+        # later request (bpm/key included) then 500'd "worker not ready".
+        except BaseException as ex:  # noqa: BLE001 — degrade, never crash the worker
+            log(f"Demucs load failed ({ex or type(ex).__name__}); vocal activity disabled for this run")
             _vocal_failed = True
             return None
     return _vocal_detector
@@ -481,7 +494,7 @@ def fetch_audio(url):
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp, open(path, "wb") as out:
         # Cap the download so we don't pull whole albums of bytes for a
         # 120-second analysis window — ~3 MB covers 2 min of most codecs.
-        max_bytes = int(os.environ.get("ANALYZE_MAX_BYTES", str(12 * 1024 * 1024)))
+        max_bytes = int(os.environ.get("ANALYZE_MAX_BYTES", "").strip() or str(12 * 1024 * 1024))
         read = 0
         while True:
             chunk = resp.read(65536)

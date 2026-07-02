@@ -34,7 +34,10 @@ import { loadSecretsIntoEnv } from '../setup/secrets.js';
 import { loadSetupConfig } from '../setup/config.js';
 import { runAnalysisPass } from './analyze.js';
 import * as analyzer from './analyzer.js';
-import { reportProgress } from './tagger-progress.js';
+import { reportProgress, makeEventLogger } from './tagger-progress.js';
+import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
+
+const logEvent = makeEventLogger('analyze');
 
 function parseIntFlag(args: string[], name: string): number | undefined {
   const idx = args.indexOf(name);
@@ -64,6 +67,19 @@ async function applyWizardOverlay() {
 
 async function main() {
   const args = process.argv.slice(2);
+
+  // Belt-and-braces single-flight — a controller-spawned run is a no-op here
+  // (MANAGED_ENV set, the controller holds the pidfile); a manual `npm run
+  // analyze` claims the lock and refuses if another live run holds it.
+  let ownsLock = false;
+  try {
+    ownsLock = acquireStandaloneLock('analyze', args);
+  } catch (err: any) {
+    console.error(`[analyze] ${err.message}`);
+    process.exit(1);
+  }
+  if (ownsLock) installPidfileCleanup();
+
   const limit = parseIntFlag(args, '--limit');
   const reAnalyze = args.includes('--re-analyze');
   const forceWalk = args.includes('--walk');
@@ -118,7 +134,7 @@ async function main() {
         reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: walked });
       }
     }
-    console.log(`[analyze] walked ${walked} total tracks`);
+    logEvent('info', `Scanned ${walked.toLocaleString('en-GB')} tracks`);
 
     // Reconcile: drop rows for tracks no longer in Navidrome so the analysis
     // scope reflects the live catalogue, not orphans from past full rescans.

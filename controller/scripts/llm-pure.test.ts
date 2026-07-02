@@ -7,14 +7,14 @@
 // node:assert-via-tsx style of scripts/picker-recency-regression.ts.
 
 import assert from 'node:assert/strict';
-import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded } from '../src/llm/internal/core/pure.js';
+import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, errReason } from '../src/llm/internal/core/pure.js';
 import { withDeadline } from '../src/llm/internal/core/retry.js';
 import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
 import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
 import { DEFAULT_LOCCA_EMBED_BASE_URL } from '../src/llm/internal/provider/registry.js';
-import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict, clampTtsSpeed, TTS_SPEED_DEFAULT } from '../src/settings.js';
+import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict, clampTtsSpeed, TTS_SPEED_DEFAULT, clampMaxOutputTokens, resolveMaxOutputTokens, MAX_OUTPUT_TOKENS_MIN, MAX_OUTPUT_TOKENS_MAX } from '../src/settings.js';
 import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
 
 let failures = 0;
@@ -82,6 +82,17 @@ async function main() {
     assert.equal(isQuotaOrAuthError({ cause: { statusCode: 402 } }), true);
     assert.equal(isQuotaOrAuthError({ cause: { message: 'quota exceeded' } }), true);
   });
+  await test('OpenRouter out-of-credit 402 classifies by message when status is flattened', () => {
+    // Canonical 402 — caught by the existing insufficient-credit branch.
+    assert.equal(isQuotaOrAuthError(new Error('Your account or API key has insufficient credits. Add more credits and retry the request.')), true);
+    // Per-request affordability 402 — no "insufficient"/"quota" token, so before
+    // this it classified ONLY while the 402 status survived (Discord: run died as
+    // "unreachable" once the SDK flattened the status into the message).
+    const afford: any = new Error('This request requires more credits, or fewer max_tokens. You requested up to 4096 tokens, but can only afford 118.');
+    assert.equal(isQuotaOrAuthError(afford), true);
+    assert.equal(isTransient(afford), false);    // fail over, not same-leg retry
+    assert.equal(isUnreachable(afford), false);   // host answered — not a network outage
+  });
   await test('plain 5xx / socket errors are NOT quota/auth (still same-leg retry)', () => {
     assert.equal(isQuotaOrAuthError({ statusCode: 503 }), false);
     assert.equal(isQuotaOrAuthError({ code: 'ECONNRESET' }), false);
@@ -114,6 +125,26 @@ async function main() {
     assert.equal(isUpstreamOverloaded({ statusCode: 429, message: 'rate limit exceeded, slow down' }), false);
     assert.equal(isUpstreamOverloaded({ code: 'ECONNRESET' }), false);
     assert.equal(isUpstreamOverloaded(null), false);
+  });
+
+  // ---- errReason: turn undici's opaque "fetch failed" into an actionable log ----
+  console.log('errReason (log-friendly cause; digs the errno out of err.cause):');
+  await test('undici "fetch failed" surfaces the errno from err.cause.code, not "unknown"', () => {
+    // The Discord shape: the request never reached OpenRouter, so there is no
+    // HTTP status — the real reason (ECONNRESET / ENOTFOUND / ETIMEDOUT) is on
+    // the cause. The old retry log only read err.code and printed "unknown".
+    const e: any = new TypeError('fetch failed');
+    e.cause = { code: 'ECONNRESET' };
+    assert.equal(errReason(e), 'fetch failed (ECONNRESET)');
+    const dns: any = new TypeError('fetch failed');
+    dns.cause = { code: 'ENOTFOUND' };
+    assert.equal(errReason(dns), 'fetch failed (ENOTFOUND)');
+  });
+  await test('prefers a status when there is no errno, and never double-prints', () => {
+    assert.equal(errReason({ statusCode: 503 }), '503');
+    assert.equal(errReason({ message: '503 Service Unavailable', statusCode: 503 }), '503 Service Unavailable');
+    assert.equal(errReason(new Error('Insufficient credits. Add more credits and retry.')), 'Insufficient credits. Add more credits and retry.');
+    assert.equal(errReason(null), 'unknown');
   });
 
   // ---- per-provider thinking knob (the single most regression-prone mapping) ----
@@ -398,6 +429,36 @@ async function main() {
     assert.match(out, /Soul-only/);   // strict genre lock (#618)
     assert.match(out, /Music steer for this show — prefer tracks from 1970–1979; favour medium-energy tracks/);
     assert.doesNotMatch(out, /lean toward Soul/);  // genre is the hard rule, not a soft part
+  });
+
+  // ---- clampMaxOutputTokens / resolveMaxOutputTokens (per-call cap, #712) ----
+  console.log('clampMaxOutputTokens / resolveMaxOutputTokens (per-call output cap):');
+  await test('0 and negatives mean "off" — pass through as 0, not the floor', () => {
+    assert.equal(clampMaxOutputTokens(0, 4000), 0);
+    assert.equal(clampMaxOutputTokens(-5, 4000), 0);
+  });
+  await test('non-numeric / NaN falls back to def (leaves the stored value untouched)', () => {
+    assert.equal(clampMaxOutputTokens('nope', 4000), 4000);
+    assert.equal(clampMaxOutputTokens(NaN, 8000), 8000);
+    assert.equal(clampMaxOutputTokens(undefined, 1234), 1234);
+    assert.equal(clampMaxOutputTokens(Infinity, 4000), 4000);
+  });
+  await test('1..499 rounds up to the 500 floor; over-max clamps to 8000', () => {
+    assert.equal(clampMaxOutputTokens(1, 4000), MAX_OUTPUT_TOKENS_MIN);
+    assert.equal(clampMaxOutputTokens(499, 4000), 500);
+    assert.equal(clampMaxOutputTokens(9000, 4000), MAX_OUTPUT_TOKENS_MAX);
+  });
+  await test('in-range values pass through, floored to an int', () => {
+    assert.equal(clampMaxOutputTokens(500, 4000), 500);
+    assert.equal(clampMaxOutputTokens(2000, 4000), 2000);
+    assert.equal(clampMaxOutputTokens(8000, 4000), 8000);
+    assert.equal(clampMaxOutputTokens(2000.9, 4000), 2000);
+  });
+  await test('resolveMaxOutputTokens returns the strategy fallback when unset (default 0)', () => {
+    // No update() has run in this pure harness, so settings.get() is DEFAULTS
+    // (maxOutputTokens: 0) → each strategy keeps its own built-in default.
+    assert.equal(resolveMaxOutputTokens(4000), 4000);
+    assert.equal(resolveMaxOutputTokens(8000), 8000);
   });
 
   console.log(failures === 0 ? '\nAll llm-pure tests passed.' : `\n${failures} test(s) FAILED.`);

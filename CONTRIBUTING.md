@@ -64,7 +64,7 @@ on every push to `main`, the **Release Please**
 workflow opens (or updates) a release PR that bumps `package.json` +
 `CHANGELOG.md` based on the Conventional Commits since the last tag. Merging
 that PR creates a `vX.Y.Z` tag and a GitHub Release, which triggers
-`publish-images.yml` to build and push the three Docker images to GHCR.
+`publish-images.yml` to build and push the Docker images to GHCR.
 
 ## Code of conduct
 

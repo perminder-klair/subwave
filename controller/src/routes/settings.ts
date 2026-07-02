@@ -25,7 +25,8 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { tagger } from '../broadcast/tagger.js';
+import { taggerView } from '../broadcast/tagger.js';
+import { currentMode as budgetCurrentMode } from '../broadcast/dj-budget.js';
 import { skillCatalog } from '../skills/_agent.js';
 import { clearUserThemeCache, loadUserThemes, listThemesAnnotated, saveUserTheme, deleteUserTheme } from '../themes.js';
 
@@ -71,7 +72,11 @@ router.get('/settings', requireAdmin, async (req, res) => {
       onAir,
       jingles: await jingles.list(),
       libraryStats: library.stats(),
-      tagger: { ...tagger, lastLog: tagger.lastLog.slice(-30) },
+      tagger: taggerView(),
+      // Current daily-token-budget tier (normal|soft|hard) — reads 'normal' on the
+      // default cap-off install. The library Tagging modal warns before a run when
+      // this is soft/hard (LLM steps will spend more, or fail until UTC midnight).
+      budget: { mode: budgetCurrentMode() },
       ollama: { url: config.ollama.url, model: config.ollama.model },
       // What the configured zone resolves to when timezone is '' (Auto) —
       // lets the UI label the Auto option with the actual server zone.
@@ -526,6 +531,23 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
   }
 });
 
+// Providers whose model API returns one mixed list (chat + embedding) with no
+// type flag. For scope=embedding we can't tell them apart at the API level like
+// openai/google/openrouter/gateway do, so we trim by model-name heuristic below
+// — otherwise the embedding picker offers chat models that just fail to embed.
+const MIXED_MODEL_LIST_PROVIDERS = new Set(['ollama', 'openai-compatible', 'locca', 'requesty']);
+
+// Heuristic: does this model id look like a text-embedding model? Embedding
+// model naming is conventional — almost all carry "embed", the rest come from a
+// short list of known families (bge / gte / e5 / minilm / instructor). Anything
+// unmatched can still be typed by hand (the field falls back to a free-text
+// input when discovery returns nothing).
+function looksLikeEmbeddingModel(id: string): boolean {
+  const s = id.toLowerCase();
+  if (s.includes('embed')) return true; // nomic-embed-text, mxbai-embed-large, text-embedding-3-*, *-arctic-embed
+  return /(^|[/:_-])(bge|gte|e5|all-minilm|minilm|instructor)([/:_-]|$)/.test(s);
+}
+
 // ---------------------------------------------------------------------------
 // GET /settings/llm/models — discover available models for any LLM provider.
 // Query: provider (required), baseUrl (optional), ollamaUrl (optional).
@@ -710,6 +732,14 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
         return res.json({ ok: false, models: [], provider, error: `unknown provider: ${provider}` });
     }
 
+    // These providers hand back a mixed chat+embedding list; keep only the
+    // embedding-looking models so the tagger's embedding picker isn't cluttered
+    // with chat models that can't embed. Other providers already filtered by
+    // their API above.
+    if (scope === 'embedding' && MIXED_MODEL_LIST_PROVIDERS.has(provider)) {
+      models = models.filter(looksLikeEmbeddingModel);
+    }
+
     res.json({ ok: true, models, provider });
   } catch (err: any) {
     res.json({ ok: false, models: [], provider, error: err?.message || 'discovery failed' });
@@ -735,7 +765,15 @@ router.get('/settings/embedding/probe', requireAdmin, async (req, res) => {
   }
   try {
     const r = await probeEmbeddingConfig(overrides);
-    res.json({ ok: r.code === 'ok', dim: r.dim ?? null, code: r.code, message: r.message });
+    let message = r.message;
+    // Test-only reassurance: a not-yet-pulled Ollama model isn't a real failure —
+    // the tagger auto-pulls it on the next run (ensureReady → tryOllamaPull). We
+    // add this only here, NOT in the shared actionableMessage, because the tagger
+    // reuses that same message only AFTER an auto-pull has already failed.
+    if (r.code === 'not_found' && r.provider === 'ollama') {
+      message += '\n  You can ignore this — the tagger pulls this model automatically when you start a run.';
+    }
+    res.json({ ok: r.code === 'ok', dim: r.dim ?? null, code: r.code, message });
   } catch (err: any) {
     res.json({ ok: false, dim: null, code: 'unknown', message: err?.message || 'probe failed' });
   }

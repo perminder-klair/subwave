@@ -161,7 +161,10 @@ export function isUnreachable(err: any): boolean {
 // leg (issue #438). Detected by message because providers surface quota/auth
 // differently and the AI SDK often flattens the status into the message text;
 // a bare 429 with no quota signature stays a plain transient rate-limit.
-const QUOTA_RE = /usage limit|quota|exceeded your current|insufficient[ _]?(quota|funds|credit|balance)|upgrade for higher|out of credit|payment required/i;
+// "requires more credits" / "can only afford" are OpenRouter's per-request
+// affordability 402 — no "insufficient"/"quota" token, so it only classified
+// while the 402 status survived; match it by text too (Discord out-of-credit run).
+const QUOTA_RE = /usage limit|quota|exceeded your current|insufficient[ _]?(quota|funds|credit|balance)|requires more credits|can only afford|upgrade for higher|out of credit|payment required/i;
 const AUTH_RE = /invalid[ _]?api[ _]?key|incorrect[ _]?api[ _]?key|unauthorized|authentication (failed|error)|forbidden|api key (not|is|was) /i;
 
 export function isQuotaOrAuthError(err: any): boolean {
@@ -202,6 +205,23 @@ export function isUpstreamOverloaded(err: any): boolean {
   if (status === 529) return true; // Anthropic "Overloaded" — outside TRANSIENT_STATUS
   const msg = String(err.message || err.cause?.message || '');
   return UPSTREAM_OVERLOAD_RE.test(msg);
+}
+
+// A short, actionable reason string for logs. A network-transport failure
+// surfaces as undici's opaque `TypeError: fetch failed` — the real errno
+// (ECONNRESET / ENOTFOUND / ETIMEDOUT / UND_ERR_*) lives on err.cause.code,
+// NOT err.code, so a log that only reads err.code/status prints "unknown" for
+// exactly the case an operator most needs to see (a request that never reached
+// the provider — Discord: "it's not even seeing requests"). Digs into the cause
+// and appends the errno/status to the message when it adds something.
+export function errReason(err: any): string {
+  if (!err) return 'unknown';
+  const msg = String(err.message || err.cause?.message || '').trim();
+  const code = err.code ?? err.cause?.code;
+  const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
+  const detail = typeof code === 'string' ? code : typeof status === 'number' ? String(status) : '';
+  if (msg && detail && !msg.includes(detail)) return `${msg.slice(0, 100)} (${detail})`;
+  return msg.slice(0, 100) || detail || 'unknown';
 }
 
 // ---------------------------------------------------------------------------

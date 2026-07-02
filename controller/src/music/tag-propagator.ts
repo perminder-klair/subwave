@@ -34,8 +34,12 @@ export interface VoteOpts {
 //   topSim      = max(0, neighbours[0].similarity)   (penalises far-away matches)
 //   confidence  = topSim * coverage
 //
-// Calibration is open in the spec (see §11). 0.6 is a reasonable starting
-// threshold — the implementation PR should tune this on the operator's data.
+// Because confidence is a PRODUCT of two sub-1 terms, the gate compounds fast: a
+// strong nearest match (topSim 0.75) with 3-of-5 tagged neighbours (coverage 0.6)
+// only scores 0.45. The old 0.6 default therefore rejected most genuinely-similar
+// tracks and dumped them into (expensive) active-learning; the default is now 0.35
+// (settings.ts DEFAULTS.embedding.confidenceThreshold), which still needs a real
+// neighbour but lets KNN propagation carry the bulk of tagging. Operator-tunable.
 export function vote(
   neighbours: KnnHit[],
   getTags: (id: string) => NeighbourTags | null,

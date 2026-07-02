@@ -193,6 +193,16 @@ app.listen(config.server.port, async () => {
   // handed to Liquidsoap stay tracked across a controller restart.
   queue.recover();
 
+  // Terminate any tagger/analyzer child orphaned by a controller restart — the
+  // child is detached and keeps running while our in-memory state resets, so a
+  // second Start would double-write the library DB. See broadcast/tagger.ts.
+  try {
+    const { recoverFromRestart } = await import('./broadcast/tagger.js');
+    recoverFromRestart();
+  } catch (err: any) {
+    console.error('[tagger] restart recovery failed:', err.message);
+  }
+
   // Reload the durable curiosity dedup ledger so a restart doesn't re-air the
   // same "on this day" fact (issue #577).
   try {

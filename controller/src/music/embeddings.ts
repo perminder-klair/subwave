@@ -147,6 +147,10 @@ export interface ProbeResult {
   // Vector length measured from a successful probe. Authoritative dim for the
   // schema — beats guessing from the model name (#319). Only set when code==ok.
   dim?: number;
+  // Resolved embedding provider ("follow LLM" already resolved). Lets callers
+  // tailor messaging — e.g. the Test endpoint's Ollama auto-pull note — without
+  // re-deriving the provider.
+  provider?: string;
 }
 
 function classifyEmbeddingError(err: any): { code: ProbeCode; raw: string } {
@@ -209,7 +213,7 @@ function actionableMessage(
         return (
           `Embedding model "${model}" isn't installed in your Ollama at ${ollamaUrl}.\n` +
           `  Fix:  ollama pull ${model}\n` +
-          `  Or pick another model in /admin/settings → Embedding (e.g. mxbai-embed-large).`
+          `  Or pick another model in /admin/settings → Embedding (e.g. nomic-embed-text).`
         );
       }
       return (
@@ -370,10 +374,10 @@ export async function probeEmbeddingConfig(
     // Measure the real vector length from the live server — authoritative dim,
     // independent of the name→dim guess table (#319).
     const dim = Array.isArray(embeddings?.[0]) ? embeddings[0].length : undefined;
-    return { code: 'ok', message: 'ok', dim };
+    return { code: 'ok', message: 'ok', dim, provider: info.provider };
   } catch (err: any) {
     const { code, raw } = classifyEmbeddingError(err);
-    return { code, message: actionableMessage(code, raw, info) };
+    return { code, message: actionableMessage(code, raw, info), provider: info.provider };
   }
 }
 

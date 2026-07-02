@@ -52,11 +52,11 @@ export const KOKORO_RE = /^[a-z]{2}_[a-z0-9]+$/;
 
 export const NAME_MAX = 40;
 export const TAGLINE_MAX = 80;
-export const SOUL_MAX = 400;
+export const SOUL_MAX = 1000;
 export const LANGUAGE_MAX = 60;
 export const PROMPT_MIN = 50;
 export const PROMPT_MAX = 4000;
-export const PERSONA_MAX = 12;
+export const PERSONA_MAX = 24;
 
 // 512×512 output target. The controller hard-caps the decoded image at 300 KB
 // and the JSON body at 600 KB; a center-cropped 512×512 WebP from a typical

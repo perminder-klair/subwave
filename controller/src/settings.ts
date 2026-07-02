@@ -224,17 +224,17 @@ export const LLM_PROVIDERS = [
 // to a local Ollama and failed with a misleading "can't reach <provider>" error
 // (#493). `openrouter` was originally in that chat-only set, but OpenRouter
 // shipped an OpenAI-compatible embeddings endpoint, so it's back in (#522) and
-// routes through llm/internal/provider/embedding.ts. `anthropic` stays in too —
-// it has no first-party embedding model, but embedding.ts routes it to OpenAI
-// (needs OPENAI_API_KEY), as the picker hint already explains.
+// routes through llm/internal/provider/embedding.ts. `anthropic` was dropped —
+// it has no first-party embedding model and only worked by transparently routing
+// to OpenAI (needs OPENAI_API_KEY), which confused operators; pick OpenAI (or any
+// other embedding provider) directly instead.
 export const EMBEDDING_PROVIDERS = [
   'ollama',
   'openai-compatible',
   'locca',
-  'anthropic',
+  'openrouter',
   'openai',
   'google',
-  'openrouter',
   'requesty',
 ];
 
@@ -272,6 +272,28 @@ function clampDailyTokenCap(raw: any, def: number): number {
 function clampBudgetSoftPct(raw: any, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   return Math.min(100, Math.max(0, Math.floor(raw)));
+}
+
+// Per-call max output tokens (issue #712). 0 is a first-class value meaning
+// "off — use each strategy's built-in default", so it passes through unclamped.
+// Any other value is floored and clamped to [MAX_OUTPUT_TOKENS_MIN,
+// MAX_OUTPUT_TOKENS_MAX]; non-numeric/NaN falls back to `def`.
+export const MAX_OUTPUT_TOKENS_MIN = 500;
+export const MAX_OUTPUT_TOKENS_MAX = 8000;
+export function clampMaxOutputTokens(raw: any, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  const n = Math.floor(raw);
+  if (n <= 0) return 0;
+  return Math.min(MAX_OUTPUT_TOKENS_MAX, Math.max(MAX_OUTPUT_TOKENS_MIN, n));
+}
+
+// Resolve the effective per-call output-token cap. Returns the operator's
+// configured value when set (> 0), else `fallback` — the strategy's own
+// built-in default. The single read point for settings.llm.maxOutputTokens;
+// strategy/text|object|agent all default their maxOutputTokens param through it.
+export function resolveMaxOutputTokens(fallback: number): number {
+  const v = get().llm?.maxOutputTokens;
+  return typeof v === 'number' && v > 0 ? v : fallback;
 }
 
 // Count-based hard no-repeat window (distinct plays). Floored to an integer in
@@ -480,7 +502,7 @@ export const AVATAR_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'] as const;
 // source of truth for which slugs exist; settings only checks the shape.
 const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
 
-const PERSONA_LIMIT = 12;
+const PERSONA_LIMIT = 24;
 const SHOWS_LIMIT = 64;
 const PLAYLISTS_PER_SHOW = 10;
 const SKILLS_PER_PERSONA_LIMIT = 20;
@@ -856,6 +878,15 @@ const DEFAULTS = {
     // over the cap fall through to the stateless matcher cascade like every
     // other LLM path. No effect until dailyTokenCap is set.
     exemptRequests: true,
+    // Per-call max OUTPUT tokens — distinct from dailyTokenCap (a cumulative
+    // daily budget). This caps the size of each individual model response. The
+    // strategy primitives default to generous built-ins (4000 text / 8000
+    // object / 8000 agent); 0 = use those defaults. Set a value (clamped
+    // 500–8000) to override all three — the lever for a local model on a small
+    // context window, where an 8000-token response allowance can crowd out the
+    // system prompt / tool listing and risk truncation, and is pure waste with
+    // reasoning off. Resolved via resolveMaxOutputTokens(); see issue #712.
+    maxOutputTokens: 0,
     // When on (or when LLM_DEBUG_RAW is set in the env), every outbound model
     // request's exact body is captured to ${STATE_DIR}/logs/llm-debug.log (the
     // last 10, newest first) and dumped to stderr — a copy-pasteable view of
@@ -908,10 +939,18 @@ const DEFAULTS = {
     baseUrl: '',          // openai-compatible / locca embedding server URL (with /v1)
     ollamaUrl: '',        // Ollama embedding server URL (ollama provider)
     apiKey: '',           // empty -> inherit settings.llm.apiKey
-    seedCount: 0,         // 0 → auto max(200, ceil(sqrt(library)))
-    knnNeighbours: 5,
-    moodVoteThreshold: 0.6,
-    confidenceThreshold: 0.6,
+    seedCount: 0,         // 0 → auto (see autoSeedCount in tag-library.ts: ~4% of
+                          //   the library, floored 200 / capped 2500)
+    // Propagation defaults. These were 5 / 0.6 / 0.6 and propagated almost
+    // nothing: confidence is topSim×coverage (a product of two sub-1 terms — see
+    // tag-propagator.ts), so a 0.6 gate rejected even strong matches and dumped
+    // the library into expensive active-learning. Loosened so KNN propagation
+    // actually carries the bulk of tagging. NOTE: only affects NEW installs / a
+    // reset — an existing settings.json keeps its saved values (loadWithDefaults
+    // below prefers a stored value), so operators are never silently overridden.
+    knnNeighbours: 10,        // was 5 — a broader, more stable neighbour vote
+    moodVoteThreshold: 0.4,   // was 0.6 — a mood carried by ~a third propagates
+    confidenceThreshold: 0.35, // was 0.6 — see the topSim×coverage note above
     maxActiveLearningRounds: 3,
     enrichment: {
       // Last.fm crowd tags. Tri-state: true = always fetch, false = never,
@@ -1079,7 +1118,7 @@ function normalizeTts(raw: any) {
 function normalizePersona(raw: any) {
   if (!raw || typeof raw !== 'object') return null;
   const name = typeof raw.name === 'string' ? raw.name.trim().slice(0, 40) : '';
-  const soul = typeof raw.soul === 'string' ? raw.soul.trim().slice(0, 400) : '';
+  const soul = typeof raw.soul === 'string' ? raw.soul.trim().slice(0, 1000) : '';
   if (!name || !soul) return null;
   // Avatar — stored as a bare basename. Reset to '' if the persisted value
   // doesn't match the strict basename shape, so a hand-edited settings.json
@@ -1455,6 +1494,9 @@ export async function load() {
       // up the defaults (0 = disabled, so they behave exactly as before).
       dailyTokenCap: clampDailyTokenCap(stored.llm?.dailyTokenCap, DEFAULTS.llm.dailyTokenCap),
       budgetSoftPct: clampBudgetSoftPct(stored.llm?.budgetSoftPct, DEFAULTS.llm.budgetSoftPct),
+      // Per-call output cap (issue #712) — pre-existing settings.json lacks the
+      // field and picks up the 0 default (= built-in per-strategy defaults).
+      maxOutputTokens: clampMaxOutputTokens(stored.llm?.maxOutputTokens, DEFAULTS.llm.maxOutputTokens),
       exemptRequests:
         typeof stored.llm?.exemptRequests === 'boolean'
           ? stored.llm.exemptRequests
@@ -1777,8 +1819,8 @@ export function validatePersonasStrict(raw) {
     if (name.length < 1 || name.length > 40)
       throw new Error(`personas[${i}].name must be 1-40 chars`);
     const soul = String(item.soul ?? '').trim();
-    if (soul.length < 1 || soul.length > 400)
-      throw new Error(`personas[${i}].soul must be 1-400 chars`);
+    if (soul.length < 1 || soul.length > 1000)
+      throw new Error(`personas[${i}].soul must be 1-1000 chars`);
     const tagline = String(item.tagline ?? '').trim();
     if (tagline.length > 80) throw new Error(`personas[${i}].tagline must be 0-80 chars`);
     // language — optional free text ("Turkish", "Türkçe", …). Absent/empty →
@@ -2449,6 +2491,9 @@ export async function update(patch) {
     }
     if (l.budgetSoftPct !== undefined) {
       next.llm.budgetSoftPct = clampBudgetSoftPct(Number(l.budgetSoftPct), next.llm.budgetSoftPct);
+    }
+    if (l.maxOutputTokens !== undefined) {
+      next.llm.maxOutputTokens = clampMaxOutputTokens(Number(l.maxOutputTokens), next.llm.maxOutputTokens);
     }
     if (l.exemptRequests !== undefined) {
       next.llm.exemptRequests = !!l.exemptRequests;

@@ -42,6 +42,42 @@ export function reportProgress(p: Omit<TaggerProgress, 'updatedAt'>): void {
   console.log(PROGRESS_PREFIX + JSON.stringify({ ...p, updatedAt: new Date().toISOString() }));
 }
 
+// Second sentinel channel, alongside PROGRESS_PREFIX: discrete, typed status
+// events. The frontend used to regex-scrape console.log strings to decide what a
+// line meant (and whether it was a failure) — brittle, and prone to false
+// "failed" hits on song titles. The children now DECLARE the meaning here, so
+// broadcast/tagger.ts can relay it and the panel renders by kind without guessing.
+export const EVENT_PREFIX = '[event] ';
+
+export type TaggerEventKind = 'info' | 'success' | 'warning' | 'error';
+
+export interface TaggerEvent {
+  kind: TaggerEventKind;
+  // Operator-facing sentence, composed at the call site (pre-formatted numbers,
+  // friendly phrasing) — the human wording that used to live in the frontend's
+  // LOG_RULES table now lives next to the code that knows what happened.
+  text: string;
+  at: string;
+}
+
+export function reportEvent(e: Omit<TaggerEvent, 'at'>): void {
+  console.log(EVENT_PREFIX + JSON.stringify({ ...e, at: new Date().toISOString() }));
+}
+
+// Bind an event logger to a module's console tag ('tag' / 'analyze'). Each call
+// emits BOTH the terse `[tag] …` line (docker logs stay greppable) AND the event
+// sentinel, so call sites stay one line. Both go to stdout back-to-back so the
+// capture side can drop the plain echo and keep only the structured entry.
+export function makeEventLogger(prefix: string) {
+  return (kind: TaggerEventKind, text: string): void => {
+    // Collapse newlines: a multi-line echo would split into several raw capture
+    // lines and defeat the single-line de-dup on the controller side.
+    const line = text.replace(/\s*\n\s*/g, ' ');
+    console.log(`[${prefix}] ${line}`);
+    reportEvent({ kind, text: line });
+  };
+}
+
 // Phase timings sorted slowest-first, with zero-duration phases dropped. The
 // shared shape behind both the CLI breakdown line and the 'done' event's
 // `timings` field, so the two can't drift. Pure — unit-pinned.

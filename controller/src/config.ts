@@ -64,15 +64,23 @@ export const config = {
   },
   // Acoustic analysis (bpm/key/intro) — runs librosa, which deliberately does
   // NOT live in the controller image. Two backends, resolved in music/
-  // analyzer.ts: the tts-heavy sidecar (production) or a local Python venv
+  // analyzer.ts: an analysis sidecar (production) or a local Python venv
   // (offline/dev — set ANALYZE_PYTHON to a venv with librosa installed). When
   // neither is reachable the analysis phase skips cleanly.
   analyzer: {
+    // Base URL for the analysis sidecar — the default-on `subwave-analyzer`
+    // image (`subwave-analyzer-heavy` for CLAP/Demucs, via ANALYZER_HEAVY=1).
+    // analyzer.ts probes /health and uses it when it reports the 'analyze'
+    // engine. tts-heavy no longer carries the analyzer (it's TTS-only), so there
+    // is no TTS_HEAVY_URL fallback here anymore.
+    urls: [process.env.ANALYZE_URL].filter((u): u is string => !!u),
     python: process.env.ANALYZE_PYTHON || '',   // empty → no local backend
     workerScript: process.env.ANALYZE_WORKER || '/app/scripts/analyze_worker.py',
-    // 60s is enough for stable BPM (beat_track) / key (chroma); intro
-    // detection only needs the first ~20-30s. Env-overridable.
-    seconds: parseFloat(process.env.ANALYZE_SECONDS || '60'),
+    // 40s is enough for stable BPM (beat_track) / key (chroma); intro
+    // detection only needs the first ~20-30s. Env-overridable; Demucs cost
+    // scales linearly with the window. Keep in sync with analyze_worker.py
+    // and docker/analyzer/server.py.
+    seconds: parseFloat(process.env.ANALYZE_SECONDS || '40'),
     requestTimeoutMs: parseInt(process.env.ANALYZE_REQUEST_TIMEOUT_MS || '120000', 10),
   },
   kokoro: {
