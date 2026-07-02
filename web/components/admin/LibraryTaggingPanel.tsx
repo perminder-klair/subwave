@@ -581,7 +581,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 {num(audioEmbedded)} / {num(total)} · {audpct != null ? `${audpct}%` : '…'}
               </>
             ) : audioStarved ? (
-              'engine can’t fingerprint — needs a CLAP build'
+              'engine can’t fingerprint — needs the heavy analyzer'
             ) : p.audioEnabled ? (
               'enabled, not yet analysed'
             ) : (
@@ -647,7 +647,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                       {num(vocalAnalyzed)} / {num(total)} · {vpct != null ? `${vpct}%` : '…'}
                     </>
                   ) : vocalStarved ? (
-                    'engine can’t separate vocals — needs a Demucs build'
+                    'engine can’t separate vocals — needs the heavy analyzer'
                   ) : (
                     'enabled, not yet analysed'
                   )}
@@ -705,14 +705,17 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         )}
         {audioIncapable && p.audioEnabled ? (
           <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
-            <b>Sounds-like is on, but the analysis engine can’t fingerprint audio.</b> Pull the
-            latest analyzer (or tts-heavy) image and recreate the sidecar to enable CLAP embeddings.
+            <b>Sounds-like is on, but your analyzer can’t fingerprint audio.</b> The default analyzer
+            is the lean image (bpm/key only). CLAP needs the heavy build: set <code>ANALYZER_HEAVY=1</code>{' '}
+            in <code>.env</code> and recreate the analyzer (<code>docker compose up -d analyzer</code>).
+            The heavy image is amd64-only.
           </div>
         ) : null}
         {vocalIncapable && p.vocalEnabled ? (
           <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
-            <b>Vocal-activity is on, but the analysis engine can’t separate vocals.</b> Pull the
-            latest analyzer (or tts-heavy) image and recreate the sidecar to enable vocal ranges.
+            <b>Vocal-activity is on, but your analyzer can’t separate vocals.</b> Demucs needs the heavy
+            build: set <code>ANALYZER_HEAVY=1</code> in <code>.env</code> and recreate the analyzer
+            (<code>docker compose up -d analyzer</code>). The heavy image is amd64-only.
           </div>
         ) : null}
       </div>
