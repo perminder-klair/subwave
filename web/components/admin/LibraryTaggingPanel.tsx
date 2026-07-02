@@ -72,16 +72,40 @@ export interface TaggerProgress {
   updatedAt: string;
 }
 
+// A structured log event relayed from the tagger child (music/tagger-progress.ts
+// EVENT_PREFIX channel). The child DECLARES what a line means so the panel renders
+// by kind — no more regex-scraping console strings to guess intent/failure.
+export interface TaggerEvent {
+  kind: 'info' | 'success' | 'warning' | 'error';
+  text: string;
+  at: string;
+}
+
+// Outcome of the last finished run — drives the idle failure banner. 'stopped'
+// (Stop button / a controller-restart kill) is operator-context and shows nothing.
+export interface TaggerLastRun {
+  mode: 'tag' | 'analyze' | 'reconcile';
+  outcome: 'ok' | 'failed' | 'stopped';
+  exitCode: number | null;
+  signal: string | null;
+  error: string | null;
+  startedAt: string;
+  finishedAt: string;
+}
+
 export interface TaggerState {
   running?: boolean;
   pid?: number;
   startedAt?: string;
-  lastLog?: string[];
+  // Raw console lines interleaved with structured events, in chronological order
+  // (broadcast/tagger.ts relays both). Capped at 100 server-side.
+  lastLog?: (string | TaggerEvent)[];
   // 'tag' (tag-library), 'analyze' (the acoustic/audio-embedding pass), or
   // 'reconcile' (walk Navidrome + prune orphaned rows) — all run through the
   // same single-flight child slot.
   mode?: 'tag' | 'analyze' | 'reconcile' | null;
   progress?: TaggerProgress | null;
+  lastRun?: TaggerLastRun | null;
 }
 
 // libraryStats rides along on /settings — gives moods-in-use, last-tag time,
@@ -191,127 +215,30 @@ function fmtDur(ms: number): string {
   return r ? `${m}m ${r}s` : `${m}m`;
 }
 
-// Make a raw tagger log line human for the drawer: strip the [tag]/[analyze]
-// noise, add a phase emoji, lightly rephrase the common lines, and tint by kind.
-// Backend logs stay machine-greppable; only the operator's view is dressed up.
-const grp = (s: string | undefined): string => {
-  const n = Number(String(s ?? '').replace(/[, ]/g, ''));
-  return Number.isFinite(n) ? n.toLocaleString('en-GB') : String(s ?? '');
+// Presentation for a structured event, keyed on the kind the child declared.
+// (The old 20-rule LOG_RULES regex table + keyword failure heuristic are gone —
+// the friendly wording now lives at the tagger call sites and rides the event
+// `text`; the panel just tints and tags by kind.)
+const EVENT_STYLE: Record<TaggerEvent['kind'], { emoji: string; cls: string }> = {
+  error: { emoji: '⚠️', cls: 'text-vermilion font-semibold' },
+  warning: { emoji: '⚠', cls: 'text-vermilion' },
+  success: { emoji: '✓', cls: 'text-emerald-500 font-semibold' },
+  info: { emoji: '', cls: 'text-muted' },
 };
-// Rename the breakdown phase keys to the friendly labels (walk→scan, etc.).
-const humanBreakdown = (s: string | undefined): string =>
-  String(s ?? '').replace(
-    /\b(setup|walk|enrich|embed|seed|propagate|learn|analyze)\b/g,
-    k => PHASE_LABEL[k] ?? k,
-  );
 
-const LOG_RULES: { re: RegExp; to: (m: RegExpMatchArray) => string; cls: string }[] = [
-  {
-    re: /^done in (\d+)s\..*?llm_tagged=(\d+)/,
-    to: m => `✅  Done in ${fmtDur(Number(m[1]) * 1000)} — ${m[2]} tracks tagged`,
-    cls: 'text-emerald-500 font-semibold',
-  },
-  {
-    re: /^phase breakdown:\s*(.+)$/,
-    to: m => `⏱️  Time per phase — ${humanBreakdown(m[1])}`,
-    cls: 'text-ink',
-  },
-  {
-    re: /^([\d,]+) tagged · (.+)$/,
-    to: m => `📊  Library now: ${grp(m[1])} tagged · ${m[2]}`,
-    cls: 'text-ink',
-  },
-  {
-    re: /^walked ([\d,]+) total tracks/,
-    to: m => `🔍  Scanned ${grp(m[1])} tracks`,
-    cls: 'text-muted',
-  },
-  {
-    re: /^walked ([\d,]+) tracks/,
-    to: m => `🔍  Scanning library… ${grp(m[1])}`,
-    cls: 'text-muted',
-  },
-  {
-    re: /^([\d,]+) untagged tracks in scope.*?\(of ([\d,]+)/,
-    to: m => `📋  ${grp(m[1])} new tracks to tag (${grp(m[2])} still untagged)`,
-    cls: 'text-ink',
-  },
-  {
-    re: /^enriched (\d+)\/(\d+) \(lastfm: (\d+), lyrics: (\d+)\)/,
-    to: m => `🌐  Enriched ${m[1]}/${m[2]} — ${m[3]} Last.fm, ${m[4]} lyrics`,
-    cls: 'text-muted',
-  },
-  {
-    re: /^phase-0 done.*?enriched (\d+)/,
-    to: m => `🌐  Metadata fetched for ${m[1]} tracks`,
-    cls: 'text-muted',
-  },
-  {
-    re: /^phase-1 embedding (\d+) tracks/,
-    to: m => `🧬  Building similarity vectors for ${m[1]} tracks…`,
-    cls: 'text-muted',
-  },
-  { re: /^embedded (\d+)\/(\d+)/, to: m => `🧬  Vectors ${m[1]}/${m[2]}`, cls: 'text-muted' },
-  { re: /^LLM-tagged (\d+)\/(\d+)/, to: m => `🏷️  DJ tagged ${m[1]}/${m[2]}`, cls: 'text-muted' },
-  {
-    re: /^phase-2 done: (\d+)\/(\d+) seeded/,
-    to: m => `✓  Mood tagging done — ${m[1]}/${m[2]}`,
-    cls: 'text-emerald-500',
-  },
-  {
-    re: /^phase-3 propagated (\d+) tracks; (\d+) uncertain/,
-    to: m => `🔗  Spread tags to ${m[1]} similar tracks (${m[2]} unsure)`,
-    cls: 'text-muted',
-  },
-  {
-    re: /^phase-4 round (\d+).*?LLM-tagging (\d+)/,
-    to: m => `🔁  Round ${m[1]}: re-checking ${m[2]} unsure tracks…`,
-    cls: 'text-muted',
-  },
-  {
-    re: /^(\d+) tracks to analyse/,
-    to: m => `🔊  Analysing audio for ${m[1]} tracks…`,
-    cls: 'text-muted',
-  },
-  {
-    re: /^(\d+)\/(\d+) \(ok=\d+ fail=(\d+)\)/,
-    to: m => `🔊  Audio ${m[1]}/${m[2]}${Number(m[3]) ? ` · ${m[3]} failed` : ''}`,
-    cls: 'text-muted',
-  },
-  {
-    re: /^done — analyzed=(\d+).*?audio-embedded=(\d+)/,
-    to: m => `✓  Audio analysed — ${m[1]} tracks, ${m[2]} sounds-like`,
-    cls: 'text-emerald-500',
-  },
-  { re: /^backend: (\w+)/, to: m => `🔊  Audio engine: ${m[1]}`, cls: 'text-muted' },
-  { re: /^LLM model: (.+)/, to: m => `🤖  Tagging model — ${m[1]}`, cls: 'text-muted' },
-  { re: /^embedding model: (.+)/, to: m => `🧬  Embedding model — ${m[1]}`, cls: 'text-muted' },
-  { re: /^starting\b/, to: () => '▶️  Starting up…', cls: 'text-muted' },
-];
-
+// A MUCH slimmer beautifier for the RAW (non-event) lines that remain — the
+// verbose per-batch progress console output and the synthetic [exit] marker.
+// Handles only: exit status, [llm-debug-raw]/JSON-body suppression, and
+// prefix-stripping. No LOG_RULES, no keyword failure scan.
 function beautifyLog(raw: string): { text: string; cls: string } {
   if (/^\[exit 0\]/.test(raw))
-    return { text: '✅  Finished', cls: 'text-emerald-500 font-semibold' };
+    return { text: '✓  Finished', cls: 'text-emerald-500 font-semibold' };
   if (/^\[exit/.test(raw))
     return {
       text: `⏹  Stopped (${raw.replace(/^\[exit\s*|\]\s*$/g, '')})`,
       cls: 'text-vermilion font-semibold',
     };
   const s = raw.replace(/^\[(tag|analyze|stats|scheduler|error)\]\s*/, '');
-  // Raw LLM-request dumps (the `[llm-debug-raw]` header and its JSON body) are
-  // verbose debug output, not status lines — never keyword-scan them. A song
-  // title carried inside the body (e.g. "Closer (Cotto's Can't Stop Remix)")
-  // would otherwise false-trigger the failure warning below.
-  if (/^\[llm-debug-raw\]/.test(s) || /^\s*\{/.test(s)) return { text: s, cls: 'text-muted' };
-  const low = s.toLowerCase();
-  // Real failures (but not "0 failed" / "fail=0") → vermilion warning.
-  if (/(fail(ed)?|error|unreachable|can'?t|missing)/.test(low) && !/fail=0|0 failed/.test(low)) {
-    return { text: `⚠️  ${s}`, cls: 'text-vermilion' };
-  }
-  for (const r of LOG_RULES) {
-    const m = s.match(r.re);
-    if (m) return { text: r.to(m), cls: r.cls };
-  }
   return { text: s, cls: 'text-muted' };
 }
 
@@ -320,6 +247,9 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // Intent carried into the modal when opened from a contextual prompt — the
   // "embeddings missing" nudge jumps straight to a pre-ticked re-embed.
   const [modalIntent, setModalIntent] = useState<'reembed' | null>(null);
+  // Dismiss-state for the last-run failure banner, keyed on the run's
+  // finishedAt so a NEW failure (different timestamp) re-shows it.
+  const [dismissedFailAt, setDismissedFailAt] = useState<string | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
   const moodFillRef = useRef<HTMLSpanElement>(null);
   const acousticFillRef = useRef<HTMLSpanElement>(null);
@@ -429,6 +359,16 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         .filter(([, ms]) => ms > 0)
         .sort((a, b) => b[1] - a[1])
     : [];
+
+  // Last-run failure banner: only when idle, the run genuinely failed (a signal
+  // exit — Stop / restart-kill — is 'stopped' and shows nothing), and this
+  // finishedAt hasn't been dismissed. A fresh failure has a new timestamp, so it
+  // re-shows past a dismiss.
+  const lastRun = p.tagger?.lastRun ?? null;
+  const showFailBanner =
+    !running && lastRun?.outcome === 'failed' && lastRun.finishedAt !== dismissedFailAt;
+  const failModeLabel =
+    lastRun?.mode === 'analyze' ? 'analysis' : lastRun?.mode === 'reconcile' ? 'reconcile' : 'tagging';
 
   useDynamicStyle(moodFillRef, { width: pct != null ? `${Math.min(100, pct)}%` : '0%' });
   useDynamicStyle(acousticFillRef, {
@@ -744,6 +684,31 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         ) : null}
       </div>
 
+      {/* last-run failure banner — idle only; matches the embeddingStale banner's
+          danger styling. 'stopped' runs (Stop / restart-kill) show nothing. */}
+      {showFailBanner && (
+        <div className="mx-6 mt-6 flex flex-wrap items-center gap-x-3 gap-y-1 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2 text-[11px] text-ink">
+          <span>
+            <b>The last {failModeLabel} run failed.</b>
+            {lastRun?.error ? <> {lastRun.error}</> : ' Check the log for what went wrong.'}
+          </span>
+          <button
+            type="button"
+            className="font-bold text-vermilion underline-offset-2 hover:underline"
+            onClick={() => p.setLogOpen(() => true)}
+          >
+            View log →
+          </button>
+          <button
+            type="button"
+            className="ml-auto text-muted hover:text-ink"
+            onClick={() => setDismissedFailAt(lastRun!.finishedAt)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* action zone — idle vs running */}
       {!running ? (
         <div className="flex flex-wrap items-center gap-4 p-6">
@@ -873,7 +838,18 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         >
           {(p.tagger?.lastLog ?? []).length
             ? (p.tagger?.lastLog ?? []).map((line, i) => {
-                const f = beautifyLog(line);
+                // Structured events render directly by kind; raw strings fall
+                // back to the slim beautifier.
+                if (typeof line === 'object' && line !== null) {
+                  const st = EVENT_STYLE[line.kind] ?? EVENT_STYLE.info;
+                  return (
+                    <div key={i} className={cn('whitespace-pre-wrap', st.cls)}>
+                      {st.emoji ? `${st.emoji}  ` : ''}
+                      {line.text}
+                    </div>
+                  );
+                }
+                const f = beautifyLog(String(line));
                 return (
                   <div key={i} className={cn('whitespace-pre-wrap', f.cls)}>
                     {f.text}
