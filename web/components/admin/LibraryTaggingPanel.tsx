@@ -347,9 +347,11 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // The Pause/Enable button + meter-vs-collapsed layout must react to a toggle
   // immediately, so drive them off the optimistic settings prop (p.vocalEnabled,
   // flipped on click in LibraryPanel) — mirroring how the audio row uses
-  // p.audioEnabled. vocalWanted (from the polled /coverage) only lags, so it
-  // just fills the gap before /settings first loads. (The analysis-state bits —
-  // vocalStatus, the modal's vocalWanted — stay coverage-driven.)
+  // p.audioEnabled. vocalWanted (from the polled /coverage, 60s cadence) only
+  // lags, so it just fills the gap before /settings first loads. The modal's
+  // per-run vocal checkboxes get this same optimistic value — coverage-driven,
+  // they stayed invisible until a repoll/refresh after enabling. Only the
+  // analysis-state bits (vocalStatus) stay coverage-driven.
   const vocalOptedIn = p.vocalEnabled ?? vocalWanted;
   const vocalOn = (vocalAnalyzed ?? 0) > 0;
   const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
@@ -1029,7 +1031,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         remaining={remaining}
         libraryTotal={total}
         analysisOff={analysisOff}
-        vocalWanted={vocalWanted}
+        vocalWanted={vocalOptedIn}
         // sounds-like only runs when the dimension is on AND the engine can do
         // it — otherwise the acoustics steps are bpm/key-only (honest hints).
         soundsLikeActive={!analysisOff && audioStatus !== 'pending-heavy' && !!p.audioEnabled}

@@ -692,8 +692,11 @@ export default function LibraryPanel() {
             : 'vocal-activity analysis enabled'
           : 'vocal-activity analysis disabled',
       );
-      // Refresh the slow settings-derived state now rather than waiting for its tick.
+      // Refresh the slow settings-derived state now rather than waiting for its
+      // tick — and coverage too, so the coverage-driven bits (vocalStatus, the
+      // vocal meter row) catch up without waiting out the 60s poll.
       void loadSettingsData();
+      void loadCoverage();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
