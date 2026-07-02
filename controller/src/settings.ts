@@ -117,10 +117,11 @@ export function effectiveFrequency(persona: any = getEffectivePersona()) {
   return FREQUENCIES[Math.min(i + 1, FREQUENCIES.length - 1)];
 }
 
-// Single gate for the transition music sweep: it's on whenever the on-air
-// persona is in DJ mode — no separate toggle. The picker schema/prompt builders
-// use this to decide whether to offer the DJ the `transition: "sweep"` choice;
-// when off, the field is never shown and nothing is applied.
+// Single gate for the transition effects (filter sweep + echo washout): they're
+// on whenever the on-air persona is in DJ mode — no separate toggle. The picker
+// schema/prompt builders use this to decide whether to offer the DJ the
+// `transition` choice; when off, the guidance is never shown and nothing is
+// applied.
 export function effectsActive(persona: any = getEffectivePersona()): boolean {
   return !!persona?.djMode;
 }

@@ -168,8 +168,8 @@ export const PICK_SCHEMA = z.object({
   id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
   reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just note what makes THIS pick a fresh step (new artist, a shift in energy/era/texture), not a vibe label you would recycle pick after pick (e.g. "new artist, lifts the energy", never a repeated "mellow reflective step")'),
   say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). When the event says stay silent, set this to null'),
-  // Transition effects (only honoured when the system prompt offers them — DJ mode + effects on).
-  transition: z.enum(['normal', 'sweep', 'washout']).nullable().describe('special transition effect for this pick, used RARELY: "sweep" muffles the music under a lowpass that opens across the crossfade INTO this pick (it surfaces from far away) — for a big mood/energy jump; "washout" dissolves THIS track into a wide ping-pong echo tail as it ENDS, bleeding into the next track — for closing a segment or a dreamy/ambient pick; "normal" or null for an ordinary crossfade'),
+  // Transition effects (only honoured when the system prompt offers them — persona djMode, see settings.effectsActive).
+  transition: z.enum(['normal', 'sweep', 'washout']).nullable().describe('special transition effect for this pick, used RARELY: "sweep" muffles the music under a lowpass that opens across the crossfade INTO this pick (it surfaces from far away) — for a big mood/energy jump; "washout" dissolves THIS track into a decaying echo tail as it ENDS, bleeding into the next track — for closing a segment or a dreamy/ambient pick; "normal" or null for an ordinary crossfade'),
 });
 
 const REQUEST_SCHEMA = z.object({
@@ -188,11 +188,12 @@ const REQUEST_SCHEMA = z.object({
 // models. PICKER_CRITERIA stays because it's editorial preference (flow,
 // context, variety, interest) — that's not in any tool or schema.
 // Guidance for the transition effects (PICK_SCHEMA.transition), appended to the
-// picker system prompt ONLY when effects are active (global toggle + on-air
-// persona djMode). Invisible otherwise, so the model leaves "transition" null.
+// picker system prompt ONLY when effects are active (the on-air persona's
+// djMode — see settings.effectsActive; there is no separate toggle). Invisible
+// otherwise, so the model leaves "transition" null.
 function effectsGuidance(): string {
   if (!settings.effectsActive()) return '';
-  return `\n\nTRANSITION EFFECTS ("transition") — use rarely, at most one in a set, only when it serves the moment:\n- "sweep": the music muffles under a lowpass that opens back up across the crossfade INTO your pick, so the new track surfaces from far away. Choose it on a big mood/energy jump.\n- "washout": this track dissolves into a wide ping-pong echo tail as it ENDS and bleeds into the next track. Choose it to close a segment, or for a dreamy/ambient pick. Otherwise "normal" or null.`;
+  return `\n\nTRANSITION EFFECTS ("transition") — use rarely, at most one in a set, only when it serves the moment:\n- "sweep": the music muffles under a lowpass that opens back up across the crossfade INTO your pick, so the new track surfaces from far away. Choose it on a big mood/energy jump.\n- "washout": this track dissolves into a decaying echo tail as it ENDS and bleeds into the next track. Choose it to close a segment, or for a dreamy/ambient pick. Otherwise "normal" or null.`;
 }
 
 export function pickSystem() {
@@ -460,7 +461,7 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   // talking over them. No-op when the pick is un-analysed or not in DJ mode.
   const djMode = !!settings.getEffectivePersona()?.djMode;
   const say = (djMode && rawSay) ? dj.enforceIntroBudget(rawSay, introMsOf(song)) : rawSay;
-  // Music filter sweep on the crossfade into the pick (DJ mode + effects toggle),
+  // Transition effects on this pick (persona djMode via settings.effectsActive),
   // independent of whether a link airs.
   const link = (wantLink && say) ? say : null;
   const sweep = settings.effectsActive() && object.transition === 'sweep';
