@@ -20,6 +20,7 @@ import {
 } from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Seg, Metric } from './ui';
 import { EngineSelector } from './tts/EngineSelector';
+import type { TtsAvailable } from './tts/engineMeta';
 import { VoicePreviewButton } from './tts/VoicePreviewButton';
 import { ProviderSelector } from './llm/ProviderSelector';
 import { EmbeddingProviderSelector } from './embedding/EmbeddingProviderSelector';
@@ -324,7 +325,7 @@ interface SettingsData {
   };
   tts?: {
     engines?: string[];
-    available?: Record<string, boolean>;
+    available?: TtsAvailable;
     kokoroVoices?: Array<{ id: string; label: string }>;
     chatterboxVoices?: string[];
     // `voiceDir` is the new shared name (issue #213). `chatterboxVoiceDir` is
@@ -1888,7 +1889,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
       Endpoint <code>{savedRemoteUrl || 'not configured'}</code>. Falls back to Piper if the URL isn’t set or the sidecar is down.
     </>;
   }
-  const savedEngineMissing = available[savedEngine] === false;
+  const savedEngineMissing = (available as Partial<Record<string, boolean>>)[savedEngine] === false;
 
   return (
     <>
