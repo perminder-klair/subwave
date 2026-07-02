@@ -962,12 +962,14 @@ SITE_URL=
 #
 # Optional model overrides (sensible defaults shown):
 # CLAP_MODEL=laion-clap
-# DEMUCS_MODEL=htdemucs   # vocal separation is the slow pass; a lighter model
-#                         # (e.g. mdx_q) is markedly faster on CPU and plenty
-#                         # for the present/absent vocal ranges SUB/WAVE needs
+# DEMUCS_MODEL=htdemucs   # vocal separation is the slow pass, and the default
+#                         # is also the fastest on CPU we've measured — the
+#                         # mdx*/*_q alternatives are bags of 4 sub-models and
+#                         # run ~3x SLOWER despite the smaller download
 # ANALYZE_SECONDS=60      # per-track analysis window (seconds), shared by
-#                         # bpm/key, CLAP and Demucs. Smaller = faster analysis;
-#                         # vocal ranges beyond the window aren't detected
+#                         # bpm/key, CLAP and Demucs — the real speed lever
+#                         # (40 ≈ 1.5x faster vocal analysis). Ranges beyond
+#                         # the window aren't detected
 #
 # HuggingFace token — only to download gated model weights at build time
 # (PocketTTS cloning weights; some CLAP/Demucs checkpoints). ARG HF_TOKEN in
