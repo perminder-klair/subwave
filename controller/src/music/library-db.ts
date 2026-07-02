@@ -441,8 +441,10 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     } else if (!reseed) {
       throw new Error(
         `embedding dim mismatch: state/library.db has ${tableDim}-d vectors${modelHint}, ` +
-          `but the current settings ask for ${embeddingDim}-d. ` +
-          `Run \`npm run tag -- --reseed\` to re-embed.`,
+          `but the current embedding model needs ${embeddingDim}-d. You changed the embedding ` +
+          `model, so the library must be re-embedded to switch. In the admin UI: Library → ` +
+          `Start tagging → Re-scan tab → “Re-embed all tracks” (your mood tags are kept). ` +
+          `Or from the CLI: \`npm run tag -- --reseed\`.`,
       );
     } else {
       // Reseed across a model/dim change on a POPULATED index: the stored vectors

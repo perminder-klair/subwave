@@ -47,6 +47,13 @@ export interface Coverage {
   // up but built without the Demucs stack (sidecar WITH_DEMUCS=0) — drives the
   // "rebuild with WITH_DEMUCS=1" warning when vocal activity is enabled.
   vocalAnalysisAvailable?: boolean | null;
+  // Text-embedding index provenance. `embeddingStale` = the library was embedded
+  // with a different model than the one currently configured, so a tag run is
+  // blocked until a re-embed — drives the one-click "re-embed" prompt below.
+  embeddedModel?: string | null;
+  embeddedDim?: number | null;
+  currentEmbeddingModel?: string | null;
+  embeddingStale?: boolean;
 }
 
 // Mirrors controller/src/music/tagger-progress.ts — the structured sentinel
@@ -381,6 +388,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // covered dimension doesn't show a dead button.
   const audioGap = !audioOn || (audpct != null && audpct < 100);
   const vocalGap = !vocalOn || (vpct != null && vpct < 100);
+  // The library was embedded with a different model than the one now configured,
+  // so a tag run would fail on a dim/model mismatch — surface a blocking, one-click
+  // re-embed prompt instead of letting the operator hit a cryptic tagger error.
+  const embeddingStale = p.coverage?.embeddingStale === true;
   const moodCount = p.libStats ? Object.keys(p.libStats.byMood || {}).length : 0;
   const lastTag = p.libStats?.updatedAt
     ? new Date(p.libStats.updatedAt).toLocaleString('en-GB')
@@ -488,7 +499,25 @@ export default function TaggingPanel(p: TaggingPanelProps) {
               </>
             )}
           </div>
-          {embeddingMissing && (
+          {embeddingStale && (
+            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2 text-[11px] text-ink">
+              <span>
+                <b>Embedding model changed — tagging is blocked.</b> Your library is embedded with{' '}
+                <code>{p.coverage?.embeddedModel}</code>
+                {p.coverage?.embeddedDim ? ` (${p.coverage.embeddedDim}-d)` : ''}, but you&rsquo;ve
+                selected <code>{p.coverage?.currentEmbeddingModel}</code>. Re-embed at the new model
+                to continue — your mood tags are kept.
+              </span>
+              <button
+                type="button"
+                className="font-bold text-vermilion underline-offset-2 hover:underline"
+                onClick={() => openModal('reembed')}
+              >
+                Re-embed now →
+              </button>
+            </div>
+          )}
+          {embeddingMissing && !embeddingStale && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] text-ink">
               <span>
                 <b>Embeddings missing.</b> Your embedding model may have changed. Re-embed to

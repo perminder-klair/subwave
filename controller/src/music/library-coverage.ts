@@ -12,6 +12,7 @@ import * as library from './library.js';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
 import { vocalActivityWanted } from './analyze.js';
+import { activeModelLabel } from './embeddings.js';
 
 const STALE_MS = 6 * 60 * 60 * 1000; // 6 h
 // Acoustic-analysis backend availability is probed separately: analyzer
@@ -111,6 +112,16 @@ export async function get() {
     total != null && total > 0 ? Math.round((audioEmbedded / total) * 100) : null;
   const vocalAnalyzedPercent =
     total != null && total > 0 ? Math.round((vocalAnalyzed / total) * 100) : null;
+  // Embedding-index provenance: the model the vectors were built with vs what the
+  // current settings would embed with (same activeModelLabel() format on both
+  // sides, so no prefix/default drift). When they differ, a tag run hits a hard
+  // dim/model mismatch in library-db.migrate — the UI turns this into a one-click
+  // "re-embed" prompt instead of a cryptic tagger-log failure.
+  const embeddedMeta = db.getEmbeddingMeta();
+  const currentEmbeddingModel = activeModelLabel();
+  const embeddingStale = !!(
+    embeddedMeta && currentEmbeddingModel && embeddedMeta.model !== currentEmbeddingModel
+  );
   return {
     tagged,
     analysed,
@@ -141,5 +152,13 @@ export async function get() {
     // turns this into a "rebuild with WITH_DEMUCS=1" warning, and the analysis
     // pass skips vocal backfill so it doesn't churn the whole library. null = unknown.
     vocalAnalysisAvailable: analysisAvail ? analysisAvail.vocalCapable : null,
+    // Text-embedding index provenance + staleness. `embeddingStale` = the model
+    // the library was embedded with differs from the currently-configured one, so
+    // the next tag run would be blocked until a re-embed. null model = never
+    // embedded yet (no staleness).
+    embeddedModel: embeddedMeta?.model ?? null,
+    embeddedDim: embeddedMeta?.dim ?? null,
+    currentEmbeddingModel,
+    embeddingStale,
   };
 }
