@@ -582,7 +582,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             {analysisOff ? (
               'engine off'
             ) : audioIncapable ? (
-              'engine missing CLAP'
+              p.audioEnabled ? 'waiting for the heavy analyzer' : 'off · needs the heavy analyzer'
             ) : audioOn ? (
               <>
                 {num(audioEmbedded)} / {num(total)} · {audpct != null ? `${audpct}%` : '…'}
@@ -615,7 +615,9 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 title={
                   p.audioEnabled
                     ? 'Pause fingerprinting newly-added tracks. Existing “sounds-like” data stays and keeps driving picks.'
-                    : 'Start fingerprinting new tracks for “sounds-like” picks (~1-2s each on the analysis engine).'
+                    : audioIncapable
+                      ? 'Needs the heavy analyzer (ANALYZER_HEAVY=1). You can enable now — fingerprinting starts automatically once it’s up.'
+                      : 'Start fingerprinting new tracks for “sounds-like” picks (~1-2s each on the analysis engine).'
                 }
               >
                 {p.audioEnabled ? 'Pause' : 'Enable'}
@@ -648,7 +650,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                   {analysisOff ? (
                     'engine off'
                   ) : vocalIncapable ? (
-                    'engine missing Demucs'
+                    'waiting for the heavy analyzer'
                   ) : vocalOn ? (
                     <>
                       {num(vocalAnalyzed)} / {num(total)} · {vpct != null ? `${vpct}%` : '…'}
@@ -691,13 +693,19 @@ export default function TaggingPanel(p: TaggingPanelProps) {
               </>
             ) : (
               <>
-                <span className="caption mono-num !tracking-[0.04em]">off</span>
+                <span className="caption mono-num !tracking-[0.04em]">
+                  {vocalIncapable ? 'off · needs the heavy analyzer' : 'off'}
+                </span>
                 <span className="ml-auto">
                   <Btn
                     sm
                     onClick={p.onToggleVocal}
                     disabled={p.busy || running}
-                    title="Start Demucs vocal separation on new tracks (~10-30s each — CPU-heavy)."
+                    title={
+                      vocalIncapable
+                        ? 'Needs the heavy analyzer (ANALYZER_HEAVY=1). You can enable now — separation starts automatically once it’s up.'
+                        : 'Start Demucs vocal separation on new tracks (~10-30s each — CPU-heavy).'
+                    }
                   >
                     Enable
                   </Btn>
@@ -705,6 +713,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 <span className="caption basis-full !tracking-[0.04em] !normal-case">
                   Separates vocals so the DJ can talk before lyrics (Demucs, ~10-30s/track —
                   CPU-heavy). Off by default.
+                  {vocalIncapable && ' Needs the heavy analyzer (ANALYZER_HEAVY=1).'}
                 </span>
               </>
             )}
@@ -712,10 +721,11 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         )}
         {audioIncapable && p.audioEnabled ? (
           <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
-            <b>Sounds-like is on, but your analyzer can’t fingerprint audio.</b> The default analyzer
-            is the lean image (bpm/key only). CLAP needs the heavy build: set <code>ANALYZER_HEAVY=1</code>{' '}
-            in <code>.env</code> and recreate the analyzer (<code>docker compose up -d analyzer</code>).
-            The heavy image is amd64-only.{' '}
+            <b>Sounds-like is enabled — fingerprinting starts once your analyzer can do it.</b> The
+            default analyzer is the lean image (bpm/key only); CLAP needs the heavy build. Set{' '}
+            <code>ANALYZER_HEAVY=1</code> in <code>.env</code> and recreate the analyzer
+            (<code>docker compose up -d analyzer</code>) — analysis then kicks in automatically,
+            nothing to re-enable here. The heavy image is amd64-only.{' '}
             <a href="/manual/analysis" className="font-bold text-vermilion underline-offset-2 hover:underline">
               Manual → Acoustic analysis
             </a>
@@ -723,9 +733,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         ) : null}
         {vocalIncapable && p.vocalEnabled ? (
           <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
-            <b>Vocal-activity is on, but your analyzer can’t separate vocals.</b> Demucs needs the heavy
-            build: set <code>ANALYZER_HEAVY=1</code> in <code>.env</code> and recreate the analyzer
-            (<code>docker compose up -d analyzer</code>). The heavy image is amd64-only.{' '}
+            <b>Vocal-activity is enabled — separation starts once your analyzer can do it.</b> Demucs
+            needs the heavy build. Set <code>ANALYZER_HEAVY=1</code> in <code>.env</code> and recreate
+            the analyzer (<code>docker compose up -d analyzer</code>) — analysis then kicks in
+            automatically, nothing to re-enable here. The heavy image is amd64-only.{' '}
             <a href="/manual/analysis" className="font-bold text-vermilion underline-offset-2 hover:underline">
               Manual → Acoustic analysis
             </a>

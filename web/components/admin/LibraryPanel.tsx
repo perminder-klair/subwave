@@ -567,7 +567,17 @@ export default function LibraryPanel() {
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
       setAudioEnabled(!audioEnabled);
-      notify.ok(!audioEnabled ? 'sounds-like analysis enabled' : 'sounds-like analysis disabled');
+      // When the analyzer can't fingerprint yet (lean image), frame enabling as
+      // pending rather than done — the incapable banner below explains the upgrade.
+      const audioPending =
+        coverage?.analysisAvailable !== false && coverage?.audioAnalysisAvailable === false;
+      notify.ok(
+        !audioEnabled
+          ? audioPending
+            ? 'sounds-like enabled — starts once the heavy analyzer is up'
+            : 'sounds-like analysis enabled'
+          : 'sounds-like analysis disabled',
+      );
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -637,7 +647,16 @@ export default function LibraryPanel() {
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
       setVocalEnabled(!vocalEnabled);
-      notify.ok(!vocalEnabled ? 'vocal-activity analysis enabled' : 'vocal-activity analysis disabled');
+      // Mirrors toggleAudio: enabling on a lean analyzer is "armed", not active.
+      const vocalPending =
+        coverage?.analysisAvailable !== false && coverage?.vocalAnalysisAvailable === false;
+      notify.ok(
+        !vocalEnabled
+          ? vocalPending
+            ? 'vocal-activity enabled — starts once the heavy analyzer is up'
+            : 'vocal-activity analysis enabled'
+          : 'vocal-activity analysis disabled',
+      );
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
