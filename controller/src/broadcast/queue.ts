@@ -408,9 +408,9 @@ class Queue {
   // even a quiet persona gets one occasionally.
   effectTransitionGap(): number {
     const f = settings.effectiveFrequency();
-    if (f === 'aggressive') return 4;
-    if (f === 'moderate') return 8;
-    return 12;
+    if (f === 'aggressive') return 2;
+    if (f === 'moderate') return 5;
+    return 8;
   }
 
   // Drop any transition-effect flags from a track (with a logged reason) so
