@@ -162,6 +162,66 @@ export function crossSecondsFor(
   return Math.round(secs * 10) / 10;
 }
 
+// --- DJ transition effects (sweep / washout) --------------------------------
+// The DJ agent proposes `transition: sweep|washout` on a pick; these helpers
+// are how the data disposes. All pure — broadcast/queue.ts applies them.
+//
+// Cross-duration physics (see radio.liq's fade == buffer invariant): a track's
+// `liq_cross_duration` governs the crossfade at its own END. The washout flag
+// rides the track that ends, so its canvas can be stamped on that same track
+// and it lands on exactly the transition the wash fires on. The sweep (the
+// transition INTO the flagged pick) cannot be given a canvas — the previous
+// track's stamp is already sent to Liquidsoap when the pick happens — so its
+// envelope scales to whatever `d` that transition already earned.
+
+export const WASHOUT_CROSS_TARGET_SECONDS = 12;
+
+// Blend canvas for a washout: target 12 s snapped to whole bars of the flagged
+// track's own tempo, clamped to [8, min(14, admin ceiling)]. Unknown BPM →
+// fixed 10 s. No incoming-intro cap: the next track isn't known when this
+// track is annotated — a tail decaying over the next track's opening is an
+// accepted (and DJ-authentic) hazard.
+export function washoutCrossSecondsFor(a: Analysis, maxSec: number | null = null): number {
+  const ceil = typeof maxSec === 'number' && maxSec > 0 ? Math.min(maxSec, CROSS_MAX_SECONDS) : CROSS_MAX_SECONDS;
+  const lo = Math.min(8, ceil);
+  let secs = 10;
+  if (a.bpm && a.bpm > 0) {
+    const barSec = (4 * 60) / a.bpm;
+    const bars = Math.max(1, Math.round(WASHOUT_CROSS_TARGET_SECONDS / barSec));
+    secs = bars * barSec;
+  }
+  secs = Math.max(lo, Math.min(ceil, secs));
+  return Math.round(secs * 10) / 10;
+}
+
+// Comb tap spacing for the washout tail — a dotted eighth of the flagged
+// track's tempo (the classic dub-throw subdivision), clamped so extreme tempi
+// stay in the audible-echo range. Unknown BPM → 0.30 s (the neutral default
+// radio.liq also falls back to when the stamp is absent).
+export function washoutDelayFor(bpm: number | null): number {
+  if (!bpm || bpm <= 0) return 0.3;
+  const clamped = Math.max(0.18, Math.min(0.45, 0.75 * (60 / bpm)));
+  return Math.round(clamped * 100) / 100;
+}
+
+// The LLM proposes, the data disposes. A sweep is the move that hides a seam —
+// between tempo/key-locked tracks a tight beat-blend is better and a filter
+// ride reads as gratuitous — so it only survives a real clash. Un-analysed
+// tracks pass (the data can't contradict the DJ). Washout is an editorial
+// "close the chapter" gesture, not a compatibility repair: always allowed —
+// the caller's cooldown rations it.
+export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend', cur: Analysis, next: Analysis): boolean {
+  if (kind === 'washout') return true;
+  if (!analysed(cur) || !analysed(next)) return true;
+  const compat = mixCompat(cur, next);
+  // blend (spectral handover) is the sweep's mirror: it makes COMPATIBLE
+  // tracks feel like one continuous piece — between clashing tracks the
+  // complementary-band trade just exposes the clash, so a long wash (or a
+  // sweep) serves better there.
+  if (kind === 'blend') return compat >= 0.4;
+  return compat < 0.6;
+}
+
 // --- Feature 2: transition FX ----------------------------------------------
 // Pick a flourish to fire across the blend, or null for "no garnish". Only
 // fires on a NOTABLE upward tempo jump (the moment a DJ would ride a riser);

@@ -168,6 +168,8 @@ export const PICK_SCHEMA = z.object({
   id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
   reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just note what makes THIS pick a fresh step (new artist, a shift in energy/era/texture), not a vibe label you would recycle pick after pick (e.g. "new artist, lifts the energy", never a repeated "mellow reflective step")'),
   say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). When the event says stay silent, set this to null'),
+  // Transition effects (only honoured when the system prompt offers them — persona djMode, see settings.effectsActive).
+  transition: z.enum(['normal', 'blend', 'sweep', 'washout']).nullable().describe('transition treatment for this pick: "blend" — spectral handover: your pick and the track before it trade the spectrum in complementary bands across a long crossfade so they feel like ONE continuous piece; choose it for a same-lane pick (similar tempo/energy/mood). "sweep" — the track playing before your pick sinks under a slowly closing filter while your pick rises clean; choose it for a real gear-change (big jump in energy, tempo, or mood). "washout" — THIS pick dissolves into a pulsing echo tail as it ENDS, ringing out into whatever follows; choose it to close a chapter (end of a themed run, before a talk break, or out of a dreamy track). "normal" or null for a plain crossfade'),
 });
 
 const REQUEST_SCHEMA = z.object({
@@ -185,6 +187,15 @@ const REQUEST_SCHEMA = z.object({
 // competes with the framework's structural signals and derails smaller
 // models. PICKER_CRITERIA stays because it's editorial preference (flow,
 // context, variety, interest) — that's not in any tool or schema.
+// Guidance for the transition effects (PICK_SCHEMA.transition), appended to the
+// picker system prompt ONLY when effects are active (the on-air persona's
+// djMode — see settings.effectsActive; there is no separate toggle). Invisible
+// otherwise, so the model leaves "transition" null.
+function effectsGuidance(): string {
+  if (!settings.effectsActive()) return '';
+  return `\n\nTRANSITION EFFECTS ("transition") — part of your craft, not a gimmick: a working DJ fires one every few songs when the moment earns it. Actively look for the moment on every pick; when you spot one, flag it — the station validates your choice against the audio analysis and skips ones that don't land. The PACING is entirely yours: there is no rate limit, so be the taste — an effect hits hardest coming out of a stretch of clean blends, so let a few ordinary transitions breathe between them. VARY THE TWO: they are equals in your kit, and if your recent picks leaned on one, reach for the other.\n- "washout": your pick dissolves into a pulsing, tempo-synced echo tail as it ENDS, ringing out into whatever follows. Fire it whenever your pick is the natural END of something: the last track of a run of similar songs, a song with a big or atmospheric ending, anything dreamy/hazy/anthemic, or when the NEXT stretch will change direction. In a normal set several tracks qualify — this is your workhorse exit move, not a rarity.\n- "sweep": the track playing before your pick sinks under a slowly closing filter across the blend while your pick rises clean underneath. Use it on a genuine gear-change — a clear jump in energy, tempo, or mood (it only fires when the tracks measurably clash).\n- "blend": spectral handover — across a long crossfade the outgoing track hands its bass, then its mids, to your pick, keeping only its highs to the end, while your pick arrives lows-first underneath. The two feel like ONE continuous piece of music. Use it for same-lane picks: similar tempo, energy, or mood (it only fires when the tracks measurably fit).\nUse "normal" or null only when nothing above applies.`;
+}
+
 export function pickSystem() {
   const persona = settings.getEffectivePersona();
   // In DJ mode, lean on the live session history: a working DJ runs threads
@@ -225,7 +236,7 @@ You run the station as one continuous shift. The messages above are the live ses
 
 ${dj.PICKER_CRITERIA}
 
-Finding candidates: prefer tools backed by the local library — searchLibrary, songsByGenre, tracksByMood, tracksByEnergy, randomSongs, and the audio/embedding similarity tools. similarSongs and topSongsByArtist use external data and often return little, so try them second. If a tool returns nothing, switch tools rather than retrying. If a tool returns only a few tracks (fewer than ~4), make one more discovery call with a different tool before choosing, so you pick from a real range rather than whatever the first call happened to surface.${settings.agentLanguageReminder(persona, 'the "say" link')}`;
+Finding candidates: prefer tools backed by the local library — searchLibrary, songsByGenre, tracksByMood, tracksByEnergy, randomSongs, and the audio/embedding similarity tools. similarSongs and topSongsByArtist use external data and often return little, so try them second. If a tool returns nothing, switch tools rather than retrying. If a tool returns only a few tracks (fewer than ~4), make one more discovery call with a different tool before choosing, so you pick from a real range rather than whatever the first call happened to surface.${effectsGuidance()}${settings.agentLanguageReminder(persona, 'the "say" link')}`;
 }
 
 function requestSystem() {
@@ -340,6 +351,12 @@ function trackFields(song) {
     album: song.album,
     year: song.year,
     genre: song.genre,
+    // Seconds. The queue needs it to spot picks that will hit the
+    // max-track-length cap (its liq_cue_out) so it can auto-arm a washout on
+    // the forced mid-song exit — see applyMixTransition. Field name varies by
+    // source: Subsonic `duration`, the picker tools' slim projection (what the
+    // agent's `seen` map stores) `duration_sec`, library rows `durationSec`.
+    duration: song.duration ?? song.duration_sec ?? song.durationSec ?? null,
   };
 }
 
@@ -355,9 +372,22 @@ function trackFields(song) {
 // `linkPrev` is the track the link back-announces (the one on-air when the pick
 // was made); the queue uses it to drop the link if a request jumps ahead and it
 // would otherwise air a stale "that was X" over the wrong transition.
-async function enqueuePick(queue, song, reason, source, link: string | null = null, linkPrev: any = null): Promise<number> {
+async function enqueuePick(
+  queue, song, reason, source,
+  link: string | null = null,
+  linkPrev: any = null,
+  { sweep = false, washout = false, blend = false }: { sweep?: boolean; washout?: boolean; blend?: boolean } = {},
+): Promise<number> {
+  const track: any = trackFields(song);
+  // Flag the transition effects on this pick (DJ mode only). getAnnotatedUri
+  // stamps liq_sweep / liq_washout; radio.liq ramps them. sweep muffles the
+  // crossfade INTO this pick; washout rings this track out into an echo tail as
+  // it ENDS.
+  if (sweep) track.sweep = true;
+  if (washout) track.washout = true;
+  if (blend) track.blend = true;
   const pos = await queue.push({
-    track: trackFields(song),
+    track,
     requestedBy: null,
     intent: reason || 'ai pick',
     introScript: link,
@@ -438,11 +468,17 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   // talking over them. No-op when the pick is un-analysed or not in DJ mode.
   const djMode = !!settings.getEffectivePersona()?.djMode;
   const say = (djMode && rawSay) ? dj.enforceIntroBudget(rawSay, introMsOf(song)) : rawSay;
+  // Transition effects on this pick (persona djMode via settings.effectsActive),
+  // independent of whether a link airs.
+  const link = (wantLink && say) ? say : null;
+  const sweep = settings.effectsActive() && object.transition === 'sweep';
+  const washout = settings.effectsActive() && object.transition === 'washout';
+  const blend = settings.effectsActive() && object.transition === 'blend';
   // Attach the link to the pick so it airs as the pick starts (back-announcing
   // the track on-air now), instead of immediately over that on-air track (#189).
   // Stamp `current` as the link's back-announce target so the queue can drop the
   // link if a request jumps ahead of this pick before it airs.
-  const queued = await enqueuePick(queue, song, object.reason, 'agent', (wantLink && say) ? say : null, current);
+  const queued = await enqueuePick(queue, song, object.reason, 'agent', link, current, { sweep, washout, blend });
   // Pick was already queued/on-air and got deduped — don't record a session turn
   // for a track that never airs. Returning false lets runTrackEvent fall through
   // to the pool for a fresh pick.
@@ -582,11 +618,24 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     // tracksLikeThis ("pass the currently-playing song id") actually have one
     // to pass. Without it the agent fabricates a slug from the title/artist
     // (e.g. "lost-sultaan-romeo") and Navidrome answers "data not found".
+    // Per-pick effects reminder: the system-prompt guidance alone loses to the
+    // session history (the model sees ~40 of its own prior picks, almost all
+    // transition:"normal", and copies itself — observed on-air: 19 picks, zero
+    // washouts). The event turn is the freshest instruction in the window, so
+    // the deliberate-choice nudge rides here.
+    const recentT = typeof queue.recentTransitionChoices === 'function' ? queue.recentTransitionChoices() : [];
+    const historyNote = recentT.length
+      ? ` Your recent transition choices, oldest first: ${recentT.join(', ')} — the station strips a third repeat, so vary deliberately.`
+      : '';
+    const effectClause = settings.effectsActive()
+      ? ` Set "transition" by what THIS moment needs — "blend" to flow in as one continuous piece, "sweep" for a gear-change entry, "washout" to dissolve out as it ends, "normal" for a plain hand-off. Vary your craft: never the same transition three picks running, and if your last pick used an effect, lean "normal" now unless the moment clearly calls again.${historyNote}`
+      : '';
     const eventText = `Now playing "${current?.title}" by ${current?.artist}`
       + (current?.id ? ` [id: ${current.id}]` : '')
       + (previous ? ` (after "${previous.title}" by ${previous.artist})` : '')
       + '. Pick the track to play next.'
       + linkClause
+      + effectClause
       + runClause
       + journeyClause;
     session.appendTurn({ role: 'event', kind: 'pick', text: eventText });
