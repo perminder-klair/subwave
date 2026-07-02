@@ -459,19 +459,44 @@ export const SHOW_MOODS = [
 // tagger's per-track energy classes and the `tracksByMood` agent-tool filter.
 export const SHOW_ENERGY = ['low', 'medium', 'high'];
 
-// British English Kokoro voices — the ones that fit a BBC 6 Music tone. The
-// underlying model ships 54 voices total; we expose only the British subset to
-// keep the UI tidy. Any voice matching KOKORO_VOICE_RE still passes validation.
-export const KOKORO_VOICES_BRITISH = [
-  { id: 'bm_george', label: 'George (M)' },
-  { id: 'bm_fable', label: 'Fable (M)' },
-  { id: 'bm_daniel', label: 'Daniel (M)' },
-  { id: 'bm_lewis', label: 'Lewis (M)' },
-  { id: 'bf_emma', label: 'Emma (F)' },
-  { id: 'bf_isabella', label: 'Isabella (F)' },
-  { id: 'bf_alice', label: 'Alice (F)' },
-  { id: 'bf_lily', label: 'Lily (F)' },
+// All 54 official Kokoro voices from kokoro-onnx v1.0. The UI filters by
+// language prefix and formats display names from the code (bm_george → "George (M)").
+// Any voice matching KOKORO_VOICE_RE passes validation.
+export const KOKORO_VOICES = [
+  'af_alloy', 'af_aoede', 'af_bella', 'af_heart', 'af_jessica', 'af_kore',
+  'af_nicole', 'af_nova', 'af_river', 'af_sarah', 'af_sky',
+  'am_adam', 'am_echo', 'am_eric', 'am_fenrir', 'am_liam', 'am_michael',
+  'am_onyx', 'am_puck', 'am_santa',
+  'bf_alice', 'bf_emma', 'bf_isabella', 'bf_lily',
+  'bm_daniel', 'bm_fable', 'bm_george', 'bm_lewis',
+  'ef_dora', 'em_alex', 'em_santa',
+  'ff_siwis',
+  'hf_alpha', 'hf_beta', 'hm_omega', 'hm_psi',
+  'if_sara', 'im_nicola',
+  'jf_alpha', 'jf_gongitsune', 'jf_nezumi', 'jf_tebukuro', 'jm_kumo',
+  'pf_dora', 'pm_alex', 'pm_santa',
+  'zf_xiaobei', 'zf_xiaoni', 'zf_xiaoxiao', 'zf_xiaoyi',
+  'zm_yunjian', 'zm_yunxi', 'zm_yunxia', 'zm_yunyang',
 ];
+
+export const KOKORO_VOICE_LANGUAGES: Record<string, string> = {
+  'a': 'English (US)',
+  'b': 'English (UK)',
+  'e': 'Spanish',
+  'f': 'French',
+  'h': 'Hindi',
+  'i': 'Italian',
+  'j': 'Japanese',
+  'p': 'Portuguese (Brazilian)',
+  'z': 'Mandarin Chinese',
+};
+
+export function formatKokoroVoiceLabel(code: string): string {
+  const [langGender, name] = code.split('_');
+  const gender = (langGender?.[1] ?? '').toUpperCase();
+  const displayName = name.charAt(0).toUpperCase() + name.slice(1);
+  return `${displayName} (${gender})`;
+}
 
 const KOKORO_VOICE_RE = /^[a-z]{2}_[a-z0-9]+$/;
 // PocketTTS built-in voices — the curated set the admin UI offers. Issue #213

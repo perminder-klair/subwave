@@ -327,7 +327,8 @@ interface SettingsData {
   tts?: {
     engines?: string[];
     available?: Record<string, boolean>;
-    kokoroVoices?: Array<{ id: string; label: string }>;
+    kokoroVoices?: string[];
+    kokoroVoiceLanguages?: Record<string, string>;
     chatterboxVoices?: string[];
     // `voiceDir` is the new shared name (issue #213). `chatterboxVoiceDir` is
     // kept as an alias so the UI keeps working against older controllers.
@@ -1960,42 +1961,78 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
           </>
         )}
 
-        {form.tts.defaultEngine === 'kokoro' && (
-          <>
-            <div className="field mt-4">
-              <Label>Kokoro voice</Label>
-              {available.kokoro === false && (
-                <div className="field-hint text-[var(--danger)]">
-                  Kokoro is not installed in this build, so it will fall back to Piper.
-                </div>
-              )}
-              {(data.tts?.kokoroVoices?.length || 0) > 0 ? (
-                <>
-                  <Select
-                    value={form.tts.kokoro?.voice ?? 'bf_isabella'}
-                    onValueChange={val => setForm(f => ({
-                      ...f, tts: { ...f.tts, kokoro: { ...f.tts.kokoro, voice: val } },
-                    }))}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {data.tts?.kokoroVoices?.map(v => (
-                          <SelectItem key={v.id} value={v.id}>{v.label} — {v.id}</SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <div className="field-hint">British English only. Applies to every kind routed through Kokoro.</div>
-                </>
-              ) : (
-                <div className="field-hint">This build reports no Kokoro voices.</div>
-              )}
-            </div>
-            <TtsGainField engineId="kokoro" form={form} setForm={setForm} />
-            <TtsSpeedField engineId="kokoro" form={form} setForm={setForm} />
-          </>
-        )}
+        {form.tts.defaultEngine === 'kokoro' && (() => {
+          const voices = data.tts?.kokoroVoices || [];
+          const languages = data.tts?.kokoroVoiceLanguages || {};
+          const voice = form.tts.kokoro?.voice ?? 'bf_isabella';
+          const langPrefix = voice.charAt(0);
+          const filtered = voices.filter(v => v.startsWith(langPrefix));
+          const fmt = (code: string) => {
+            const [lg, name = ''] = code.split('_');
+            const g = (lg?.[1] ?? '').toUpperCase();
+            const n = name.charAt(0).toUpperCase() + name.slice(1);
+            return `${n} (${g})`;
+          };
+          const setVoice = (val: string) => setForm(f => ({
+            ...f, tts: { ...f.tts, kokoro: { ...f.tts.kokoro, voice: val } },
+          }));
+          return (
+            <>
+              <div className="field mt-4">
+                <Label>Kokoro voice</Label>
+                {available.kokoro === false && (
+                  <div className="field-hint text-[var(--danger)]">
+                    Kokoro is not installed in this build, so it will fall back to Piper.
+                  </div>
+                )}
+                {voices.length > 0 ? (
+                  <>
+                    <div className="field mt-3">
+                      <Label>Language</Label>
+                      <Select
+                        value={langPrefix}
+                        onValueChange={lang => {
+                          const first = voices.find(v => v.startsWith(lang));
+                          if (first) setVoice(first);
+                        }}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {Object.entries(languages).map(([k, v]) => (
+                              <SelectItem key={k} value={k}>{v}</SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="field mt-3">
+                      <Label>Voice</Label>
+                      <Select value={voice} onValueChange={setVoice}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {!filtered.includes(voice) && (
+                              <SelectItem value={voice}>{fmt(voice)}</SelectItem>
+                            )}
+                            {filtered.map(v => (
+                              <SelectItem key={v} value={v}>{fmt(v)}</SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="field-hint">Applies to every kind routed through Kokoro.</div>
+                  </>
+                ) : (
+                  <div className="field-hint">This build reports no Kokoro voices.</div>
+                )}
+              </div>
+              <TtsGainField engineId="kokoro" form={form} setForm={setForm} />
+              <TtsSpeedField engineId="kokoro" form={form} setForm={setForm} />
+            </>
+          );
+        })()}
 
         {form.tts.defaultEngine === 'chatterbox' && (
           <>

@@ -76,7 +76,8 @@ export interface SettingsResponse {
   defaults?: { djPrompt?: string };
   skills?: { catalog?: SkillCatalogEntry[] };
   tts?: {
-    kokoroVoices?: VoiceOption[];
+    kokoroVoices?: string[];
+    kokoroVoiceLanguages?: Record<string, string>;
     piperVoices?: string[];
     chatterboxVoices?: string[];
     // `voiceDir` is the new shared name (issue #213). `chatterboxVoiceDir` is

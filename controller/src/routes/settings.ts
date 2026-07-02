@@ -121,7 +121,8 @@ router.get('/settings', requireAdmin, async (req, res) => {
       tts: {
         engines: tts.ENGINES,
         available: tts.availableEngines(),
-        kokoroVoices: settings.KOKORO_VOICES_BRITISH,
+        kokoroVoices: settings.KOKORO_VOICES,
+        kokoroVoiceLanguages: settings.KOKORO_VOICE_LANGUAGES,
         voiceDir,
         piperVoices,
         chatterboxVoices: customVoices,

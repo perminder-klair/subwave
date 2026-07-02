@@ -33,7 +33,8 @@ interface PersonaVoiceCardProps {
 }
 
 export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText, adminFetch, updateTts }: PersonaVoiceCardProps) {
-  const kokoroVoices = data?.tts?.kokoroVoices || [];
+  const kokoroVoices: string[] = data?.tts?.kokoroVoices || [];
+  const kokoroLanguages = data?.tts?.kokoroVoiceLanguages || {};
   const pocketTtsVoices = data?.tts?.pocketTtsVoices || [];
   const cloudProviders = data?.tts?.cloudProviders || ['openai', 'elevenlabs'];
 
@@ -123,26 +124,61 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
             );
           })()}
 
-          {persona.tts.engine === 'kokoro' && (
-            <div className="field max-w-[320px]">
-              <Label>Kokoro voice</Label>
-              <Select
-                value={persona.tts.voice}
-                onValueChange={val => updateTts({ voice: val })}
-              >
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {!kokoroVoices.some(v => v.id === persona.tts.voice) && (
-                      <SelectItem value={persona.tts.voice}>{persona.tts.voice}</SelectItem>
-                    )}
-                    {kokoroVoices.map(v => <SelectItem key={v.id} value={v.id}>{v.label}</SelectItem>)}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <div className="field-hint">The kokoro-onnx voice id for this persona.</div>
-            </div>
-          )}
+          {persona.tts.engine === 'kokoro' && (() => {
+            const voice = persona.tts.voice || 'bf_isabella';
+            const langPrefix = voice.charAt(0);
+            const filtered = kokoroVoices.filter(v => v.startsWith(langPrefix));
+            const fmt = (code: string) => {
+              const [lg, name = ''] = code.split('_');
+              const g = (lg?.[1] ?? '').toUpperCase();
+              const n = name.charAt(0).toUpperCase() + name.slice(1);
+              return `${n} (${g})`;
+            };
+            return (
+              <div className="field max-w-[320px]">
+                <Label>Kokoro voice</Label>
+                <div className="field mt-3">
+                  <Label>Language</Label>
+                  <Select
+                    value={langPrefix}
+                    onValueChange={lang => {
+                      const first = kokoroVoices.find(v => v.startsWith(lang));
+                      if (first) updateTts({ voice: first });
+                    }}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {Object.entries(kokoroLanguages).map(([k, v]) => (
+                          <SelectItem key={k} value={k}>{v}</SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="field mt-3">
+                  <Label>Voice</Label>
+                  <Select
+                    value={voice}
+                    onValueChange={val => updateTts({ voice: val })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {!filtered.includes(voice) && (
+                          <SelectItem value={voice}>{fmt(voice)}</SelectItem>
+                        )}
+                        {filtered.map(v => (
+                          <SelectItem key={v} value={v}>{fmt(v)}</SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="field-hint">The kokoro-onnx voice id for this persona.</div>
+              </div>
+            );
+          })()}
 
           {persona.tts.engine === 'chatterbox' && (() => {
             const cbVoices: string[] = data?.tts?.chatterboxVoices || [];
