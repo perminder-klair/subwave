@@ -187,6 +187,7 @@ interface EmbeddingForm {
   moodVoteThreshold: string;
   confidenceThreshold: string;
   maxActiveLearningRounds: string;
+  audioFusionWeight: string; // '0' = text-only vote (fusion off)
   enrichment: EmbeddingEnrichmentForm;
 }
 
@@ -313,6 +314,7 @@ interface SettingsData {
       moodVoteThreshold?: number;
       confidenceThreshold?: number;
       maxActiveLearningRounds?: number;
+      audioFusionWeight?: number;
       enrichment?: Partial<EmbeddingEnrichmentForm>;
     };
     sfx?: { enabled?: boolean };
@@ -525,6 +527,7 @@ export default function SettingsPanel() {
         moodVoteThreshold: String(v.embedding?.moodVoteThreshold ?? 0.4),
         confidenceThreshold: String(v.embedding?.confidenceThreshold ?? 0.35),
         maxActiveLearningRounds: String(v.embedding?.maxActiveLearningRounds ?? 3),
+        audioFusionWeight: String(v.embedding?.audioFusionWeight ?? 0.5),
         enrichment: {
           lastfmTags: v.embedding?.enrichment?.lastfmTags ?? false,
           lyrics: v.embedding?.enrichment?.lyrics ?? true,
@@ -3692,6 +3695,11 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
         moodVoteThreshold: parseFloat(e.moodVoteThreshold) || 0.4,
         confidenceThreshold: parseFloat(e.confidenceThreshold) || 0.35,
         maxActiveLearningRounds: parseInt(e.maxActiveLearningRounds, 10) || 0,
+        // NaN-safe rather than `|| 0.5` — 0 is a deliberate value (fusion off)
+        // and must not be coerced back to the default.
+        audioFusionWeight: Number.isFinite(parseFloat(e.audioFusionWeight))
+          ? parseFloat(e.audioFusionWeight)
+          : 0.5,
         enrichment: {
           lastfmTags: e.enrichment.lastfmTags,
           lyrics: e.enrichment.lyrics,
@@ -4232,10 +4240,10 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
               className="max-w-[180px]"
             />
             <div className="field-hint">
-              Fraction of voting neighbours that must carry a mood for it to
-              propagate. Default <code>0.4</code> — a mood shared by ~a third of
-              the voters carries. Higher = stricter, fewer propagated tags;
-              lower = looser, more drift.
+              Fraction of the total voting <em>weight</em> a mood must carry to
+              propagate (neighbours vote weighted by similarity, so close matches
+              count for more). Default <code>0.4</code>. Higher = stricter, fewer
+              propagated tags; lower = looser, more drift.
             </div>
           </div>
 
@@ -4263,6 +4271,32 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
               product of two sub-1 numbers it compounds fast, so the default is{' '}
               <code>0.35</code>, not 0.6 (0.6 rejected even strong matches and sent
               most tracks to the LLM).
+            </div>
+          </div>
+
+          <div className="field">
+            <Label>Audio fusion weight</Label>
+            <Input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={e.audioFusionWeight}
+              onChange={(ev: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({
+                  ...f,
+                  embedding: { ...f.embedding, audioFusionWeight: ev.target.value },
+                }))
+              }
+              className="max-w-[180px]"
+            />
+            <div className="field-hint">
+              Lets tracks with a &ldquo;sounds-like&rdquo; (CLAP) vector pull
+              audio-similar neighbours into the mood vote, scaled by this weight —
+              sound is the stronger mood signal for instrumentals and tracks with
+              thin metadata. <code>0</code> = text-only vote; <code>1</code> =
+              trust audio similarity as much as text. Default <code>0.5</code>.
+              Only applies where the acoustic analysis has produced audio vectors.
             </div>
           </div>
 

@@ -11,7 +11,7 @@
 // Run: `tsx scripts/tag-propagator.test.ts` (folded into `npm run test`).
 
 import assert from 'node:assert/strict';
-import { vote, type NeighbourTags } from '../src/music/tag-propagator.js';
+import { vote, fuseNeighbours, type NeighbourTags } from '../src/music/tag-propagator.js';
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -183,6 +183,38 @@ async function main() {
       { moodVoteThreshold: 0.5, k: 2 },
     );
     assert.deepEqual(result, { moods: [], energy: null, confidence: 0, votingNeighbours: 0 });
+  });
+
+  console.log('fuseNeighbours (CLAP audio fusion):');
+
+  await test('blend 0 or no audio hits → text list unchanged (today\'s behaviour)', () => {
+    const text = [hit('a', 0.7), hit('b', 0.5)];
+    assert.deepEqual(fuseNeighbours(text, [hit('c', 0.9)], 0, 2), text);
+    assert.deepEqual(fuseNeighbours(text, [], 0.5, 2), text);
+  });
+
+  await test('audio neighbours displace the weak text tail, list stays capped at k', () => {
+    const fused = fuseNeighbours(
+      [hit('a', 0.7), hit('b', 0.3)],
+      [hit('c', 0.9)],
+      0.5,
+      2,
+    );
+    // c enters at 0.9 × 0.5 = 0.45, pushing b (0.3) out; a stays on top.
+    assert.deepEqual(fused, [hit('a', 0.7), hit('c', 0.45)]);
+  });
+
+  await test('a track surfaced by both spaces appears once, at its higher score', () => {
+    const fused = fuseNeighbours([hit('a', 0.5)], [hit('a', 0.9)], 0.5, 4);
+    assert.deepEqual(fused, [hit('a', 0.5)]); // max(0.5, 0.45), no duplicate
+    const audioWins = fuseNeighbours([hit('a', 0.3)], [hit('a', 0.9)], 0.5, 4);
+    assert.deepEqual(audioWins, [hit('a', 0.45)]);
+  });
+
+  await test('scores stay cosine-shaped: negatives clamp, blend clamps to 0..1', () => {
+    const fused = fuseNeighbours([hit('a', -0.2)], [hit('b', 0.8)], 5, 4);
+    // blend clamped to 1 (not 5); negative text sim clamps to 0.
+    assert.deepEqual(fused, [hit('b', 0.8), hit('a', 0)]);
   });
 
   if (failures > 0) {

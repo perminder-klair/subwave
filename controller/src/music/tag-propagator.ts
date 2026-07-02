@@ -31,6 +31,39 @@ export interface VoteOpts {
   weightOf?: (id: string) => number;
 }
 
+// Fuse text-space and CLAP audio-space KNN lists into one neighbour ranking
+// for the mood vote. The audio cosine is scaled by `blend` (0..1, the
+// operator's settings.embedding.audioFusionWeight) to put it on a comparable
+// footing with text similarity; a track surfaced by BOTH spaces keeps the
+// higher of its two scores (max, not sum — the result must stay a
+// cosine-shaped 0..1 because vote()'s confidence formula reads topSim off it).
+// The fused list is re-capped at k so coverage/confidence semantics don't
+// shift: audio neighbours displace the weak tail of the text list rather than
+// widening the vote. With blend 0 or no audio hits this is exactly the text
+// list — today's behaviour.
+export function fuseNeighbours(
+  text: KnnHit[],
+  audio: KnnHit[],
+  blend: number,
+  k: number,
+): KnnHit[] {
+  const b = Math.min(1, Math.max(0, blend));
+  if (b <= 0 || audio.length === 0) return text.slice(0, Math.max(0, k));
+  const fused = new Map<string, number>();
+  for (const h of text) {
+    const s = Math.max(0, h.similarity);
+    fused.set(h.id, Math.max(fused.get(h.id) ?? 0, s));
+  }
+  for (const h of audio) {
+    const s = Math.max(0, h.similarity) * b;
+    fused.set(h.id, Math.max(fused.get(h.id) ?? 0, s));
+  }
+  return [...fused.entries()]
+    .map(([id, similarity]) => ({ id, similarity }))
+    .sort((x, y) => y.similarity - x.similarity)
+    .slice(0, Math.max(0, k));
+}
+
 // Vote on moods + energy from a KNN result. Caller supplies a lookup function
 // so we don't have to import library-db here (keeps this file unit-testable).
 //

@@ -40,7 +40,7 @@ import * as settings from '../settings.js';
 import * as embeddings from './embeddings.js';
 import { selectSeeds } from './seed-selector.js';
 import { selectEnrichIds } from './enrich-scope.js';
-import { vote } from './tag-propagator.js';
+import { vote, fuseNeighbours } from './tag-propagator.js';
 import { summariseEval, formatEvalSummary } from './propagation-eval.js';
 import { config } from '../config.js';
 import { loadSecretsIntoEnv } from '../setup/secrets.js';
@@ -324,11 +324,23 @@ async function main() {
   // embedding is dominated by artist/album, so its KNN list is mostly its own
   // album mates; at full weight one mistagged seed swept its whole album, and
   // cross-album corroboration never got a say (the same-album echo chamber).
+  //
+  // When the track has a CLAP "sounds-like" vector, audio-KNN neighbours are
+  // fused into the list at audioFusionWeight before the vote — sound is the
+  // stronger mood signal for instrumentals / thin-metadata tracks, and CLAP
+  // doesn't cluster by album. knnAudioById returns [] for un-analysed tracks,
+  // so fusion degrades to text-only per track, not per run.
   const SAME_ALBUM_WEIGHT = 0.5;
+  const audioFusionWeight = clamp01(embedCfg.audioFusionWeight ?? 0.5);
   const voteForTrack = (id: string) => {
     const target = db.getTrack(id);
+    const textNeighbours = db.knnById(id, knnK);
+    const neighbours =
+      audioFusionWeight > 0
+        ? fuseNeighbours(textNeighbours, db.knnAudioById(id, knnK), audioFusionWeight, knnK)
+        : textNeighbours;
     return vote(
-      db.knnById(id, knnK),
+      neighbours,
       (nId) => {
         const t = db.getTrack(nId);
         if (!t || t.moods.length === 0) return null;
@@ -353,8 +365,19 @@ async function main() {
   logEvent('info', `Embedding model — ${embeddings.activeModelLabel()} (dim=${embeddingDim})`);
   console.log(
     `[tag] batch=${flags.batchSize} maxRounds=${maxRounds} knnK=${knnK} ` +
-      `moodVote=${moodVoteThreshold} confidence=${confidenceThreshold}`,
+      `moodVote=${moodVoteThreshold} confidence=${confidenceThreshold} ` +
+      `audioFusion=${audioFusionWeight}`,
   );
+  if (audioFusionWeight > 0) {
+    const audioVecs = db.audioVectorCount();
+    if (audioVecs > 0) {
+      logEvent(
+        'info',
+        `Audio fusion on — ${audioVecs.toLocaleString('en-GB')} sounds-like vectors ` +
+          `join the mood vote (weight ${audioFusionWeight})`,
+      );
+    }
+  }
 
   // A re-scan re-embed rebuilds the vector population; a normal --reseed run does
   // it as part of its forward pass and doesn't need the snapshot below.

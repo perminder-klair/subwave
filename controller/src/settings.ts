@@ -952,6 +952,14 @@ const DEFAULTS = {
     moodVoteThreshold: 0.4,   // was 0.6 — a mood carried by ~a third propagates
     confidenceThreshold: 0.35, // was 0.6 — see the topSim×coverage note above
     maxActiveLearningRounds: 3,
+    // CLAP audio fusion in mood propagation: tracks with a "sounds-like"
+    // audio vector also pull neighbours from the audio-KNN space, scaled by
+    // this weight, before the mood vote (tag-propagator.ts fuseNeighbours).
+    // Sound is the stronger mood signal for instrumentals / thin-metadata
+    // tracks, and CLAP neighbours don't cluster by album. 0 = text-only
+    // (today's behaviour); 1 = trust audio similarity as much as text. Only
+    // bites where the acoustic analysis has produced audio vectors.
+    audioFusionWeight: 0.5,
     enrichment: {
       // Last.fm crowd tags. Tri-state: true = always fetch, false = never,
       // null = auto (fetch only when a Last.fm api_key is configured — see
@@ -1581,6 +1589,10 @@ export async function load() {
         && stored.embedding.maxActiveLearningRounds >= 0
           ? Math.floor(stored.embedding.maxActiveLearningRounds)
           : DEFAULTS.embedding.maxActiveLearningRounds,
+      audioFusionWeight:
+        Number.isFinite(stored.embedding?.audioFusionWeight)
+          ? clamp01(stored.embedding.audioFusionWeight)
+          : DEFAULTS.embedding.audioFusionWeight,
       enrichment: {
         lastfmTags:
           typeof stored.embedding?.enrichment?.lastfmTags === 'boolean'
@@ -2628,6 +2640,13 @@ export async function update(patch) {
         throw new Error('embedding.maxActiveLearningRounds must be an integer 0-10');
       }
       next.embedding.maxActiveLearningRounds = v;
+    }
+    if (e.audioFusionWeight !== undefined) {
+      const v = parseFloat(e.audioFusionWeight);
+      if (!Number.isFinite(v) || v < 0 || v > 1) {
+        throw new Error('embedding.audioFusionWeight must be between 0 and 1');
+      }
+      next.embedding.audioFusionWeight = v;
     }
     if (e.enrichment !== undefined) {
       const en = e.enrichment || {};
