@@ -4,6 +4,7 @@
 // (/tag-library) and the ones that report on it (/settings).
 import { spawn, ChildProcess } from 'node:child_process';
 import { queue } from './queue.js';
+import * as coverage from '../music/library-coverage.js';
 import { PROGRESS_PREFIX, EVENT_PREFIX, type TaggerProgress, type TaggerEvent } from '../music/tagger-progress.js';
 import { writePidfile, clearPidfile, readPidfile, isPidAlive, MANAGED_ENV } from '../music/tagger-lock.js';
 
@@ -267,6 +268,10 @@ function spawnChild(mode: TaggerMode, args: string[], detail: string) {
       startedAt,
       finishedAt: new Date().toISOString(),
     };
+    // The run just walked the whole Navidrome catalogue, so library-coverage's
+    // 6h-TTL total is now the stalest number on the page — refresh it in the
+    // background (fire-and-forget) so the hero meter reflects the fresh count.
+    coverage.refresh().catch(() => {});
     queue.log('scheduler', `${label} finished (${signal ? `signal ${signal}` : `exit ${code}`})`);
   });
   queue.log('scheduler', `${label} started${detail ? ` (${detail})` : ''}`);
