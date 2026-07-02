@@ -119,15 +119,18 @@ and `dj_transition` reads `a.metadata` for the fades to keep fade == buffer
   `d` the transition gets (clash-y pairs tend to earn long adaptive blends
   anyway, and the audible floor is `CROSS_MIN_SECONDS = 6` — a `0.7·d` close
   is ≥ 4 s, against the PR's 0.5 s).
-- **Found during design — suspected off-by-one in shipped feature 1** (develop,
-  predates PR #606): `applyMixTransition` computes `crossSecondsFor(prev,
-  item)` — including the cap to *item's* intro — but stamps the result on
-  `item`, whose stamp physically governs the item→*next* transition, not
-  prev→item. The harness (Phase 1) renders transitions with distinct stamps to
-  confirm which transition gets which length; if confirmed, it's filed as a
+- **Found during design, CONFIRMED empirically — off-by-one in shipped
+  feature 1** (develop, predates PR #606): `applyMixTransition` computes
+  `crossSecondsFor(prev, item)` — including the cap to *item's* intro — but
+  stamps the result on `item`, whose stamp physically governs the item→*next*
+  transition, not prev→item. Verified with the harness (`xdur.liq` render): a
+  track stamped `liq_cross_duration=12` against a cross default of 4 produced
+  a 12 s buffer **at its own end** (output duration 78 s = 50 − 12 + 40, and
+  the callback logged d=12 for a→b, d=4 for the unstamped b). Filed as a
   separate issue, not fixed in this branch (the correct fix needs a different
   signalling channel, since the pair (item, next) isn't known when `item` is
-  annotated).
+  annotated). The same render is what proves the washout canvas stamp lands on
+  exactly the right transition.
 
 ## Design — Liquidsoap (`liquidsoap/radio.liq`)
 
@@ -143,7 +146,8 @@ and `dj_transition` reads `a.metadata` for the fades to keep fade == buffer
   dry always passing) is what made the muffle sound half-hearted; at a 9 kHz
   open cutoff, wet=1 is still near-transparent at idle, so the cutoff does all
   the work.
-- **Envelope** (thread.run.recurrent, 0.05 s steps, fired from the callback):
+- **Envelope** (implemented as a pure closure of `source.elapsed()` on the
+  transition branch — see "Envelopes are audio-time closures" below):
   - Close over `T_close = 0.7·d` with a smoothstep ease
     (`depth = 3x² − 2x³`, x = e/T_close) — no audible corner at the start.
   - Cutoff mapped **exponentially** (log-frequency space):
@@ -154,8 +158,6 @@ and `dj_transition` reads `a.metadata` for the fades to keep fade == buffer
     phase** — the outgoing branch ends with the cross; there is nothing to
     reopen. (This is what kills symptom 2: the incoming branch never passes
     through the filter.)
-  - Reset `sweep_cutoff := open` when the envelope ends (at `e ≥ d`), guarded
-    by `sweep_firing` as today.
 - **Deleted:** the post-cross `filter.rc` pair on the music bus, `sweep_wet`
   (wetness is fixed inside the branch). The jingle caveat (a jingle airing
   inside a ramp gets swept) disappears — the effect exists only on the
@@ -177,26 +179,29 @@ and `dj_transition` reads `a.metadata` for the fades to keep fade == buffer
   - Comb sits **after** the fade, so once the dry input falls away the
     feedback loop self-sustains — the tail keeps pulsing and decaying over the
     incoming track with no dry signal under it. That is the dissolve.
-- **Envelope** (same recurrent-thread pattern):
-  - Swell `washout_fb` from −90 dB → **−2.5 dB** over the first `0.25·d`
+- **Envelope** (same closure pattern):
+  - Swell feedback from −90 dB → **−2.5 dB** over the first `0.25·d`
     (smoothstep).
   - Hold to `0.75·d`.
   - Release back to −90 dB by `0.95·d` — the taps must decay ≥ ~30 dB before
     the transition source ends, so the tail never truncates with a click.
-  - `washout_firing` guard retained.
 - **Deleted:** the pre-cross bus `comb`, `washout_watch`, `washout_armed`, the
   `on_meta` arming line, the fixed `washout_delay` constant.
 
-### Shared
+### Shared: envelopes are audio-time closures (found during implementation)
 
-- Both effects read their envelope refs via getters inside per-transition
-  operator instances; the refs stay module-level (as in the PR) so the
-  recurrent threads can drive them. One transition at a time can fire each
-  effect (`*_firing` guards; a second flagged transition inside a live
-  envelope logs and plays a normal cross).
-- If both flags coincide on one transition (washout out of `a`, sweep into
-  `b`), both chains stack on `a.source` — allowed; the harness renders this
-  combo case to confirm it degrades gracefully.
+The spec originally kept the PR's `thread.run.recurrent` envelopes driving
+shared refs. Building the render harness exposed why that's wrong: thread
+envelopes run in **wall-clock** time while audio can run on any clock — under
+`sync="none"` (offline renders) the envelope never moves, and even on-air the
+thread quantises to 50 ms steps and can drift. The implementation instead
+computes each envelope as a **pure closure of `source.elapsed()`** on the
+transition branch, evaluated per frame by the operator's getter:
+sample-accurate in audio time, faithful in offline renders, and with **no
+shared state at all** — no refs, no `*_firing` guards, no reset logic; the
+closure dies with the transition. If both flags coincide on one transition
+(washout out of `a`, sweep into `b`), both chains stack on `a.source` —
+allowed; the harness renders this combo case.
 
 ## Design — Controller
 

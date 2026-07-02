@@ -169,7 +169,7 @@ export const PICK_SCHEMA = z.object({
   reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just note what makes THIS pick a fresh step (new artist, a shift in energy/era/texture), not a vibe label you would recycle pick after pick (e.g. "new artist, lifts the energy", never a repeated "mellow reflective step")'),
   say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). When the event says stay silent, set this to null'),
   // Transition effects (only honoured when the system prompt offers them — persona djMode, see settings.effectsActive).
-  transition: z.enum(['normal', 'sweep', 'washout']).nullable().describe('special transition effect for this pick, used RARELY: "sweep" muffles the music under a lowpass that opens across the crossfade INTO this pick (it surfaces from far away) — for a big mood/energy jump; "washout" dissolves THIS track into a decaying echo tail as it ENDS, bleeding into the next track — for closing a segment or a dreamy/ambient pick; "normal" or null for an ordinary crossfade'),
+  transition: z.enum(['normal', 'sweep', 'washout']).nullable().describe('special transition effect for this pick, used RARELY: "sweep" — the track playing before your pick sinks under a slowly closing filter across the blend while your pick rises clean underneath; choose it for a real gear-change (big jump in energy, tempo, or mood). "washout" — THIS pick dissolves into a pulsing echo tail as it ENDS, ringing out into whatever follows; choose it to close a chapter (end of a themed run, before a talk break, or out of a dreamy track). "normal" or null for an ordinary crossfade'),
 });
 
 const REQUEST_SCHEMA = z.object({
@@ -193,7 +193,7 @@ const REQUEST_SCHEMA = z.object({
 // otherwise, so the model leaves "transition" null.
 function effectsGuidance(): string {
   if (!settings.effectsActive()) return '';
-  return `\n\nTRANSITION EFFECTS ("transition") — use rarely, at most one in a set, only when it serves the moment:\n- "sweep": the music muffles under a lowpass that opens back up across the crossfade INTO your pick, so the new track surfaces from far away. Choose it on a big mood/energy jump.\n- "washout": this track dissolves into a decaying echo tail as it ENDS and bleeds into the next track. Choose it to close a segment, or for a dreamy/ambient pick. Otherwise "normal" or null.`;
+  return `\n\nTRANSITION EFFECTS ("transition") — use rarely, at most one in a set, only when it serves the moment. The station validates your choice against the audio analysis and may skip it if the transition does not warrant it:\n- "sweep": the track playing before your pick sinks under a slowly closing filter across the blend while your pick rises clean underneath. Choose it for a real gear-change — a big jump in energy, tempo, or mood (it only fires when the tracks genuinely clash).\n- "washout": your pick dissolves into a pulsing, tempo-synced echo tail as it ENDS, ringing out into whatever follows. Choose it to close a chapter: the end of a themed run, before a talk break, or out of a dreamy/ambient track. Otherwise "normal" or null.`;
 }
 
 export function pickSystem() {

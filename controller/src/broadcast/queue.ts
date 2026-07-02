@@ -82,6 +82,7 @@ class Queue {
   autoLink = true;             // toggle: random DJ links between auto tracks
   tracksUntilLink = pickLinkInterval();
   _transitionsSinceSfx = 999;  // DJ-mode transition-FX spacing counter (see drainToLiquidsoap)
+  _transitionsSinceEffect = 999;  // sweep/washout spacing counter (see applyMixTransition)
   _persistTimer: NodeJS.Timeout | null = null; // debounce for the queue.json snapshot
   _recentPlaysTimer: NodeJS.Timeout | null = null; // debounce for the recent-plays.json sidecar
   _recentPlays: { id: string | null; title: string | null; artist: string | null; endedAt: string }[] = [];
@@ -402,18 +403,48 @@ class Queue {
     return Infinity;
   }
 
+  // Spacing for the DJ transition effects (sweep/washout). Unlike the SFX
+  // ladder there is no Infinity tier: the DJ explicitly chose the effect, so
+  // even a quiet persona gets one occasionally.
+  effectTransitionGap(): number {
+    const f = settings.effectiveFrequency();
+    if (f === 'aggressive') return 4;
+    if (f === 'moderate') return 8;
+    return 12;
+  }
+
+  // Drop any transition-effect flags from a track (with a logged reason) so
+  // getAnnotatedUri never stamps an effect the gate rejected.
+  stripEffect(track: any, reason: string) {
+    const kind = track.sweep ? 'sweep' : 'washout';
+    delete track.sweep;
+    delete track.washout;
+    this.log('mix', `${kind} dropped (${reason})`);
+  }
+
   // DJ-mode mixing applied to the transition INTO `item`'s track (features 1 &
-  // 2). No-op unless the active persona is in DJ mode. Stashes a per-transition
-  // crossfade length on the track (read by subsonic.getAnnotatedUri →
-  // liq_cross_duration) and, on a notable upward tempo jump, fires a rate-
-  // limited riser across the blend. Both require both tracks to be analysed.
+  // 2, plus the sweep/washout transition effects). No-op unless the active
+  // persona is in DJ mode. Stashes a per-transition crossfade length on the
+  // track (read by subsonic.getAnnotatedUri → liq_cross_duration) and, on a
+  // notable upward tempo jump, fires a rate-limited riser across the blend.
   applyMixTransition(item: any) {
     const persona = settings.getEffectivePersona();
-    if (!persona?.djMode || !item?.track) return;
+    if (!item?.track) return;
+    // Persona flipped out of DJ mode between the pick and the drain: the
+    // effects gate below never runs, so make sure no flag survives to annotate.
+    if (!persona?.djMode) {
+      if (item.track.sweep || item.track.washout) this.stripEffect(item.track, 'dj mode off');
+      return;
+    }
 
     const idx = this.upcoming.indexOf(item);
     const prevTrack = (idx > 0 ? this.upcoming[idx - 1]?.track : null) || this.current?.track || null;
-    if (!prevTrack) return;
+    if (!prevTrack) {
+      // Nothing on-air to validate against (first track after boot) — an
+      // effect on a cold start would garnish silence; drop it.
+      if (item.track.sweep || item.track.washout) this.stripEffect(item.track, 'no predecessor');
+      return;
+    }
 
     const cur = this.mixAnalysisFor(prevTrack);
     const next = this.mixAnalysisFor(item.track);
@@ -434,10 +465,42 @@ class Queue {
       this.log('mix', `blend ${secs}s → ${item.track.title}`);
     }
 
+    // DJ transition effects (sweep/washout) — the agent proposes, the data
+    // disposes. Cooldown first (cheap), then the analyzer gate; a rejected
+    // flag is stripped so getAnnotatedUri never stamps it. On success the
+    // washout also gets its canvas + tempo stamps: cross-duration physics puts
+    // both on the flagged track itself (its liq_cross_duration governs its OWN
+    // end, exactly where the wash fires — overriding the feature-1 value). The
+    // sweep needs no stamps: the transition INTO it is already sized, and its
+    // envelope scales to whatever d it gets.
+    const wantsEffect: 'sweep' | 'washout' | null =
+      item.track.sweep ? 'sweep' : item.track.washout ? 'washout' : null;
+    this._transitionsSinceEffect++;
+    let effectFired = false;
+    if (wantsEffect) {
+      const gap = this.effectTransitionGap();
+      if (this._transitionsSinceEffect < gap) {
+        this.stripEffect(item.track, `cooldown ${this._transitionsSinceEffect}/${gap}`);
+      } else if (!mix.effectAllowedFor(wantsEffect, cur, next)) {
+        this.stripEffect(item.track, 'tracks too compatible — beat-blend beats a sweep');
+      } else {
+        this._transitionsSinceEffect = 0;
+        effectFired = true;
+        if (wantsEffect === 'washout') {
+          item.track.crossSec = mix.washoutCrossSecondsFor(next, maxSec);
+          item.track.washoutDelay = mix.washoutDelayFor(next.bpm);
+          this.log('mix', `washout armed: ${item.track.crossSec}s canvas, ${item.track.washoutDelay}s tap → ${item.track.title}`);
+        } else {
+          this.log('mix', `sweep armed → ${item.track.title}`);
+        }
+      }
+    }
+
     // Feature 2 — transition FX, spaced by the chattiness ladder and gated on
-    // settings.sfx.enabled; never two transitions in a row.
+    // settings.sfx.enabled; never two transitions in a row, and never a riser
+    // over a sweep/washout transition.
     this._transitionsSinceSfx++;
-    if (settings.get().sfx?.enabled && this._transitionsSinceSfx >= this.sfxTransitionGap()) {
+    if (!effectFired && settings.get().sfx?.enabled && this._transitionsSinceSfx >= this.sfxTransitionGap()) {
       const fx = mix.transitionSfxFor(cur, next);
       if (fx) {
         this._transitionsSinceSfx = 0;

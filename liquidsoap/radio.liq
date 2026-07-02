@@ -30,35 +30,19 @@ aac_bitrate = ref(192)
 stream_bitrate = ref(192)
 station_name = ref("SUB/WAVE")
 
-# DJ filter sweep state. The music passes through a getter-controlled 2-stage
-# lowpass (filter.rc, see below — AFTER `cross`, so the ramp shapes the actual
-# crossfade output); idle state is sweep_wet=0 so the filter is fully bypassed
-# and normal playout is untouched. On a transition the controller flags
-# `liq_sweep` (annotate:, via subsonic.getAnnotatedUri, driven by the DJ agent's
-# transition:'sweep' choice); dj_transition then ramps these refs to muffle the
-# music closed then open across the crossfade. NB: the SVF `filter` operator
-# goes unstable near sr/4 (~11 kHz @ 44.1 k) and collapses the signal to
-# near-silence — hence filter.rc, with the "open" cutoff capped at 9 kHz; the
-# sweep is driven mainly by `sweep_wet` (wetness=0 is bit-transparent dry, so
-# idle playout is untouched and the sweep ends seamlessly). Verified on
-# liquidsoap v2.2.5.
-sweep_cutoff = ref(9000.)
-sweep_wet = ref(0.)
-sweep_firing = ref(false)  # envelope ramp in progress (re-entry guard)
-
-# DJ washout state. A getter-controlled feedback delay (`comb`) sits on the music
-# BEFORE `cross` (see below; the sweep filter.rc sits post-cross, downstream of
-# it). Idle feedback is -90 dB so the delay taps fall below the noise floor
-# (effectively dry playout). When the
-# on-air track is flagged `liq_washout` (annotate:, via subsonic.getAnnotatedUri,
-# driven by the DJ agent's transition:'washout' choice), a remaining()-driven
-# watcher (see washout_watch, below the on_meta hook) swells the feedback up as
-# the track ENDS so it dissolves into a decaying echo tail that bleeds across the
-# crossfade into the next track, then releases back to silent. Unlike the sweep
-# (triggered from inside dj_transition, where the outgoing tail is already
-# buffered), the washout is timed off source.remaining so the swell starts BEFORE
-# the cross buffers the tail — that's what makes it wash the OUTGOING track, not
-# the incoming one.
+# DJ transition effects (filter sweep + echo washout) — see dj_transition
+# below. Both effects are built PER-BRANCH inside the transition callback, on
+# the OUTGOING track's source only: idle playout never passes through an
+# effect operator at all, and the incoming track always lands clean and dry —
+# the way a DJ's filter/echo ride the channel that's leaving. The envelopes
+# are pure functions of source.elapsed() on the transition branch (closures,
+# no threads, no shared state): sample-accurate in AUDIO time, so they hold
+# under any clock — the offline render harness (sync="none") exposed that
+# wall-clock thread envelopes and audio time drift apart.
+# Verified on liquidsoap v2.2.5 (scripts/fx-render-test.sh probe): filter.rc
+# and comb instantiate cleanly INSIDE the cross callback on a
+# request.queue-backed source — the "Early computation of source content-type"
+# crash is specific to iir_filter/HPF — and audibly alter the render.
 # WHY comb, NOT echo: liquidsoap's native `echo` (incl. its ping_pong flag) is a
 # verified NO-OP in this savonet/liquidsoap:v2.2.5 build — it type-checks but
 # passes audio through bit-for-bit unchanged (confirmed by render: identical
@@ -66,10 +50,9 @@ sweep_firing = ref(false)  # envelope ramp in progress (re-entry guard)
 # with a getter-controlled `feedback`. The tail is therefore centred, not a true
 # L/R ping-pong; real stereo bounce would need the heavier ffmpeg.filter.aecho
 # send path. Do NOT "simplify" this back to `echo`.
-washout_fb = ref(-90.)      # comb feedback in dB (negative); -90 ≈ silent/dry
-washout_delay = 0.30        # delay tap spacing in seconds (fixed at graph-up)
-washout_armed = ref(false)  # on-air track carries liq_washout (set in on_meta)
-washout_firing = ref(false) # envelope ramp in progress (one fire per track)
+# NB: the SVF `filter` operator goes unstable near sr/4 (~11 kHz @ 44.1 k) and
+# collapses the signal to near-silence — hence filter.rc with the "open" cutoff
+# capped at 9 kHz (near-transparent on music).
 
 if file.exists("/var/sub-wave/liquidsoap_jingle_ratio.txt") then
   raw = string.trim(file.contents("/var/sub-wave/liquidsoap_jingle_ratio.txt"))
@@ -271,17 +254,14 @@ music = cue_cut(music)
 # The function receives records `a` and `b` with fields `.source`,
 # `.metadata`, `.db_level`. Reach into `.source` for the audio.
 #
-# DJ FILTER SWEEP: an earlier revision low-pass-filtered the outgoing track
-# from INSIDE this callback for a sweep feel. That triggered a runtime error —
-# `Early computation of source content-type detected for source iir_filter!` —
-# because `cross` invokes the callback before the content-type is negotiated,
-# and IIR filters on a not-yet-typed `request.queue`-backed source fail the same
-# way the HPF on the mic chain does. The fix (now implemented): a getter-
-# controlled 2-stage filter.rc sits on the music bus AFTER `cross` (instantiated
-# at graph-up, so no early-computation error — see the music = filter.rc line
-# below the cross), and the callback only nudges the shared sweep_cutoff/
-# sweep_wet refs — it never instantiates a filter. Verified to come up clean on
-# liquidsoap v2.2.5.
+# DJ TRANSITION EFFECTS live INSIDE this callback, per-branch on the outgoing
+# source (see the state block near the top of this file). Instantiating
+# operators here is safe for filter.rc and comb specifically — proven against
+# the real v2.2.5 image by scripts/fx-render-test.sh probe. The historical
+# `Early computation of source content-type detected for source iir_filter!`
+# crash is specific to IIR filters (iir_filter/HPF) on a not-yet-typed
+# `request.queue`-backed source; re-test with the probe before adding any OTHER
+# operator class inside this callback.
 # DJ-mode adaptive blend: the controller may stamp `liq_cross_duration` on a
 # track (annotate:, via subsonic.getAnnotatedUri) to size its transition from
 # tempo/harmonic compatibility. CRITICAL: `cross` reads `liq_cross_duration` to
@@ -294,108 +274,88 @@ music = cue_cut(music)
 # fade shorter than the buffer sums to +6 dB (doubling). Reading `a` keeps
 # fade == buffer — the invariant the whole section depends on.
 # Absent / unparseable → crossfade_duration(), i.e. the global startup default.
-# Envelope: a quick gesture AT the transition — ATTACK (dip into the muffle) →
-# HOLD (brief) → RELEASE (open back up). The filter is applied AFTER the cross
-# (see the music = filter.rc line below the cross), so this ramp shapes the
-# actual crossfade output in real time: the mix dips under the lowpass right as
-# the song changes and rises back out. (Pre-cross the muffle rode the incoming
-# track while it faded up under the still-dry outgoing track → only audible
-# mid-song, not at the transition — found while tuning.) Drives a 2-stage
-# filter.rc; SVF filter() is too weak and IIR filters crash with "Early
-# computation of source content-type" here. Self-stopping via
-# thread.run.recurrent (tick returns the next delay; <0 stops). Guarded by
-# sweep_firing so two flagged transitions inside one ~7s envelope can't race on
-# the shared refs (theoretical with song-length tracks, cheap to rule out).
-# `d` unused.
-def start_filter_sweep(d) =
-  ignore(d)
-  if sweep_firing() then
-    log("DJ filter sweep already running — skipping")
-  else
-    sweep_firing := true
-    attack  = 0.5              # dip into the muffle at the transition
-    hold    = 1.5             # brief hold at full muffle
-    release = 5.0             # open back up over ~5s
-    total = attack + hold + release
-    step_dt = 0.05
-    steps = int_of_float(total / step_dt)
-    open_cut  = 9000.0        # transparent (a 9kHz lowpass barely touches music)
-    floor_cut = 650.0         # peak muffle cutoff (2-stage filter.rc); higher = less muffled
-    max_wet   = 0.5           # cap wet/dry mix — ~half the dry signal always passes, so the dip darkens without dropping the level
-    i = ref(0)
-    sweep_cutoff := open_cut
-    sweep_wet := 0.0
-    def tick() =
-      n = i()
-      i := n + 1
-      e = float_of_int(n) * step_dt
-      depth =                                  # 0 (dry) → 1 (full muffle) → 0
-        if e < attack then e / attack
-        elsif e < attack + hold then 1.0
-        elsif e < total then 1.0 - (e - attack - hold) / release
-        else 0.0 end
-      sweep_wet := depth * max_wet
-      sweep_cutoff := open_cut - depth * (open_cut - floor_cut)
-      if n >= steps then
-        sweep_cutoff := open_cut
-        sweep_wet := 0.0
-        sweep_firing := false
-        (-1.0)        # stop the recurrent thread
-      else
-        step_dt
-      end
-    end
-    thread.run.recurrent(delay=0.0, tick)
-  end
-end
-
-# Ramp the comb feedback up, hold it across the crossfade, then release a
-# decaying tail — an asymmetric envelope: swell → hold → long release. `d` sizes
-# the hold to the crossfade so the wash peaks while the two tracks overlap.
-# Because the comb's delay line is full of the OUTGOING track when the cross
-# flips to the incoming one, that tail rings out over the new track's opening,
-# then decays as the feedback releases to silent. Self-stopping via
-# thread.run.recurrent (the tick returns the next delay; negative stops it).
-def start_washout(d) =
-  washout_firing := true
-  swell = 1.8                              # ramp up over ~1.8s into the cross
-  hold = if d < 1.0 then 1.0 else d end    # hold ~ the crossfade length
-  release = 3.0                            # decaying tail over ~3s
-  total = swell + hold + release
-  fb_max = -1.6                            # peak feedback dB (longer tail nearer 0; stays <unity)
-  fb_off = -90.0                           # idle/silent
-  step_dt = 0.05
-  steps = int_of_float(total / step_dt)
-  i = ref(0)
-  def tick() =
-    n = i()
-    i := n + 1
-    e = float_of_int(n) * step_dt
-    fb =
-      if e < swell then fb_off + (e / swell) * (fb_max - fb_off)
-      elsif e < swell + hold then fb_max
-      elsif e < total then fb_max + ((e - swell - hold) / release) * (fb_off - fb_max)
-      else fb_off end
-    washout_fb := fb
-    if n >= steps then
-      washout_fb := fb_off
-      washout_firing := false
-      (-1.0)        # stop the recurrent thread
-    else
-      step_dt
-    end
-  end
-  thread.run.recurrent(delay=0.0, tick)
-end
-
 def dj_transition(a, b) =
   d = float_of_string(default=crossfade_duration(), a.metadata["liq_cross_duration"])
-  # Fire the sweep when the INCOMING track is the one the DJ flagged.
-  if b.metadata["liq_sweep"] == "true" then
-    log("DJ filter sweep on this transition")
-    start_filter_sweep(d)
-  end
-  a_source = fade.out(duration=d, initial_metadata=a.metadata, a.source)
+  # Washout rides the ENDING track's own annotation — `a` IS the flagged track,
+  # so there is no arming, no remaining() watcher, and no race against a
+  # listener request jumping the queue. The controller stamps liq_washout_delay
+  # (tempo-synced, dotted-eighth of the track's BPM) alongside the flag.
+  washing = a.metadata["liq_washout"] == "true"
+  # Sweep rides the INCOMING pick's annotation ("sweep into my pick") but the
+  # filter is applied to the OUTGOING branch: the track we're leaving sinks
+  # under a closing lowpass while the pick rises clean underneath.
+  sweeping = b.metadata["liq_sweep"] == "true"
+  # Washout drops the dry signal early (exp fade) so the tail reads as a
+  # dissolve. An early drop sums BELOW unity mid-cross — a dip, which is the
+  # effect; the +6 dB doubling hazard is only for fades that hold full level
+  # early (see the fade == buffer invariant above).
+  a_source =
+    if washing then
+      fade.out(duration=d, type="exp", initial_metadata=a.metadata, a.source)
+    else
+      fade.out(duration=d, initial_metadata=a.metadata, a.source)
+    end
+  # SWEEP ENVELOPE — how a DJ rides the filter out of a track: a slow
+  # smoothstep close over the first 70% of the blend, held at the floor while
+  # the fade finishes. The cutoff moves in LOG-frequency space (pow) — linear
+  # Hz ramps sound like nothing-then-everything; log space is how a filter
+  # knob feels. No release phase: the outgoing branch ends with the cross, so
+  # there is nothing to reopen. Pure function of the branch's own
+  # source.elapsed(), evaluated per frame by the getter — audio-time-accurate
+  # under any clock, no threads, no shared state.
+  a_source =
+    if sweeping then
+      log("DJ sweep: closing the filter over the outgoing track (d=#{d}s)")
+      sweep_src = a_source
+      def sweep_cut() =
+        e = source.elapsed(sweep_src)
+        e = if e < 0. then 0. else e end
+        t_close = 0.7 * d
+        x = if e >= t_close then 1.0 else e / t_close end
+        depth = 3.0 * x * x - 2.0 * x * x * x     # smoothstep 0→1
+        9000.0 * pow(400.0 / 9000.0, depth)       # 9 kHz open → 400 Hz floor
+      end
+      filter.rc(frequency=sweep_cut, mode="low", wetness=1.,
+        filter.rc(frequency=sweep_cut, mode="low", wetness=1., a_source))
+    else
+      a_source
+    end
+  # WASHOUT ENVELOPE — dub-style tail: the comb feedback swells over the first
+  # quarter of the blend while the exp fade above drops the dry signal away
+  # early, so the delay line SELF-SUSTAINS: the track dissolves into a pulsing,
+  # decaying tail over the incoming track's opening instead of echo layered on
+  # a still-full-level song. Feedback releases to silent by 0.95*d — the
+  # transition source is truncated at d, so the tail must decay before the
+  # window closes or it clicks off. Same closure pattern as the sweep.
+  a_source =
+    if washing then
+      wd = float_of_string(default=0.30, a.metadata["liq_washout_delay"])
+      log("DJ washout: dissolving the outgoing track, tap=#{wd}s (d=#{d}s)")
+      wash_src = a_source
+      def wash_fb() =
+        e = source.elapsed(wash_src)
+        e = if e < 0. then 0. else e end
+        fb_max = -2.5            # peak feedback dB (nearer 0 = longer tail; <unity)
+        fb_off = -90.0           # idle/silent
+        t_swell = 0.25 * d
+        t_hold  = 0.75 * d
+        t_rel   = 0.95 * d
+        if e < t_swell then
+          x = e / t_swell
+          s = 3.0 * x * x - 2.0 * x * x * x       # smoothstep swell
+          fb_off + s * (fb_max - fb_off)
+        elsif e < t_hold then
+          fb_max
+        elsif e < t_rel then
+          fb_max + ((e - t_hold) / (t_rel - t_hold)) * (fb_off - fb_max)
+        else
+          fb_off
+        end
+      end
+      comb(delay=wd, feedback=wash_fb, a_source)
+    else
+      a_source
+    end
   b_source = fade.in(duration=d, initial_metadata=b.metadata, b.source)
   add(normalize=false, [a_source, b_source])
 end
@@ -445,39 +405,15 @@ music = rotate(
 # is involved — the broadcast bus stays the brick-wall limiter only.
 music = amplify(override="liq_amplify", 1., music)
 
-# DJ filter sweep is applied AFTER the cross (just below), not here — so the ramp
-# shapes the real crossfade output in real time and the dip is heard AT the
-# transition. (Pre-cross it rode the incoming track under the dry outgoing one →
-# audible only mid-song.)
-
-# DJ washout — a getter-controlled feedback delay (`comb`) on the music BEFORE
-# the cross. Idle feedback (-90 dB) keeps the taps below the noise floor so
-# playout is effectively dry; the remaining()-driven washout_watch swells
-# washout_fb on a flagged track's outro (see start_washout). `feedback` is a
-# getter (curly braces), read live from the ref; `delay` is a fixed constant
-# (sampled at graph-up). PCM operator (same low-risk class as the sweep filter) —
-# validated to come up clean on liquidsoap v2.2.5 with no "Early computation"
-# error, stacked on the filter, and to actually alter the audio in a render
-# (native `echo` does NOT — see the WHY comb note at the refs above).
-music = comb(delay=washout_delay, feedback={washout_fb()}, music)
-
+# NB: no effect operators on the bus here — the DJ transition effects (sweep /
+# washout) are built per-transition on the outgoing branch inside dj_transition,
+# so idle playout has no effect operators in its path at all, and jingles can
+# never be caught inside a ramp.
 music = cross(
   duration=crossfade_duration(),
   dj_transition,
   music
 )
-
-# DJ filter sweep — 2-stage filter.rc on the music bus AFTER the cross, so the
-# ramp (start_filter_sweep, fired from dj_transition on a flagged track) muffles
-# the actual crossfade output in real time and opens back up as the new track
-# settles — the dip is heard right at the transition. Idle wet=0 → transparent.
-# filter.rc works in this v2.2.5 build (SVF filter() too weak; IIR filters crash
-# "Early computation"). NB: the jingle rotate sits upstream (it must stay on the
-# raw pre-cross sources — see its CRITICAL comment), so a jingle airing inside a
-# ramp gets swept too. Unavoidable given both placement constraints, and rare:
-# idle is transparent and the envelope lasts ~7s per flagged transition.
-music = filter.rc(frequency={sweep_cutoff()}, mode="low", wetness={sweep_wet()},
-          filter.rc(frequency={sweep_cutoff()}, mode="low", wetness={sweep_wet()}, music))
 
 # ---------------------------------------------------------------------------
 # DJ VOICE — TTS intros that duck the music
@@ -774,10 +710,6 @@ radio = metadata.map(update=false, strip=true, fun(_) -> [], radio)
 radio = insert_metadata(radio)
 
 def on_meta(m) =
-  # Arm the washout for THIS track if the DJ flagged it (transition:'washout').
-  # The remaining()-driven washout_watch (below) rings it out as the track ends.
-  # Set unconditionally so a non-flagged track clears any prior arming.
-  washout_armed := (m["liq_washout"] == "true")
   title = m["title"]
   artist = m["artist"]
   album = m["album"]
@@ -815,27 +747,6 @@ end
 # on_metadata is used instead of on_track because on_track gets swallowed
 # by source switches (request queue → auto playlist).
 music_meta.on_metadata(on_meta)
-
-# DJ washout watcher — fire the echo ring-out as a flagged track ENDS. Timed off
-# source.remaining(music_meta) (the PRE-cross handle, so it reports the current
-# track's true remaining) rather than from dj_transition: the swell has to start
-# BEFORE `cross` buffers the outgoing tail, so the wash lands on the OUTGOING
-# track. Trigger = crossfade_duration + a lead so the feedback is already up when
-# the cross begins. remaining() < 0 means "unknown" (live/looping source) → skip,
-# so the washout simply no-ops rather than misfiring. One fire per track
-# (washout_armed cleared on fire; re-armed by on_meta on the next track).
-def washout_watch() =
-  if washout_armed() and not washout_firing() then
-    r = source.remaining(music_meta)
-    if r >= 0.0 and r <= crossfade_duration() + 2.0 then
-      log("DJ washout: ringing out the outgoing track")
-      washout_armed := false
-      start_washout(crossfade_duration())
-    end
-  end
-  0.25
-end
-thread.run.recurrent(delay=1.0, washout_watch)
 
 # ---------------------------------------------------------------------------
 # OUTPUT — broadcast to Icecast
