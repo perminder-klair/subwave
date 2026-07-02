@@ -156,9 +156,10 @@ export type RescanOpts = {
   thenTag?: boolean;
 };
 
-// Forward-run step toggles from the modal's Run tab. All default true; an
-// unchecked box sends `false`, which the controller maps to a skip flag
-// (enrich→--skip-enrich, tagMoods→--skip-tag, analyze→--skip-analyze,
+// Forward-run step toggles from the modal's Run tab. All default true except
+// `vocal` (the Demucs pass is ~90% of the acoustics cost, so it's opt-in per
+// run); an unchecked box sends `false`, which the controller maps to a skip
+// flag (enrich→--skip-enrich, tagMoods→--skip-tag, analyze→--skip-analyze,
 // reconcile→--no-prune). Only-reconcile is routed to onReconcile instead.
 export type TagSteps = {
   reconcile: boolean;

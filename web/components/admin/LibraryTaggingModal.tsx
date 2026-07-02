@@ -61,9 +61,12 @@ const TABS: { key: Tab; label: string }[] = [
 export default function LibraryTaggingModal(p: Props) {
   const [tab, setTab] = useState<Tab>('run');
 
-  // Run-tab step selection — all on by default (today's full-run behaviour).
+  // Run-tab step selection — all on by default EXCEPT the Demucs vocal pass:
+  // measured at ~90% of the whole acoustics phase (~10s/track on a 24-thread
+  // CPU), so the default forward run stays quick and vocal coverage is a
+  // deliberate tick (or the coverage row's Backfill, which sweeps the backlog).
   const [steps, setSteps] = useState<TagSteps>({
-    reconcile: true, enrich: true, tagMoods: true, analyze: true, vocal: true,
+    reconcile: true, enrich: true, tagMoods: true, analyze: true, vocal: false,
   });
   const toggleStep = (k: keyof TagSteps) => setSteps(s => ({ ...s, [k]: !s[k] }));
 
