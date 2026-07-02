@@ -471,7 +471,12 @@ class Queue {
     // sweep on the same pick (sweep shapes its ENTRY, washout its EXIT).
     // Requests are exempt from the cap (requestedBy) so they never arm this.
     const capSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
-    const durSec = Number(item.track.duration) || 0;
+    let durSec = Number(item.track.duration) || 0;
+    // Same resolution ladder as loudness/analysis: the track object first
+    // (Subsonic picks carry it), the library row when it doesn't (agent picks
+    // resolve from the picker tools' slim projections, which omit length when
+    // the source tool didn't surface one).
+    if (!durSec && item.track.id) durSec = Number(library.get(item.track.id)?.durationSec) || 0;
     const cappedExit = !!(capSec && durSec > capSec);
     if (cappedExit && !item.track.washout) {
       item.track.washout = true;

@@ -351,10 +351,12 @@ function trackFields(song) {
     album: song.album,
     year: song.year,
     genre: song.genre,
-    // Seconds, from Subsonic. The queue needs it to spot picks that will hit
-    // the max-track-length cap (its liq_cue_out) so it can auto-arm a washout
-    // on the forced mid-song exit — see applyMixTransition.
-    duration: song.duration,
+    // Seconds. The queue needs it to spot picks that will hit the
+    // max-track-length cap (its liq_cue_out) so it can auto-arm a washout on
+    // the forced mid-song exit — see applyMixTransition. Field name varies by
+    // source: Subsonic `duration`, the picker tools' slim projection (what the
+    // agent's `seen` map stores) `duration_sec`, library rows `durationSec`.
+    duration: song.duration ?? song.duration_sec ?? song.durationSec ?? null,
   };
 }
 
@@ -614,11 +616,20 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     // tracksLikeThis ("pass the currently-playing song id") actually have one
     // to pass. Without it the agent fabricates a slug from the title/artist
     // (e.g. "lost-sultaan-romeo") and Navidrome answers "data not found".
+    // Per-pick effects reminder: the system-prompt guidance alone loses to the
+    // session history (the model sees ~40 of its own prior picks, almost all
+    // transition:"normal", and copies itself — observed on-air: 19 picks, zero
+    // washouts). The event turn is the freshest instruction in the window, so
+    // the deliberate-choice nudge rides here.
+    const effectClause = settings.effectsActive()
+      ? ' Also set "transition" deliberately for THIS pick — "washout" if it should dissolve out as it ends, "sweep" if it enters on a gear-change; only a truly same-lane blend gets "normal". Do not default to "normal" out of habit.'
+      : '';
     const eventText = `Now playing "${current?.title}" by ${current?.artist}`
       + (current?.id ? ` [id: ${current.id}]` : '')
       + (previous ? ` (after "${previous.title}" by ${previous.artist})` : '')
       + '. Pick the track to play next.'
       + linkClause
+      + effectClause
       + runClause
       + journeyClause;
     session.appendTurn({ role: 'event', kind: 'pick', text: eventText });
