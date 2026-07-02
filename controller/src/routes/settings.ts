@@ -90,6 +90,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         minTrackSeconds: settings.minTrackSeconds(s),
         archive: s.archive,
         stream: s.stream,
+        loudness: s.loudness,
         station: s.station,
         timezone: s.timezone,
         locale: s.locale,

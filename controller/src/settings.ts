@@ -702,6 +702,16 @@ const DEFAULTS = {
     aacBitrate: 192,
     bitrate: 192,
   },
+  // Per-track loudness normalisation (music/mix.ts gainForLoudness). targetLufs
+  // is what every measured track is pulled toward; maxBoostDb caps the upward
+  // direction only — cuts have a fixed wide clamp, and the boost is further
+  // limited by the track's own measured peak headroom, so widening this on a
+  // dynamic library won't slam the broadcast limiter. Read live per track at
+  // annotate time; no mixer restart.
+  loudness: {
+    targetLufs: -14,
+    maxBoostDb: 6,
+  },
   weather: { lat: 30.7333, lng: 76.7794, locationName: 'Punjab', units: 'metric' as 'metric' | 'imperial' },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
   // placeholder and returned by GET /dj for the landing page. The product is
@@ -1052,6 +1062,11 @@ const BOUNDS = {
   // 0 = off; 36000 s (10h) is a generous ceiling that still leaves room for
   // long-form mix shows without letting a typo set an absurd value.
   maxTrackSeconds: { min: 0, max: 36000, type: 'int' },
+  // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
+  loudnessTargetLufs: { min: -23, max: -9, type: 'float' },
+  // 0 disables boosting entirely (cut-only levelling); 12 dB is plenty — the
+  // per-track peak headroom cap bites long before that on dynamic material.
+  loudnessMaxBoostDb: { min: 0, max: 12, type: 'float' },
 };
 
 const MP3_BITRATE_SET = new Set<number>(MP3_BITRATES);
@@ -1351,6 +1366,20 @@ export async function load() {
         typeof stored.stream?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.stream.bitrate)
           ? stored.stream.bitrate
           : DEFAULTS.stream.bitrate,
+    },
+    loudness: {
+      targetLufs:
+        typeof stored.loudness?.targetLufs === 'number' &&
+        stored.loudness.targetLufs >= BOUNDS.loudnessTargetLufs.min &&
+        stored.loudness.targetLufs <= BOUNDS.loudnessTargetLufs.max
+          ? stored.loudness.targetLufs
+          : DEFAULTS.loudness.targetLufs,
+      maxBoostDb:
+        typeof stored.loudness?.maxBoostDb === 'number' &&
+        stored.loudness.maxBoostDb >= BOUNDS.loudnessMaxBoostDb.min &&
+        stored.loudness.maxBoostDb <= BOUNDS.loudnessMaxBoostDb.max
+          ? stored.loudness.maxBoostDb
+          : DEFAULTS.loudness.maxBoostDb,
     },
     weather: {
       lat: stored.weather?.lat ?? DEFAULTS.weather.lat,
@@ -2248,6 +2277,27 @@ export async function update(patch) {
         next.stream.bitrate = v;
         restart = true;
       }
+    }
+  }
+  if ('loudness' in patch) {
+    // Read live by queue.applyLoudnessGain when each track is annotated — no
+    // Liquidsoap file, no restart. Applies from the next queued track.
+    const lo = patch.loudness || {};
+    if (lo.targetLufs !== undefined) {
+      const v = parseFloat(lo.targetLufs);
+      const b = BOUNDS.loudnessTargetLufs;
+      if (!Number.isFinite(v) || v < b.min || v > b.max) {
+        throw new Error(`loudness.targetLufs must be number in [${b.min}, ${b.max}]`);
+      }
+      next.loudness.targetLufs = v;
+    }
+    if (lo.maxBoostDb !== undefined) {
+      const v = parseFloat(lo.maxBoostDb);
+      const b = BOUNDS.loudnessMaxBoostDb;
+      if (!Number.isFinite(v) || v < b.min || v > b.max) {
+        throw new Error(`loudness.maxBoostDb must be number in [${b.min}, ${b.max}]`);
+      }
+      next.loudness.maxBoostDb = v;
     }
   }
   if ('weather' in patch) {

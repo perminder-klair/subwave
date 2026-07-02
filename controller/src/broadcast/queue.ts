@@ -406,15 +406,27 @@ class Queue {
     return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
   }
 
-  // Resolve a track's integrated loudness (track object first, else a library
-  // lookup) and stash a clamped gain offset toward the loudness target on the
-  // track as `gainDb`. Null measurement → leaves gainDb undefined, so
-  // getAnnotatedUri emits no liq_amplify and the track plays at unity gain.
+  // Resolve a track's integrated loudness + measured peak (track object first,
+  // else a library lookup) and stash a clamped gain offset toward the
+  // operator's loudness target on the track as `gainDb`. The peak lets
+  // gainForLoudness cap the boost by real headroom instead of a blind clamp.
+  // Null measurement → leaves gainDb undefined, so getAnnotatedUri emits no
+  // liq_amplify and the track plays at unity gain.
   applyLoudnessGain(track: any) {
     if (!track) return;
     let lufs = track.loudnessLufs;
-    if (lufs == null && track.id) lufs = library.get(track.id)?.loudnessLufs ?? null;
-    const gain = mix.gainForLoudness(lufs);
+    let peakDb = track.peakDb;
+    if ((lufs == null || peakDb == null) && track.id) {
+      const rec = library.get(track.id);
+      if (lufs == null) lufs = rec?.loudnessLufs ?? null;
+      if (peakDb == null) peakDb = rec?.peakDb ?? null;
+    }
+    const loud = settings.get().loudness;
+    const gain = mix.gainForLoudness(lufs, {
+      peakDb,
+      targetLufs: loud?.targetLufs,
+      maxBoostDb: loud?.maxBoostDb,
+    });
     if (gain != null) track.gainDb = gain;
   }
 
