@@ -5,6 +5,25 @@
 
 import { isTransient, errReason } from './pure.js';
 
+// Retry-After (seconds, or an HTTP-date) — RFC 9110 §10.2.3. Providers rate-
+// limiting a 429 commonly tell the caller exactly how long to wait (OpenAI,
+// Anthropic, Groq all send it); honouring it instead of a blind fixed delay
+// (issue #738) means a same-leg retry actually lands after the window clears
+// rather than guessing and burning the retry budget on another 429. Capped at
+// 30s — same-leg retry exists to smooth a blip, not to block the DJ loop for a
+// provider's full per-minute reset window; a longer wait should fail over.
+const MAX_RETRY_AFTER_MS = 30_000;
+
+export function retryAfterMs(err: any): number | null {
+  const headers = err?.responseHeaders || err?.cause?.responseHeaders;
+  const raw = headers?.['retry-after'];
+  if (!raw) return null;
+  const seconds = Number(raw);
+  const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(raw) - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  return Math.min(ms, MAX_RETRY_AFTER_MS);
+}
+
 // Retry transient upstream failures (gateway timeouts, dropped sockets). Local
 // Ollama — and anything proxying it — produces occasional 502/503/504 and TCP
 // resets, especially on slow models with fat prompts. Without retry, one blip
@@ -24,7 +43,7 @@ export async function withTransientRetry<T>(kind: string, fn: () => Promise<T>):
       lastErr = err;
       if (!isTransient(err) || attempt === delays.length) throw err;
       const jitter = Math.floor(Math.random() * 200);
-      const wait = delays[attempt] + jitter;
+      const wait = retryAfterMs(err) ?? (delays[attempt] + jitter);
       console.log(`[${kind}] transient upstream error — ${errReason(err)} — retrying in ${wait}ms (attempt ${attempt + 1}/${delays.length})`);
       await new Promise(r => setTimeout(r, wait));
     }
