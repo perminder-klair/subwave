@@ -298,6 +298,10 @@ services:
       - ANALYZE_VOCAL_ACTIVITY=\${ANALYZE_VOCAL_ACTIVITY:-}
       - CLAP_MODEL=\${CLAP_MODEL:-}
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
+      # Demucs model + analysis-window overrides (worker reads both; see
+      # .env.example "Optional model overrides").
+      - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
+      - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
     volumes:
       # Shared mount with the controller — reads tracks the controller
       # pre-fetched into /var/sub-wave/analyze-tmp.
@@ -553,6 +557,10 @@ services:
       - ANALYZE_VOCAL_ACTIVITY=\${ANALYZE_VOCAL_ACTIVITY:-}
       - CLAP_MODEL=\${CLAP_MODEL:-}
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
+      # Demucs model + analysis-window overrides (worker reads both; see
+      # .env.example "Optional model overrides").
+      - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
+      - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
     volumes:
       - *state-mount
       - analyzer-cache:/opt/analyzer/hf-cache
@@ -774,6 +782,10 @@ services:
       - ANALYZE_VOCAL_ACTIVITY=\${ANALYZE_VOCAL_ACTIVITY:-}
       - CLAP_MODEL=\${CLAP_MODEL:-}
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
+      # Demucs model + analysis-window overrides (worker reads both; see
+      # .env.example "Optional model overrides").
+      - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
+      - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
     volumes:
       - *state-mount
       - analyzer-cache:/opt/analyzer/hf-cache
@@ -950,7 +962,12 @@ SITE_URL=
 #
 # Optional model overrides (sensible defaults shown):
 # CLAP_MODEL=laion-clap
-# DEMUCS_MODEL=htdemucs
+# DEMUCS_MODEL=htdemucs   # vocal separation is the slow pass; a lighter model
+#                         # (e.g. mdx_q) is markedly faster on CPU and plenty
+#                         # for the present/absent vocal ranges SUB/WAVE needs
+# ANALYZE_SECONDS=60      # per-track analysis window (seconds), shared by
+#                         # bpm/key, CLAP and Demucs. Smaller = faster analysis;
+#                         # vocal ranges beyond the window aren't detected
 #
 # HuggingFace token — only to download gated model weights at build time
 # (PocketTTS cloning weights; some CLAP/Demucs checkpoints). ARG HF_TOKEN in
