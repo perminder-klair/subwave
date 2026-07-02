@@ -274,6 +274,74 @@ export default function Unraid() {
         </div>
       </section>
 
+      <section className="bs-section" id="acoustic-analysis">
+        <p className="bs-eyebrow">ACOUSTIC ANALYSIS — LEAN VS HEAVY</p>
+        <h2>&ldquo;Sounds-like&rdquo; and the heavy image.</h2>
+        <p>
+          Applies to both options. Tempo, key, intro detection, and loudness run
+          out of the box, the default image analyses them in the background, so
+          just run <strong>admin &rarr; Library &rarr; Rescan</strong> (tick{' '}
+          <em>re-analyse</em>) and let it churn. The two <strong>heavy</strong>{' '}
+          dimensions, <strong>&ldquo;sounds-like&rdquo; audio embeddings</strong>{' '}
+          (CLAP) and <strong>vocal ranges</strong> (Demucs), need a CPU-torch
+          stack that isn&apos;t in the lean image, so they&apos;re a separate{' '}
+          <code className="bs-code-inline">-heavy</code> build (~1.9 GB,{' '}
+          <strong>amd64-only</strong>). Only switch if you specifically want
+          them.
+        </p>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">ONE-CLICK: POINT AT THE HEAVY TAG</div>
+          <p>
+            The heavy/lean split is baked into the all-in-one image, so you
+            switch by editing the container&apos;s image, not a setting.{' '}
+            <code className="bs-code-inline">ANALYZER_HEAVY</code> does{' '}
+            <em>nothing</em> here; it&apos;s the split-stack toggle.
+          </p>
+          <ul className="bs-list">
+            <li>
+              <strong>Docker</strong> tab &rarr; click the{' '}
+              <strong>subwave</strong> container &rarr; <strong>Edit</strong>{' '}
+              (turn on <em>Advanced View</em>, top-right).
+            </li>
+            <li>
+              Change the <strong>Repository</strong> field from{' '}
+              <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-aio:latest</code>{' '}
+              to{' '}
+              <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-aio-heavy:latest</code>
+              .
+            </li>
+            <li>
+              <strong>Apply</strong> &rarr; Unraid re-pulls and recreates the
+              container.
+            </li>
+          </ul>
+          <p>
+            Your state is untouched, config, personas, library tags, and the
+            cached model weights all live under the appdata volume, so the swap
+            is safe and reversible (edit the field back to{' '}
+            <code className="bs-code-inline">subwave-aio</code> to return). First
+            boot on heavy downloads the CLAP/Demucs weights, so give it a few
+            minutes.
+          </p>
+        </div>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">FULL COMPOSE STACK: ANALYZER_HEAVY=1</div>
+          <p>
+            On Option 2 the <code className="bs-code-inline">analyzer</code> is
+            its own container, so flip it from the <strong>.env</strong>:
+          </p>
+          <CodeBlock lang="env">{`ANALYZER_HEAVY=1`}</CodeBlock>
+          <p>
+            <strong>Save</strong>, then <strong>Pull &amp; Up</strong>, and the{' '}
+            <code className="bs-code-inline">analyzer</code> container re-pulls as{' '}
+            <code className="bs-code-inline">subwave-analyzer-heavy</code>. On an
+            arm64 box you&apos;d also need{' '}
+            <code className="bs-code-inline">DOCKER_DEFAULT_PLATFORM=linux/amd64</code>{' '}
+            (emulated).
+          </p>
+        </div>
+      </section>
+
       <section className="bs-section" id="reverse-proxy">
         <p className="bs-eyebrow">BEHIND YOUR OWN PROXY</p>
         <h2>Putting it behind your reverse proxy.</h2>
