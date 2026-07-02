@@ -624,7 +624,7 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     // washouts). The event turn is the freshest instruction in the window, so
     // the deliberate-choice nudge rides here.
     const effectClause = settings.effectsActive()
-      ? ' Also set "transition" deliberately for THIS pick — "blend" if it is a same-lane pick that should flow in as one continuous piece, "sweep" if it enters on a gear-change, "washout" if it should dissolve out as it ends; "normal" only when none of those fit. Do not default to "normal" out of habit.'
+      ? ' Set "transition" by what THIS moment needs — "blend" to flow in as one continuous piece, "sweep" for a gear-change entry, "washout" to dissolve out as it ends, "normal" for a plain hand-off. Vary your craft: never the same transition three picks running, and if your last pick used an effect, lean "normal" now unless the moment clearly calls again.'
       : '';
     const eventText = `Now playing "${current?.title}" by ${current?.artist}`
       + (current?.id ? ` [id: ${current.id}]` : '')

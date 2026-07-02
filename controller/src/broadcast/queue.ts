@@ -82,6 +82,7 @@ class Queue {
   autoLink = true;             // toggle: random DJ links between auto tracks
   tracksUntilLink = pickLinkInterval();
   _transitionsSinceSfx = 999;  // DJ-mode transition-FX spacing counter (see drainToLiquidsoap)
+  _recentEffects: string[] = [];  // last few armed effect kinds — anti-streak guard (see applyMixTransition)
   _persistTimer: NodeJS.Timeout | null = null; // debounce for the queue.json snapshot
   _recentPlaysTimer: NodeJS.Timeout | null = null; // debounce for the recent-plays.json sidecar
   _recentPlays: { id: string | null; title: string | null; artist: string | null; endedAt: string }[] = [];
@@ -490,6 +491,17 @@ class Queue {
     // prompt tells it to let ordinary blends breathe between effects); the
     // analyzer veto is the only deterministic guard, and it only judges
     // sweeps (musically wrong between locked tracks), never frequency.
+    // Anti-streak: the model imitates its own session history, so once it
+    // finds a defensible favourite it repeats it mechanically (observed twice:
+    // all-normal, then all-blend). The third consecutive IDENTICAL effect is
+    // stripped — variety is a station rule, not a model virtue. Distinct
+    // effects in a row are fine; this only breaks monoculture.
+    const streakKind: string | null =
+      item.track.sweep ? 'sweep' : item.track.blend ? 'blend' : item.track.washout && !item.track.washoutAuto ? 'washout' : null;
+    if (streakKind && this._recentEffects.length >= 2
+        && this._recentEffects.every(k => k === streakKind)) {
+      this.stripEffect(item.track, `variety — third ${streakKind} in a row`);
+    }
     if (item.track.sweep && !mix.effectAllowedFor('sweep', cur, next)) {
       delete item.track.sweep;
       this.log('mix', 'sweep dropped (tracks too compatible — beat-blend beats a sweep)');
@@ -510,6 +522,22 @@ class Queue {
       this.log('mix', `washout armed${why}: ${item.track.crossSec}s canvas, ${item.track.washoutDelay}s tap → ${item.track.title}`);
     }
     const effectFired = !!(item.track.sweep || item.track.washout || item.track.blend);
+    // Track the last two armed kinds for the anti-streak guard above. A plain
+    // transition resets the streak — "two blends, a normal, two blends" is
+    // fine pacing; five blends running is not. Auto (length-cap) washouts are
+    // deterministic, not model choices, so they count neither toward nor
+    // against the model's variety.
+    const armedKind: string | null =
+      item.track.sweep ? 'sweep' : item.track.blend ? 'blend'
+        : (item.track.washout && !item.track.washoutAuto) ? 'washout' : null;
+    if (armedKind) {
+      this._recentEffects.push(armedKind);
+      if (this._recentEffects.length > 2) this._recentEffects.shift();
+    } else if (!item.track.washoutAuto) {
+      // A genuinely plain transition resets the streak; an auto (length-cap)
+      // washout is invisible to the variety ledger in both directions.
+      this._recentEffects = [];
+    }
 
     // Feature 2 — transition FX, spaced by the chattiness ladder and gated on
     // settings.sfx.enabled; never two transitions in a row, and never a riser
