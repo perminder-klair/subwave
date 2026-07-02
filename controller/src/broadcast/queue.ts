@@ -82,7 +82,6 @@ class Queue {
   autoLink = true;             // toggle: random DJ links between auto tracks
   tracksUntilLink = pickLinkInterval();
   _transitionsSinceSfx = 999;  // DJ-mode transition-FX spacing counter (see drainToLiquidsoap)
-  _transitionsSinceEffect = 999;  // sweep/washout spacing counter (see applyMixTransition)
   _persistTimer: NodeJS.Timeout | null = null; // debounce for the queue.json snapshot
   _recentPlaysTimer: NodeJS.Timeout | null = null; // debounce for the recent-plays.json sidecar
   _recentPlays: { id: string | null; title: string | null; artist: string | null; endedAt: string }[] = [];
@@ -403,16 +402,6 @@ class Queue {
     return Infinity;
   }
 
-  // Spacing for the DJ transition effects (sweep/washout). Unlike the SFX
-  // ladder there is no Infinity tier: the DJ explicitly chose the effect, so
-  // even a quiet persona gets one occasionally.
-  effectTransitionGap(): number {
-    const f = settings.effectiveFrequency();
-    if (f === 'aggressive') return 2;
-    if (f === 'moderate') return 5;
-    return 8;
-  }
-
   // Drop any transition-effect flags from a track (with a logged reason) so
   // getAnnotatedUri never stamps an effect the gate rejected.
   stripEffect(track: any, reason: string) {
@@ -466,8 +455,7 @@ class Queue {
     }
 
     // DJ transition effects (sweep/washout) — the agent proposes, the data
-    // disposes. Cooldown first (cheap), then the analyzer gate; a rejected
-    // flag is stripped so getAnnotatedUri never stamps it. On success the
+    // disposes. A rejected flag is stripped so getAnnotatedUri never stamps it. On success the
     // washout also gets its canvas + tempo stamps: cross-duration physics puts
     // both on the flagged track itself (its liq_cross_duration governs its OWN
     // end, exactly where the wash fires — overriding the feature-1 value). The
@@ -475,16 +463,15 @@ class Queue {
     // envelope scales to whatever d it gets.
     const wantsEffect: 'sweep' | 'washout' | null =
       item.track.sweep ? 'sweep' : item.track.washout ? 'washout' : null;
-    this._transitionsSinceEffect++;
     let effectFired = false;
     if (wantsEffect) {
-      const gap = this.effectTransitionGap();
-      if (this._transitionsSinceEffect < gap) {
-        this.stripEffect(item.track, `cooldown ${this._transitionsSinceEffect}/${gap}`);
-      } else if (!mix.effectAllowedFor(wantsEffect, cur, next)) {
+      // No cooldown by design: pacing is the DJ's call (the prompt tells it
+      // to let ordinary blends breathe between effects). The analyzer veto
+      // below is the only deterministic guard — it kills musically-wrong
+      // sweeps, not frequency.
+      if (!mix.effectAllowedFor(wantsEffect, cur, next)) {
         this.stripEffect(item.track, 'tracks too compatible — beat-blend beats a sweep');
       } else {
-        this._transitionsSinceEffect = 0;
         effectFired = true;
         if (wantsEffect === 'washout') {
           item.track.crossSec = mix.washoutCrossSecondsFor(next, maxSec);
