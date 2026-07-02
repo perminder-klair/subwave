@@ -461,27 +461,41 @@ class Queue {
     // end, exactly where the wash fires — overriding the feature-1 value). The
     // sweep needs no stamps: the transition INTO it is already sized, and its
     // envelope scales to whatever d it gets.
-    const wantsEffect: 'sweep' | 'washout' | null =
-      item.track.sweep ? 'sweep' : item.track.washout ? 'washout' : null;
-    let effectFired = false;
-    if (wantsEffect) {
-      // No cooldown by design: pacing is the DJ's call (the prompt tells it
-      // to let ordinary blends breathe between effects). The analyzer veto
-      // below is the only deterministic guard — it kills musically-wrong
-      // sweeps, not frequency.
-      if (!mix.effectAllowedFor(wantsEffect, cur, next)) {
-        this.stripEffect(item.track, 'tracks too compatible — beat-blend beats a sweep');
-      } else {
-        effectFired = true;
-        if (wantsEffect === 'washout') {
-          item.track.crossSec = mix.washoutCrossSecondsFor(next, maxSec);
-          item.track.washoutDelay = mix.washoutDelayFor(next.bpm);
-          this.log('mix', `washout armed: ${item.track.crossSec}s canvas, ${item.track.washoutDelay}s tap → ${item.track.title}`);
-        } else {
-          this.log('mix', `sweep armed → ${item.track.title}`);
-        }
-      }
+    // Length-cap exit (max-track-length × effects): when this pick will be CUT
+    // by the cap (duration > effectiveMaxTrackSec → drain stamps liq_cue_out),
+    // its ending is a forced mid-song exit — and the classic DJ move for
+    // leaving a record before it ends is the echo-out. Auto-arm a washout so
+    // the cut sounds intentional instead of broken. Deterministic, not an LLM
+    // choice: the controller KNOWS which tracks will be capped. The flag rides
+    // the ending track, exactly like a DJ-chosen washout, and coexists with a
+    // sweep on the same pick (sweep shapes its ENTRY, washout its EXIT).
+    // Requests are exempt from the cap (requestedBy) so they never arm this.
+    const capSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
+    const durSec = Number(item.track.duration) || 0;
+    const cappedExit = !!(capSec && durSec > capSec);
+    if (cappedExit && !item.track.washout) {
+      item.track.washout = true;
+      item.track.washoutAuto = true;
     }
+
+    // The two flags are independent boundaries — sweep shapes this pick's
+    // ENTRY, washout its EXIT — so both can ride one pick; validate and stamp
+    // them separately. No cooldown by design: pacing is the DJ's call (the
+    // prompt tells it to let ordinary blends breathe between effects); the
+    // analyzer veto is the only deterministic guard, and it only judges
+    // sweeps (musically wrong between locked tracks), never frequency.
+    if (item.track.sweep && !mix.effectAllowedFor('sweep', cur, next)) {
+      delete item.track.sweep;
+      this.log('mix', 'sweep dropped (tracks too compatible — beat-blend beats a sweep)');
+    }
+    if (item.track.sweep) this.log('mix', `sweep armed → ${item.track.title}`);
+    if (item.track.washout) {
+      item.track.crossSec = mix.washoutCrossSecondsFor(next, maxSec);
+      item.track.washoutDelay = mix.washoutDelayFor(next.bpm);
+      const why = item.track.washoutAuto ? ' (length-cap exit)' : '';
+      this.log('mix', `washout armed${why}: ${item.track.crossSec}s canvas, ${item.track.washoutDelay}s tap → ${item.track.title}`);
+    }
+    const effectFired = !!(item.track.sweep || item.track.washout);
 
     // Feature 2 — transition FX, spaced by the chattiness ladder and gated on
     // settings.sfx.enabled; never two transitions in a row, and never a riser

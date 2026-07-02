@@ -351,6 +351,10 @@ function trackFields(song) {
     album: song.album,
     year: song.year,
     genre: song.genre,
+    // Seconds, from Subsonic. The queue needs it to spot picks that will hit
+    // the max-track-length cap (its liq_cue_out) so it can auto-arm a washout
+    // on the forced mid-song exit — see applyMixTransition.
+    duration: song.duration,
   };
 }
 
