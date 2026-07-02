@@ -3403,6 +3403,28 @@ html.lite *::after {
     color: var(--muted); border: 1px solid var(--separator-strong); padding: 2px 7px;
 }
 
+/* run phase stepper — the live pipeline position above the run bar */
+.admin-root .lib-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 4px; }
+.admin-root .lib-step {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+    color: var(--muted);
+}
+.admin-root .lib-step-dot {
+    width: 15px; height: 15px; border-radius: 50%; flex: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 8px; line-height: 1;
+    border: 1px solid var(--separator-strong); color: var(--muted);
+}
+/* completed phases: dimmed text, ticked accent dot */
+.admin-root .lib-step.done .lib-step-dot { border-color: var(--accent); color: var(--accent); }
+/* the live phase: full-ink label, filled accent dot */
+.admin-root .lib-step.active { color: var(--ink); }
+.admin-root .lib-step.active .lib-step-dot { border-color: var(--accent); background: var(--accent); color: var(--bg); }
+/* not yet reached */
+.admin-root .lib-step.pending { opacity: 0.45; }
+.admin-root .lib-step-sep { color: var(--separator-strong); font-size: 11px; }
+
 /* batch select */
 .admin-root .lib-batch { display: flex; align-items: stretch; border: 1px solid var(--ink); }
 .admin-root .lib-batch label {

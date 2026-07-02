@@ -7,7 +7,7 @@
 // Extracted from LibraryPanel.tsx; the browse/search/untagged experience
 // stays over there.
 
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { Sparkles, Activity, Play, Square, Terminal, Loader2 } from 'lucide-react';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { Btn, Eyebrow } from './ui';
@@ -206,6 +206,26 @@ const PHASE_LABEL: Record<string, string> = {
   analyze: 'acoustics',
 };
 
+// The tag pipeline in execution order — the stepper's canonical sequence, and
+// the ordering used to decide which phases are behind/ahead of the live one.
+// Excludes 'done' (a terminal marker, not a stage).
+const PIPELINE: TaggerProgress['phase'][] = [
+  'walk', 'enrich', 'embed', 'seed', 'propagate', 'learn', 'analyze',
+];
+
+// The stepper only renders the phases a given run mode can actually reach: an
+// analyze run is acoustics-only, a reconcile run is a bare Navidrome scan, and a
+// tag run walks the whole pipeline. Not every tag run hits every phase (steps
+// can be deselected / re-scans skip forward work) — the caller marks phases
+// BEFORE the live one as done, so a skipped phase simply never lights up active
+// and is swept into "done" once a later phase starts, rather than sticking as a
+// permanent "pending".
+function stepsForMode(mode: TaggerState['mode']): TaggerProgress['phase'][] {
+  if (mode === 'analyze') return ['analyze'];
+  if (mode === 'reconcile') return ['walk'];
+  return PIPELINE;
+}
+
 // ms → compact "2m 5s" / "40s" for the breakdown line.
 function fmtDur(ms: number): string {
   const s = Math.round(ms / 1000);
@@ -213,6 +233,15 @@ function fmtDur(ms: number): string {
   const m = Math.floor(s / 60);
   const r = s % 60;
   return r ? `${m}m ${r}s` : `${m}m`;
+}
+
+// Coarser than fmtDur — a live ETA wobbles as the sampled rate drifts, so we
+// round hard (5s buckets under a minute, whole minutes above) to keep it calm:
+// "~40s left" / "~4m left".
+function fmtEta(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `~${Math.max(5, Math.round(s / 5) * 5)}s left`;
+  return `~${Math.round(s / 60)}m left`;
 }
 
 // Presentation for a structured event, keyed on the kind the child declared.
@@ -256,6 +285,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const audioFillRef = useRef<HTMLSpanElement>(null);
   const vocalFillRef = useRef<HTMLSpanElement>(null);
   const runFillRef = useRef<HTMLSpanElement>(null);
+  // ETA baseline: the {done, at} captured when the current phase (or active-learn
+  // round) began. Pinned at phase entry so the rate is a stable phase-average
+  // rather than a jittery instantaneous window; reset by the effect below.
+  const etaRef = useRef<{ phase: string; round: number | null; done: number; at: number } | null>(null);
 
   const tagged = p.coverage?.tagged ?? p.libStats?.total ?? null;
   const total = p.coverage?.total ?? null;
@@ -347,6 +380,64 @@ export default function TaggingPanel(p: TaggingPanelProps) {
     : null;
   const runIndeterminate = !!progress && progress.total == null && progress.phase !== 'done';
   const legEntries = progress?.llm ? Object.entries(progress.llm.legs) : [];
+
+  // Phase stepper — the pipeline stages this run mode can reach, each tagged
+  // done/active/pending by comparing to the live phase's position in PIPELINE
+  // order (so a phase the child skipped never strands as "pending"). Empty for
+  // an old child binary with no progress sentinel → the stepper stays hidden.
+  const stepList = progress
+    ? (() => {
+        const curIdx =
+          progress.phase === 'done' ? PIPELINE.length : PIPELINE.indexOf(progress.phase);
+        return stepsForMode(p.tagger?.mode).map(ph => {
+          const i = PIPELINE.indexOf(ph);
+          const state = curIdx > i ? 'done' : curIdx === i ? 'active' : 'pending';
+          return { ph, state } as const;
+        });
+      })()
+    : [];
+
+  // Per-phase ETA — extrapolate the remaining items from the average rate since
+  // the phase baseline. Recomputed on every progress poll (~3s while running)
+  // inside the effect below, since it needs Date.now() (impure — not allowed at
+  // render time). Suppressed for indeterminate phases (no total), the first ~10s
+  // of a phase (too little signal), and a stalled/zero rate.
+  const [etaMs, setEtaMs] = useState<number | null>(null);
+  // Re-pin the ETA baseline whenever the phase or active-learn round changes so
+  // each phase's rate is measured from its own start, then re-estimate against
+  // the pinned baseline. Clears once the run ends.
+  useEffect(() => {
+    if (!progress || progress.phase === 'done') {
+      etaRef.current = null;
+      setEtaMs(null);
+      return;
+    }
+    const b = etaRef.current;
+    if (!b || b.phase !== progress.phase || b.round !== (progress.round ?? null)) {
+      // Fresh phase — pin the baseline and hold off on an estimate until the
+      // next poll gives us a rate to measure.
+      etaRef.current = {
+        phase: progress.phase,
+        round: progress.round ?? null,
+        done: progress.done ?? 0,
+        at: Date.now(),
+      };
+      setEtaMs(null);
+      return;
+    }
+    if (progress.total == null || progress.done == null) {
+      setEtaMs(null);
+      return;
+    }
+    const elapsed = Date.now() - b.at;
+    const advanced = progress.done - b.done;
+    const remaining = progress.total - progress.done;
+    setEtaMs(
+      elapsed >= 10_000 && advanced > 0 && remaining > 0
+        ? (remaining / advanced) * elapsed
+        : null,
+    );
+  }, [progress]);
 
   // After a run ends, the child's final 'done' event sticks around (broadcast/
   // tagger.ts keeps it post-exit) — surface its per-phase breakdown when idle so
@@ -765,6 +856,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             </span>
             <span className="caption mono-num !tracking-[0.04em]">
               {runPct != null && `${runPct}% · `}
+              {etaMs != null && `${fmtEta(etaMs)} · `}
               {p.tagger?.pid ? `pid ${p.tagger.pid}` : ''}
               {p.tagger?.startedAt
                 ? ` · started ${new Date(p.tagger.startedAt).toLocaleTimeString('en-GB')}`
@@ -774,6 +866,22 @@ export default function TaggingPanel(p: TaggingPanelProps) {
               <Square size={11} /> Stop
             </Btn>
           </div>
+          {/* pipeline stepper — where in the run we are (done · active · ahead),
+              so a bar that resets to 0% each phase no longer reads as "starting
+              over". Hidden when there's no structured progress (old child). */}
+          {stepList.length > 0 && (
+            <div className="lib-steps">
+              {stepList.map((s, i) => (
+                <Fragment key={s.ph}>
+                  {i > 0 && <span className="lib-step-sep" aria-hidden>›</span>}
+                  <span className={cn('lib-step', s.state)}>
+                    <span className="lib-step-dot" aria-hidden>{s.state === 'done' ? '✓' : ''}</span>
+                    {PHASE_LABEL[s.ph] ?? s.ph}
+                  </span>
+                </Fragment>
+              ))}
+            </div>
+          )}
           {(runPct != null || runIndeterminate) && (
             <div className={cn('lib-bar !h-1.5', runIndeterminate && 'indet')}>
               <span ref={runFillRef} />
