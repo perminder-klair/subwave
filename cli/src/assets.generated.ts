@@ -302,6 +302,10 @@ services:
       # .env.example "Optional model overrides").
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
+      # CLAP isn't gated, but an anonymous HF Hub download is rate-limited and
+      # slow. Same var as tts-heavy — set HF_TOKEN=hf_... in your root .env once
+      # and both sidecars pick it up.
+      - HF_TOKEN=\${HF_TOKEN:-}
     volumes:
       # Shared mount with the controller — reads tracks the controller
       # pre-fetched into /var/sub-wave/analyze-tmp.
@@ -561,6 +565,10 @@ services:
       # .env.example "Optional model overrides").
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
+      # CLAP isn't gated, but an anonymous HF Hub download is rate-limited and
+      # slow. Same var as tts-heavy — set HF_TOKEN=hf_... in your root .env once
+      # and both sidecars pick it up.
+      - HF_TOKEN=\${HF_TOKEN:-}
     volumes:
       - *state-mount
       - analyzer-cache:/opt/analyzer/hf-cache
@@ -786,6 +794,10 @@ services:
       # .env.example "Optional model overrides").
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
+      # CLAP isn't gated, but an anonymous HF Hub download is rate-limited and
+      # slow. Same var as tts-heavy — set HF_TOKEN=hf_... in your root .env once
+      # and both sidecars pick it up.
+      - HF_TOKEN=\${HF_TOKEN:-}
     volumes:
       - *state-mount
       - analyzer-cache:/opt/analyzer/hf-cache
