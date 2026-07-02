@@ -167,10 +167,23 @@ that isn't in the lean image (the `-heavy` images are ~1.9 GB):
 - **Split stack (Compose Manager).** Add `ANALYZER_HEAVY=1` to your **.env**,
   **Save**, then **Pull & Up** — the `analyzer` container re-pulls as
   `subwave-analyzer-heavy`.
-- **All-in-one.** Point the container's **Repository** at
-  `ghcr.io/perminder-klair/subwave-aio-heavy` and re-pull.
+- **All-in-one (one-click from Community Applications).** The heavy/lean split
+  is baked into the image, so you switch by pointing the container at the heavy
+  tag — **`ANALYZER_HEAVY` does nothing here** (it's the split-stack toggle):
+  1. **Docker** tab → click the **subwave** container → **Edit** (turn on
+     *Advanced View*, top-right).
+  2. Change the **Repository** field from
+     `ghcr.io/perminder-klair/subwave-aio:latest` to
+     `ghcr.io/perminder-klair/subwave-aio-heavy:latest`.
+  3. **Apply** — Unraid re-pulls and recreates the container.
 
-Both heavy images are **amd64-only**; on an arm64 box you'd also need
+  Your state is untouched (it all lives under the appdata volume, including the
+  `hf-cache` where the CLAP/Demucs weights land), so config, personas, and
+  library tags survive the swap. First boot on heavy downloads the model weights
+  into that cache, so give it a few minutes. To go back, edit the Repository
+  field back to `subwave-aio` and **Apply**.
+
+Both heavy images are **amd64-only** (~1.9 GB); on an arm64 box you'd also need
 `DOCKER_DEFAULT_PLATFORM=linux/amd64` (emulated).
 
 > Verify with `docker ps --filter name=sub-wave-analyzer`. Full details, the
