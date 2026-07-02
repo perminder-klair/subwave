@@ -354,6 +354,12 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // analysis-state bits (vocalStatus) stay coverage-driven.
   const vocalOptedIn = p.vocalEnabled ?? vocalWanted;
   const vocalOn = (vocalAnalyzed ?? 0) > 0;
+  // Whether ANY tagging/analysis work has ever landed. On a completely virgin
+  // library the honest affordance is the primary Start-tagging run, so the
+  // per-dimension Backfill buttons stay hidden until there's an actual gap to
+  // fill (some work done, this dimension behind) instead of sitting next to a
+  // 0-of-N meter looking like a duplicate of the modal's "Analyze acoustics".
+  const anyWorkDone = (tagged ?? 0) > 0 || (analysed ?? 0) > 0 || audioOn || vocalOn;
   const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
   const running = !!p.tagger?.running;
   // The first library count (walking Navidrome for a total) is in flight — size
@@ -605,7 +611,9 @@ export default function TaggingPanel(p: TaggingPanelProps) {
       {/* acoustic & audio coverage — status meter on each row, plus the controls
           that change it: bpm/key is always-on (engine permitting); sounds-like
           (CLAP) and vocal (Demucs) are opt-in, so they carry Enable/Disable + a
-          contextual Backfill (shown only while enabled, capable, and < 100%). */}
+          contextual Backfill (shown only while enabled, capable, < 100%, and the
+          library has SOME work done — on a virgin library the primary
+          Start-tagging run is the one entry point). */}
       <div className="flex flex-col gap-3 border-b border-ink px-6 py-4">
         <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
           <span className="caption flex items-center gap-2">
@@ -666,7 +674,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
           </span>
           {!analysisOff && (
             <span className="ml-auto flex items-center gap-2">
-              {p.audioEnabled && canBackfill(audioStatus) && (
+              {p.audioEnabled && anyWorkDone && canBackfill(audioStatus) && (
                 <Btn
                   sm
                   tone="accent"
@@ -674,7 +682,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                   disabled={p.busy || running}
                   title="Fingerprint the tracks still missing a “sounds-like” vector — without redoing bpm/key."
                 >
-                  <Play size={12} /> {audioOn ? 'Backfill' : 'Analyze'}
+                  <Play size={12} /> Backfill
                 </Btn>
               )}
               <Btn
@@ -739,7 +747,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 </span>
                 {!analysisOff && (
                   <span className="ml-auto flex items-center gap-2">
-                    {canBackfill(vocalStatus) && (
+                    {anyWorkDone && canBackfill(vocalStatus) && (
                       <Btn
                         sm
                         tone="accent"
@@ -747,7 +755,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                         disabled={p.busy || running}
                         title="Separate vocals for the tracks still missing it — without redoing bpm/key."
                       >
-                        <Play size={12} /> {vocalOn ? 'Backfill' : 'Analyze'}
+                        <Play size={12} /> Backfill
                       </Btn>
                     )}
                     <Btn
