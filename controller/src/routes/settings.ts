@@ -25,7 +25,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { tagger } from '../broadcast/tagger.js';
+import { taggerView } from '../broadcast/tagger.js';
 import { currentMode as budgetCurrentMode } from '../broadcast/dj-budget.js';
 import { skillCatalog } from '../skills/_agent.js';
 import { clearUserThemeCache, loadUserThemes, listThemesAnnotated, saveUserTheme, deleteUserTheme } from '../themes.js';
@@ -72,7 +72,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
       onAir,
       jingles: await jingles.list(),
       libraryStats: library.stats(),
-      tagger: { ...tagger, lastLog: tagger.lastLog.slice(-30) },
+      tagger: taggerView(),
       // Current daily-token-budget tier (normal|soft|hard) — reads 'normal' on the
       // default cap-off install. The library Tagging modal warns before a run when
       // this is soft/hard (LLM steps will spend more, or fail until UTC midnight).

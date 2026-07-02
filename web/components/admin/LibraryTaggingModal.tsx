@@ -339,7 +339,14 @@ function Pass({ on, onClick, name, hint, disabled, tag }: {
   on: boolean; onClick: () => void; name: string; hint: string; disabled?: boolean; tag?: string;
 }) {
   return (
-    <button type="button" className={cn('lib-pass', on && 'on')} onClick={onClick} disabled={disabled}>
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={on}
+      className={cn('lib-pass', on && 'on')}
+      onClick={onClick}
+      disabled={disabled}
+    >
       <span className="box">
         <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
           <path d="M2.5 6.2L4.8 8.5L9.5 3.5" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />

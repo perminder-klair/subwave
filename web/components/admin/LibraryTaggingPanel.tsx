@@ -528,7 +528,14 @@ export default function TaggingPanel(p: TaggingPanelProps) {
               / {total != null ? num(total) : p.coverage?.scanning ? 'scanning…' : '—'} tracks
             </span>
           </div>
-          <div className="lib-bar mt-3">
+          <div
+            className="lib-bar mt-3"
+            role="progressbar"
+            aria-label="Mood and energy tagging coverage"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            {...(pct != null ? { 'aria-valuenow': Math.min(100, pct) } : {})}
+          >
             <span ref={moodFillRef} />
           </div>
           <div className="mt-2.5 text-[11px] text-muted">
@@ -599,7 +606,14 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             <Activity size={13} /> Acoustic analysis · bpm / key
           </span>
           <span className="lib-opt-tag">optional</span>
-          <span className="lib-minibar">
+          <span
+            className="lib-minibar"
+            role="progressbar"
+            aria-label="Acoustic analysis (bpm / key) coverage"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            {...(!analysisOff && apct != null ? { 'aria-valuenow': Math.min(100, apct) } : {})}
+          >
             <span ref={acousticFillRef} />
           </span>
           <span className="caption mono-num !tracking-[0.04em]">
@@ -617,7 +631,14 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             <Activity size={13} /> Audio fingerprint · sounds-like
           </span>
           <span className="lib-opt-tag">optional</span>
-          <span className="lib-minibar">
+          <span
+            className="lib-minibar"
+            role="progressbar"
+            aria-label="Audio fingerprint (sounds-like) coverage"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            {...(audioOn && audpct != null ? { 'aria-valuenow': Math.min(100, audpct) } : {})}
+          >
             <span ref={audioFillRef} />
           </span>
           <span className="caption mono-num !tracking-[0.04em]">
@@ -685,7 +706,14 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             <span className="lib-opt-tag">optional</span>
             {vocalOptedIn ? (
               <>
-                <span className="lib-minibar">
+                <span
+                  className="lib-minibar"
+                  role="progressbar"
+                  aria-label="Vocal activity (instrumental detection) coverage"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  {...(vocalOn && vpct != null ? { 'aria-valuenow': Math.min(100, vpct) } : {})}
+                >
                   <span ref={vocalFillRef} />
                 </span>
                 <span className="caption mono-num !tracking-[0.04em]">
@@ -894,7 +922,14 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             </div>
           )}
           {(runPct != null || runIndeterminate) && (
-            <div className={cn('lib-bar !h-1.5', runIndeterminate && 'indet')}>
+            <div
+              className={cn('lib-bar !h-1.5', runIndeterminate && 'indet')}
+              role="progressbar"
+              aria-label="Tagging run progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              {...(!runIndeterminate && runPct != null ? { 'aria-valuenow': runPct } : {})}
+            >
               <span ref={runFillRef} />
             </div>
           )}
@@ -953,6 +988,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
       {p.logOpen && (
         <pre
           ref={logRef}
+          aria-live="polite"
           className="term term-crt m-0 max-h-56 overflow-y-auto !border-t !border-l-0 border-separator-strong"
         >
           {(p.tagger?.lastLog ?? []).length

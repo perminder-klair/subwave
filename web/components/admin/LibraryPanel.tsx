@@ -201,13 +201,28 @@ export default function LibraryPanel() {
     } catch { /* transient */ }
   }, [adminFetch, ready]);
 
-  const loadTagger = useCallback(async () => {
+  // Fast loop payload — just the live tagger snapshot (GET /library/tagger), so a
+  // 3s running poll doesn't drag the whole heavy /settings body across each time.
+  const loadTaggerState = useCallback(async () => {
+    if (!ready) return;
+    try {
+      const r = await adminFetch('/library/tagger');
+      if (!r.ok) return;
+      const j = (await r.json()) as { tagger?: TaggerState };
+      setTagger(j.tagger || null);
+    } catch { /* transient */ }
+  }, [adminFetch, ready]);
+
+  // Slow loop payload — the settings-derived bits the panel shows but that change
+  // rarely: library stats, the audio/vocal opt-in toggles, and the daily-budget
+  // tier. Deliberately does NOT touch tagger state (the fast loop owns that) so
+  // the two pollers never race on it.
+  const loadSettingsData = useCallback(async () => {
     if (!ready) return;
     try {
       const r = await adminFetch('/settings');
       if (!r.ok) return;
       const j = (await r.json()) as SettingsResponse;
-      setTagger(j.tagger || null);
       if (j.libraryStats) setLibStats(j.libraryStats);
       if (j.values?.audio) {
         setAudioEnabled(!!j.values.audio.embeddings);
@@ -224,13 +239,22 @@ export default function LibraryPanel() {
     return () => clearInterval(id);
   }, [ready, loadCoverage]);
 
+  // Fast: tagger state — 3s while a run is live so progress is snappy, 10s idle.
   useEffect(() => {
     if (!ready) return;
-    loadTagger();
+    loadTaggerState();
     const interval = tagger?.running ? 3_000 : 10_000;
-    const id = setInterval(loadTagger, interval);
+    const id = setInterval(loadTaggerState, interval);
     return () => clearInterval(id);
-  }, [ready, loadTagger, tagger?.running]);
+  }, [ready, loadTaggerState, tagger?.running]);
+
+  // Slow: settings-derived data (stats / audio toggles / budget) — 30s + on mount.
+  useEffect(() => {
+    if (!ready) return;
+    loadSettingsData();
+    const id = setInterval(loadSettingsData, 30_000);
+    return () => clearInterval(id);
+  }, [ready, loadSettingsData]);
 
   // While a run is live, poll coverage faster so the % visibly climbs.
   useEffect(() => {
@@ -508,7 +532,7 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `tagger start failed (${r.status})`);
       notify.ok('tagger started');
       setLogOpen(true);
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -523,7 +547,7 @@ export default function LibraryPanel() {
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `tagger stop failed (${r.status})`);
       notify.ok('stopping tagger…');
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -553,7 +577,7 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `re-scan failed (${r.status})`);
       notify.ok('re-scan started…');
       setLogOpen(true);
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -586,6 +610,9 @@ export default function LibraryPanel() {
             : 'sounds-like analysis enabled'
           : 'sounds-like analysis disabled',
       );
+      // The toggle lives on the slow /settings loop — refresh it now so a manual
+      // re-open / status recompute doesn't wait up to 30s to reflect the flip.
+      void loadSettingsData();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -610,7 +637,7 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `reconcile failed (${r.status})`);
       notify.ok('reconcile started, scanning Navidrome');
       setLogOpen(true);
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -633,7 +660,7 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `analysis start failed (${r.status})`);
       notify.ok('audio analysis started');
       setLogOpen(true);
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -665,6 +692,8 @@ export default function LibraryPanel() {
             : 'vocal-activity analysis enabled'
           : 'vocal-activity analysis disabled',
       );
+      // Refresh the slow settings-derived state now rather than waiting for its tick.
+      void loadSettingsData();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -686,7 +715,7 @@ export default function LibraryPanel() {
       if (!r.ok) throw new Error(j.error || `vocal analysis start failed (${r.status})`);
       notify.ok('vocal analysis started');
       setLogOpen(true);
-      await loadTagger();
+      await loadTaggerState();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {

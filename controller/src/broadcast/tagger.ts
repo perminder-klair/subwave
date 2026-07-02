@@ -53,6 +53,17 @@ export const tagger: TaggerState = {
   running: false, startedAt: null, pid: null, lastLog: [], mode: null, progress: null, lastRun: null,
 };
 
+// How many trailing log entries the admin surfaces receive. The full buffer is
+// capped at 100 in-process; the UI only ever renders the recent tail.
+const TAGGER_LOG_TAIL = 30;
+
+// The tagger snapshot the admin routes serialise — full state with lastLog sliced
+// to the recent tail. Single source so GET /settings and GET /library/tagger
+// can't drift on how much log they ship (they poll at different cadences).
+export function taggerView(): TaggerState {
+  return { ...tagger, lastLog: tagger.lastLog.slice(-TAGGER_LOG_TAIL) };
+}
+
 // Strip a module's console tag so a plain echo can be matched against its event
 // text (for the capture-side de-dup below), and so the last-error fallback reads
 // cleanly.

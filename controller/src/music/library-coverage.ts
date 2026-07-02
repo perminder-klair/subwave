@@ -105,14 +105,18 @@ export async function get() {
   const audioEmbedded = db.audioVectorCount();
   const vocalAnalyzed = db.vocalAnalyzedCount();
   const total = cache.scannedAt ? cache.total : null;
+  // Floor, not round: "100%" must mean truly complete. Rounding showed 100% at
+  // 99.5%+ (e.g. 999/1000), which reads as done when a track still needs work —
+  // and pushed coverage-status.ts to 'complete' one track early. Floor keeps the
+  // meter at 99% until the last track lands; count===total is the only exact 100.
   const percent =
-    total != null && total > 0 ? Math.round((tagged / total) * 100) : null;
+    total != null && total > 0 ? Math.floor((tagged / total) * 100) : null;
   const analysedPercent =
-    total != null && total > 0 ? Math.round((analysed / total) * 100) : null;
+    total != null && total > 0 ? Math.floor((analysed / total) * 100) : null;
   const audioEmbeddedPercent =
-    total != null && total > 0 ? Math.round((audioEmbedded / total) * 100) : null;
+    total != null && total > 0 ? Math.floor((audioEmbedded / total) * 100) : null;
   const vocalAnalyzedPercent =
-    total != null && total > 0 ? Math.round((vocalAnalyzed / total) * 100) : null;
+    total != null && total > 0 ? Math.floor((vocalAnalyzed / total) * 100) : null;
   // Embedding-index provenance: the model the vectors were built with vs what the
   // current settings would embed with (same activeModelLabel() format on both
   // sides, so no prefix/default drift). When they differ, a tag run hits a hard
