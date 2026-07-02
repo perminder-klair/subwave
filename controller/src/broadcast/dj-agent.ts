@@ -623,8 +623,12 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     // transition:"normal", and copies itself — observed on-air: 19 picks, zero
     // washouts). The event turn is the freshest instruction in the window, so
     // the deliberate-choice nudge rides here.
+    const recentT = typeof queue.recentTransitionChoices === 'function' ? queue.recentTransitionChoices() : [];
+    const historyNote = recentT.length
+      ? ` Your recent transition choices, oldest first: ${recentT.join(', ')} — the station strips a third repeat, so vary deliberately.`
+      : '';
     const effectClause = settings.effectsActive()
-      ? ' Set "transition" by what THIS moment needs — "blend" to flow in as one continuous piece, "sweep" for a gear-change entry, "washout" to dissolve out as it ends, "normal" for a plain hand-off. Vary your craft: never the same transition three picks running, and if your last pick used an effect, lean "normal" now unless the moment clearly calls again.'
+      ? ` Set "transition" by what THIS moment needs — "blend" to flow in as one continuous piece, "sweep" for a gear-change entry, "washout" to dissolve out as it ends, "normal" for a plain hand-off. Vary your craft: never the same transition three picks running, and if your last pick used an effect, lean "normal" now unless the moment clearly calls again.${historyNote}`
       : '';
     const eventText = `Now playing "${current?.title}" by ${current?.artist}`
       + (current?.id ? ` [id: ${current.id}]` : '')
