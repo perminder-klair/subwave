@@ -314,7 +314,7 @@ def dj_transition(a, b) =
     if sweeping then
       log("DJ sweep: closing the filter over the outgoing track (d=#{d}s)")
       sweep_src = a_source
-      # Close FAST and DEEP — over the first 45% of the blend down to 450 Hz,
+      # Close FAST and DEEP — over the first 45% of the blend down to 600 Hz,
       # through three RC stages (18 dB/oct), so the choke arrives while the
       # outgoing is still loud (the log fade above holds its level up). A
       # slower/shallower close spread over 70% was inaudible under the fade.
@@ -324,7 +324,7 @@ def dj_transition(a, b) =
         t_close = 0.45 * d
         x = if e >= t_close then 1.0 else e / t_close end
         depth = 3.0 * x * x - 2.0 * x * x * x     # smoothstep 0→1
-        9000.0 * pow(450.0 / 9000.0, depth)       # 9 kHz open → 450 Hz floor
+        9000.0 * pow(600.0 / 9000.0, depth)       # 9 kHz open → 600 Hz floor
       end
       # Wet ramps 0→1 over the first ~15% of the blend: an RC at 9 kHz is NOT
       # transparent (−dB at the cutoff + roll-off), so engaging it full-wet at
@@ -337,9 +337,28 @@ def dj_transition(a, b) =
         x = if e >= t_on then 1.0 else e / t_on end
         3.0 * x * x - 2.0 * x * x * x             # smoothstep 0→1
       end
-      filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
+      # Makeup on the choked branch: the filter guts the outgoing's energy
+      # right when the incoming is only half-faded, and the mid-blend went
+      # near-quiet (twice, by ear). Lift the choked residual +2.6 dB as the
+      # cutoff bottoms out so the blend keeps its body — the choke stays
+      # dramatic spectrally without a level hole.
+      def sweep_gain() =
+        e = source.elapsed(sweep_src)
+        e = if e < 0. then 0. else e end
+        g_max = 1.35
+        t_from = 0.30 * d
+        t_to   = 0.50 * d
+        if e <= t_from then 1.0
+        elsif e >= t_to then g_max
+        else
+          x = (e - t_from) / (t_to - t_from)
+          1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
+        end
+      end
+      amplify(sweep_gain,
         filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
-          filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet, a_source)))
+          filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
+            filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet, a_source))))
     else
       a_source
     end
@@ -468,8 +487,8 @@ def dj_transition(a, b) =
       def bass_wet() =
         e = source.elapsed(in_src)
         e = if e < 0. then 0. else e end
-        t_from = 0.45 * d
-        t_to   = 0.62 * d
+        t_from = 0.38 * d
+        t_to   = 0.55 * d
         x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
         1.0 - (3.0 * x * x - 2.0 * x * x * x)     # wet 1 → 0 (bass lands by 75%)
       end

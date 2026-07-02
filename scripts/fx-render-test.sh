@@ -168,7 +168,7 @@ def t(a, b) =
         t_close = 0.45 * d
         x = if e >= t_close then 1.0 else e / t_close end
         depth = 3.0 * x * x - 2.0 * x * x * x
-        9000.0 * pow(450.0 / 9000.0, depth)
+        9000.0 * pow(600.0 / 9000.0, depth)
       end
       def sweep_wet() =
         e = source.elapsed(sweep_src)
@@ -177,9 +177,23 @@ def t(a, b) =
         x = if e >= t_on then 1.0 else e / t_on end
         3.0 * x * x - 2.0 * x * x * x
       end
-      filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
+      def sweep_gain() =
+        e = source.elapsed(sweep_src)
+        e = if e < 0. then 0. else e end
+        g_max = 1.35
+        t_from = 0.30 * d
+        t_to   = 0.50 * d
+        if e <= t_from then 1.0
+        elsif e >= t_to then g_max
+        else
+          x = (e - t_from) / (t_to - t_from)
+          1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
+        end
+      end
+      amplify(sweep_gain,
         filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
-          filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet, a_src)))
+          filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
+            filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet, a_src))))
     else a_src end
   a_src =
     if washout_on then
@@ -257,8 +271,8 @@ def t(a, b) =
       def bass_wet() =
         e = source.elapsed(in_src)
         e = if e < 0. then 0. else e end
-        t_from = 0.45 * d
-        t_to   = 0.62 * d
+        t_from = 0.38 * d
+        t_to   = 0.55 * d
         x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
         1.0 - (3.0 * x * x - 2.0 * x * x * x)
       end
