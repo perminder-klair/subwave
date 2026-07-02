@@ -75,9 +75,16 @@ export default function LibraryTaggingModal(p: Props) {
   // Default on (re-analyse = redo all); unticking keeps existing vocal ranges.
   const [reAnalyzeVocal, setReAnalyzeVocal] = useState(true);
   const [confirmRescan, setConfirmRescan] = useState(false);
+  // "Then tag untagged tracks" sub-toggle — offered only when Re-embed is the
+  // ONLY selected pass (a reseed-only run can continue straight into the forward
+  // tag pass; combining it with other re-* passes isn't well-defined). Defaults
+  // ON when the modal was opened by the stale-embedding banner (intent 'reembed'),
+  // since that banner blocked a run the operator actually wanted.
+  const [thenTag, setThenTag] = useState(false);
   const togglePass = (k: keyof RescanOpts) => setPasses(prev => ({ ...prev, [k]: !prev[k] }));
   const passAllSelected = !!(passes.reseed && passes.reEnrich && passes.reAnalyze && passes.upgrade);
   const anyPass = !!(passes.reseed || passes.reEnrich || passes.reAnalyze || passes.upgrade);
+  const reseedOnly = !!passes.reseed && !passes.reEnrich && !passes.reAnalyze && !passes.upgrade;
   const clearPasses = () => setPasses({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false });
 
   // On each open, reset to a sensible tab. A 'reembed' intent (the panel's
@@ -87,8 +94,11 @@ export default function LibraryTaggingModal(p: Props) {
     if (p.intent === 'reembed') {
       setTab('rescan');
       setPasses({ reseed: true, reEnrich: false, reAnalyze: false, upgrade: false });
+      // Staleness blocked a run the operator wanted — default to continuing into it.
+      setThenTag(true);
     } else {
       setTab('run');
+      setThenTag(false);
     }
     // Only re-run when the modal transitions open (or the intent changes).
   }, [p.open, p.intent]);
@@ -138,6 +148,8 @@ export default function LibraryTaggingModal(p: Props) {
   const rescanPayload = (): RescanOpts => ({
     ...passes,
     vocal: passes.reAnalyze && p.vocalWanted ? reAnalyzeVocal : undefined,
+    // Only carry the continuation when reseed is the sole pass and it's ticked.
+    thenTag: reseedOnly && thenTag ? true : undefined,
   });
   const runRescan = () => {
     if (!anyPass || p.busy) return;
@@ -271,6 +283,13 @@ export default function LibraryTaggingModal(p: Props) {
                 hint="Re-fetch Last.fm tags + lyrics for tracks you've already enriched. External API calls — slow on a big library." />
               <Pass on={!!passes.reseed} onClick={() => togglePass('reseed')} name="Re-embed all tracks" tag="slow"
                 hint={`Drop & rebuild the similarity vectors for your whole library${p.libraryTotal != null ? ` (${num(p.libraryTotal)} tracks)` : ''} at the current embedding model — not just tagged tracks. Re-spends embedding calls; only needed after a model change. Your mood tags are kept.`} />
+              {reseedOnly && (
+                <div className="pl-6">
+                  <Pass on={thenTag} onClick={() => setThenTag(v => !v)}
+                    name="Then tag untagged tracks" tag="AI · billed"
+                    hint="Continue into the forward tag pass once vectors are rebuilt — tags all remaining untagged tracks in the same run, so you don't have to come back and start it. Uses model calls." />
+                </div>
+              )}
               <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods" tag="AI · billed"
                 hint="Re-tag already-tagged rows whose prompt or model has gone stale (never your manual tags). No model change → nothing to redo. Uses model calls." />
               {passes.upgrade && (
@@ -306,7 +325,7 @@ export default function LibraryTaggingModal(p: Props) {
         open={confirmRescan}
         onOpenChange={setConfirmRescan}
         title={p.libraryTotal != null ? `Re-embed all ${num(p.libraryTotal)} tracks?` : 'Re-embed the whole library?'}
-        description={`This rebuilds ${p.libraryTotal != null ? `all ${num(p.libraryTotal)} ` : 'every '}similarity vectors from scratch — the whole library, not just tagged tracks — re-spending embedding calls (can take several minutes on a large library, longer with a heavier model). Existing mood tags are kept and reused as seeds. Only needed after changing the embedding model.`}
+        description={`This rebuilds ${p.libraryTotal != null ? `all ${num(p.libraryTotal)} ` : 'every '}similarity vectors from scratch — the whole library, not just tagged tracks — re-spending embedding calls (can take several minutes on a large library, longer with a heavier model). Existing mood tags are kept and reused as seeds. Only needed after changing the embedding model.${reseedOnly && thenTag ? ' It then continues into the forward tag pass, tagging every remaining untagged track in the same run (uses model calls).' : ''}`}
         confirmLabel="re-scan"
         danger
         onConfirm={() => { p.onRescan(rescanPayload()); clearPasses(); setConfirmRescan(false); p.onOpenChange(false); }}

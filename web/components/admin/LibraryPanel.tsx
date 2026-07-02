@@ -538,7 +538,9 @@ export default function LibraryPanel() {
   //   upgrade    re-LLM-tag only rows whose prompt/model is stale
   // Sends no limit — a partial reseed leaves the library in a mixed state KNN
   // can't use. Existing mood tags survive as seeds, so a reseed re-spends
-  // embedding calls, not LLM.
+  // embedding calls, not LLM. `thenTag` (reseed-only) rides along in opts: it
+  // continues into the forward tag pass after the whole-library re-embed, still
+  // with no limit so every untagged track is processed.
   const rescanTagger = async (opts: RescanOpts) => {
     setTaggerBusy(true);
     try {

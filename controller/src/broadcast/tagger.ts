@@ -100,6 +100,10 @@ export function startTagger(
     reEnrich?: boolean;
     reAnalyze?: boolean;
     upgrade?: boolean;
+    // "Re-embed, then continue tagging" chain (the stale-embedding banner's
+    // "Re-embed now"). Only honoured when reseed is the SOLE re-* pass — see the
+    // --rescan suppression below.
+    thenTag?: boolean;
     // Forward-run step toggles from the admin Run tab. undefined = run the step
     // (back-compat: callers that omit these get a full run); false emits the
     // matching skip flag. Reconcile-*only* is a separate path (startReconcile).
@@ -112,7 +116,7 @@ export function startTagger(
     vocal?: boolean;
   } = {},
 ) {
-  const { limit, reseed, reEnrich, reAnalyze, upgrade, reconcile, enrich, tagMoods, analyze, vocal } = opts;
+  const { limit, reseed, reEnrich, reAnalyze, upgrade, thenTag, reconcile, enrich, tagMoods, analyze, vocal } = opts;
   const args = ['src/music/tag-library.ts'];
   if (Number.isFinite(limit) && (limit as number) > 0) args.push('--limit', String(limit));
   if (reseed) args.push('--reseed');
@@ -123,7 +127,18 @@ export function startTagger(
   // scopes every pass to already-done tracks and suppresses forward discovery of
   // the untagged remainder. (Raw CLI re-* flags without --rescan keep their
   // documented per-flag, full-library meaning.)
-  const rescan = !!(reseed || reEnrich || reAnalyze || upgrade);
+  //
+  // Exception — the reseed-only "then tag" chain: dropping --rescan runs raw
+  // --reseed, whose forward pass drops all vectors, RE-EMBEDS THE WHOLE LIBRARY
+  // (phaseEmbed's allTaggedIds sweep re-vectorises the tagged set the drop wiped),
+  // then seed→propagate→active-learn tags the untagged remainder — exactly the run
+  // the stale-embedding banner was blocking. Only when reseed is the sole re-*
+  // pass: mixing forward discovery into a targeted reEnrich/reAnalyze/upgrade
+  // re-scan isn't well-defined, so any other re-* flag keeps today's --rescan
+  // scoping and ignores thenTag.
+  const reseedOnly = !!reseed && !reEnrich && !reAnalyze && !upgrade;
+  const chainTag = reseedOnly && thenTag === true;
+  const rescan = !!(reseed || reEnrich || reAnalyze || upgrade) && !chainTag;
   if (rescan) args.push('--rescan');
   // Step deselections → skip flags. Only an explicit `false` skips; undefined
   // leaves the phase on so omitting the fields keeps the legacy full-run.
@@ -138,6 +153,7 @@ export function startTagger(
   const detail = [
     Number.isFinite(limit) && (limit as number) > 0 ? `limit=${limit}` : null,
     rescan ? 'rescan' : null,
+    chainTag ? 'then-tag' : null,
     reseed ? 'reseed' : null,
     reEnrich ? 're-enrich' : null,
     reAnalyze ? 're-analyze' : null,

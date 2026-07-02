@@ -150,6 +150,10 @@ export type RescanOpts = {
   // Whether a Re-analyse-acoustics pass also redoes the slow Demucs vocal pass.
   // false → --no-vocal (re-do bpm/key + sounds-like, keep existing vocal ranges).
   vocal?: boolean;
+  // Reseed-only "re-embed, then continue tagging": after rebuilding vectors,
+  // forward-tag the untagged remainder in the same run (drops the re-scan's
+  // --rescan on the backend). Only honoured when reseed is the sole pass.
+  thenTag?: boolean;
 };
 
 // Forward-run step toggles from the modal's Run tab. All default true; an
