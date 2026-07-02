@@ -46,6 +46,7 @@ import { loadSecretsIntoEnv } from '../setup/secrets.js';
 import { loadSetupConfig } from '../setup/config.js';
 import { activeModelLabel, primaryLeg, fallbackLeg, probeLegReachable } from '../llm/provider.js';
 import { isUnreachable, isQuotaOrAuthError, errReason } from '../llm/sdk.js';
+import { setRawDebugStderrMirror } from '../llm/log.js';
 import { tagBatch, tagOne, TAGGER_BATCH_SYSTEM, type TagResult } from './tagger-core.js';
 import { runAnalysisPass } from './analyze.js';
 import { reportProgress, formatPhaseBreakdown, sortedPhaseTimings, makeEventLogger } from './tagger-progress.js';
@@ -223,6 +224,11 @@ async function applyWizardOverlay() {
 async function main() {
   const flags = parseFlags();
   const startedAt = Date.now();
+
+  // Keep the raw-LLM-request debug capture writing to state/logs/llm-debug.log,
+  // but mute its stderr mirror so it doesn't drown the tagger's formatted output
+  // (the `[llm-debug-raw] {...}` JSON dumps). The file still captures everything.
+  setRawDebugStderrMirror(false);
 
   // Belt-and-braces single-flight: a controller-spawned run is already covered by
   // the pidfile the controller wrote (MANAGED_ENV set → this is a no-op). A manual

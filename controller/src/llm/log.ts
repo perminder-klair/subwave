@@ -19,6 +19,7 @@ export { budgetMode } from './internal/core/pure.js';
 export {
   rawDebugEnabled,
   rawDebugEnabledViaEnv,
+  setRawDebugStderrMirror,
   LLM_DEBUG_LOG,
   LLM_DEBUG_MAX,
 } from './internal/telemetry/raw-debug.js';
