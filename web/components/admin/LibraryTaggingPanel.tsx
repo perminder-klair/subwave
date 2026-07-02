@@ -342,6 +342,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // Vocal row is hidden unless the operator opted in (env or settings) — the
   // common case never sees it. Backend resolves env-vs-settings precedence.
   const vocalWanted = p.coverage?.vocalWanted === true;
+  // The Pause/Enable button + meter-vs-collapsed layout must react to a toggle
+  // immediately, so drive them off the optimistic settings prop (p.vocalEnabled,
+  // flipped on click in LibraryPanel) — mirroring how the audio row uses
+  // p.audioEnabled. vocalWanted (from the polled /coverage) only lags, so it
+  // just fills the gap before /settings first loads. (The analysis-state bits
+  // below — vocalStarved, the modal's vocalWanted — stay coverage-driven.)
+  const vocalOptedIn = p.vocalEnabled ?? vocalWanted;
   const vocalOn = (vocalAnalyzed ?? 0) > 0;
   const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
   const running = !!p.tagger?.running;
@@ -626,13 +633,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         {/* Vocal (Demucs) row — the opt-in entry point now that the modal tab is
             gone. Collapsed to a single "off · Enable" line until opted in (#646);
             once wanted it shows the full meter + Disable + Backfill. */}
-        {(vocalWanted || !analysisOff) && (
+        {(vocalOptedIn || !analysisOff) && (
           <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong pt-3">
             <span className="caption flex items-center gap-2">
               <Activity size={13} /> Vocal activity · instrumental detection
             </span>
             <span className="lib-opt-tag">optional</span>
-            {vocalWanted ? (
+            {vocalOptedIn ? (
               <>
                 <span className="lib-minibar">
                   <span ref={vocalFillRef} />
