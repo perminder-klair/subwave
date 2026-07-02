@@ -715,14 +715,20 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             <b>Sounds-like is on, but your analyzer can’t fingerprint audio.</b> The default analyzer
             is the lean image (bpm/key only). CLAP needs the heavy build: set <code>ANALYZER_HEAVY=1</code>{' '}
             in <code>.env</code> and recreate the analyzer (<code>docker compose up -d analyzer</code>).
-            The heavy image is amd64-only.
+            The heavy image is amd64-only.{' '}
+            <a href="/manual/analysis" className="font-bold text-vermilion underline-offset-2 hover:underline">
+              Manual → Acoustic analysis
+            </a>
           </div>
         ) : null}
         {vocalIncapable && p.vocalEnabled ? (
           <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
             <b>Vocal-activity is on, but your analyzer can’t separate vocals.</b> Demucs needs the heavy
             build: set <code>ANALYZER_HEAVY=1</code> in <code>.env</code> and recreate the analyzer
-            (<code>docker compose up -d analyzer</code>). The heavy image is amd64-only.
+            (<code>docker compose up -d analyzer</code>). The heavy image is amd64-only.{' '}
+            <a href="/manual/analysis" className="font-bold text-vermilion underline-offset-2 hover:underline">
+              Manual → Acoustic analysis
+            </a>
           </div>
         ) : null}
       </div>

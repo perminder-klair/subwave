@@ -20,6 +20,7 @@ export const MANUAL_PAGES: ManualPageEntry[] = [
   { href: '/manual/cli', label: 'The Operator CLI' },
   { href: '/manual/llm', label: 'Models & Tokens' },
   { href: '/manual/voices', label: 'Voices & TTS' },
+  { href: '/manual/analysis', label: 'Acoustic Analysis' },
   { href: '/manual/mcp', label: 'Agent Access' },
   { href: '/manual/faq', label: 'FAQ' },
 ];
