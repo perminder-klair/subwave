@@ -22,7 +22,10 @@ import { djAgent } from './strategy/agent.js';
 
 export interface AgentDefinition {
   kind: string;
-  schema?: any;
+  // A function form is resolved at each run, so the schema can follow live
+  // state (the picker swaps its transition-field coaching off when the on-air
+  // persona isn't in DJ mode) instead of being frozen at module load.
+  schema?: any | (() => any);
   buildSystem: (args: any) => string;
   buildTools?: (args: any) => { tools: any; extras?: any };
   maxSteps?: number;
@@ -55,10 +58,19 @@ function resolveTimeout(t: number | (() => number) | undefined): number | undefi
   return typeof t === 'function' ? t() : t;
 }
 
+// Zod schemas are plain objects, so a function here can only be a dynamic
+// schema factory — same convention as timeoutMs.
+function resolveSchema(s: any | (() => any) | undefined): any {
+  return typeof s === 'function' ? s() : s;
+}
+
 export function defineAgent(def: AgentDefinition): DjAgentInstance {
   return {
     kind: def.kind,
-    schema: def.schema,
+    // Resolved on read so consumers always see what the next run would use.
+    get schema() {
+      return resolveSchema(def.schema);
+    },
     maxSteps: def.maxSteps,
     // Resolved on read so consumers (picker-test.mjs) always see a number
     // matching what the next run would use.
@@ -74,7 +86,7 @@ export function defineAgent(def: AgentDefinition): DjAgentInstance {
         system,
         messages,
         tools: built.tools,
-        schema: def.schema,
+        schema: resolveSchema(def.schema),
         maxSteps: def.maxSteps,
         timeoutMs: resolveTimeout(def.timeoutMs),
         temperature: def.temperature,
