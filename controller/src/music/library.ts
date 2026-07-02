@@ -36,6 +36,16 @@ export async function reload() {
   await load();
 }
 
+// Wipe the whole library (tags, embeddings, acoustic analysis, enrichment) and
+// reopen an empty DB, so the picker/tools immediately see a clean slate without
+// a controller restart. Backs the admin library "Reset" action. Unlike
+// reload(), this deletes the file first (db.reset()) for a true fresh start.
+export async function reset() {
+  loaded = false;
+  await db.reset();
+  await load();
+}
+
 // SQLite WAL writes are durable per statement — no batched save needed. Kept
 // as a no-op so existing callers that call save() at intervals still work.
 export async function save() {

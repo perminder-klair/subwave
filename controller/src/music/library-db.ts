@@ -260,6 +260,20 @@ export async function restoreFromFile(srcPath: string): Promise<void> {
   await rm(`${DB_PATH}-shm`, { force: true });
 }
 
+// Delete the entire on-disk DB — every track row, mood/energy tag, text +
+// audio embedding, acoustic-analysis column, and enrichment cache — plus the
+// WAL/SHM sidecars, so the next open() recreates an empty schema from scratch.
+// Mirrors restoreFromFile()'s close→swap-file→drop-sidecars shape, and like it
+// leaves the reopen to the caller (music/library.ts:reset()). This is the
+// "start fresh" wipe behind the admin library Reset action — irreversible short
+// of restoring a backup.
+export async function reset(): Promise<void> {
+  close();
+  await rm(DB_PATH, { force: true });
+  await rm(`${DB_PATH}-wal`, { force: true });
+  await rm(`${DB_PATH}-shm`, { force: true });
+}
+
 function requireDb(): Database.Database {
   if (!db) throw new Error('library-db not opened — call open() first');
   return db;

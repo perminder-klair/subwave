@@ -192,6 +192,9 @@ interface TaggingPanelProps {
   onRescan: (opts: RescanOpts) => void;
   // Walk Navidrome and prune library entries for tracks that no longer exist.
   onReconcile: () => void;
+  // Wipe ALL tagging data (tags, embeddings, acoustics, enrichment) and start
+  // fresh — backs the modal's Reset tab, behind a typed confirmation.
+  onReset: () => void;
   // sounds-like (CLAP) controls — null until the first settings poll lands.
   audioEnabled: boolean | null;
   onToggleAudio: () => void;
@@ -1034,6 +1037,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         onStart={p.onStart}
         onReconcile={p.onReconcile}
         onRescan={p.onRescan}
+        onReset={p.onReset}
       />
     </section>
   );

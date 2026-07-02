@@ -1,15 +1,17 @@
 'use client';
 
 // The single "Tagging" modal opened from the library panel's primary button.
-// Two tabs, one per intent:
+// Three tabs, one per intent:
 //   • Run     — pick which pipeline steps run, then start a forward run
 //   • Re-scan — maintenance passes that redo already-done work after a model change
-// Both tabs are "configure + launch a pipeline run". The optional-dimension
-// lifecycle (enable / disable / backfill CLAP + Demucs) lives on the panel's
-// coverage rows instead, next to the meters it changes.
+//   • Reset   — nuke ALL tagging data (tags, embeddings, acoustics, enrichment)
+//               and start fresh, behind a double confirmation
+// Run/Re-scan are "configure + launch a pipeline run"; Reset is a destructive
+// one-shot. The optional-dimension lifecycle (enable / disable / backfill CLAP +
+// Demucs) lives on the panel's coverage rows instead, next to the meters it changes.
 
 import { useEffect, useState } from 'react';
-import { Play, RefreshCw } from 'lucide-react';
+import { Play, RefreshCw, Trash2, AlertTriangle } from 'lucide-react';
 import { Modal } from '../ui/modal';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { Btn } from './ui';
@@ -17,7 +19,7 @@ import { cn } from '../../lib/cn';
 import type { Batch, BudgetMode, RescanOpts, TagSteps } from './LibraryTaggingPanel';
 import { num } from './LibraryTaggingPanel';
 
-type Tab = 'run' | 'rescan';
+type Tab = 'run' | 'rescan' | 'reset';
 
 interface Props {
   open: boolean;
@@ -51,11 +53,14 @@ interface Props {
   onStart: (steps?: TagSteps) => void;
   onReconcile: () => void;
   onRescan: (opts: RescanOpts) => void;
+  // Wipe ALL tagging data and start fresh (deletes library.db server-side).
+  onReset: () => void;
 }
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'run', label: 'Run' },
   { key: 'rescan', label: 'Re-scan' },
+  { key: 'reset', label: 'Reset' },
 ];
 
 export default function LibraryTaggingModal(p: Props) {
@@ -85,6 +90,11 @@ export default function LibraryTaggingModal(p: Props) {
   // since that banner blocked a run the operator actually wanted.
   const [thenTag, setThenTag] = useState(false);
   const togglePass = (k: keyof RescanOpts) => setPasses(prev => ({ ...prev, [k]: !prev[k] }));
+
+  // Reset tab — first confirmation is an acknowledgement checkbox that arms the
+  // button; clicking it then opens the second (a danger alert dialog).
+  const [resetAck, setResetAck] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
   const passAllSelected = !!(passes.reseed && passes.reEnrich && passes.reAnalyze && passes.upgrade);
   const anyPass = !!(passes.reseed || passes.reEnrich || passes.reAnalyze || passes.upgrade);
   const reseedOnly = !!passes.reseed && !passes.reEnrich && !passes.reAnalyze && !passes.upgrade;
@@ -103,6 +113,9 @@ export default function LibraryTaggingModal(p: Props) {
       setTab('run');
       setThenTag(false);
     }
+    // The destructive acknowledgement never survives a modal close — every open
+    // starts un-armed so Reset can't be one-clicked from a stale tick.
+    setResetAck(false);
     // Only re-run when the modal transitions open (or the intent changes).
   }, [p.open, p.intent]);
 
@@ -186,7 +199,7 @@ export default function LibraryTaggingModal(p: Props) {
         {/* Daily-token-budget caution — shown on both tabs when the day's spend
             is near (soft) or past (hard) the cap, so a run's LLM steps won't
             surprise the operator with extra spend or mid-run failures. */}
-        {budgetWarn && (
+        {tab !== 'reset' && budgetWarn && (
           <div className="flex items-start gap-2 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2 text-[11px] leading-[1.5] text-ink">
             {budgetWarn === 'soft' ? (
               <span><b>Daily token budget nearly used</b> — this run will spend more against it.</span>
@@ -322,6 +335,57 @@ export default function LibraryTaggingModal(p: Props) {
             </div>
           </>
         )}
+
+        {/* ---------------------------------------------------------------- RESET */}
+        {tab === 'reset' && (
+          <>
+            <div className="flex items-start gap-2.5 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2.5 text-[12px] leading-[1.55] text-ink">
+              <AlertTriangle size={16} className="mt-px shrink-0 text-vermilion" />
+              <span>
+                <b>This wipes everything the tagger has learned.</b> It permanently deletes all
+                mood &amp; energy tags, similarity embeddings, acoustic analysis (bpm / key /
+                loudness / vocal), and Last.fm / lyric enrichment
+                {p.libraryTotal != null ? <> for all <b className="mono-num">{num(p.libraryTotal)}</b> tracks</> : ''}.
+                Your music in Navidrome is <b>not</b> touched — every track just returns to the
+                untagged pool.
+              </span>
+            </div>
+            <p className="text-[12px] leading-[1.55] text-muted">
+              There&rsquo;s no undo short of restoring a backup. Afterwards you&rsquo;ll start from{' '}
+              <b>0%</b> and need a fresh <b>Run</b> (including the slow acoustic + embedding passes)
+              to rebuild coverage. Use this only to start completely clean — for a model change,
+              the <b>Re-scan</b> tab redoes just the affected work and keeps your tags.
+            </p>
+            {/* first confirmation — arm the action */}
+            <button
+              type="button"
+              role="checkbox"
+              aria-checked={resetAck}
+              className={cn('lib-pass', resetAck && 'on')}
+              onClick={() => setResetAck(v => !v)}
+              disabled={p.busy}
+            >
+              <span className="box">
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                  <path d="M2.5 6.2L4.8 8.5L9.5 3.5" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </span>
+              <span>
+                <span className="lib-pass-name">I understand this permanently deletes all tagging data</span>
+                <span className="lib-pass-hint">
+                  Tags, embeddings, and acoustic analysis for the whole library are erased and cannot be recovered.
+                </span>
+              </span>
+            </button>
+            <div className="flex items-center justify-end gap-2.5 border-t border-dashed border-separator-strong pt-3.5">
+              <Btn onClick={() => p.onOpenChange(false)}>Cancel</Btn>
+              {/* second confirmation happens in the danger dialog this opens */}
+              <Btn tone="danger" disabled={!resetAck || p.busy} onClick={() => setConfirmReset(true)}>
+                <Trash2 size={12} /> Reset library…
+              </Btn>
+            </div>
+          </>
+        )}
       </div>
 
       <V3AlertDialog
@@ -332,6 +396,16 @@ export default function LibraryTaggingModal(p: Props) {
         confirmLabel="re-scan"
         danger
         onConfirm={() => { p.onRescan(rescanPayload()); clearPasses(); setConfirmRescan(false); p.onOpenChange(false); }}
+      />
+
+      <V3AlertDialog
+        open={confirmReset}
+        onOpenChange={setConfirmReset}
+        title={p.libraryTotal != null ? `Delete all tagging data for ${num(p.libraryTotal)} tracks?` : 'Delete all tagging data?'}
+        description={`This permanently erases every mood/energy tag, similarity embedding, acoustic-analysis result (bpm, key, loudness, vocal), and Last.fm/lyric enrichment${p.libraryTotal != null ? ` across all ${num(p.libraryTotal)} tracks` : ''}. Your music in Navidrome is not affected — but there is no undo short of restoring a backup, and rebuilding coverage means a full tag + analysis run from scratch.`}
+        confirmLabel="Delete everything"
+        danger
+        onConfirm={() => { p.onReset(); setConfirmReset(false); setResetAck(false); p.onOpenChange(false); }}
       />
     </Modal>
   );
