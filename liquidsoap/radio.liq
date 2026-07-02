@@ -315,8 +315,19 @@ def dj_transition(a, b) =
         depth = 3.0 * x * x - 2.0 * x * x * x     # smoothstep 0→1
         9000.0 * pow(400.0 / 9000.0, depth)       # 9 kHz open → 400 Hz floor
       end
-      filter.rc(frequency=sweep_cut, mode="low", wetness=1.,
-        filter.rc(frequency=sweep_cut, mode="low", wetness=1., a_source))
+      # Wet ramps 0→1 over the first ~15% of the blend: a 2-stage RC at 9 kHz
+      # is NOT transparent (−6 dB at the cutoff + roll-off), so engaging it
+      # full-wet at the cross start lands as an instant dulling — the filter
+      # must fade IN, then the closing cutoff does the work (found on-air).
+      def sweep_wet() =
+        e = source.elapsed(sweep_src)
+        e = if e < 0. then 0. else e end
+        t_on = 0.15 * d
+        x = if e >= t_on then 1.0 else e / t_on end
+        3.0 * x * x - 2.0 * x * x * x             # smoothstep 0→1
+      end
+      filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
+        filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet, a_source))
     else
       a_source
     end
@@ -332,14 +343,21 @@ def dj_transition(a, b) =
       wd = float_of_string(default=0.30, a.metadata["liq_washout_delay"])
       log("DJ washout: dissolving the outgoing track, tap=#{wd}s (d=#{d}s)")
       wash_src = a_source
+      # The swell must beat the exp fade: feedback peaks within ~10% of the
+      # blend, while the outgoing material is still hot, so the delay line
+      # loads audible audio — swelling at 25% seeded the tail from an
+      # already-faded signal and the wash was inaudible (found on-air). The
+      # higher fb (−1.5 dB ≈ ×0.84/tap) sustains the tail across the blend;
+      # buildup is bounded because the exp fade starves the input within a
+      # couple of seconds, and the brick-wall limiter backs the bus anyway.
       def wash_fb() =
         e = source.elapsed(wash_src)
         e = if e < 0. then 0. else e end
-        fb_max = -2.5            # peak feedback dB (nearer 0 = longer tail; <unity)
+        fb_max = -1.2            # peak feedback dB (nearer 0 = longer tail; <unity)
         fb_off = -90.0           # idle/silent
-        t_swell = 0.25 * d
-        t_hold  = 0.75 * d
-        t_rel   = 0.95 * d
+        t_swell = 0.10 * d
+        t_hold  = 0.85 * d
+        t_rel   = 0.97 * d
         if e < t_swell then
           x = e / t_swell
           s = 3.0 * x * x - 2.0 * x * x * x       # smoothstep swell
@@ -352,7 +370,25 @@ def dj_transition(a, b) =
           fb_off
         end
       end
-      comb(delay=wd, feedback=wash_fb, a_source)
+      # Late makeup gain (+3.5 dB) so the tail sits PRESENT over the incoming
+      # track's fade-in instead of buried under it. It comes up only after the
+      # exp fade has dropped the dry (0.3·d → 0.55·d), so it never bumps the
+      # still-audible song — it lifts the echoes alone (found on-air: the
+      # dissolve was correct but too quiet to register).
+      def wash_gain() =
+        e = source.elapsed(wash_src)
+        e = if e < 0. then 0. else e end
+        g_max = 1.5              # ≈ +3.5 dB on the ringing tail
+        t_from = 0.30 * d
+        t_to   = 0.55 * d
+        if e <= t_from then 1.0
+        elsif e >= t_to then g_max
+        else
+          x = (e - t_from) / (t_to - t_from)
+          1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
+        end
+      end
+      amplify(wash_gain, comb(delay=wd, feedback=wash_fb, a_source))
     else
       a_source
     end

@@ -163,8 +163,15 @@ def t(a, b) =
         depth = 3.0 * x * x - 2.0 * x * x * x
         9000.0 * pow(400.0 / 9000.0, depth)
       end
-      filter.rc(frequency=sweep_cut, mode="low", wetness=1.,
-        filter.rc(frequency=sweep_cut, mode="low", wetness=1., a_src))
+      def sweep_wet() =
+        e = source.elapsed(sweep_src)
+        e = if e < 0. then 0. else e end
+        t_on = 0.15 * d
+        x = if e >= t_on then 1.0 else e / t_on end
+        3.0 * x * x - 2.0 * x * x * x
+      end
+      filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet,
+        filter.rc(frequency=sweep_cut, mode="low", wetness=sweep_wet, a_src))
     else a_src end
   a_src =
     if washout_on then
@@ -172,11 +179,11 @@ def t(a, b) =
       def wash_fb() =
         e = source.elapsed(wash_src)
         e = if e < 0. then 0. else e end
-        fb_max = -2.5
+        fb_max = -1.2
         fb_off = -90.0
-        t_swell = 0.25 * d
-        t_hold  = 0.75 * d
-        t_rel   = 0.95 * d
+        t_swell = 0.10 * d
+        t_hold  = 0.85 * d
+        t_rel   = 0.97 * d
         if e < t_swell then
           x = e / t_swell
           s = 3.0 * x * x - 2.0 * x * x * x
@@ -185,7 +192,20 @@ def t(a, b) =
         elsif e < t_rel then fb_max + ((e - t_hold) / (t_rel - t_hold)) * (fb_off - fb_max)
         else fb_off end
       end
-      comb(delay=0.28, feedback=wash_fb, a_src)
+      def wash_gain() =
+        e = source.elapsed(wash_src)
+        e = if e < 0. then 0. else e end
+        g_max = 1.5
+        t_from = 0.30 * d
+        t_to   = 0.55 * d
+        if e <= t_from then 1.0
+        elsif e >= t_to then g_max
+        else
+          x = (e - t_from) / (t_to - t_from)
+          1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
+        end
+      end
+      amplify(wash_gain, comb(delay=0.28, feedback=wash_fb, a_src))
     else a_src end
   add(normalize=false, [a_src, fade.in(duration=d, b.source)])
 end
