@@ -39,14 +39,15 @@ station_name = ref("SUB/WAVE")
 # no threads, no shared state): sample-accurate in AUDIO time, so they hold
 # under any clock — the offline render harness (sync="none") exposed that
 # wall-clock thread envelopes and audio time drift apart.
-# Verified on liquidsoap v2.2.5 (scripts/fx-render-test.sh probe): filter.rc
-# and comb instantiate cleanly INSIDE the cross callback on a
+# Verified on liquidsoap v2.2.5 AND v2.4.4 (scripts/fx-render-test.sh probe):
+# filter.rc and comb instantiate cleanly INSIDE the cross callback on a
 # request.queue-backed source — the "Early computation of source content-type"
 # crash is specific to iir_filter/HPF — and audibly alter the render.
 # WHY comb, NOT echo: liquidsoap's native `echo` (incl. its ping_pong flag) is a
-# verified NO-OP in this savonet/liquidsoap:v2.2.5 build — it type-checks but
-# passes audio through bit-for-bit unchanged (confirmed by render: identical
-# md5 dry vs wet). `comb` (a feedback delay line) is the working PCM primitive
+# verified NO-OP in BOTH the v2.2.5 and v2.4.4 savonet builds — it type-checks
+# but passes audio through bit-for-bit unchanged (confirmed by render:
+# identical md5 dry vs wet, re-confirmed on 2.4.4 with the dB-form feedback
+# the 2.4 API demands). `comb` (a feedback delay line) is the working PCM primitive
 # with a getter-controlled `feedback`. The tail is therefore centred, not a true
 # L/R ping-pong; real stereo bounce would need the heavier ffmpeg.filter.aecho
 # send path. Do NOT "simplify" this back to `echo`.
@@ -152,15 +153,15 @@ def proto_subhttp(~rlog, ~maxtime, arg) =
     elsif string.contains(substring=".ogg", arg) then ".ogg"
     elsif string.contains(substring=".flac", arg) then ".flac"
     else ".mp3" end
-  output = file.temp("liq-curl-", ext)
-  cmd = "curl -sS -L --max-time #{timeout} -o #{process.quote(output)} #{process.quote(uri)}"
+  outfile = file.temp("liq-curl-", ext)
+  cmd = "curl -sS -L --max-time #{timeout} -o #{process.quote(outfile)} #{process.quote(uri)}"
   ret = process.run(timeout=float_of_int(timeout), cmd)
-  if ret.status == "exit" and ret.status.code == 0 and file.size(output) > 0 then
-    [output]
+  if ret.status == "exit" and ret.status.code == 0 and file.size(outfile) > 0 then
+    outfile
   else
     log(label="protocol.subhttp", level=3, "curl failed for #{uri}: status=#{ret.status} code=#{ret.status.code} stderr=#{ret.stderr}")
-    file.remove(output)
-    []
+    file.remove(outfile)
+    null
   end
 end
 
@@ -257,7 +258,7 @@ music = cue_cut(music)
 # DJ TRANSITION EFFECTS live INSIDE this callback, per-branch on the outgoing
 # source (see the state block near the top of this file). Instantiating
 # operators here is safe for filter.rc and comb specifically — proven against
-# the real v2.2.5 image by scripts/fx-render-test.sh probe. The historical
+# the real v2.2.5 and v2.4.4 images by scripts/fx-render-test.sh probe. The historical
 # `Early computation of source content-type detected for source iir_filter!`
 # crash is specific to IIR filters (iir_filter/HPF) on a not-yet-typed
 # `request.queue`-backed source; re-test with the probe before adding any OTHER
@@ -405,9 +406,11 @@ def dj_transition(a, b) =
         sxx = 3.0 * x * x - 2.0 * x * x * x
         30.0 * pow(1800.0 / 30.0, sxx)            # 30 Hz → 1.8 kHz (log space)
       end
-      # SUBTRACT-HPF: filter.rc mode="high" is BROKEN in this v2.2.5 build —
+      # SUBTRACT-HPF: filter.rc mode="high" is BROKEN in the v2.2.5 build —
       # even a static 400 Hz high-pass collapses music to −115 dB (verified by
-      # render; same defect family as the `echo` no-op). High-pass is built
+      # render; same defect family as the `echo` no-op) — and STILL broken on
+      # v2.4.4 (re-verified: 40 Hz HPF on a 440 Hz tone renders −inf silence).
+      # High-pass is built
       # from proven parts instead: dry − lowpass(dry). Polarity inversion and
       # twin-consumer frame alignment verified: src + amplify(-1., src)
       # renders exact silence.
@@ -633,8 +636,18 @@ music = amplify(override="liq_amplify", 1., music)
 # washout) are built per-transition on the outgoing branch inside dj_transition,
 # so idle playout has no effect operators in its path at all, and jingles can
 # never be caught inside a ramp.
+# persist_override=true (2.4): with the new default (false) the
+# liq_cross_duration override is reset before it ever sizes the stamped
+# track's own end-of-track buffer (verified by scripts/fx-render-test.sh
+# xdur: stamped 12 rendered an 86s output — static buffer — without persist,
+# 78s — stamp honoured — with it). Persist restores the 2.2.5 sizing. The
+# flip side of persist is that a stamp would linger over later unstamped
+# tracks, so the controller now stamps EVERY track it annotates
+# (subsonic.getAnnotatedUri falls back to the operator's crossfade setting),
+# making the lingering value always the intended one.
 music = cross(
   duration=crossfade_duration(),
+  persist_override=true,
   dj_transition,
   music
 )
@@ -945,7 +958,7 @@ def on_meta(m) =
     # Build via json.stringify so values with embedded quotes/backslashes
     # (e.g. a title like Fall (From "Rabb Da Radio 3")) are properly escaped —
     # raw string interpolation here produced invalid JSON the UI couldn't parse.
-    json = json.stringify(compact=true, {
+    payload = json.stringify(compact=true, {
       title = title,
       artist = artist,
       album = album,
@@ -953,7 +966,7 @@ def on_meta(m) =
       filename = filename,
       timestamp = ts
     })
-    file.write(data=json, "/var/sub-wave/now-playing.json")
+    file.write(data=payload, "/var/sub-wave/now-playing.json")
     # Push the same metadata onto the Icecast stream so the ICY title
     # tracks the current song instead of lagging a transition behind.
     radio.insert_metadata([
@@ -970,7 +983,9 @@ end
 # outgoing track usually wins, freezing the UI one song behind.
 # on_metadata is used instead of on_track because on_track gets swallowed
 # by source switches (request queue → auto playlist).
-music_meta.on_metadata(on_meta)
+# synchronous=false (2.3+ mandatory arg): on_meta does file I/O — run it on
+# the task queue, not the streaming thread.
+music_meta.on_metadata(synchronous=false, on_meta)
 
 # ---------------------------------------------------------------------------
 # OUTPUT — broadcast to Icecast
