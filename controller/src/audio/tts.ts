@@ -45,6 +45,18 @@ function djPersonaTts(kind: string): any {
   return settings.getEffectivePersona()?.tts || null;
 }
 
+// The engine the persona (or the global default) actually asked for, BEFORE
+// resolveEngine()'s availability/key reroute. Recorded alongside the engine
+// that truly spoke so a *resolve-time* fallback — e.g. a persona on pocket-tts
+// when the tts-heavy sidecar is down, silently routed to piper — shows up in
+// Stats as `fellBack`, instead of looking like a healthy piper call the
+// operator never configured (issue #691). Mirrors describeRouting()'s
+// `requested`.
+function requestedEngine(kind: string, personaTts: any): string {
+  if (personaTts && ENGINES.includes(personaTts.engine)) return personaTts.engine;
+  return settings.get().tts?.defaultEngine || 'piper';
+}
+
 function resolveEngine(kind: string, personaTts: any) {
   const tts = settings.get().tts || {};
   let chosen;
@@ -213,6 +225,7 @@ export async function speak(
 ) {
   const speakText = normalizeForSpeech(text);
   const personaTts = djPersonaTts(kind);
+  const requested = requestedEngine(kind, personaTts);
   const primary = resolveEngine(kind, personaTts);
   // Persona on-air language (e.g. "French") rides along to the cloud engine as a
   // pronunciation hint so a non-English script isn't read with English phonetics
@@ -263,7 +276,7 @@ export async function speak(
   try {
     const result = await speakWith(primary, speakText, { outPath, speedScale: scale, language, soul }, personaTts);
     recordTts({
-      kind, engine: primary, requested: primary, fellBack: false,
+      kind, engine: primary, requested, fellBack: requested !== primary,
       ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
     });
     return result;
@@ -274,7 +287,7 @@ export async function speak(
     const fallback = primary === 'piper' ? 'kokoro' : 'piper';
     if (fallback === 'kokoro' && !kokoro.isAvailable()) {
       recordTts({
-        kind, engine: primary, requested: primary, fellBack: false,
+        kind, engine: primary, requested, fellBack: requested !== primary,
         ok: false, ms: Date.now() - started, chars, error: err.message,
         t: new Date().toISOString(),
       });
@@ -284,13 +297,13 @@ export async function speak(
     try {
       const result = await speakWith(fallback, speakText, { outPath, speedScale: scale, language, soul }, personaTts);
       recordTts({
-        kind, engine: fallback, requested: primary, fellBack: true,
+        kind, engine: fallback, requested, fellBack: true,
         ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
       });
       return result;
     } catch (err2) {
       recordTts({
-        kind, engine: fallback, requested: primary, fellBack: true,
+        kind, engine: fallback, requested, fellBack: true,
         ok: false, ms: Date.now() - started, chars, error: err2.message,
         t: new Date().toISOString(),
       });
