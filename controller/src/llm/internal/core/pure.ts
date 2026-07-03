@@ -273,3 +273,51 @@ export function failureDiagnostics(err: any): any {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Near-miss id resolution
+// ---------------------------------------------------------------------------
+
+// Levenshtein distance capped at 2 — we only ever care about distance ≤ 1, so
+// bail as soon as a row's minimum exceeds the cap instead of filling the table.
+function editDistanceAtMost2(a: string, b: string): number {
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > 2) return 3;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+// Resolve a model-returned id that isn't in the candidate set to the candidate
+// it almost certainly meant, or null when no single safe match exists. Covers
+// the observed transcription slips (glm-5.1 dropped the final character of an
+// id it had genuinely picked from its own tool results — a 22-char nanoid
+// returned as 21) without ever guessing between two plausible candidates:
+//   1. prefix — one string is a prefix of the other, ≥ 12 chars shared and ≤ 3
+//      chars difference (nanoid-style ids make a 12-char prefix collision
+//      astronomically unlikely; 12 also keeps short ids from matching wildly).
+//   2. edit distance ≤ 1 — a single dropped/added/substituted character.
+// Both passes require EXACTLY one candidate to match — any ambiguity → null,
+// the caller falls back to its re-pick / stateless path rather than airing a
+// coin-flip.
+export function nearestId(id: string, candidateIds: Iterable<string>): string | null {
+  if (!id || typeof id !== 'string') return null;
+  const ids = [...candidateIds];
+  const prefix = ids.filter((c) =>
+    c !== id
+    && Math.min(c.length, id.length) >= 12
+    && Math.abs(c.length - id.length) <= 3
+    && (c.startsWith(id) || id.startsWith(c)));
+  if (prefix.length === 1) return prefix[0];
+  if (prefix.length > 1) return null;
+  const near = ids.filter((c) => c !== id && editDistanceAtMost2(c, id) <= 1);
+  return near.length === 1 ? near[0] : null;
+}

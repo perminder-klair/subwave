@@ -97,8 +97,11 @@ export function PersonaIdentityCard({
               onChange={(e: ChangeEvent<HTMLInputElement>) => update({ language: e.target.value })}
             />
             <div className="field-hint">
-              The DJ speaks every on-air line in this language. Leave empty for English.
-              Pick a voice that can actually speak it.
+              The DJ <em>writes</em> every on-air line in this language. Leave empty for English.
+              The <em>accent</em> comes from the voice, not this field — set a voice that speaks
+              it in the Voice section below (e.g. drop a Piper voice like <code>it_IT-*.onnx</code>{' '}
+              into <code>state/voices/</code>, or use a Cloud voice). An English-only voice will
+              read this language with an English accent.
               <span className="ml-2 text-muted">{persona.language.trim().length} / {LANGUAGE_MAX}</span>
             </div>
           </div>

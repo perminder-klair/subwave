@@ -8,8 +8,11 @@ import {
   washoutCrossSecondsFor,
   washoutDelayFor,
   effectAllowedFor,
+  gainForLoudness,
   WASHOUT_CROSS_TARGET_SECONDS,
   CROSS_MAX_SECONDS,
+  LOUDNESS_MAX_BOOST_DB,
+  LOUDNESS_CUT_CLAMP_DB,
 } from '../src/music/mix.js';
 
 let failures = 0;
@@ -114,6 +117,58 @@ async function main() {
   await test('washout is never data-gated (cooldown rations it)', () => {
     assert.equal(effectAllowedFor('washout', { bpm: 124, key: '8A' }, { bpm: 124, key: '8A' }), true);
     assert.equal(effectAllowedFor('washout', { bpm: null, key: null }, { bpm: null, key: null }), true);
+  });
+
+  console.log('gainForLoudness (asymmetric clamp, peak headroom, operator overrides):');
+
+  await test('no measurement → null (unity gain, pre-feature behaviour)', () => {
+    assert.equal(gainForLoudness(null), null);
+    assert.equal(gainForLoudness(undefined), null);
+    assert.equal(gainForLoudness(NaN), null);
+  });
+
+  await test('within-cap gains are the exact target distance', () => {
+    assert.equal(gainForLoudness(-18), 4);    // quiet → +4 toward −14
+    assert.equal(gainForLoudness(-10), -4);   // loud → −4
+    assert.equal(gainForLoudness(-14), 0);    // on target → 0
+  });
+
+  await test('boost capped at the default max, cut gets the wider clamp', () => {
+    // −28 LUFS wants +14 → capped at the default +6.
+    assert.equal(gainForLoudness(-28), LOUDNESS_MAX_BOOST_DB);
+    // −4 LUFS wants −10 → allowed (cut clamp is 12, not 6).
+    assert.equal(gainForLoudness(-4), -10);
+    // Absurdly loud still stops at the cut clamp.
+    assert.equal(gainForLoudness(0), -LOUDNESS_CUT_CLAMP_DB);
+  });
+
+  await test('measured peak headroom caps the boost below the operator max', () => {
+    // −28 LUFS, peak −4 dBFS → headroom to the −1 ceiling is 3 dB < cap 9.
+    assert.equal(gainForLoudness(-28, { peakDb: -4, maxBoostDb: 9 }), 3);
+    // Peak already at/above the ceiling → no boost at all (never negative).
+    assert.equal(gainForLoudness(-20, { peakDb: -0.5 }), 0);
+    // Plenty of headroom → the operator max is what bites.
+    assert.equal(gainForLoudness(-28, { peakDb: -20, maxBoostDb: 9 }), 9);
+  });
+
+  await test('peak never limits the cut direction', () => {
+    // Loud track with peaks at the ceiling still gets turned down.
+    assert.equal(gainForLoudness(-8, { peakDb: -0.1 }), -6);
+  });
+
+  await test('operator target and boost-cap overrides apply', () => {
+    assert.equal(gainForLoudness(-20, { targetLufs: -16 }), 4);
+    assert.equal(gainForLoudness(-10, { targetLufs: -16 }), -6);
+    assert.equal(gainForLoudness(-28, { maxBoostDb: 12 }), 12);
+    // maxBoostDb 0 = cut-only levelling.
+    assert.equal(gainForLoudness(-28, { maxBoostDb: 0 }), 0);
+    // Junk overrides fall back to the defaults.
+    assert.equal(gainForLoudness(-28, { targetLufs: NaN, maxBoostDb: -3 }), LOUDNESS_MAX_BOOST_DB);
+  });
+
+  await test('rounded to 0.1 dB', () => {
+    assert.equal(gainForLoudness(-15.55), 1.6);
+    assert.equal(gainForLoudness(-13.333), -0.7);
   });
 
   if (failures > 0) {

@@ -224,6 +224,11 @@ interface StreamForm {
   bitrate: string;
 }
 
+interface LoudnessForm {
+  targetLufs: string;
+  maxBoostDb: string;
+}
+
 // Keep in sync with MP3_BITRATES in controller/src/settings.ts — radio.liq
 // has a literal `%mp3(bitrate=…)` branch per value, so this set is fixed.
 const MP3_BITRATES = [64, 96, 128, 160, 192, 320] as const;
@@ -237,6 +242,7 @@ interface FormState {
   maxTrackSeconds: string;
   archive: ArchiveForm;
   stream: StreamForm;
+  loudness: LoudnessForm;
   station: string;
   timezone: string;
   locale: StationLocale;
@@ -286,6 +292,7 @@ interface SettingsData {
       aacBitrate?: number;
       bitrate?: number;
     };
+    loudness?: { targetLufs?: number; maxBoostDb?: number };
     station?: string;
     timezone?: string;
     locale?: StationLocale;
@@ -436,6 +443,10 @@ export default function SettingsPanel() {
         aacEnabled: v.stream?.aacEnabled ?? false,
         aacBitrate: String(v.stream?.aacBitrate ?? 192),
         bitrate: String(v.stream?.bitrate ?? 192),
+      },
+      loudness: {
+        targetLufs: String(v.loudness?.targetLufs ?? -14),
+        maxBoostDb: String(v.loudness?.maxBoostDb ?? 6),
       },
       station: v.station ?? '',
       timezone: v.timezone ?? '',
@@ -1028,6 +1039,79 @@ export default function SettingsPanel() {
                     album mixes or DJ sets that keep landing in rotation. Listener requests still
                     play any length, and a show can override this with its own limit (0 there means
                     unlimited). Applies on the next pick; no restart needed.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Loudness levelling" sub="per-track volume normalisation">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <Label>Target loudness</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="mono-num w-28"
+                        type="number"
+                        step={1}
+                        min={-23}
+                        max={-9}
+                        value={form.loudness.targetLufs}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f =>
+                            f ? { ...f, loudness: { ...f.loudness, targetLufs: e.target.value } } : f,
+                          )
+                        }
+                      />
+                      <span className="text-[12px] text-muted">LUFS · −23 to −9</span>
+                    </div>
+                    <div className="field-hint">
+                      Every analysed track is pulled toward this level. −14 is the streaming
+                      standard (Spotify, YouTube). A quieter target like −16 narrows the gap in
+                      mixed libraries: loud modern masters come down more, and quiet dynamic ones
+                      (classical, jazz) need less lift to catch up.
+                    </div>
+                  </div>
+                  <div className="field">
+                    <Label>Max boost</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="mono-num w-28"
+                        type="number"
+                        step={1}
+                        min={0}
+                        max={12}
+                        value={form.loudness.maxBoostDb}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f =>
+                            f ? { ...f, loudness: { ...f.loudness, maxBoostDb: e.target.value } } : f,
+                          )
+                        }
+                      />
+                      <span className="text-[12px] text-muted">dB · 0 to 12</span>
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({
+                            loudness: {
+                              targetLufs: parseFloat(form.loudness.targetLufs),
+                              maxBoostDb: parseFloat(form.loudness.maxBoostDb),
+                            },
+                          })
+                        }
+                        disabled={busy}
+                      >
+                        Save loudness
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      Cap on how far a quiet track is turned up (0 = level down only). Boost is
+                      also limited by each track&rsquo;s own measured peak headroom, so raising
+                      this won&rsquo;t distort dynamic material — very quiet, dynamic masters
+                      simply can&rsquo;t reach the target cleanly. Loud tracks are turned down as
+                      far as needed. Applies from the next queued track; no restart, tracks need
+                      acoustic analysis (Library → Analyze).
+                    </div>
                   </div>
                 </div>
               </Card>

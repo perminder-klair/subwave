@@ -10,9 +10,11 @@
 // Shows are created/edited through an in-page editor (ShowEditor, below the
 // show list) — the personas pattern: click a show to open it, edit it in place.
 // The weekly grid is drag-paintable: pick a brush, then click-drag across
-// cells; click a day label or hour header to fill a whole row/column.
+// cells; click a day label or hour header to fill a whole row/column. On
+// touch, a tap toggles one cell and a long-press arms drag-painting — a
+// plain swipe only scrolls (see HOLD_MS below).
 import type { ChangeEvent, RefObject, TouchEvent } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../lib/notify';
@@ -44,6 +46,13 @@ const DAYS = [
   { key: 0, label: 'Sun' },
 ];
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
+
+// Touch paint gesture: holding a cell this long (without drifting past the
+// slop) arms a paint stroke; releasing earlier is a tap (single-cell toggle,
+// committed on release); drifting past the slop first is a scroll and paints
+// nothing. Mouse painting is immediate and unaffected.
+const HOLD_MS = 300;
+const PRESS_SLOP_PX = 8;
 
 const SHOW_COLORS = [
   '#c5302a', '#2f6f4f', '#3a5fa8', '#9a5b1f', '#6b4a8a', '#1f7a7a',
@@ -270,6 +279,19 @@ export default function ShowsPanel() {
     active: false,
     value: undefined,
   });
+  // Pending touch press — a finger is down on a cell but the gesture hasn't
+  // resolved yet into tap (release early), paint (hold HOLD_MS) or scroll
+  // (drift past PRESS_SLOP_PX). Nothing is painted until it resolves, so a
+  // scroll that merely starts on a cell can never toggle it.
+  const pressRef = useRef<{
+    day: number; hour: number; x: number; y: number;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  // Detach for the grid's non-passive touchmove listener (set by the callback
+  // ref below when the grid mounts/unmounts).
+  const gridTouchMoveCleanup = useRef<(() => void) | null>(null);
+  // Latest extendStroke for the once-attached touchmove listener.
+  const extendStrokeRef = useRef<(day: number, hour: number) => void>(() => {});
 
   // Live clock — the grid highlights the cell the station is in right now.
   useEffect(() => {
@@ -283,14 +305,23 @@ export default function ShowsPanel() {
   const stationLocale = normalizeStationLocale(data?.values?.locale);
   const { dow: nowDay, hour: nowHour } = zonedDayHour(now, stationTz);
 
-  // End any drag-paint stroke when the pointer is released anywhere.
+  // End any drag-paint stroke when the pointer is released anywhere. A
+  // touchcancel (OS took the gesture — notification shade, browser nav) also
+  // discards any pending press so no stray paint lands after the fact.
   useEffect(() => {
     const end = () => { strokeRef.current.active = false; };
+    const cancel = () => {
+      strokeRef.current.active = false;
+      if (pressRef.current) { clearTimeout(pressRef.current.timer); pressRef.current = null; }
+    };
     window.addEventListener('mouseup', end);
     window.addEventListener('touchend', end);
+    window.addEventListener('touchcancel', cancel);
     return () => {
       window.removeEventListener('mouseup', end);
       window.removeEventListener('touchend', end);
+      window.removeEventListener('touchcancel', cancel);
+      cancel();
     };
   }, []);
 
@@ -517,18 +548,76 @@ export default function ShowsPanel() {
   };
   const clearWeek = () => setForm(f => f ? ({ ...f, schedule: emptyWeek() }) : f);
 
-  // Touch drag — translate the moving touch point into a grid cell.
-  const onGridTouchMove = (e: TouchEvent<HTMLDivElement>) => {
-    if (!strokeRef.current.active) return;
+  // ── touch paint (long-press to arm; see HOLD_MS above) ──────────────────
+  const clearPress = () => {
+    if (pressRef.current) { clearTimeout(pressRef.current.timer); pressRef.current = null; }
+  };
+  // Finger down on a cell: don't paint yet — start the hold timer. If it
+  // fires (finger still down, within slop) the stroke arms from this cell and
+  // the touchmove listener below takes over.
+  const onCellTouchStart = (day: number, hour: number, e: TouchEvent<HTMLButtonElement>) => {
+    clearPress();
+    if (brush == null || e.touches.length > 1) return;
     const t = e.touches[0];
     if (!t) return;
-    const el = document.elementFromPoint(t.clientX, t.clientY);
-    const cell = el?.closest?.('[data-cell]') as HTMLElement | null;
-    if (cell) {
-      e.preventDefault();
-      extendStroke(Number(cell.dataset.day), Number(cell.dataset.hour));
+    const timer = setTimeout(() => {
+      pressRef.current = null;
+      beginStroke(day, hour);
+      navigator.vibrate?.(10);
+    }, HOLD_MS);
+    pressRef.current = { day, hour, x: t.clientX, y: t.clientY, timer };
+  };
+  // Finger up before the hold timer fired and without drifting → a tap:
+  // toggle just that cell, committed on release so scrolls never toggle.
+  // preventDefault() stops the browser's compatibility mousedown that follows
+  // touchend — it would re-enter beginStroke and toggle the cell right back.
+  const onCellTouchEnd = (e: TouchEvent<HTMLButtonElement>) => {
+    const press = pressRef.current;
+    if (press) {
+      clearPress();
+      if (e.cancelable) e.preventDefault();
+      beginStroke(press.day, press.hour);
+      strokeRef.current.active = false;
+    } else if (strokeRef.current.active) {
+      // End of a long-press paint stroke — same synthetic-mouse suppression;
+      // the window touchend listener clears the stroke itself.
+      if (e.cancelable) e.preventDefault();
     }
   };
+  extendStrokeRef.current = extendStroke;
+  // Touch drag — translate the moving touch point into a grid cell. Attached
+  // imperatively with passive:false because React registers root touchmove
+  // listeners passively, which silently ignores preventDefault() — the pan
+  // and the paint used to run at once, spraying cells while scrolling. A
+  // callback ref (not an effect) because the grid only mounts once /settings
+  // has loaded. The handler reads refs only, so the [] memo is safe.
+  const gridScrollRef = useCallback((el: HTMLDivElement | null) => {
+    gridTouchMoveCleanup.current?.();
+    gridTouchMoveCleanup.current = null;
+    if (!el) return;
+    const onMove = (e: globalThis.TouchEvent) => {
+      const t = e.touches[0];
+      const press = pressRef.current;
+      if (press) {
+        // Still deciding: a drift past the slop means it's a scroll — drop
+        // the press and let the browser pan natively (no preventDefault).
+        if (!t || e.touches.length > 1
+          || Math.abs(t.clientX - press.x) > PRESS_SLOP_PX
+          || Math.abs(t.clientY - press.y) > PRESS_SLOP_PX) {
+          clearTimeout(press.timer);
+          pressRef.current = null;
+        }
+        return;
+      }
+      if (!strokeRef.current.active || !t) return;
+      e.preventDefault(); // stroke armed: suppress the pan, paint instead
+      const cell = document.elementFromPoint(t.clientX, t.clientY)
+        ?.closest?.('[data-cell]') as HTMLElement | null;
+      if (cell) extendStrokeRef.current(Number(cell.dataset.day), Number(cell.dataset.hour));
+    };
+    el.addEventListener('touchmove', onMove, { passive: false });
+    gridTouchMoveCleanup.current = () => el.removeEventListener('touchmove', onMove);
+  }, []);
 
   // ── validation ───────────────────────────────────────────────────────────
   const allShowsOk = form ? form.shows.every(showValid) : false;
@@ -704,8 +793,13 @@ export default function ShowsPanel() {
         </div>
 
         <div
+          ref={gridScrollRef}
           className="overflow-x-auto"
-          onTouchMove={onGridTouchMove}
+          onContextMenu={e => {
+            // Long-press opens the context menu on Android — swallow it while
+            // a press is resolving or a stroke is being painted.
+            if (pressRef.current || strokeRef.current.active) e.preventDefault();
+          }}
         >
           <div className="grid min-w-[760px] touch-pan-x grid-cols-[44px_repeat(24,minmax(28px,1fr))] gap-0 select-none">
             <span />
@@ -738,6 +832,8 @@ export default function ShowsPanel() {
                 fillDay={fillDay}
                 beginStroke={beginStroke}
                 extendStroke={extendStroke}
+                onCellTouchStart={onCellTouchStart}
+                onCellTouchEnd={onCellTouchEnd}
                 showById={showById}
                 colorOf={colorOf}
               />
@@ -759,10 +855,12 @@ export default function ShowsPanel() {
         </div>
 
         <p className="mt-2.5 text-[11px] leading-[1.5] text-muted">
-          Pick a brush, then <b>click or drag</b> across cells to paint. Click a
-          {' '}<b>day name</b> to fill that day, or an <b>hour</b> to fill that hour
-          {' '}across the week. Painting over a matching cell clears it. The
-          {' '}vermilion-ringed cell is the hour on air.
+          Pick a brush, then <b>click or drag</b> across cells to paint — on a
+          {' '}touch screen, <b>tap</b> a cell or <b>hold it</b> a moment to start
+          {' '}painting (a quick swipe just scrolls). Click a <b>day name</b> to
+          {' '}fill that day, or an <b>hour</b> to fill that hour across the week.
+          {' '}Painting over a matching cell clears it. The vermilion-ringed cell
+          {' '}is the hour on air.
         </p>
       </Card>
 
@@ -1279,13 +1377,16 @@ interface DayRowProps {
   fillDay: (day: number) => void;
   beginStroke: (day: number, hour: number) => void;
   extendStroke: (day: number, hour: number) => void;
+  onCellTouchStart: (day: number, hour: number, e: TouchEvent<HTMLButtonElement>) => void;
+  onCellTouchEnd: (e: TouchEvent<HTMLButtonElement>) => void;
   showById: (id: string | null | undefined) => Show | null;
   colorOf: (id: string | null | undefined) => string;
 }
 
 function DayRow({
   dayKey, label, brush, form, nowDay, nowHour,
-  fillDay, beginStroke, extendStroke, showById, colorOf,
+  fillDay, beginStroke, extendStroke, onCellTouchStart, onCellTouchEnd,
+  showById, colorOf,
 }: DayRowProps) {
   return (
     <>
@@ -1317,7 +1418,8 @@ function DayRow({
             brush={brush}
             onMouseDown={() => beginStroke(dayKey, h)}
             onMouseEnter={() => extendStroke(dayKey, h)}
-            onTouchStart={() => beginStroke(dayKey, h)}
+            onTouchStart={e => onCellTouchStart(dayKey, h, e)}
+            onTouchEnd={onCellTouchEnd}
           />
         );
       })}
@@ -1335,12 +1437,13 @@ interface GridCellProps {
   brush: string | 'erase' | null;
   onMouseDown: () => void;
   onMouseEnter: () => void;
-  onTouchStart: () => void;
+  onTouchStart: (e: TouchEvent<HTMLButtonElement>) => void;
+  onTouchEnd: (e: TouchEvent<HTMLButtonElement>) => void;
 }
 
 function GridCell({
   day, hour, label, show, color, isNow, brush,
-  onMouseDown, onMouseEnter, onTouchStart,
+  onMouseDown, onMouseEnter, onTouchStart, onTouchEnd,
 }: GridCellProps) {
   const cellRef = useRef<HTMLButtonElement>(null);
   useDynamicStyle(cellRef, {
@@ -1356,12 +1459,13 @@ function GridCell({
       onMouseDown={onMouseDown}
       onMouseEnter={onMouseEnter}
       onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
       title={
         (show ? `${show.name} (${show.mood})` : `${label} ${String(hour).padStart(2, '0')}:00, empty`)
         + (isNow ? ' · on air now' : '')
       }
       className={cn(
-        'relative -mt-px -ml-px flex h-8 items-center justify-center border border-separator-strong p-0 font-[inherit] text-[9px] font-bold tracking-[0.15em] uppercase',
+        'relative -mt-px -ml-px flex h-8 items-center justify-center border border-separator-strong p-0 font-[inherit] text-[9px] font-bold tracking-[0.15em] uppercase [-webkit-touch-callout:none]',
         show ? 'text-white' : 'text-muted',
         brush == null ? 'cursor-default' : 'cursor-pointer',
       )}
