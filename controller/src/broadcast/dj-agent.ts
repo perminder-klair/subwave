@@ -28,6 +28,7 @@ import { recordPick } from '../llm/log.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { recencyWindowsForLibrary, effectiveNoRepeatWindow } from '../music/recency.js';
+import { djCallsAllowed } from './listeners.js';
 
 // --- Feature 4: DJ-mode mini-runs ------------------------------------------
 // A short, deliberate tempo/key journey across 2-3 consecutive picks. While a
@@ -856,5 +857,91 @@ async function runRequestViaAgent(queue: any, { requester }: { requester: string
       track: { title: song.title, artist: song.artist, id: song.id },
       introScript: intro || null,
     };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Persona handoff — a two-voice mic-pass at a show boundary.
+// ---------------------------------------------------------------------------
+//
+// When session.maybeRoll() hard-rolls and the effective PERSONA changed, it
+// stamps roll metadata on the fresh session (session.pendingHandoff). This runs
+// after the roll — driven by whichever maybeRoll call site fires first (the
+// queue's track-start, or the :00 hourly cron) — and, when a handoff is pending,
+// airs a sign-off in the OUTGOING persona's voice followed by a greeting in the
+// incoming persona's voice. Both go through the serialized say.txt voice chain
+// (queue.announce → airVoice), so they play cleanly back to back.
+//
+// Never throws (callers still need to run the pick after it) and is idempotent:
+// it marks the handoff aired up front, so a concurrent second call — or a
+// mid-way failure — can't double-air or retry into the middle of the new show.
+export async function runPersonaHandoff(queue: any, ctx: any): Promise<void> {
+  const pending = session.pendingHandoff();
+  if (!pending) return;
+
+  // Nobody listening → the mic-pass moment has passed; don't stack a stale
+  // handoff for later. Budget: treated as an optional segment (muted in soft
+  // and hard tiers, policy in dj-budget.ts). Either way, mark aired so it
+  // doesn't retry — a handoff fires at most ~once an hour and is cheap to loosen.
+  if (!djCallsAllowed() || !budget.optionalSegmentsAllowed()) {
+    session.markHandoffAired();
+    return;
+  }
+
+  // Outgoing persona comes from the roll metadata — its clock slot is already
+  // over, so getEffectivePersona() no longer returns it. Incoming is the fresh
+  // session's persona. A persona deleted mid-shift → nothing to voice; drop it.
+  const personaOut = settings.resolvePersonaById(pending.personaId);
+  const cur = session.getSession();
+  const personaIn = settings.resolvePersonaById(cur?.persona?.id) || settings.getEffectivePersona();
+  if (!personaOut || !personaIn) {
+    session.markHandoffAired();
+    return;
+  }
+  const showIn = cur?.show?.name || null;
+
+  // Mark aired BEFORE airing (see the idempotency note above).
+  session.markHandoffAired();
+
+  await withTrace({ kind: 'handoff', from: personaOut.name, to: personaIn.name }, async () => {
+    const recentOpeners = queue.getRecentOpeners();
+    let aired = false;
+
+    // 1. Sign-off, in the OUTGOING persona's voice. Tag the session turn with
+    //    the outgoing persona's id + name — session.windowMessages() uses the id
+    //    to spot a turn spoken by someone other than the session's own persona
+    //    and names the real speaker, so the incoming DJ never reads the
+    //    sign-off as its own words.
+    let signoffText: string | null = null;
+    try {
+      signoffText = await dj.generateSignoff({
+        personaOut, personaIn, showIn,
+        context: ctx, recap: queue.getDjRecap(), recentOpeners,
+      });
+      await queue.announce(signoffText, 'handoff', {
+        persona: personaOut, meta: { personaId: personaOut.id, personaName: personaOut.name },
+      });
+      aired = true;
+    } catch (err: any) {
+      queue.log('error', `Handoff sign-off failed: ${err.message}`);
+      signoffText = null;
+    }
+
+    // 2. Greeting, in the INCOMING persona's voice — fed the sign-off text so
+    //    it can genuinely respond. Stands alone if the sign-off didn't air.
+    try {
+      const greeting = await dj.generateHandoffGreeting({
+        personaIn, personaOut, signoffText, showIn,
+        context: ctx, recap: queue.getDjRecap(), recentOpeners,
+      });
+      await queue.announce(greeting, 'handoff', { persona: personaIn });
+      aired = true;
+    } catch (err: any) {
+      queue.log('error', `Handoff greeting failed: ${err.message}`);
+    }
+
+    if (aired) {
+      logEvent('dj.handoff', { from: personaOut.name, to: personaIn.name, show: showIn });
+    }
   });
 }

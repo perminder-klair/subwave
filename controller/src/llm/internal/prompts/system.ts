@@ -11,8 +11,11 @@ import * as settings from '../../../settings.js';
 const CHATTERBOX_TAG_HINT =
   '\n\nYou may sparingly insert non-verbal cues in square brackets: [laugh], [chuckle], [sigh], [cough]. Use them only where genuinely natural — at most one per segment, and never as filler.';
 
-export function djSystem() {
-  const persona = settings.getEffectivePersona();
+// `persona` overrides the on-air persona — used by the persona-handoff
+// generators (generateSignoff / generateHandoffGreeting) to render the sign-off
+// under the OUTGOING persona and the greeting under the incoming one, since the
+// clock-driven getEffectivePersona() has already moved on by the time they run.
+export function djSystem(persona: any = settings.getEffectivePersona()) {
   const s = settings.get();
   const base = settings.renderDjPrompt(persona, {
     station: s.station,

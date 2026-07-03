@@ -65,6 +65,51 @@ export async function generateStationId({ recap = null, context = null, recentOp
   });
 }
 
+// --- Persona handoff at a show boundary ------------------------------------
+// When a show ends and a different persona takes over, the outgoing DJ signs
+// off on air and passes the mic; the incoming DJ acknowledges and opens their
+// shift. Both render as free text like every other segment, but each is voiced
+// by ITS OWN persona — the system prompt is rendered with an explicit persona
+// (djSystem(personaOut/In)) rather than the clock-driven effective one, which
+// has already flipped to the incoming persona by the time these run.
+// Anti-repeat: no ANGLES entry for 'handoff' (pickAngle returns null → no tone
+// line), but the recent-openers blocklist still steers the first words clear of
+// what just aired. A handoff fires at most ~once an hour, so that's plenty.
+
+export async function generateSignoff({ personaOut, personaIn, showIn = null, context = null, recap = null, recentOpeners = null }: any) {
+  const ctxLines = buildContextLines(context, { contextFields: SCRIPT_CONTEXT_FIELDS });
+  const outName = personaOut?.name || 'your host';
+  const inName = personaIn?.name || 'the next host';
+  const handTo = showIn ? `${inName}, who's bringing you "${showIn}"` : inName;
+  ctxLines.push(`Task: your time on air is wrapping up. Sign off in character as ${outName} and hand the mic over to ${handTo}. Say ${inName}'s name as you pass it along. ${lengthPhrase('link', personaOut)}. This is a real DJ passing the baton, warm and natural — not a formal announcement, and don't over-explain the schedule.`);
+  return djText({
+    system: djSystem(personaOut),
+    prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'handoff', recap, recentOpeners }),
+    temperature: 1.0, topP: 0.9, repeatPenalty: 1.25, seed: randomSeed(),
+    kind: 'generateSignoff',
+  });
+}
+
+export async function generateHandoffGreeting({ personaIn, personaOut, signoffText = null, showIn = null, context = null, recap = null, recentOpeners = null }: any) {
+  const ctxLines = buildContextLines(context, { contextFields: SCRIPT_CONTEXT_FIELDS });
+  const inName = personaIn?.name || 'your host';
+  const outName = personaOut?.name || 'the previous host';
+  // The predecessor's actual sign-off rides in the prompt so the greeting can
+  // genuinely respond to it ("Cheers Johnny…") rather than a generic hello.
+  if (signoffText) {
+    const clipped = String(signoffText).replace(/\s+/g, ' ').trim().slice(0, 240);
+    if (clipped) ctxLines.push(`${outName} just signed off with: "${clipped}"`);
+  }
+  const showClause = showIn ? ` You're kicking off "${showIn}".` : '';
+  ctxLines.push(`Task: you're ${inName}, just taking over the mic from ${outName}. Acknowledge ${outName} warmly and naturally — a quick nod to what they said if it fits — then ease into your shift.${showClause} ${lengthPhrase('link', personaIn)}. Keep it easy and in character; you're stepping up to the decks, not reading a bulletin.`);
+  return djText({
+    system: djSystem(personaIn),
+    prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'handoff', recap, recentOpeners }),
+    temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(),
+    kind: 'generateHandoffGreeting',
+  });
+}
+
 // Operator ad-lib — the command-center "manual voice DJ" in styled mode.
 // Takes a free-text instruction/topic and performs it in character, rather
 // than reading it verbatim (that's what raw mode is for).
