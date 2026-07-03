@@ -239,7 +239,12 @@ export function washoutDelayFor(bpm: number | null): number {
 // tracks pass (the data can't contradict the DJ). Washout is an editorial
 // "close the chapter" gesture, not a compatibility repair: always allowed —
 // the caller's cooldown rations it.
-export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend', cur: Analysis, next: Analysis): boolean {
+//
+// The four effects form a 2×2: blend = the rhythmic move for COMPATIBLE
+// pairs, washout = the rhythmic exit (always allowed), sweep = the dramatic
+// textural move across a clash, dissolve = the smooth textural move across a
+// clash (the reverb wash — hides the seam the sweep would announce).
+export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend' | 'dissolve', cur: Analysis, next: Analysis): boolean {
   if (kind === 'washout') return true;
   if (!analysed(cur) || !analysed(next)) return true;
   const compat = mixCompat(cur, next);
@@ -248,6 +253,10 @@ export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend', cur: Analy
   // complementary-band trade just exposes the clash, so a long wash (or a
   // sweep) serves better there.
   if (kind === 'blend') return compat >= 0.4;
+  // dissolve: exact mirror of blend — beatless ambience is the tempo-agnostic
+  // glue for a pair that measurably clashes; between compatible tracks a
+  // blend keeps the groove alive and a wash just kills it.
+  if (kind === 'dissolve') return compat < 0.4;
   return compat < 0.6;
 }
 
