@@ -223,11 +223,11 @@ export function pickSystem() {
   const showLine = activeShow?.topic
     ? `\n\nCurrent show brief — follow this for every pick:\n${activeShow.topic}`
     : '';
-  // The same genre/decade/energy steer the pool picker applies — the agent
+  // The same mood/genre/decade/energy steer the pool picker applies — the agent
   // already owns songsByGenre + tracksByMood(energy) tools, so this line is
   // enough to make it reach for them. showMusicLean reflects the show's
-  // genreStrict here too: a strict show gets a hard "stay within {genre}" rule
-  // instead of a soft lean, so both pick paths honour strict the same way. Lives
+  // filtersStrict here too: a strict show gets a hard "stay within" rule
+  // instead of soft leans, so both pick paths honour strict the same way. Lives
   // in the system prompt for the same session-window reason as the show brief.
   const musicLean = dj.showMusicLean(activeShow);
   // Playlist anchor: a separate steer from genre/era. Strict → every pick MUST
@@ -318,19 +318,21 @@ export const pickerAgent = defineAgent({
   buildSystem: () => pickSystem(),
   buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, playlistLock, playlistTracks }) => {
     // Resolve the active show live (a show that just came on air takes effect):
-    // for a strict show, hard genre + era locks the discovery tools enforce on
-    // candidates — not just the prompt. Era rides the same genreStrict flag (no
-    // separate era-strict toggle). Track length is enforced as an on-air cut,
-    // NOT a pick filter (issue #447), so no length cap is passed here.
+    // for a strict show (filtersStrict), EVERY set music filter — genre, era,
+    // mood, energy — becomes a hard lock the discovery tools enforce on
+    // candidates, not just the prompt. Track length is enforced as an on-air
+    // cut, NOT a pick filter (issue #447), so no length cap is passed here.
     const activeShow = settings.resolveActiveShow();
-    const strict = !!(activeShow?.genreStrict);
+    const strict = !!(activeShow?.filtersStrict);
     const genreLock = strict && activeShow?.genre ? activeShow.genre : null;
     const eraLock = strict && (activeShow?.fromYear != null || activeShow?.toYear != null)
       ? { fromYear: activeShow.fromYear, toYear: activeShow.toYear }
       : null;
+    const moodLock = strict && activeShow?.mood ? activeShow.mood : null;
+    const energyLock = strict && activeShow?.energy ? activeShow.energy : null;
     // playlistLock / playlistTracks are pre-resolved by pickViaAgent (the
     // Navidrome fetch is async; buildTools is sync) and threaded through run().
-    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock, playlistLock, playlistTracks });
+    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock, moodLock, energyLock, playlistLock, playlistTracks });
     return { tools, extras: { seen } };
   },
 });

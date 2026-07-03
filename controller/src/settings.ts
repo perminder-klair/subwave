@@ -1210,10 +1210,11 @@ function normalizeShows(raw: any, personaIds: string[]) {
     const fromYear = Number.isFinite(item.fromYear) ? Math.trunc(item.fromYear) : null;
     const toYear = Number.isFinite(item.toYear) ? Math.trunc(item.toYear) : null;
     const energy = SHOW_ENERGY.includes(item.energy) ? item.energy : '';
-    // Opt-in: hard-filter the pick pool to `genre` instead of the default soft
-    // lean. Only meaningful when a genre is set; defaults off so existing shows
-    // and soft shows are byte-for-byte unchanged.
-    const genreStrict = item.genreStrict === true;
+    // Opt-in: hard-filter the pick pool to EVERY set music filter (mood, genre,
+    // era, energy) instead of the default soft leans. Only meaningful when at
+    // least one filter is set; defaults off so existing shows are unchanged.
+    // Legacy `genreStrict` (the old genre-only toggle) migrates into it on load.
+    const filtersStrict = item.filtersStrict === true || item.genreStrict === true;
     // Per-show track-length override (seconds). null = inherit the station-wide
     // maxTrackSeconds; 0 = unlimited (opt this show back out of the cap so a
     // long-form mix show can air hour-long sets); >0 = this show's own cap.
@@ -1235,7 +1236,7 @@ function normalizeShows(raw: any, personaIds: string[]) {
       fromYear,
       toYear,
       energy,
-      genreStrict,
+      filtersStrict,
       maxTrackSeconds,
       playlistIds,
       playlistStrict,
@@ -1984,8 +1985,10 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     if (energy && !SHOW_ENERGY.includes(energy)) {
       throw new Error(`shows[${i}].energy must be one of: ${SHOW_ENERGY.join(', ')}`);
     }
-    // Opt-in hard genre filter (vs the default soft lean). Boolean, defaults off.
-    const genreStrict = item.genreStrict === true;
+    // Opt-in hard filter across every set music constraint — mood, genre, era,
+    // energy (vs the default soft leans). Boolean, defaults off. Legacy
+    // `genreStrict` from pre-rename clients/state migrates into it.
+    const filtersStrict = item.filtersStrict === true || item.genreStrict === true;
     const parseYear = (v, field) => {
       if (v == null || v === '') return null;
       const n = Number(v);
@@ -2041,7 +2044,7 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood, themeId, genre, fromYear, toYear, energy, genreStrict, maxTrackSeconds, playlistIds, playlistStrict };
+    return { id, name, topic, personaId: item.personaId, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict };
   });
 }
 
@@ -2837,10 +2840,10 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     fromYear: Number.isFinite(show.fromYear) ? show.fromYear : null,
     toYear: Number.isFinite(show.toYear) ? show.toYear : null,
     energy: typeof show.energy === 'string' ? show.energy : '',
-    // When true (and a genre is set) the pick pool is hard-filtered to the
-    // genre instead of softly leaned; off-genre tracks only survive as a
-    // never-starve fallback. Defaults off.
-    genreStrict: show.genreStrict === true,
+    // When true, every set music filter (mood, genre, era, energy) is a hard
+    // filter on the pick pool instead of a soft lean; off-filter tracks only
+    // survive as a never-starve fallback. Defaults off.
+    filtersStrict: show.filtersStrict === true,
     // Per-show track-length cap override (seconds). null = inherit the station
     // default; 0 = unlimited; >0 = own cap. See effectiveMaxTrackSec().
     maxTrackSeconds: show.maxTrackSeconds != null ? show.maxTrackSeconds : null,

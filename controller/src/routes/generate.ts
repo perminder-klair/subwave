@@ -63,8 +63,10 @@ router.post('/generate/show', requireAdmin, async (req, res) => {
     // rather than an arbitrary vocabulary entry the operator didn't ask for.
     if (!draft.mood || !settings.SHOW_MOODS.includes(draft.mood)) draft.mood = '';
     if (draft.energy && !settings.SHOW_ENERGY.includes(draft.energy)) draft.energy = '';
-    // Strict only makes sense with a genre to lock to.
-    if (draft.genreStrict && !draft.genre) draft.genreStrict = false;
+    // Strict only makes sense with at least one music filter to lock to.
+    if (draft.filtersStrict && !(draft.genre || draft.mood || draft.energy || draft.fromYear != null || draft.toYear != null)) {
+      draft.filtersStrict = false;
+    }
 
     res.json({ ok: true, show: draft });
   } catch (err: any) {

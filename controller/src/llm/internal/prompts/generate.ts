@@ -57,7 +57,7 @@ interface ShowCtx {
 // `.catch(...)`-wrapped for the same reason as PERSONA_SCHEMA above: a partial
 // model response (the common failure on small / non-tool-tuned local models) must
 // degrade to an editable draft, not a thrown ZodError. The route then re-checks
-// personaId / themeId / mood / energy / genreStrict against the live lists
+// personaId / themeId / mood / energy / filtersStrict against the live lists
 // (routes/generate.ts) — that normalisation only runs because parse no longer
 // throws here.
 const SHOW_SCHEMA = z.object({
@@ -65,7 +65,7 @@ const SHOW_SCHEMA = z.object({
   topic: z.string().max(1000).describe('the brief the AI DJ reads before the slot: genres, eras, moods, artists, time of day, listener type, host tone. 1-4 sentences, max 1000 chars.').catch(''),
   mood: z.enum(SHOW_MOODS as [string, ...string[]]).describe('the single closest music mood for this show').catch(SHOW_MOODS[0]),
   genre: z.string().max(64).describe('a music genre lean if one fits (e.g. "jazz", "gospel", "lofi"); "" for no lean. Prefer a genre present in the supplied library list when relevant.').catch(''),
-  genreStrict: z.boolean().describe('true ONLY when the description demands genre exclusivity ("only plays hip-hop", "strictly jazz", "nothing but metal") — hard-locks every pick to the genre. false for a normal lean. Requires a genre; leave false when genre is "".').catch(false),
+  filtersStrict: z.boolean().describe('true ONLY when the description demands exclusivity ("only plays hip-hop", "strictly 80s", "nothing but calm tracks") — hard-locks every pick to ALL the filters set (mood, genre, era, energy). false for normal soft leans. Requires at least one filter; leave false when none is set.').catch(false),
   fromYear: z.number().int().nullable().describe('start year of an era window if the show targets a decade (e.g. 1970), else null').catch(null),
   toYear: z.number().int().nullable().describe('end year of that era window (e.g. 1979), else null').catch(null),
   energy: z.enum(['', ...SHOW_ENERGY] as [string, ...string[]]).describe('soft energy steer: low, medium, high, or "" for any').catch(''),
@@ -73,7 +73,7 @@ const SHOW_SCHEMA = z.object({
   themeId: z.string().nullable().describe('the id of a per-show theme override chosen from the supplied theme list, or null for the station default').catch(null),
 });
 
-const SHOW_SYSTEM = `You design radio shows for a personal internet radio station. Given a free-text description, produce a single show definition: a name, a DJ brief (topic), a music mood, an optional genre lean and era window, an energy steer, and the best-matching persona and (optional) theme from the supplied lists. Pick personaId / themeId ONLY from the ids given; use null when nothing clearly fits. The mood MUST be one of the listed moods. Set genreStrict=true only when the description signals genre exclusivity ("only", "strictly", "nothing but", "pure <genre>") — otherwise keep the genre a soft lean (genreStrict=false). Keep the topic concrete and useful as a brief — name the kind of music, the moment of day, and the tone.`;
+const SHOW_SYSTEM = `You design radio shows for a personal internet radio station. Given a free-text description, produce a single show definition: a name, a DJ brief (topic), a music mood, an optional genre lean and era window, an energy steer, and the best-matching persona and (optional) theme from the supplied lists. Pick personaId / themeId ONLY from the ids given; use null when nothing clearly fits. The mood MUST be one of the listed moods. Set filtersStrict=true only when the description signals exclusivity ("only", "strictly", "nothing but", "pure <genre>") — it hard-locks every pick to ALL the set filters (mood, genre, era, energy); otherwise keep them soft leans (filtersStrict=false). Keep the topic concrete and useful as a brief — name the kind of music, the moment of day, and the tone.`;
 
 export async function generateShow(description: string, ctx: ShowCtx = {}) {
   const lines: string[] = [];

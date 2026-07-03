@@ -12,7 +12,7 @@ import * as dj from '../llm/dj.js';
 import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
-import { normGenre, genreMatches, preferGenre, inYearRange, preferEnergy } from './show-filter.js';
+import { normGenre, genreMatches, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood } from './show-filter.js';
 import { resolveShowPlaylistPool, type PlaylistPool } from './show-playlist.js';
 
 const CANDIDATE_CAP = 18;
@@ -95,19 +95,19 @@ function softRankByCompat(pool: any[], current: { bpm: number | null; key: strin
 }
 
 // --- Show music-steering filters -------------------------------------------
-// A show can pin a genre, a decade (fromYear/toYear) and an energy band. By
-// default none is a hard filter: each prefers matching tracks but falls back to
-// the full set when matches are too thin to fill the pool, so a sparse genre or
-// an un-analysed library never starves the stream.
+// A show can pin a mood, a genre, a decade (fromYear/toYear) and an energy
+// band. By default none is a hard filter: each prefers matching tracks but
+// falls back to the full set when matches are too thin to fill the pool, so a
+// sparse genre or an un-analysed library never starves the stream.
 //
-// `strict` opts the GENRE (only) into a hard filter: the off-genre discovery
-// sources are genre-filtered before they enter the pool, so the pool is
-// genuinely genre-dominated rather than just shrunk. The same never-starve
-// fallback applies — a genre too thin to fill the pool degrades to off-genre
-// tracks rather than dead air (logged by the caller). Decade and energy stay
-// soft either way.
+// `strict` (show.filtersStrict) opts EVERY set filter into a hard filter: the
+// discovery sources are mood/genre/era/energy-filtered before they enter the
+// pool, so the pool is genuinely filter-dominated rather than just shrunk. The
+// same never-starve fallback applies per dimension — a constraint too thin to
+// fill the pool degrades to off-filter tracks rather than dead air (logged by
+// the caller for genre).
 
-type ShowFilter = { genre?: string; fromYear?: number | null; toYear?: number | null; energy?: string; strict?: boolean } | null;
+type ShowFilter = { mood?: string; genre?: string; fromYear?: number | null; toYear?: number | null; energy?: string; strict?: boolean } | null;
 
 function hasMusicFilter(f: ShowFilter): boolean {
   return !!f && (!!f.genre || f.fromYear != null || f.toYear != null);
@@ -159,21 +159,35 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   const narrow = hasMusicFilter(showFilter) || hasPlaylist;
   const nz = (cap: number) => (narrow ? Math.max(2, Math.ceil(cap * SHOW_NARROW_FACTOR)) : cap);
 
-  // Strict genre: resolve the show's free-text genre to the library's exact tag
-  // ONCE, up front, so the off-genre discovery sources below can be hard-filtered
-  // to it before they enter the pool — making the pool genuinely genre-dominated,
-  // not just shrunk. Soft mode (or no genre) leaves the sources untouched (only
-  // the nz() shrink applies). A resolution failure / absent genre degrades to no
-  // filter so a misspelled genre never strands the show (never-starve).
-  const strict = !!(showFilter?.strict && showFilter?.genre);
+  // Strict filters (show.filtersStrict): every SET filter — genre, era, mood,
+  // energy — becomes a hard filter on the discovery sources before they enter
+  // the pool, making the pool genuinely filter-dominated, not just shrunk.
+  // Each dimension keeps its own never-starve fallback (preferGenre/preferEra/
+  // preferMood/preferEnergyStrict all fall back to the full set on zero
+  // matches), so a thin constraint degrades rather than strands the show.
+  // Soft mode leaves the sources untouched (only the nz() shrink applies).
+  const strict = !!(showFilter?.strict
+    && (showFilter?.genre || showFilter?.mood || showFilter?.energy
+      || showFilter?.fromYear != null || showFilter?.toYear != null));
+  // Resolve the show's free-text genre to the library's exact tag ONCE, up
+  // front. A resolution failure / absent genre degrades to no genre filter so
+  // a misspelled genre never strands the show (never-starve).
   let strictGenre: string | null = null;
-  if (strict) {
-    try { strictGenre = await subsonic.resolveGenreName(showFilter!.genre!); } catch {}
+  if (strict && showFilter?.genre) {
+    try { strictGenre = await subsonic.resolveGenreName(showFilter.genre); } catch {}
   }
-  // Hard-prefer the resolved genre on a discovery source in strict mode; a no-op
-  // otherwise. preferGenre always falls back to the full set when nothing in the
-  // source matches, so leaning a source can only tighten genre, never starve it.
-  const lean = (items: any[]) => (strict && strictGenre ? preferGenre(items, strictGenre) : items);
+  // Hard-prefer every set filter on a discovery source in strict mode; a no-op
+  // otherwise. Each prefer* falls back to the full set when nothing in the
+  // source matches, so leaning a source can only tighten, never starve it.
+  const lean = (items: any[]) => {
+    if (!strict) return items;
+    let out = items;
+    if (strictGenre) out = preferGenre(out, strictGenre);
+    out = preferEra(out, showFilter!);
+    out = preferMood(out, showFilter!.mood);
+    out = preferEnergyStrict(out, showFilter!.energy);
+    return out;
+  };
 
   // 1. Similar-songs from current track — strongest contextual signal.
   if (currentTrack?.id) {
@@ -261,7 +275,9 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
         const ranged = inYearRange(g, showFilter!);
         collected.push(...(ranged.length ? ranged : g));
       }
-      const leaned = preferEnergy(collected, showFilter!.energy);
+      // Genre/era are already native to this source; lean() adds the strict
+      // mood/energy filters on top (no-op in soft mode).
+      const leaned = lean(preferEnergy(collected, showFilter!.energy));
       // Strict bumps the cap so this genre-native source dominates the merged pool.
       add('show-genre', sampleWithRecentFallback(shuffle(leaned), recentIds, strict ? CAP_SHOW_GENRE_STRICT : CAP_SHOW_GENRE));
     } catch {}
@@ -411,7 +427,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // final pool actually landed in-genre. `resolved` is null when the show's
   // genre didn't map to any library tag (strict silently degraded to soft).
   let strictInfo: { requested: string; resolved: string | null; matched: number; total: number } | null = null;
-  if (strict) {
+  if (strict && showFilter?.genre) {
     const target = strictGenre ? normGenre(strictGenre) : '';
     strictInfo = {
       requested: showFilter!.genre!,
@@ -473,7 +489,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   // (below) and its brief steers the LLM pick (further down).
   const activeShow = settings.resolveActiveShow();
   const showFilter: ShowFilter = activeShow
-    ? { genre: activeShow.genre, fromYear: activeShow.fromYear, toYear: activeShow.toYear, energy: activeShow.energy, strict: activeShow.genreStrict }
+    ? { mood: activeShow.mood, genre: activeShow.genre, fromYear: activeShow.fromYear, toYear: activeShow.toYear, energy: activeShow.energy, strict: activeShow.filtersStrict }
     : null;
   // Resolve the show's anchored Navidrome playlist(s), if any, into a deduped
   // track pool. Null when the show pins none (the common case → pool unchanged).
@@ -529,11 +545,12 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
         ? {
             name: activeShow.name,
             topic: activeShow.topic,
+            mood: activeShow.mood,
             genre: activeShow.genre,
             fromYear: activeShow.fromYear,
             toYear: activeShow.toYear,
             energy: activeShow.energy,
-            genreStrict: activeShow.genreStrict,
+            filtersStrict: activeShow.filtersStrict,
           }
         : null,
       candidates: candidates.map(c => {

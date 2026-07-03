@@ -12,7 +12,7 @@ import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { artistKey } from '../music/recency.js';
-import { normGenre, genreMatches, inYearRange, preferEnergy } from '../music/show-filter.js';
+import { normGenre, genreMatches, inYearRange, preferEnergy, preferEnergyStrict, preferMood } from '../music/show-filter.js';
 import { resolveShowPlaylistPool } from '../music/show-playlist.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
@@ -83,9 +83,11 @@ async function refreshAutoPlaylistInner() {
   const toYear: number | null = show?.toYear ?? null;
   const showEnergy: string = show?.energy || '';
   // A genre or a year window narrows the pool; energy alone only soft-leans
-  // (mirrors picker.hasMusicFilter). Strict opts the GENRE into a hard filter.
+  // (mirrors picker.hasMusicFilter). Strict (show.filtersStrict) opts EVERY set
+  // filter — mood, genre, era, energy — into a hard filter on the pool.
   const narrow = !!(show && (showGenre || fromYear != null || toYear != null));
-  const strict = !!(show?.genreStrict && showGenre);
+  const showMood: string = show?.mood || '';
+  const strict = !!(show?.filtersStrict && (showGenre || showMood || showEnergy || fromYear != null || toYear != null));
 
   // Show playlist anchor: resolve the union once. The fallback must honour it
   // too, so the LLM-free coast (LLM down, budget-hard, zero listeners) still
@@ -105,13 +107,23 @@ async function refreshAutoPlaylistInner() {
     try { genreName = await subsonic.resolveGenreName(showGenre); } catch {}
   }
   const strictGenreNorm = strict && genreName ? normGenre(genreName) : null;
-  // Strict: hard-drop off-genre tracks from every discovery source (even if that
-  // empties the source) — the auto playlist airs in full with no LLM gatekeeper,
-  // so never-starve off-genre filler would actually play. The dedicated genre
-  // source + genre-targeted random carry the pool; an unresolved genre disables
-  // this (genreName null → no filter). Soft mode is a no-op here.
-  const enforce = (items: any[]) =>
-    strictGenreNorm ? items.filter((t: any) => genreMatches(t, strictGenreNorm)) : items;
+  // Strict: hard-drop off-genre / off-era tracks from every discovery source
+  // (even if that empties the source) — the auto playlist airs in full with no
+  // LLM gatekeeper, so never-starve off-target filler would actually play. The
+  // dedicated genre source + genre/era-targeted random carry the pool; an
+  // unresolved genre disables the genre drop (genreName null → no filter).
+  // Mood and energy enforce with per-source never-starve instead (preferMood /
+  // preferEnergyStrict): they depend on the tagger/analyzer having run, and an
+  // un-tagged library hard-dropping everything would empty the dead-air
+  // fallback entirely. Soft mode is a no-op here.
+  const enforce = (items: any[]) => {
+    let out = items;
+    if (strictGenreNorm) out = out.filter((t: any) => genreMatches(t, strictGenreNorm));
+    if (strict && (fromYear != null || toYear != null)) out = inYearRange(out, { fromYear, toYear });
+    if (strict && showMood) out = preferMood(out, showMood);
+    if (strict && showEnergy) out = preferEnergyStrict(out, showEnergy);
+    return out;
+  };
   // Shrink the off-genre / off-playlist sources so the dedicated show source
   // (genre or playlist) dominates the pool.
   const nz = (cap: number) => ((narrow || hasPlaylist) ? Math.max(2, Math.ceil(cap * SHOW_NARROW_FACTOR)) : cap);
@@ -163,7 +175,9 @@ async function refreshAutoPlaylistInner() {
         const ranged = inYearRange(g, { fromYear, toYear });
         collected.push(...(ranged.length ? ranged : g));
       }
-      const leaned = preferEnergy(collected, showEnergy);
+      // Genre/era are server-side native here; enforce() adds the strict
+      // mood/energy filters on top (no-op in soft mode).
+      const leaned = enforce(preferEnergy(collected, showEnergy));
       take('show-genre', shuffle(leaned), strict ? SHOW_GENRE_STRICT_WEIGHT : SHOW_GENRE_WEIGHT);
     } catch (err) {
       queue.log('error', `Show-genre fetch failed: ${err.message}`);
@@ -285,8 +299,8 @@ async function refreshAutoPlaylistInner() {
     ? (playlistPool!.names.length ? playlistPool!.names.join('/') : `${show.playlistIds.length} playlist(s)`)
     : '';
   const showInfo = show
-    ? `, show=${show.name}` +
-      (showGenre ? ` genre=${genreName || showGenre} (${strict ? 'strict' : 'soft'})` : '') +
+    ? `, show=${show.name}${strict ? ' filters=strict' : ''}` +
+      (showGenre ? ` genre=${genreName || showGenre}` : '') +
       (fromYear != null || toYear != null ? ` year=${fromYear ?? ''}-${toYear ?? ''}` : '') +
       (showEnergy ? ` energy=${showEnergy}` : '') +
       (hasPlaylist ? ` playlist=${playlistTag} (${strictPlaylist ? 'strict' : 'soft'})` : '')

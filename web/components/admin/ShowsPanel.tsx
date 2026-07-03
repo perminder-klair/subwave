@@ -71,10 +71,12 @@ interface Show {
   fromYear: number | null;
   toYear: number | null;
   energy: string;
-  /** When true (and a genre is set) the genre becomes a HARD filter on the pick
-   *  pool instead of a soft lean — off-genre tracks only play as a last resort
-   *  to avoid silence. Defaults off. */
-  genreStrict: boolean;
+  /** When true (and ≥1 music filter is set) EVERY set filter — mood, genre,
+   *  era, energy — becomes a HARD filter on the pick pool instead of a soft
+   *  lean; off-filter tracks only play as a last resort to avoid silence.
+   *  Defaults off. (Renamed from the genre-only `genreStrict`; the controller
+   *  migrates legacy state on load.) */
+  filtersStrict: boolean;
   /** Per-show track-length cap (seconds). null = inherit the station default;
    *  0 = unlimited (opt this show out of the cap so it can air long mixes);
    *  >0 = this show's own cap. */
@@ -197,14 +199,17 @@ function NowCard({ label, accent, slotHour, show, color, personaLabel }: NowCard
 }
 
 // Compact " · genre · 80s · high" suffix for the show summary lines, omitting
-// whatever the show doesn't pin. A strict genre is flagged inline so the hard
+// whatever the show doesn't pin. Strict filters are flagged inline so the hard
 // lock is visible at a glance.
-function showFilterSummary(s: { genre: string; fromYear: number | null; toYear: number | null; energy: string; genreStrict?: boolean; maxTrackSeconds?: number | null; playlistIds?: string[]; playlistStrict?: boolean }): string {
-  const genre = s.genre ? (s.genreStrict ? `${s.genre} (strict)` : s.genre) : '';
+function showFilterSummary(s: { mood?: string; genre: string; fromYear: number | null; toYear: number | null; energy: string; filtersStrict?: boolean; maxTrackSeconds?: number | null; playlistIds?: string[]; playlistStrict?: boolean }): string {
   const len = s.maxTrackSeconds == null ? '' : s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s`;
   const nPl = s.playlistIds?.length ?? 0;
   const playlist = nPl ? `${nPl} playlist${nPl > 1 ? 's' : ''}${s.playlistStrict ? ' (strict)' : ''}` : '';
-  const bits = [genre, decadeLabelOf(s), s.energy, len, playlist].filter(Boolean);
+  // The strict chip covers every music filter (mood included) — only shown when
+  // there's actually a filter for it to bite on.
+  const strict = s.filtersStrict && (s.mood || s.genre || s.energy || s.fromYear != null || s.toYear != null)
+    ? 'strict filters' : '';
+  const bits = [s.genre, decadeLabelOf(s), s.energy, strict, len, playlist].filter(Boolean);
   return bits.length ? ` · ${bits.join(' · ')}` : '';
 }
 
@@ -229,6 +234,12 @@ function showValid(s: Show): boolean {
   // mood is deliberately not required — '' means "Any" (autonomous mood).
   return s.name.trim().length >= 1 && s.name.trim().length <= NAME_MAX
     && !!s.personaId && s.topic.trim().length <= TOPIC_MAX;
+}
+
+// At least one music filter set — the Strict filter toggle only means
+// something when there's a filter for it to harden.
+function hasAnyMusicFilter(s: Show): boolean {
+  return !!(s.mood || s.genre.trim() || s.energy || s.fromYear != null || s.toYear != null);
 }
 
 export default function ShowsPanel() {
@@ -338,7 +349,7 @@ export default function ShowsPanel() {
           fromYear: s.fromYear ?? null,
           toYear: s.toYear ?? null,
           energy: s.energy ?? '',
-          genreStrict: s.genreStrict ?? false,
+          filtersStrict: s.filtersStrict ?? false,
           maxTrackSeconds: s.maxTrackSeconds ?? null,
           playlistIds: Array.isArray(s.playlistIds) ? s.playlistIds : [],
           playlistStrict: s.playlistStrict ?? false,
@@ -435,7 +446,7 @@ export default function ShowsPanel() {
           id, name: '', topic: '',
           personaId: personas[0]?.id || '', mood: '',
           themeId: '', genre: '', fromYear: null, toYear: null, energy: '',
-          genreStrict: false, maxTrackSeconds: null,
+          filtersStrict: false, maxTrackSeconds: null,
           playlistIds: [], playlistStrict: false,
         }],
       };
@@ -568,7 +579,8 @@ export default function ShowsPanel() {
             personaId: s.personaId, mood: s.mood,
             themeId: s.themeId || '',
             genre: s.genre.trim(), fromYear: s.fromYear, toYear: s.toYear, energy: s.energy || '',
-            genreStrict: !!s.genre.trim() && s.genreStrict,
+            // Strict only means something with at least one music filter set.
+            filtersStrict: hasAnyMusicFilter(s) && s.filtersStrict,
             maxTrackSeconds: s.maxTrackSeconds,
             playlistIds: s.playlistIds || [],
             // Strict only means something with at least one playlist pinned.
@@ -1072,28 +1084,31 @@ function ShowEditor({
           <div className="flex items-start gap-3">
             <div className="pt-0.5">
               <Toggle
-                on={show.genreStrict}
-                disabled={!show.genre.trim()}
-                onClick={() => update({ genreStrict: !show.genreStrict })}
+                on={show.filtersStrict}
+                disabled={!hasAnyMusicFilter(show)}
+                onClick={() => update({ filtersStrict: !show.filtersStrict })}
               />
             </div>
             <div className="grid gap-0.5">
-              <Label className={!show.genre.trim() ? 'opacity-40' : undefined}>
-                Strict genre
+              <Label className={!hasAnyMusicFilter(show) ? 'opacity-40' : undefined}>
+                Strict filter
               </Label>
               <span className="field-hint">
-                Stay strictly within this genre (off-genre tracks only as a last
-                resort to avoid silence). Needs a genre lean set above.
+                Hard-enforce every filter set above — mood, era, energy and
+                genre. Off-filter tracks only play as a last resort to avoid
+                silence. When off, they&apos;re all soft leans the DJ can break
+                for flow. Needs at least one filter set.
               </span>
             </div>
           </div>
 
           <span className="field-hint -mt-1.5">
-            Optional soft music steer for this show: a genre, an era, an energy
-            band, or any mix. The DJ leans toward these but can break them for
-            flow; leave blank to let the topic and mood drive selection. Mood
-            set to Any (auto) follows the station&apos;s autonomous mood — time
-            of day, weather, festivals — instead of pinning one.
+            Optional music steer for this show: a mood, a genre, an era, an
+            energy band, or any mix. Soft by default — the DJ leans toward them
+            but can break them for flow; Strict filter above turns every set
+            one into a hard rule. Mood set to Any (auto) follows the
+            station&apos;s autonomous mood — time of day, weather, festivals —
+            instead of pinning one.
           </span>
 
           <Field>
