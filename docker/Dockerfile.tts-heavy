@@ -142,7 +142,7 @@ RUN python3 -m venv /opt/pocket-tts/venv && \
     /opt/pocket-tts/venv/bin/pip install --no-cache-dir \
       --index-url https://download.pytorch.org/whl/cpu \
       --extra-index-url https://pypi.org/simple \
-      torch==2.6.0 scipy==1.18.0 pocket-tts==2.1.0 && \
+      torch==2.6.0 scipy==1.17.1 pocket-tts==2.1.0 && \
     /opt/pocket-tts/venv/bin/python -c \
       "from pocket_tts import TTSModel" && \
     find /opt/pocket-tts/venv -depth -type d -name __pycache__ -exec rm -rf {} + && \
