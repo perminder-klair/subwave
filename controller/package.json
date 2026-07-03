@@ -26,7 +26,7 @@
     "adm-zip": "^0.5.16",
     "ai": "^7.0.4",
     "ai-sdk-ollama": "^4.0.0",
-    "better-sqlite3": "^11.10.0",
+    "better-sqlite3": "^12.11.1",
     "express": "^4.21.0",
     "multer": "^2.0.1",
     "node-cron": "^3.0.3",
