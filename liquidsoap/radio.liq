@@ -30,7 +30,7 @@ aac_bitrate = ref(192)
 stream_bitrate = ref(192)
 station_name = ref("SUB/WAVE")
 
-# DJ transition effects (filter sweep + echo washout) — see dj_transition
+# DJ transition effects (filter sweep + echo washout + reverb dissolve) — see dj_transition
 # below. Both effects are built PER-BRANCH inside the transition callback, on
 # the OUTGOING track's source only: idle playout never passes through an
 # effect operator at all, and the incoming track always lands clean and dry —
@@ -286,6 +286,16 @@ def dj_transition(a, b) =
   # filter is applied to the OUTGOING branch: the track we're leaving sinks
   # under a closing lowpass while the pick rises clean underneath.
   sweeping = b.metadata["liq_sweep"] == "true"
+  # Dissolve (reverb wash) rides the INCOMING pick like the sweep — "dissolve
+  # the current track under my pick" — and is likewise applied to the OUTGOING
+  # branch: the track we're leaving loses its transients and pulse to a
+  # diffuse comb-cluster wash while the pick rises clean through it. The
+  # SMOOTH way across a clash (the sweep is the dramatic way); the controller
+  # only arms it between CLASHING tracks (mix.effectAllowedFor).
+  # Precedence: a washout on the outgoing track's own annotation also shapes
+  # this exit (echo tail vs ambient wash are mutually exclusive gestures) —
+  # the washout wins because it may carry the length-cap auto-arm.
+  dissolving = b.metadata["liq_dissolve"] == "true" and not washing
   # Washout drops the dry signal early (exp fade) so the tail reads as a
   # dissolve. An early drop sums BELOW unity mid-cross — a dip, which is the
   # effect; the +6 dB doubling hazard is only for fades that hold full level
@@ -496,6 +506,114 @@ def dj_transition(a, b) =
       washed = filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet,
                  filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet, washed))
       amplify(wash_gain, washed)
+    else
+      a_source
+    end
+  # DISSOLVE ENVELOPE — the reverb wash. Same topology as the washout (comb →
+  # cascaded damped lowpass → late makeup) with two deliberate differences:
+  #   1. FOUR parallel combs at mutually prime, tempo-UNRELATED delays
+  #      (43/61/79/101 ms) instead of one tempo-synced tap — the tails smear
+  #      into diffuse ambience instead of a rhythmic pulse. No allpass exists
+  #      in the proven kit (native echo is a no-op on both engine builds), so
+  #      diffusion comes from the prime spread plus heavy damping; the wash
+  #      also sits UNDER the rising pick, which hides the metallic edge a
+  #      Schroeder cluster has when exposed.
+  #   2. The damping lowpass closes deeper (7 kHz → 1.2 kHz) — the wash reads
+  #      as the track receding into a large dark space, not echoing in place.
+  # Feedback swells fast (within 15% of d, while the exp-faded dry is still
+  # hot enough to seed the cluster — the washout's on-air lesson), holds, and
+  # releases to silence by 0.93·d so the tail is dead before the transition
+  # source truncates at d. Each comb's tail is isolated from its dry
+  # pass-through (see pure_tail below) so the wash can run hot without
+  # multiplying the dry path.
+  a_source =
+    if dissolving then
+      log("DJ dissolve: reverb wash under the next track (d=#{d}s)")
+      diss_src = a_source
+      def diss_fb() =
+        e = source.elapsed(diss_src)
+        e = if e < 0. then 0. else e end
+        # Per-tap dB. Tail decay = fb/delay per SECOND, so short taps need
+        # near-unity feedback: -0.5 dB on 89–181 ms taps ≈ a 3–6 dB/s,
+        # multi-second wash. The first cut (-2.5 dB on 43–101 ms taps)
+        # decayed 25–58 dB/s — rendered indistinguishable from dry.
+        fb_max = -0.5
+        fb_off = -90.0
+        # The swell must beat the exp fade (the washout's on-air lesson): the
+        # loop only ever holds what it was fed while the dry was still hot.
+        t_swell = 0.10 * d
+        t_hold  = 0.80 * d
+        t_rel   = 0.93 * d
+        if e < t_swell then
+          x = e / t_swell
+          s = 3.0 * x * x - 2.0 * x * x * x
+          fb_off + s * (fb_max - fb_off)
+        elsif e < t_hold then
+          fb_max
+        elsif e < t_rel then
+          fb_max + ((e - t_hold) / (t_rel - t_hold)) * (fb_off - fb_max)
+        else
+          fb_off
+        end
+      end
+      # Late makeup, same rationale as the washout: lift the wash alone after
+      # the exp fade has dropped the dry, so the ambience sits present over
+      # the incoming track instead of buried. Hotter than the washout's 1.95
+      # in linear terms is NOT what this is — the wash's four 0.25-weighted
+      # taps start ~12 dB below the washout's single unity tap, so 2.2 here
+      # still lands the bed several dB under where the washout tail sits.
+      def diss_gain() =
+        e = source.elapsed(diss_src)
+        e = if e < 0. then 0. else e end
+        g_max = 1.3
+        t_from = 0.25 * d
+        t_to   = 0.50 * d
+        if e <= t_from then 1.0
+        elsif e >= t_to then g_max
+        else
+          x = (e - t_from) / (t_to - t_from)
+          1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
+        end
+      end
+      # Darkening: later reflections arrive later in time, so a lowpass
+      # closing across the window makes the wash recede into the dark. Wet
+      # ramps in over the first 10% (an RC at 7 kHz is not transparent —
+      # engaging it full-wet at cross start dulls the still-audible dry;
+      # the sweep's on-air lesson).
+      def diss_cut() =
+        e = source.elapsed(diss_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.30 * d
+        t_to   = 0.90 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        s = 3.0 * x * x - 2.0 * x * x * x
+        7000.0 * pow(1200.0 / 7000.0, s)
+      end
+      def diss_wet() =
+        e = source.elapsed(diss_src)
+        e = if e < 0. then 0. else e end
+        t_on = 0.10 * d
+        x = if e >= t_on then 1.0 else e / t_on end
+        3.0 * x * x - 2.0 * x * x * x
+      end
+      # PURE-TAIL isolation: comb passes its input, so summing four combs
+      # directly forces a 0.25 weight to keep the dry at unity — which buries
+      # the tails 12 dB down before they even start (first render: a −44 dB
+      # mid-cross crater, wash inaudible). Subtracting the input from each
+      # comb leaves ONLY the feedback tail (src + amplify(-1., src) nulls
+      # exactly — the twin-consumer alignment the blend already relies on),
+      # so the dry rides the faded path once and the tails run hot.
+      def pure_tail(tap) =
+        add(normalize=false,
+          [comb(delay=tap, feedback=diss_fb, a_source), amplify(-1., a_source)])
+      end
+      washed = add(normalize=false,
+        [amplify(0.7, pure_tail(0.089)), amplify(0.7, pure_tail(0.113)),
+         amplify(0.7, pure_tail(0.151)), amplify(0.7, pure_tail(0.181))])
+      washed = filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet,
+                 filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet, washed))
+      # Dry (faded) + wash: the track walks out through its own ambience.
+      add(normalize=false, [a_source, amplify(diss_gain, washed)])
     else
       a_source
     end

@@ -171,7 +171,7 @@ export const PICK_SCHEMA = z.object({
   reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just note what makes THIS pick a fresh step (new artist, a shift in energy/era/texture), not a vibe label you would recycle pick after pick (e.g. "new artist, lifts the energy", never a repeated "mellow reflective step")'),
   say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). When the event says stay silent, set this to null'),
   // Transition effects (only honoured when the system prompt offers them — persona djMode, see settings.effectsActive).
-  transition: z.enum(['normal', 'blend', 'sweep', 'washout']).nullable().describe('transition treatment for this pick: "blend" — spectral handover: your pick and the track before it trade the spectrum in complementary bands across a long crossfade so they feel like ONE continuous piece; choose it for a same-lane pick (similar tempo/energy/mood). "sweep" — the track playing before your pick sinks under a slowly closing filter while your pick rises clean; choose it for a real gear-change (big jump in energy, tempo, or mood). "washout" — THIS pick dissolves into a pulsing echo tail as it ENDS, ringing out into whatever follows; choose it to close a chapter (end of a themed run, before a talk break, or out of a dreamy track). "normal" or null for a plain crossfade'),
+  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve']).nullable().describe('transition treatment for this pick: "blend" — spectral handover: your pick and the track before it trade the spectrum in complementary bands across a long crossfade so they feel like ONE continuous piece; choose it for a same-lane pick (similar tempo/energy/mood). "sweep" — the track playing before your pick sinks under a slowly closing filter while your pick rises clean; choose it for a real gear-change (big jump in energy, tempo, or mood). "washout" — THIS pick dissolves into a pulsing echo tail as it ENDS, ringing out into whatever follows; choose it to close a chapter (end of a themed run, before a talk break, or out of a dreamy track). "dissolve" — the track playing before your pick melts into a diffuse ambient wash as your pick rises clean through it; the SMOOTH way across a clash (sweep is the dramatic way) — choose it for a tempo/mood mismatch you want to hide rather than announce. "normal" or null for a plain crossfade'),
 });
 
 // Same shape, transition coaching stripped. Zod field descriptions travel to
@@ -181,7 +181,7 @@ export const PICK_SCHEMA = z.object({
 // the LLM log showed effects that could never air. The enum stays identical
 // (validation must not depend on persona state); only the description flips.
 export const PICK_SCHEMA_NO_FX = PICK_SCHEMA.extend({
-  transition: z.enum(['normal', 'blend', 'sweep', 'washout']).nullable().describe('always set to null — transition effects are not available for this persona'),
+  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve']).nullable().describe('always set to null — transition effects are not available for this persona'),
 });
 
 const REQUEST_SCHEMA = z.object({
@@ -398,16 +398,18 @@ async function enqueuePick(
   queue, song, reason, source,
   link: string | null = null,
   linkPrev: any = null,
-  { sweep = false, washout = false, blend = false }: { sweep?: boolean; washout?: boolean; blend?: boolean } = {},
+  { sweep = false, washout = false, blend = false, dissolve = false }: { sweep?: boolean; washout?: boolean; blend?: boolean; dissolve?: boolean } = {},
 ): Promise<number> {
   const track: any = trackFields(song);
   // Flag the transition effects on this pick (DJ mode only). getAnnotatedUri
-  // stamps liq_sweep / liq_washout; radio.liq ramps them. sweep muffles the
-  // crossfade INTO this pick; washout rings this track out into an echo tail as
-  // it ENDS.
+  // stamps liq_sweep / liq_washout / liq_dissolve; radio.liq ramps them. sweep
+  // muffles the crossfade INTO this pick; dissolve melts the PREVIOUS track
+  // into ambience under this pick; washout rings this track out into an echo
+  // tail as it ENDS.
   if (sweep) track.sweep = true;
   if (washout) track.washout = true;
   if (blend) track.blend = true;
+  if (dissolve) track.dissolve = true;
   const pos = await queue.push({
     track,
     requestedBy: null,
@@ -568,11 +570,12 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   const sweep = fxActive && object.transition === 'sweep';
   const washout = fxActive && object.transition === 'washout';
   const blend = fxActive && object.transition === 'blend';
+  const dissolve = fxActive && object.transition === 'dissolve';
   // Attach the link to the pick so it airs as the pick starts (back-announcing
   // the track on-air now), instead of immediately over that on-air track (#189).
   // Stamp `current` as the link's back-announce target so the queue can drop the
   // link if a request jumps ahead of this pick before it airs.
-  const queued = await enqueuePick(queue, song, object.reason, 'agent', link, current, { sweep, washout, blend });
+  const queued = await enqueuePick(queue, song, object.reason, 'agent', link, current, { sweep, washout, blend, dissolve });
   // Pick was already queued/on-air and got deduped — don't record a session turn
   // for a track that never airs. Returning false lets runTrackEvent fall through
   // to the pool for a fresh pick.
@@ -626,6 +629,7 @@ async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm:
     sweep: fxActive && result.transition === 'sweep',
     washout: fxActive && result.transition === 'washout',
     blend: fxActive && result.transition === 'blend',
+    dissolve: fxActive && result.transition === 'dissolve',
   };
   // `current` is the link's back-announce target (passed to generateLink as
   // `previous`); stamp it so the queue drops the link if a request jumps ahead.

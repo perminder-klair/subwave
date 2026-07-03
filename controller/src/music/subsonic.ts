@@ -606,6 +606,10 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } =
   // closes a lowpass over the OUTGOING branch across the blend — the track
   // being left sinks away while this pick rises clean. Absent → normal cross.
   if (song.sweep) fields.push('liq_sweep="true"');
+  // DJ dissolve (reverb wash): like the sweep it rides the INCOMING pick —
+  // radio.liq reads `liq_dissolve` off `b` and washes the OUTGOING branch
+  // into diffuse ambience under it.
+  if (song.dissolve) fields.push('liq_dissolve="true"');
   // DJ washout: the DJ agent may flag a pick (transition:'washout') to dissolve
   // into an echo tail as that track ENDS; the queue validates and stamps
   // `washout` (+ the tempo-synced comb tap below, and a long bar-snapped
