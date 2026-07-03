@@ -234,6 +234,10 @@ export function close(): void {
     db.close();
     db = null;
     currentEmbeddingDim = null;
+    // reload()/restoreFromFile() both drop the handle through here, so a
+    // reopened (possibly restored-from-backup) library never serves the
+    // previous handle's cached tallies.
+    invalidateStats();
   }
 }
 
@@ -675,6 +679,50 @@ export function getTrack(id: string): TrackRecord | null {
     .prepare(`SELECT * FROM tracks WHERE id = ?`)
     .get(id) as any;
   return row ? rowToTrack(row) : null;
+}
+
+export interface TrackLite {
+  genre: string | null;
+  bpm: number | null;
+  musicalKey: string | null;
+  moods: string[];
+  energy: string | null;
+  year: number | null;
+}
+
+// Lean read for the /now-playing hot path (polled every ~5s by every listener).
+// Selects only the light scalar columns the player's metadata strip renders,
+// skipping the heavy acoustic *_json blobs (structure/pace/beats/bars/key/vocal
+// ranges) that a full getTrack() → rowToTrack() SELECTs and JSON.parses on every
+// call. After acoustic analysis those blobs are populated and fat, so parsing
+// them per poll — on better-sqlite3's single synchronous thread — stalled every
+// concurrent HTTP response, making the whole UI sluggish (#723).
+export function getTrackLite(id: string): TrackLite | null {
+  const row = requireDb()
+    .prepare(`SELECT genre, bpm, musical_key, moods, energy, year FROM tracks WHERE id = ?`)
+    .get(id) as any;
+  if (!row) return null;
+  return {
+    genre: row.genre ?? null,
+    bpm: row.bpm ?? null,
+    musicalKey: row.musical_key ?? null,
+    moods: row.moods ? safeParseArray(row.moods) : [],
+    energy: row.energy ?? null,
+    year: row.year ?? null,
+  };
+}
+
+// COUNT(*) of tagged tracks — the O(1)-ish query behind the coverage meter's
+// "tagged" tally. Replaces allTaggedIds().length, which materialised a ~30k-
+// element JS id array on every coverage poll only to read its .length (#723).
+// Predicate is `moods IS NOT NULL` to match allTaggedIds() exactly (NOT the
+// stricter SQL_HAS_MOODS) so the coverage percentage is unchanged.
+export function countTagged(): number {
+  return (
+    requireDb().prepare(`SELECT COUNT(*) AS n FROM tracks WHERE moods IS NOT NULL`).get() as {
+      n: number;
+    }
+  ).n;
 }
 
 export function hasTags(id: string): boolean {
@@ -1406,7 +1454,32 @@ export function allTaggedSampled(max: number, totalTagged: number): TrackRecord[
 // Stats
 // ---------------------------------------------------------------------------
 
+// stats() runs ~7 full-table scans/GROUP BYs (byMood alone is a json_each walk
+// over every row). It's polled every 30s by the admin Library panel and hit by
+// several admin pages (/library, /debug, /observatory) + /settings. Post-
+// analysis the fattened rows make each scan slow, so uncached these stacked up
+// on the synchronous DB thread and blocked listener polls (#723). A short TTL
+// collapses page-load / multi-tab bursts into one computation; 5s is well within
+// the display's freshness needs, and analysis writes don't change these tallies
+// anyway (they touch bpm/*_json, not moods/genre/energy).
+let statsCache: { at: number; value: LibraryStats } | null = null;
+const STATS_TTL_MS = 5000;
+
+// Drop the memoised stats() result — call when the DB handle is swapped
+// (reset/reload) so a fresh library never briefly serves the old one's tallies.
+export function invalidateStats(): void {
+  statsCache = null;
+}
+
 export function stats(): LibraryStats {
+  const now = Date.now();
+  if (statsCache && now - statsCache.at < STATS_TTL_MS) return statsCache.value;
+  const value = computeStats();
+  statsCache = { at: now, value };
+  return value;
+}
+
+function computeStats(): LibraryStats {
   const d = requireDb();
   const total =
     (d.prepare(`SELECT COUNT(*) AS n FROM tracks WHERE ${SQL_HAS_MOODS}`).get() as {
