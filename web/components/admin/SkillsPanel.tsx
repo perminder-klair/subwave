@@ -15,9 +15,10 @@ import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { notify, errorMessage } from '../../lib/notify';
 import { useAdminAuth } from '../../lib/adminAuth';
-import { RefreshCw, Plus } from 'lucide-react';
+import { RefreshCw, Plus, Users } from 'lucide-react';
 import { Card, Btn, Pill, Eyebrow, Toggle } from './ui';
 import { V3Alert } from '../ui/alert';
+import { Modal } from '../ui/modal';
 import SkillEditModal from './skills/SkillEditModal';
 
 interface Skill {
@@ -112,6 +113,7 @@ export default function SkillsPanel() {
   const [modal, setModal] = useState<ModalState | null>(null); // open editor sheet, or null
   const [community, setCommunity] = useState<CommunitySkill[] | null>(null);
   const [installing, setInstalling] = useState<string | null>(null); // community slug installing, or null
+  const [communityOpen, setCommunityOpen] = useState(false);         // community catalog modal open?
 
   useEffect(() => {
     if (!hydrated || needsAuth) return;
@@ -265,6 +267,16 @@ export default function SkillsPanel() {
           <span className="caption">{skills.length} skill{skills.length === 1 ? '' : 's'}</span>
           <span className="caption text-vermilion">{enabledCount} enabled</span>
           <div className="ml-auto flex items-center gap-2">
+            <Btn
+              onClick={() => setCommunityOpen(true)}
+              disabled={!community}
+              title="Browse and install skills shared by other stations"
+            >
+              <Users size={14} /> Community
+              {community && community.length > 0 && (
+                <span className="ml-1 text-vermilion">{community.length}</span>
+              )}
+            </Btn>
             <Btn tone="accent" onClick={() => setModal({ mode: 'create' })}>
               <Plus size={14} /> New skill
             </Btn>
@@ -345,31 +357,31 @@ export default function SkillsPanel() {
         </Card>
       ))}
 
-      {/* ── COMMUNITY CATALOG ────────────────────────────────────────────── */}
-      {community && community.length > 0 && (
-        <section className="card">
-          <div className="border-b border-ink p-4">
-            <Eyebrow className="text-vermilion">community</Eyebrow>
-            <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
-              Skills shared by other stations.
-            </div>
-            <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-              These prompt-only skills ship with SUB/WAVE and update when you do.
-              <strong> Install</strong> copies one into <code>state/skills/</code> as your own
-              editable skill — it arrives <strong>disabled</strong>, so review the brief, then
-              enable it. Made one worth sharing? Hit <strong>Edit → Share to community</strong> on
-              any custom skill.
-            </div>
-          </div>
-          <div className="grid gap-3 p-3.5">
-            {community.map(c => (
+      {/* ── COMMUNITY CATALOG MODAL ──────────────────────────────────────── */}
+      <Modal
+        open={communityOpen}
+        onOpenChange={setCommunityOpen}
+        title="community"
+        sub="skills shared by other stations"
+        width={640}
+      >
+        <div className="text-[12px] leading-[1.65] text-muted">
+          These prompt-only skills ship with SUB/WAVE and update when you do.
+          <strong> Install</strong> copies one into <code>state/skills/</code> as your own
+          editable skill — it arrives <strong>disabled</strong>, so review the brief, then
+          enable it. Made one worth sharing? Hit <strong>Edit → Share to community</strong> on
+          any custom skill.
+        </div>
+        <div className="mt-4 grid gap-3">
+          {community && community.length > 0 ? (
+            community.map(c => (
               <div key={c.slug} className="grid grid-cols-[1fr_auto] items-center gap-4 border border-ink p-3">
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="text-[13px] font-extrabold">{c.label}</span>
                     {c.cooldown && <Pill className="text-[8px]">{c.cooldown} cooldown</Pill>}
                   </div>
-                  <div className="mt-1 line-clamp-2 text-[12px] leading-[1.6] text-muted">{c.brief}</div>
+                  <div className="mt-1 line-clamp-3 text-[12px] leading-[1.6] text-muted">{c.brief}</div>
                 </div>
                 <div className="flex flex-col items-end gap-2">
                   {c.installed ? (
@@ -387,10 +399,14 @@ export default function SkillsPanel() {
                   )}
                 </div>
               </div>
-            ))}
-          </div>
-        </section>
-      )}
+            ))
+          ) : (
+            <div className="py-6 text-center text-[13px] text-muted italic">
+              No community skills yet.
+            </div>
+          )}
+        </div>
+      </Modal>
 
       {/* ── EDIT / CREATE MODAL ──────────────────────────────────────────── */}
       {modal && (
