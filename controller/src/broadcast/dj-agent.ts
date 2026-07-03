@@ -184,6 +184,19 @@ export const PICK_SCHEMA_NO_FX = PICK_SCHEMA.extend({
   transition: z.enum(['normal', 'blend', 'sweep', 'washout']).nullable().describe('always set to null — transition effects are not available for this persona'),
 });
 
+// The live pick schema, resolved per run: the transition coaching follows the
+// on-air persona's djMode (settings.effectsActive), and the `say` length
+// follows its scriptLength — without this overlay an 'extended' storytelling
+// persona stretched to 4-6 sentence links on the pool path (generateLink gets
+// lengthPhrase in its prompt) but snapped back to the consts' hard-coded "one
+// or two sentences" whenever the default-on agent picker was doing the talking.
+export function pickSchema() {
+  const base = settings.effectsActive() ? PICK_SCHEMA : PICK_SCHEMA_NO_FX;
+  return base.extend({
+    say: z.string().nullable().describe(`when the latest event message says to write a spoken link, set this to ${dj.lengthPhrase('link')} of natural speech in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). When the event says stay silent, set this to null`),
+  });
+}
+
 const REQUEST_SCHEMA = z.object({
   id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
   ack: z.string().describe('short on-air acknowledgement of the listener, in character — max 20 words; no "thank you for listening" or self-intros'),
@@ -309,8 +322,9 @@ function agentDeadline(): number {
 export const pickerAgent = defineAgent({
   kind: 'djAgentPick',
   // Resolved per run: the effects coaching in the transition field follows
-  // the on-air persona's djMode, same reason effectsGuidance() is dynamic.
-  schema: () => (settings.effectsActive() ? PICK_SCHEMA : PICK_SCHEMA_NO_FX),
+  // the on-air persona's djMode, and the say length its scriptLength — same
+  // reason effectsGuidance() is dynamic. See pickSchema above.
+  schema: () => pickSchema(),
   // The done-tool path ends the loop at step 1 (COMMIT_AFTER_STEPS in sdk.js)
   // on every provider now; maxSteps is just the backstop.
   maxSteps: 4,
@@ -437,8 +451,7 @@ async function enqueuePick(
 async function repickFromSeen({ seen, badId, wantLink }: { seen: Map<string, any>; badId: string | null; wantLink: boolean }) {
   const ids = [...seen.keys()];
   if (ids.length === 0) return null;
-  const base = settings.effectsActive() ? PICK_SCHEMA : PICK_SCHEMA_NO_FX;
-  const schema = base.extend({
+  const schema = pickSchema().extend({
     id: z.enum(ids as [string, ...string[]]).describe('the exact id of one candidate'),
   });
   try {

@@ -7,9 +7,13 @@ import * as settings from '../../../settings.js';
 import { djObject } from '../strategy/object.js';
 
 export const PICKER_CRITERIA = `Selection criteria, in order:
-1. FLOW — does it transition naturally from what just played? Match energy, mood and tempo, or step them deliberately for the daypart. Some candidates carry MEASURED acoustic facts — treat these as tie-breakers, never hard rules (many tracks won't have them): "bpm" and Camelot "key" (prefer a tempo near the current one and a harmonically-close key for a smooth segue); "pace" (0–1 perceptual energy, decoupled from tempo — shape build/release arcs: don't stack two peaks back-to-back, ease down for wind-down dayparts, lift for workout/drive); "sections" (higher = a busier, evolving intro); "instrumental" (true = no vocals — avoid stacking instrumentals back-to-back, and an instrumental opener leaves room to talk over).
+1. FLOW — does it transition naturally from what just played? Match energy, mood and tempo, or step them deliberately for the daypart. Some candidates carry MEASURED acoustic facts — treat these as tie-breakers, never hard rules (many tracks won't have them):
+   - "bpm" and Camelot "key": prefer a tempo near the current one and a harmonically-close key for a smooth segue.
+   - "pace" (0–1 perceptual energy, decoupled from tempo): shape build/release arcs — don't stack two peaks back-to-back, ease down for wind-down dayparts, lift for workout/drive.
+   - "sections": higher = a busier, evolving intro.
+   - "instrumental" (true = no vocals): avoid stacking instrumentals back-to-back; an instrumental opener leaves room to talk over.
 2. CONTEXT — does it fit the time of day, weather, and dominant mood? When a candidate carries its own "moods" tags and an "energy" band (low/medium/high), weigh those against the room's mood and the daypart — match a calm room with calm tracks, lift the energy for a workout slot.
-3. VARIETY — avoid the same artist back-to-back; don't repeat tracks you've already played today; rotate energy. Variety over cleverness — never pick a track because its title literally matches the time of day, the weather, or anything else literal.
+3. VARIETY — avoid the same artist back-to-back; rotate energy. Variety over cleverness — never pick a track because its title literally matches the time of day, the weather, or anything else literal.
 4. INTEREST — prefer something that creates a moment, not the most generic option.`;
 
 // Coaching for the DJ transition effects (the "transition" output field),

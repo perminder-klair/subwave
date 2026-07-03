@@ -29,6 +29,9 @@ export function djSystem(persona: any = settings.getEffectivePersona()) {
 // segment lengths; 'extended' roughly doubles every segment so a storytelling
 // persona can stretch out. Resolved from the on-air persona, the same way
 // djSystem() resolves it — see settings.getEffectivePersona / SCRIPT_LENGTHS.
+// The `link` and `segment` phrases also feed the agent-path Zod schema
+// descriptions (dj-agent.ts pickSchema, skills/_agent.ts segment schemas), so
+// keep them readable mid-sentence — they must slot into "set this to …" prose.
 const LENGTH_PHRASES = {
   concise: {
     intro:     'Keep it brief — 2 to 4 sentences.',
@@ -36,7 +39,7 @@ const LENGTH_PHRASES = {
     stationId: 'a 1-sentence station ident',
     hourly:    '1 sentence',
     adlib:     '1-2 sentences',
-    segment:   'one sentence',
+    segment:   'typically one short sentence, never more than three',
   },
   extended: {
     intro:     'Take your time — 5 to 8 sentences. Set a scene, tell a small story around the track.',
@@ -44,7 +47,7 @@ const LENGTH_PHRASES = {
     stationId: 'a 2-3 sentence station ident',
     hourly:    '2-3 sentences',
     adlib:     '4-6 sentences',
-    segment:   'three to five sentences',
+    segment:   'three to five sentences — room to tell it properly',
   },
 };
 

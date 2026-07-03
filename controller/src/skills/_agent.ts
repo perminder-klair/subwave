@@ -37,7 +37,7 @@ import { z } from 'zod';
 import { queue } from '../broadcast/queue.js';
 import * as settings from '../settings.js';
 import { defineAgent } from '../llm/agent.js';
-import { buildContextLines, CONTEXT_FIELDS } from '../llm/dj.js';
+import { buildContextLines, CONTEXT_FIELDS, lengthPhrase } from '../llm/dj.js';
 import { buildSegmentTools } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
@@ -91,25 +91,34 @@ function unionContextFields(caps: any[]): string[] {
   return [...out];
 }
 
-const SEGMENT_SCHEMA = z.object({
-  segment: z.object({
-    // Kept as a free string (not a fixed enum) so operator-dropped custom
-    // skills get valid kinds too. The agent is told which kinds are on offer in
-    // the system prompt, and agenticTick drops any kind it wasn't offered.
-    kind: z.string()
-      .describe('the segment kind — MUST be one of the kinds offered in the system prompt for this tick'),
-    text: z.string().describe('the spoken line in the DJ voice — typically one short sentence, never more than three'),
-    sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect (null is usually right — most segments need none)'),
-  }).nullable().describe('the segment to air, or null to stay silent — silence is a perfectly good answer, often the best one, when the data is dull, stale, unchanged, or there is nothing fresh worth a listener\'s attention'),
-  reason: z.string().describe('one short internal sentence on why this segment (or why silent) — never shown to the listener'),
-});
+// Schema factories, resolved per run (defineAgent's function-schema form): the
+// spoken-line length follows the on-air persona's scriptLength via
+// lengthPhrase('segment'), so an 'extended' storytelling persona stretches its
+// segments the way it already stretches intros and links. A hard-coded
+// description here previously pinned every persona to one-liners.
+function segmentSchema() {
+  return z.object({
+    segment: z.object({
+      // Kept as a free string (not a fixed enum) so operator-dropped custom
+      // skills get valid kinds too. The agent is told which kinds are on offer in
+      // the system prompt, and agenticTick drops any kind it wasn't offered.
+      kind: z.string()
+        .describe('the segment kind — MUST be one of the kinds offered in the system prompt for this tick'),
+      text: z.string().describe(`the spoken line in the DJ voice — ${lengthPhrase('segment')}`),
+      sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect (null is usually right — most segments need none)'),
+    }).nullable().describe('the segment to air, or null to stay silent — silence is a perfectly good answer, often the best one, when the data is dull, stale, unchanged, or there is nothing fresh worth a listener\'s attention'),
+    reason: z.string().describe('one short internal sentence on why this segment (or why silent) — never shown to the listener'),
+  });
+}
 
 // Operator-override schema: the segment is mandatory, the kind is already
 // known, so the agent only returns the spoken line.
-const FORCED_SCHEMA = z.object({
-  text: z.string().describe('the spoken line in the DJ voice — typically one short sentence, never more than three'),
-  sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect'),
-});
+function forcedSchema() {
+  return z.object({
+    text: z.string().describe(`the spoken line in the DJ voice — ${lengthPhrase('segment')}`),
+    sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect'),
+  });
+}
 
 // The optional sound-effects block appended to the agent's system prompt.
 // Returns '' when the library is empty — the feature stays invisible to the
@@ -173,7 +182,7 @@ function availableCapabilities(ctx: any, now: Date) {
 // tone, sfx catalog). Everything else (response shape, silent-null option,
 // "call done", length, tool exploration) is conveyed via the AI SDK's
 // channels: the segment-tools.js tool descriptions, the schema field
-// descriptions on SEGMENT_SCHEMA above, the done-tool description in sdk.js,
+// descriptions on segmentSchema above, the done-tool description in sdk.js,
 // and the buildSituation() user message. Same principle as pickSystem.
 function directorSystem(persona: any, caps: any[], freq: string, sfxCatalog: any) {
   const capList = caps.map((c: any) => `- ${c.kind}: ${c.desc}`).join('\n');
@@ -203,7 +212,7 @@ function segmentDeadline(): number {
 // caller (agenticTick) only feeds the dynamic per-tick state.
 export const directorAgent = defineAgent({
   kind: 'djAgentSegment',
-  schema: SEGMENT_SCHEMA,
+  schema: () => segmentSchema(),
   // Wall-clock ceiling, mirroring the picker (dj-agent.ts). Without it a
   // gemma-class model that ignores toolChoice can drive the done-tool recovery
   // into a multi-step stall (86s observed in issue #555) and hang the tick;
@@ -373,7 +382,7 @@ function isBareNullSilent(err) {
 
 // Operator-override variant of directorSystem: exactly one capability, and the
 // segment is mandatory — the agent does not get the option to stay silent.
-// Same ultra-minimal treatment as directorSystem — the FORCED_SCHEMA's text
+// Same ultra-minimal treatment as directorSystem — the forcedSchema text
 // description and the segment-tools.js tool descriptions carry the rest.
 function forcedSystem(persona, cap, sfxCatalog) {
   return `${settings.agentPersonaPreamble(persona)}
@@ -387,7 +396,7 @@ ${cap.desc}${sfxBlock(sfxCatalog)}${settings.agentLanguageReminder(persona, 'the
 // the segment is mandatory, silence is not an option.
 export const forcedDirectorAgent = defineAgent({
   kind: 'djAgentSegment',
-  schema: FORCED_SCHEMA,
+  schema: () => forcedSchema(),
   // Same wall-clock ceiling as the autonomous director (issue #555).
   timeoutMs: segmentDeadline,
   buildSystem: ({ persona, cap, sfxCatalog }) => forcedSystem(persona, cap, sfxCatalog),
