@@ -648,8 +648,9 @@ music_meta.on_metadata(on_meta)
 
 # Stream on/off control. An Icecast output can't be paused, but it can be
 # shut down and recreated on demand (Liquidsoap's dynamic-sources pattern).
-# `stream_off` shuts both mounts down — the /stream.mp3 and /stream.opus
-# mounts disconnect and the station goes genuinely off air; `stream_on`
+# `stream_off` shuts all mounts down — /stream.mp3, /stream.opus (and any
+# optional mounts) disconnect and the station goes genuinely off air, and the
+# hourly archive output (also built here) stops recording with them; `stream_on`
 # recreates them. force_start lets the recreated outputs start after init.
 # The on/off state lives in refs and is read back over telnet by the
 # controller. It is NOT persisted: a mixer restart always comes back on air.
@@ -670,6 +671,14 @@ music_meta.on_metadata(on_meta)
 #                  build all decode it; older clients keep using MP3.
 # Per-listener bandwidth is per-mount, so the unused side costs nothing.
 settings.init.force_start := true
+
+# Hourly archive path. Wrap in `{time.string(...)}` so the path is a getter that
+# re-runs strftime each time `output.file` reopens (every hour via reopen_when).
+# Passing the bare string skips strftime entirely and writes everything to one
+# literal "%Y-%m-%d/%H-00.mp3" file that gets truncated at the top of each hour.
+# Defined here (before make_stream_outputs) because the archive output is built
+# inside it, tied to the on-air lifecycle.
+archive_path = {time.string("/var/sub-wave/archive/%Y-%m-%d/%H-00.mp3")}
 
 def make_stream_outputs() =
   # Pick the encoder from a fixed set: %mp3(bitrate=…) needs a parse-time
@@ -812,11 +821,42 @@ def make_stream_outputs() =
     else
       fun () -> ()
     end
+  # Hourly archive to /var/sub-wave/archive/. A second MP3 encoder running 24/7
+  # is the single biggest CPU cost in the broadcast container — guard the entire
+  # output so operators who don't use the archives don't pay for the encoder.
+  # Bitrate is selected from a fixed set because `%mp3(bitrate=…)` requires a
+  # literal int at parse time (we can't pass a ref). Built here (not standalone)
+  # so it lives inside the on-air lifecycle: taking the station off air stops the
+  # recording too — otherwise it kept writing hourly files of the internal
+  # fallback/emergency loop while off air (issue #768).
+  archive_shutdown =
+    if archive_enabled() then
+      br = archive_bitrate()
+      arch_out =
+        if br <= 64 then
+          output.file(%mp3(bitrate=64), fallible=true, reopen_when={0m0s}, archive_path, radio)
+        elsif br <= 96 then
+          output.file(%mp3(bitrate=96), fallible=true, reopen_when={0m0s}, archive_path, radio)
+        elsif br <= 128 then
+          output.file(%mp3(bitrate=128), fallible=true, reopen_when={0m0s}, archive_path, radio)
+        elsif br <= 160 then
+          output.file(%mp3(bitrate=160), fallible=true, reopen_when={0m0s}, archive_path, radio)
+        elsif br <= 192 then
+          output.file(%mp3(bitrate=192), fallible=true, reopen_when={0m0s}, archive_path, radio)
+        else
+          output.file(%mp3(bitrate=320), fallible=true, reopen_when={0m0s}, archive_path, radio)
+        end
+      arch_out.shutdown
+    else
+      log("Hourly archive disabled — set archive.enabled=true in settings to re-enable")
+      fun () -> ()
+    end
   fun () -> begin
     mp3_out.shutdown()
     opus_shutdown()
     flac_shutdown()
     aac_shutdown()
+    archive_shutdown()
   end
 end
 
@@ -838,37 +878,9 @@ def stream_down() =
   end
 end
 
-# On air at startup.
+# On air at startup — this also starts the hourly archive (built inside
+# make_stream_outputs, so it follows the on-air lifecycle).
 stream_up()
-
-# Optional: hourly archive to /var/sub-wave/archive/. A second MP3 encoder
-# running 24/7 is the single biggest CPU cost in the broadcast container —
-# guard the entire output so operators who don't use the archives don't pay
-# for the encoder. Bitrate is selected from a fixed set because `%mp3(bitrate=…)`
-# requires a literal int at parse time (we can't pass a ref).
-# Wrap in `{time.string(...)}` so the path is a getter that re-runs strftime
-# each time `output.file` reopens (every hour via reopen_when). Passing the
-# bare string skips strftime entirely and writes everything to one literal
-# "%Y-%m-%d/%H-00.mp3" file that gets truncated at the top of each hour.
-archive_path = {time.string("/var/sub-wave/archive/%Y-%m-%d/%H-00.mp3")}
-if archive_enabled() then
-  br = archive_bitrate()
-  if br <= 64 then
-    output.file(%mp3(bitrate=64), fallible=true, reopen_when={0m0s}, archive_path, radio)
-  elsif br <= 96 then
-    output.file(%mp3(bitrate=96), fallible=true, reopen_when={0m0s}, archive_path, radio)
-  elsif br <= 128 then
-    output.file(%mp3(bitrate=128), fallible=true, reopen_when={0m0s}, archive_path, radio)
-  elsif br <= 160 then
-    output.file(%mp3(bitrate=160), fallible=true, reopen_when={0m0s}, archive_path, radio)
-  elsif br <= 192 then
-    output.file(%mp3(bitrate=192), fallible=true, reopen_when={0m0s}, archive_path, radio)
-  else
-    output.file(%mp3(bitrate=320), fallible=true, reopen_when={0m0s}, archive_path, radio)
-  end
-else
-  log("Hourly archive disabled — set archive.enabled=true in settings to re-enable")
-end
 
 # ---------------------------------------------------------------------------
 # CONTROL — custom telnet command for the controller to trigger a restart
@@ -886,9 +898,10 @@ server.register(
   end
 )
 
-# Take the station off air / back on air on demand. stream_off shuts both
-# Icecast outputs down so /stream.mp3 and /stream.opus disconnect together;
-# stream_on recreates them. stream_status reports the current state for the
+# Take the station off air / back on air on demand. stream_off shuts the
+# Icecast outputs down so /stream.mp3 and /stream.opus disconnect together (and
+# stops the hourly archive recording); stream_on recreates them all.
+# stream_status reports the current state for the
 # admin UI and the listener-facing player. Operator-only — listeners can't
 # reach this.
 server.register(
