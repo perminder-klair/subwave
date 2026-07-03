@@ -300,6 +300,30 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
     }
   };
 
+  // Export this skill as a .zip (SKILL.md + tool.mjs if any). Auth-gated, so we
+  // fetch the bytes via adminFetch and trigger the download from the blob — a
+  // plain <a href> can't carry the Basic-auth header.
+  const exportZip = async () => {
+    try {
+      const r = await adminFetch(`/dj/skills/${fileId}/export`);
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `failed (${r.status})`);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${fileId}-skill.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      notify.err(`Export failed: ${errorMessage(e)}`);
+    }
+  };
+
   // Share a custom, prompt-only skill to the community: open the prefilled
   // add-skill Issue Form on GitHub in a new tab. A maintainer reviews the
   // generated PR; once merged it ships to everyone as an installable community
@@ -415,6 +439,11 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
         {isEdit && (
           <button type="button" onClick={run} disabled={acting} style={{ padding: '13px 26px', fontSize: 11, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', transition: 'transform .1s', border: '1px solid var(--accent)', background: 'var(--accent)', color: '#fff', cursor: acting ? 'wait' : 'pointer', opacity: acting ? 0.7 : 1 }}>
             ▸ RUN NOW
+          </button>
+        )}
+        {isEdit && (
+          <button type="button" onClick={exportZip} className="sw-ghost" title="Download this skill as a .zip (SKILL.md + tool.mjs)" style={{ padding: '13px 22px', background: 'transparent', color: 'var(--muted)', border: '1px solid color-mix(in oklab, var(--ink) 24%, transparent)', fontSize: 11, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', cursor: 'pointer' }}>
+            ↓ EXPORT
           </button>
         )}
         {isEdit && custom && (

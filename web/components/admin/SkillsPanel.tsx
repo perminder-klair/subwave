@@ -12,10 +12,10 @@
 // Creating and editing a skill (custom or built-in) opens the SkillEditModal
 // "segment sheet" — the list here is just the roster + quick actions.
 import type { ReactNode } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { notify, errorMessage } from '../../lib/notify';
 import { useAdminAuth } from '../../lib/adminAuth';
-import { RefreshCw, Plus, Users } from 'lucide-react';
+import { RefreshCw, Plus, Users, Upload } from 'lucide-react';
 import { Card, Btn, Pill, Eyebrow, Toggle } from './ui';
 import { V3Alert } from '../ui/alert';
 import { Modal } from '../ui/modal';
@@ -114,6 +114,8 @@ export default function SkillsPanel() {
   const [community, setCommunity] = useState<CommunitySkill[] | null>(null);
   const [installing, setInstalling] = useState<string | null>(null); // community slug installing, or null
   const [communityOpen, setCommunityOpen] = useState(false);         // community catalog modal open?
+  const [importing, setImporting] = useState(false);                 // zip import in flight?
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!hydrated || needsAuth) return;
@@ -190,6 +192,42 @@ export default function SkillsPanel() {
     } catch (e) {
       notify.err(`Run failed: ${errorMessage(e)}`);
     } finally { setBusy(null); }
+  };
+
+  // Re-fetch the community catalog (after an import may have flipped an entry's
+  // installed flag). Best-effort — leaves the list as-is on failure.
+  const refreshCommunity = async () => {
+    try {
+      const r = await adminFetch('/dj/skills/community');
+      if (!r.ok) return;
+      const j = (await r.json()) as CommunityResponse;
+      if (Array.isArray(j.community)) setCommunity(j.community);
+    } catch { /* keep current list */ }
+  };
+
+  // Import a skill from an uploaded .zip (SKILL.md + optional tool.mjs). Arrives
+  // disabled; a bundle carrying a tool.mjs runs code once enabled, so the toast
+  // says so. The controller derives the slug from the bundle's SKILL.md.
+  const importZip = async (file: File) => {
+    setImporting(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await adminFetch('/dj/skills/import', { method: 'POST', body: fd });
+      const j = (await r.json().catch(() => ({}))) as SkillToggleResponse & { slug?: string; hasTool?: boolean };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      if (Array.isArray(j.skills)) setSkills(j.skills);
+      await refreshCommunity();
+      notify.ok(
+        j.hasTool
+          ? `Imported “${j.slug}” — includes a data tool that runs code; review it before enabling`
+          : `Imported “${j.slug}” — disabled until you enable it`,
+      );
+    } catch (e) {
+      notify.err(`Import failed: ${errorMessage(e)}`);
+    } finally {
+      setImporting(false);
+    }
   };
 
   // Install a community skill into state/skills (arrives disabled). The route
@@ -364,6 +402,32 @@ export default function SkillsPanel() {
         title="community"
         sub="skills shared by other stations"
         width={640}
+        footer={
+          <div className="flex w-full items-center justify-between gap-3">
+            <span className="text-[11px] leading-[1.5] text-muted">
+              Got a skill someone shared as a <code>.zip</code>? Import it here — it may include a
+              data tool that runs code, so it arrives disabled for review.
+            </span>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".zip,application/zip"
+              className="hidden"
+              onChange={e => {
+                const f = e.target.files?.[0];
+                if (f) importZip(f);
+                e.target.value = ''; // allow re-selecting the same file
+              }}
+            />
+            <Btn
+              onClick={() => fileInputRef.current?.click()}
+              disabled={importing}
+              title="Install a skill from a .zip bundle"
+            >
+              <Upload size={14} /> {importing ? 'Importing…' : 'Import .zip'}
+            </Btn>
+          </div>
+        }
       >
         <div className="text-[12px] leading-[1.65] text-muted">
           These prompt-only skills ship with SUB/WAVE and update when you do.
