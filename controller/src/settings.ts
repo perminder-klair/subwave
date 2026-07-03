@@ -1227,9 +1227,11 @@ function normalizeShows(raw: any, personaIds: string[]) {
     const energy = SHOW_ENERGY.includes(item.energy) ? item.energy : '';
     // Opt-in: hard-filter the pick pool to EVERY set music filter (mood, genre,
     // era, energy) instead of the default soft leans. Only meaningful when at
-    // least one filter is set; defaults off so existing shows are unchanged.
-    // Legacy `genreStrict` (the old genre-only toggle) migrates into it on load.
-    const filtersStrict = item.filtersStrict === true || item.genreStrict === true;
+    // least one filter is set; defaults OFF. The legacy genre-only `genreStrict`
+    // is deliberately NOT carried over: the toggle now spans every filter, so
+    // auto-migrating an old genre-strict show would silently harden mood/era/
+    // energy too. Old shows come back soft; the operator re-opts into strict.
+    const filtersStrict = item.filtersStrict === true;
     // Per-show track-length override (seconds). null = inherit the station-wide
     // maxTrackSeconds; 0 = unlimited (opt this show back out of the cap so a
     // long-form mix show can air hour-long sets); >0 = this show's own cap.
@@ -2015,9 +2017,11 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
       throw new Error(`shows[${i}].energy must be one of: ${SHOW_ENERGY.join(', ')}`);
     }
     // Opt-in hard filter across every set music constraint — mood, genre, era,
-    // energy (vs the default soft leans). Boolean, defaults off. Legacy
-    // `genreStrict` from pre-rename clients/state migrates into it.
-    const filtersStrict = item.filtersStrict === true || item.genreStrict === true;
+    // energy (vs the default soft leans). Boolean, defaults OFF. The legacy
+    // genre-only `genreStrict` is deliberately NOT carried over (see the load
+    // path): the toggle now spans every filter, so migrating it would silently
+    // harden mood/era/energy an old show never opted into.
+    const filtersStrict = item.filtersStrict === true;
     const parseYear = (v, field) => {
       if (v == null || v === '') return null;
       const n = Number(v);

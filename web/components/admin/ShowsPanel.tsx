@@ -83,8 +83,8 @@ interface Show {
   /** When true (and ≥1 music filter is set) EVERY set filter — mood, genre,
    *  era, energy — becomes a HARD filter on the pick pool instead of a soft
    *  lean; off-filter tracks only play as a last resort to avoid silence.
-   *  Defaults off. (Renamed from the genre-only `genreStrict`; the controller
-   *  migrates legacy state on load.) */
+   *  Defaults off. (Replaces the genre-only `genreStrict`; the controller does
+   *  NOT auto-migrate legacy strict shows — they load soft, opt back in here.) */
   filtersStrict: boolean;
   /** Per-show track-length cap (seconds). null = inherit the station default;
    *  0 = unlimited (opt this show out of the cap so it can air long mixes);
