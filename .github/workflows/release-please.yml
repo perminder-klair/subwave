@@ -16,7 +16,7 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         with:
           # Explicit target-branch: the action defaults to the repo's default
           # branch when unset, and our default is `develop` (not `main`). Without

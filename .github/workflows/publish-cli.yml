@@ -39,7 +39,7 @@ jobs:
           - target: bun-darwin-arm64
             asset:  subwave-darwin-arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -87,7 +87,7 @@ jobs:
         # Share every built binary (not just on tags) so the smoke jobs can
         # download and exec them on both tag pushes and workflow_dispatch runs.
         # Short retention — these are throwaway CI artifacts, not releases.
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bin-${{ matrix.asset }}
           path: cli/dist/${{ matrix.asset }}
@@ -95,7 +95,7 @@ jobs:
 
       - name: Upload to release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: cli/dist/${{ matrix.asset }}
           fail_on_unmatched_files: true
@@ -110,7 +110,7 @@ jobs:
         run: sha256sum "$ASSET" > "$ASSET.sha256"
 
       - name: Upload checksum fragment
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sha256-${{ matrix.asset }}
           path: cli/dist/${{ matrix.asset }}.sha256
@@ -136,7 +136,7 @@ jobs:
             rosetta: true
     steps:
       - name: Download binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bin-${{ matrix.asset }}
           path: dist
@@ -167,10 +167,10 @@ jobs:
     continue-on-error: true
     steps:
       - name: Set up QEMU binfmt
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Download binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bin-subwave-linux-arm64
           path: dist
@@ -191,7 +191,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download checksum fragments
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: sha256-*
           path: sums
@@ -203,7 +203,7 @@ jobs:
           cat SHA256SUMS
 
       - name: Upload SHA256SUMS to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: SHA256SUMS
           fail_on_unmatched_files: true

@@ -44,10 +44,10 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Deploy Worker
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           # Pin Wrangler so a deploy on a quiet day doesn't break because
           # of an upstream CLI change. Bump deliberately.
