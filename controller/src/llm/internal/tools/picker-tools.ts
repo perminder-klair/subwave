@@ -96,6 +96,7 @@ export function buildPickerTools({
   energyLock = null,
   playlistLock = null,
   playlistTracks = null,
+  excludedIds = null,
 }: {
   recentIds?: Set<string>;
   recentKeys?: Set<string>;        // lowercased "title|artist" — backfilled entries lack ids
@@ -144,6 +145,10 @@ export function buildPickerTools({
   // the agent's window into the operator's curation. Set in BOTH strict (with
   // playlistLock) and soft (no lock, just a strong prompt preference) modes.
   playlistTracks?: any[] | null;
+  // Track ids from the show's excluded playlists (blocklist). Any track whose
+  // id is in this set is dropped from every tool's results so the agent never
+  // sees — and can never pick — a blocklisted track. null = no exclusions.
+  excludedIds?: Set<string> | null;
 } = {}) {
   const seen = new Map<string, any>(); // id → slim song, accumulated across all tool calls
 
@@ -169,6 +174,9 @@ export function buildPickerTools({
     // contributes nothing). The guaranteed in-set source is showPlaylistTracks
     // below, so `seen` is never empty and the agent's pick is always in-playlist.
     if (playlistLock) pool = pool.filter((s: any) => s?.id && playlistLock.has(s.id));
+    // Excluded playlists (blocklist): hard-drop tracks from any blocklisted
+    // playlist. The agent simply never sees these ids.
+    if (excludedIds) pool = pool.filter((s: any) => s?.id && !excludedIds.has(s.id));
     const accepted = filterPickerCandidates(pool, {
       recentIds,
       recentKeys,

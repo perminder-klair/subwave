@@ -516,6 +516,7 @@ const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
 const PERSONA_LIMIT = 24;
 const SHOWS_LIMIT = 64;
 const PLAYLISTS_PER_SHOW = 10;
+const EXCLUDED_PLAYLISTS_PER_SHOW = 10;
 const SKILLS_PER_PERSONA_LIMIT = 20;
 const WEBHOOKS_LIMIT = 16;
 
@@ -535,6 +536,24 @@ function coercePlaylistIds(raw: any): string[] {
     seen.add(id);
     out.push(id);
     if (out.length >= PLAYLISTS_PER_SHOW) break;
+  }
+  return out;
+}
+
+// A show can exclude tracks from one or more Navidrome playlists: any track
+// that appears in these playlists is dropped from the candidate pool at pick
+// time. Same shape/rules as coercePlaylistIds. Empty = no exclusions.
+function coerceExcludedPlaylistIds(raw: any): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const id = v.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= EXCLUDED_PLAYLISTS_PER_SHOW) break;
   }
   return out;
 }
@@ -1242,6 +1261,9 @@ function normalizeShows(raw: any, personaIds: string[]) {
     // so existing shows are byte-for-byte unchanged.
     const playlistIds = coercePlaylistIds(item.playlistIds);
     const playlistStrict = item.playlistStrict === true;
+    // Optional Navidrome playlist blocklist — tracks from these playlists are
+    // excluded from the candidate pool. Empty = no exclusions.
+    const excludedPlaylistIds = coerceExcludedPlaylistIds(item.excludedPlaylistIds);
     out.push({
       id,
       name,
@@ -1257,6 +1279,7 @@ function normalizeShows(raw: any, personaIds: string[]) {
       maxTrackSeconds,
       playlistIds,
       playlistStrict,
+      excludedPlaylistIds,
     });
     if (out.length >= SHOWS_LIMIT) break;
   }
@@ -2074,10 +2097,25 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
       playlistIds = coercePlaylistIds(item.playlistIds);
     }
     const playlistStrict = item.playlistStrict === true;
+    // Optional Navidrome playlist blocklist. Shape-checked only — same rules as
+    // playlistIds; stale ids contribute nothing at pick time.
+    let excludedPlaylistIds: string[] = [];
+    if (item.excludedPlaylistIds !== undefined && item.excludedPlaylistIds !== null) {
+      if (!Array.isArray(item.excludedPlaylistIds)) {
+        throw new Error(`shows[${i}].excludedPlaylistIds must be an array of strings`);
+      }
+      if (item.excludedPlaylistIds.length > EXCLUDED_PLAYLISTS_PER_SHOW) {
+        throw new Error(`shows[${i}].excludedPlaylistIds must have at most ${EXCLUDED_PLAYLISTS_PER_SHOW} entries`);
+      }
+      for (const v of item.excludedPlaylistIds) {
+        if (typeof v !== 'string') throw new Error(`shows[${i}].excludedPlaylistIds entries must be strings`);
+      }
+      excludedPlaylistIds = coerceExcludedPlaylistIds(item.excludedPlaylistIds);
+    }
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict };
+    return { id, name, topic, personaId: item.personaId, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
   });
 }
 

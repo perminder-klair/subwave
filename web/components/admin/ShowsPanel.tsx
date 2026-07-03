@@ -97,6 +97,9 @@ interface Show {
    *  universe; off-playlist tracks only play as a never-starve fallback. When
    *  false, the playlist just dominates the pool. Defaults off. */
   playlistStrict: boolean;
+  /** Navidrome playlist blocklist — tracks from these playlists are excluded
+   *  from the candidate pool regardless of other filters. Empty = no exclusions. */
+  excludedPlaylistIds: string[];
 }
 
 // Decade presets for the era dropdown → fromYear/toYear. 'any' clears the window.
@@ -210,15 +213,17 @@ function NowCard({ label, accent, slotHour, show, color, personaLabel }: NowCard
 // Compact " · genre · 80s · high" suffix for the show summary lines, omitting
 // whatever the show doesn't pin. Strict filters are flagged inline so the hard
 // lock is visible at a glance.
-function showFilterSummary(s: { mood?: string; genre: string; fromYear: number | null; toYear: number | null; energy: string; filtersStrict?: boolean; maxTrackSeconds?: number | null; playlistIds?: string[]; playlistStrict?: boolean }): string {
+function showFilterSummary(s: { mood?: string; genre: string; fromYear: number | null; toYear: number | null; energy: string; filtersStrict?: boolean; maxTrackSeconds?: number | null; playlistIds?: string[]; playlistStrict?: boolean; excludedPlaylistIds?: string[] }): string {
   const len = s.maxTrackSeconds == null ? '' : s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s`;
   const nPl = s.playlistIds?.length ?? 0;
   const playlist = nPl ? `${nPl} playlist${nPl > 1 ? 's' : ''}${s.playlistStrict ? ' (strict)' : ''}` : '';
+  const nEx = s.excludedPlaylistIds?.length ?? 0;
+  const excluded = nEx ? `${nEx} excluded` : '';
   // The strict chip covers every music filter (mood included) — only shown when
   // there's actually a filter for it to bite on.
   const strict = s.filtersStrict && (s.mood || s.genre || s.energy || s.fromYear != null || s.toYear != null)
     ? 'strict filters' : '';
-  const bits = [s.genre, decadeLabelOf(s), s.energy, strict, len, playlist].filter(Boolean);
+  const bits = [s.genre, decadeLabelOf(s), s.energy, strict, len, playlist, excluded].filter(Boolean);
   return bits.length ? ` · ${bits.join(' · ')}` : '';
 }
 
@@ -384,6 +389,7 @@ export default function ShowsPanel() {
           maxTrackSeconds: s.maxTrackSeconds ?? null,
           playlistIds: Array.isArray(s.playlistIds) ? s.playlistIds : [],
           playlistStrict: s.playlistStrict ?? false,
+          excludedPlaylistIds: Array.isArray(s.excludedPlaylistIds) ? s.excludedPlaylistIds : [],
         }));
         setForm({ shows, schedule: week });
         // Arm the first valid show as the brush so the grid is paintable at once.
@@ -478,7 +484,7 @@ export default function ShowsPanel() {
           personaId: personas[0]?.id || '', mood: '',
           themeId: '', genre: '', fromYear: null, toYear: null, energy: '',
           filtersStrict: false, maxTrackSeconds: null,
-          playlistIds: [], playlistStrict: false,
+          playlistIds: [], playlistStrict: false, excludedPlaylistIds: [],
         }],
       };
     });
@@ -674,6 +680,7 @@ export default function ShowsPanel() {
             playlistIds: s.playlistIds || [],
             // Strict only means something with at least one playlist pinned.
             playlistStrict: (s.playlistIds?.length ?? 0) > 0 && s.playlistStrict,
+            excludedPlaylistIds: s.excludedPlaylistIds || [],
           })),
           schedule: form.schedule,
         }),
@@ -1271,6 +1278,50 @@ function ShowEditor({
               </div>
             </div>
           )}
+
+          <Field>
+            <Label>excluded playlists</Label>
+            <span className="field-hint">
+              Tracks from these playlists will never play during this show,
+              regardless of other filters. Useful for blocking genres or moods
+              that don&apos;t fit — add them to a Navidrome playlist and
+              exclude it here (up to 10).
+            </span>
+            {playlists.length === 0 ? (
+              <span className="field-hint opacity-60">
+                No Navidrome playlists found yet — create some in Navidrome and
+                reopen this panel.
+              </span>
+            ) : (
+              <div className="grid max-h-44 gap-1 overflow-y-auto border border-ink bg-[var(--ink-softer)] p-2">
+                {playlists.map(pl => {
+                  const checked = show.excludedPlaylistIds.includes(pl.id);
+                  const atCap = !checked && show.excludedPlaylistIds.length >= 10;
+                  return (
+                    <label
+                      key={pl.id}
+                      className={`flex items-center gap-2 text-sm ${atCap ? 'opacity-40' : 'cursor-pointer'}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={atCap}
+                        onChange={() => update({
+                          excludedPlaylistIds: checked
+                            ? show.excludedPlaylistIds.filter(id => id !== pl.id)
+                            : [...show.excludedPlaylistIds, pl.id],
+                        })}
+                      />
+                      <span className="truncate">{pl.name}</span>
+                      {pl.songCount != null && (
+                        <span className="field-hint">({pl.songCount})</span>
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </Field>
         </Card>
 
         <Card flat title="Brief" bodyClass="grid gap-3.5">

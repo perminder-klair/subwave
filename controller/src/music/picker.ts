@@ -13,7 +13,7 @@ import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
 import { normGenre, genreMatches, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood } from './show-filter.js';
-import { resolveShowPlaylistPool, type PlaylistPool } from './show-playlist.js';
+import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
 
 const CANDIDATE_CAP = 18;
 const HISTORY_DEPTH = 4;
@@ -495,7 +495,15 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   // track pool. Null when the show pins none (the common case → pool unchanged).
   const playlistPool = activeShow ? await resolveShowPlaylistPool(activeShow) : null;
   const playlistStrict = !!activeShow?.playlistStrict;
-  const { candidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict);
+  const excludedIds = activeShow ? await resolveExcludedPlaylistIds(activeShow) : null;
+  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict);
+
+  // Excluded playlists (blocklist): drop any track whose id appears in the
+  // show's excluded playlist union. Applied after buildCandidates so the full
+  // pool is built first; no never-starve fallback — the blocklist is hard.
+  const candidates = excludedIds
+    ? rawCandidates.filter((t: any) => t?.id && !excludedIds.has(t.id))
+    : rawCandidates;
 
   if (candidates.length === 0) {
     queue.log('picker', 'no candidates available, skipping LLM pick');
