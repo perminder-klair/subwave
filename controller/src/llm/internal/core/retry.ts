@@ -3,26 +3,42 @@
 //   withTransientRetry — retries the SAME call on transient upstream blips.
 //   withDeadline       — a hard wall-clock ceiling (Promise.race + AbortSignal).
 
-import { isTransient, errReason } from './pure.js';
+import { isTransient, errReason, unwrapSdkError } from './pure.js';
 
 // Retry-After (seconds, or an HTTP-date) — RFC 9110 §10.2.3. Providers rate-
 // limiting a 429 commonly tell the caller exactly how long to wait (OpenAI,
 // Anthropic, Groq all send it); honouring it instead of a blind fixed delay
 // (issue #738) means a same-leg retry actually lands after the window clears
-// rather than guessing and burning the retry budget on another 429. Capped at
-// 30s — same-leg retry exists to smooth a blip, not to block the DJ loop for a
-// provider's full per-minute reset window; a longer wait should fail over.
-const MAX_RETRY_AFTER_MS = 30_000;
-
+// rather than guessing and burning the retry budget on another 429. Returns
+// the RAW duration, uncapped — the caller compares it against
+// MAX_RETRY_AFTER_MS and gives up on the leg (→ withFailover tries the backup)
+// rather than clamping a per-day reset window down to something waitable.
+// Unwraps AI_RetryError first: after the SDK's own retries the header lives on
+// the wrapped APICallError, not the wrapper (PR #751 review). OpenAI also
+// sends the ms-precision `retry-after-ms`; prefer it when present.
 export function retryAfterMs(err: any): number | null {
+  err = unwrapSdkError(err);
   const headers = err?.responseHeaders || err?.cause?.responseHeaders;
-  const raw = headers?.['retry-after'];
+  if (!headers) return null;
+  const rawMs = Number(headers['retry-after-ms']);
+  if (Number.isFinite(rawMs) && rawMs > 0) return rawMs;
+  const raw = headers['retry-after'];
   if (!raw) return null;
   const seconds = Number(raw);
   const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(raw) - Date.now();
   if (!Number.isFinite(ms) || ms <= 0) return null;
-  return Math.min(ms, MAX_RETRY_AFTER_MS);
+  return ms;
 }
+
+// The longest Retry-After worth sleeping on the SAME leg. Same-leg retry
+// exists to smooth a blip, not to hold the DJ loop hostage for a provider's
+// per-minute (or per-day) reset window — past this, the wait is the provider
+// saying "come back much later", and the right move is to throw immediately so
+// withFailover can try the configured backup leg NOW (issue #738). Kept well
+// under the 45s default agent deadline (settings.llm.agentTimeoutMs) so an
+// honoured wait can't blow the deadline and surface as AgentDeadlineError,
+// which matches no failover classifier (PR #751 review).
+export const MAX_RETRY_AFTER_MS = 15_000;
 
 // Retry transient upstream failures (gateway timeouts, dropped sockets). Local
 // Ollama — and anything proxying it — produces occasional 502/503/504 and TCP
@@ -31,9 +47,24 @@ export function retryAfterMs(err: any): number | null {
 // jittered backoff is enough — beyond that the upstream is genuinely down and
 // the failure should surface.
 //
+// A Retry-After header on the error overrides the fixed delay (jitter is kept
+// so a fleet of callers released by the same header doesn't stampede back in
+// sync); a header LONGER than MAX_RETRY_AFTER_MS aborts same-leg retry
+// entirely — the error propagates to withFailover, which fails over to the
+// backup leg instead of sleeping out the provider's reset window here.
+//
+// `signal` (optional, threaded from withDeadline by djAgent's runDeadlined)
+// cuts the backoff sleep short and stops further attempts once the deadline
+// has fired — without it the loop would sleep through the abort and launch a
+// ghost attempt whose result nobody is waiting on.
+//
 // Schema/parse failures and the agent's "did not call done" condition are NOT
 // transient and bubble straight out — they need different recovery paths.
-export async function withTransientRetry<T>(kind: string, fn: () => Promise<T>): Promise<T> {
+export async function withTransientRetry<T>(
+  kind: string,
+  fn: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
   const delays = [500, 1500]; // ms — two retries, ~2s total budget
   let lastErr: any;
   for (let attempt = 0; attempt <= delays.length; attempt++) {
@@ -41,14 +72,34 @@ export async function withTransientRetry<T>(kind: string, fn: () => Promise<T>):
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (!isTransient(err) || attempt === delays.length) throw err;
+      if (!isTransient(err) || attempt === delays.length || signal?.aborted) throw err;
       const jitter = Math.floor(Math.random() * 200);
-      const wait = retryAfterMs(err) ?? (delays[attempt] + jitter);
+      const hinted = retryAfterMs(err);
+      if (hinted != null && hinted > MAX_RETRY_AFTER_MS) {
+        console.log(`[${kind}] provider asked to retry after ${Math.round(hinted / 1000)}s — beyond the ${MAX_RETRY_AFTER_MS / 1000}s same-leg budget, giving up on this leg`);
+        throw err;
+      }
+      const wait = hinted != null ? hinted + jitter : delays[attempt] + jitter;
       console.log(`[${kind}] transient upstream error — ${errReason(err)} — retrying in ${wait}ms (attempt ${attempt + 1}/${delays.length})`);
-      await new Promise(r => setTimeout(r, wait));
+      await sleep(wait, signal);
+      if (signal?.aborted) throw lastErr;
     }
   }
   throw lastErr;
+}
+
+// setTimeout that ends early (resolving, not throwing — the aborted check
+// after the sleep owns the exit) when the signal fires mid-wait.
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    }
+    signal?.addEventListener('abort', done, { once: true });
+  });
 }
 
 // Hard wall-clock ceiling on a single agent generation (including its

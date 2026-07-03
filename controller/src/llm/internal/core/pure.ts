@@ -104,6 +104,21 @@ export function budgetMode(
 // persists past that budget does withFailover try the configured fallback model,
 // instead of the call dying on the saturated route having never tried the backup.
 
+// The AI SDK's built-in retry (generateText's default maxRetries: 2) throws
+// AI_RetryError once its attempts are spent — a wrapper with NO statusCode,
+// cause, or responseHeaders of its own. The real APICallError (with the 429
+// status and the Retry-After header) lives in err.lastError / err.errors[].
+// Every classifier below unwraps first, or a rate-limited/quota/overloaded
+// call that the SDK already retried would classify as nothing at all and
+// never fail over (PR #751 review). Duck-typed on the wrapper's fields, not
+// RetryError.isInstance, so this file keeps its no-`ai`-import purity.
+export function unwrapSdkError(err: any): any {
+  if (!err) return err;
+  const inner = err.lastError
+    ?? (Array.isArray(err.errors) && err.errors.length ? err.errors[err.errors.length - 1] : undefined);
+  return inner ?? err;
+}
+
 const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 const TRANSIENT_CODE = new Set([
   'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN',
@@ -112,6 +127,7 @@ const TRANSIENT_CODE = new Set([
 
 export function isTransient(err: any): boolean {
   if (!err) return false;
+  err = unwrapSdkError(err);
   // A quota/usage-limit/auth rejection is permanent for THIS leg this call —
   // never burn same-leg retries on it; let it propagate to withFailover, which
   // switches legs (#438). A plain rate-limit 429 (no quota/auth signature) is
@@ -142,6 +158,7 @@ const UNREACHABLE_CODE = new Set([
 
 export function isUnreachable(err: any): boolean {
   if (!err) return false;
+  err = unwrapSdkError(err);
   const code = err.code ?? err.cause?.code;
   if (typeof code === 'string' && UNREACHABLE_CODE.has(code)) return true;
   const name = err.name ?? err.cause?.name;
@@ -169,6 +186,7 @@ const AUTH_RE = /invalid[ _]?api[ _]?key|incorrect[ _]?api[ _]?key|unauthorized|
 
 export function isQuotaOrAuthError(err: any): boolean {
   if (!err) return false;
+  err = unwrapSdkError(err);
   const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
   // Auth: any 401/403, or an auth-shaped message regardless of status.
   if (status === 401 || status === 403) return true;
@@ -201,6 +219,7 @@ const UPSTREAM_OVERLOAD_RE = /upstream error|resource[ _]?exhausted|overloaded|n
 
 export function isUpstreamOverloaded(err: any): boolean {
   if (!err) return false;
+  err = unwrapSdkError(err);
   const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
   if (status === 529) return true; // Anthropic "Overloaded" — outside TRANSIENT_STATUS
   const msg = String(err.message || err.cause?.message || '');
@@ -216,12 +235,25 @@ export function isUpstreamOverloaded(err: any): boolean {
 // to the backup leg — a request-per-minute/day cap on the primary provider is
 // exactly the "keep the station on air on a free tier" case the issue asks
 // for, and retrying the same exhausted leg forever will never recover it.
+//
+// Deliberately NOT any bare 429: a status alone must also carry rate-limit
+// wording or a Retry-After header to qualify. A self-hosted llama.cpp/vLLM box
+// answering 429 on a momentary concurrency spike sends neither — that stays a
+// plain same-leg transient retry and never silently switches the station onto
+// a (possibly paid) cloud fallback (PR #751 review). Every provider #738
+// names does send the wording and/or the header.
+const RATE_LIMIT_RE = /rate.?limit|too many requests|requests? per (?:minute|day|hour)|\b[rt]p[mdh]\b/i;
+
 export function isRateLimited(err: any): boolean {
   if (!err) return false;
+  err = unwrapSdkError(err);
   const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
-  if (status === 429) return true;
   const msg = String(err.message || err.cause?.message || '');
-  return /\b429\b/.test(msg) && /rate.?limit|too many requests/i.test(msg);
+  const is429 = status === 429 || (status == null && /\b429\b/.test(msg));
+  if (!is429) return false;
+  const headers = err.responseHeaders ?? err.cause?.responseHeaders;
+  const hasRetryAfter = !!(headers?.['retry-after'] ?? headers?.['retry-after-ms']);
+  return hasRetryAfter || RATE_LIMIT_RE.test(msg);
 }
 
 // A short, actionable reason string for logs. A network-transport failure
@@ -233,6 +265,7 @@ export function isRateLimited(err: any): boolean {
 // and appends the errno/status to the message when it adds something.
 export function errReason(err: any): string {
   if (!err) return 'unknown';
+  err = unwrapSdkError(err);
   const msg = String(err.message || err.cause?.message || '').trim();
   const code = err.code ?? err.cause?.code;
   const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;

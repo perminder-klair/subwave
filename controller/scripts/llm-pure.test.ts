@@ -7,6 +7,8 @@
 // node:assert-via-tsx style of scripts/picker-recency-regression.ts.
 
 import assert from 'node:assert/strict';
+import { generateText, APICallError } from 'ai';
+import { MockLanguageModelV3 } from 'ai/test';
 import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
 import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
@@ -128,10 +130,7 @@ async function main() {
   });
 
   // ---- rate-limit gate: STAYS transient (retry first), THEN fails over (#738) ----
-  console.log('isRateLimited (bare 429 with no quota wording → retry, then fail over to keep a free tier on air):');
-  await test('bare 429 status with no message → rate-limited', () => {
-    assert.equal(isRateLimited({ statusCode: 429 }), true);
-  });
+  console.log('isRateLimited (rate-limit 429 → retry, then fail over to keep a free tier on air):');
   await test('a 429 with a plain "rate limit" message → rate-limited, stays transient, not quota/auth', () => {
     const e: any = { statusCode: 429, message: 'rate limit exceeded, slow down' };
     assert.equal(isRateLimited(e), true);
@@ -139,16 +138,45 @@ async function main() {
     assert.equal(isQuotaOrAuthError(e), false);
     assert.equal(isUnreachable(e), false);
   });
-  await test('"too many requests" 429 message with no status field → rate-limited', () => {
-    assert.equal(isRateLimited({ message: '429 Too Many Requests' }), true);
+  await test('real provider shapes: OpenAI RPM / Gemini per-day / Groq TPM messages classify', () => {
+    assert.equal(isRateLimited({ statusCode: 429, message: 'Rate limit reached for gpt-4o in organization org-x on requests per min (RPM): Limit 3, Used 3' }), true);
+    assert.equal(isRateLimited({ statusCode: 429, message: 'Resource has been exhausted (e.g. check quota): too many requests per day' }), true);
+    assert.equal(isRateLimited({ statusCode: 429, message: 'Rate limit exceeded for requests per minute' }), true);
+  });
+  await test('a bare 429 with a Retry-After header but no wording → rate-limited', () => {
+    assert.equal(isRateLimited({ statusCode: 429, responseHeaders: { 'retry-after': '20' } }), true);
+    assert.equal(isRateLimited({ statusCode: 429, responseHeaders: { 'retry-after-ms': '500' } }), true);
+  });
+  await test('a bare 429 with NO wording and NO header (self-hosted concurrency spike) does NOT fail over', () => {
+    // llama.cpp/vLLM/LiteLLM answering 429 on a momentary slot conflict must
+    // stay a same-leg transient retry — never silently switch the station onto
+    // a possibly-paid cloud fallback (PR #751 review).
+    assert.equal(isRateLimited({ statusCode: 429 }), false);
+    assert.equal(isTransient({ statusCode: 429 }), true);
+  });
+  await test('an AI_RetryError wrapper (SDK maxRetries spent) is unwrapped to the real 429', () => {
+    // What djText/djObject/djAgent actually receive: the SDK retried
+    // internally, then threw a wrapper with NO statusCode of its own — the
+    // real APICallError lives in errors[]/lastError (PR #751 review).
+    const inner: any = { statusCode: 429, message: 'Rate limit reached for gpt-4o', responseHeaders: { 'retry-after': '20' } };
+    const wrapper: any = new Error('Failed after 3 attempts. Last error: Rate limit reached for gpt-4o');
+    wrapper.reason = 'maxRetriesExceeded';
+    wrapper.errors = [inner, inner];
+    wrapper.lastError = inner;
+    assert.equal(isRateLimited(wrapper), true);
+    assert.equal(isTransient(wrapper), true);
+    assert.equal(isQuotaOrAuthError(wrapper), false);
+  });
+  await test('a wrapped quota/auth error still classifies as quota/auth through the wrapper', () => {
+    const inner: any = { statusCode: 429, message: 'you have reached your weekly usage limit' };
+    const wrapper: any = new Error('Failed after 3 attempts. Last error: weekly usage limit');
+    wrapper.errors = [inner];
+    wrapper.lastError = inner;
+    assert.equal(isQuotaOrAuthError(wrapper), true);
+    assert.equal(isTransient(wrapper), false);
   });
   await test('cause.statusCode is unwrapped', () => {
-    assert.equal(isRateLimited({ cause: { statusCode: 429 } }), true);
-  });
-  await test('a quota/usage-limit 429 is already isQuotaOrAuthError, not double-classified oddly', () => {
-    const e: any = { statusCode: 429, message: 'you have reached your weekly usage limit' };
-    assert.equal(isRateLimited(e), true);
-    assert.equal(isQuotaOrAuthError(e), true); // both true is fine — withFailover only needs one to trigger
+    assert.equal(isRateLimited({ cause: { statusCode: 429, message: 'too many requests' } }), true);
   });
   await test('non-429 errors are NOT rate-limited', () => {
     assert.equal(isRateLimited({ statusCode: 503 }), false);
@@ -157,13 +185,23 @@ async function main() {
   });
 
   // ---- retryAfterMs: parses a provider's Retry-After header (#738) ----
-  console.log('retryAfterMs (Retry-After header sets the same-leg retry delay, capped at 30s):');
+  console.log('retryAfterMs (Retry-After header sets the same-leg retry delay; raw, uncapped):');
   await test('a numeric Retry-After (seconds) converts to ms', () => {
     assert.equal(retryAfterMs({ responseHeaders: { 'retry-after': '1' } }), 1000);
     assert.equal(retryAfterMs({ responseHeaders: { 'retry-after': '5' } }), 5000);
   });
-  await test('a Retry-After longer than 30s is clamped to the cap', () => {
-    assert.equal(retryAfterMs({ responseHeaders: { 'retry-after': '9999' } }), 30_000);
+  await test('returns the RAW duration uncapped — the caller decides to wait or fail over', () => {
+    assert.equal(retryAfterMs({ responseHeaders: { 'retry-after': '3600' } }), 3_600_000);
+  });
+  await test('OpenAI retry-after-ms takes precedence over retry-after', () => {
+    assert.equal(retryAfterMs({ responseHeaders: { 'retry-after-ms': '250', 'retry-after': '2' } }), 250);
+  });
+  await test('an AI_RetryError wrapper is unwrapped to reach the header', () => {
+    const inner: any = { statusCode: 429, responseHeaders: { 'retry-after': '20' } };
+    const wrapper: any = new Error('Failed after 3 attempts');
+    wrapper.errors = [inner];
+    wrapper.lastError = inner;
+    assert.equal(retryAfterMs(wrapper), 20_000);
   });
   await test('cause.responseHeaders is unwrapped', () => {
     assert.equal(retryAfterMs({ cause: { responseHeaders: { 'retry-after': '2' } } }), 2000);
@@ -177,7 +215,7 @@ async function main() {
   });
 
   // ---- withTransientRetry: wires retryAfterMs into the actual retry loop ----
-  console.log('withTransientRetry (uses Retry-After when present, else the default jittered delay):');
+  console.log('withTransientRetry (waits out a short Retry-After; gives up the leg on a long one):');
   await test('a 429 with Retry-After: 1 waits ~1000ms instead of the default 500ms', async () => {
     let calls = 0;
     const started = Date.now();
@@ -195,6 +233,32 @@ async function main() {
     assert.equal(calls, 2);
     assert.ok(elapsed >= 950, `expected a ~1000ms wait, got ${elapsed}ms`);
   });
+  await test('a Retry-After beyond the same-leg budget throws IMMEDIATELY (→ withFailover tries the backup)', async () => {
+    let calls = 0;
+    const started = Date.now();
+    const err: any = new Error('rate limit exceeded');
+    err.statusCode = 429;
+    err.responseHeaders = { 'retry-after': '3600' };
+    const thrown = await withTransientRetry('test', async () => { calls++; throw err; }).catch((x) => x);
+    const elapsed = Date.now() - started;
+    assert.equal(thrown, err);
+    assert.equal(calls, 1);                        // no second same-leg attempt
+    assert.ok(elapsed < 500, `expected an immediate throw, got ${elapsed}ms`);
+  });
+  await test('an aborted signal stops the backoff sleep and further attempts', async () => {
+    let calls = 0;
+    const controller = new AbortController();
+    const started = Date.now();
+    const err: any = new Error('service unavailable');
+    err.statusCode = 503;
+    const run = withTransientRetry('test', async () => { calls++; throw err; }, controller.signal).catch((x) => x);
+    setTimeout(() => controller.abort(), 50);       // fire mid-backoff (first delay is ~500ms)
+    const thrown = await run;
+    const elapsed = Date.now() - started;
+    assert.equal(thrown, err);
+    assert.equal(calls, 1);
+    assert.ok(elapsed < 400, `expected the abort to cut the ~500ms sleep short, got ${elapsed}ms`);
+  });
   await test('no Retry-After header falls back to the default jittered delay', async () => {
     let calls = 0;
     await withTransientRetry('test', async () => {
@@ -207,6 +271,48 @@ async function main() {
       return 'ok';
     });
     assert.equal(calls, 2);
+  });
+
+  // ---- real AI SDK error shapes: generateText + mock transport (PR #751 review) ----
+  // The synthetic literals above pin the classifier logic; this pins the SHAPE.
+  // A real generateText call retries internally (default maxRetries: 2) and
+  // throws AI_RetryError — a wrapper with no statusCode/responseHeaders of its
+  // own. The classifiers must see through it or none of this fires in prod.
+  console.log('real AI SDK shapes (generateText throws AI_RetryError wrapping APICallError):');
+  await test('a real 429 APICallError from generateText classifies through the RetryError wrapper', async () => {
+    const rateLimit429 = new APICallError({
+      message: 'Rate limit reached for gpt-4o on requests per min (RPM): Limit 3, Used 3',
+      url: 'https://api.openai.com/v1/chat/completions',
+      requestBodyValues: {},
+      statusCode: 429,
+      // retry-after: 0 keeps the SDK's own honoured waits at 0ms so the test is fast.
+      responseHeaders: { 'retry-after': '0' },
+    });
+    const model = new MockLanguageModelV3({
+      doGenerate: () => { throw rateLimit429; },
+    });
+    const thrown: any = await generateText({ model, prompt: 'hi' }).catch((x) => x);
+    assert.equal(thrown?.name, 'AI_RetryError');            // proves the wrapper shape
+    assert.equal(thrown?.statusCode, undefined);            // …with no status of its own
+    assert.equal(isRateLimited(thrown), true);              // unwrap finds the real 429
+    assert.equal(isTransient(thrown), true);
+    assert.equal(isQuotaOrAuthError(thrown), false);
+    assert.equal(isUnreachable(thrown), false);
+    assert.equal(retryAfterMs(thrown), null);               // '0' → no forced wait, default delay
+  });
+  await test('a real quota 429 through the wrapper still routes to quota/auth (issue #438 preserved)', async () => {
+    const quota429 = new APICallError({
+      message: 'you have reached your weekly usage limit, upgrade for higher limits',
+      url: 'https://ollama.com/api/chat',
+      requestBodyValues: {},
+      statusCode: 429,
+      responseHeaders: { 'retry-after': '0' },
+    });
+    const model = new MockLanguageModelV3({ doGenerate: () => { throw quota429; } });
+    const thrown: any = await generateText({ model, prompt: 'hi' }).catch((x) => x);
+    assert.equal(thrown?.name, 'AI_RetryError');
+    assert.equal(isQuotaOrAuthError(thrown), true);
+    assert.equal(isTransient(thrown), false);
   });
 
   // ---- errReason: turn undici's opaque "fetch failed" into an actionable log ----
