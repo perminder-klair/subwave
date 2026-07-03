@@ -97,6 +97,7 @@ export function buildContextLines(
   }
   if (on('clock') && context?.clock) {
     const tags: string[] = [];
+    if (context.clock.isDark) tags.push('after dark');
     if (context.clock.isWeekend) tags.push('weekend');
     if (context.clock.isLateNight) tags.push('late night');
     if (context.clock.isCommute) tags.push('commute hour');
