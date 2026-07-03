@@ -483,9 +483,23 @@ class Queue {
     // admin slider acts as a real ceiling on DJ-mode transitions too.
     const maxSec = settings.get()?.crossfadeDuration ?? null;
     const secs = mix.crossSecondsFor(cur, next, { energyDelta, nextIntroMs, maxSec });
+    // NOT stamped onto item.track.crossSec (#749 — off-by-one, confirmed still
+    // live on inspection despite the issue being closed with no fix commit).
+    // liq_cross_duration governs the crossfade at the STAMPED track's OWN end
+    // (radio.liq's dj_transition reads it off `a`, the outgoing branch) — but
+    // `secs` here is sized for the transition INTO item (prevTrack → item).
+    // The only track that could correctly carry this value is prevTrack, and
+    // drainToLiquidsoap drains strictly FIFO, marking each item sent before
+    // the next is even looked at — so prevTrack has invariably already been
+    // annotated and handed to Liquidsoap by the time this runs. Stamping it
+    // on item instead silently governs item's OWN exit (item → next), sized
+    // by the wrong pair's compatibility and intro cap, one hop later than
+    // intended — and that error compounds every transition for the rest of
+    // the session. Left un-applied (logged only) until there's a real fix: a
+    // buffer-time override channel Liquidsoap re-reads dynamically, not a
+    // static per-track annotation baked in ahead of the pair being known.
     if (secs != null) {
-      item.track.crossSec = secs;
-      this.log('mix', `blend ${secs}s → ${item.track.title}`);
+      this.log('mix', `blend would be ${secs}s for ${prevTrack.title || '?'} → ${item.track.title} (not applied — #749)`);
     }
 
     // DJ transition effects (sweep/washout) — the agent proposes, the data
