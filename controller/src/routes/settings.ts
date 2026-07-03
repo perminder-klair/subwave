@@ -123,6 +123,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         available: tts.availableEngines(),
         kokoroVoices: settings.KOKORO_VOICES,
         kokoroVoiceLanguages: settings.KOKORO_VOICE_LANGUAGES,
+        kokoroLangs: settings.KOKORO_LANGS,
         voiceDir,
         piperVoices,
         chatterboxVoices: customVoices,
@@ -424,10 +425,10 @@ router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
 // POST /settings/tts/preview — synthesize a short sample in an EXPLICIT engine +
 // voice (not the on-air persona) so the admin "Play sample" button can audition
 // a voice/speed before saving. Body: { engine, voice?, cloudProvider?, speed?,
-// text? }. On success streams the rendered WAV (audio/wav). On a synth failure —
-// e.g. the tts-heavy sidecar is down or no cloud key — returns 422 with
-// { ok, message } instead of silently falling back to Piper, so the operator
-// sees why. The temp WAV is unlinked once sent.
+// lang?, text? }. On success streams the rendered WAV (audio/wav). On a synth
+// failure — e.g. the tts-heavy sidecar is down or no cloud key — returns 422
+// with { ok, message } instead of silently falling back to Piper, so the
+// operator sees why. The temp WAV is unlinked once sent.
 // ---------------------------------------------------------------------------
 router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
   const body = req.body || {};
@@ -442,6 +443,7 @@ router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
       voice: typeof body.voice === 'string' ? body.voice : '',
       cloudProvider: typeof body.cloudProvider === 'string' ? body.cloudProvider : 'openai',
       speed: typeof body.speed === 'number' ? body.speed : undefined,
+      lang: typeof body.lang === 'string' ? body.lang : undefined,
       text: typeof body.text === 'string' ? body.text : undefined,
     });
     const buf = await readFile(filePath);

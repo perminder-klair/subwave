@@ -499,6 +499,13 @@ export function formatKokoroVoiceLabel(code: string): string {
 }
 
 const KOKORO_VOICE_RE = /^[a-z]{2}_[a-z0-9]+$/;
+
+// Kokoro language override — the set of phonemizer languages the worker accepts
+// (passed through _espeak_code()). Empty string = auto-detect from voice prefix.
+// Synced with the prefix→lang mapping in controller/scripts/kokoro_worker.py.
+export const KOKORO_LANGS = ['en-gb', 'en-us', 'es', 'it', 'fr', 'hi', 'pt-br', 'ja', 'cmn'];
+const KOKORO_LANG_RE = new RegExp(`^(${KOKORO_LANGS.join('|')})$`);
+
 // PocketTTS built-in voices — the curated set the admin UI offers. Issue #213
 // also surfaced zero-shot cloning, so `tts.voice` for pocket-tts may now be
 // either an entry from this list (or another id passing POCKET_TTS_VOICE_RE)
@@ -773,7 +780,7 @@ const DEFAULTS = {
     // is the source of truth. This is purely for the UI to show consistent
     // state and for the CLI to know whether to write COMPOSE_PROFILES.
     heavyEnabled: false,
-    kokoro: { voice: 'bf_isabella' },
+    kokoro: { voice: 'bf_isabella', lang: '' },
     // Global Chatterbox fallback — used as the reference voice when the
     // engine resolves to chatterbox but no persona-level voice is set.
     // Empty filename means "use the model's built-in default voice".
@@ -1437,6 +1444,11 @@ export async function load() {
           KOKORO_VOICE_RE.test(stored.tts.kokoro.voice)
             ? stored.tts.kokoro.voice
             : DEFAULTS.tts.kokoro.voice,
+        lang:
+          typeof stored.tts?.kokoro?.lang === 'string' &&
+          KOKORO_LANG_RE.test(stored.tts.kokoro.lang)
+            ? stored.tts.kokoro.lang
+            : DEFAULTS.tts.kokoro.lang,
       },
       chatterbox: {
         referenceVoice:
@@ -2388,6 +2400,13 @@ export async function update(patch) {
           throw new Error('tts.kokoro.voice must match <lang><gender>_<name>, e.g. bf_isabella');
         }
         next.tts.kokoro.voice = v;
+      }
+      if (k.lang !== undefined) {
+        const v = String(k.lang).trim();
+        if (v && !KOKORO_LANG_RE.test(v)) {
+          throw new Error(`tts.kokoro.lang must be one of: ${KOKORO_LANGS.join(', ')}`);
+        }
+        next.tts.kokoro.lang = v;
       }
     }
     if (t.chatterbox !== undefined) {

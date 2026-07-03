@@ -10,8 +10,10 @@ Request:  {"id": "<any>", "text": "...", "voice": "bm_george", "out": "/path/to.
 Response: {"id": "<echoed>", "ok": true,  "path": "/path/to.wav", "duration_s": 3.4}
        |  {"id": "<echoed>", "ok": false, "error": "..."}
 
-`lang` is fixed to "en-gb" for British English — kokoro-onnx picks a phonemizer
-based on this, and the misaki package needs espeak-ng installed in the image.
+`lang` (optional) explicitly overrides the phonemizer language (e.g. "en-gb").
+When provided, the voice's audio/timbre is preserved but the phonemes are
+generated for the given language (e.g. a Japanese voice reading English text).
+When absent, the language is auto-detected from the voice code prefix character.
 """
 
 import json
@@ -41,6 +43,8 @@ def main():
     try:
         from kokoro_onnx import Kokoro
         import soundfile as sf
+        import misaki
+        from misaki import espeak
     except Exception as e:
         emit({"id": None, "ok": False, "fatal": True, "error": f"import failed: {e}"})
         sys.exit(1)
@@ -56,6 +60,28 @@ def main():
     log("ready")
     emit({"id": None, "ready": True})
 
+    def _phonemize(voice_code, lang=None):
+        """Build a language-aware phonemizer. When `lang` is explicitly
+        provided use it directly (voice timbre, accent preserved); otherwise
+        auto-detect from the voice code prefix character."""
+        code_char = voice_code[0]
+        mapping = {
+            "a": "en-us",
+            "b": "en-gb",
+            "e": "es",
+            "i": "it",
+            "f": "fr",
+            "h": "hi",
+            "p": "pt-br",
+            "j": "ja",
+            "z": "cmn",
+        }
+        if not lang or lang not in mapping.values():
+            lang = mapping.get(code_char, "en-gb") # british english fallback
+        g2p = espeak.EspeakG2P(language=lang)
+        return g2p
+
+
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -68,14 +94,16 @@ def main():
             if not text:
                 raise ValueError("empty text")
             voice = req.get("voice") or DEFAULT_VOICE
-            lang = req.get("lang") or DEFAULT_LANG
+            lang = (req.get("lang") or "").strip() or None
             speed = float(req.get("speed") or 1.0)
             out = req.get("out")
             if not out:
                 raise ValueError("missing 'out' path")
             Path(out).parent.mkdir(parents=True, exist_ok=True)
 
-            samples, sample_rate = kokoro.create(text, voice=voice, speed=speed, lang=lang)
+            phonemes, _ = _phonemize(voice, lang)(text)
+
+            samples, sample_rate = kokoro.create(phonemes, voice=voice, speed=speed, is_phonemes=True)
             sf.write(out, samples, sample_rate)
 
             duration = float(len(samples)) / float(sample_rate)

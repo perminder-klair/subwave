@@ -78,6 +78,7 @@ export interface SettingsResponse {
   tts?: {
     kokoroVoices?: string[];
     kokoroVoiceLanguages?: Record<string, string>;
+    kokoroLangs?: string[];
     piperVoices?: string[];
     chatterboxVoices?: string[];
     // `voiceDir` is the new shared name (issue #213). `chatterboxVoiceDir` is
