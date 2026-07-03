@@ -10,7 +10,7 @@
 // After init, the operator runs `subwave start` (which brings docker up)
 // and `subwave setup` (the full wizard for Navidrome / LLM / TTS / DJ).
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 import crypto from 'node:crypto';
@@ -19,6 +19,7 @@ import { COMPOSE_YML, COMPOSE_BYO_YML, COMPOSE_TTS_HEAVY_GPU_YML, ENV_EXAMPLE } 
 import { DEFAULT_SUBWAVE_HOME, writeHomeConfig } from '../home.ts';
 import { loadConfig, saveConfig } from '../config.ts';
 import { writeEnvFile } from '../util.ts';
+import { cliImageTag } from '../version.ts';
 import { runStartCommand } from './start.ts';
 import {
   banner, header, ok, warn, err, info, muted, p, pc, exitIfCancelled, pauseForEnter,
@@ -250,8 +251,21 @@ async function scaffold(a: InitAnswers): Promise<void> {
     TZ: a.tz,
   };
   if (a.siteUrl) envValues.SITE_URL = a.siteUrl;
-  writeEnvFileAt(resolve(a.home, '.env'), envValues, envExamplePath);
+  const envPath = resolve(a.home, '.env');
+  writeEnvFileAt(envPath, envValues, envExamplePath);
   ok(`wrote .env (ADMIN_USER, ADMIN_PASS, TZ=${a.tz}${a.siteUrl ? ', SITE_URL' : ''})`);
+
+  // Pin the stack to this CLI's release. Without a pin every compose image ref
+  // resolves `${SUBWAVE_VERSION:-latest}` and floats on :latest, which can
+  // drift ahead of the frozen compose files this binary carries. A dev build
+  // (no real release) has no published tag to pin to — leave it on :latest.
+  const pinTag = cliImageTag();
+  if (pinTag) {
+    applyVersionPin(envPath, pinTag);
+    ok(`pinned SUBWAVE_VERSION=${pinTag} (images track this CLI; delete the line to follow :latest)`);
+  } else {
+    warn('CLI has no published release version — leaving SUBWAVE_VERSION unset (images follow :latest).');
+  }
 
   // 4. Persist the home in ~/.config/subwave/config.json so subsequent
   // `subwave …` commands resolve to this directory without --home or
@@ -283,4 +297,35 @@ function writeEnvFileAt(path: string, values: Record<string, string>, templateFa
   // Just delegate. Kept as a separate function so future init-only quirks
   // have somewhere obvious to land without touching util.ts.
   return writeEnvFile(path, values, { templateFallback });
+}
+
+// Write the SUBWAVE_VERSION pin into a freshly-scaffolded .env, with a comment
+// explaining it. writeEnvFile() can't carry a comment for an appended key, so
+// we edit the file directly here. The .env.example template ships a commented
+// `# SUBWAVE_VERSION=latest` example line — replace that in place so the active
+// pin lands exactly where operators look for it. If some future template has an
+// uncommented pin, rewrite its value; otherwise append a fresh block.
+function applyVersionPin(envPath: string, tag: string): void {
+  const lines = readFileSync(envPath, 'utf8').split('\n');
+  const block = [
+    "# Pin every image to this install's CLI release — each compose image ref",
+    `# resolves to ghcr.io/…/subwave-*:${tag}. Delete this line to follow :latest.`,
+    `SUBWAVE_VERSION=${tag}`,
+  ];
+
+  const activeIdx = lines.findIndex((l) => /^SUBWAVE_VERSION\s*=/.test(l));
+  const commentIdx = lines.findIndex((l) => /^#\s*SUBWAVE_VERSION\s*=/.test(l));
+
+  if (activeIdx >= 0) {
+    lines[activeIdx] = `SUBWAVE_VERSION=${tag}`;
+  } else if (commentIdx >= 0) {
+    lines.splice(commentIdx, 1, ...block);
+  } else {
+    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+    lines.push('', ...block);
+  }
+
+  let content = lines.join('\n');
+  if (!content.endsWith('\n')) content += '\n';
+  writeFileSync(envPath, content);
 }

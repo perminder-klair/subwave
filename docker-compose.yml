@@ -242,10 +242,6 @@ services:
       context: .
       dockerfile: docker/Dockerfile.tts-heavy
       args:
-        # Optional — bake the gated PocketTTS cloning weights into the image at
-        # build time. Usually unnecessary: setting HF_TOKEN in `environment`
-        # below enables cloning at runtime (lazy download) without it.
-        HF_TOKEN: ${HF_TOKEN:-}
         # GPU opt-in: point the Chatterbox venv's torch install at a CUDA wheel
         # index to build a GPU-capable image. Defaults to CPU wheels; override
         # with e.g. CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
@@ -262,6 +258,12 @@ services:
     container_name: sub-wave-tts-heavy
     restart: unless-stopped
     logging: *default-logging
+    # OOM containment: cap the resident set so a runaway model load (a huge
+    # reference WAV, a wedged PyTorch allocation) is killed inside this
+    # container instead of triggering the host OOM-killer and taking broadcast
+    # or the controller down with it. Default is generous — real Chatterbox +
+    # PocketTTS peaks sit well under it. Raise/lower via TTS_HEAVY_MEM_LIMIT in .env.
+    mem_limit: ${TTS_HEAVY_MEM_LIMIT:-10g}
     profiles: ["tts-heavy"]
     environment:
       # 'cpu' or 'cuda'. The default image is CPU-only — cuda needs a GPU
@@ -318,6 +320,13 @@ services:
     container_name: sub-wave-analyzer
     restart: unless-stopped
     logging: *default-logging
+    # OOM containment: cap the resident set so a runaway analysis (a long track,
+    # a CLAP/Demucs allocation spike on the heavy image) is killed inside this
+    # container instead of triggering the host OOM-killer and taking broadcast or
+    # the controller down with it. Default is generous — librosa passes sit well
+    # under it, and even CLAP + Demucs on the heavy image fit. Raise/lower via
+    # ANALYZER_MEM_LIMIT in .env.
+    mem_limit: ${ANALYZER_MEM_LIMIT:-6g}
     environment:
       # Force CLAP embeddings / Demucs vocal ranges on for the whole analyze
       # pass. Usually unnecessary — the admin toggles drive these per request.
