@@ -12,40 +12,61 @@ export const PICKER_CRITERIA = `Selection criteria, in order:
 3. VARIETY — avoid the same artist back-to-back; don't repeat tracks you've already played today; rotate energy. Variety over cleverness — never pick a track because its title literally matches the time of day, the weather, or anything else literal.
 4. INTEREST — prefer something that creates a moment, not the most generic option.`;
 
-export type ShowMusic = { name: string; topic: string; genre?: string; fromYear?: number | null; toYear?: number | null; energy?: string; genreStrict?: boolean };
+// Coaching for the DJ transition effects (the "transition" output field),
+// shared by both pick strategies — the conversational agent (dj-agent.ts
+// pickSystem) and the pool picker below — so the craft guidance can't drift
+// between them. Returns '' when effects are off (the on-air persona isn't in
+// DJ mode — settings.effectsActive), so callers append it unconditionally.
+// Lives here rather than in broadcast/dj-agent.ts because llm/ must not
+// import from broadcast/.
+export function effectsGuidance(): string {
+  if (!settings.effectsActive()) return '';
+  return `\n\nTRANSITION EFFECTS ("transition") — part of your craft, not a gimmick: a working DJ fires one every few songs when the moment earns it. Actively look for the moment on every pick; when you spot one, flag it — the station validates your choice against the audio analysis and skips ones that don't land. The PACING is entirely yours: there is no rate limit, so be the taste — an effect hits hardest coming out of a stretch of clean blends, so let a few ordinary transitions breathe between them. VARY THE TWO: they are equals in your kit, and if your recent picks leaned on one, reach for the other.\n- "washout": your pick dissolves into a pulsing, tempo-synced echo tail as it ENDS, ringing out into whatever follows. Fire it whenever your pick is the natural END of something: the last track of a run of similar songs, a song with a big or atmospheric ending, anything dreamy/hazy/anthemic, or when the NEXT stretch will change direction. In a normal set several tracks qualify — this is your workhorse exit move, not a rarity.\n- "sweep": the track playing before your pick sinks under a slowly closing filter across the blend while your pick rises clean underneath. Use it on a genuine gear-change — a clear jump in energy, tempo, or mood (it only fires when the tracks measurably clash).\n- "blend": spectral handover — across a long crossfade the outgoing track hands its bass, then its mids, to your pick, keeping only its highs to the end, while your pick arrives lows-first underneath. The two feel like ONE continuous piece of music. Use it for same-lane picks: similar tempo, energy, or mood (it only fires when the tracks measurably fit).\nUse "normal" or null only when nothing above applies.`;
+}
 
-// A show can pin a genre, decade and/or energy band on track selection. Genre
-// is a SOFT lean by default, or a HARD constraint when `genreStrict` is on;
-// decade and energy are always soft. Render it as one prompt line shared by both
-// pick paths (the pool picker here and the conversational agent in
+export type ShowMusic = { name: string; topic: string; mood?: string; genre?: string; fromYear?: number | null; toYear?: number | null; energy?: string; filtersStrict?: boolean };
+
+// A show can pin a mood, genre, decade and/or energy band on track selection.
+// All are SOFT leans by default, or HARD constraints when `filtersStrict` is on
+// (one toggle governs every set filter). Render it as one prompt line shared by
+// both pick paths (the pool picker here and the conversational agent in
 // broadcast/dj-agent.ts). Returns '' when the show pins nothing, so callers can
 // append it unconditionally.
 export function showMusicLean(show?: ShowMusic | null): string {
   if (!show) return '';
-  // Strict only bites when there's actually a genre to lock to.
-  const strict = !!(show.genreStrict && show.genre);
-  // Soft preferences (the genre lean is dropped here when strict — it becomes a
-  // hard rule on its own line below).
-  const parts: string[] = [];
-  if (show.genre && !strict) parts.push(`lean toward ${show.genre}`);
-  if (show.fromYear != null || show.toYear != null) {
+  const eraText = (() => {
+    if (show.fromYear == null && show.toYear == null) return '';
     const from = show.fromYear != null ? String(show.fromYear) : '';
     const to = show.toYear != null ? String(show.toYear) : '';
-    parts.push(from && to ? `prefer tracks from ${from}–${to}` : `prefer tracks ${from ? `from ${from} onward` : `up to ${to}`}`);
-  }
-  if (show.energy) parts.push(`favour ${show.energy}-energy tracks`);
+    return from && to ? `${from}–${to}` : from ? `${from} onward` : `up to ${to}`;
+  })();
+  // Strict only bites when there's actually a filter to lock to.
+  const hasFilter = !!(show.genre || show.mood || show.energy || eraText);
+  const strict = !!(show.filtersStrict && hasFilter);
 
-  // The hard genre rule. Track selection is now code-enforced for strict shows
-  // (preferGenre in both pick paths), so this is lean: it governs the DJ's TALK
-  // and the never-starve fallback case (where off-genre tracks can still surface),
-  // not the candidate list.
-  const lock = strict
-    ? `\n\nThis show is ${show.genre}-only — keep your picks and your talk in ${show.genre}; only step outside if there is genuinely no ${show.genre} track left to play (never leave dead air).`
-    : '';
-  const soft = parts.length
+  if (strict) {
+    // The hard rule. Track selection is code-enforced for strict shows (the
+    // prefer* locks in both pick paths), so this is lean: it governs the DJ's
+    // TALK and the never-starve fallback case (where off-filter tracks can
+    // still surface), not the candidate list. Mood joins the lock here — soft
+    // shows carry mood through the room-context prompt instead.
+    const locks: string[] = [];
+    if (show.genre) locks.push(`${show.genre} tracks`);
+    if (eraText) locks.push(`the ${eraText} era`);
+    if (show.mood) locks.push(`the ${show.mood} mood`);
+    if (show.energy) locks.push(`${show.energy}-energy tracks`);
+    return `\n\nThis show's music filters are STRICT — every pick must fit: ${locks.join('; ')}. Keep your talk inside them too; only step outside if there is genuinely nothing left that fits (never leave dead air).`;
+  }
+
+  // Soft preferences. Mood is deliberately absent — it steers the room context
+  // (dominantMood) rather than reading as a per-track preference.
+  const parts: string[] = [];
+  if (show.genre) parts.push(`lean toward ${show.genre}`);
+  if (eraText) parts.push(`prefer tracks from ${eraText}`);
+  if (show.energy) parts.push(`favour ${show.energy}-energy tracks`);
+  return parts.length
     ? `\n\nMusic steer for this show — ${parts.join('; ')}. These are preferences, not hard filters: break them only when the flow genuinely demands it.`
     : '';
-  return `${lock}${soft}`;
 }
 
 function pickerSystem(show?: ShowMusic | null) {
@@ -77,11 +98,16 @@ unplayed, so you never need to reject one for being recent.
 Pick exactly one candidate.`;
 }
 
-export async function pickNextTrack({ candidates, recentPlays, context, show = null }: {
+export async function pickNextTrack({ candidates, recentPlays, context, show = null, recentTransitions = [] }: {
   candidates: any[];
   recentPlays: any;
   context: any;
   show?: ShowMusic | null;
+  // The model's recent transition asks (oldest first), for the same deliberate-
+  // variety nudge the agent path gets — the queue's monoculture guard strips a
+  // third identical choice either way, this just keeps the model from wasting
+  // picks on choices that will be stripped. Only used when effects are active.
+  recentTransitions?: string[];
 }) {
   const user = JSON.stringify({
     now: {
@@ -112,12 +138,28 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
     ? z.enum(candidateIds as [string, ...string[]]).describe('the exact id of one candidate')
     : z.string().describe('the exact id of one candidate');
 
+  // Transition effects on the pool path too: the queue's applyMixTransition
+  // validates/strips whatever any pick strategy asks for, so a DJ-mode persona
+  // keeps its craft even while picks run through this fallback (breaker open,
+  // soft budget tier, pickerAgent off). Unlike the agent's session-anchored
+  // schema pair (PICK_SCHEMA / PICK_SCHEMA_NO_FX), this is a one-shot call with
+  // no history to poison — when effects are off the field simply doesn't exist.
+  const fxActive = settings.effectsActive();
+  const fxGuidance = effectsGuidance();
+  const fxHistory = fxActive && recentTransitions.length
+    ? `\n\nYour recent transition choices, oldest first: ${recentTransitions.join(', ')} — the station strips a third repeat, so vary deliberately.`
+    : '';
+
   return djObject({
-    system: pickerSystem(show),
+    system: `${pickerSystem(show)}${fxGuidance}${fxHistory}`,
     prompt: user,
     schema: z.object({
       id: idSchema,
       reason: z.string().describe('one short sentence on why this one'),
+      ...(fxActive ? {
+        transition: z.enum(['normal', 'blend', 'sweep', 'washout']).nullable()
+          .describe('transition treatment for this pick — "blend" for a same-lane pick (similar tempo/energy/mood), "sweep" for a genuine gear-change, "washout" to dissolve this pick out as it ends; "normal" or null for a plain crossfade. The TRANSITION EFFECTS guidance above explains each.'),
+      } : {}),
     }),
     temperature: 0.5,
     kind: 'pickNextTrack',

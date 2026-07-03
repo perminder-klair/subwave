@@ -260,6 +260,20 @@ export async function restoreFromFile(srcPath: string): Promise<void> {
   await rm(`${DB_PATH}-shm`, { force: true });
 }
 
+// Delete the entire on-disk DB — every track row, mood/energy tag, text +
+// audio embedding, acoustic-analysis column, and enrichment cache — plus the
+// WAL/SHM sidecars, so the next open() recreates an empty schema from scratch.
+// Mirrors restoreFromFile()'s close→swap-file→drop-sidecars shape, and like it
+// leaves the reopen to the caller (music/library.ts:reset()). This is the
+// "start fresh" wipe behind the admin library Reset action — irreversible short
+// of restoring a backup.
+export async function reset(): Promise<void> {
+  close();
+  await rm(DB_PATH, { force: true });
+  await rm(`${DB_PATH}-wal`, { force: true });
+  await rm(`${DB_PATH}-shm`, { force: true });
+}
+
 function requireDb(): Database.Database {
   if (!db) throw new Error('library-db not opened — call open() first');
   return db;
@@ -394,6 +408,16 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     // the scalar musical_key stays the back-compat dominant key.
     runDdl(d, `ALTER TABLE tracks ADD COLUMN key_ranges_json TEXT;`);
     d.pragma('user_version = 9');
+  }
+
+  if (userVersion < 10) {
+    // Task-prefix mode of the text-embedding index: 'plain' (texts embedded
+    // bare) or 'prefixed' (embedded with the model's document prefix, e.g.
+    // nomic's `search_document:`). NULL (legacy rows) = 'plain'. Lives with the
+    // index provenance because query embeds must match how the documents were
+    // embedded (music/embeddings.ts resolveIndexTextMode).
+    runDdl(d, `ALTER TABLE embedding_meta ADD COLUMN text_mode TEXT;`);
+    d.pragma('user_version = 10');
   }
 
   // Reconcile the requested embedding dim against what physically exists.
@@ -588,20 +612,39 @@ async function archiveMoodsJson(): Promise<void> {
 // Embedding meta
 // ---------------------------------------------------------------------------
 
-export function getEmbeddingMeta(): { model: string; dim: number } | null {
+// `textMode` records whether the vectors were embedded with the model's
+// document prefix ('prefixed') or bare ('plain'); null = legacy row from
+// before mode tracking (equivalent to 'plain' — see resolveIndexTextMode).
+export type EmbeddingTextMode = 'plain' | 'prefixed';
+
+export function getEmbeddingMeta(): {
+  model: string;
+  dim: number;
+  textMode: EmbeddingTextMode | null;
+} | null {
   const row = requireDb()
-    .prepare('SELECT model, dim FROM embedding_meta WHERE pk = 1')
-    .get() as { model: string; dim: number } | undefined;
-  return row || null;
+    .prepare('SELECT model, dim, text_mode FROM embedding_meta WHERE pk = 1')
+    .get() as { model: string; dim: number; text_mode: string | null } | undefined;
+  if (!row) return null;
+  return {
+    model: row.model,
+    dim: row.dim,
+    textMode: row.text_mode === 'prefixed' || row.text_mode === 'plain' ? row.text_mode : null,
+  };
 }
 
-export function setEmbeddingMeta(model: string, dim: number): void {
+export function setEmbeddingMeta(
+  model: string,
+  dim: number,
+  textMode: EmbeddingTextMode | null = null,
+): void {
   requireDb()
     .prepare(
-      `INSERT INTO embedding_meta (pk, model, dim, set_at) VALUES (1, ?, ?, ?)
-       ON CONFLICT(pk) DO UPDATE SET model = excluded.model, dim = excluded.dim, set_at = excluded.set_at`,
+      `INSERT INTO embedding_meta (pk, model, dim, set_at, text_mode) VALUES (1, ?, ?, ?, ?)
+       ON CONFLICT(pk) DO UPDATE SET model = excluded.model, dim = excluded.dim,
+         set_at = excluded.set_at, text_mode = excluded.text_mode`,
     )
-    .run(model, dim, new Date().toISOString());
+    .run(model, dim, new Date().toISOString(), textMode);
 }
 
 // Audio-embedding provenance — which CLAP model wrote the current audio
@@ -1108,6 +1151,25 @@ export function allTaggedIds(): string[] {
   return (
     requireDb()
       .prepare('SELECT id FROM tracks WHERE moods IS NOT NULL')
+      .all() as Array<{ id: string }>
+  ).map(r => r.id);
+}
+
+// Directly-decided tags with a vector — the trusted sample for the propagation
+// self-check (music/propagation-eval.ts). Excludes 'propagated' rows (they ARE
+// the propagation output — scoring against them would be circular) and
+// vectorless rows (KNN can't run). Null source = legacy import, decided by an
+// LLM at the time, so it counts.
+export function trustedTaggedIds(): string[] {
+  return (
+    requireDb()
+      .prepare(
+        `SELECT id FROM tracks
+          WHERE ${SQL_HAS_MOODS}
+            AND (source IS NULL OR source != 'propagated')
+            AND id IN (SELECT id FROM track_vectors)
+          ORDER BY id`,
+      )
       .all() as Array<{ id: string }>
   ).map(r => r.id);
 }

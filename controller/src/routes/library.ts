@@ -393,6 +393,31 @@ router.post('/library/reconcile', requireAdmin, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /library/reset — nuke ALL tagging data and start fresh. Deletes the
+// entire library.db (mood/energy tags, text + CLAP embeddings, acoustic
+// analysis, Last.fm/lyric enrichment) and reopens an empty DB. Coverage's
+// `total` (the Navidrome library size) is untouched — only the tagged/analysed
+// figures drop to 0. Refused while a tagger/analyzer run holds the single-flight
+// slot (deleting the file out from under the child would corrupt it). This is
+// irreversible short of a backup restore; the admin UI gates it behind an
+// explicit typed confirmation.
+// ---------------------------------------------------------------------------
+router.post('/library/reset', requireAdmin, async (_req, res) => {
+  if (tagger.running) return res.status(409).json({ error: 'a tagger/analyzer run is already active', tagger });
+  try {
+    await library.reset();
+    // The tagged/analysed counts are read live from the DB, so they're already 0
+    // now; kick a coverage refresh so the panel's snapshot reflects it promptly.
+    coverage.refresh();
+    queue.log('warn', 'library reset: wiped all tagging data (tags, embeddings, acoustics, enrichment)');
+    res.json({ ok: true });
+  } catch (err: any) {
+    queue.log('error', `/library/reset failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // POST /library/retag — single-track refresh through the bulk pipeline.
 // Body: { id, title?, artist?, album?, year?, genre? }
 //
@@ -483,7 +508,13 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
           },
           { lastfmTags, lyricExcerpt },
         );
-        const [vec] = await embeddings.embedTexts([text]);
+        // Document embed — must match the task-prefix mode the rest of the
+        // index was built in, or this one track drifts in the KNN space.
+        const textMode = embeddings.resolveIndexTextMode(
+          db.getEmbeddingMeta()?.textMode,
+          db.vectorCount(),
+        );
+        const [vec] = await embeddings.embedDocTexts([text], textMode);
         if (vec) db.upsertTrackVector(id, vec);
       } catch (err: any) {
         queue.log('warn', `/library/retag embed ${id}: ${err.message}`);

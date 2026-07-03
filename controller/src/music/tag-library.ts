@@ -40,7 +40,8 @@ import * as settings from '../settings.js';
 import * as embeddings from './embeddings.js';
 import { selectSeeds } from './seed-selector.js';
 import { selectEnrichIds } from './enrich-scope.js';
-import { vote } from './tag-propagator.js';
+import { vote, fuseNeighbours } from './tag-propagator.js';
+import { summariseEval, formatEvalSummary } from './propagation-eval.js';
 import { config } from '../config.js';
 import { loadSecretsIntoEnv } from '../setup/secrets.js';
 import { loadSetupConfig } from '../setup/config.js';
@@ -287,8 +288,22 @@ async function main() {
   // runs (the bug in #307). On a same-dim run this is a no-op.
   await db.open({ embeddingDim, reseed: flags.reseed });
 
-  // The DB upserts emit when the model changes; record the current one.
-  db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim);
+  // The DB upserts emit when the model changes; record the current one, plus
+  // the task-prefix mode this run embeds documents in. A reseed re-embeds
+  // everything, so it adopts the active model's preferred mode; otherwise stay
+  // consistent with how the existing vectors were embedded — query embeds must
+  // match the documents (a legacy meta row with no mode = embedded bare).
+  const textMode = flags.reseed
+    ? embeddings.preferredTextMode()
+    : embeddings.resolveIndexTextMode(db.getEmbeddingMeta()?.textMode, db.vectorCount());
+  db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim, textMode);
+  if (textMode === 'plain' && embeddings.preferredTextMode() === 'prefixed') {
+    logEvent(
+      'info',
+      `${embeddings.activeModelLabel()} retrieves better with task prefixes — run ` +
+        `“Re-embed all tracks” (admin Re-scan tab, or --reseed) once to upgrade the index.`,
+    );
+  }
 
   // Tunables from settings.embedding, CLI flags override where present.
   const embedCfg: any = (settings.get() as any).embedding ?? {};
@@ -303,13 +318,66 @@ async function main() {
       ? embedCfg.seedCount
       : null;
 
+  // Shared vote plumbing for phase 3, the phase-4 re-propagation rounds and
+  // the post-run self-check: KNN → neighbour-tag lookup → similarity-weighted
+  // vote. Same-album+artist neighbours vote at half weight — a track's text
+  // embedding is dominated by artist/album, so its KNN list is mostly its own
+  // album mates; at full weight one mistagged seed swept its whole album, and
+  // cross-album corroboration never got a say (the same-album echo chamber).
+  //
+  // When the track has a CLAP "sounds-like" vector, audio-KNN neighbours are
+  // fused into the list at audioFusionWeight before the vote — sound is the
+  // stronger mood signal for instrumentals / thin-metadata tracks, and CLAP
+  // doesn't cluster by album. knnAudioById returns [] for un-analysed tracks,
+  // so fusion degrades to text-only per track, not per run.
+  const SAME_ALBUM_WEIGHT = 0.5;
+  const audioFusionWeight = clamp01(embedCfg.audioFusionWeight ?? 0.5);
+  const voteForTrack = (id: string) => {
+    const target = db.getTrack(id);
+    const textNeighbours = db.knnById(id, knnK);
+    const neighbours =
+      audioFusionWeight > 0
+        ? fuseNeighbours(textNeighbours, db.knnAudioById(id, knnK), audioFusionWeight, knnK)
+        : textNeighbours;
+    return vote(
+      neighbours,
+      (nId) => {
+        const t = db.getTrack(nId);
+        if (!t || t.moods.length === 0) return null;
+        return { moods: t.moods, energy: t.energy };
+      },
+      {
+        moodVoteThreshold,
+        k: knnK,
+        weightOf: (nId) => {
+          if (!target?.album || !target?.artist) return 1;
+          const n = db.getTrack(nId);
+          return n?.album === target.album && n?.artist === target.artist
+            ? SAME_ALBUM_WEIGHT
+            : 1;
+        },
+      },
+    );
+  };
+
   logEvent('info', `Starting up — ${db.allTaggedIds().length.toLocaleString('en-GB')} tracks already tagged`);
   logEvent('info', `Tagging model — ${activeModelLabel()}`);
   logEvent('info', `Embedding model — ${embeddings.activeModelLabel()} (dim=${embeddingDim})`);
   console.log(
     `[tag] batch=${flags.batchSize} maxRounds=${maxRounds} knnK=${knnK} ` +
-      `moodVote=${moodVoteThreshold} confidence=${confidenceThreshold}`,
+      `moodVote=${moodVoteThreshold} confidence=${confidenceThreshold} ` +
+      `audioFusion=${audioFusionWeight}`,
   );
+  if (audioFusionWeight > 0) {
+    const audioVecs = db.audioVectorCount();
+    if (audioVecs > 0) {
+      logEvent(
+        'info',
+        `Audio fusion on — ${audioVecs.toLocaleString('en-GB')} sounds-like vectors ` +
+          `join the mood vote (weight ${audioFusionWeight})`,
+      );
+    }
+  }
 
   // A re-scan re-embed rebuilds the vector population; a normal --reseed run does
   // it as part of its forward pass and doesn't need the snapshot below.
@@ -432,7 +500,7 @@ async function main() {
   let llmTagged = 0;
   if (plan.forwardTag) {
     // ---- Phase 1: EMBED ----------------------------------------------------
-    await phaseEmbed(targetUntagged, flags.batchSize);
+    await phaseEmbed(targetUntagged, flags.batchSize, textMode);
     lap('embed');
 
     // ---- Phase 2: SEED -----------------------------------------------------
@@ -508,16 +576,7 @@ async function main() {
       }
       if (db.hasTags(id)) continue;        // already seeded
       if (!db.hasVector(id)) continue;     // no embedding → can't propagate
-      const neighbours = db.knnById(id, knnK);
-      const result = vote(
-        neighbours,
-        (nId) => {
-          const t = db.getTrack(nId);
-          if (!t || t.moods.length === 0) return null;
-          return { moods: t.moods, energy: t.energy };
-        },
-        { moodVoteThreshold, k: knnK },
-      );
+      const result = voteForTrack(id);
       if (
         result.votingNeighbours >= 1 &&
         result.confidence >= confidenceThreshold &&
@@ -562,16 +621,7 @@ async function main() {
       for (const id of targetUntagged) {
         if (db.hasTags(id)) continue;
         if (!db.hasVector(id)) continue;
-        const neighbours = db.knnById(id, knnK);
-        const result = vote(
-          neighbours,
-          (nId) => {
-            const t = db.getTrack(nId);
-            if (!t || t.moods.length === 0) return null;
-            return { moods: t.moods, energy: t.energy };
-          },
-          { moodVoteThreshold, k: knnK },
-        );
+        const result = voteForTrack(id);
         if (
           result.votingNeighbours >= 1 &&
           result.confidence >= confidenceThreshold &&
@@ -603,6 +653,35 @@ async function main() {
       uncertain = stillUncertain;
     }
     lap('learn');
+
+    // ---- Self-check: held-out propagation agreement ------------------------
+    // Re-run the production vote on a sample of directly-decided tracks (KNN
+    // excludes self, so a track's own tags never vote for it) and score
+    // against the stored truth. A relative signal for judging knob changes
+    // (knnK, thresholds, vote weighting) run-over-run — NOT a benchmark; see
+    // propagation-eval.ts for the circularity caveat. ~150 KNN scans,
+    // negligible next to phases 1-4. Best-effort: never fails the run.
+    try {
+      const truth = db.trustedTaggedIds();
+      if (truth.length >= 20) {
+        const SAMPLE = 150;
+        // Partial Fisher-Yates — shuffle just the head we sample.
+        const pool = [...truth];
+        const n = Math.min(SAMPLE, pool.length);
+        for (let i = 0; i < n; i++) {
+          const j = i + Math.floor(Math.random() * (pool.length - i));
+          [pool[i], pool[j]] = [pool[j], pool[i]];
+        }
+        const cases = pool.slice(0, n).map((id) => {
+          const t = db.getTrack(id)!;
+          return { actual: { moods: t.moods, energy: t.energy }, result: voteForTrack(id) };
+        });
+        logEvent('info', formatEvalSummary(summariseEval(cases, confidenceThreshold)));
+      }
+    } catch (err: any) {
+      console.log(`[tag] propagation self-check failed: ${err?.message || err}`);
+    }
+    lap('eval');
   } else if (flags.skipTag) {
     console.log('[tag] --skip-tag: skipping embed + mood tagging (phases 1-4)');
   } // end forward "Tag moods" step (plan.forwardTag)
@@ -616,7 +695,7 @@ async function main() {
   // model.
   if (plan.reEmbed) {
     console.log(`[tag] re-embed: rebuilding ${reembedIds.length} vectors from scratch`);
-    await phaseEmbed(reembedIds, flags.batchSize);
+    await phaseEmbed(reembedIds, flags.batchSize, textMode);
     lap('embed');
   }
 
@@ -821,7 +900,13 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
 // Phase 1 — Embed
 // ---------------------------------------------------------------------------
 
-async function phaseEmbed(targetIds: string[], batchSize: number): Promise<void> {
+async function phaseEmbed(
+  targetIds: string[],
+  batchSize: number,
+  // The index's task-prefix mode (resolved once in run()) — every document
+  // this phase writes must match the vectors already in the index.
+  textMode: embeddings.IndexTextMode,
+): Promise<void> {
   // Embed any track in scope that doesn't already have a vector. Includes
   // already-tagged tracks (legacy v1) so they can serve as KNN neighbours.
   const needsEmbed: string[] = [];
@@ -854,7 +939,7 @@ async function phaseEmbed(targetIds: string[], batchSize: number): Promise<void>
     );
     let vecs: number[][];
     try {
-      vecs = await embeddings.embedTexts(texts);
+      vecs = await embeddings.embedDocTexts(texts, textMode);
     } catch (err: any) {
       console.error(`[tag] embedding batch failed at offset ${i}: ${err.message}`);
       throw err;

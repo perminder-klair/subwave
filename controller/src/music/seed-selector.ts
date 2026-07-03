@@ -9,8 +9,9 @@
 //      library get at least one seed (capped at ~35%)
 //   4. K-means over embedding space — fill the remainder with diverse picks
 //
-// Selection is deterministic given the same library state + random seed,
-// which keeps test assertions clean.
+// Layers 1-3 are deterministic given the same library state; layer 4's
+// k-means init and shuffle fall back to Math.random, so only the earlier
+// layers are stable across runs. Tests exercise the deterministic layers.
 
 import * as subsonic from './subsonic.js';
 import * as db from './library-db.js';

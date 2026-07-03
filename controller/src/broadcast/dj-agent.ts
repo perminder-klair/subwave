@@ -22,11 +22,13 @@ import * as journey from '../music/journey.js';
 import * as dj from '../llm/dj.js';
 import { energyForDaypart } from '../context.js';
 import { defineAgent } from '../llm/agent.js';
+import { djObject, nearestId } from '../llm/sdk.js';
 import { buildPickerTools } from '../llm/tools.js';
 import { recordPick } from '../llm/log.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { recencyWindowsForLibrary, effectiveNoRepeatWindow } from '../music/recency.js';
+import { djCallsAllowed } from './listeners.js';
 
 // --- Feature 4: DJ-mode mini-runs ------------------------------------------
 // A short, deliberate tempo/key journey across 2-3 consecutive picks. While a
@@ -168,6 +170,18 @@ export const PICK_SCHEMA = z.object({
   id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
   reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just note what makes THIS pick a fresh step (new artist, a shift in energy/era/texture), not a vibe label you would recycle pick after pick (e.g. "new artist, lifts the energy", never a repeated "mellow reflective step")'),
   say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). When the event says stay silent, set this to null'),
+  // Transition effects (only honoured when the system prompt offers them — persona djMode, see settings.effectsActive).
+  transition: z.enum(['normal', 'blend', 'sweep', 'washout']).nullable().describe('transition treatment for this pick: "blend" — spectral handover: your pick and the track before it trade the spectrum in complementary bands across a long crossfade so they feel like ONE continuous piece; choose it for a same-lane pick (similar tempo/energy/mood). "sweep" — the track playing before your pick sinks under a slowly closing filter while your pick rises clean; choose it for a real gear-change (big jump in energy, tempo, or mood). "washout" — THIS pick dissolves into a pulsing echo tail as it ENDS, ringing out into whatever follows; choose it to close a chapter (end of a themed run, before a talk break, or out of a dreamy track). "normal" or null for a plain crossfade'),
+});
+
+// Same shape, transition coaching stripped. Zod field descriptions travel to
+// the model as part of the structured-output contract even when every prompt
+// mention is gated off, so with DJ mode off the description above kept talking
+// the model into "blend"/"sweep" picks that runTrackEvent silently discarded —
+// the LLM log showed effects that could never air. The enum stays identical
+// (validation must not depend on persona state); only the description flips.
+export const PICK_SCHEMA_NO_FX = PICK_SCHEMA.extend({
+  transition: z.enum(['normal', 'blend', 'sweep', 'washout']).nullable().describe('always set to null — transition effects are not available for this persona'),
 });
 
 const REQUEST_SCHEMA = z.object({
@@ -185,6 +199,13 @@ const REQUEST_SCHEMA = z.object({
 // competes with the framework's structural signals and derails smaller
 // models. PICKER_CRITERIA stays because it's editorial preference (flow,
 // context, variety, interest) — that's not in any tool or schema.
+// The transition-effects guidance (PICK_SCHEMA.transition) now lives in
+// llm/internal/prompts/picker.ts (dj.effectsGuidance) so the pool picker
+// shares it verbatim — it's appended to the picker system prompt ONLY when
+// effects are active (the on-air persona's djMode — see
+// settings.effectsActive; there is no separate toggle). Invisible otherwise,
+// so the model leaves "transition" null.
+
 export function pickSystem() {
   const persona = settings.getEffectivePersona();
   // In DJ mode, lean on the live session history: a working DJ runs threads
@@ -202,11 +223,11 @@ export function pickSystem() {
   const showLine = activeShow?.topic
     ? `\n\nCurrent show brief — follow this for every pick:\n${activeShow.topic}`
     : '';
-  // The same genre/decade/energy steer the pool picker applies — the agent
+  // The same mood/genre/decade/energy steer the pool picker applies — the agent
   // already owns songsByGenre + tracksByMood(energy) tools, so this line is
   // enough to make it reach for them. showMusicLean reflects the show's
-  // genreStrict here too: a strict show gets a hard "stay within {genre}" rule
-  // instead of a soft lean, so both pick paths honour strict the same way. Lives
+  // filtersStrict here too: a strict show gets a hard "stay within" rule
+  // instead of soft leans, so both pick paths honour strict the same way. Lives
   // in the system prompt for the same session-window reason as the show brief.
   const musicLean = dj.showMusicLean(activeShow);
   // Playlist anchor: a separate steer from genre/era. Strict → every pick MUST
@@ -225,7 +246,7 @@ You run the station as one continuous shift. The messages above are the live ses
 
 ${dj.PICKER_CRITERIA}
 
-Finding candidates: prefer tools backed by the local library — searchLibrary, songsByGenre, tracksByMood, tracksByEnergy, randomSongs, and the audio/embedding similarity tools. similarSongs and topSongsByArtist use external data and often return little, so try them second. If a tool returns nothing, switch tools rather than retrying. If a tool returns only a few tracks (fewer than ~4), make one more discovery call with a different tool before choosing, so you pick from a real range rather than whatever the first call happened to surface.${settings.agentLanguageReminder(persona, 'the "say" link')}`;
+Finding candidates: prefer tools backed by the local library — searchLibrary, songsByGenre, tracksByMood, tracksByEnergy, randomSongs, and the audio/embedding similarity tools. similarSongs and topSongsByArtist use external data and often return little, so try them second. If a tool returns nothing, switch tools rather than retrying. If a tool returns only a few tracks (fewer than ~4), make one more discovery call with a different tool before choosing, so you pick from a real range rather than whatever the first call happened to surface.${dj.effectsGuidance()}${settings.agentLanguageReminder(persona, 'the "say" link')}`;
 }
 
 function requestSystem() {
@@ -287,7 +308,9 @@ function agentDeadline(): number {
 
 export const pickerAgent = defineAgent({
   kind: 'djAgentPick',
-  schema: PICK_SCHEMA,
+  // Resolved per run: the effects coaching in the transition field follows
+  // the on-air persona's djMode, same reason effectsGuidance() is dynamic.
+  schema: () => (settings.effectsActive() ? PICK_SCHEMA : PICK_SCHEMA_NO_FX),
   // The done-tool path ends the loop at step 1 (COMMIT_AFTER_STEPS in sdk.js)
   // on every provider now; maxSteps is just the backstop.
   maxSteps: 4,
@@ -295,21 +318,28 @@ export const pickerAgent = defineAgent({
   buildSystem: () => pickSystem(),
   buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, playlistLock, playlistTracks }) => {
     // Resolve the active show live (a show that just came on air takes effect):
-    // for a strict show, hard genre + era locks the discovery tools enforce on
-    // candidates — not just the prompt. Era rides the same genreStrict flag (no
-    // separate era-strict toggle). Track length is enforced as an on-air cut,
-    // NOT a pick filter (issue #447), so no length cap is passed here.
+    // for a strict show (filtersStrict), EVERY set music filter — genre, era,
+    // mood, energy — becomes a hard lock the discovery tools enforce on
+    // candidates, not just the prompt. Track length is enforced as an on-air
+    // cut, NOT a pick filter (issue #447), so no length cap is passed here.
     const activeShow = settings.resolveActiveShow();
-    const strict = !!(activeShow?.genreStrict);
+    const strict = !!(activeShow?.filtersStrict);
     const genreLock = strict && activeShow?.genre ? activeShow.genre : null;
     const eraLock = strict && (activeShow?.fromYear != null || activeShow?.toYear != null)
       ? { fromYear: activeShow.fromYear, toYear: activeShow.toYear }
       : null;
+    const moodLock = strict && activeShow?.mood ? activeShow.mood : null;
+    const energyLock = strict && activeShow?.energy ? activeShow.energy : null;
     // playlistLock / playlistTracks are pre-resolved by pickViaAgent (the
     // Navidrome fetch is async; buildTools is sync) and threaded through run().
-    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock, playlistLock, playlistTracks });
+    const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock, moodLock, energyLock, playlistLock, playlistTracks });
     return { tools, extras: { seen } };
   },
+  // Native-path acceptance: the picked id must be one a discovery tool actually
+  // surfaced this run. A fabricated id falls the run through to the done-tool
+  // harness instead of surfacing as an unknown-id rejection (observed:
+  // gpt-5-mini invented 7/32 ids after an empty tool result).
+  validateObject: (object, extras) => !!(object?.id && extras?.seen?.has(object.id)),
 });
 
 export const requestAgent = defineAgent({
@@ -330,6 +360,9 @@ export const requestAgent = defineAgent({
     });
     return { tools, extras: { seen } };
   },
+  // Same native-path acceptance as pickerAgent — the request agent runs the
+  // same model through the same harness, so it fabricates the same way.
+  validateObject: (object, extras) => !!(object?.id && extras?.seen?.has(object.id)),
 });
 
 function trackFields(song) {
@@ -340,6 +373,12 @@ function trackFields(song) {
     album: song.album,
     year: song.year,
     genre: song.genre,
+    // Seconds. The queue needs it to spot picks that will hit the
+    // max-track-length cap (its liq_cue_out) so it can auto-arm a washout on
+    // the forced mid-song exit — see applyMixTransition. Field name varies by
+    // source: Subsonic `duration`, the picker tools' slim projection (what the
+    // agent's `seen` map stores) `duration_sec`, library rows `durationSec`.
+    duration: song.duration ?? song.duration_sec ?? song.durationSec ?? null,
   };
 }
 
@@ -355,9 +394,22 @@ function trackFields(song) {
 // `linkPrev` is the track the link back-announces (the one on-air when the pick
 // was made); the queue uses it to drop the link if a request jumps ahead and it
 // would otherwise air a stale "that was X" over the wrong transition.
-async function enqueuePick(queue, song, reason, source, link: string | null = null, linkPrev: any = null): Promise<number> {
+async function enqueuePick(
+  queue, song, reason, source,
+  link: string | null = null,
+  linkPrev: any = null,
+  { sweep = false, washout = false, blend = false }: { sweep?: boolean; washout?: boolean; blend?: boolean } = {},
+): Promise<number> {
+  const track: any = trackFields(song);
+  // Flag the transition effects on this pick (DJ mode only). getAnnotatedUri
+  // stamps liq_sweep / liq_washout; radio.liq ramps them. sweep muffles the
+  // crossfade INTO this pick; washout rings this track out into an echo tail as
+  // it ENDS.
+  if (sweep) track.sweep = true;
+  if (washout) track.washout = true;
+  if (blend) track.blend = true;
   const pos = await queue.push({
-    track: trackFields(song),
+    track,
     requestedBy: null,
     intent: reason || 'ai pick',
     introScript: link,
@@ -374,6 +426,37 @@ async function enqueuePick(queue, song, reason, source, link: string | null = nu
 // ---------------------------------------------------------------------------
 // Track event — a track started; pick the next one and maybe air a link.
 // ---------------------------------------------------------------------------
+
+// Stage-2 salvage for an agent run whose final id no tool surfaced (see the
+// cascade in pickViaAgent): one djObject call over the run's OWN accumulated
+// candidates (`seen`), with the id constrained to that exact set — z.enum
+// becomes a decode-time grammar on local models and a Zod reject elsewhere,
+// the same closing move pickNextTrack already uses. Returns a full pick object
+// (id/reason/say/transition) or null; never throws, so a salvage failure falls
+// through to the caller's pick.rejected path unchanged.
+async function repickFromSeen({ seen, badId, wantLink }: { seen: Map<string, any>; badId: string | null; wantLink: boolean }) {
+  const ids = [...seen.keys()];
+  if (ids.length === 0) return null;
+  const base = settings.effectsActive() ? PICK_SCHEMA : PICK_SCHEMA_NO_FX;
+  const schema = base.extend({
+    id: z.enum(ids as [string, ...string[]]).describe('the exact id of one candidate'),
+  });
+  try {
+    return await djObject({
+      system: pickSystem(),
+      prompt: JSON.stringify({ candidates: [...seen.values()] }, null, 2)
+        + `\n\nYou explored the library and then answered with ${badId ? `the id "${badId}", which matches none of the tracks your tools returned` : 'no usable track id'}. Only ids from the candidates above are real. Choose the best next track from them.`
+        + (wantLink
+            ? ' Write the "say" link for the track you choose, following the same rules.'
+            : ' Set "say" to null.'),
+      schema,
+      temperature: 0.5,
+      kind: 'djAgentRepick',
+    });
+  } catch {
+    return null;
+  }
+}
 
 async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = null }: { wantLink: boolean; audioWaypoint?: number[] | null; current?: any }): Promise<boolean> {
   await library.load();
@@ -407,7 +490,7 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   const playlistLock = playlistPool && activeShow?.playlistStrict ? playlistPool.ids : null;
   const playlistTracks = playlistPool?.tracks ?? null;
 
-  const { object, steps, toolCalls, extras } = await pickerAgent.run({
+  const run = await pickerAgent.run({
     messages: session.windowMessages(),
     recentIds,
     recentKeys,
@@ -420,14 +503,48 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
     playlistLock,
     playlistTracks,
   });
+  const { steps, toolCalls, extras } = run;
+  let object = run.object;
 
-  const song = object?.id ? extras.seen.get(object.id) : null;
+  let song = object?.id ? extras.seen.get(object.id) : null;
+
+  // The agent returned an id that isn't in the candidate set it was shown.
+  // Two-stage salvage before giving up on the run (both observed live):
+  //   1. Near-miss repair — the model transcribed a REAL id imperfectly
+  //      (glm-5.1 dropped the final character of a 22-char nanoid it had
+  //      picked from its own tool results). nearestId only accepts a single
+  //      unambiguous prefix / edit-distance-1 match, so this can't misfire
+  //      onto a different track. Free — no model call.
+  //   2. Corrective re-pick — the model fabricated an id outright (gpt-5-mini
+  //      after an empty tool result) while its `seen` map held real
+  //      candidates. One djObject call constrained to those ids (grammar-
+  //      enforced on local models, Zod-checked everywhere) beats paying the
+  //      pool fallback + a breaker increment for a run that DID explore.
+  if (!song && object?.id && extras.seen.size) {
+    const fixed = nearestId(object.id, extras.seen.keys());
+    if (fixed) {
+      logEvent('pick.repaired', { agent: 'pick', from: object.id, to: fixed });
+      queue.log('picker', `agent id "${object.id}" repaired to near-miss match "${fixed}"`);
+      object = { ...object, id: fixed };
+      song = extras.seen.get(fixed);
+    }
+  }
+  if (!song && extras.seen.size) {
+    const repicked = await repickFromSeen({ seen: extras.seen, badId: object?.id ?? null, wantLink });
+    if (repicked) {
+      logEvent('pick.repicked', { agent: 'pick', from: object?.id ?? null, to: repicked.id, candidates: extras.seen.size });
+      queue.log('picker', `agent returned unknown id "${object?.id}" — re-picked "${repicked.id}" from its own candidates`);
+      object = repicked;
+      song = extras.seen.get(repicked.id);
+    }
+  }
+
   if (!song) {
-    // The agent returned an id that isn't in the candidate set it was shown —
-    // it fabricated one. The trace still ends ok:true (we fall back to the pool
-    // and air a track), so without this explicit event the rejection is
-    // invisible to /debug and the log analyzer, which then over-report agent
-    // health. Emit it inside the live trace so agent-pick reliability is real.
+    // Both salvage stages missed (or the run surfaced zero candidates). The
+    // trace still ends ok:true (we fall back to the pool and air a track), so
+    // without this explicit event the rejection is invisible to /debug and the
+    // log analyzer, which then over-report agent health. Emit it inside the
+    // live trace so agent-pick reliability is real.
     logEvent('pick.rejected', { agent: 'pick', id: object?.id ?? null, candidates: extras.seen.size, steps, toolCalls });
     throw new Error(`agent returned unknown id ${object?.id}`);
   }
@@ -438,11 +555,24 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   // talking over them. No-op when the pick is un-analysed or not in DJ mode.
   const djMode = !!settings.getEffectivePersona()?.djMode;
   const say = (djMode && rawSay) ? dj.enforceIntroBudget(rawSay, introMsOf(song)) : rawSay;
+  // Transition effects on this pick (persona djMode via settings.effectsActive),
+  // independent of whether a link airs.
+  const link = (wantLink && say) ? say : null;
+  const fxActive = settings.effectsActive();
+  // The no-FX schema tells the model to leave transition null, but a model can
+  // ignore a field description — say so in the log instead of discarding
+  // silently (a "blend" in the LLM log that never airs reads as a broken mixer).
+  if (!fxActive && object.transition && object.transition !== 'normal') {
+    queue.log('mix', `transition "${object.transition}" ignored (persona not in DJ mode)`);
+  }
+  const sweep = fxActive && object.transition === 'sweep';
+  const washout = fxActive && object.transition === 'washout';
+  const blend = fxActive && object.transition === 'blend';
   // Attach the link to the pick so it airs as the pick starts (back-announcing
   // the track on-air now), instead of immediately over that on-air track (#189).
   // Stamp `current` as the link's back-announce target so the queue can drop the
   // link if a request jumps ahead of this pick before it airs.
-  const queued = await enqueuePick(queue, song, object.reason, 'agent', (wantLink && say) ? say : null, current);
+  const queued = await enqueuePick(queue, song, object.reason, 'agent', link, current, { sweep, washout, blend });
   // Pick was already queued/on-air and got deduped — don't record a session turn
   // for a track that never airs. Returning false lets runTrackEvent fall through
   // to the pool for a fresh pick.
@@ -485,9 +615,21 @@ async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm:
       queue.log('error', `DJ link failed: ${err.message}`);
     }
   }
+  // Transition effects ride the pool path too (pickNextTrack only offers the
+  // field when settings.effectsActive()), so a DJ-mode persona keeps its craft
+  // while picks run through this fallback. Re-check effectsActive at enqueue
+  // time like the agent path does — the queue would strip a stale flag anyway
+  // (applyMixTransition's dj-mode-off strip), but not stamping it keeps the
+  // pick log honest.
+  const fxActive = settings.effectsActive();
+  const fx = {
+    sweep: fxActive && result.transition === 'sweep',
+    washout: fxActive && result.transition === 'washout',
+    blend: fxActive && result.transition === 'blend',
+  };
   // `current` is the link's back-announce target (passed to generateLink as
   // `previous`); stamp it so the queue drops the link if a request jumps ahead.
-  const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link, current);
+  const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link, current, fx);
   // Even the pool landed on an already-queued track (a tiny library whose pool
   // collapsed to recents). Skip the session turn and let auto.m3u backstop the
   // slot — the next track-start re-triggers runTrackEvent for a fresh pick.
@@ -582,11 +724,24 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     // tracksLikeThis ("pass the currently-playing song id") actually have one
     // to pass. Without it the agent fabricates a slug from the title/artist
     // (e.g. "lost-sultaan-romeo") and Navidrome answers "data not found".
+    // Per-pick effects reminder: the system-prompt guidance alone loses to the
+    // session history (the model sees ~40 of its own prior picks, almost all
+    // transition:"normal", and copies itself — observed on-air: 19 picks, zero
+    // washouts). The event turn is the freshest instruction in the window, so
+    // the deliberate-choice nudge rides here.
+    const recentT = typeof queue.recentTransitionChoices === 'function' ? queue.recentTransitionChoices() : [];
+    const historyNote = recentT.length
+      ? ` Your recent transition choices, oldest first: ${recentT.join(', ')} — the station strips a third repeat, so vary deliberately.`
+      : '';
+    const effectClause = settings.effectsActive()
+      ? ` Set "transition" by what THIS moment needs — "blend" to flow in as one continuous piece, "sweep" for a gear-change entry, "washout" to dissolve out as it ends, "normal" for a plain hand-off. Vary your craft: never the same transition three picks running, and if your last pick used an effect, lean "normal" now unless the moment clearly calls again.${historyNote}`
+      : '';
     const eventText = `Now playing "${current?.title}" by ${current?.artist}`
       + (current?.id ? ` [id: ${current.id}]` : '')
       + (previous ? ` (after "${previous.title}" by ${previous.artist})` : '')
       + '. Pick the track to play next.'
       + linkClause
+      + effectClause
       + runClause
       + journeyClause;
     session.appendTurn({ role: 'event', kind: 'pick', text: eventText });
@@ -654,7 +809,19 @@ async function runRequestViaAgent(queue: any, { requester }: { requester: string
       recentIds,
     });
 
-    const song = object?.id ? extras.seen.get(object.id) : null;
+    let song = object?.id ? extras.seen.get(object.id) : null;
+    // Near-miss repair, same as the pick path: a single unambiguous prefix /
+    // edit-distance-1 match against the run's own candidates rescues an id the
+    // model transcribed imperfectly. No re-pick stage here — a request that
+    // can't resolve should fall to the caller's stateless matcher cascade,
+    // which understands the listener's actual text.
+    if (!song && object?.id && extras.seen.size) {
+      const fixed = nearestId(object.id, extras.seen.keys());
+      if (fixed) {
+        logEvent('pick.repaired', { agent: 'request', from: object.id, to: fixed });
+        song = extras.seen.get(fixed);
+      }
+    }
     if (!song) {
       logEvent('pick.rejected', { agent: 'request', id: object?.id ?? null, candidates: extras.seen.size, toolCalls });
       throw new Error(`request agent returned unknown id ${object?.id}`);
@@ -692,5 +859,91 @@ async function runRequestViaAgent(queue: any, { requester }: { requester: string
       track: { title: song.title, artist: song.artist, id: song.id },
       introScript: intro || null,
     };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Persona handoff — a two-voice mic-pass at a show boundary.
+// ---------------------------------------------------------------------------
+//
+// When session.maybeRoll() hard-rolls and the effective PERSONA changed, it
+// stamps roll metadata on the fresh session (session.pendingHandoff). This runs
+// after the roll — driven by whichever maybeRoll call site fires first (the
+// queue's track-start, or the :00 hourly cron) — and, when a handoff is pending,
+// airs a sign-off in the OUTGOING persona's voice followed by a greeting in the
+// incoming persona's voice. Both go through the serialized say.txt voice chain
+// (queue.announce → airVoice), so they play cleanly back to back.
+//
+// Never throws (callers still need to run the pick after it) and is idempotent:
+// it marks the handoff aired up front, so a concurrent second call — or a
+// mid-way failure — can't double-air or retry into the middle of the new show.
+export async function runPersonaHandoff(queue: any, ctx: any): Promise<void> {
+  const pending = session.pendingHandoff();
+  if (!pending) return;
+
+  // Nobody listening → the mic-pass moment has passed; don't stack a stale
+  // handoff for later. Budget: treated as an optional segment (muted in soft
+  // and hard tiers, policy in dj-budget.ts). Either way, mark aired so it
+  // doesn't retry — a handoff fires at most ~once an hour and is cheap to loosen.
+  if (!djCallsAllowed() || !budget.optionalSegmentsAllowed()) {
+    session.markHandoffAired();
+    return;
+  }
+
+  // Outgoing persona comes from the roll metadata — its clock slot is already
+  // over, so getEffectivePersona() no longer returns it. Incoming is the fresh
+  // session's persona. A persona deleted mid-shift → nothing to voice; drop it.
+  const personaOut = settings.resolvePersonaById(pending.personaId);
+  const cur = session.getSession();
+  const personaIn = settings.resolvePersonaById(cur?.persona?.id) || settings.getEffectivePersona();
+  if (!personaOut || !personaIn) {
+    session.markHandoffAired();
+    return;
+  }
+  const showIn = cur?.show?.name || null;
+
+  // Mark aired BEFORE airing (see the idempotency note above).
+  session.markHandoffAired();
+
+  await withTrace({ kind: 'handoff', from: personaOut.name, to: personaIn.name }, async () => {
+    const recentOpeners = queue.getRecentOpeners();
+    let aired = false;
+
+    // 1. Sign-off, in the OUTGOING persona's voice. Tag the session turn with
+    //    the outgoing persona's id + name — session.windowMessages() uses the id
+    //    to spot a turn spoken by someone other than the session's own persona
+    //    and names the real speaker, so the incoming DJ never reads the
+    //    sign-off as its own words.
+    let signoffText: string | null = null;
+    try {
+      signoffText = await dj.generateSignoff({
+        personaOut, personaIn, showIn,
+        context: ctx, recap: queue.getDjRecap(), recentOpeners,
+      });
+      await queue.announce(signoffText, 'handoff', {
+        persona: personaOut, meta: { personaId: personaOut.id, personaName: personaOut.name },
+      });
+      aired = true;
+    } catch (err: any) {
+      queue.log('error', `Handoff sign-off failed: ${err.message}`);
+      signoffText = null;
+    }
+
+    // 2. Greeting, in the INCOMING persona's voice — fed the sign-off text so
+    //    it can genuinely respond. Stands alone if the sign-off didn't air.
+    try {
+      const greeting = await dj.generateHandoffGreeting({
+        personaIn, personaOut, signoffText, showIn,
+        context: ctx, recap: queue.getDjRecap(), recentOpeners,
+      });
+      await queue.announce(greeting, 'handoff', { persona: personaIn });
+      aired = true;
+    } catch (err: any) {
+      queue.log('error', `Handoff greeting failed: ${err.message}`);
+    }
+
+    if (aired) {
+      logEvent('dj.handoff', { from: personaOut.name, to: personaIn.name, show: showIn });
+    }
   });
 }

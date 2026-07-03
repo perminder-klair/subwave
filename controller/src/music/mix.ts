@@ -15,22 +15,51 @@ export interface Analysis {
 }
 
 // --- Loudness normalisation ------------------------------------------------
-// Target integrated loudness; streaming-standard −14 LUFS (Spotify, YouTube).
-// Gain is clamped to ±LOUDNESS_GAIN_CLAMP_DB so a mis-measured
-// outlier can't blow up the mix — Liquidsoap's brick-wall limiter still backs
-// us up, but the clamp keeps us well clear of it on normal catalogue audio.
+// Target integrated loudness; streaming-standard −14 LUFS (Spotify, YouTube)
+// by default, operator-tunable via settings.loudness. The two directions are
+// clamped asymmetrically because they carry different risk: cutting a loud
+// track is always safe (wide fixed clamp), while boosting a quiet one can
+// drive high-crest material (classical, jazz) into the broadcast limiter — so
+// the boost is capped by the operator's maxBoostDb AND by the track's own
+// measured peak headroom when the analyzer has one.
 export const LOUDNESS_TARGET_LUFS = -14;
-export const LOUDNESS_GAIN_CLAMP_DB = 6;
+export const LOUDNESS_MAX_BOOST_DB = 6;
+export const LOUDNESS_CUT_CLAMP_DB = 12;
+// Boost never pushes the measured sample peak past this ceiling — it matches
+// the brick-wall limiter threshold (−1 dBFS in radio.liq) so normal catalogue
+// audio stays clear of it. Peak is measured over the analysis window (~the
+// first 2 min), not the whole file, so the limiter remains the backstop for
+// peaks later in the track.
+export const LOUDNESS_PEAK_CEILING_DBFS = -1;
 
 // dB gain to bring a track measured at `lufs` toward the target, clamped.
 // Returns null when the track has no loudness measurement (→ unity gain on the
 // playback side, i.e. today's behaviour). Result is rounded to 0.1 dB — finer
 // is inaudible and just bloats the annotate string.
-export function gainForLoudness(lufs: number | null | undefined): number | null {
+export function gainForLoudness(
+  lufs: number | null | undefined,
+  opts: { peakDb?: number | null; targetLufs?: number | null; maxBoostDb?: number | null } = {},
+): number | null {
   if (typeof lufs !== 'number' || !Number.isFinite(lufs)) return null;
-  const raw = LOUDNESS_TARGET_LUFS - lufs;
-  const clamped = Math.max(-LOUDNESS_GAIN_CLAMP_DB, Math.min(LOUDNESS_GAIN_CLAMP_DB, raw));
-  return Math.round(clamped * 10) / 10;
+  const target =
+    typeof opts.targetLufs === 'number' && Number.isFinite(opts.targetLufs)
+      ? opts.targetLufs
+      : LOUDNESS_TARGET_LUFS;
+  const maxBoost =
+    typeof opts.maxBoostDb === 'number' && Number.isFinite(opts.maxBoostDb) && opts.maxBoostDb >= 0
+      ? opts.maxBoostDb
+      : LOUDNESS_MAX_BOOST_DB;
+  const raw = target - lufs;
+  let gain: number;
+  if (raw > 0) {
+    gain = Math.min(raw, maxBoost);
+    if (typeof opts.peakDb === 'number' && Number.isFinite(opts.peakDb)) {
+      gain = Math.min(gain, Math.max(0, LOUDNESS_PEAK_CEILING_DBFS - opts.peakDb));
+    }
+  } else {
+    gain = Math.max(raw, -LOUDNESS_CUT_CLAMP_DB);
+  }
+  return Math.round(gain * 10) / 10;
 }
 
 // True when a track carries at least one measured value. An un-analysed track
@@ -160,6 +189,66 @@ export function crossSecondsFor(
   const minSec = Math.min(CROSS_MIN_SECONDS, maxSec);
   secs = Math.max(minSec, Math.min(maxSec, secs));
   return Math.round(secs * 10) / 10;
+}
+
+// --- DJ transition effects (sweep / washout) --------------------------------
+// The DJ agent proposes `transition: sweep|washout` on a pick; these helpers
+// are how the data disposes. All pure — broadcast/queue.ts applies them.
+//
+// Cross-duration physics (see radio.liq's fade == buffer invariant): a track's
+// `liq_cross_duration` governs the crossfade at its own END. The washout flag
+// rides the track that ends, so its canvas can be stamped on that same track
+// and it lands on exactly the transition the wash fires on. The sweep (the
+// transition INTO the flagged pick) cannot be given a canvas — the previous
+// track's stamp is already sent to Liquidsoap when the pick happens — so its
+// envelope scales to whatever `d` that transition already earned.
+
+export const WASHOUT_CROSS_TARGET_SECONDS = 12;
+
+// Blend canvas for a washout: target 12 s snapped to whole bars of the flagged
+// track's own tempo, clamped to [8, min(14, admin ceiling)]. Unknown BPM →
+// fixed 10 s. No incoming-intro cap: the next track isn't known when this
+// track is annotated — a tail decaying over the next track's opening is an
+// accepted (and DJ-authentic) hazard.
+export function washoutCrossSecondsFor(a: Analysis, maxSec: number | null = null): number {
+  const ceil = typeof maxSec === 'number' && maxSec > 0 ? Math.min(maxSec, CROSS_MAX_SECONDS) : CROSS_MAX_SECONDS;
+  const lo = Math.min(8, ceil);
+  let secs = 10;
+  if (a.bpm && a.bpm > 0) {
+    const barSec = (4 * 60) / a.bpm;
+    const bars = Math.max(1, Math.round(WASHOUT_CROSS_TARGET_SECONDS / barSec));
+    secs = bars * barSec;
+  }
+  secs = Math.max(lo, Math.min(ceil, secs));
+  return Math.round(secs * 10) / 10;
+}
+
+// Comb tap spacing for the washout tail — a dotted eighth of the flagged
+// track's tempo (the classic dub-throw subdivision), clamped so extreme tempi
+// stay in the audible-echo range. Unknown BPM → 0.30 s (the neutral default
+// radio.liq also falls back to when the stamp is absent).
+export function washoutDelayFor(bpm: number | null): number {
+  if (!bpm || bpm <= 0) return 0.3;
+  const clamped = Math.max(0.18, Math.min(0.45, 0.75 * (60 / bpm)));
+  return Math.round(clamped * 100) / 100;
+}
+
+// The LLM proposes, the data disposes. A sweep is the move that hides a seam —
+// between tempo/key-locked tracks a tight beat-blend is better and a filter
+// ride reads as gratuitous — so it only survives a real clash. Un-analysed
+// tracks pass (the data can't contradict the DJ). Washout is an editorial
+// "close the chapter" gesture, not a compatibility repair: always allowed —
+// the caller's cooldown rations it.
+export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend', cur: Analysis, next: Analysis): boolean {
+  if (kind === 'washout') return true;
+  if (!analysed(cur) || !analysed(next)) return true;
+  const compat = mixCompat(cur, next);
+  // blend (spectral handover) is the sweep's mirror: it makes COMPATIBLE
+  // tracks feel like one continuous piece — between clashing tracks the
+  // complementary-band trade just exposes the clash, so a long wash (or a
+  // sweep) serves better there.
+  if (kind === 'blend') return compat >= 0.4;
+  return compat < 0.6;
 }
 
 // --- Feature 2: transition FX ----------------------------------------------

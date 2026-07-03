@@ -30,6 +30,30 @@ aac_bitrate = ref(192)
 stream_bitrate = ref(192)
 station_name = ref("SUB/WAVE")
 
+# DJ transition effects (filter sweep + echo washout) — see dj_transition
+# below. Both effects are built PER-BRANCH inside the transition callback, on
+# the OUTGOING track's source only: idle playout never passes through an
+# effect operator at all, and the incoming track always lands clean and dry —
+# the way a DJ's filter/echo ride the channel that's leaving. The envelopes
+# are pure functions of source.elapsed() on the transition branch (closures,
+# no threads, no shared state): sample-accurate in AUDIO time, so they hold
+# under any clock — the offline render harness (sync="none") exposed that
+# wall-clock thread envelopes and audio time drift apart.
+# Verified on liquidsoap v2.2.5 (scripts/fx-render-test.sh probe): filter.rc
+# and comb instantiate cleanly INSIDE the cross callback on a
+# request.queue-backed source — the "Early computation of source content-type"
+# crash is specific to iir_filter/HPF — and audibly alter the render.
+# WHY comb, NOT echo: liquidsoap's native `echo` (incl. its ping_pong flag) is a
+# verified NO-OP in this savonet/liquidsoap:v2.2.5 build — it type-checks but
+# passes audio through bit-for-bit unchanged (confirmed by render: identical
+# md5 dry vs wet). `comb` (a feedback delay line) is the working PCM primitive
+# with a getter-controlled `feedback`. The tail is therefore centred, not a true
+# L/R ping-pong; real stereo bounce would need the heavier ffmpeg.filter.aecho
+# send path. Do NOT "simplify" this back to `echo`.
+# NB: the SVF `filter` operator goes unstable near sr/4 (~11 kHz @ 44.1 k) and
+# collapses the signal to near-silence — hence filter.rc with the "open" cutoff
+# capped at 9 kHz (near-transparent on music).
+
 if file.exists("/var/sub-wave/liquidsoap_jingle_ratio.txt") then
   raw = string.trim(file.contents("/var/sub-wave/liquidsoap_jingle_ratio.txt"))
   v = int_of_string(default=30, raw)
@@ -230,15 +254,14 @@ music = cue_cut(music)
 # The function receives records `a` and `b` with fields `.source`,
 # `.metadata`, `.db_level`. Reach into `.source` for the audio.
 #
-# WHY NO FILTER-KILL HERE: an earlier revision low-pass-filtered the
-# outgoing track for a "DJ filter sweep" feel. That triggered a runtime
-# error — `Early computation of source content-type detected for source
-# iir_filter!` — because `cross` invokes the transition callback before
-# the content-type is fully negotiated, and IIR filters on a not-yet-typed
-# `request.queue`-backed source fail the same way that the HPF on the mic
-# chain does (see comment above mic_chain). The fix would be to put a
-# getter-controlled filter on the music source BEFORE `cross` and modulate
-# its cutoff from a transition trigger. Parked until needed.
+# DJ TRANSITION EFFECTS live INSIDE this callback, per-branch on the outgoing
+# source (see the state block near the top of this file). Instantiating
+# operators here is safe for filter.rc and comb specifically — proven against
+# the real v2.2.5 image by scripts/fx-render-test.sh probe. The historical
+# `Early computation of source content-type detected for source iir_filter!`
+# crash is specific to IIR filters (iir_filter/HPF) on a not-yet-typed
+# `request.queue`-backed source; re-test with the probe before adding any OTHER
+# operator class inside this callback.
 # DJ-mode adaptive blend: the controller may stamp `liq_cross_duration` on a
 # track (annotate:, via subsonic.getAnnotatedUri) to size its transition from
 # tempo/harmonic compatibility. CRITICAL: `cross` reads `liq_cross_duration` to
@@ -253,8 +276,311 @@ music = cue_cut(music)
 # Absent / unparseable → crossfade_duration(), i.e. the global startup default.
 def dj_transition(a, b) =
   d = float_of_string(default=crossfade_duration(), a.metadata["liq_cross_duration"])
-  a_source = fade.out(duration=d, initial_metadata=a.metadata, a.source)
+  # Washout rides the ENDING track's own annotation — `a` IS the flagged track,
+  # so there is no arming, no remaining() watcher, and no race against a
+  # listener request jumping the queue. The controller stamps liq_washout_delay
+  # (tempo-synced, dotted-eighth of the track's BPM) alongside the flag.
+  washing = a.metadata["liq_washout"] == "true"
+  # Sweep rides the INCOMING pick's annotation ("sweep into my pick") but the
+  # filter is applied to the OUTGOING branch: the track we're leaving sinks
+  # under a closing lowpass while the pick rises clean underneath.
+  sweeping = b.metadata["liq_sweep"] == "true"
+  # Washout drops the dry signal early (exp fade) so the tail reads as a
+  # dissolve. An early drop sums BELOW unity mid-cross — a dip, which is the
+  # effect; the +6 dB doubling hazard is only for fades that hold full level
+  # early (see the fade == buffer invariant above).
+  a_source =
+    if washing then
+      fade.out(duration=d, type="exp", initial_metadata=a.metadata, a.source)
+    elsif sweeping then
+      # A real filter-kill: the FILTER does the removal, not the fader. A log
+      # fade holds the outgoing's level up longer so the closing filter is
+      # heard choking a still-loud track — with the default fade the track was
+      # already quiet by the time the cutoff got dramatic and the sweep felt
+      # powerless (found on-air).
+      fade.out(duration=d, type="log", initial_metadata=a.metadata, a.source)
+    else
+      fade.out(duration=d, initial_metadata=a.metadata, a.source)
+    end
+  # SWEEP ENVELOPE — how a DJ rides the filter out of a track: a slow
+  # smoothstep close over the first 70% of the blend, held at the floor while
+  # the fade finishes. The cutoff moves in LOG-frequency space (pow) — linear
+  # Hz ramps sound like nothing-then-everything; log space is how a filter
+  # knob feels. No release phase: the outgoing branch ends with the cross, so
+  # there is nothing to reopen. Pure function of the branch's own
+  # source.elapsed(), evaluated per frame by the getter — audio-time-accurate
+  # under any clock, no threads, no shared state.
+  a_source =
+    if sweeping then
+      log("DJ sweep: closing the filter over the outgoing track (d=#{d}s)")
+      sweep_src = a_source
+      # Close FAST and DEEP — over the first 45% of the blend down to 600 Hz,
+      # through three RC stages (18 dB/oct), so the choke arrives while the
+      # outgoing is still loud (the log fade above holds its level up). A
+      # slower/shallower close spread over 70% was inaudible under the fade.
+      def sweep_cut() =
+        e = source.elapsed(sweep_src)
+        e = if e < 0. then 0. else e end
+        t_close = 0.45 * d
+        t_hold  = 0.55 * d
+        t_back  = 0.85 * d
+        # Dive to the floor, touch it briefly, then PARTIALLY re-open as the
+        # incoming takes over: a sustained floor reads as "the track went
+        # quiet"; a brief bottom with the outgoing re-emerging under the new
+        # track reads as the gesture (second on-air 'goes quiet' report).
+        depth =
+          if e < t_close then
+            x = e / t_close
+            3.0 * x * x - 2.0 * x * x * x
+          elsif e < t_hold then
+            1.0
+          elsif e < t_back then
+            x = (e - t_hold) / (t_back - t_hold)
+            1.0 - 0.6 * (3.0 * x * x - 2.0 * x * x * x)
+          else
+            0.4
+          end
+        9000.0 * pow(1100.0 / 9000.0, depth)       # 9 kHz open → 600 Hz floor
+      end
+      # Wet ramps 0→1 over the first ~15% of the blend: an RC at 9 kHz is NOT
+      # transparent (−dB at the cutoff + roll-off), so engaging it full-wet at
+      # the cross start lands as an instant dulling — the filter must fade IN,
+      # then the closing cutoff does the work (found on-air).
+      # Makeup on the choked branch: the filter guts the outgoing's energy
+      # right when the incoming is only half-faded, and the mid-blend went
+      # near-quiet (twice, by ear). Lift the choked residual +2.6 dB as the
+      # cutoff bottoms out so the blend keeps its body — the choke stays
+      # dramatic spectrally without a level hole.
+      def sweep_gain() =
+        e = source.elapsed(sweep_src)
+        e = if e < 0. then 0. else e end
+        g_max = 1.35
+        t_from = 0.30 * d
+        t_to   = 0.50 * d
+        if e <= t_from then 1.0
+        elsif e >= t_to then g_max
+        else
+          x = (e - t_from) / (t_to - t_from)
+          1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
+        end
+      end
+      # PARALLEL DRY BLEED — the "never goes quiet" guarantee. Wetness on
+      # cascaded stages multiplies the dry path (0.35 × 0.35 ≈ 12% ≈ −18 dB),
+      # which is why every wetness-cap attempt still cratered the mid-band.
+      # An explicit dry branch around a full-wet chain gives a HARD floor:
+      # 30% of the untouched track always reaches the mix (≈ −10 dB, ≈ −8 dB
+      # after makeup), no matter how deep the cutoff dives.
+      swept = filter.rc(frequency=sweep_cut, mode="low", wetness=1.,
+                filter.rc(frequency=sweep_cut, mode="low", wetness=1., a_source))
+      amplify(sweep_gain, add(normalize=false,
+        [amplify(0.30, a_source), amplify(0.75, swept)]))
+    else
+      a_source
+    end
+  # WASHOUT ENVELOPE — dub-style tail: the comb feedback swells over the first
+  # quarter of the blend while the exp fade above drops the dry signal away
+  # early, so the delay line SELF-SUSTAINS: the track dissolves into a pulsing,
+  # decaying tail over the incoming track's opening instead of echo layered on
+  # a still-full-level song. Feedback releases to silent by 0.95*d — the
+  # transition source is truncated at d, so the tail must decay before the
+  # window closes or it clicks off. Same closure pattern as the sweep.
+  # BLEND (spectral handover) — the continuity move, the sweep's mirror: the
+  # OUTGOING track hands its bass (by ~25%), then its mids (by ~65%), to the
+  # incoming, keeping only its highs to the end; the incoming arrives
+  # lows-first underneath (see the b-side block below). At every moment the
+  # sum reads as ONE full-spectrum piece of music whose ingredients are
+  # swapping — the club "EQ mixing" technique for seamless long blends. The
+  # controller only arms it between COMPATIBLE tracks (mix.effectAllowedFor).
+  # At e=0 the HPF sits at 30 Hz ≈ transparent, so the engage is seamless.
+  blending = b.metadata["liq_blend"] == "true"
+  a_source =
+    if blending then
+      log("DJ blend: spectral handover into the next track (d=#{d}s)")
+      ha_src = a_source
+      def blend_hp() =
+        e = source.elapsed(ha_src)
+        e = if e < 0. then 0. else e end
+        t_end = 0.65 * d
+        x = if e >= t_end then 1.0 else e / t_end end
+        sxx = 3.0 * x * x - 2.0 * x * x * x
+        30.0 * pow(1800.0 / 30.0, sxx)            # 30 Hz → 1.8 kHz (log space)
+      end
+      # SUBTRACT-HPF: filter.rc mode="high" is BROKEN in this v2.2.5 build —
+      # even a static 400 Hz high-pass collapses music to −115 dB (verified by
+      # render; same defect family as the `echo` no-op). High-pass is built
+      # from proven parts instead: dry − lowpass(dry). Polarity inversion and
+      # twin-consumer frame alignment verified: src + amplify(-1., src)
+      # renders exact silence.
+      blend_low = filter.rc(frequency=blend_hp, mode="low", wetness=1., a_source)
+      add(normalize=false, [a_source, amplify(-1., blend_low)])
+    else
+      a_source
+    end
+  a_source =
+    if washing then
+      wd = float_of_string(default=0.30, a.metadata["liq_washout_delay"])
+      log("DJ washout: dissolving the outgoing track, tap=#{wd}s (d=#{d}s)")
+      wash_src = a_source
+      # The swell must beat the exp fade: feedback peaks within ~10% of the
+      # blend, while the outgoing material is still hot, so the delay line
+      # loads audible audio — swelling at 25% seeded the tail from an
+      # already-faded signal and the wash was inaudible (found on-air). The
+      # higher fb (−1.5 dB ≈ ×0.84/tap) sustains the tail across the blend;
+      # buildup is bounded because the exp fade starves the input within a
+      # couple of seconds, and the brick-wall limiter backs the bus anyway.
+      def wash_fb() =
+        e = source.elapsed(wash_src)
+        e = if e < 0. then 0. else e end
+        fb_max = -1.0            # peak feedback dB (nearer 0 = longer tail; <unity)
+        fb_off = -90.0           # idle/silent
+        t_swell = 0.10 * d
+        t_hold  = 0.85 * d
+        t_rel   = 0.97 * d
+        if e < t_swell then
+          x = e / t_swell
+          s = 3.0 * x * x - 2.0 * x * x * x       # smoothstep swell
+          fb_off + s * (fb_max - fb_off)
+        elsif e < t_hold then
+          fb_max
+        elsif e < t_rel then
+          fb_max + ((e - t_hold) / (t_rel - t_hold)) * (fb_off - fb_max)
+        else
+          fb_off
+        end
+      end
+      # Late makeup gain (+3.5 dB) so the tail sits PRESENT over the incoming
+      # track's fade-in instead of buried under it. It comes up only after the
+      # exp fade has dropped the dry (0.3·d → 0.55·d), so it never bumps the
+      # still-audible song — it lifts the echoes alone (found on-air: the
+      # dissolve was correct but too quiet to register).
+      def wash_gain() =
+        e = source.elapsed(wash_src)
+        e = if e < 0. then 0. else e end
+        g_max = 1.95             # ≈ +5.8 dB — the tail must sit OVER a dense incoming mix
+        t_from = 0.30 * d
+        t_to   = 0.55 * d
+        if e <= t_from then 1.0
+        elsif e >= t_to then g_max
+        else
+          x = (e - t_from) / (t_to - t_from)
+          1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
+        end
+      end
+      # Darkening tail — a real dub/DJ delay feeds back through a filter, so
+      # every repeat comes back darker. The comb's loop is fixed, so instead a
+      # lowpass AFTER it closes across the window (9 kHz → 1.5 kHz, log space):
+      # later repeats occur later in time, so they arrive darker — the tail
+      # recedes into the dark instead of ringing at full brightness. Wet ramps
+      # in over the first 20% (an RC at 9 kHz is not transparent — engaging it
+      # full-wet would dull the still-audible dry, same lesson as the sweep).
+      def tail_cut() =
+        e = source.elapsed(wash_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.35 * d
+        t_to   = 0.90 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        s = 3.0 * x * x - 2.0 * x * x * x
+        9000.0 * pow(3000.0 / 9000.0, s)
+      end
+      def tail_wet() =
+        e = source.elapsed(wash_src)
+        e = if e < 0. then 0. else e end
+        t_on = 0.20 * d
+        x = if e >= t_on then 1.0 else e / t_on end
+        3.0 * x * x - 2.0 * x * x * x
+      end
+      washed = comb(delay=wd, feedback=wash_fb, a_source)
+      washed = filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet,
+                 filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet, washed))
+      amplify(wash_gain, washed)
+    else
+      a_source
+    end
   b_source = fade.in(duration=d, initial_metadata=b.metadata, b.source)
+  # INCOMING side of a sweep — two real-DJ moves, both fully transparent well
+  # before the outgoing track is gone (release = wetness → 0, because an RC
+  # filter at its "open" cutoff still is not transparent):
+  #   1. SURFACING — the pick materialises from far away: a lowpass opens
+  #      500 Hz → 9 kHz over the first 35% of the blend and is fully OUT by
+  #      40%, while the old track still dominates. (The v1 mistake was a
+  #      muffle that outlived the transition; opening fast and early keeps
+  #      the "approaching" feel without the broken-sounding landing.)
+  #   2. BASS SWAP — a highpass holds the pick's low end back so two
+  #      basslines never fight across the long blend, then releases at
+  #      ~45–62% and the bass lands like a small drop — the most
+  #      professional-sounding instant of the whole move. (Releases sit
+  #      earlier than a club bass-swap so the incoming fills the middle of
+  #      the blend — with both tracks processed, ~50% went near-silent.)
+  # Net arc: mid-band → highs bloom (35%) → bass drops (65%) → standalone.
+  # BLEND, incoming side: the pick arrives lows-first — a lowpass opens
+  # 250 Hz → 9 kHz over the first 70% (log space) as the outgoing HPF climbs,
+  # so the two trade the spectrum in complementary bands. Wetness releases to
+  # 0 by 82% (release must be wet→0: an RC at its open cutoff is never fully
+  # transparent, and the branch operators vanish at the d boundary — the
+  # track must already be bit-clean before then).
+  b_source =
+    if blending then
+      bin_src = b_source
+      def blend_lp() =
+        e = source.elapsed(bin_src)
+        e = if e < 0. then 0. else e end
+        t_open = 0.70 * d
+        x = if e >= t_open then 1.0 else e / t_open end
+        sxx = 3.0 * x * x - 2.0 * x * x * x
+        250.0 * pow(9000.0 / 250.0, sxx)
+      end
+      def blend_lp_wet() =
+        e = source.elapsed(bin_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.70 * d
+        t_to   = 0.82 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        1.0 - (3.0 * x * x - 2.0 * x * x * x)
+      end
+      filter.rc(frequency=blend_lp, mode="low", wetness=blend_lp_wet,
+        filter.rc(frequency=blend_lp, mode="low", wetness=blend_lp_wet, bin_src))
+    else
+      b_source
+    end
+  b_source =
+    if sweeping then
+      in_src = b_source
+      def surf_cut() =
+        e = source.elapsed(in_src)
+        e = if e < 0. then 0. else e end
+        t_open = 0.30 * d
+        x = if e >= t_open then 1.0 else e / t_open end
+        s = 3.0 * x * x - 2.0 * x * x * x
+        500.0 * pow(9000.0 / 500.0, s)            # 500 Hz → open, log space
+      end
+      def surf_wet() =
+        e = source.elapsed(in_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.20 * d
+        t_to   = 0.32 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        1.0 - (3.0 * x * x - 2.0 * x * x * x)     # wet 1 → 0 (fully dry by 40%)
+      end
+      # Bass swap via SUBTRACT-HPF (mode="high" is broken — see the blend
+      # block above; it was silencing the whole incoming track while its
+      # wetness was up, the real culprit behind the mid-blend dropouts):
+      # subtract `bass_amt` of the track's own <160 Hz content, releasing
+      # amt 1 → 0 over 38–55% so the bass lands as the outgoing bows out.
+      def bass_amt() =
+        e = source.elapsed(in_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.38 * d
+        t_to   = 0.55 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        0.0 - (1.0 - (3.0 * x * x - 2.0 * x * x * x))
+      end
+      bs = filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet,
+             filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet, in_src))
+      bs_low = filter.rc(frequency=160., mode="low", wetness=1., bs)
+      add(normalize=false, [bs, amplify(bass_amt, bs_low)])
+    else
+      b_source
+    end
   add(normalize=false, [a_source, b_source])
 end
 
@@ -303,6 +629,10 @@ music = rotate(
 # is involved — the broadcast bus stays the brick-wall limiter only.
 music = amplify(override="liq_amplify", 1., music)
 
+# NB: no effect operators on the bus here — the DJ transition effects (sweep /
+# washout) are built per-transition on the outgoing branch inside dj_transition,
+# so idle playout has no effect operators in its path at all, and jingles can
+# never be caught inside a ramp.
 music = cross(
   duration=crossfade_duration(),
   dj_transition,

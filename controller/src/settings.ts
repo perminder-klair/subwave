@@ -117,6 +117,15 @@ export function effectiveFrequency(persona: any = getEffectivePersona()) {
   return FREQUENCIES[Math.min(i + 1, FREQUENCIES.length - 1)];
 }
 
+// Single gate for the transition effects (filter sweep + echo washout): they're
+// on whenever the on-air persona is in DJ mode — no separate toggle. The picker
+// schema/prompt builders use this to decide whether to offer the DJ the
+// `transition` choice; when off, the guidance is never shown and nothing is
+// applied.
+export function effectsActive(persona: any = getEffectivePersona()): boolean {
+  return !!persona?.djMode;
+}
+
 // TTS engines. Every spoken segment is voiced by the on-air persona's own
 // `tts` config (see audio/tts.js); only jingle rendering falls back to the
 // global defaultEngine.
@@ -425,7 +434,9 @@ export const SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'searxng'] as const;
 
 // Canonical mood vocabulary. Shared by the library tagger (music/tag-library.js
 // imports this as MOOD_VOCAB) and the Shows scheduler — a show's `mood`
-// overrides the autonomous dominantMood, so it must come from this list.
+// overrides the autonomous dominantMood, so a non-empty value must come from
+// this list. Empty string means "Any": the show pins no mood and the
+// autonomous chain (festival > weather > time) applies while it's on air.
 export const SHOW_MOODS = [
   'energetic',
   'calm',
@@ -693,6 +704,16 @@ const DEFAULTS = {
     aacBitrate: 192,
     bitrate: 192,
   },
+  // Per-track loudness normalisation (music/mix.ts gainForLoudness). targetLufs
+  // is what every measured track is pulled toward; maxBoostDb caps the upward
+  // direction only — cuts have a fixed wide clamp, and the boost is further
+  // limited by the track's own measured peak headroom, so widening this on a
+  // dynamic library won't slam the broadcast limiter. Read live per track at
+  // annotate time; no mixer restart.
+  loudness: {
+    targetLufs: -14,
+    maxBoostDb: 6,
+  },
   weather: { lat: 30.7333, lng: 76.7794, locationName: 'Punjab', units: 'metric' as 'metric' | 'imperial' },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
   // placeholder and returned by GET /dj for the landing page. The product is
@@ -952,6 +973,14 @@ const DEFAULTS = {
     moodVoteThreshold: 0.4,   // was 0.6 — a mood carried by ~a third propagates
     confidenceThreshold: 0.35, // was 0.6 — see the topSim×coverage note above
     maxActiveLearningRounds: 3,
+    // CLAP audio fusion in mood propagation: tracks with a "sounds-like"
+    // audio vector also pull neighbours from the audio-KNN space, scaled by
+    // this weight, before the mood vote (tag-propagator.ts fuseNeighbours).
+    // Sound is the stronger mood signal for instrumentals / thin-metadata
+    // tracks, and CLAP neighbours don't cluster by album. 0 = text-only
+    // (today's behaviour); 1 = trust audio similarity as much as text. Only
+    // bites where the acoustic analysis has produced audio vectors.
+    audioFusionWeight: 0.5,
     enrichment: {
       // Last.fm crowd tags. Tri-state: true = always fetch, false = never,
       // null = auto (fetch only when a Last.fm api_key is configured — see
@@ -1035,6 +1064,11 @@ const BOUNDS = {
   // 0 = off; 36000 s (10h) is a generous ceiling that still leaves room for
   // long-form mix shows without letting a typo set an absurd value.
   maxTrackSeconds: { min: 0, max: 36000, type: 'int' },
+  // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
+  loudnessTargetLufs: { min: -23, max: -9, type: 'float' },
+  // 0 disables boosting entirely (cut-only levelling); 12 dB is plenty — the
+  // per-track peak headroom cap bites long before that on dynamic material.
+  loudnessMaxBoostDb: { min: 0, max: 12, type: 'float' },
 };
 
 const MP3_BITRATE_SET = new Set<number>(MP3_BITRATES);
@@ -1167,7 +1201,9 @@ function normalizeShows(raw: any, personaIds: string[]) {
     const name = typeof item.name === 'string' ? item.name.trim().slice(0, 60) : '';
     if (!name) continue;
     if (!personaIds.includes(item.personaId)) continue; // drop dangling owner
-    if (!SHOW_MOODS.includes(item.mood)) continue;
+    // Empty mood = "Any" (the autonomous mood applies on air). An unknown mood
+    // string is coerced to Any rather than dropping the whole show on the floor.
+    const mood = SHOW_MOODS.includes(item.mood) ? item.mood : '';
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
@@ -1189,10 +1225,13 @@ function normalizeShows(raw: any, personaIds: string[]) {
     const fromYear = Number.isFinite(item.fromYear) ? Math.trunc(item.fromYear) : null;
     const toYear = Number.isFinite(item.toYear) ? Math.trunc(item.toYear) : null;
     const energy = SHOW_ENERGY.includes(item.energy) ? item.energy : '';
-    // Opt-in: hard-filter the pick pool to `genre` instead of the default soft
-    // lean. Only meaningful when a genre is set; defaults off so existing shows
-    // and soft shows are byte-for-byte unchanged.
-    const genreStrict = item.genreStrict === true;
+    // Opt-in: hard-filter the pick pool to EVERY set music filter (mood, genre,
+    // era, energy) instead of the default soft leans. Only meaningful when at
+    // least one filter is set; defaults OFF. The legacy genre-only `genreStrict`
+    // is deliberately NOT carried over: the toggle now spans every filter, so
+    // auto-migrating an old genre-strict show would silently harden mood/era/
+    // energy too. Old shows come back soft; the operator re-opts into strict.
+    const filtersStrict = item.filtersStrict === true;
     // Per-show track-length override (seconds). null = inherit the station-wide
     // maxTrackSeconds; 0 = unlimited (opt this show back out of the cap so a
     // long-form mix show can air hour-long sets); >0 = this show's own cap.
@@ -1208,13 +1247,13 @@ function normalizeShows(raw: any, personaIds: string[]) {
       name,
       topic: typeof item.topic === 'string' ? item.topic.trim().slice(0, 1000) : '',
       personaId: item.personaId,
-      mood: item.mood,
+      mood,
       themeId,
       genre,
       fromYear,
       toYear,
       energy,
-      genreStrict,
+      filtersStrict,
       maxTrackSeconds,
       playlistIds,
       playlistStrict,
@@ -1334,6 +1373,20 @@ export async function load() {
         typeof stored.stream?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.stream.bitrate)
           ? stored.stream.bitrate
           : DEFAULTS.stream.bitrate,
+    },
+    loudness: {
+      targetLufs:
+        typeof stored.loudness?.targetLufs === 'number' &&
+        stored.loudness.targetLufs >= BOUNDS.loudnessTargetLufs.min &&
+        stored.loudness.targetLufs <= BOUNDS.loudnessTargetLufs.max
+          ? stored.loudness.targetLufs
+          : DEFAULTS.loudness.targetLufs,
+      maxBoostDb:
+        typeof stored.loudness?.maxBoostDb === 'number' &&
+        stored.loudness.maxBoostDb >= BOUNDS.loudnessMaxBoostDb.min &&
+        stored.loudness.maxBoostDb <= BOUNDS.loudnessMaxBoostDb.max
+          ? stored.loudness.maxBoostDb
+          : DEFAULTS.loudness.maxBoostDb,
     },
     weather: {
       lat: stored.weather?.lat ?? DEFAULTS.weather.lat,
@@ -1581,6 +1634,10 @@ export async function load() {
         && stored.embedding.maxActiveLearningRounds >= 0
           ? Math.floor(stored.embedding.maxActiveLearningRounds)
           : DEFAULTS.embedding.maxActiveLearningRounds,
+      audioFusionWeight:
+        Number.isFinite(stored.embedding?.audioFusionWeight)
+          ? clamp01(stored.embedding.audioFusionWeight)
+          : DEFAULTS.embedding.audioFusionWeight,
       enrichment: {
         lastfmTags:
           typeof stored.embedding?.enrichment?.lastfmTags === 'boolean'
@@ -1932,8 +1989,12 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     if (!personaIds.includes(item.personaId)) {
       throw new Error(`shows[${i}].personaId must reference an existing persona`);
     }
-    if (!SHOW_MOODS.includes(item.mood)) {
-      throw new Error(`shows[${i}].mood must be one of: ${SHOW_MOODS.join(', ')}`);
+    // Empty/missing mood means "Any": the show pins no mood and the autonomous
+    // dominantMood chain (festival > weather > time) applies while it's on air.
+    // A non-empty mood must come from the canonical vocabulary.
+    const mood = item.mood == null || item.mood === '' ? '' : String(item.mood);
+    if (mood && !SHOW_MOODS.includes(mood)) {
+      throw new Error(`shows[${i}].mood must be empty (any) or one of: ${SHOW_MOODS.join(', ')}`);
     }
     // Optional per-show theme override. Empty/missing means "fall back to the
     // station default while this show is on air". The allow-set is built once
@@ -1955,8 +2016,12 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     if (energy && !SHOW_ENERGY.includes(energy)) {
       throw new Error(`shows[${i}].energy must be one of: ${SHOW_ENERGY.join(', ')}`);
     }
-    // Opt-in hard genre filter (vs the default soft lean). Boolean, defaults off.
-    const genreStrict = item.genreStrict === true;
+    // Opt-in hard filter across every set music constraint — mood, genre, era,
+    // energy (vs the default soft leans). Boolean, defaults OFF. The legacy
+    // genre-only `genreStrict` is deliberately NOT carried over (see the load
+    // path): the toggle now spans every filter, so migrating it would silently
+    // harden mood/era/energy an old show never opted into.
+    const filtersStrict = item.filtersStrict === true;
     const parseYear = (v, field) => {
       if (v == null || v === '') return null;
       const n = Number(v);
@@ -2012,7 +2077,7 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId, genre, fromYear, toYear, energy, genreStrict, maxTrackSeconds, playlistIds, playlistStrict };
+    return { id, name, topic, personaId: item.personaId, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict };
   });
 }
 
@@ -2227,6 +2292,27 @@ export async function update(patch) {
         next.stream.bitrate = v;
         restart = true;
       }
+    }
+  }
+  if ('loudness' in patch) {
+    // Read live by queue.applyLoudnessGain when each track is annotated — no
+    // Liquidsoap file, no restart. Applies from the next queued track.
+    const lo = patch.loudness || {};
+    if (lo.targetLufs !== undefined) {
+      const v = parseFloat(lo.targetLufs);
+      const b = BOUNDS.loudnessTargetLufs;
+      if (!Number.isFinite(v) || v < b.min || v > b.max) {
+        throw new Error(`loudness.targetLufs must be number in [${b.min}, ${b.max}]`);
+      }
+      next.loudness.targetLufs = v;
+    }
+    if (lo.maxBoostDb !== undefined) {
+      const v = parseFloat(lo.maxBoostDb);
+      const b = BOUNDS.loudnessMaxBoostDb;
+      if (!Number.isFinite(v) || v < b.min || v > b.max) {
+        throw new Error(`loudness.maxBoostDb must be number in [${b.min}, ${b.max}]`);
+      }
+      next.loudness.maxBoostDb = v;
     }
   }
   if ('weather' in patch) {
@@ -2629,6 +2715,13 @@ export async function update(patch) {
       }
       next.embedding.maxActiveLearningRounds = v;
     }
+    if (e.audioFusionWeight !== undefined) {
+      const v = parseFloat(e.audioFusionWeight);
+      if (!Number.isFinite(v) || v < 0 || v > 1) {
+        throw new Error('embedding.audioFusionWeight must be between 0 and 1');
+      }
+      next.embedding.audioFusionWeight = v;
+    }
     if (e.enrichment !== undefined) {
       const en = e.enrichment || {};
       if (en.lastfmTags !== undefined) {
@@ -2801,10 +2894,10 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     fromYear: Number.isFinite(show.fromYear) ? show.fromYear : null,
     toYear: Number.isFinite(show.toYear) ? show.toYear : null,
     energy: typeof show.energy === 'string' ? show.energy : '',
-    // When true (and a genre is set) the pick pool is hard-filtered to the
-    // genre instead of softly leaned; off-genre tracks only survive as a
-    // never-starve fallback. Defaults off.
-    genreStrict: show.genreStrict === true,
+    // When true, every set music filter (mood, genre, era, energy) is a hard
+    // filter on the pick pool instead of a soft lean; off-filter tracks only
+    // survive as a never-starve fallback. Defaults off.
+    filtersStrict: show.filtersStrict === true,
     // Per-show track-length cap override (seconds). null = inherit the station
     // default; 0 = unlimited; >0 = own cap. See effectiveMaxTrackSec().
     maxTrackSeconds: show.maxTrackSeconds != null ? show.maxTrackSeconds : null,

@@ -17,11 +17,13 @@ export { matchRequest, identifyTrackFromText } from './internal/prompts/request.
 export {
   generateIntro,
   generateStationId,
+  generateSignoff,
+  generateHandoffGreeting,
   generateAdLib,
   generateLink,
   generateHourlyTime,
 } from './internal/prompts/scripts.js';
-export { PICKER_CRITERIA, pickNextTrack, showMusicLean } from './internal/prompts/picker.js';
+export { PICKER_CRITERIA, pickNextTrack, showMusicLean, effectsGuidance } from './internal/prompts/picker.js';
 export { generatePersona, generateShow, generateTheme } from './internal/prompts/generate.js';
 
 // Re-exported so routes/debug.js can read the LLM call ring buffer through the

@@ -36,6 +36,16 @@ export async function reload() {
   await load();
 }
 
+// Wipe the whole library (tags, embeddings, acoustic analysis, enrichment) and
+// reopen an empty DB, so the picker/tools immediately see a clean slate without
+// a controller restart. Backs the admin library "Reset" action. Unlike
+// reload(), this deletes the file first (db.reset()) for a true fresh start.
+export async function reset() {
+  loaded = false;
+  await db.reset();
+  await load();
+}
+
 // SQLite WAL writes are durable per statement — no batched save needed. Kept
 // as a no-op so existing callers that call save() at intervals still work.
 export async function save() {
@@ -63,6 +73,12 @@ export function get(songId: string): any {
     bpm: t.bpm,
     musicalKey: t.musicalKey,
     introMs: t.introMs,
+    // Loudness surface for queue.applyLoudnessGain's library-lookup fallback —
+    // Subsonic-sourced picks (requests, similar-songs) resolve their measured
+    // LUFS/peak through here. Without these the fallback always saw null and
+    // those tracks played at unity gain.
+    loudnessLufs: t.loudnessLufs,
+    peakDb: t.peakDb,
     // Phase 2/4 acoustic surface for the agent picker's Subsonic-fallback path
     // (slim() in llm/tools.ts). Library-sourced candidates already carry these
     // via slimTrack; this keeps Subsonic-sourced candidates symmetric.
@@ -264,6 +280,14 @@ export function tracksLikeThisAudio(seed: string, k: number): any[] {
     if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
   }
   return out;
+}
+
+// The task-prefix mode the text-embedding index was built in — query embeds
+// must match it (embeddings.embedQueryText). 'plain' when the DB isn't loaded
+// or the meta predates mode tracking (legacy indexes were embedded bare).
+export function embeddingIndexTextMode(): 'plain' | 'prefixed' {
+  if (!loaded) return 'plain';
+  return db.getEmbeddingMeta()?.textMode ?? 'plain';
 }
 
 // KNN against an externally-computed query vector. The lyric-search tool

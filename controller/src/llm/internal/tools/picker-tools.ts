@@ -14,7 +14,7 @@ import * as subsonic from '../../../music/subsonic.js';
 import * as library from '../../../music/library.js';
 import * as embeddings from '../../../music/embeddings.js';
 import { filterPickerCandidates, durationSeconds } from '../../../music/recency.js';
-import { preferGenre, preferEra } from '../../../music/show-filter.js';
+import { preferGenre, preferEra, preferMood, preferEnergyStrict } from '../../../music/show-filter.js';
 import { searchWeb, searchReady } from '../../../skills/web-search.js';
 import { identifyTrackFromText } from '../prompts/request.js';
 
@@ -53,7 +53,10 @@ function slim(s: any) {
     ...(src.energy != null ? { energy: src.energy } : {}),
     ...(durationSec != null ? { duration_sec: durationSec } : {}),
     ...(instrumental != null ? { instrumental } : {}),
-    ...(src.bpm != null ? { bpm: src.bpm } : {}),
+    // Truthy, not != null: un-analysed tracks carry bpm 0, and emitting
+    // "bpm": 0 tells the model the tempo is zero while PICKER_CRITERIA says to
+    // segue on it. 0 means unknown — omit, like every other absent fact.
+    ...(src.bpm ? { bpm: src.bpm } : {}),
     ...(src.musicalKey != null ? { key: src.musicalKey } : {}),
     ...(src.introMs != null ? { intro_ms: src.introMs } : {}),
     ...(src.paceMean != null ? { pace: src.paceMean } : {}),
@@ -89,6 +92,8 @@ export function buildPickerTools({
   resolveReferences = false,
   genreLock = null,
   eraLock = null,
+  moodLock = null,
+  energyLock = null,
   playlistLock = null,
   playlistTracks = null,
 }: {
@@ -101,17 +106,23 @@ export function buildPickerTools({
   // queue.recentlyPlayedByCount(N); empty on the request path (requests exempt).
   hardRecentIds?: Set<string>;
   hardRecentKeys?: Set<string>;    // lowercased "title|artist" — blocks id-less backfilled plays
-  // Hard genre constraint for a strict-genre show (settings.genreStrict). When
-  // set, every tool's candidates are genre-filtered (preferGenre, never-starve)
+  // Hard genre constraint for a strict show (show.filtersStrict). When set,
+  // every tool's candidates are genre-filtered (preferGenre, never-starve)
   // before recency + cap, so the agent path enforces the lock in code, not just
   // the prompt — mirroring the pool picker's strict mode. null = no lock.
   // Deliberately NOT set on the request path: an explicit listener ask wins.
   genreLock?: string | null;
   // Hard era (decade/year window) constraint, applied only for a strict show
-  // (gated on the same genreStrict flag — there's no separate era-strict toggle).
-  // When set, candidates are year-filtered (preferEra, never-starve) before
-  // recency + cap. null / both-bounds-null = no era lock.
+  // (same filtersStrict flag — one toggle governs every filter). When set,
+  // candidates are year-filtered (preferEra, never-starve) before recency +
+  // cap. null / both-bounds-null = no era lock.
   eraLock?: { fromYear?: number | null; toYear?: number | null } | null;
+  // Hard mood constraint for a strict show: candidates are filtered to tracks
+  // tagged with the show's mood (preferMood, never-starve). null = no lock.
+  moodLock?: string | null;
+  // Hard energy-band constraint for a strict show: candidates are filtered to
+  // the analysed band (preferEnergyStrict — unknowns dropped, never-starve).
+  energyLock?: string | null;
   // The active sonic journey's current waypoint vector (broadcast/dj-agent.ts).
   // When present, the tracksTowardJourney tool below is registered, closing
   // over it — the agent never sees the raw vector, only the tracks near it.
@@ -145,12 +156,14 @@ export function buildPickerTools({
   // grows with each tool call regardless.
   const collect = (list: any, cap = 8) => {
     // Strict show: filter candidates BEFORE recency + cap, so the 8 the agent
-    // sees are genre-/era-pure. Both never-starve (fall back to the full list
-    // when a tool returns no match), so a thin genre/era degrades to off-target
-    // rather than dead air — same contract as the pool path.
+    // sees are genre-/era-/mood-/energy-pure. Each lock never-starves (falls
+    // back to the full list when a tool returns no match), so a thin constraint
+    // degrades to off-target rather than dead air — same contract as the pool path.
     let pool = shuffle((list || []) as any[]);
     if (genreLock) pool = preferGenre(pool, genreLock);
     if (eraLock) pool = preferEra(pool, eraLock);
+    if (moodLock) pool = preferMood(pool, moodLock);
+    if (energyLock) pool = preferEnergyStrict(pool, energyLock);
     // Strict playlist: HARD-intersect with the lock set, with NO never-starve to
     // off-playlist (a playlist is an exact set, so a tool with no overlap simply
     // contributes nothing). The guaranteed in-set source is showPlaylistTracks
@@ -172,6 +185,20 @@ export function buildPickerTools({
     }
     return out;
   };
+
+  // When a tool comes up empty, say WHY and what to try next instead of a bare
+  // [] — the observed fabrication pattern is "tool returned nothing → model
+  // invents a plausible-looking id anyway" (7 of gpt-5-mini's 32 picks in one
+  // day). `matched` is the pre-recency-filter count, so the note distinguishes
+  // "nothing matches" from "matches exist but were all played recently or
+  // already shown this pick" — opposite next moves for the model.
+  const emptyResult = (matched: number, hint: string) => ({
+    tracks: [],
+    note: matched > 0
+      ? `${matched} matching track(s) exist but were all played recently or already shown this pick — ${hint}`
+      : hint,
+    rule: 'Never invent a song id — only ids returned by a tool are valid picks.',
+  });
 
   // Snapshot the embedding index counts once at tool-build time (synchronous
   // after library.load() — pickViaAgent awaits library.load() before reaching
@@ -205,11 +232,15 @@ export function buildPickerTools({
           // Lexical search3 found nothing — fall back to semantic embedding
           // search over the library (same path as searchByLyrics) so vibe
           // queries still return tracks. No-op when embeddings aren't set up.
-          if (!embeddings.isAvailable()) return out;
-          await library.load();
-          const [vec] = await embeddings.embedTexts([query.trim()]);
-          if (!vec) return out;
-          return collect(library.tracksByVector(vec, 20));
+          if (embeddings.isAvailable()) {
+            await library.load();
+            const vec = await embeddings.embedQueryText(query.trim(), library.embeddingIndexTextMode());
+            if (vec) {
+              const sem = collect(library.tracksByVector(vec, 20));
+              if (sem.length > 0) return sem;
+            }
+          }
+          return emptyResult(songs.length, 'this search matches literal titles/artists/genres first and the vibe index found nothing — try songsByGenre with a single genre word, or tracksByMood');
         }
         catch (err) { return { error: err.message }; }
       },
@@ -219,7 +250,11 @@ export function buildPickerTools({
       description: 'Find songs similar to a given song id. Pass the currently-playing song id to keep the flow going.',
       inputSchema: z.object({ songId: z.string() }),
       execute: async ({ songId }) => {
-        try { return collect(await subsonic.getSimilarSongs(songId, { count: 20 })); }
+        try {
+          const list = await subsonic.getSimilarSongs(songId, { count: 20 });
+          const out = collect(list);
+          return out.length ? out : emptyResult(list.length, 'no similarity data for that track — try tracksByMood, songsByGenre, or searchLibrary instead');
+        }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -228,7 +263,11 @@ export function buildPickerTools({
       description: 'Top songs for a named artist — good for staying in an artist\'s orbit without repeating a track.',
       inputSchema: z.object({ artist: z.string() }),
       execute: async ({ artist }) => {
-        try { return collect(await subsonic.getTopSongs(artist, { count: 15 })); }
+        try {
+          const list = await subsonic.getTopSongs(artist, { count: 15 });
+          const out = collect(list);
+          return out.length ? out : emptyResult(list.length, 'no top-songs data for that artist — try searchLibrary with the artist name');
+        }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -240,7 +279,11 @@ export function buildPickerTools({
         // Keep the source list tight (newest ~6 tracks): collect() shuffles, so
         // a wide pool would let the shuffle drop the actual-newest tracks,
         // defeating "latest".
-        try { return collect(await subsonic.getRecentSongsByArtist(artist, { albums: 2, count: 6 })); }
+        try {
+          const list = await subsonic.getRecentSongsByArtist(artist, { albums: 2, count: 6 });
+          const out = collect(list);
+          return out.length ? out : emptyResult(list.length, 'that artist has no releases in the library — try topSongsByArtist or searchLibrary');
+        }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -252,7 +295,9 @@ export function buildPickerTools({
         try {
           const name = await subsonic.resolveGenreName(genre);
           if (!name) return { error: `no library genre matching "${genre}"` };
-          return collect(await subsonic.getSongsByGenre(name, { count: 50 }));
+          const list = await subsonic.getSongsByGenre(name, { count: 50 });
+          const out = collect(list);
+          return out.length ? out : emptyResult(list.length, `the "${name}" genre has nothing fresh right now — try another genre or tracksByMood`);
         }
         catch (err) { return { error: err.message }; }
       },
@@ -273,9 +318,23 @@ export function buildPickerTools({
       execute: async ({ mood, energy }) => {
         try {
           await library.load();
-          let rows = library.songsByMood(mood);
-          if (energy) rows = rows.filter((r: any) => r.energy === energy);
-          return collect(rows);
+          const moodRows = library.songsByMood(mood);
+          const rows = energy ? moodRows.filter((r: any) => r.energy === energy) : moodRows;
+          const out = collect(rows);
+          if (out.length) return out;
+          // Empty for three distinct reasons — tell the model which, because
+          // the fixes are different (observed: {mood:"night", energy:"low"} →
+          // bare [] → fabricated id).
+          if (energy && moodRows.length > 0 && rows.length === 0) {
+            return emptyResult(0, `${moodRows.length} "${mood}" track(s) exist but none tagged ${energy} energy — call again with energy: null`);
+          }
+          if (moodRows.length === 0) {
+            const covered = Object.keys(library.stats().byMood || {}).join(', ');
+            return emptyResult(0, covered
+              ? `no tracks tagged "${mood}" — moods with coverage in this library: ${covered}`
+              : `no tracks tagged "${mood}"`);
+          }
+          return emptyResult(rows.length, 'try another mood, drop the energy filter, or use songsByGenre');
         }
         catch (err) { return { error: err.message }; }
       },
@@ -285,7 +344,12 @@ export function buildPickerTools({
       description: 'Songs tagged with a specific energy level: low (slow / mellow / ambient), medium (mid-tempo / steady), or high (uptempo / driving). Use for time-of-day or activity-based picks the mood vocab alone can\'t express — e.g. high for a workout, low for a wind-down, medium for a commute.',
       inputSchema: z.object({ energy: z.enum(['low', 'medium', 'high']) }),
       execute: async ({ energy }) => {
-        try { await library.load(); return collect(library.songsByEnergy(energy)); }
+        try {
+          await library.load();
+          const list = library.songsByEnergy(energy);
+          const out = collect(list);
+          return out.length ? out : emptyResult(list.length, `no ${energy}-energy tracks available — try tracksByMood or songsByGenre`);
+        }
         catch (err) { return { error: err.message }; }
       },
     }),
@@ -310,7 +374,13 @@ export function buildPickerTools({
           songId: z.string().describe('a song id (preferred) or a track title'),
         }),
         execute: async ({ songId }) => {
-          try { await library.load(); return collect(library.tracksLikeThis(songId, 60)); }
+          try {
+            await library.load();
+            const list = library.tracksLikeThis(songId, 60);
+            const out = collect(list);
+            return out.length ? out : emptyResult(list.length,
+              `that track has no embedding yet (${_stats.withEmbedding ?? 0} of ${_stats.total} tracks indexed so far) — try similarSongs or tracksByMood`);
+          }
           catch (err) { return { error: err.message }; }
         },
       }),
@@ -331,7 +401,13 @@ export function buildPickerTools({
           songId: z.string().describe('a song id (preferred) or a track title'),
         }),
         execute: async ({ songId }) => {
-          try { await library.load(); return collect(library.tracksLikeThisAudio(songId, 60)); }
+          try {
+            await library.load();
+            const list = library.tracksLikeThisAudio(songId, 60);
+            const out = collect(list);
+            return out.length ? out : emptyResult(list.length,
+              `the seed track likely has no audio vector yet (audio analysis covers ${_stats.withAudioEmbedding ?? 0} of ${_stats.total} tracks so far) — try tracksLikeThis or similarSongs`);
+          }
           catch (err) { return { error: err.message }; }
         },
       }),
@@ -355,9 +431,11 @@ export function buildPickerTools({
           try {
             if (!embeddings.isAvailable()) return { error: 'embeddings not configured — set settings.embedding.enabled / provider' };
             await library.load();
-            const [vec] = await embeddings.embedTexts([query.trim()]);
+            const vec = await embeddings.embedQueryText(query.trim(), library.embeddingIndexTextMode());
             if (!vec) return { error: 'embedding query failed' };
-            return collect(library.tracksByVector(vec, 60));
+            const list = library.tracksByVector(vec, 60);
+            const out = collect(list);
+            return out.length ? out : emptyResult(list.length, 'no thematic match — try tracksByMood or songsByGenre');
           }
           catch (err) { return { error: err.message }; }
         },
@@ -425,7 +503,12 @@ export function buildPickerTools({
           // Pull a wide KNN (60) around the waypoint: the nearest neighbours
           // cluster tightly and many will be recently-played, so a small k left
           // the agent with ~1 candidate. collect() still caps to 8 fresh ones.
-          try { await library.load(); return collect(library.tracksByAudioVector(audioWaypoint, 60)); }
+          try {
+            await library.load();
+            const list = library.tracksByAudioVector(audioWaypoint, 60);
+            const out = collect(list);
+            return out.length ? out : emptyResult(list.length, 'the journey has no fresh tracks near this waypoint — pick via the library mood/genre/audio tools and keep the energy heading the same way');
+          }
           catch (err) { return { error: err.message }; }
         },
       }),

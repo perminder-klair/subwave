@@ -183,11 +183,15 @@ const DAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Fri
 const MONTH_LABELS = ['January', 'February', 'March', 'April', 'May', 'June',
                       'July', 'August', 'September', 'October', 'November', 'December'];
 
-// Northern-hemisphere meteorological seasons — the box is in Wolverhampton.
-function seasonFor(month /* 1-12 */) {
-  if (month === 12 || month <= 2) return 'winter';
-  if (month <= 5) return 'spring';
-  if (month <= 8) return 'summer';
+// Meteorological seasons, hemisphere-aware. Open-Meteo hands us the station's
+// latitude, so a southern-hemisphere station (negative lat) reads July as
+// winter, not summer (issue: Buenos Aires DJ talking about "summer" and "heat"
+// in July). The southern seasons are the northern ones shifted six months.
+function seasonFor(month /* 1-12 */, lat = config.weather.lat) {
+  const m = lat < 0 ? ((month + 5) % 12) + 1 : month;
+  if (m === 12 || m <= 2) return 'winter';
+  if (m <= 5) return 'spring';
+  if (m <= 8) return 'summer';
   return 'autumn';
 }
 
@@ -258,6 +262,13 @@ export async function getFullContext() {
   const festival = getFestivalContext(now);
   const date = getDateContext(now);
   const clock = getClockContext(now);
+
+  // Open-Meteo reports whether the sun is up at the station right now; ride it
+  // on the clock so the DJ stops describing dusk/daylight after dark (issue:
+  // "night is starting to claim its place" / "shadows lengthen" said two hours
+  // past sunset). Only set when known — a failed weather fetch leaves it unset
+  // and the model falls back to inferring from the wall-clock time.
+  if (typeof weather?.isDay === 'boolean') (clock as any).isDark = !weather.isDay;
 
   // A scheduled show for this hour, if any. Its mood wins everything below —
   // an empty hour leaves the station running autonomously.

@@ -94,6 +94,7 @@ class Queue {
   autoLink = true;             // toggle: random DJ links between auto tracks
   tracksUntilLink = pickLinkInterval();
   _transitionsSinceSfx = 999;  // DJ-mode transition-FX spacing counter (see drainToLiquidsoap)
+  _recentEffects: string[] = [];  // the model's last few transition CHOICES — anti-streak guard + fed back into the pick event turn
   _persistTimer: NodeJS.Timeout | null = null; // debounce for the queue.json snapshot
   _recentPlaysTimer: NodeJS.Timeout | null = null; // debounce for the recent-plays.json sidecar
   _recentPlays: { id: string | null; title: string | null; artist: string | null; endedAt: string }[] = [];
@@ -405,15 +406,27 @@ class Queue {
     return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
   }
 
-  // Resolve a track's integrated loudness (track object first, else a library
-  // lookup) and stash a clamped gain offset toward the loudness target on the
-  // track as `gainDb`. Null measurement → leaves gainDb undefined, so
-  // getAnnotatedUri emits no liq_amplify and the track plays at unity gain.
+  // Resolve a track's integrated loudness + measured peak (track object first,
+  // else a library lookup) and stash a clamped gain offset toward the
+  // operator's loudness target on the track as `gainDb`. The peak lets
+  // gainForLoudness cap the boost by real headroom instead of a blind clamp.
+  // Null measurement → leaves gainDb undefined, so getAnnotatedUri emits no
+  // liq_amplify and the track plays at unity gain.
   applyLoudnessGain(track: any) {
     if (!track) return;
     let lufs = track.loudnessLufs;
-    if (lufs == null && track.id) lufs = library.get(track.id)?.loudnessLufs ?? null;
-    const gain = mix.gainForLoudness(lufs);
+    let peakDb = track.peakDb;
+    if ((lufs == null || peakDb == null) && track.id) {
+      const rec = library.get(track.id);
+      if (lufs == null) lufs = rec?.loudnessLufs ?? null;
+      if (peakDb == null) peakDb = rec?.peakDb ?? null;
+    }
+    const loud = settings.get().loudness;
+    const gain = mix.gainForLoudness(lufs, {
+      peakDb,
+      targetLufs: loud?.targetLufs,
+      maxBoostDb: loud?.maxBoostDb,
+    });
     if (gain != null) track.gainDb = gain;
   }
 
@@ -426,18 +439,47 @@ class Queue {
     return Infinity;
   }
 
+  // The model's recent transition choices, oldest first — surfaced into the
+  // pick event turn so the model can SEE its own habit and break it (it has
+  // no other way to know what it recently chose; session-history imitation is
+  // how both the all-normal and all-blend monocultures formed).
+  recentTransitionChoices(): string[] {
+    return [...this._recentEffects];
+  }
+
+  // Drop any transition-effect flags from a track (with a logged reason) so
+  // getAnnotatedUri never stamps an effect the gate rejected.
+  stripEffect(track: any, reason: string) {
+    const kind = track.sweep ? 'sweep' : track.blend ? 'blend' : 'washout';
+    delete track.sweep;
+    delete track.washout;
+    delete track.blend;
+    this.log('mix', `${kind} dropped (${reason})`);
+  }
+
   // DJ-mode mixing applied to the transition INTO `item`'s track (features 1 &
-  // 2). No-op unless the active persona is in DJ mode. Stashes a per-transition
-  // crossfade length on the track (read by subsonic.getAnnotatedUri →
-  // liq_cross_duration) and, on a notable upward tempo jump, fires a rate-
-  // limited riser across the blend. Both require both tracks to be analysed.
+  // 2, plus the sweep/washout transition effects). No-op unless the active
+  // persona is in DJ mode. Stashes a per-transition crossfade length on the
+  // track (read by subsonic.getAnnotatedUri → liq_cross_duration) and, on a
+  // notable upward tempo jump, fires a rate-limited riser across the blend.
   applyMixTransition(item: any) {
     const persona = settings.getEffectivePersona();
-    if (!persona?.djMode || !item?.track) return;
+    if (!item?.track) return;
+    // Persona flipped out of DJ mode between the pick and the drain: the
+    // effects gate below never runs, so make sure no flag survives to annotate.
+    if (!persona?.djMode) {
+      if (item.track.sweep || item.track.washout || item.track.blend) this.stripEffect(item.track, 'dj mode off');
+      return;
+    }
 
     const idx = this.upcoming.indexOf(item);
     const prevTrack = (idx > 0 ? this.upcoming[idx - 1]?.track : null) || this.current?.track || null;
-    if (!prevTrack) return;
+    if (!prevTrack) {
+      // Nothing on-air to validate against (first track after boot) — an
+      // effect on a cold start would garnish silence; drop it.
+      if (item.track.sweep || item.track.washout || item.track.blend) this.stripEffect(item.track, 'no predecessor');
+      return;
+    }
 
     const cur = this.mixAnalysisFor(prevTrack);
     const next = this.mixAnalysisFor(item.track);
@@ -453,15 +495,106 @@ class Queue {
     // admin slider acts as a real ceiling on DJ-mode transitions too.
     const maxSec = settings.get()?.crossfadeDuration ?? null;
     const secs = mix.crossSecondsFor(cur, next, { energyDelta, nextIntroMs, maxSec });
+    // NOT stamped onto item.track.crossSec (#749 — off-by-one, confirmed still
+    // live on inspection despite the issue being closed with no fix commit).
+    // liq_cross_duration governs the crossfade at the STAMPED track's OWN end
+    // (radio.liq's dj_transition reads it off `a`, the outgoing branch) — but
+    // `secs` here is sized for the transition INTO item (prevTrack → item).
+    // The only track that could correctly carry this value is prevTrack, and
+    // drainToLiquidsoap drains strictly FIFO, marking each item sent before
+    // the next is even looked at — so prevTrack has invariably already been
+    // annotated and handed to Liquidsoap by the time this runs. Stamping it
+    // on item instead silently governs item's OWN exit (item → next), sized
+    // by the wrong pair's compatibility and intro cap, one hop later than
+    // intended — and that error compounds every transition for the rest of
+    // the session. Left un-applied (logged only) until there's a real fix: a
+    // buffer-time override channel Liquidsoap re-reads dynamically, not a
+    // static per-track annotation baked in ahead of the pair being known.
     if (secs != null) {
-      item.track.crossSec = secs;
-      this.log('mix', `blend ${secs}s → ${item.track.title}`);
+      this.log('mix', `blend would be ${secs}s for ${prevTrack.title || '?'} → ${item.track.title} (not applied — #749)`);
     }
 
+    // DJ transition effects (sweep/washout) — the agent proposes, the data
+    // disposes. A rejected flag is stripped so getAnnotatedUri never stamps it. On success the
+    // washout also gets its canvas + tempo stamps: cross-duration physics puts
+    // both on the flagged track itself (its liq_cross_duration governs its OWN
+    // end, exactly where the wash fires — overriding the feature-1 value). The
+    // sweep needs no stamps: the transition INTO it is already sized, and its
+    // envelope scales to whatever d it gets.
+    // Length-cap exit (max-track-length × effects): when this pick will be CUT
+    // by the cap (duration > effectiveMaxTrackSec → drain stamps liq_cue_out),
+    // its ending is a forced mid-song exit — and the classic DJ move for
+    // leaving a record before it ends is the echo-out. Auto-arm a washout so
+    // the cut sounds intentional instead of broken. Deterministic, not an LLM
+    // choice: the controller KNOWS which tracks will be capped. The flag rides
+    // the ending track, exactly like a DJ-chosen washout, and coexists with a
+    // sweep on the same pick (sweep shapes its ENTRY, washout its EXIT).
+    // Requests are exempt from the cap (requestedBy) so they never arm this.
+    const capSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
+    let durSec = Number(item.track.duration) || 0;
+    // Same resolution ladder as loudness/analysis: the track object first
+    // (Subsonic picks carry it), the library row when it doesn't (agent picks
+    // resolve from the picker tools' slim projections, which omit length when
+    // the source tool didn't surface one).
+    if (!durSec && item.track.id) durSec = Number(library.get(item.track.id)?.durationSec) || 0;
+    const cappedExit = !!(capSec && durSec > capSec);
+    if (cappedExit && !item.track.washout) {
+      item.track.washout = true;
+      item.track.washoutAuto = true;
+    }
+
+    // The two flags are independent boundaries — sweep shapes this pick's
+    // ENTRY, washout its EXIT — so both can ride one pick; validate and stamp
+    // them separately. No cooldown by design: pacing is the DJ's call (the
+    // prompt tells it to let ordinary blends breathe between effects); the
+    // analyzer veto is the only deterministic guard, and it only judges
+    // sweeps (musically wrong between locked tracks), never frequency.
+    // Anti-streak: the model imitates its own session history, so once it
+    // finds a defensible favourite it repeats it mechanically (observed twice:
+    // all-normal, then all-blend). The third consecutive IDENTICAL CHOICE is
+    // stripped — variety is a station rule, not a model virtue. The ledger
+    // tracks what the model ASKED FOR, not what aired: a stripped blend still
+    // evidences monoculture, so a stuck model gets everything past the second
+    // stripped until it genuinely varies. Auto (length-cap) washouts are
+    // deterministic, not choices — invisible to the ledger in both directions.
+    const choice: string | null =
+      item.track.sweep ? 'sweep' : item.track.blend ? 'blend'
+        : (item.track.washout && !item.track.washoutAuto) ? 'washout'
+        : item.track.washoutAuto ? null : 'normal';
+    const last2 = this._recentEffects.slice(-2);
+    if (choice && choice !== 'normal' && last2.length >= 2 && last2.every(k => k === choice)) {
+      this.stripEffect(item.track, `variety — third ${choice} in a row`);
+    }
+    if (choice) {
+      this._recentEffects.push(choice);
+      if (this._recentEffects.length > 4) this._recentEffects.shift();
+    }
+    if (item.track.sweep && !mix.effectAllowedFor('sweep', cur, next)) {
+      delete item.track.sweep;
+      this.log('mix', 'sweep dropped (tracks too compatible — beat-blend beats a sweep)');
+    }
+    if (item.track.sweep) this.log('mix', `sweep armed → ${item.track.title}`);
+    // blend is the sweep's mirror (entry-side, flagged on the incoming pick):
+    // it only makes sense between COMPATIBLE tracks — the handover exposes a
+    // clash rather than hiding it.
+    if (item.track.blend && !mix.effectAllowedFor('blend', cur, next)) {
+      delete item.track.blend;
+      this.log('mix', 'blend dropped (tracks clash — a handover needs a compatible pair)');
+    }
+    if (item.track.blend) this.log('mix', `blend armed → ${item.track.title}`);
+    if (item.track.washout) {
+      item.track.crossSec = mix.washoutCrossSecondsFor(next, maxSec);
+      item.track.washoutDelay = mix.washoutDelayFor(next.bpm);
+      const why = item.track.washoutAuto ? ' (length-cap exit)' : '';
+      this.log('mix', `washout armed${why}: ${item.track.crossSec}s canvas, ${item.track.washoutDelay}s tap → ${item.track.title}`);
+    }
+    const effectFired = !!(item.track.sweep || item.track.washout || item.track.blend);
+
     // Feature 2 — transition FX, spaced by the chattiness ladder and gated on
-    // settings.sfx.enabled; never two transitions in a row.
+    // settings.sfx.enabled; never two transitions in a row, and never a riser
+    // over a sweep/washout transition.
     this._transitionsSinceSfx++;
-    if (settings.get().sfx?.enabled && this._transitionsSinceSfx >= this.sfxTransitionGap()) {
+    if (!effectFired && settings.get().sfx?.enabled && this._transitionsSinceSfx >= this.sfxTransitionGap()) {
       const fx = mix.transitionSfxFor(cur, next);
       if (fx) {
         this._transitionsSinceSfx = 0;
@@ -533,16 +666,22 @@ class Queue {
   //              song that just started stays audible underneath the voice)
   //   - everything else → say.txt → voice_queue → HEAVY duck (solo voice
   //              dominates; used for station ID / hourly / weather)
-  async announce(text, kind = 'announcement') {
+  //
+  // `opts.persona` overrides the on-air persona for THIS clip's voice — the
+  // persona-handoff mic-pass voices the outgoing DJ after the hour has flipped
+  // (see broadcast/dj-agent.runPersonaHandoff). `opts.meta` is merged into the
+  // session turn (e.g. tagging the sign-off with the outgoing persona id). Both
+  // default to absent, so every existing call site is byte-identical.
+  async announce(text, kind = 'announcement', { persona = null, meta = {} }: { persona?: any; meta?: any } = {}) {
     if (!text || !text.trim()) return;
     try {
-      const wavPath = await speak(text, { kind });
+      const wavPath = await speak(text, { kind, persona });
       const targetFile = kind === 'link'
         ? config.liquidsoap.introFile
         : config.liquidsoap.sayFile;
-      await airVoice(targetFile, wavPath, text, voiceGainDb(kind));
+      await airVoice(targetFile, wavPath, text, voiceGainDb(kind, persona));
       this.log(kind, text);
-      session.appendTurn({ role: 'segment', kind, text });
+      session.appendTurn({ role: 'segment', kind, text, meta });
       // The auto-DJ link channel is its own event; everything else (station
       // IDs, weather, hourly) is `dj.say`. Operators that pipe these into
       // Discord usually want to filter the chatty link stream separately.
@@ -787,6 +926,14 @@ class Queue {
         try {
           const ctx = await getFullContext();
           await session.maybeRoll(ctx);
+          // If that roll crossed a persona boundary, air the mic-pass first
+          // (sign-off + greeting) so it plays before the incoming DJ's first
+          // pick. Guarded so a handoff failure never blocks the next track.
+          try {
+            await djAgent.runPersonaHandoff(this, ctx);
+          } catch (err: any) {
+            this.log('error', `Persona handoff failed: ${err.message}`);
+          }
           await djAgent.runTrackEvent(this, ctx, { wantLink });
         } catch (err: any) {
           this.log('error', `DJ track event failed: ${err.message}`);
@@ -1236,14 +1383,19 @@ function wavDurationMs(path: string): number | null {
 // Voice kinds the DJ recap remembers. The fixed channels are always present;
 // every skill kind (built-in + custom) is registered at skill-load time via
 // registerSkillKinds() — so a new skill is recapped without editing this list.
-const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check']);
+// 'handoff' (the two-voice persona mic-pass) counts too, so the incoming DJ's
+// next segments don't echo the greeting's opener.
+const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check', 'handoff']);
 // Kinds whose recap entries are de-duped. Skills are added at load time too.
+// 'handoff' is deliberately NOT deduped — its two lines (sign-off + greeting)
+// are distinct utterances by different voices.
 const DEDUPE_KINDS = new Set(['station-id', 'hourly-check']);
 const KIND_LABEL: Record<string, string> = {
   'dj-speak': 'intro',
   'link': 'link',
   'station-id': 'ident',
   'hourly-check': 'hourly',
+  'handoff': 'handoff',
 };
 
 // Register the loaded skill kinds (built-in + custom) as recap voice/dedupe

@@ -22,8 +22,9 @@ import {
   buildEmbeddingModel,
   isHeavyEmbeddingModel,
   isLocalEmbeddingProvider,
+  embeddingTextPrefixes,
 } from '../llm/provider.js';
-import type { EmbeddingCfg } from '../llm/provider.js';
+import type { EmbeddingCfg, EmbeddingTextPrefixes } from '../llm/provider.js';
 import { SHOW_MOODS as MOOD_VOCAB } from '../settings.js';
 import crypto from 'node:crypto';
 
@@ -122,6 +123,81 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
     );
   }
   return embeddings as number[][];
+}
+
+// ---------------------------------------------------------------------------
+// Task-prefix handling — some embedding models (nomic-embed-text, the shipped
+// default) are trained with mandatory task prefixes: `search_document:` on
+// indexed texts and `search_query:` on queries. Document prefixes change the
+// stored vectors, so the index records its mode in embedding_meta.text_mode
+// ('plain' = embedded bare, 'prefixed' = embedded with the document prefix)
+// and every query embed must match it. See embeddingTextPrefixes in
+// llm/internal/provider/embedding.ts for the per-model table.
+// ---------------------------------------------------------------------------
+
+export type IndexTextMode = 'plain' | 'prefixed';
+
+function activePrefixes(): EmbeddingTextPrefixes {
+  return embeddingTextPrefixes(embeddingProviderInfo().model);
+}
+
+// The mode a FRESH index should be built in for the active model: 'prefixed'
+// when the model has a document prefix, else 'plain'.
+export function preferredTextMode(): IndexTextMode {
+  return activePrefixes().document ? 'prefixed' : 'plain';
+}
+
+// Resolve the mode of an EXISTING index. Stored mode always wins (consistency
+// beats preference — a prefixed query against bare documents is worse than
+// bare-vs-bare). A populated index with no recorded mode predates mode
+// tracking and was embedded bare; an empty one is free to adopt the model's
+// preferred mode.
+export function resolveIndexTextMode(
+  stored: IndexTextMode | null | undefined,
+  vectorCount: number,
+): IndexTextMode {
+  if (stored) return stored;
+  if (vectorCount > 0) return 'plain';
+  return preferredTextMode();
+}
+
+// Pure prefix application, exported for tests. `prefixes` defaults to the
+// active model's table entry.
+export function applyDocPrefix(
+  text: string,
+  mode: IndexTextMode,
+  prefixes: EmbeddingTextPrefixes = activePrefixes(),
+): string {
+  return mode === 'prefixed' && prefixes.document ? prefixes.document + text : text;
+}
+
+// A query prefix applies when the index carries document prefixes too
+// ('prefixed'), OR when the model prefixes queries only (mxbai-style — the
+// documents embed bare by design, so the index mode doesn't gate it).
+export function applyQueryPrefix(
+  text: string,
+  indexMode: IndexTextMode,
+  prefixes: EmbeddingTextPrefixes = activePrefixes(),
+): string {
+  if (!prefixes.query) return text;
+  if (!prefixes.document || indexMode === 'prefixed') return prefixes.query + text;
+  return text;
+}
+
+// Embed texts destined for the index (tracks). `mode` is the index's mode —
+// callers get it from embedding_meta via resolveIndexTextMode.
+export function embedDocTexts(texts: string[], mode: IndexTextMode): Promise<number[][]> {
+  return embedTexts(texts.map(t => applyDocPrefix(t, mode)));
+}
+
+// Embed a search query against an index built in `indexMode`. Returns null
+// when the provider comes back empty (callers already handle a missing vector).
+export async function embedQueryText(
+  text: string,
+  indexMode: IndexTextMode,
+): Promise<number[] | null> {
+  const [vec] = await embedTexts([applyQueryPrefix(text, indexMode)]);
+  return vec ?? null;
 }
 
 // ---------------------------------------------------------------------------

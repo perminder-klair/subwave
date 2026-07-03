@@ -3,16 +3,19 @@
 // Shows scheduler — /admin/shows. A show is a reusable definition (name,
 // topic, owner persona, music mood). The weekly grid assigns a show to any
 // 1-hour cell, Mon–Sun. When the current hour has a show, its persona goes on
-// air, its mood overrides the autonomous mood, and its topic feeds the DJ.
+// air, its mood (when set — empty means Any/auto) overrides the autonomous
+// mood, and its topic feeds the DJ.
 // An empty hour = the station runs autonomously, as it does today.
 // Everything POSTs to /settings and applies live.
 //
 // Shows are created/edited through an in-page editor (ShowEditor, below the
 // show list) — the personas pattern: click a show to open it, edit it in place.
 // The weekly grid is drag-paintable: pick a brush, then click-drag across
-// cells; click a day label or hour header to fill a whole row/column.
+// cells; click a day label or hour header to fill a whole row/column. On
+// touch, a tap toggles one cell and a long-press arms drag-painting — a
+// plain swipe only scrolls (see HOLD_MS below).
 import type { ChangeEvent, RefObject, TouchEvent } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../lib/notify';
@@ -45,6 +48,13 @@ const DAYS = [
 ];
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
+// Touch paint gesture: holding a cell this long (without drifting past the
+// slop) arms a paint stroke; releasing earlier is a tap (single-cell toggle,
+// committed on release); drifting past the slop first is a scroll and paints
+// nothing. Mouse painting is immediate and unaffected.
+const HOLD_MS = 300;
+const PRESS_SLOP_PX = 8;
+
 const SHOW_COLORS = [
   '#c5302a', '#2f6f4f', '#3a5fa8', '#9a5b1f', '#6b4a8a', '#1f7a7a',
   '#a83a6b', '#4a6b1f', '#8a6a1f', '#3a3a8a', '#7a2f5a', '#2f7a3a',
@@ -55,6 +65,8 @@ interface Show {
   name: string;
   topic: string;
   personaId: string;
+  /** '' = Any — the show pins no mood; the autonomous mood (festival >
+   *  weather > time of day) applies while it's on air. */
   mood: string;
   /** Optional theme override — empty string means "fall back to the station
    *  default while this show is on air". Validated against the live theme
@@ -68,10 +80,12 @@ interface Show {
   fromYear: number | null;
   toYear: number | null;
   energy: string;
-  /** When true (and a genre is set) the genre becomes a HARD filter on the pick
-   *  pool instead of a soft lean — off-genre tracks only play as a last resort
-   *  to avoid silence. Defaults off. */
-  genreStrict: boolean;
+  /** When true (and ≥1 music filter is set) EVERY set filter — mood, genre,
+   *  era, energy — becomes a HARD filter on the pick pool instead of a soft
+   *  lean; off-filter tracks only play as a last resort to avoid silence.
+   *  Defaults off. (Replaces the genre-only `genreStrict`; the controller does
+   *  NOT auto-migrate legacy strict shows — they load soft, opt back in here.) */
+  filtersStrict: boolean;
   /** Per-show track-length cap (seconds). null = inherit the station default;
    *  0 = unlimited (opt this show out of the cap so it can air long mixes);
    *  >0 = this show's own cap. */
@@ -186,7 +200,7 @@ function NowCard({ label, accent, slotHour, show, color, personaLabel }: NowCard
       </div>
       <div className="text-[11px] text-muted">
         {show
-          ? <>persona · {personaLabel} · mood · {show.mood}{showFilterSummary(show)}</>
+          ? <>persona · {personaLabel} · mood · {show.mood || 'any'}{showFilterSummary(show)}</>
           : 'station runs on its own picker'}
       </div>
     </div>
@@ -194,14 +208,17 @@ function NowCard({ label, accent, slotHour, show, color, personaLabel }: NowCard
 }
 
 // Compact " · genre · 80s · high" suffix for the show summary lines, omitting
-// whatever the show doesn't pin. A strict genre is flagged inline so the hard
+// whatever the show doesn't pin. Strict filters are flagged inline so the hard
 // lock is visible at a glance.
-function showFilterSummary(s: { genre: string; fromYear: number | null; toYear: number | null; energy: string; genreStrict?: boolean; maxTrackSeconds?: number | null; playlistIds?: string[]; playlistStrict?: boolean }): string {
-  const genre = s.genre ? (s.genreStrict ? `${s.genre} (strict)` : s.genre) : '';
+function showFilterSummary(s: { mood?: string; genre: string; fromYear: number | null; toYear: number | null; energy: string; filtersStrict?: boolean; maxTrackSeconds?: number | null; playlistIds?: string[]; playlistStrict?: boolean }): string {
   const len = s.maxTrackSeconds == null ? '' : s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s`;
   const nPl = s.playlistIds?.length ?? 0;
   const playlist = nPl ? `${nPl} playlist${nPl > 1 ? 's' : ''}${s.playlistStrict ? ' (strict)' : ''}` : '';
-  const bits = [genre, decadeLabelOf(s), s.energy, len, playlist].filter(Boolean);
+  // The strict chip covers every music filter (mood included) — only shown when
+  // there's actually a filter for it to bite on.
+  const strict = s.filtersStrict && (s.mood || s.genre || s.energy || s.fromYear != null || s.toYear != null)
+    ? 'strict filters' : '';
+  const bits = [s.genre, decadeLabelOf(s), s.energy, strict, len, playlist].filter(Boolean);
   return bits.length ? ` · ${bits.join(' · ')}` : '';
 }
 
@@ -223,8 +240,15 @@ function abbrev(name: string): string {
 }
 
 function showValid(s: Show): boolean {
+  // mood is deliberately not required — '' means "Any" (autonomous mood).
   return s.name.trim().length >= 1 && s.name.trim().length <= NAME_MAX
-    && !!s.personaId && !!s.mood && s.topic.trim().length <= TOPIC_MAX;
+    && !!s.personaId && s.topic.trim().length <= TOPIC_MAX;
+}
+
+// At least one music filter set — the Strict filter toggle only means
+// something when there's a filter for it to harden.
+function hasAnyMusicFilter(s: Show): boolean {
+  return !!(s.mood || s.genre.trim() || s.energy || s.fromYear != null || s.toYear != null);
 }
 
 export default function ShowsPanel() {
@@ -270,6 +294,19 @@ export default function ShowsPanel() {
     active: false,
     value: undefined,
   });
+  // Pending touch press — a finger is down on a cell but the gesture hasn't
+  // resolved yet into tap (release early), paint (hold HOLD_MS) or scroll
+  // (drift past PRESS_SLOP_PX). Nothing is painted until it resolves, so a
+  // scroll that merely starts on a cell can never toggle it.
+  const pressRef = useRef<{
+    day: number; hour: number; x: number; y: number;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  // Detach for the grid's non-passive touchmove listener (set by the callback
+  // ref below when the grid mounts/unmounts).
+  const gridTouchMoveCleanup = useRef<(() => void) | null>(null);
+  // Latest extendStroke for the once-attached touchmove listener.
+  const extendStrokeRef = useRef<(day: number, hour: number) => void>(() => {});
 
   // Live clock — the grid highlights the cell the station is in right now.
   useEffect(() => {
@@ -283,14 +320,23 @@ export default function ShowsPanel() {
   const stationLocale = normalizeStationLocale(data?.values?.locale);
   const { dow: nowDay, hour: nowHour } = zonedDayHour(now, stationTz);
 
-  // End any drag-paint stroke when the pointer is released anywhere.
+  // End any drag-paint stroke when the pointer is released anywhere. A
+  // touchcancel (OS took the gesture — notification shade, browser nav) also
+  // discards any pending press so no stray paint lands after the fact.
   useEffect(() => {
     const end = () => { strokeRef.current.active = false; };
+    const cancel = () => {
+      strokeRef.current.active = false;
+      if (pressRef.current) { clearTimeout(pressRef.current.timer); pressRef.current = null; }
+    };
     window.addEventListener('mouseup', end);
     window.addEventListener('touchend', end);
+    window.addEventListener('touchcancel', cancel);
     return () => {
       window.removeEventListener('mouseup', end);
       window.removeEventListener('touchend', end);
+      window.removeEventListener('touchcancel', cancel);
+      cancel();
     };
   }, []);
 
@@ -334,7 +380,7 @@ export default function ShowsPanel() {
           fromYear: s.fromYear ?? null,
           toYear: s.toYear ?? null,
           energy: s.energy ?? '',
-          genreStrict: s.genreStrict ?? false,
+          filtersStrict: s.filtersStrict ?? false,
           maxTrackSeconds: s.maxTrackSeconds ?? null,
           playlistIds: Array.isArray(s.playlistIds) ? s.playlistIds : [],
           playlistStrict: s.playlistStrict ?? false,
@@ -429,9 +475,9 @@ export default function ShowsPanel() {
         ...f,
         shows: [...f.shows, {
           id, name: '', topic: '',
-          personaId: personas[0]?.id || '', mood: moods[0] || '',
+          personaId: personas[0]?.id || '', mood: '',
           themeId: '', genre: '', fromYear: null, toYear: null, energy: '',
-          genreStrict: false, maxTrackSeconds: null,
+          filtersStrict: false, maxTrackSeconds: null,
           playlistIds: [], playlistStrict: false,
         }],
       };
@@ -441,7 +487,7 @@ export default function ShowsPanel() {
     scrollToEditorRef.current = true;
     setCreatingId(id);
     setFocusIdx(newIdx);
-    notify.ok('New show added — give it a name, persona and mood, then Save schedule.');
+    notify.ok('New show added — give it a name and a persona, then Save schedule.');
   };
 
   const removeShow = (i: number) => {
@@ -517,18 +563,76 @@ export default function ShowsPanel() {
   };
   const clearWeek = () => setForm(f => f ? ({ ...f, schedule: emptyWeek() }) : f);
 
-  // Touch drag — translate the moving touch point into a grid cell.
-  const onGridTouchMove = (e: TouchEvent<HTMLDivElement>) => {
-    if (!strokeRef.current.active) return;
+  // ── touch paint (long-press to arm; see HOLD_MS above) ──────────────────
+  const clearPress = () => {
+    if (pressRef.current) { clearTimeout(pressRef.current.timer); pressRef.current = null; }
+  };
+  // Finger down on a cell: don't paint yet — start the hold timer. If it
+  // fires (finger still down, within slop) the stroke arms from this cell and
+  // the touchmove listener below takes over.
+  const onCellTouchStart = (day: number, hour: number, e: TouchEvent<HTMLButtonElement>) => {
+    clearPress();
+    if (brush == null || e.touches.length > 1) return;
     const t = e.touches[0];
     if (!t) return;
-    const el = document.elementFromPoint(t.clientX, t.clientY);
-    const cell = el?.closest?.('[data-cell]') as HTMLElement | null;
-    if (cell) {
-      e.preventDefault();
-      extendStroke(Number(cell.dataset.day), Number(cell.dataset.hour));
+    const timer = setTimeout(() => {
+      pressRef.current = null;
+      beginStroke(day, hour);
+      navigator.vibrate?.(10);
+    }, HOLD_MS);
+    pressRef.current = { day, hour, x: t.clientX, y: t.clientY, timer };
+  };
+  // Finger up before the hold timer fired and without drifting → a tap:
+  // toggle just that cell, committed on release so scrolls never toggle.
+  // preventDefault() stops the browser's compatibility mousedown that follows
+  // touchend — it would re-enter beginStroke and toggle the cell right back.
+  const onCellTouchEnd = (e: TouchEvent<HTMLButtonElement>) => {
+    const press = pressRef.current;
+    if (press) {
+      clearPress();
+      if (e.cancelable) e.preventDefault();
+      beginStroke(press.day, press.hour);
+      strokeRef.current.active = false;
+    } else if (strokeRef.current.active) {
+      // End of a long-press paint stroke — same synthetic-mouse suppression;
+      // the window touchend listener clears the stroke itself.
+      if (e.cancelable) e.preventDefault();
     }
   };
+  extendStrokeRef.current = extendStroke;
+  // Touch drag — translate the moving touch point into a grid cell. Attached
+  // imperatively with passive:false because React registers root touchmove
+  // listeners passively, which silently ignores preventDefault() — the pan
+  // and the paint used to run at once, spraying cells while scrolling. A
+  // callback ref (not an effect) because the grid only mounts once /settings
+  // has loaded. The handler reads refs only, so the [] memo is safe.
+  const gridScrollRef = useCallback((el: HTMLDivElement | null) => {
+    gridTouchMoveCleanup.current?.();
+    gridTouchMoveCleanup.current = null;
+    if (!el) return;
+    const onMove = (e: globalThis.TouchEvent) => {
+      const t = e.touches[0];
+      const press = pressRef.current;
+      if (press) {
+        // Still deciding: a drift past the slop means it's a scroll — drop
+        // the press and let the browser pan natively (no preventDefault).
+        if (!t || e.touches.length > 1
+          || Math.abs(t.clientX - press.x) > PRESS_SLOP_PX
+          || Math.abs(t.clientY - press.y) > PRESS_SLOP_PX) {
+          clearTimeout(press.timer);
+          pressRef.current = null;
+        }
+        return;
+      }
+      if (!strokeRef.current.active || !t) return;
+      e.preventDefault(); // stroke armed: suppress the pan, paint instead
+      const cell = document.elementFromPoint(t.clientX, t.clientY)
+        ?.closest?.('[data-cell]') as HTMLElement | null;
+      if (cell) extendStrokeRef.current(Number(cell.dataset.day), Number(cell.dataset.hour));
+    };
+    el.addEventListener('touchmove', onMove, { passive: false });
+    gridTouchMoveCleanup.current = () => el.removeEventListener('touchmove', onMove);
+  }, []);
 
   // ── validation ───────────────────────────────────────────────────────────
   const allShowsOk = form ? form.shows.every(showValid) : false;
@@ -564,7 +668,8 @@ export default function ShowsPanel() {
             personaId: s.personaId, mood: s.mood,
             themeId: s.themeId || '',
             genre: s.genre.trim(), fromYear: s.fromYear, toYear: s.toYear, energy: s.energy || '',
-            genreStrict: !!s.genre.trim() && s.genreStrict,
+            // Strict only means something with at least one music filter set.
+            filtersStrict: hasAnyMusicFilter(s) && s.filtersStrict,
             maxTrackSeconds: s.maxTrackSeconds,
             playlistIds: s.playlistIds || [],
             // Strict only means something with at least one playlist pinned.
@@ -704,8 +809,13 @@ export default function ShowsPanel() {
         </div>
 
         <div
+          ref={gridScrollRef}
           className="overflow-x-auto"
-          onTouchMove={onGridTouchMove}
+          onContextMenu={e => {
+            // Long-press opens the context menu on Android — swallow it while
+            // a press is resolving or a stroke is being painted.
+            if (pressRef.current || strokeRef.current.active) e.preventDefault();
+          }}
         >
           <div className="grid min-w-[760px] touch-pan-x grid-cols-[44px_repeat(24,minmax(28px,1fr))] gap-0 select-none">
             <span />
@@ -738,6 +848,8 @@ export default function ShowsPanel() {
                 fillDay={fillDay}
                 beginStroke={beginStroke}
                 extendStroke={extendStroke}
+                onCellTouchStart={onCellTouchStart}
+                onCellTouchEnd={onCellTouchEnd}
                 showById={showById}
                 colorOf={colorOf}
               />
@@ -759,10 +871,12 @@ export default function ShowsPanel() {
         </div>
 
         <p className="mt-2.5 text-[11px] leading-[1.5] text-muted">
-          Pick a brush, then <b>click or drag</b> across cells to paint. Click a
-          {' '}<b>day name</b> to fill that day, or an <b>hour</b> to fill that hour
-          {' '}across the week. Painting over a matching cell clears it. The
-          {' '}vermilion-ringed cell is the hour on air.
+          Pick a brush, then <b>click or drag</b> across cells to paint — on a
+          {' '}touch screen, <b>tap</b> a cell or <b>hold it</b> a moment to start
+          {' '}painting (a quick swipe just scrolls). Click a <b>day name</b> to
+          {' '}fill that day, or an <b>hour</b> to fill that hour across the week.
+          {' '}Painting over a matching cell clears it. The vermilion-ringed cell
+          {' '}is the hour on air.
         </p>
       </Card>
 
@@ -922,7 +1036,7 @@ function ShowEditor({
             />
             <span className="text-[11px] text-muted">
               {!valid
-                ? <span className="text-[var(--danger)]">this show needs a name, a persona, and a mood</span>
+                ? <span className="text-[var(--danger)]">this show needs a name and a persona</span>
                 : !allShowsOk
                   ? <span className="text-[var(--danger)]">another show in the list is incomplete</span>
                   : 'saves all shows + the weekly grid · applies live on the next pick'}
@@ -993,14 +1107,15 @@ function ShowEditor({
             <Field>
               <Label>music mood</Label>
               <Select
-                value={show.mood || undefined}
-                onValueChange={val => update({ mood: val })}
+                value={show.mood || ANY_SENTINEL}
+                onValueChange={val => update({ mood: val === ANY_SENTINEL ? '' : val })}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="— pick mood —" />
+                  <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
+                    <SelectItem value={ANY_SENTINEL}>Any (auto)</SelectItem>
                     {moods.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
                   </SelectGroup>
                 </SelectContent>
@@ -1067,26 +1182,31 @@ function ShowEditor({
           <div className="flex items-start gap-3">
             <div className="pt-0.5">
               <Toggle
-                on={show.genreStrict}
-                disabled={!show.genre.trim()}
-                onClick={() => update({ genreStrict: !show.genreStrict })}
+                on={show.filtersStrict}
+                disabled={!hasAnyMusicFilter(show)}
+                onClick={() => update({ filtersStrict: !show.filtersStrict })}
               />
             </div>
             <div className="grid gap-0.5">
-              <Label className={!show.genre.trim() ? 'opacity-40' : undefined}>
-                Strict genre
+              <Label className={!hasAnyMusicFilter(show) ? 'opacity-40' : undefined}>
+                Strict filter
               </Label>
               <span className="field-hint">
-                Stay strictly within this genre (off-genre tracks only as a last
-                resort to avoid silence). Needs a genre lean set above.
+                Hard-enforce every filter set above — mood, era, energy and
+                genre. Off-filter tracks only play as a last resort to avoid
+                silence. When off, they&apos;re all soft leans the DJ can break
+                for flow. Needs at least one filter set.
               </span>
             </div>
           </div>
 
           <span className="field-hint -mt-1.5">
-            Optional soft music steer for this show: a genre, an era, an energy
-            band, or any mix. The DJ leans toward these but can break them for
-            flow; leave blank to let the topic and mood drive selection.
+            Optional music steer for this show: a mood, a genre, an era, an
+            energy band, or any mix. Soft by default — the DJ leans toward them
+            but can break them for flow; Strict filter above turns every set
+            one into a hard rule. Mood set to Any (auto) follows the
+            station&apos;s autonomous mood — time of day, weather, festivals —
+            instead of pinning one.
           </span>
 
           <Field>
@@ -1279,13 +1399,16 @@ interface DayRowProps {
   fillDay: (day: number) => void;
   beginStroke: (day: number, hour: number) => void;
   extendStroke: (day: number, hour: number) => void;
+  onCellTouchStart: (day: number, hour: number, e: TouchEvent<HTMLButtonElement>) => void;
+  onCellTouchEnd: (e: TouchEvent<HTMLButtonElement>) => void;
   showById: (id: string | null | undefined) => Show | null;
   colorOf: (id: string | null | undefined) => string;
 }
 
 function DayRow({
   dayKey, label, brush, form, nowDay, nowHour,
-  fillDay, beginStroke, extendStroke, showById, colorOf,
+  fillDay, beginStroke, extendStroke, onCellTouchStart, onCellTouchEnd,
+  showById, colorOf,
 }: DayRowProps) {
   return (
     <>
@@ -1317,7 +1440,8 @@ function DayRow({
             brush={brush}
             onMouseDown={() => beginStroke(dayKey, h)}
             onMouseEnter={() => extendStroke(dayKey, h)}
-            onTouchStart={() => beginStroke(dayKey, h)}
+            onTouchStart={e => onCellTouchStart(dayKey, h, e)}
+            onTouchEnd={onCellTouchEnd}
           />
         );
       })}
@@ -1335,12 +1459,13 @@ interface GridCellProps {
   brush: string | 'erase' | null;
   onMouseDown: () => void;
   onMouseEnter: () => void;
-  onTouchStart: () => void;
+  onTouchStart: (e: TouchEvent<HTMLButtonElement>) => void;
+  onTouchEnd: (e: TouchEvent<HTMLButtonElement>) => void;
 }
 
 function GridCell({
   day, hour, label, show, color, isNow, brush,
-  onMouseDown, onMouseEnter, onTouchStart,
+  onMouseDown, onMouseEnter, onTouchStart, onTouchEnd,
 }: GridCellProps) {
   const cellRef = useRef<HTMLButtonElement>(null);
   useDynamicStyle(cellRef, {
@@ -1356,12 +1481,13 @@ function GridCell({
       onMouseDown={onMouseDown}
       onMouseEnter={onMouseEnter}
       onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
       title={
-        (show ? `${show.name} (${show.mood})` : `${label} ${String(hour).padStart(2, '0')}:00, empty`)
+        (show ? `${show.name}${show.mood ? ` (${show.mood})` : ''}` : `${label} ${String(hour).padStart(2, '0')}:00, empty`)
         + (isNow ? ' · on air now' : '')
       }
       className={cn(
-        'relative -mt-px -ml-px flex h-8 items-center justify-center border border-separator-strong p-0 font-[inherit] text-[9px] font-bold tracking-[0.15em] uppercase',
+        'relative -mt-px -ml-px flex h-8 items-center justify-center border border-separator-strong p-0 font-[inherit] text-[9px] font-bold tracking-[0.15em] uppercase [-webkit-touch-callout:none]',
         show ? 'text-white' : 'text-muted',
         brush == null ? 'cursor-default' : 'cursor-pointer',
       )}
@@ -1412,7 +1538,7 @@ function ShowDefRow({ show: s, index: i, ok, hrs, personaLabel, onEdit }: ShowDe
       <div className="grid grid-cols-[1fr_auto] items-center gap-4">
         <div className="min-w-0">
           <div className="text-[12px] leading-[1.6] text-muted">
-            persona · {personaLabel} · mood · {s.mood || '—'}{showFilterSummary(s)}
+            persona · {personaLabel} · mood · {s.mood || 'any'}{showFilterSummary(s)}
           </div>
           {s.topic.trim() && (
             <div className="mt-1 line-clamp-2 text-[12px] leading-[1.6] text-muted italic">

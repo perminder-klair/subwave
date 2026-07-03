@@ -692,8 +692,11 @@ export default function LibraryPanel() {
             : 'vocal-activity analysis enabled'
           : 'vocal-activity analysis disabled',
       );
-      // Refresh the slow settings-derived state now rather than waiting for its tick.
+      // Refresh the slow settings-derived state now rather than waiting for its
+      // tick — and coverage too, so the coverage-driven bits (vocalStatus, the
+      // vocal meter row) catch up without waiting out the 60s poll.
       void loadSettingsData();
+      void loadCoverage();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -716,6 +719,39 @@ export default function LibraryPanel() {
       notify.ok('vocal analysis started');
       setLogOpen(true);
       await loadTaggerState();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
+  // Reset — wipe ALL tagging data (tags, embeddings, acoustics, enrichment) and
+  // start fresh. Deletes library.db server-side; the Navidrome library itself is
+  // untouched, so every track simply returns to the untagged pool. Gated behind
+  // the modal's typed confirmation. Refused (409) while a tagger run is active.
+  const resetLibrary = async () => {
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/library/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `reset failed (${r.status})`);
+      notify.ok('library reset — all tagging data wiped');
+      // Everything the tables/meters showed is gone. Refresh coverage + settings
+      // and drop the cached views so each tab reloads against the empty library.
+      await loadCoverage();
+      void loadSettingsData();
+      setBrowse(null);
+      setSearchResults(null);
+      setRecent(null);
+      setUntagged([]);
+      setUntaggedCursor(null);
+      if (tab === 'browse') runBrowse();
+      else if (tab === 'recent') loadRecent();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -771,6 +807,7 @@ export default function LibraryPanel() {
         onStop={stopTagger}
         onRescan={rescanTagger}
         onReconcile={reconcile}
+        onReset={resetLibrary}
         audioEnabled={audioEnabled}
         onToggleAudio={toggleAudio}
         onAnalyzeAudio={analyzeAudio}

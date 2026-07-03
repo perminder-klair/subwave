@@ -594,6 +594,24 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } =
   // tracks play at even perceived volume — masters untouched, no bus
   // normaliser. Absent → no gain applied, i.e. unity / today's behaviour.
   if (song.gainDb != null) fields.push(`liq_amplify="${escAnnotate(song.gainDb)} dB"`);
+  // DJ filter sweep: the DJ agent may flag a pick (transition:'sweep') for a
+  // gear-change; the queue validates and stamps `sweep` on the track.
+  // radio.liq's dj_transition reads `liq_sweep` on the INCOMING track and
+  // closes a lowpass over the OUTGOING branch across the blend — the track
+  // being left sinks away while this pick rises clean. Absent → normal cross.
+  if (song.sweep) fields.push('liq_sweep="true"');
+  // DJ washout: the DJ agent may flag a pick (transition:'washout') to dissolve
+  // into an echo tail as that track ENDS; the queue validates and stamps
+  // `washout` (+ the tempo-synced comb tap below, and a long bar-snapped
+  // liq_cross_duration — this track's own stamp governs its own end, see
+  // mix.washoutCrossSecondsFor). radio.liq's dj_transition reads both off the
+  // OUTGOING track's metadata. Absent → normal cross.
+  if (song.washout) fields.push('liq_washout="true"');
+  if (song.washoutDelay != null) fields.push(`liq_washout_delay="${escAnnotate(song.washoutDelay)}"`);
+  // DJ blend (spectral handover): validated same-lane picks trade the spectrum
+  // with their predecessor across the cross — dj_transition reads liq_blend on
+  // the INCOMING track, like the sweep.
+  if (song.blend) fields.push('liq_blend="true"');
   // Hard track-length cap (issue #447 / max-track-length). When the caller passes
   // a positive cap, stamp `liq_cue_out` so radio.liq's `cue_cut` stops the track
   // at that second offset — a real ceiling that fires no matter how the track

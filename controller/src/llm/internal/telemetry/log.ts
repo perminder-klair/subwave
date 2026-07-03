@@ -58,7 +58,13 @@ export function record(call: any) {
       kind: call.kind,
       name: tc.name,
       args: cap(JSON.stringify(tc.args ?? null), 1000),
-      resultCount: Array.isArray(tc.result) ? tc.result.length : undefined,
+      // Picker tools return either a bare track array or, when empty, a
+      // { tracks: [], note, rule } hint object — count both shapes so an
+      // empty-with-hint result still logs resultCount: 0 (the log analyzer
+      // keys on it), not undefined.
+      resultCount: Array.isArray(tc.result) ? tc.result.length
+        : Array.isArray(tc.result?.tracks) ? tc.result.tracks.length
+        : undefined,
     });
   }
 }

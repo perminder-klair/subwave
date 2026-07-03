@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { generateText, APICallError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason } from '../src/llm/internal/core/pure.js';
+import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
 import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
@@ -647,6 +647,35 @@ async function main() {
     // (maxOutputTokens: 0) → each strategy keeps its own built-in default.
     assert.equal(resolveMaxOutputTokens(4000), 4000);
     assert.equal(resolveMaxOutputTokens(8000), 8000);
+  });
+
+  // ---- nearestId: near-miss id repair for the picker agents ----
+  console.log('nearestId (unknown-id near-miss repair):');
+  await test('repairs the observed live case: final character dropped from a nanoid', () => {
+    // glm-5.1 returned "BFjCKvSeWFKFpKTRvroPC" for the real "BFjCKvSeWFKFpKTRvroPCp".
+    const seen = ['2igTN1Xw3uJBY9CjdKzZGl', 'H8G6Y1gPsSsMNJwflWbstW', 'BFjCKvSeWFKFpKTRvroPCp'];
+    assert.equal(nearestId('BFjCKvSeWFKFpKTRvroPC', seen), 'BFjCKvSeWFKFpKTRvroPCp');
+  });
+  await test('repairs a single substituted character (edit distance 1)', () => {
+    const seen = ['yu4ZsUclpGxnr8CU2YfNf7', 'qJcxd61T5W7YJ0bNryKakG'];
+    assert.equal(nearestId('yu4ZsUclpGxnr8CU2YfNf8', seen), 'yu4ZsUclpGxnr8CU2YfNf7');
+  });
+  await test('rejects a fabricated id (nothing near any candidate)', () => {
+    const seen = ['2igTN1Xw3uJBY9CjdKzZGl', 'H8G6Y1gPsSsMNJwflWbstW'];
+    assert.equal(nearestId('3bKpTnYlqR8vD4sXe2aJ0m', seen), null);
+  });
+  await test('rejects an ambiguous match (two candidates equally close)', () => {
+    // Both differ from the query by one trailing character — no safe winner.
+    const seen = ['AAAAAAAAAAAAAAAAAAAAAx', 'AAAAAAAAAAAAAAAAAAAAAy'];
+    assert.equal(nearestId('AAAAAAAAAAAAAAAAAAAAAz', seen), null);
+  });
+  await test('rejects short-prefix matches (below the 12-char floor)', () => {
+    assert.equal(nearestId('abc', ['abcdef123456789012345']), null);
+  });
+  await test('handles junk input without throwing', () => {
+    assert.equal(nearestId('', ['abcdef123456789012345']), null);
+    assert.equal(nearestId(undefined as any, ['abcdef123456789012345']), null);
+    assert.equal(nearestId('abcdef123456789012345', []), null);
   });
 
   console.log(failures === 0 ? '\nAll llm-pure tests passed.' : `\n${failures} test(s) FAILED.`);

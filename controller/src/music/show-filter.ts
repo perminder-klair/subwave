@@ -84,12 +84,45 @@ export function trackEnergy(t: any): string | null {
 
 // Soft-prefer tracks matching the show's energy band; unknown-energy tracks
 // stay eligible. Falls back to the full set when no track matches (never-starve,
-// mirrors preferEra). Energy stays soft even when the show's genre is strict.
+// mirrors preferEra). This is the soft-lean path; strict shows
+// (show.filtersStrict) use preferEnergyStrict below.
 export function preferEnergy(tracks: any[], energy?: string | null): any[] {
   if (!energy) return tracks;
   const match = tracks.filter((t: any) => {
     const e = trackEnergy(t);
     return e == null || e === energy;
   });
+  return match.length ? match : tracks;
+}
+
+// Strict energy filter (show.filtersStrict): only tracks whose analysed energy
+// band matches survive — unknown-energy tracks are dropped too, that's the
+// point of strict. Never-starve: an un-analysed library (everything unknown)
+// falls back to the full set rather than emptying the source.
+export function preferEnergyStrict(tracks: any[], energy?: string | null): any[] {
+  if (!energy) return tracks;
+  const match = tracks.filter((t: any) => trackEnergy(t) === energy);
+  return match.length ? match : tracks;
+}
+
+// ── Mood ─────────────────────────────────────────────────────────────────────
+
+// Per-track mood tags — from the track itself (library sources carry them) or a
+// library lookup (Subsonic sources don't). Empty when un-tagged.
+export function trackMoods(t: any): string[] {
+  if (Array.isArray(t?.moods)) return t.moods;
+  const rec = t?.id ? library.get(t.id) : null;
+  return Array.isArray(rec?.moods) ? rec.moods : [];
+}
+
+// Strict mood filter (show.filtersStrict): only tracks tagged with the show's
+// mood survive; un-tagged tracks are dropped. Never-starve: an un-tagged
+// library falls back to the full set rather than emptying the source. Soft
+// shows don't use this — their mood steering happens through the
+// dominantMood-driven pool sources, not a per-track filter.
+export function preferMood(tracks: any[], mood?: string | null): any[] {
+  if (!mood) return tracks;
+  const m = String(mood).toLowerCase();
+  const match = tracks.filter((t: any) => trackMoods(t).some((x: any) => String(x).toLowerCase() === m));
   return match.length ? match : tracks;
 }
