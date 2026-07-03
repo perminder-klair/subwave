@@ -2,13 +2,13 @@
 # Produces a slim standalone image (~150MB) suitable for production.
 
 # ---- deps ----
-FROM node:22-bookworm-slim AS deps
+FROM node:26-bookworm-slim AS deps
 WORKDIR /app
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 
 # ---- build ----
-FROM node:22-bookworm-slim AS build
+FROM node:26-bookworm-slim AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY web/ ./
@@ -33,7 +33,7 @@ ENV SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION}
 RUN npm run build
 
 # ---- runner ----
-FROM node:22-bookworm-slim AS runner
+FROM node:26-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
