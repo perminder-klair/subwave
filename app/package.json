@@ -37,7 +37,7 @@
     "react-native-svg": "15.15.4",
     "react-native-track-player": "^4.1.2",
     "react-native-worklets": "0.8.3",
-    "tailwindcss": "^3.4.19"
+    "tailwindcss": "^4.3.2"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
