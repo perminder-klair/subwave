@@ -59,7 +59,9 @@ router.post('/generate/show', requireAdmin, async (req, res) => {
     }
     const themeIds = new Set(themes.map(t => t.id));
     if (!draft.themeId || !themeIds.has(draft.themeId)) draft.themeId = null;
-    if (!settings.SHOW_MOODS.includes(draft.mood)) draft.mood = settings.SHOW_MOODS[0];
+    // An unknown/missing mood becomes '' (Any — the autonomous mood applies)
+    // rather than an arbitrary vocabulary entry the operator didn't ask for.
+    if (!draft.mood || !settings.SHOW_MOODS.includes(draft.mood)) draft.mood = '';
     if (draft.energy && !settings.SHOW_ENERGY.includes(draft.energy)) draft.energy = '';
     // Strict only makes sense with a genre to lock to.
     if (draft.genreStrict && !draft.genre) draft.genreStrict = false;

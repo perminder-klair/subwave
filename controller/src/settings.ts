@@ -434,7 +434,9 @@ export const SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'searxng'] as const;
 
 // Canonical mood vocabulary. Shared by the library tagger (music/tag-library.js
 // imports this as MOOD_VOCAB) and the Shows scheduler — a show's `mood`
-// overrides the autonomous dominantMood, so it must come from this list.
+// overrides the autonomous dominantMood, so a non-empty value must come from
+// this list. Empty string means "Any": the show pins no mood and the
+// autonomous chain (festival > weather > time) applies while it's on air.
 export const SHOW_MOODS = [
   'energetic',
   'calm',
@@ -1184,7 +1186,9 @@ function normalizeShows(raw: any, personaIds: string[]) {
     const name = typeof item.name === 'string' ? item.name.trim().slice(0, 60) : '';
     if (!name) continue;
     if (!personaIds.includes(item.personaId)) continue; // drop dangling owner
-    if (!SHOW_MOODS.includes(item.mood)) continue;
+    // Empty mood = "Any" (the autonomous mood applies on air). An unknown mood
+    // string is coerced to Any rather than dropping the whole show on the floor.
+    const mood = SHOW_MOODS.includes(item.mood) ? item.mood : '';
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
@@ -1225,7 +1229,7 @@ function normalizeShows(raw: any, personaIds: string[]) {
       name,
       topic: typeof item.topic === 'string' ? item.topic.trim().slice(0, 1000) : '',
       personaId: item.personaId,
-      mood: item.mood,
+      mood,
       themeId,
       genre,
       fromYear,
@@ -1953,8 +1957,12 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     if (!personaIds.includes(item.personaId)) {
       throw new Error(`shows[${i}].personaId must reference an existing persona`);
     }
-    if (!SHOW_MOODS.includes(item.mood)) {
-      throw new Error(`shows[${i}].mood must be one of: ${SHOW_MOODS.join(', ')}`);
+    // Empty/missing mood means "Any": the show pins no mood and the autonomous
+    // dominantMood chain (festival > weather > time) applies while it's on air.
+    // A non-empty mood must come from the canonical vocabulary.
+    const mood = item.mood == null || item.mood === '' ? '' : String(item.mood);
+    if (mood && !SHOW_MOODS.includes(mood)) {
+      throw new Error(`shows[${i}].mood must be empty (any) or one of: ${SHOW_MOODS.join(', ')}`);
     }
     // Optional per-show theme override. Empty/missing means "fall back to the
     // station default while this show is on air". The allow-set is built once
@@ -2033,7 +2041,7 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood: item.mood, themeId, genre, fromYear, toYear, energy, genreStrict, maxTrackSeconds, playlistIds, playlistStrict };
+    return { id, name, topic, personaId: item.personaId, mood, themeId, genre, fromYear, toYear, energy, genreStrict, maxTrackSeconds, playlistIds, playlistStrict };
   });
 }
 

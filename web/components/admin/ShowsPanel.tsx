@@ -3,7 +3,8 @@
 // Shows scheduler — /admin/shows. A show is a reusable definition (name,
 // topic, owner persona, music mood). The weekly grid assigns a show to any
 // 1-hour cell, Mon–Sun. When the current hour has a show, its persona goes on
-// air, its mood overrides the autonomous mood, and its topic feeds the DJ.
+// air, its mood (when set — empty means Any/auto) overrides the autonomous
+// mood, and its topic feeds the DJ.
 // An empty hour = the station runs autonomously, as it does today.
 // Everything POSTs to /settings and applies live.
 //
@@ -55,6 +56,8 @@ interface Show {
   name: string;
   topic: string;
   personaId: string;
+  /** '' = Any — the show pins no mood; the autonomous mood (festival >
+   *  weather > time of day) applies while it's on air. */
   mood: string;
   /** Optional theme override — empty string means "fall back to the station
    *  default while this show is on air". Validated against the live theme
@@ -186,7 +189,7 @@ function NowCard({ label, accent, slotHour, show, color, personaLabel }: NowCard
       </div>
       <div className="text-[11px] text-muted">
         {show
-          ? <>persona · {personaLabel} · mood · {show.mood}{showFilterSummary(show)}</>
+          ? <>persona · {personaLabel} · mood · {show.mood || 'any'}{showFilterSummary(show)}</>
           : 'station runs on its own picker'}
       </div>
     </div>
@@ -223,8 +226,9 @@ function abbrev(name: string): string {
 }
 
 function showValid(s: Show): boolean {
+  // mood is deliberately not required — '' means "Any" (autonomous mood).
   return s.name.trim().length >= 1 && s.name.trim().length <= NAME_MAX
-    && !!s.personaId && !!s.mood && s.topic.trim().length <= TOPIC_MAX;
+    && !!s.personaId && s.topic.trim().length <= TOPIC_MAX;
 }
 
 export default function ShowsPanel() {
@@ -429,7 +433,7 @@ export default function ShowsPanel() {
         ...f,
         shows: [...f.shows, {
           id, name: '', topic: '',
-          personaId: personas[0]?.id || '', mood: moods[0] || '',
+          personaId: personas[0]?.id || '', mood: '',
           themeId: '', genre: '', fromYear: null, toYear: null, energy: '',
           genreStrict: false, maxTrackSeconds: null,
           playlistIds: [], playlistStrict: false,
@@ -441,7 +445,7 @@ export default function ShowsPanel() {
     scrollToEditorRef.current = true;
     setCreatingId(id);
     setFocusIdx(newIdx);
-    notify.ok('New show added — give it a name, persona and mood, then Save schedule.');
+    notify.ok('New show added — give it a name and a persona, then Save schedule.');
   };
 
   const removeShow = (i: number) => {
@@ -922,7 +926,7 @@ function ShowEditor({
             />
             <span className="text-[11px] text-muted">
               {!valid
-                ? <span className="text-[var(--danger)]">this show needs a name, a persona, and a mood</span>
+                ? <span className="text-[var(--danger)]">this show needs a name and a persona</span>
                 : !allShowsOk
                   ? <span className="text-[var(--danger)]">another show in the list is incomplete</span>
                   : 'saves all shows + the weekly grid · applies live on the next pick'}
@@ -993,14 +997,15 @@ function ShowEditor({
             <Field>
               <Label>music mood</Label>
               <Select
-                value={show.mood || undefined}
-                onValueChange={val => update({ mood: val })}
+                value={show.mood || ANY_SENTINEL}
+                onValueChange={val => update({ mood: val === ANY_SENTINEL ? '' : val })}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="— pick mood —" />
+                  <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
+                    <SelectItem value={ANY_SENTINEL}>Any (auto)</SelectItem>
                     {moods.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
                   </SelectGroup>
                 </SelectContent>
@@ -1086,7 +1091,9 @@ function ShowEditor({
           <span className="field-hint -mt-1.5">
             Optional soft music steer for this show: a genre, an era, an energy
             band, or any mix. The DJ leans toward these but can break them for
-            flow; leave blank to let the topic and mood drive selection.
+            flow; leave blank to let the topic and mood drive selection. Mood
+            set to Any (auto) follows the station&apos;s autonomous mood — time
+            of day, weather, festivals — instead of pinning one.
           </span>
 
           <Field>
@@ -1357,7 +1364,7 @@ function GridCell({
       onMouseEnter={onMouseEnter}
       onTouchStart={onTouchStart}
       title={
-        (show ? `${show.name} (${show.mood})` : `${label} ${String(hour).padStart(2, '0')}:00, empty`)
+        (show ? `${show.name}${show.mood ? ` (${show.mood})` : ''}` : `${label} ${String(hour).padStart(2, '0')}:00, empty`)
         + (isNow ? ' · on air now' : '')
       }
       className={cn(
@@ -1412,7 +1419,7 @@ function ShowDefRow({ show: s, index: i, ok, hrs, personaLabel, onEdit }: ShowDe
       <div className="grid grid-cols-[1fr_auto] items-center gap-4">
         <div className="min-w-0">
           <div className="text-[12px] leading-[1.6] text-muted">
-            persona · {personaLabel} · mood · {s.mood || '—'}{showFilterSummary(s)}
+            persona · {personaLabel} · mood · {s.mood || 'any'}{showFilterSummary(s)}
           </div>
           {s.topic.trim() && (
             <div className="mt-1 line-clamp-2 text-[12px] leading-[1.6] text-muted italic">
