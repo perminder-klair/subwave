@@ -166,7 +166,9 @@ router.get('/now-playing', async (req, res) => {
     // reader of now-playing.json. A not-yet-tagged track (or unloaded DB)
     // yields null here and the fields are simply omitted.
     if (nowPlaying?.subsonic_id) {
-      const rec = library.get(nowPlaying.subsonic_id);
+      // Lean read: only the scalar fields the metadata strip renders, so this
+      // per-listener 5s poll never parses the heavy acoustic *_json blobs (#723).
+      const rec = library.getPlaybackMeta(nowPlaying.subsonic_id);
       if (rec) {
         nowPlaying.genre = rec.genre ?? null;
         nowPlaying.bpm = rec.bpm ?? null;
