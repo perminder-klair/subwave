@@ -67,7 +67,7 @@ export function usePlayer(
     if (!tunedInRef.current || !a) return;
     setStatus('connecting');
     try {
-      await loadAndPlay({ url: a.streamUrl() });
+      await loadAndPlay({ url: a.streamUrl(), headers: a.streamHeaders() });
       await TrackPlayer.setVolume(volume);
     } catch {
       /* the next error event will re-arm */
@@ -152,7 +152,7 @@ export function usePlayer(
     if (!a) return;
     setTunedIn(true);
     setStatus('connecting');
-    loadAndPlay({ url: a.streamUrl() })
+    loadAndPlay({ url: a.streamUrl(), headers: a.streamHeaders() })
       .then(() => TrackPlayer.setVolume(volume))
       .catch(() => { if (tunedInRef.current) armWatchdog(500); });
   }, [stop, volume, armWatchdog]);
