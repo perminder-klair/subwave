@@ -28,6 +28,12 @@ export async function djText({
   seed = null,
   maxOutputTokens = resolveMaxOutputTokens(MAX_TOKENS_TEXT),
   kind = 'sdk.djText',
+  // Optional caller-supplied abort signal. No live caller wraps djText in
+  // withDeadline today, so this is inert unless one starts to — kept in the
+  // shape as a precaution so a future deadline-wrapped call can cut the
+  // Retry-After sleep short and prevent a ghost retry after the abort (mirrors
+  // djAgent's threading, PR #751 review).
+  signal = undefined,
 }: any): Promise<string> {
   return withFailover(
     kind,
@@ -42,7 +48,8 @@ export async function djText({
         ...(seed != null ? { seed } : {}),
         maxOutputTokens,
         providerOptions: providerOptions(leg.cfg, { repeatPenalty }),
-      }));
+        ...(signal ? { abortSignal: signal } : {}),
+      }), signal);
       const out = stripThinking(result.text);
       // Only record sampling knobs that actually reached the model — see
       // repeatPenaltyApplies() and providerOptions handling.
