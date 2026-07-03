@@ -313,10 +313,12 @@ export default function LibraryTaggingModal(p: Props) {
                   Model calls only for rows with a stale prompt or model — often zero if nothing has changed.
                 </p>
               )}
-              <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} name="Re-analyse acoustics" tag="slow"
-                hint={p.soundsLikeActive
-                  ? "Redo bpm/key + sounds-like for tracks you've already analysed. Drops their acoustic data and rebuilds it."
-                  : "Redo bpm/key for tracks you've already analysed. Drops their acoustic data and rebuilds it. Sounds-like is off."} />
+              <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} disabled={p.analysisOff} name="Re-analyse acoustics" tag="slow"
+                hint={p.analysisOff
+                  ? 'No analysis engine running — start the analyzer or tts-heavy sidecar (or a local librosa venv).'
+                  : p.soundsLikeActive
+                    ? "Redo bpm/key + sounds-like for tracks you've already analysed. Drops their acoustic data and rebuilds it."
+                    : "Redo bpm/key for tracks you've already analysed. Drops their acoustic data and rebuilds it. Sounds-like is off."} />
               {p.vocalWanted && (
                 <div className="pl-6">
                   <Pass on={!!passes.reAnalyze && reAnalyzeVocal} onClick={() => setReAnalyzeVocal(v => !v)}
