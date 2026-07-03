@@ -39,10 +39,31 @@ export const VOICE_KINDS = [
 // persona-agnostic stinger) falls back to the global defaultEngine.
 const GLOBAL_VOICE_KINDS = new Set(['jingle', 'default']);
 
-// The effective persona's TTS config for a persona-voiced kind, else null.
-function djPersonaTts(kind: string): any {
+// Which persona voices a segment: an explicit override (the persona-handoff
+// mic-pass — broadcast/dj-agent.runPersonaHandoff — voices the OUTGOING persona
+// even though the clock has already moved on to the incoming one), else the
+// clock-driven effective persona. `null`/absent → today's behaviour exactly.
+function personaFor(persona?: any): any {
+  return persona ?? settings.getEffectivePersona();
+}
+
+// The persona's TTS config for a persona-voiced kind, else null. `persona`
+// overrides the effective persona (persona handoff); absent → effective persona.
+function djPersonaTts(kind: string, persona?: any): any {
   if (GLOBAL_VOICE_KINDS.has(kind)) return null;
-  return settings.getEffectivePersona()?.tts || null;
+  return personaFor(persona)?.tts || null;
+}
+
+// The engine the persona (or the global default) actually asked for, BEFORE
+// resolveEngine()'s availability/key reroute. Recorded alongside the engine
+// that truly spoke so a *resolve-time* fallback — e.g. a persona on pocket-tts
+// when the tts-heavy sidecar is down, silently routed to piper — shows up in
+// Stats as `fellBack`, instead of looking like a healthy piper call the
+// operator never configured (issue #691). Mirrors describeRouting()'s
+// `requested`.
+function requestedEngine(kind: string, personaTts: any): string {
+  if (personaTts && ENGINES.includes(personaTts.engine)) return personaTts.engine;
+  return settings.get().tts?.defaultEngine || 'piper';
 }
 
 function resolveEngine(kind: string, personaTts: any) {
@@ -102,8 +123,8 @@ function resolveEngine(kind: string, personaTts: any) {
 // written), i.e. today's behaviour. Uses the *resolved* engine (post
 // availability/key fallback), so the gain matches the engine that will actually
 // speak; the rare runtime-throw fallback inside speak() is an error path.
-export function voiceGainDb(kind: string): number {
-  const personaTts = djPersonaTts(kind);
+export function voiceGainDb(kind: string, persona?: any): number {
+  const personaTts = djPersonaTts(kind, persona);
   const engine = resolveEngine(kind, personaTts);
   const tts: any = settings.get().tts || {};
   const engineGain = settings.clampTtsGain(tts.gainDb?.[engine]);
@@ -209,10 +230,17 @@ export async function synthesizeSample(
 // admin Stats page can show per-engine usage, latency, and the fallback rate.
 export async function speak(
   text: string,
-  { kind = 'default', outPath, speedScale }: { kind?: string; outPath?: string; speedScale?: number } = {},
+  { kind = 'default', outPath, speedScale, persona }: { kind?: string; outPath?: string; speedScale?: number; persona?: any } = {},
 ) {
   const speakText = normalizeForSpeech(text);
-  const personaTts = djPersonaTts(kind);
+  // `persona` overrides the clock-driven effective persona so the persona-handoff
+  // mic-pass can voice the outgoing DJ (engine, voice, language, soul, speed)
+  // after the hour has flipped. Absent → getEffectivePersona(), i.e. today.
+  const personaTts = djPersonaTts(kind, persona);
+  // The engine that persona actually asked for, before resolveEngine()'s reroute
+  // (#691) — resolves off the override-aware personaTts, so a handoff clip logs
+  // the OUTGOING persona's requested engine.
+  const requested = requestedEngine(kind, personaTts);
   const primary = resolveEngine(kind, personaTts);
   // Persona on-air language (e.g. "French") rides along to the cloud engine as a
   // pronunciation hint so a non-English script isn't read with English phonetics
@@ -222,7 +250,7 @@ export async function speak(
   // kokoro / pocket-tts).
   const language = GLOBAL_VOICE_KINDS.has(kind)
     ? ''
-    : String(settings.getEffectivePersona()?.language || '').trim();
+    : String(personaFor(persona)?.language || '').trim();
   // The persona's soul (e.g. "thoughtful and a little wistful") rides the same
   // path so the voice delivery carries the same character as the writing (issue
   // #579). DJ-voiced kinds only, like `language`; only the OpenAI gpt-4o*-tts
@@ -230,7 +258,7 @@ export async function speak(
   // other engine ignores it.
   const soul = GLOBAL_VOICE_KINDS.has(kind)
     ? ''
-    : String(settings.getEffectivePersona()?.soul || '').trim();
+    : String(personaFor(persona)?.soul || '').trim();
   // Delivery pace — a MULTIPLIER on the engine's configured speech rate (1.0 =
   // unchanged), composed (not overridden) on top of an operator's global env
   // base PIPER_SPEED/KOKORO_SPEED/CLOUD_TTS_SPEED. Three factors multiply:
@@ -263,7 +291,7 @@ export async function speak(
   try {
     const result = await speakWith(primary, speakText, { outPath, speedScale: scale, language, soul }, personaTts);
     recordTts({
-      kind, engine: primary, requested: primary, fellBack: false,
+      kind, engine: primary, requested, fellBack: requested !== primary,
       ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
     });
     return result;
@@ -274,7 +302,7 @@ export async function speak(
     const fallback = primary === 'piper' ? 'kokoro' : 'piper';
     if (fallback === 'kokoro' && !kokoro.isAvailable()) {
       recordTts({
-        kind, engine: primary, requested: primary, fellBack: false,
+        kind, engine: primary, requested, fellBack: requested !== primary,
         ok: false, ms: Date.now() - started, chars, error: err.message,
         t: new Date().toISOString(),
       });
@@ -284,13 +312,13 @@ export async function speak(
     try {
       const result = await speakWith(fallback, speakText, { outPath, speedScale: scale, language, soul }, personaTts);
       recordTts({
-        kind, engine: fallback, requested: primary, fellBack: true,
+        kind, engine: fallback, requested, fellBack: true,
         ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
       });
       return result;
     } catch (err2) {
       recordTts({
-        kind, engine: fallback, requested: primary, fellBack: true,
+        kind, engine: fallback, requested, fellBack: true,
         ok: false, ms: Date.now() - started, chars, error: err2.message,
         t: new Date().toISOString(),
       });

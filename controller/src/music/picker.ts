@@ -535,6 +535,12 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   }
 
   const recentPlays = summariseRecent(queue);
+  // The model's recent transition asks, for the deliberate-variety nudge —
+  // only consulted by pickNextTrack when effects are active. Guarded call:
+  // picker-test.mjs drives this path with a stub queue.
+  const recentTransitions = typeof queue.recentTransitionChoices === 'function'
+    ? queue.recentTransitionChoices()
+    : [];
 
   let pickRaw;
   try {
@@ -586,6 +592,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
       }),
       recentPlays,
       context: ctx,
+      recentTransitions,
     });
   } catch (err) {
     // The LLM pick failed outright (e.g. unparseable structured output even
@@ -616,5 +623,9 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     song: chosen,
     reason: pickRaw.reason || null,
     source: chosen._source,
+    // Present only when effects were active at call time (the schema omits the
+    // field otherwise). The caller maps it to the queued track's effect flags;
+    // the queue's applyMixTransition validates/strips it like any agent pick.
+    transition: pickRaw.transition ?? null,
   };
 }

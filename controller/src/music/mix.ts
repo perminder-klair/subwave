@@ -15,22 +15,51 @@ export interface Analysis {
 }
 
 // --- Loudness normalisation ------------------------------------------------
-// Target integrated loudness; streaming-standard −14 LUFS (Spotify, YouTube).
-// Gain is clamped to ±LOUDNESS_GAIN_CLAMP_DB so a mis-measured
-// outlier can't blow up the mix — Liquidsoap's brick-wall limiter still backs
-// us up, but the clamp keeps us well clear of it on normal catalogue audio.
+// Target integrated loudness; streaming-standard −14 LUFS (Spotify, YouTube)
+// by default, operator-tunable via settings.loudness. The two directions are
+// clamped asymmetrically because they carry different risk: cutting a loud
+// track is always safe (wide fixed clamp), while boosting a quiet one can
+// drive high-crest material (classical, jazz) into the broadcast limiter — so
+// the boost is capped by the operator's maxBoostDb AND by the track's own
+// measured peak headroom when the analyzer has one.
 export const LOUDNESS_TARGET_LUFS = -14;
-export const LOUDNESS_GAIN_CLAMP_DB = 6;
+export const LOUDNESS_MAX_BOOST_DB = 6;
+export const LOUDNESS_CUT_CLAMP_DB = 12;
+// Boost never pushes the measured sample peak past this ceiling — it matches
+// the brick-wall limiter threshold (−1 dBFS in radio.liq) so normal catalogue
+// audio stays clear of it. Peak is measured over the analysis window (~the
+// first 2 min), not the whole file, so the limiter remains the backstop for
+// peaks later in the track.
+export const LOUDNESS_PEAK_CEILING_DBFS = -1;
 
 // dB gain to bring a track measured at `lufs` toward the target, clamped.
 // Returns null when the track has no loudness measurement (→ unity gain on the
 // playback side, i.e. today's behaviour). Result is rounded to 0.1 dB — finer
 // is inaudible and just bloats the annotate string.
-export function gainForLoudness(lufs: number | null | undefined): number | null {
+export function gainForLoudness(
+  lufs: number | null | undefined,
+  opts: { peakDb?: number | null; targetLufs?: number | null; maxBoostDb?: number | null } = {},
+): number | null {
   if (typeof lufs !== 'number' || !Number.isFinite(lufs)) return null;
-  const raw = LOUDNESS_TARGET_LUFS - lufs;
-  const clamped = Math.max(-LOUDNESS_GAIN_CLAMP_DB, Math.min(LOUDNESS_GAIN_CLAMP_DB, raw));
-  return Math.round(clamped * 10) / 10;
+  const target =
+    typeof opts.targetLufs === 'number' && Number.isFinite(opts.targetLufs)
+      ? opts.targetLufs
+      : LOUDNESS_TARGET_LUFS;
+  const maxBoost =
+    typeof opts.maxBoostDb === 'number' && Number.isFinite(opts.maxBoostDb) && opts.maxBoostDb >= 0
+      ? opts.maxBoostDb
+      : LOUDNESS_MAX_BOOST_DB;
+  const raw = target - lufs;
+  let gain: number;
+  if (raw > 0) {
+    gain = Math.min(raw, maxBoost);
+    if (typeof opts.peakDb === 'number' && Number.isFinite(opts.peakDb)) {
+      gain = Math.min(gain, Math.max(0, LOUDNESS_PEAK_CEILING_DBFS - opts.peakDb));
+    }
+  } else {
+    gain = Math.max(raw, -LOUDNESS_CUT_CLAMP_DB);
+  }
+  return Math.round(gain * 10) / 10;
 }
 
 // True when a track carries at least one measured value. An un-analysed track

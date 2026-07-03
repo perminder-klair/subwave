@@ -406,15 +406,27 @@ class Queue {
     return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
   }
 
-  // Resolve a track's integrated loudness (track object first, else a library
-  // lookup) and stash a clamped gain offset toward the loudness target on the
-  // track as `gainDb`. Null measurement → leaves gainDb undefined, so
-  // getAnnotatedUri emits no liq_amplify and the track plays at unity gain.
+  // Resolve a track's integrated loudness + measured peak (track object first,
+  // else a library lookup) and stash a clamped gain offset toward the
+  // operator's loudness target on the track as `gainDb`. The peak lets
+  // gainForLoudness cap the boost by real headroom instead of a blind clamp.
+  // Null measurement → leaves gainDb undefined, so getAnnotatedUri emits no
+  // liq_amplify and the track plays at unity gain.
   applyLoudnessGain(track: any) {
     if (!track) return;
     let lufs = track.loudnessLufs;
-    if (lufs == null && track.id) lufs = library.get(track.id)?.loudnessLufs ?? null;
-    const gain = mix.gainForLoudness(lufs);
+    let peakDb = track.peakDb;
+    if ((lufs == null || peakDb == null) && track.id) {
+      const rec = library.get(track.id);
+      if (lufs == null) lufs = rec?.loudnessLufs ?? null;
+      if (peakDb == null) peakDb = rec?.peakDb ?? null;
+    }
+    const loud = settings.get().loudness;
+    const gain = mix.gainForLoudness(lufs, {
+      peakDb,
+      targetLufs: loud?.targetLufs,
+      maxBoostDb: loud?.maxBoostDb,
+    });
     if (gain != null) track.gainDb = gain;
   }
 
@@ -483,9 +495,23 @@ class Queue {
     // admin slider acts as a real ceiling on DJ-mode transitions too.
     const maxSec = settings.get()?.crossfadeDuration ?? null;
     const secs = mix.crossSecondsFor(cur, next, { energyDelta, nextIntroMs, maxSec });
+    // NOT stamped onto item.track.crossSec (#749 — off-by-one, confirmed still
+    // live on inspection despite the issue being closed with no fix commit).
+    // liq_cross_duration governs the crossfade at the STAMPED track's OWN end
+    // (radio.liq's dj_transition reads it off `a`, the outgoing branch) — but
+    // `secs` here is sized for the transition INTO item (prevTrack → item).
+    // The only track that could correctly carry this value is prevTrack, and
+    // drainToLiquidsoap drains strictly FIFO, marking each item sent before
+    // the next is even looked at — so prevTrack has invariably already been
+    // annotated and handed to Liquidsoap by the time this runs. Stamping it
+    // on item instead silently governs item's OWN exit (item → next), sized
+    // by the wrong pair's compatibility and intro cap, one hop later than
+    // intended — and that error compounds every transition for the rest of
+    // the session. Left un-applied (logged only) until there's a real fix: a
+    // buffer-time override channel Liquidsoap re-reads dynamically, not a
+    // static per-track annotation baked in ahead of the pair being known.
     if (secs != null) {
-      item.track.crossSec = secs;
-      this.log('mix', `blend ${secs}s → ${item.track.title}`);
+      this.log('mix', `blend would be ${secs}s for ${prevTrack.title || '?'} → ${item.track.title} (not applied — #749)`);
     }
 
     // DJ transition effects (sweep/washout) — the agent proposes, the data
@@ -640,16 +666,22 @@ class Queue {
   //              song that just started stays audible underneath the voice)
   //   - everything else → say.txt → voice_queue → HEAVY duck (solo voice
   //              dominates; used for station ID / hourly / weather)
-  async announce(text, kind = 'announcement') {
+  //
+  // `opts.persona` overrides the on-air persona for THIS clip's voice — the
+  // persona-handoff mic-pass voices the outgoing DJ after the hour has flipped
+  // (see broadcast/dj-agent.runPersonaHandoff). `opts.meta` is merged into the
+  // session turn (e.g. tagging the sign-off with the outgoing persona id). Both
+  // default to absent, so every existing call site is byte-identical.
+  async announce(text, kind = 'announcement', { persona = null, meta = {} }: { persona?: any; meta?: any } = {}) {
     if (!text || !text.trim()) return;
     try {
-      const wavPath = await speak(text, { kind });
+      const wavPath = await speak(text, { kind, persona });
       const targetFile = kind === 'link'
         ? config.liquidsoap.introFile
         : config.liquidsoap.sayFile;
-      await airVoice(targetFile, wavPath, text, voiceGainDb(kind));
+      await airVoice(targetFile, wavPath, text, voiceGainDb(kind, persona));
       this.log(kind, text);
-      session.appendTurn({ role: 'segment', kind, text });
+      session.appendTurn({ role: 'segment', kind, text, meta });
       // The auto-DJ link channel is its own event; everything else (station
       // IDs, weather, hourly) is `dj.say`. Operators that pipe these into
       // Discord usually want to filter the chatty link stream separately.
@@ -894,6 +926,14 @@ class Queue {
         try {
           const ctx = await getFullContext();
           await session.maybeRoll(ctx);
+          // If that roll crossed a persona boundary, air the mic-pass first
+          // (sign-off + greeting) so it plays before the incoming DJ's first
+          // pick. Guarded so a handoff failure never blocks the next track.
+          try {
+            await djAgent.runPersonaHandoff(this, ctx);
+          } catch (err: any) {
+            this.log('error', `Persona handoff failed: ${err.message}`);
+          }
           await djAgent.runTrackEvent(this, ctx, { wantLink });
         } catch (err: any) {
           this.log('error', `DJ track event failed: ${err.message}`);
@@ -1343,14 +1383,19 @@ function wavDurationMs(path: string): number | null {
 // Voice kinds the DJ recap remembers. The fixed channels are always present;
 // every skill kind (built-in + custom) is registered at skill-load time via
 // registerSkillKinds() — so a new skill is recapped without editing this list.
-const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check']);
+// 'handoff' (the two-voice persona mic-pass) counts too, so the incoming DJ's
+// next segments don't echo the greeting's opener.
+const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check', 'handoff']);
 // Kinds whose recap entries are de-duped. Skills are added at load time too.
+// 'handoff' is deliberately NOT deduped — its two lines (sign-off + greeting)
+// are distinct utterances by different voices.
 const DEDUPE_KINDS = new Set(['station-id', 'hourly-check']);
 const KIND_LABEL: Record<string, string> = {
   'dj-speak': 'intro',
   'link': 'link',
   'station-id': 'ident',
   'hourly-check': 'hourly',
+  'handoff': 'handoff',
 };
 
 // Register the loaded skill kinds (built-in + custom) as recap voice/dedupe

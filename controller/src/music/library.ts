@@ -73,6 +73,12 @@ export function get(songId: string): any {
     bpm: t.bpm,
     musicalKey: t.musicalKey,
     introMs: t.introMs,
+    // Loudness surface for queue.applyLoudnessGain's library-lookup fallback —
+    // Subsonic-sourced picks (requests, similar-songs) resolve their measured
+    // LUFS/peak through here. Without these the fallback always saw null and
+    // those tracks played at unity gain.
+    loudnessLufs: t.loudnessLufs,
+    peakDb: t.peakDb,
     // Phase 2/4 acoustic surface for the agent picker's Subsonic-fallback path
     // (slim() in llm/tools.ts). Library-sourced candidates already carry these
     // via slimTrack; this keeps Subsonic-sourced candidates symmetric.
