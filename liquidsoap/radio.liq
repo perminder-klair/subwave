@@ -1135,6 +1135,14 @@ music_meta.on_metadata(synchronous=false, on_meta)
 # Per-listener bandwidth is per-mount, so the unused side costs nothing.
 settings.init.force_start := true
 
+# TEMPORARY (re-harden later): allow running as root. The broadcast entrypoint
+# currently launches liquidsoap as root (not the privilege-dropped `liquidsoap`
+# user) because the 2.4.4 base image changed that user's uid and made the
+# persisted state files unwritable — see docker/broadcast-entrypoint.sh. Without
+# this, liquidsoap refuses to start under a root euid. Revert together with the
+# entrypoint once the state files are re-chowned to the liquidsoap uid.
+settings.init.allow_root := true
+
 # Hourly archive path. Wrap in `{time.string(...)}` so the path is a getter that
 # re-runs strftime each time `output.file` reopens (every hour via reopen_when).
 # Passing the bare string skips strftime entirely and writes everything to one
