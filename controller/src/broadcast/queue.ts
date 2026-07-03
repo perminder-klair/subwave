@@ -1383,14 +1383,19 @@ function wavDurationMs(path: string): number | null {
 // Voice kinds the DJ recap remembers. The fixed channels are always present;
 // every skill kind (built-in + custom) is registered at skill-load time via
 // registerSkillKinds() — so a new skill is recapped without editing this list.
-const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check']);
+// 'handoff' (the two-voice persona mic-pass) counts too, so the incoming DJ's
+// next segments don't echo the greeting's opener.
+const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check', 'handoff']);
 // Kinds whose recap entries are de-duped. Skills are added at load time too.
+// 'handoff' is deliberately NOT deduped — its two lines (sign-off + greeting)
+// are distinct utterances by different voices.
 const DEDUPE_KINDS = new Set(['station-id', 'hourly-check']);
 const KIND_LABEL: Record<string, string> = {
   'dj-speak': 'intro',
   'link': 'link',
   'station-id': 'ident',
   'hourly-check': 'hourly',
+  'handoff': 'handoff',
 };
 
 // Register the loaded skill kinds (built-in + custom) as recap voice/dedupe

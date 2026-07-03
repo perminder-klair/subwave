@@ -321,9 +321,12 @@ export async function runHourlyCheck() {
 async function hourlyCheck() {
   // The top of the hour is the natural show boundary — roll the session here
   // so a scheduled show starting/ending opens a fresh chat history even if no
-  // track happens to start right on the hour.
-  const ctx = await getFullContext();
+  // track happens to start right on the hour. getFullContext() stays inside the
+  // try — node-cron doesn't catch async throws, so an escape here would be an
+  // unhandled rejection.
+  let ctx: Awaited<ReturnType<typeof getFullContext>> | null = null;
   try {
+    ctx = await getFullContext();
     await session.maybeRoll(ctx);
   } catch (err) {
     queue.log('error', `Session roll failed: ${err.message}`);
@@ -331,11 +334,14 @@ async function hourlyCheck() {
   // If that roll crossed a persona boundary, air the two-voice mic-pass. It
   // does its own listener/budget gating and marks itself aired, so it's safe to
   // call unconditionally here (whichever of this cron or a track-start rolls the
-  // session first drives it — the other no-ops).
-  try {
-    await djAgent.runPersonaHandoff(queue, ctx);
-  } catch (err) {
-    queue.log('error', `Persona handoff failed: ${err.message}`);
+  // session first drives it — the other no-ops). No ctx → the roll above didn't
+  // happen either; leave the handoff pending for the next call site.
+  if (ctx) {
+    try {
+      await djAgent.runPersonaHandoff(queue, ctx);
+    } catch (err) {
+      queue.log('error', `Persona handoff failed: ${err.message}`);
+    }
   }
   if (!shouldFire('hourly')) return;
   if (!djCallsAllowed()) return;  // nobody listening — stay on the auto playlist

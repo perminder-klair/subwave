@@ -143,8 +143,12 @@ export function start(ctx: any, handoff: any = null): any {
     handoff: handoff || null,
     messages: [],
   };
+  // appendTurn above already scheduled a debounced persist. No immediate
+  // write here: maybeRoll's hard-roll path stamps rolledFrom right after
+  // start() returns and awaits its own persist() — an unawaited write started
+  // now could land AFTER that stamped write and leave a stale (handoff-less)
+  // session.json on disk until the next debounce.
   appendTurn({ role: 'event', kind: 'scenario', text: scenarioText(_session) });
-  persist();
   // Milestone on the unified timeline — marks where one DJ run ends and the
   // next begins, so traces can be grouped by the session they belong to.
   logEvent('session.start', {
@@ -319,9 +323,22 @@ export function windowMessages() {
     // the same assistant block as real spoken segments, leaving the picker unable
     // to tell its own scratchpad from its broadcast voice. Mark it so the role of
     // each line stays unambiguous even after coalescing.
+    //
+    // Same identity guard for a turn VOICED BY A DIFFERENT PERSONA: the handoff
+    // sign-off is spoken by the outgoing DJ but stored in the new session
+    // (dj-agent.runPersonaHandoff tags it with the speaker's id + name).
+    // Untagged it would read as the incoming DJ's own words — name the real
+    // speaker instead.
+    const foreignSpeaker = (m.role === 'segment'
+      && m.meta?.personaId
+      && m.meta.personaId !== _session.persona?.id)
+      ? (m.meta.personaName || 'the previous host')
+      : null;
     const content = (m.role === 'dj' && m.kind === 'pick')
       ? `(pick note to self — not aired) ${m.text}`
-      : m.text;
+      : foreignSpeaker
+        ? `(${foreignSpeaker} said this on air while handing over — their words, not yours) ${m.text}`
+        : m.text;
     raw.push({ role, content });
   }
   const out: any[] = [];

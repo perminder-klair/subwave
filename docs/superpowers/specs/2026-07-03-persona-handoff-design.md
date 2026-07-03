@@ -1,7 +1,7 @@
 # On-air persona handoff at show boundaries
 
 **Date:** 2026-07-03
-**Status:** Draft — awaiting operator review
+**Status:** Implemented on this branch (PR #762)
 
 ## The idea
 
@@ -127,9 +127,15 @@ never blocks the roll — the existing text handoff is the floor.
 - The previous session is already archived by the time the runner fires, so
   both turns append to the **new** session as
   `role: 'segment', kind: 'handoff'` (the sign-off tagged
-  `meta: { personaId: <outgoing> }`), so the incoming DJ's window opens with the
-  mic-pass it just took part in. `windowMessages()` needs no new filter —
-  handoff turns are real on-air speech and belong in the window.
+  `meta: { personaId, personaName }` of the outgoing persona), so the incoming
+  DJ's window opens with the mic-pass it just took part in. Handoff turns are
+  real on-air speech and belong in the window, but the sign-off was spoken by
+  a *different* persona — `windowMessages()` uses the meta tag to prefix it
+  with the real speaker's name (mirroring the pick-note marker) so the
+  incoming DJ never reads the predecessor's words as its own.
+- `kind: 'handoff'` is registered in the queue's recap `VOICE_KINDS`, so both
+  lines feed `getDjRecap()` / `getRecentOpeners()` and later segments don't
+  echo the greeting's opener.
 - `webhooks.notify('dj.say', { text, kind: 'handoff' })` per line, matching
   other spoken segments.
 - `logEvent('dj.handoff', { from, to, show })` on the unified timeline.

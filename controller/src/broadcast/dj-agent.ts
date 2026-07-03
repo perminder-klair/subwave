@@ -908,7 +908,10 @@ export async function runPersonaHandoff(queue: any, ctx: any): Promise<void> {
     let aired = false;
 
     // 1. Sign-off, in the OUTGOING persona's voice. Tag the session turn with
-    //    the outgoing persona id so the window shows who actually spoke it.
+    //    the outgoing persona's id + name — session.windowMessages() uses the id
+    //    to spot a turn spoken by someone other than the session's own persona
+    //    and names the real speaker, so the incoming DJ never reads the
+    //    sign-off as its own words.
     let signoffText: string | null = null;
     try {
       signoffText = await dj.generateSignoff({
@@ -916,7 +919,7 @@ export async function runPersonaHandoff(queue: any, ctx: any): Promise<void> {
         context: ctx, recap: queue.getDjRecap(), recentOpeners,
       });
       await queue.announce(signoffText, 'handoff', {
-        persona: personaOut, meta: { personaId: personaOut.id },
+        persona: personaOut, meta: { personaId: personaOut.id, personaName: personaOut.name },
       });
       aired = true;
     } catch (err: any) {
