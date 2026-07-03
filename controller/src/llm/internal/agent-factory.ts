@@ -35,6 +35,10 @@ export interface AgentDefinition {
   timeoutMs?: number | (() => number);
   temperature?: number;
   maxOutputTokens?: number;
+  // Acceptance check on the native path's object, given this run's buildTools
+  // extras (the picker checks its chosen id against the `seen` map). A miss
+  // falls the run through to the done-tool harness — see djAgent's validate.
+  validateObject?: (object: any, extras: any) => boolean;
 }
 
 export interface AgentRunResult {
@@ -92,6 +96,9 @@ export function defineAgent(def: AgentDefinition): DjAgentInstance {
         temperature: def.temperature,
         maxOutputTokens: def.maxOutputTokens,
         kind: def.kind,
+        ...(def.validateObject
+          ? { validate: (object: any) => def.validateObject!(object, built.extras) }
+          : {}),
       });
       return {
         object: result.object,

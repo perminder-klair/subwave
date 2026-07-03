@@ -22,6 +22,7 @@ import * as journey from '../music/journey.js';
 import * as dj from '../llm/dj.js';
 import { energyForDaypart } from '../context.js';
 import { defineAgent } from '../llm/agent.js';
+import { djObject, nearestId } from '../llm/sdk.js';
 import { buildPickerTools } from '../llm/tools.js';
 import { recordPick } from '../llm/log.js';
 import * as budget from './dj-budget.js';
@@ -333,6 +334,11 @@ export const pickerAgent = defineAgent({
     const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock, playlistLock, playlistTracks });
     return { tools, extras: { seen } };
   },
+  // Native-path acceptance: the picked id must be one a discovery tool actually
+  // surfaced this run. A fabricated id falls the run through to the done-tool
+  // harness instead of surfacing as an unknown-id rejection (observed:
+  // gpt-5-mini invented 7/32 ids after an empty tool result).
+  validateObject: (object, extras) => !!(object?.id && extras?.seen?.has(object.id)),
 });
 
 export const requestAgent = defineAgent({
@@ -353,6 +359,9 @@ export const requestAgent = defineAgent({
     });
     return { tools, extras: { seen } };
   },
+  // Same native-path acceptance as pickerAgent — the request agent runs the
+  // same model through the same harness, so it fabricates the same way.
+  validateObject: (object, extras) => !!(object?.id && extras?.seen?.has(object.id)),
 });
 
 function trackFields(song) {
@@ -417,6 +426,37 @@ async function enqueuePick(
 // Track event — a track started; pick the next one and maybe air a link.
 // ---------------------------------------------------------------------------
 
+// Stage-2 salvage for an agent run whose final id no tool surfaced (see the
+// cascade in pickViaAgent): one djObject call over the run's OWN accumulated
+// candidates (`seen`), with the id constrained to that exact set — z.enum
+// becomes a decode-time grammar on local models and a Zod reject elsewhere,
+// the same closing move pickNextTrack already uses. Returns a full pick object
+// (id/reason/say/transition) or null; never throws, so a salvage failure falls
+// through to the caller's pick.rejected path unchanged.
+async function repickFromSeen({ seen, badId, wantLink }: { seen: Map<string, any>; badId: string | null; wantLink: boolean }) {
+  const ids = [...seen.keys()];
+  if (ids.length === 0) return null;
+  const base = settings.effectsActive() ? PICK_SCHEMA : PICK_SCHEMA_NO_FX;
+  const schema = base.extend({
+    id: z.enum(ids as [string, ...string[]]).describe('the exact id of one candidate'),
+  });
+  try {
+    return await djObject({
+      system: pickSystem(),
+      prompt: JSON.stringify({ candidates: [...seen.values()] }, null, 2)
+        + `\n\nYou explored the library and then answered with ${badId ? `the id "${badId}", which matches none of the tracks your tools returned` : 'no usable track id'}. Only ids from the candidates above are real. Choose the best next track from them.`
+        + (wantLink
+            ? ' Write the "say" link for the track you choose, following the same rules.'
+            : ' Set "say" to null.'),
+      schema,
+      temperature: 0.5,
+      kind: 'djAgentRepick',
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = null }: { wantLink: boolean; audioWaypoint?: number[] | null; current?: any }): Promise<boolean> {
   await library.load();
   const stats = library.stats();
@@ -449,7 +489,7 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   const playlistLock = playlistPool && activeShow?.playlistStrict ? playlistPool.ids : null;
   const playlistTracks = playlistPool?.tracks ?? null;
 
-  const { object, steps, toolCalls, extras } = await pickerAgent.run({
+  const run = await pickerAgent.run({
     messages: session.windowMessages(),
     recentIds,
     recentKeys,
@@ -462,14 +502,48 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
     playlistLock,
     playlistTracks,
   });
+  const { steps, toolCalls, extras } = run;
+  let object = run.object;
 
-  const song = object?.id ? extras.seen.get(object.id) : null;
+  let song = object?.id ? extras.seen.get(object.id) : null;
+
+  // The agent returned an id that isn't in the candidate set it was shown.
+  // Two-stage salvage before giving up on the run (both observed live):
+  //   1. Near-miss repair — the model transcribed a REAL id imperfectly
+  //      (glm-5.1 dropped the final character of a 22-char nanoid it had
+  //      picked from its own tool results). nearestId only accepts a single
+  //      unambiguous prefix / edit-distance-1 match, so this can't misfire
+  //      onto a different track. Free — no model call.
+  //   2. Corrective re-pick — the model fabricated an id outright (gpt-5-mini
+  //      after an empty tool result) while its `seen` map held real
+  //      candidates. One djObject call constrained to those ids (grammar-
+  //      enforced on local models, Zod-checked everywhere) beats paying the
+  //      pool fallback + a breaker increment for a run that DID explore.
+  if (!song && object?.id && extras.seen.size) {
+    const fixed = nearestId(object.id, extras.seen.keys());
+    if (fixed) {
+      logEvent('pick.repaired', { agent: 'pick', from: object.id, to: fixed });
+      queue.log('picker', `agent id "${object.id}" repaired to near-miss match "${fixed}"`);
+      object = { ...object, id: fixed };
+      song = extras.seen.get(fixed);
+    }
+  }
+  if (!song && extras.seen.size) {
+    const repicked = await repickFromSeen({ seen: extras.seen, badId: object?.id ?? null, wantLink });
+    if (repicked) {
+      logEvent('pick.repicked', { agent: 'pick', from: object?.id ?? null, to: repicked.id, candidates: extras.seen.size });
+      queue.log('picker', `agent returned unknown id "${object?.id}" — re-picked "${repicked.id}" from its own candidates`);
+      object = repicked;
+      song = extras.seen.get(repicked.id);
+    }
+  }
+
   if (!song) {
-    // The agent returned an id that isn't in the candidate set it was shown —
-    // it fabricated one. The trace still ends ok:true (we fall back to the pool
-    // and air a track), so without this explicit event the rejection is
-    // invisible to /debug and the log analyzer, which then over-report agent
-    // health. Emit it inside the live trace so agent-pick reliability is real.
+    // Both salvage stages missed (or the run surfaced zero candidates). The
+    // trace still ends ok:true (we fall back to the pool and air a track), so
+    // without this explicit event the rejection is invisible to /debug and the
+    // log analyzer, which then over-report agent health. Emit it inside the
+    // live trace so agent-pick reliability is real.
     logEvent('pick.rejected', { agent: 'pick', id: object?.id ?? null, candidates: extras.seen.size, steps, toolCalls });
     throw new Error(`agent returned unknown id ${object?.id}`);
   }
@@ -722,7 +796,19 @@ async function runRequestViaAgent(queue: any, { requester }: { requester: string
       recentIds,
     });
 
-    const song = object?.id ? extras.seen.get(object.id) : null;
+    let song = object?.id ? extras.seen.get(object.id) : null;
+    // Near-miss repair, same as the pick path: a single unambiguous prefix /
+    // edit-distance-1 match against the run's own candidates rescues an id the
+    // model transcribed imperfectly. No re-pick stage here — a request that
+    // can't resolve should fall to the caller's stateless matcher cascade,
+    // which understands the listener's actual text.
+    if (!song && object?.id && extras.seen.size) {
+      const fixed = nearestId(object.id, extras.seen.keys());
+      if (fixed) {
+        logEvent('pick.repaired', { agent: 'request', from: object.id, to: fixed });
+        song = extras.seen.get(fixed);
+      }
+    }
     if (!song) {
       logEvent('pick.rejected', { agent: 'request', id: object?.id ?? null, candidates: extras.seen.size, toolCalls });
       throw new Error(`request agent returned unknown id ${object?.id}`);
