@@ -203,7 +203,7 @@ Everything that survives `docker compose down` lives in `state/`:
 | `setup-config.json` | Wizards | Navidrome creds + setup-complete timestamp |
 | `secrets.env` (0600) | Wizards | Cloud LLM/TTS API keys, sourced into the controller's `process.env` on boot |
 | `settings.json` | Admin UI / wizard | DJ personas, shows, schedule, TTS choices, weather location |
-| `icecast-secrets.env` | `subwave-icecast` image | Auto-generated Icecast passwords on first boot (mode 0644 so liquidsoap can source) |
+| `icecast-secrets.env` | `subwave-icecast` image | Auto-generated Icecast passwords on first boot (mode 0600 — only the root broadcast entrypoint + controller read it) |
 | `session.json` + `sessions/` | Controller | Live DJ session + archived past sessions |
 | `queue.json` | Controller | Track queue snapshot (survives a controller restart) |
 | `jingles/`, `jingles.m3u`, `jingles.json` | Controller / `generate-jingles.sh` | Rendered station idents |

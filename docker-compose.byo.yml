@@ -27,6 +27,16 @@
 
 x-state: &state-mount ${STATE_DIR:-./state}:/var/sub-wave
 
+# Cap container log growth. Without this the default json-file driver keeps an
+# unbounded log per container, which on a long-running station eventually fills
+# the host disk. 10m × 3 files = ~30MB ceiling per service. Applied to every
+# service below via `logging: *default-logging`.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # -------------------------------------------------------------------------
   # BROADCAST — icecast2 + liquidsoap in one container
@@ -40,6 +50,7 @@ services:
       dockerfile: docker/Dockerfile.broadcast
     container_name: sub-wave-broadcast
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:-}
@@ -73,6 +84,7 @@ services:
         - SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       broadcast:
         condition: service_healthy
@@ -105,6 +117,15 @@ services:
       - "${CONTROLLER_PORT:-7701}:7701"
     volumes:
       - *state-mount
+    # curl is present in the controller image (see docker/Dockerfile.controller).
+    # /health is served at the router root on :7701 (routes/public.ts). Lets web
+    # gate on the controller being ready via depends_on: service_healthy.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7701/health > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   # -------------------------------------------------------------------------
   # DOCKER-SOCKET-PROXY — locked-down Docker API for the Stats system panel
@@ -121,6 +142,7 @@ services:
     image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
     container_name: sub-wave-docker-proxy
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - CONTAINERS=1
     volumes:
@@ -143,8 +165,13 @@ services:
         - SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
-      - controller
+      # Wait for the controller to pass its healthcheck — the homepage renders
+      # per-request against the controller (CONTROLLER_INTERNAL_URL below), so
+      # starting web before the controller is ready serves broken first pages.
+      controller:
+        condition: service_healthy
     environment:
       - NODE_ENV=production
       - SUBWAVE_HOMEPAGE=${SUBWAVE_HOMEPAGE:-player}
@@ -189,6 +216,7 @@ services:
     platform: linux/amd64
     container_name: sub-wave-tts-heavy
     restart: unless-stopped
+    logging: *default-logging
     profiles: ["tts-heavy"]
     environment:
       - TTS_HEAVY_DEVICE=${TTS_HEAVY_DEVICE:-cpu}
@@ -229,6 +257,7 @@ services:
         WITH_DEMUCS: ${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
     restart: unless-stopped
+    logging: *default-logging
     environment:
       # Force CLAP / Demucs on for the whole pass. Usually unnecessary — the
       # admin toggles drive these per request.

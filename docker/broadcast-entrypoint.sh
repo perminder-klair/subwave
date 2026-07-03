@@ -97,7 +97,12 @@ ICECAST_SOURCE_PASSWORD=$ICECAST_SOURCE_PASSWORD
 ICECAST_ADMIN_PASSWORD=$ICECAST_ADMIN_PASSWORD
 ICECAST_RELAY_PASSWORD=$ICECAST_RELAY_PASSWORD
 EOF
-chmod 644 "$SECRETS"
+# 0600: the file holds the Icecast passwords. Only root reads it — this
+# entrypoint sources it (as root, before dropping to the icecast2/liquidsoap
+# users via sudo -E), and the controller container (also root) reads it off the
+# shared /var/sub-wave mount in broadcast/listeners.ts. No non-root reader
+# needs it, so keep it owner-only.
+chmod 600 "$SECRETS"
 
 export ICECAST_SOURCE_PASSWORD ICECAST_ADMIN_PASSWORD ICECAST_RELAY_PASSWORD
 # Liquidsoap connects to icecast over loopback inside this container.

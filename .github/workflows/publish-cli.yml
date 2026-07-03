@@ -43,7 +43,10 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # Pinned: this exact Bun version compiles the binaries we ship, so
+          # keep it fixed (bump deliberately, not via `latest`) to avoid a
+          # silent toolchain drift changing the released artifacts.
+          bun-version: 1.2.19
 
       - name: Refresh embedded assets
         # The embed-assets script regenerates cli/src/assets.generated.ts
@@ -84,4 +87,46 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: cli/dist/${{ matrix.asset }}
+          fail_on_unmatched_files: true
+
+      - name: Compute checksum
+        # Standard `<hex>  <filename>` line (run from dist/ so the filename is
+        # just the bare asset name). The fan-in job below concatenates every
+        # matrix job's fragment into one SHA256SUMS.
+        working-directory: cli/dist
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: sha256sum "$ASSET" > "$ASSET.sha256"
+
+      - name: Upload checksum fragment
+        uses: actions/upload-artifact@v4
+        with:
+          name: sha256-${{ matrix.asset }}
+          path: cli/dist/${{ matrix.asset }}.sha256
+          retention-days: 1
+
+  # Fan-in: gather every per-binary checksum fragment into a single
+  # SHA256SUMS file (the standard `sha256sum -c` format) and attach it to the
+  # release. install.sh downloads this to verify the binary before install.
+  checksums:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download checksum fragments
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sha256-*
+          path: sums
+          merge-multiple: true
+
+      - name: Aggregate into SHA256SUMS
+        run: |
+          cat sums/*.sha256 | sort -k2 > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload SHA256SUMS to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SHA256SUMS
           fail_on_unmatched_files: true

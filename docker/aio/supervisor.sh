@@ -92,7 +92,10 @@ init_secrets() {
 		ICECAST_ADMIN_PASSWORD=$ICECAST_ADMIN_PASSWORD
 		ICECAST_RELAY_PASSWORD=$ICECAST_RELAY_PASSWORD
 	EOF
-	chmod 644 "$SECRETS"
+	# 0600: holds the Icecast passwords, read only by root (this supervisor
+	# sources it, and the in-process controller reads it off the state dir —
+	# all root in the AIO's single container). Keep it owner-only.
+	chmod 600 "$SECRETS"
 
 	export ICECAST_SOURCE_PASSWORD ICECAST_ADMIN_PASSWORD ICECAST_RELAY_PASSWORD
 	# Liquidsoap connects to icecast over loopback inside this container;

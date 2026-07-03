@@ -1,0 +1,46 @@
+name: Scan images
+
+# Weekly Trivy vulnerability scan of the published GHCR images, with results
+# uploaded to GitHub code scanning (repo Security tab).
+#
+# Non-blocking by design: this is the first scan being introduced, so it
+# REPORTS findings rather than failing the job on them (exit-code 0). Once a
+# clean baseline exists, flip exit-code to fail on CRITICAL/HIGH.
+#
+# Scans only the lean, multi-arch images that the default install pulls. The
+# heavy amd64-only images (tts-heavy, aio, aio-heavy) are intentionally
+# skipped to keep the matrix runtime sane — they are opt-in and share the same
+# base layers as their lean counterparts.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write   # for github/codeql-action/upload-sarif
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [caddy, broadcast, controller, web, analyzer]
+    steps:
+      - name: Scan ${{ matrix.image }}
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ghcr.io/perminder-klair/subwave-${{ matrix.image }}:latest
+          format: sarif
+          output: trivy-${{ matrix.image }}.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"   # report only; never fail the job on vulnerabilities
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-${{ matrix.image }}.sarif
+          category: trivy-${{ matrix.image }}   # keep matrix results distinct

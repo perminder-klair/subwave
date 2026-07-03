@@ -131,6 +131,45 @@ if ! curl -fsSL "$URL" -o "$TMPDIR/$BIN_NAME"; then
   echo "  https://github.com/${REPO}/releases/tag/${VERSION}" >&2
   exit 1
 fi
+
+# ---- verify checksum -------------------------------------------------------
+# Releases publish a SHA256SUMS file alongside the binaries. Verify the
+# download against it before we trust the file.
+#   - SHA256SUMS missing (older releases predate it): warn + continue, so
+#     self-update against an old tag still works.
+#   - asset not listed, or no sha256 tool available: warn + continue.
+#   - checksum MISMATCH: fail hard — never install a binary that doesn't match.
+# macOS has no `sha256sum`; fall back to `shasum -a 256`.
+SUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
+if curl -fsSL "$SUMS_URL" -o "$TMPDIR/SHA256SUMS" 2>/dev/null; then
+  expected="$(awk -v a="$ASSET" '$2 == a { print $1 }' "$TMPDIR/SHA256SUMS")"
+  if [ -z "$expected" ]; then
+    echo "warning: $ASSET not listed in SHA256SUMS; skipping verification." >&2
+  else
+    actual=""
+    if command -v sha256sum >/dev/null 2>&1; then
+      actual="$(sha256sum "$TMPDIR/$BIN_NAME" | cut -d' ' -f1)"
+    elif command -v shasum >/dev/null 2>&1; then
+      actual="$(shasum -a 256 "$TMPDIR/$BIN_NAME" | cut -d' ' -f1)"
+    else
+      echo "warning: no sha256 tool (sha256sum/shasum) found; skipping verification." >&2
+    fi
+    if [ -n "$actual" ]; then
+      if [ "$actual" = "$expected" ]; then
+        echo "  checksum: verified (sha256)"
+      else
+        echo "checksum MISMATCH for $ASSET" >&2
+        echo "  expected: $expected" >&2
+        echo "  actual:   $actual" >&2
+        echo "Refusing to install a binary that doesn't match the published checksum." >&2
+        exit 1
+      fi
+    fi
+  fi
+else
+  echo "warning: SHA256SUMS not found for ${VERSION}; skipping checksum verification." >&2
+fi
+
 chmod +x "$TMPDIR/$BIN_NAME"
 
 if [ "$NEEDS_SUDO" = "1" ]; then

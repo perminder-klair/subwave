@@ -163,7 +163,10 @@ WORKDIR /app
 # stale `peer ai@^6` after the AI SDK v7 upgrade); it must land before install
 # or npm hits ERESOLVE.
 COPY controller/package*.json controller/.npmrc ./
-RUN npm install --omit=dev
+# npm ci (not install): controller ships a package-lock.json, so ci gives a
+# reproducible, lockfile-exact install and is faster in CI. The package*.json
+# glob above already brings the lockfile in before this runs.
+RUN npm ci --omit=dev
 COPY controller/src ./src
 COPY controller/scripts ./scripts
 
