@@ -60,25 +60,31 @@ def main():
     log("ready")
     emit({"id": None, "ready": True})
 
+    lang_mapping = {
+        "a": "en-us",
+        "b": "en-gb",
+        "e": "es",
+        "i": "it",
+        "f": "fr",
+        "h": "hi",
+        "p": "pt-br",
+        "j": "ja",
+        "z": "cmn",
+    }
+    # EspeakG2P construction isn't free, and there are only a handful of
+    # languages, so build each phonemizer once and reuse it across requests.
+    g2p_cache = {}
+
     def _phonemize(voice_code, lang=None):
-        """Build a language-aware phonemizer. When `lang` is explicitly
+        """Return a cached language-aware phonemizer. When `lang` is explicitly
         provided use it directly (voice timbre, accent preserved); otherwise
         auto-detect from the voice code prefix character."""
-        code_char = voice_code[0]
-        mapping = {
-            "a": "en-us",
-            "b": "en-gb",
-            "e": "es",
-            "i": "it",
-            "f": "fr",
-            "h": "hi",
-            "p": "pt-br",
-            "j": "ja",
-            "z": "cmn",
-        }
-        if not lang or lang not in mapping.values():
-            lang = mapping.get(code_char, "en-gb") # british english fallback
-        g2p = espeak.EspeakG2P(language=lang)
+        if not lang or lang not in lang_mapping.values():
+            lang = lang_mapping.get(voice_code[0], "en-gb")  # british english fallback
+        g2p = g2p_cache.get(lang)
+        if g2p is None:
+            g2p = espeak.EspeakG2P(language=lang)
+            g2p_cache[lang] = g2p
         return g2p
 
 
