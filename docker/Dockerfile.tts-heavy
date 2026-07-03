@@ -41,7 +41,7 @@
 # so that boot-time download survives container recreates — otherwise it would
 # repeat on every `up -d --build` / image pull / update.
 
-FROM python:3.11-slim-bookworm
+FROM python:3.14-slim-bookworm
 
 # build-essential is needed because chatterbox-tts pulls pkuseg, which has no
 # wheel for Python ≥ 3.9 on Linux and so source-builds a Cython extension that

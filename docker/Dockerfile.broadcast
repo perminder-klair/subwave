@@ -13,7 +13,7 @@
 #   - A tiny shell supervisor (broadcast-entrypoint.sh) resolves the shared
 #     password, renders icecast.xml, launches both, and exits if either dies
 #     so the container's restart policy bounces them together.
-FROM savonet/liquidsoap:v2.2.5
+FROM savonet/liquidsoap:v2.4.5
 
 USER root
 

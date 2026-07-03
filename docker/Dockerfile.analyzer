@@ -32,7 +32,7 @@
 # analyze pass needs them; the compose files mount a named volume over that
 # cache so the download survives container recreates.
 
-FROM python:3.11-slim-bookworm
+FROM python:3.14-slim-bookworm
 
 # ffmpeg + libsndfile1 give librosa broad codec coverage for the Navidrome
 # stream formats (opus/m4a/mp3). curl is for the operator's own healthchecks;
