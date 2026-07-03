@@ -828,7 +828,7 @@ def make_stream_outputs() =
   # literal int at parse time (we can't pass a ref). Built here (not standalone)
   # so it lives inside the on-air lifecycle: taking the station off air stops the
   # recording too — otherwise it kept writing hourly files of the internal
-  # fallback/emergency loop while off air (issue #768).
+  # fallback/emergency loop while off air.
   archive_shutdown =
     if archive_enabled() then
       br = archive_bitrate()
