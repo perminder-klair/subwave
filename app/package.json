@@ -17,7 +17,7 @@
     "expo-constants": "~56.0.17",
     "expo-dev-client": "~56.0.19",
     "expo-font": "~56.0.5",
-    "expo-haptics": "~56.0.3",
+    "expo-haptics": "~57.0.0",
     "expo-image": "~56.0.10",
     "expo-linear-gradient": "~56.0.4",
     "expo-linking": "~56.0.13",
