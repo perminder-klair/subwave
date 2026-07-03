@@ -198,14 +198,12 @@ const REQUEST_SCHEMA = z.object({
 // competes with the framework's structural signals and derails smaller
 // models. PICKER_CRITERIA stays because it's editorial preference (flow,
 // context, variety, interest) — that's not in any tool or schema.
-// Guidance for the transition effects (PICK_SCHEMA.transition), appended to the
-// picker system prompt ONLY when effects are active (the on-air persona's
-// djMode — see settings.effectsActive; there is no separate toggle). Invisible
-// otherwise, so the model leaves "transition" null.
-function effectsGuidance(): string {
-  if (!settings.effectsActive()) return '';
-  return `\n\nTRANSITION EFFECTS ("transition") — part of your craft, not a gimmick: a working DJ fires one every few songs when the moment earns it. Actively look for the moment on every pick; when you spot one, flag it — the station validates your choice against the audio analysis and skips ones that don't land. The PACING is entirely yours: there is no rate limit, so be the taste — an effect hits hardest coming out of a stretch of clean blends, so let a few ordinary transitions breathe between them. VARY THE TWO: they are equals in your kit, and if your recent picks leaned on one, reach for the other.\n- "washout": your pick dissolves into a pulsing, tempo-synced echo tail as it ENDS, ringing out into whatever follows. Fire it whenever your pick is the natural END of something: the last track of a run of similar songs, a song with a big or atmospheric ending, anything dreamy/hazy/anthemic, or when the NEXT stretch will change direction. In a normal set several tracks qualify — this is your workhorse exit move, not a rarity.\n- "sweep": the track playing before your pick sinks under a slowly closing filter across the blend while your pick rises clean underneath. Use it on a genuine gear-change — a clear jump in energy, tempo, or mood (it only fires when the tracks measurably clash).\n- "blend": spectral handover — across a long crossfade the outgoing track hands its bass, then its mids, to your pick, keeping only its highs to the end, while your pick arrives lows-first underneath. The two feel like ONE continuous piece of music. Use it for same-lane picks: similar tempo, energy, or mood (it only fires when the tracks measurably fit).\nUse "normal" or null only when nothing above applies.`;
-}
+// The transition-effects guidance (PICK_SCHEMA.transition) now lives in
+// llm/internal/prompts/picker.ts (dj.effectsGuidance) so the pool picker
+// shares it verbatim — it's appended to the picker system prompt ONLY when
+// effects are active (the on-air persona's djMode — see
+// settings.effectsActive; there is no separate toggle). Invisible otherwise,
+// so the model leaves "transition" null.
 
 export function pickSystem() {
   const persona = settings.getEffectivePersona();
@@ -247,7 +245,7 @@ You run the station as one continuous shift. The messages above are the live ses
 
 ${dj.PICKER_CRITERIA}
 
-Finding candidates: prefer tools backed by the local library — searchLibrary, songsByGenre, tracksByMood, tracksByEnergy, randomSongs, and the audio/embedding similarity tools. similarSongs and topSongsByArtist use external data and often return little, so try them second. If a tool returns nothing, switch tools rather than retrying. If a tool returns only a few tracks (fewer than ~4), make one more discovery call with a different tool before choosing, so you pick from a real range rather than whatever the first call happened to surface.${effectsGuidance()}${settings.agentLanguageReminder(persona, 'the "say" link')}`;
+Finding candidates: prefer tools backed by the local library — searchLibrary, songsByGenre, tracksByMood, tracksByEnergy, randomSongs, and the audio/embedding similarity tools. similarSongs and topSongsByArtist use external data and often return little, so try them second. If a tool returns nothing, switch tools rather than retrying. If a tool returns only a few tracks (fewer than ~4), make one more discovery call with a different tool before choosing, so you pick from a real range rather than whatever the first call happened to surface.${dj.effectsGuidance()}${settings.agentLanguageReminder(persona, 'the "say" link')}`;
 }
 
 function requestSystem() {
@@ -614,9 +612,21 @@ async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm:
       queue.log('error', `DJ link failed: ${err.message}`);
     }
   }
+  // Transition effects ride the pool path too (pickNextTrack only offers the
+  // field when settings.effectsActive()), so a DJ-mode persona keeps its craft
+  // while picks run through this fallback. Re-check effectsActive at enqueue
+  // time like the agent path does — the queue would strip a stale flag anyway
+  // (applyMixTransition's dj-mode-off strip), but not stamping it keeps the
+  // pick log honest.
+  const fxActive = settings.effectsActive();
+  const fx = {
+    sweep: fxActive && result.transition === 'sweep',
+    washout: fxActive && result.transition === 'washout',
+    blend: fxActive && result.transition === 'blend',
+  };
   // `current` is the link's back-announce target (passed to generateLink as
   // `previous`); stamp it so the queue drops the link if a request jumps ahead.
-  const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link, current);
+  const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link, current, fx);
   // Even the pool landed on an already-queued track (a tiny library whose pool
   // collapsed to recents). Skip the session turn and let auto.m3u backstop the
   // slot — the next track-start re-triggers runTrackEvent for a fresh pick.
