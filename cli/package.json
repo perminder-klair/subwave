@@ -19,7 +19,7 @@
     "build:all": "npm run build:linux-x64 && npm run build:linux-arm64 && npm run build:darwin-x64 && npm run build:darwin-arm64"
   },
   "dependencies": {
-    "@clack/prompts": "0.8.2",
+    "@clack/prompts": "1.6.0",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
