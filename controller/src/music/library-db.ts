@@ -234,9 +234,9 @@ export function close(): void {
     db.close();
     db = null;
     currentEmbeddingDim = null;
-    // reset()/reload()/restoreFromFile() all drop the handle through here, so a
-    // reopened (possibly reset or restored) library never serves the previous
-    // handle's cached tallies.
+    // reload()/restoreFromFile() both drop the handle through here, so a
+    // reopened (possibly restored-from-backup) library never serves the
+    // previous handle's cached tallies.
     invalidateStats();
   }
 }
