@@ -640,16 +640,22 @@ class Queue {
   //              song that just started stays audible underneath the voice)
   //   - everything else → say.txt → voice_queue → HEAVY duck (solo voice
   //              dominates; used for station ID / hourly / weather)
-  async announce(text, kind = 'announcement') {
+  //
+  // `opts.persona` overrides the on-air persona for THIS clip's voice — the
+  // persona-handoff mic-pass voices the outgoing DJ after the hour has flipped
+  // (see broadcast/dj-agent.runPersonaHandoff). `opts.meta` is merged into the
+  // session turn (e.g. tagging the sign-off with the outgoing persona id). Both
+  // default to absent, so every existing call site is byte-identical.
+  async announce(text, kind = 'announcement', { persona = null, meta = {} }: { persona?: any; meta?: any } = {}) {
     if (!text || !text.trim()) return;
     try {
-      const wavPath = await speak(text, { kind });
+      const wavPath = await speak(text, { kind, persona });
       const targetFile = kind === 'link'
         ? config.liquidsoap.introFile
         : config.liquidsoap.sayFile;
-      await airVoice(targetFile, wavPath, text, voiceGainDb(kind));
+      await airVoice(targetFile, wavPath, text, voiceGainDb(kind, persona));
       this.log(kind, text);
-      session.appendTurn({ role: 'segment', kind, text });
+      session.appendTurn({ role: 'segment', kind, text, meta });
       // The auto-DJ link channel is its own event; everything else (station
       // IDs, weather, hourly) is `dj.say`. Operators that pipe these into
       // Discord usually want to filter the chatty link stream separately.
@@ -894,6 +900,14 @@ class Queue {
         try {
           const ctx = await getFullContext();
           await session.maybeRoll(ctx);
+          // If that roll crossed a persona boundary, air the mic-pass first
+          // (sign-off + greeting) so it plays before the incoming DJ's first
+          // pick. Guarded so a handoff failure never blocks the next track.
+          try {
+            await djAgent.runPersonaHandoff(this, ctx);
+          } catch (err: any) {
+            this.log('error', `Persona handoff failed: ${err.message}`);
+          }
           await djAgent.runTrackEvent(this, ctx, { wantLink });
         } catch (err: any) {
           this.log('error', `DJ track event failed: ${err.message}`);

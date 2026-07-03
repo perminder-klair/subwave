@@ -39,10 +39,19 @@ export const VOICE_KINDS = [
 // persona-agnostic stinger) falls back to the global defaultEngine.
 const GLOBAL_VOICE_KINDS = new Set(['jingle', 'default']);
 
-// The effective persona's TTS config for a persona-voiced kind, else null.
-function djPersonaTts(kind: string): any {
+// Which persona voices a segment: an explicit override (the persona-handoff
+// mic-pass — broadcast/dj-agent.runPersonaHandoff — voices the OUTGOING persona
+// even though the clock has already moved on to the incoming one), else the
+// clock-driven effective persona. `null`/absent → today's behaviour exactly.
+function personaFor(persona?: any): any {
+  return persona ?? settings.getEffectivePersona();
+}
+
+// The persona's TTS config for a persona-voiced kind, else null. `persona`
+// overrides the effective persona (persona handoff); absent → effective persona.
+function djPersonaTts(kind: string, persona?: any): any {
   if (GLOBAL_VOICE_KINDS.has(kind)) return null;
-  return settings.getEffectivePersona()?.tts || null;
+  return personaFor(persona)?.tts || null;
 }
 
 function resolveEngine(kind: string, personaTts: any) {
@@ -102,8 +111,8 @@ function resolveEngine(kind: string, personaTts: any) {
 // written), i.e. today's behaviour. Uses the *resolved* engine (post
 // availability/key fallback), so the gain matches the engine that will actually
 // speak; the rare runtime-throw fallback inside speak() is an error path.
-export function voiceGainDb(kind: string): number {
-  const personaTts = djPersonaTts(kind);
+export function voiceGainDb(kind: string, persona?: any): number {
+  const personaTts = djPersonaTts(kind, persona);
   const engine = resolveEngine(kind, personaTts);
   const tts: any = settings.get().tts || {};
   const engineGain = settings.clampTtsGain(tts.gainDb?.[engine]);
@@ -209,10 +218,13 @@ export async function synthesizeSample(
 // admin Stats page can show per-engine usage, latency, and the fallback rate.
 export async function speak(
   text: string,
-  { kind = 'default', outPath, speedScale }: { kind?: string; outPath?: string; speedScale?: number } = {},
+  { kind = 'default', outPath, speedScale, persona }: { kind?: string; outPath?: string; speedScale?: number; persona?: any } = {},
 ) {
   const speakText = normalizeForSpeech(text);
-  const personaTts = djPersonaTts(kind);
+  // `persona` overrides the clock-driven effective persona so the persona-handoff
+  // mic-pass can voice the outgoing DJ (engine, voice, language, soul, speed)
+  // after the hour has flipped. Absent → getEffectivePersona(), i.e. today.
+  const personaTts = djPersonaTts(kind, persona);
   const primary = resolveEngine(kind, personaTts);
   // Persona on-air language (e.g. "French") rides along to the cloud engine as a
   // pronunciation hint so a non-English script isn't read with English phonetics
@@ -222,7 +234,7 @@ export async function speak(
   // kokoro / pocket-tts).
   const language = GLOBAL_VOICE_KINDS.has(kind)
     ? ''
-    : String(settings.getEffectivePersona()?.language || '').trim();
+    : String(personaFor(persona)?.language || '').trim();
   // The persona's soul (e.g. "thoughtful and a little wistful") rides the same
   // path so the voice delivery carries the same character as the writing (issue
   // #579). DJ-voiced kinds only, like `language`; only the OpenAI gpt-4o*-tts
@@ -230,7 +242,7 @@ export async function speak(
   // other engine ignores it.
   const soul = GLOBAL_VOICE_KINDS.has(kind)
     ? ''
-    : String(settings.getEffectivePersona()?.soul || '').trim();
+    : String(personaFor(persona)?.soul || '').trim();
   // Delivery pace — a MULTIPLIER on the engine's configured speech rate (1.0 =
   // unchanged), composed (not overridden) on top of an operator's global env
   // base PIPER_SPEED/KOKORO_SPEED/CLOUD_TTS_SPEED. Three factors multiply:

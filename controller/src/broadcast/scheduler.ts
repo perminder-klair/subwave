@@ -17,6 +17,7 @@ import { resolveShowPlaylistPool } from '../music/show-playlist.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
 import * as session from './session.js';
+import * as djAgent from './dj-agent.js';
 import { cleanupOldVoices } from '../audio/tts.js';
 import { shouldFire } from './dj-gate.js';
 import { djCallsAllowed } from './listeners.js';
@@ -321,10 +322,20 @@ async function hourlyCheck() {
   // The top of the hour is the natural show boundary — roll the session here
   // so a scheduled show starting/ending opens a fresh chat history even if no
   // track happens to start right on the hour.
+  const ctx = await getFullContext();
   try {
-    await session.maybeRoll(await getFullContext());
+    await session.maybeRoll(ctx);
   } catch (err) {
     queue.log('error', `Session roll failed: ${err.message}`);
+  }
+  // If that roll crossed a persona boundary, air the two-voice mic-pass. It
+  // does its own listener/budget gating and marks itself aired, so it's safe to
+  // call unconditionally here (whichever of this cron or a track-start rolls the
+  // session first drives it — the other no-ops).
+  try {
+    await djAgent.runPersonaHandoff(queue, ctx);
+  } catch (err) {
+    queue.log('error', `Persona handoff failed: ${err.message}`);
   }
   if (!shouldFire('hourly')) return;
   if (!djCallsAllowed()) return;  // nobody listening — stay on the auto playlist

@@ -17,6 +17,8 @@ export { matchRequest, identifyTrackFromText } from './internal/prompts/request.
 export {
   generateIntro,
   generateStationId,
+  generateSignoff,
+  generateHandoffGreeting,
   generateAdLib,
   generateLink,
   generateHourlyTime,

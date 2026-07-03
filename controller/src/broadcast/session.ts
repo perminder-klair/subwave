@@ -182,7 +182,49 @@ export async function maybeRoll(ctx: any): Promise<any> {
 
   const prev = _session;
   await end();
-  return start(ctx, buildHandoff(prev));
+  const next = start(ctx, buildHandoff(prev));
+  stampRolledFrom(next, prev);
+  await persist();
+  return next;
+}
+
+// After a hard roll, record whether the on-air PERSONA changed so a caller can
+// air a two-voice mic-pass (broadcast/dj-agent.runPersonaHandoff): the outgoing
+// DJ signs off in their own voice, the incoming DJ acknowledges in theirs. Same
+// persona across a show boundary (e.g. a host's show ends but they stay on as
+// the active persona) → no on-air handoff; the existing text handoff already
+// covers continuity. The flag lives on the PERSISTED session, so a controller
+// restart between roll and airing can't double-fire, and either maybeRoll call
+// site (hourly cron at :00 or the first track-start after the boundary) can
+// trigger it. Session.ts stays free of queue/TTS imports (no cycle): callers
+// read pendingHandoff() and drive the runner.
+function stampRolledFrom(next: any, prev: any) {
+  const prevId = prev?.persona?.id ?? null;
+  const nextId = next?.persona?.id ?? null;
+  next.handoffAired = false;
+  next.rolledFrom = (prevId && nextId && prevId !== nextId)
+    ? {
+        personaId: prevId,
+        personaName: prev?.persona?.name ?? null,
+        showName: prev?.show?.name ?? null,   // show that just ended, or null for an auto block
+      }
+    : null;
+}
+
+// The pending on-air handoff for the live session (outgoing persona metadata),
+// or null when there's nothing to air (no persona change, or already aired).
+export function pendingHandoff(): { personaId: string; personaName: string | null; showName: string | null } | null {
+  if (!_session?.rolledFrom || _session.handoffAired) return null;
+  return _session.rolledFrom;
+}
+
+// Mark the handoff aired so it fires at most once. Called up front by the runner
+// (before generating/airing) so a mid-way failure can't retry into the middle
+// of the new show — the existing text handoff is the floor.
+export function markHandoffAired() {
+  if (!_session) return;
+  _session.handoffAired = true;
+  schedulePersist();
 }
 
 // Soft continuation across an autonomous daypart/mood turnover: same session id,
