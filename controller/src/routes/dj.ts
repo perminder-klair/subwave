@@ -12,7 +12,7 @@ import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
-import { loadSkills, parseFrontmatter, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate } from '../skills/loader.js';
+import { loadSkills, parseFrontmatter, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
 import { writeSkillFile, msToCooldownStr, resetBuiltinSkill } from '../skills/scaffold.js';
 import { readFile, rm, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -46,6 +46,80 @@ router.post('/dj/skills/rescan', requireAdmin, async (req, res) => {
     res.json({ skills: skillCatalog(), custom: caps.filter((c: any) => !c.seeded).length });
   } catch (err) {
     queue.log('error', `/dj/skills/rescan failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /dj/skills/community — the shipped community catalog (prompt-only skills
+// contributed via the community-submission flow, COPYd into the image). Each
+// entry is annotated with `installed` (a state/skills folder already exists) and
+// `reserved` (its slug shadows a built-in / queue-internal kind, so it can't be
+// installed). Browse-only — nothing here airs until the operator installs it.
+// ---------------------------------------------------------------------------
+router.get('/dj/skills/community', requireAdmin, async (req, res) => {
+  try {
+    const catalog = await listCommunitySkills();
+    const annotated = await Promise.all(catalog.map(async (c) => ({
+      ...c,
+      installed: await skillFileExists(c.slug),
+      reserved: RESERVED_KINDS.has(c.slug),
+    })));
+    res.json({ community: annotated });
+  } catch (err: any) {
+    queue.log('error', `/dj/skills/community failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /dj/skills/community/:slug/install — copy a community catalog skill into
+// state/skills/<slug>/SKILL.md so it becomes an ordinary (non-seeded) custom
+// skill: editable, deletable, and — like every custom skill — DISABLED on
+// arrival (the loader posture), so the operator reviews then enables it. Reuses
+// buildCustomSkillFields + writeSkillFile so the on-disk file is byte-identical
+// to a locally-authored skill. Rejects reserved names and re-installs (409).
+// ---------------------------------------------------------------------------
+router.post('/dj/skills/community/:slug/install', requireAdmin, async (req, res) => {
+  const slug = req.params.slug;
+  if (!SLUG_RE.test(slug)) {
+    return res.status(400).json({ error: `invalid skill name: ${slug}` });
+  }
+  if (RESERVED_KINDS.has(slug)) {
+    return res.status(400).json({ error: `"${slug}" is reserved — it shadows a built-in capability and can't be installed` });
+  }
+  if (await skillFileExists(slug)) {
+    return res.status(409).json({ error: `a skill named "${slug}" is already installed` });
+  }
+
+  const cs = await readCommunitySkill(slug);
+  if (!cs) {
+    return res.status(404).json({ error: `no such community skill: ${slug}` });
+  }
+
+  let fields: any;
+  try {
+    // Normalize through the same builder the create/edit routes use, so a bad
+    // catalog entry (unknown context field, malformed cooldown) fails loudly
+    // here rather than writing a skill the loader would later reject.
+    fields = buildCustomSkillFields(slug, {
+      brief: cs.brief,
+      label: cs.label,
+      cooldown: cs.cooldown,
+      context: cs.context,
+      window: cs.window,
+    });
+  } catch (err: any) {
+    return res.status(400).json({ error: `community skill "${slug}" is malformed: ${err.message}` });
+  }
+
+  try {
+    await writeSkillFile(fields);
+    await loadSkills();
+    queue.log('scheduler', `[skills] community "${slug}" installed via admin UI (disabled)`);
+    res.json({ skills: skillCatalog() });
+  } catch (err: any) {
+    queue.log('error', `POST /dj/skills/community/${slug}/install failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

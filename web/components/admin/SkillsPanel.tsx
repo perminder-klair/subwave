@@ -35,8 +35,24 @@ interface Skill {
   feedMaxItems?: number | null;
 }
 
+// One entry in the shipped community catalog (GET /dj/skills/community).
+interface CommunitySkill {
+  slug: string;
+  label: string;
+  brief: string;
+  cooldown?: string;
+  window?: 'any' | 'commute';
+  context?: string;
+  installed?: boolean;   // a state/skills/<slug>/ folder already exists
+  reserved?: boolean;    // slug shadows a built-in kind — can't be installed
+}
+
 interface SkillsResponse {
   skills?: Skill[];
+}
+
+interface CommunityResponse {
+  community?: CommunitySkill[];
 }
 
 interface SkillToggleResponse {
@@ -94,6 +110,8 @@ export default function SkillsPanel() {
   const [busy, setBusy] = useState<string | null>(null);   // skill name currently mutating, or null
   const [rescanning, setRescanning] = useState(false);
   const [modal, setModal] = useState<ModalState | null>(null); // open editor sheet, or null
+  const [community, setCommunity] = useState<CommunitySkill[] | null>(null);
+  const [installing, setInstalling] = useState<string | null>(null); // community slug installing, or null
 
   useEffect(() => {
     if (!hydrated || needsAuth) return;
@@ -109,6 +127,19 @@ export default function SkillsPanel() {
       } catch (e) {
         if (cancelled) return;
         setErr(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    // The community catalog is best-effort — a failure here shouldn't blank the
+    // roster, so it fetches independently and just leaves the section empty.
+    (async () => {
+      try {
+        const r = await adminFetch('/dj/skills/community');
+        if (!r.ok) throw new Error(`failed (${r.status})`);
+        const j = (await r.json()) as CommunityResponse;
+        if (cancelled) return;
+        setCommunity(Array.isArray(j.community) ? j.community : []);
+      } catch {
+        if (!cancelled) setCommunity([]);
       }
     })();
     return () => { cancelled = true; };
@@ -157,6 +188,22 @@ export default function SkillsPanel() {
     } catch (e) {
       notify.err(`Run failed: ${errorMessage(e)}`);
     } finally { setBusy(null); }
+  };
+
+  // Install a community skill into state/skills (arrives disabled). The route
+  // returns the refreshed roster; we also flip the catalog entry to installed.
+  const install = async (slug: string) => {
+    setInstalling(slug);
+    try {
+      const r = await adminFetch(`/dj/skills/community/${slug}/install`, { method: 'POST' });
+      const j = (await r.json().catch(() => ({}))) as SkillToggleResponse;
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      if (Array.isArray(j.skills)) setSkills(j.skills);
+      setCommunity(cur => cur?.map(c => (c.slug === slug ? { ...c, installed: true } : c)) ?? cur);
+      notify.ok(`Installed “${slug}” — disabled until you enable it`);
+    } catch (e) {
+      notify.err(`Install failed: ${errorMessage(e)}`);
+    } finally { setInstalling(null); }
   };
 
   if (err) {
@@ -297,6 +344,53 @@ export default function SkillsPanel() {
           </div>
         </Card>
       ))}
+
+      {/* ── COMMUNITY CATALOG ────────────────────────────────────────────── */}
+      {community && community.length > 0 && (
+        <section className="card">
+          <div className="border-b border-ink p-4">
+            <Eyebrow className="text-vermilion">community</Eyebrow>
+            <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
+              Skills shared by other stations.
+            </div>
+            <div className="mt-1 text-[11px] leading-[1.6] text-muted">
+              These prompt-only skills ship with SUB/WAVE and update when you do.
+              <strong> Install</strong> copies one into <code>state/skills/</code> as your own
+              editable skill — it arrives <strong>disabled</strong>, so review the brief, then
+              enable it. Made one worth sharing? Hit <strong>Edit → Share to community</strong> on
+              any custom skill.
+            </div>
+          </div>
+          <div className="grid gap-3 p-3.5">
+            {community.map(c => (
+              <div key={c.slug} className="grid grid-cols-[1fr_auto] items-center gap-4 border border-ink p-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[13px] font-extrabold">{c.label}</span>
+                    {c.cooldown && <Pill className="text-[8px]">{c.cooldown} cooldown</Pill>}
+                  </div>
+                  <div className="mt-1 line-clamp-2 text-[12px] leading-[1.6] text-muted">{c.brief}</div>
+                </div>
+                <div className="flex flex-col items-end gap-2">
+                  {c.installed ? (
+                    <Pill tone="accent" dot>installed</Pill>
+                  ) : c.reserved ? (
+                    <Pill>reserved name</Pill>
+                  ) : (
+                    <Btn
+                      tone="accent"
+                      onClick={() => install(c.slug)}
+                      disabled={installing === c.slug}
+                    >
+                      {installing === c.slug ? 'Installing…' : 'Install'}
+                    </Btn>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* ── EDIT / CREATE MODAL ──────────────────────────────────────────── */}
       {modal && (

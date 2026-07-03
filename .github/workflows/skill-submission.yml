@@ -1,0 +1,203 @@
+name: Skill submission → PR
+
+# Turns a "🎛️ Share a skill" issue (see .github/ISSUE_TEMPLATE/add-skill.yml)
+# into a one-file pull request that adds a prompt-only community skill under
+# controller/src/skills/community/<slug>/SKILL.md — so contributors can share a
+# skill WITHOUT forking the repo or hand-writing frontmatter. A maintainer then
+# reviews and merges the generated PR; the skill ships in the controller image
+# on the next release and becomes installable from every station's /admin/skills.
+#
+# This mirrors .github/workflows/station-submission.yml. Security: the issue body
+# is UNTRUSTED user input. It is parsed and written to a file entirely inside
+# actions/github-script via the REST API (Buffer/base64, createOrUpdateFileContents)
+# — NEVER interpolated into a shell `run:` step, so there is no command-injection
+# surface. The only file this workflow can write is
+# controller/src/skills/community/<slug>/SKILL.md (slug sanitised + validated
+# against the loader's SLUG_RE, and rejected if it shadows a built-in). It never
+# writes a tool.mjs — community skills are prompt-only by contract.
+
+# NOTE: the `skill-submission` label MUST exist as a repo label, otherwise GitHub
+# silently drops it from the issue template and the `if:` guard below never
+# matches (every run shows "skipped"). `labeled` is included so a maintainer can
+# re-trigger a stuck submission by re-applying the label.
+on:
+  issues:
+    types: [opened, edited, labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: skill-submission-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  build-pr:
+    name: Build skill PR from issue
+    runs-on: ubuntu-latest
+    if: contains(join(github.event.issue.labels.*.name, ','), 'skill-submission')
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const { owner, repo } = context.repo;
+            const BASE = 'develop';
+            const DIR = 'controller/src/skills/community';
+
+            // Names a community skill may NOT take — kept in sync with the
+            // controller's RESERVED_KINDS (loader.ts): the shipped built-in kinds
+            // plus the queue-internal voice channels. A collision here would let a
+            // community skill shadow a first-party capability, so we reject it.
+            const RESERVED = new Set([
+              // built-in skill kinds (controller/src/skills/builtins/*)
+              'album-anniversary', 'curiosity', 'library-deep-cut', 'news',
+              'now-playing-dig', 'weather', 'web-search',
+              // queue-internal kinds (loader.ts QUEUE_INTERNAL_KINDS)
+              'link', 'dj-speak', 'announcement', 'station-id', 'hourly', 'hourly-check',
+            ]);
+            const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,48}$/;
+            const COOLDOWN_RE = /^\d+\s*[smhd]?$/;
+            const CONTEXT_FIELDS = new Set(['date', 'clock', 'time', 'weather', 'festival', 'show', 'listeners']);
+
+            // --- 1. Parse the issue-form body into a { heading: value } map ---
+            // GitHub renders each field as "### <label>\n\n<value>"; empty optional
+            // fields render as "_No response_". Walk line-by-line so a multi-line
+            // brief isn't truncated.
+            const body = issue.body || '';
+            const fields = {};
+            let curKey = null, buf = [];
+            const flush = () => {
+              if (curKey === null) return;
+              let v = buf.join('\n').trim();
+              if (v === '_No response_') v = '';
+              fields[curKey] = v;
+            };
+            for (const line of body.split(/\r?\n/)) {
+              const h = line.match(/^###\s+(.+?)\s*$/);
+              if (h) { flush(); curKey = h[1].trim(); buf = []; }
+              else if (curKey !== null) { buf.push(line); }
+            }
+            flush();
+            const get = (label) => (fields[label] || '').trim();
+
+            const slug = get('Skill slug').toLowerCase();
+            const label = get('Display name');
+            const brief = get('The brief');
+            const cooldown = get('Cooldown');
+            const contextRaw = get('Context fields');
+            const windowRaw = get('When it can air').toLowerCase();
+
+            // --- 2. Validate ---
+            const problems = [];
+            if (!slug) problems.push('**Skill slug** is required.');
+            else if (!SLUG_RE.test(slug)) problems.push('**Skill slug** must be a lowercase slug: start with a letter or digit, then letters/digits/hyphens, ≤49 chars (e.g. `moon-phase`).');
+            else if (RESERVED.has(slug)) problems.push(`**Skill slug** \`${slug}\` is reserved — it shadows a built-in capability. Pick another name.`);
+            if (!brief) problems.push('**The brief** is required — it\'s what the DJ says on air.');
+            if (cooldown && !COOLDOWN_RE.test(cooldown)) problems.push('**Cooldown** must look like `45m`, `6h`, `2d`, or a bare number (minutes).');
+
+            let contextList = [];
+            if (contextRaw) {
+              contextList = contextRaw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+              const bad = contextList.filter((c) => !CONTEXT_FIELDS.has(c));
+              if (bad.length) problems.push(`**Context fields** has unknown value(s): ${bad.join(', ')}. Valid: ${[...CONTEXT_FIELDS].join(', ')}.`);
+            }
+
+            const fail = async (lines) => {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: issue.number,
+                body: `⚠️ I couldn't build a pull request from this submission:\n\n` +
+                  lines.map((l) => `- ${l}`).join('\n') +
+                  `\n\nEdit the issue to fix it and I'll try again automatically.`,
+              });
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: issue.number, labels: ['needs-info'],
+              }).catch(() => {});
+            };
+
+            if (problems.length) { await fail(problems); return; }
+
+            // --- 3. Render SKILL.md (frontmatter matching writeSkillFile) ---
+            const fm = ['---', `name: ${slug}`];
+            if (label) fm.push(`label: ${label}`);
+            if (cooldown) fm.push(`cooldown: ${cooldown}`);
+            if (contextList.length) fm.push(`context: ${contextList.join(', ')}`);
+            if (windowRaw === 'commute') fm.push('window: commute');
+            fm.push('---', brief, '');
+            const content = fm.join('\n');
+            const contentB64 = Buffer.from(content, 'utf8').toString('base64');
+
+            const filePath = `${DIR}/${slug}/SKILL.md`;
+            const displayLabel = label || slug;
+
+            // --- 4. Ensure a branch off develop ---
+            const branch = `skill/${slug}`;
+            const baseRef = await github.rest.git.getRef({
+              owner, repo, ref: `heads/${BASE}`,
+            });
+            const baseSha = baseRef.data.object.sha;
+            try {
+              await github.rest.git.createRef({
+                owner, repo, ref: `refs/heads/${branch}`, sha: baseSha,
+              });
+            } catch (e) {
+              if (e.status !== 422) throw e; // 422 = branch already exists (edited issue)
+            }
+
+            // --- 5. Write/refresh the skill file on that branch ---
+            let existingSha;
+            try {
+              const existing = await github.rest.repos.getContent({
+                owner, repo, path: filePath, ref: branch,
+              });
+              existingSha = existing.data.sha;
+            } catch (e) {
+              if (e.status !== 404) throw e;
+            }
+            await github.rest.repos.createOrUpdateFileContents({
+              owner, repo, path: filePath, branch,
+              message: `feat(skills): add ${displayLabel} community skill (from #${issue.number})`,
+              content: contentB64,
+              ...(existingSha ? { sha: existingSha } : {}),
+            });
+
+            // --- 6. Open the PR (or reuse the existing one) ---
+            const open = await github.rest.pulls.list({
+              owner, repo, state: 'open', head: `${owner}:${branch}`,
+            });
+            let pr = open.data[0];
+            const summary = get('What is it? (for reviewers)');
+            const prBody =
+              `Adds the **${displayLabel}** community skill.\n\n` +
+              (summary ? `> ${summary}\n\n` : '') +
+              `Generated automatically from #${issue.number}. Closes #${issue.number}.\n\n` +
+              '```markdown\n' + content + '```\n';
+            if (!pr) {
+              const created = await github.rest.pulls.create({
+                owner, repo, base: BASE, head: branch,
+                title: `feat(skills): add ${displayLabel} community skill`,
+                body: prBody,
+              });
+              pr = created.data;
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: pr.number, labels: ['skills'],
+              }).catch(() => {});
+            } else {
+              await github.rest.pulls.update({
+                owner, repo, pull_number: pr.number, body: prBody,
+              });
+            }
+
+            // --- 7. Tell the contributor ---
+            await github.rest.issues.removeLabel({
+              owner, repo, issue_number: issue.number, name: 'needs-info',
+            }).catch(() => {});
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: issue.number,
+              body: `✅ Opened ${pr.html_url} with your skill at \`${filePath}\`.\n\n` +
+                `A maintainer will review and merge it — your skill then ships with the next ` +
+                `release and becomes installable from every station's admin panel. Need to ` +
+                `change something? Just edit this issue and the PR updates automatically.`,
+            });

@@ -23,6 +23,7 @@ import { V3AlertDialog } from '../../ui/alert-dialog';
 import { EditorDialog } from '../../ui/editor-dialog';
 import { Eyebrow } from '../ui';
 import { CONTEXT_FIELD_LABELS, CONTEXT_FIELDS_FALLBACK, splitContext } from './contextFields';
+import { skillSubmitUrl } from '../../../lib/repo';
 
 // Minimal shape of a catalogue skill (from GET /dj/skills) — only what the
 // modal needs. The full list type lives in SkillsPanel.
@@ -299,6 +300,23 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
     }
   };
 
+  // Share a custom, prompt-only skill to the community: open the prefilled
+  // add-skill Issue Form on GitHub in a new tab. A maintainer reviews the
+  // generated PR; once merged it ships to everyone as an installable community
+  // skill. Only offered for tool-less custom skills — built-ins already ship,
+  // and executable tool.mjs skills aren't accepted through this (v1) path.
+  const shareToCommunity = () => {
+    const url = skillSubmitUrl({
+      'skill-name': kind,
+      label: fields.label,
+      brief: fields.brief,
+      cooldown: fields.cooldown,
+      context: fields.context.join(', '),
+      window: fields.window === 'commute' ? 'commute' : '',
+    });
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   // Restore a built-in to its shipped default. Server-side and immediate: POST
   // overwrites BOTH the SKILL.md AND the tool.mjs in state/skills/<kind>/ from the
   // image template (an in-form repopulate couldn't restore the code). We then
@@ -402,6 +420,11 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
         {isEdit && custom && (
           <button type="button" onClick={() => setConfirmDelete(true)} disabled={acting} className="sw-ghost" style={{ padding: '13px 22px', background: 'transparent', color: 'var(--danger)', border: '1px solid var(--danger)', fontSize: 11, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', cursor: acting ? 'wait' : 'pointer', opacity: acting ? 0.7 : 1 }}>
             DELETE
+          </button>
+        )}
+        {isEdit && custom && !hasTool && (
+          <button type="button" onClick={shareToCommunity} className="sw-ghost" title="Open a prefilled GitHub issue to share this skill with the community" style={{ padding: '13px 22px', background: 'transparent', color: 'var(--muted)', border: '1px solid color-mix(in oklab, var(--ink) 24%, transparent)', fontSize: 11, fontWeight: 700, letterSpacing: '0.2em', textTransform: 'uppercase', cursor: 'pointer' }}>
+            ↗ SHARE TO COMMUNITY
           </button>
         )}
       </div>

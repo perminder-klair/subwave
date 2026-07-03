@@ -42,6 +42,13 @@ import { buildStationServices } from '../llm/internal/tools/station-services.js'
 // is NOT a runtime load root — it is read only by the seeder + reset route
 // (scaffold.js). Exported so those can resolve template files.
 export const BUILTINS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), 'builtins');
+// Shipped COMMUNITY catalog store — prompt-only skills contributed via the
+// community-submission flow (.github/workflows/skill-submission.yml), COPYd into
+// the image alongside builtins/. Like BUILTINS_DIR this is NOT a runtime load
+// root: it's a read-only catalog the operator browses in /admin/skills and
+// *installs* into state/skills on demand (routes/dj.ts). A community skill,
+// once installed, is an ordinary non-seeded custom skill — no special posture.
+export const COMMUNITY_DIR = resolve(dirname(fileURLToPath(import.meta.url)), 'community');
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
 const SLUG_RE_INNER = /^[a-z0-9][a-z0-9-]{0,48}$/;
 
@@ -139,6 +146,66 @@ export async function readTemplate(kind: string): Promise<SkillTemplate | null> 
   let toolPath: string | null = join(dir, 'tool.mjs');
   try { await stat(toolPath); } catch { toolPath = null; }
   return { kind, skillMd, data, body, toolPath };
+}
+
+// One entry in the shipped community catalog (browse-only). The fields mirror a
+// prompt-only skill's editable knobs so the install route can hand them straight
+// to writeSkillFile and the admin UI can preview them without a second fetch.
+export interface CommunitySkill {
+  slug: string;
+  label: string;
+  brief: string;               // the agent's brief (SKILL.md body)
+  cooldown?: string;           // e.g. "6h" — the frontmatter value, verbatim
+  window?: 'any' | 'commute';
+  context?: string;            // comma-separated "right now" fields
+}
+
+// Parse one community catalog dir into a CommunitySkill, or null when it isn't a
+// valid prompt-only skill (no SKILL.md, bad slug, empty brief). Community skills
+// carry NO tool.mjs by contract — a stray one is ignored (never read/installed).
+async function readCommunityDir(slug: string): Promise<CommunitySkill | null> {
+  if (!SLUG_RE.test(slug)) return null;
+  let raw: string;
+  try {
+    raw = await readFile(join(COMMUNITY_DIR, slug, 'SKILL.md'), 'utf8');
+  } catch {
+    return null;
+  }
+  const { data, body } = parseFrontmatter(raw);
+  const name = (data.name || slug).trim();
+  if (name !== slug || !body) return null; // name must match its folder; brief required
+  return {
+    slug,
+    label: (data.label || titleCase(slug)).trim(),
+    brief: body,
+    cooldown: data.cooldown ? String(data.cooldown).trim() : undefined,
+    window: data.window === 'commute' ? 'commute' : undefined,
+    context: (data.context ?? data.contextFields)?.trim() || undefined,
+  };
+}
+
+// List the shipped community catalog (browse-only). Returns [] when the dir is
+// absent. Never throws — a broken entry is skipped, mirroring loadSkills().
+export async function listCommunitySkills(): Promise<CommunitySkill[]> {
+  let entries: string[] = [];
+  try {
+    const dirents = await readdir(COMMUNITY_DIR, { withFileTypes: true });
+    entries = dirents.filter(d => d.isDirectory()).map(d => d.name);
+  } catch {
+    return []; // no community/ dir shipped — nothing to browse
+  }
+  const out: CommunitySkill[] = [];
+  for (const slug of entries.sort()) {
+    const cs = await readCommunityDir(slug).catch(() => null);
+    if (cs) out.push(cs);
+  }
+  return out;
+}
+
+// Read a single community catalog entry by slug (for the install route). Returns
+// null when there's no such valid entry.
+export async function readCommunitySkill(slug: string): Promise<CommunitySkill | null> {
+  return readCommunityDir(slug);
 }
 
 // Discover the shipped kinds from the template dir names and (re)build the
