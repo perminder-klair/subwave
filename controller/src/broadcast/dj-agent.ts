@@ -316,7 +316,7 @@ export const pickerAgent = defineAgent({
   maxSteps: 4,
   timeoutMs: agentDeadline,
   buildSystem: () => pickSystem(),
-  buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, playlistLock, playlistTracks }) => {
+  buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, playlistLock, playlistTracks, excludedIds }) => {
     // Resolve the active show live (a show that just came on air takes effect):
     // for a strict show (filtersStrict), EVERY set music filter — genre, era,
     // mood, energy — becomes a hard lock the discovery tools enforce on
