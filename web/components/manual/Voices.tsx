@@ -5,7 +5,7 @@ import CodeBlock from "@/components/CodeBlock";
 export default function Voices() {
   return (
     <ManualPage
-      eyebrow="MANUAL · 12"
+      eyebrow="MANUAL · 13"
       title="Voices & TTS."
       intro="The DJ's words are written by the language model, but turning them into speech is a separate job. Six text-to-speech engines render the voice: four built in, one hosted, and one a TTS server you run yourself. You can mix them per segment, clone a voice, point at your own server, or hand the heavy one to a GPU."
       current="/manual/voices"
