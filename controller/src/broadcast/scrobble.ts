@@ -26,25 +26,30 @@ const TIMEOUT_MS = 5000;
 const LASTFM_API = 'https://ws.audioscrobbler.com/2.0/';
 const LISTENBRAINZ_DEFAULT = 'https://api.listenbrainz.org/1/submit-listens';
 
-// Shared base for submit + validate-token. Env LISTENBRAINZ_API_URL wins (may be
-// a full submit-listens URL — strip that suffix). Settings baseUrl is the API
-// root (e.g. http://koito:4110/apis/listenbrainz/1). Default → listenbrainz.org.
+// Shared base for submit + validate-token. Env LISTENBRAINZ_API_URL wins. Both env +
+// settings inputs may be either the API root (…/1) or the submit endpoint
+// (…/1/submit-listens) — normalize to a base.
 export function listenbrainzApiBase(): string {
-  const envUrl = process.env.LISTENBRAINZ_API_URL?.trim();
-  if (envUrl) return envUrl.replace(/\/submit-listens\/?$/i, '').replace(/\/$/, '');
-  const base = settings.get()?.scrobble?.listenbrainz?.baseUrl?.trim();
-  if (base) return base.replace(/\/$/, '');
-  return 'https://api.listenbrainz.org/1';
+  const raw =
+    process.env.LISTENBRAINZ_API_URL?.trim() ||
+    settings.get()?.scrobble?.listenbrainz?.baseUrl?.trim() ||
+    '';
+  const base = raw.replace(/\/submit-listens\/?$/i, '').replace(/\/$/, '');
+  return base || 'https://api.listenbrainz.org/1';
 }
 
 // Env wins (LISTENBRAINZ_API_URL in .env / secrets.env), then settings baseUrl
 // (for self-hosted ListenBrainz-compatible scrobblers), else LB.org.
 function listenbrainzSubmitUrl(): string {
-  const envUrl = process.env.LISTENBRAINZ_API_URL?.trim();
-  if (envUrl) return envUrl;
-  const base = settings.get()?.scrobble?.listenbrainz?.baseUrl?.trim();
-  if (base) return `${base.replace(/\/$/, '')}/submit-listens`;
-  return LISTENBRAINZ_DEFAULT;
+  const raw =
+    process.env.LISTENBRAINZ_API_URL?.trim() ||
+    settings.get()?.scrobble?.listenbrainz?.baseUrl?.trim() ||
+    '';
+  const normalized = raw.replace(/\/$/, '');
+  if (!normalized) return LISTENBRAINZ_DEFAULT;
+  return /\/submit-listens$/i.test(normalized)
+    ? normalized
+    : `${normalized.replace(/\/submit-listens$/i, '')}/submit-listens`;
 }
 
 // Last.fm's documented rule for a "valid scrobble":
