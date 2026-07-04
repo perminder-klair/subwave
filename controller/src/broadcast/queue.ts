@@ -2,10 +2,11 @@
 // to the file Liquidsoap watches. A now-playing watcher rotates items
 // between upcoming → current → history based on what Liquidsoap reports.
 
-import { writeFile, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
-import { stat, rename } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { config } from '../config.js';
+import { writeFileAtomic } from '../util/atomic-file.js';
 import * as subsonic from '../music/subsonic.js';
 import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
@@ -97,6 +98,8 @@ class Queue {
   history: any[] = [];         // finished tracks, newest first
   djLog: any[] = [];           // controller-level events for the web UI
   lastSeenKey: string | null = null;   // for change detection in the watcher
+  _nowPlaying: any = null;             // last parse of now-playing.json, refreshed by the watcher
+  _nowPlayingFresh = false;            // true once the watcher's first tick has landed
   senderBusy = false;          // drain-to-Liquidsoap mutex
   pickerBusy = false;          // prevent concurrent LLM picks
   autoPick = true;             // toggle: should we ask Ollama for next track when idle
@@ -120,7 +123,7 @@ class Queue {
     this._persistTimer = setTimeout(async () => {
       this._persistTimer = null;
       try {
-        await writeFile(config.queue.file, JSON.stringify({
+        await writeFileAtomic(config.queue.file, JSON.stringify({
           upcoming: this.upcoming,
           current: this.current,
           history: this.history,
@@ -140,7 +143,7 @@ class Queue {
     this._recentPlaysTimer = setTimeout(async () => {
       this._recentPlaysTimer = null;
       try {
-        await writeFile(config.queue.recentPlaysFile,
+        await writeFileAtomic(config.queue.recentPlaysFile,
           JSON.stringify(this._recentPlays, null, 2));
       } catch (err: any) {
         console.error('[queue] recent-plays persist failed:', err.message);
@@ -1254,12 +1257,17 @@ class Queue {
     return out;
   }
 
-  // Poll now-playing.json every 1.5s and dispatch track changes
+  // Poll now-playing.json every 1.5s and dispatch track changes. Each tick
+  // also refreshes the in-memory copy getNowPlaying() serves, so the
+  // per-listener /now-playing poll never has to touch the disk.
   startWatcher() {
-    setInterval(async () => {
-      const np = await this.getNowPlaying();
-      this.onTrackStarted(np);
-    }, 1500);
+    const tick = async () => {
+      this._nowPlaying = await this.readNowPlayingFromDisk();
+      this._nowPlayingFresh = true;
+      this.onTrackStarted(this._nowPlaying);
+    };
+    void tick();
+    setInterval(tick, 1500);
     this.log('scheduler', 'Now-playing watcher started');
   }
 
@@ -1286,8 +1294,22 @@ class Queue {
     };
   }
 
-  // Read the now-playing JSON Liquidsoap writes
+  // Now-playing as Liquidsoap last reported it. Served from the watcher's
+  // in-memory copy: every listener polls /now-playing every ~5s and the
+  // watcher already re-reads the file every 1.5s, so a per-request disk
+  // read + parse buys nothing. Falls back to a direct read until the first
+  // watcher tick lands (or when the watcher was never started, e.g. one-off
+  // scripts). Returns a copy — callers (routes/public.ts) enrich the object
+  // in place and must not leak those fields into the shared cache.
   async getNowPlaying() {
+    const np = this._nowPlayingFresh
+      ? this._nowPlaying
+      : await this.readNowPlayingFromDisk();
+    return np ? { ...np } : null;
+  }
+
+  // Read the now-playing JSON Liquidsoap writes
+  async readNowPlayingFromDisk() {
     try {
       const raw = await readFile(config.liquidsoap.nowPlayingFile, 'utf8');
       return JSON.parse(raw);
@@ -1392,8 +1414,7 @@ async function writeHandoff(path: string, contents: string, { maxWaitMs = 1500 }
       // half-written (or truncated-but-empty) file — its poll handlers read,
       // DELETE, then check non-empty, so a poll landing mid-write would drop
       // this handoff silently. rename(2) is atomic on the same volume.
-      await writeFile(`${path}.tmp`, contents);
-      await rename(`${path}.tmp`, path);
+      await writeFileAtomic(path, contents);
     });
   // Hold the slot until liquidsoap consumes THIS write too, so the next
   // queued writer waits for the audio to land, not just for the write call to

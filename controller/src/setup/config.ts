@@ -11,9 +11,10 @@
 // the runtime admin store, setup-config.json stays the one-shot wizard output.
 
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { STATE_DIR } from '../config.js';
+import { writeFileAtomic } from '../util/atomic-file.js';
 
 const PATH = `${STATE_DIR}/setup-config.json`;
 
@@ -51,7 +52,7 @@ export async function saveSetupConfig(patch: Partial<SetupConfig>): Promise<Setu
     navidrome: { ...(current.navidrome || {}), ...(patch.navidrome || {}) },
   };
   await mkdir(dirname(PATH), { recursive: true });
-  await writeFile(PATH, JSON.stringify(next, null, 2));
+  await writeFileAtomic(PATH, JSON.stringify(next, null, 2));
   return next;
 }
 

@@ -1103,7 +1103,11 @@ def on_meta(m) =
       filename = filename,
       timestamp = ts
     })
-    file.write(data=payload, "/var/sub-wave/now-playing.json")
+    # atomic=true (temp file + rename) — the controller re-reads this file
+    # every 1.5s and per /now-playing request, and its reader treats ANY parse
+    # failure as null; an in-place truncate-then-write here made it possible to
+    # observe a half-written JSON and blank the now-playing data for a tick.
+    file.write(data=payload, atomic=true, "/var/sub-wave/now-playing.json")
     # Push the same metadata onto the Icecast stream so the ICY title
     # tracks the current song instead of lagging a transition behind.
     radio.insert_metadata([
@@ -1365,6 +1369,13 @@ def stream_down() =
     fn = stream_shutdown()
     fn()
     stream_on := false
+    # Off air — drop now-playing.json so the UI stops advertising the last
+    # track that played. on_meta rewrites it as soon as we're back on air and
+    # the next track's metadata fires; the controller reads a missing file as
+    # "nothing playing".
+    if file.exists("/var/sub-wave/now-playing.json") then
+      file.remove("/var/sub-wave/now-playing.json")
+    end
   end
 end
 

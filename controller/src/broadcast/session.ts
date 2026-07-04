@@ -15,15 +15,23 @@
 //   - The live session is persisted to state/session.json; archived sessions
 //     land in state/sessions/<id>.json on roll.
 
-import { writeFile, readFile, mkdir } from 'node:fs/promises';
+import { readFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { config } from '../config.js';
+import { writeFileAtomic } from '../util/atomic-file.js';
 import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
 
 const MAX_SESSION_MS = 4 * 60 * 60 * 1000;  // safety cap — roll even if key is stable
-const WINDOW_TURNS = 40;                    // turns fed to the agent (full log is kept)
+const WINDOW_TURNS = 40;                    // turns fed to the agent
+// Hard bound on the messages array. A normal 4h session generates a few
+// hundred turns, so this never trims in practice — it exists because persist()
+// rewrites the whole array on every turn (1s debounce), and an unbounded array
+// makes that O(n²) over the session (and lets a pathological session grow
+// session.json without limit). Far above WINDOW_TURNS and everything
+// buildHandoff reads, so trimming is invisible to the agent.
+const MAX_TURNS = 500;
 const RATIONALE_WINDOW = 3;                 // most-recent dj/pick reasons kept in the window (anti-thread-momentum)
 const PERSIST_DEBOUNCE_MS = 1000;
 
@@ -95,7 +103,9 @@ function buildHandoff(prev: any) {
 async function persist() {
   if (!_session) return;
   try {
-    await writeFile(config.session.currentFile, JSON.stringify(_session, null, 2));
+    // Atomic replace — /debug and boot recovery read this file, and a crash
+    // mid-write should leave the previous snapshot, not a truncated one.
+    await writeFileAtomic(config.session.currentFile, JSON.stringify(_session, null, 2));
   } catch {}
 }
 
@@ -108,7 +118,7 @@ async function archive(s: any) {
   if (!s?.id) return;
   try {
     await mkdir(config.session.dir, { recursive: true });
-    await writeFile(`${config.session.dir}/${s.id}.json`, JSON.stringify(s, null, 2));
+    await writeFileAtomic(`${config.session.dir}/${s.id}.json`, JSON.stringify(s, null, 2));
   } catch {}
 }
 
@@ -122,6 +132,9 @@ export function appendTurn({ role, kind, text, meta = {} }: { role: string; kind
   if (!_session) return null;
   const turn = { t: new Date().toISOString(), role, kind, text: text || '', meta };
   _session.messages.push(turn);
+  if (_session.messages.length > MAX_TURNS) {
+    _session.messages.splice(0, _session.messages.length - MAX_TURNS);
+  }
   schedulePersist();
   return turn;
 }
