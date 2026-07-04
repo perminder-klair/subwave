@@ -14,6 +14,7 @@ import { getStreamStatus } from '../broadcast/listeners.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
 import { getStationTimezone } from '../time.js';
 import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
+import { listCommunitySkills } from '../skills/loader.js';
 import { lifetimeTokenCount } from '../llm/log.js';
 
 export const router = express.Router();
@@ -444,6 +445,26 @@ router.get('/session', (req, res) => {
     },
     messages: s.messages.filter(m => m.kind !== 'sfx').slice(-120),
   });
+});
+
+// ---------------------------------------------------------------------------
+// GET /skills/community — the shipped community skill catalog (prompt-only DJ
+// segments contributed via the community-submission flow, COPYd into the
+// image). Browse-only public reference: the same catalog the admin Skills →
+// Community modal installs from, minus the per-station `installed`/`reserved`
+// annotations (those are meaningful only inside a specific station's admin).
+// Powers the public /skills showcase page. Never throws — an empty catalog
+// (no community/ dir shipped) returns []. No admin gate: it's static shipped
+// data, identical across every install of the same version.
+// ---------------------------------------------------------------------------
+router.get('/skills/community', async (req, res) => {
+  try {
+    const community = await listCommunitySkills();
+    res.json({ community });
+  } catch (err) {
+    queue.log('error', `/skills/community failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------
