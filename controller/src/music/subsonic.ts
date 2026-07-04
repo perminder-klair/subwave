@@ -4,6 +4,9 @@
 import crypto from 'node:crypto';
 import { config } from '../config.js';
 import * as subLog from './subsonic-log.js';
+import { isStationArchive } from './sources/station-archive.js';
+
+export { isStationArchive };
 
 function buildAuth() {
   const salt = crypto.randomBytes(8).toString('hex');
@@ -136,31 +139,9 @@ export async function ping(): Promise<{ ok: boolean; reason?: string }> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Station-archive guard
-// ---------------------------------------------------------------------------
-// SUB/WAVE's own hourly mixdowns are written by radio.liq to
-// `/var/sub-wave/archive/YYYY-MM-DD/HH-00.mp3`. If the operator's Navidrome music
-// folder overlaps that directory, Navidrome scans those MP3s and indexes them as
-// untagged songs whose filename ("02-00.mp3") becomes the title — they then leak
-// into the picker (DJ reads "02:00" as the time), the tagger, and the library UI
-// (issue #273). Every selection/enumeration path funnels through the song-returning
-// functions below, so filtering here keeps station recordings out of all of them.
-// `call()` logging is untouched, so /debug still shows the raw Subsonic responses.
-export function isStationArchive(song: any): boolean {
-  if (!song) return false;
-  const path = String(song.path ?? '');
-  // Primary, tight signal: the archive path pattern radio.liq writes.
-  if (/(^|\/)archive\/\d{4}-\d{2}-\d{2}\/\d{2}-\d{2}\.mp3$/i.test(path)) return true;
-  // Fallback when Navidrome omits `path`: an HH-00 title with no real artist/album.
-  const title = String(song.title ?? '').trim();
-  const blank = (s: any) => {
-    const v = String(s ?? '').trim().toLowerCase();
-    return v === '' || v.startsWith('[unknown') || v === 'unknown artist' || v === 'unknown album';
-  };
-  return /^\d{2}-00$/.test(title) && blank(song.artist) && blank(song.album);
-}
-
+// The station-archive guard (issue #273) lives in sources/station-archive.js —
+// it's source-agnostic and shared with the local-folder source. `call()` logging
+// is untouched, so /debug still shows the raw Subsonic responses.
 const rejectArchive = (arr: any[]) => (arr || []).filter((s) => !isStationArchive(s));
 
 // ---------------------------------------------------------------------------
