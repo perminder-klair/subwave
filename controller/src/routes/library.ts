@@ -17,6 +17,7 @@ import { promptVocabHash } from '../music/embeddings.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
 import { tagger, taggerView, startAnalyzer, startReconcile } from '../broadcast/tagger.js';
+import * as localScanner from '../music/sources/local/scanner.js';
 
 export const router = express.Router();
 
@@ -356,6 +357,20 @@ router.get('/library/coverage', requireAdmin, async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/library/tagger', requireAdmin, (_req, res) => {
   res.json({ tagger: taggerView() });
+});
+
+// ---------------------------------------------------------------------------
+// POST /library/local/rescan — re-scan the local-folder music source (the
+// admin "Rescan" button, only meaningful when settings.music.source is 'local').
+// Single-flight: the scanner dedupes concurrent scans, and unchanged files are
+// stat-only, so this is cheap. Returns the scan status the Settings panel polls.
+// ---------------------------------------------------------------------------
+router.post('/library/local/rescan', requireAdmin, (_req, res) => {
+  if (localScanner.getStatus().state === 'scanning') {
+    return res.status(409).json({ error: 'a local-music scan is already running', localMusic: localScanner.getStatus() });
+  }
+  void localScanner.scan();
+  res.json({ ok: true, localMusic: localScanner.getStatus() });
 });
 
 // ---------------------------------------------------------------------------

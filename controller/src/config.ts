@@ -48,6 +48,15 @@ export const config = {
     apiVersion: '1.16.1',
     clientName: 'sub-wave',
   },
+  // Local-folder music source (settings.music.source === 'local'). The default
+  // <STATE_DIR>/music needs no compose changes — the state dir is already
+  // bind-mounted at the same /var/sub-wave path in the controller, broadcast AND
+  // analyzer containers, so the absolute file paths this source hands Liquidsoap
+  // resolve identically everywhere. Override with MUSIC_DIR only if you also
+  // bind-mount that path into all three at the SAME location.
+  music: {
+    localDir: process.env.MUSIC_DIR || `${STATE_DIR}/music`,
+  },
   ollama: {
     // Default-when-blank server URL + model. The admin Settings UI
     // (`llm.ollamaUrl` / `llm.model`) overrides both — there are no

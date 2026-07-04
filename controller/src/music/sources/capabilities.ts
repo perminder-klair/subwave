@@ -33,6 +33,22 @@ const CAPS: Record<string, SourceCapabilities> = {
     hasRecentlyAdded: true,
     hasFrequent: true,
   },
+  // Local folder: everything derivable from file tags is on; anything needing a
+  // server or an external graph (similar/sonic/starred/playlists/lyrics/
+  // artist-info/last.fm tags) is off. getTopSongs is a shuffled-sample heuristic;
+  // recently-added uses file mtime; frequent is a random album sample.
+  local: {
+    hasSimilar: false,
+    hasSonicSimilarity: false,
+    hasStarred: false,
+    hasTopSongs: true,
+    hasArtistInfo: false,
+    hasLastfmTags: false,
+    hasLyrics: false,
+    hasPlaylists: false,
+    hasRecentlyAdded: true,
+    hasFrequent: true,
+  },
 };
 
 // Everything off — a source declares only what it can serve.

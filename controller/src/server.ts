@@ -135,6 +135,25 @@ app.listen(config.server.port, async () => {
     console.error('[remote] tts probe start failed:', err.message);
   }
 
+  // Local-folder music source: warm the index from the persisted cache (instant
+  // serve on restart), kick a background scan (never blocks ready — a fresh
+  // install serves empty until the first scan lands), and start the periodic
+  // rescan. Only when it's the active source. Best-effort; never fatal.
+  try {
+    if ((settings.get() as any).music?.source === 'local') {
+      const scanner = await import('./music/sources/local/scanner.js');
+      await scanner.initFromCache();
+      const cached = scanner.getStatus().trackCount;
+      console.log(`[local-music] source active — ${cached} track(s) from cache, scanning ${scanner.musicRoot()}…`);
+      scanner.scan().then((idx) =>
+        console.log(`[local-music] scan done — ${idx.tracks.size} track(s)`)
+      ).catch((err: any) => console.error('[local-music] scan failed:', err?.message || err));
+      scanner.startPeriodicRescan();
+    }
+  } catch (err: any) {
+    console.error('[local-music] init failed:', err.message);
+  }
+
   // Seed today's LLM token tally from the durable event log so a mid-day
   // restart resumes the daily budget count instead of resetting it. Must run
   // once, before any new model call records (re-seeding would double-count).

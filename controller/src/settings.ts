@@ -254,6 +254,7 @@ export const EMBEDDING_PROVIDERS = [
 // Part B appends 'local'.
 export const MUSIC_SOURCES = [
   'subsonic',
+  'local',
 ];
 
 // Coerce a stored Ollama context-window value. 0 disables (use Ollama's own

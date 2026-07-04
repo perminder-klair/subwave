@@ -294,8 +294,14 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       // Leave the row NULL so the next run retries it; don't stamp a version.
       console.error(`[analyze] ${id} failed: ${err?.message || err}`);
     } finally {
-      // Drop this track's temp file (best-effort) regardless of outcome.
-      if (localPath) await rm(localPath, { force: true }).catch(() => {});
+      // Drop this track's temp download (best-effort) regardless of outcome —
+      // but ONLY genuine downloads under analyze-tmp. A source that exposes files
+      // on the shared mount (the local-folder source) returns the real library
+      // path here; deleting that would destroy the operator's music.
+      const tmpRoot = `${config.stateDir}/analyze-tmp`;
+      if (localPath && localPath.startsWith(tmpRoot)) {
+        await rm(localPath, { force: true }).catch(() => {});
+      }
     }
     if ((i + 1) % 25 === 0 || i + 1 === ids.length) {
       console.log(`[analyze] ${i + 1}/${ids.length} (ok=${analyzed} fail=${failed})`);

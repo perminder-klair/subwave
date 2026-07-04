@@ -7,6 +7,7 @@ import { extname } from 'node:path';
 import { config } from '../config.js';
 import * as library from '../music/library.js';
 import * as source from '../music/source.js';
+import * as localScanner from '../music/sources/local/scanner.js';
 import * as jingles from '../broadcast/jingles.js';
 import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import * as settings from '../settings.js';
@@ -145,6 +146,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
       music: {
         sources: settings.MUSIC_SOURCES,
         active: source.activeSourceId(),
+        // Scan status for the local-folder source (track count, last scan,
+        // scanning-now) — the Settings panel polls this to render the card.
+        local: localScanner.getStatus(),
       },
       embedding: {
         // Embedding-capable providers only — a strict subset of llm.providers.
