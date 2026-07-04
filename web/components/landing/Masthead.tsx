@@ -37,7 +37,14 @@ export default function Masthead() {
           aria-label="SUB/WAVE home"
           className="bs-wordmark bs-wordmark-plate bs-masthead-mark text-ink no-underline"
         >
-          SUB<span className="text-vermilion">/</span>WAVE
+          SUB
+          <span className="bs-wordmark-slash">
+            <span className="bs-wordmark-slash-glyph text-vermilion">/</span>
+            <span className="bs-wordmark-disc" aria-hidden="true">
+              <span className="bs-wordmark-disc-face" />
+            </span>
+          </span>
+          WAVE
         </Link>
 
         <div className="bs-masthead-status flex items-center gap-2 text-[11px] font-bold tracking-[0.3em] uppercase">
