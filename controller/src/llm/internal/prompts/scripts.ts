@@ -162,10 +162,9 @@ export async function generateLink({ previous, current, context, recap = null, r
   });
 }
 
-export async function generateHourlyTime(time: any, weather: any, { recap = null, context = null, recentOpeners = null }: any = {}) {
-  const ctx = context || { time, weather };
-  const ctxLines = buildContextLines(ctx, { contextFields: SCRIPT_CONTEXT_FIELDS });
-  ctxLines.push(`Task: a brief top-of-the-hour time check, in character. ${lengthPhrase('hourly')}.`);
+export async function generateHourlyTime({ recap = null, context = null, recentOpeners = null }: any = {}) {
+  const ctxLines = buildContextLines(context, { contextFields: SCRIPT_CONTEXT_FIELDS });
+  ctxLines.push(`Task: a brief top-of-the-hour time check, in character. ${lengthPhrase('hourly')}. Say the time in natural spoken words ("two in the afternoon", "just gone eight") — never digits or 24-hour form.`);
   return djText({
     system: djSystem(),
     prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'hourly', recap, recentOpeners }),

@@ -334,7 +334,7 @@ async function refreshAutoPlaylistInner() {
 export async function runHourlyCheck() {
   return withTrace({ kind: 'hourly' }, async () => {
     const ctx = await getFullContext();
-    const script = await dj.generateHourlyTime(ctx.time, ctx.weather, {
+    const script = await dj.generateHourlyTime({
       recap: queue.getDjRecap(),
       context: ctx,
       recentOpeners: queue.getRecentOpeners(),

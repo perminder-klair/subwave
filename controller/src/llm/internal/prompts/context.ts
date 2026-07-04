@@ -49,6 +49,11 @@ export const ANGLES = {
     'Open with where in the day we are (mid-afternoon lull, evening getting started, etc.) before the actual time.',
     'Just one short sentence that happens to mention the time.',
     'Acknowledge what kind of listener might be tuning in at this exact hour, without naming them.',
+    'Note what this hour usually means — the kettle hour, the last-push hour, the winding-down hour — then land the time inside it.',
+    'Mark the hour as a small milestone in the day: one down, or one to go, or the halfway point.',
+    'Mention the time as if answering someone who just asked — offhand, unbothered.',
+    'Let the hour prompt a tiny aside about how fast or slow the day is moving, time folded in.',
+    'Tie the hour to the light outside — what the sky is probably doing right now — and slip the time in after.',
   ],
 };
 
