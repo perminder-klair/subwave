@@ -235,3 +235,41 @@ there (or in `/admin/skills`), not in `.env`.
   fires autonomously when it's enabled *and* assigned to the persona on air
   (Personas page). **Run now** is an operator override that bypasses the toggle,
   the persona assignment, the frequency gate, and the cooldown.
+
+## Sharing skills
+
+Three ways to move a skill between stations, sorted from most-reviewed to
+most-direct.
+
+### The community catalog
+
+`/admin/skills` has a **Community** button (next to **New skill**) that lists a
+catalog of skills shipped in the controller image. **Install** copies one into
+`state/skills/` as an ordinary custom skill — **disabled on arrival**, for you to
+read before it airs. The catalog is **prompt-only by contract**: no `tool.mjs` is
+ever shipped or written, so installing from it never runs third-party code.
+
+### Sharing your own
+
+Any **prompt-only** custom skill (no `tool.mjs`) shows a **Share to community**
+button. It opens a prefilled GitHub Issue Form; a workflow
+(`skill-submission.yml`) validates the slug, reserved names, and context fields,
+then opens a one-file PR adding `controller/src/skills/community/<slug>/SKILL.md`
+— no fork, no code. Once merged it ships in the next image and reaches every
+operator through the normal update path. A skill that carries a `tool.mjs` can't
+be shared this way; use a zip.
+
+### Zip export / import
+
+For a direct operator-to-operator handoff, the skill edit sheet has **↓ Export**
+(`GET /api/dj/skills/:slug/export`) that streams a `.zip` of `SKILL.md` plus
+`tool.mjs` if present. The **Import .zip** button in the Community modal
+(`POST /api/dj/skills/import`) takes it back in, deriving the slug from the
+bundle's `name:`.
+
+> **A zip may carry code.** Unlike the reviewed catalog, an imported `.zip` can
+> include a `tool.mjs` — a direct action on your own box, the same trust as
+> dropping a folder in by hand or restoring a backup. Imports arrive **disabled**;
+> when the bundle has a tool, the response flags it so the UI can warn you before
+> you enable it. (Hardened against zip-slip; 5 MB upload cap, only `SKILL.md` +
+> `tool.mjs` are extracted. Reserved names and re-imports are rejected.)
