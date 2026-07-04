@@ -119,20 +119,14 @@ jobs:
 
             if (problems.length) { await fail(problems); return; }
 
-            // --- 3. Render SKILL.md (frontmatter matching writeSkillFile) ---
-            const fm = ['---', `name: ${slug}`];
-            if (label) fm.push(`label: ${label}`);
-            if (cooldown) fm.push(`cooldown: ${cooldown}`);
-            if (contextList.length) fm.push(`context: ${contextList.join(', ')}`);
-            if (windowRaw === 'commute') fm.push('window: commute');
-            fm.push('---', brief, '');
-            const content = fm.join('\n');
-            const contentB64 = Buffer.from(content, 'utf8').toString('base64');
-
             const filePath = `${DIR}/${slug}/SKILL.md`;
             const displayLabel = label || slug;
+            // Provenance: who submitted it (the issue author) and when. `new Date`
+            // is the CI clock (UTC) — this runs in real Node, not a sandbox.
+            const submittedBy = (issue.user && issue.user.login) || '';
+            const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
 
-            // --- 4. Ensure a branch off develop ---
+            // --- 3. Ensure a branch off develop ---
             const branch = `skill/${slug}`;
             const baseRef = await github.rest.git.getRef({
               owner, repo, ref: `heads/${BASE}`,
@@ -146,16 +140,41 @@ jobs:
               if (e.status !== 422) throw e; // 422 = branch already exists (edited issue)
             }
 
-            // --- 5. Write/refresh the skill file on that branch ---
+            // --- 4. Find any existing copy on the branch (an edited issue, or a
+            // version already merged into develop that this branch carries). We
+            // need its blob sha to update in place, and its `dateAdded:` so the
+            // original added-date survives re-runs — only dateModified moves. ---
             let existingSha;
+            let existingAdded = '';
             try {
               const existing = await github.rest.repos.getContent({
                 owner, repo, path: filePath, ref: branch,
               });
               existingSha = existing.data.sha;
+              const prev = Buffer.from(existing.data.content || '', 'base64').toString('utf8');
+              const m = prev.match(/^dateAdded:\s*(.+?)\s*$/m);
+              if (m) existingAdded = m[1].trim();
             } catch (e) {
               if (e.status !== 404) throw e;
             }
+            const dateAdded = existingAdded || today;
+
+            // --- 5. Render SKILL.md — frontmatter matching writeSkillFile, plus
+            // the provenance the loader reads back (submittedBy / dateAdded /
+            // dateModified). See controller/src/skills/loader.ts CommunitySkill. ---
+            const fm = ['---', `name: ${slug}`];
+            if (label) fm.push(`label: ${label}`);
+            if (cooldown) fm.push(`cooldown: ${cooldown}`);
+            if (contextList.length) fm.push(`context: ${contextList.join(', ')}`);
+            if (windowRaw === 'commute') fm.push('window: commute');
+            if (submittedBy) fm.push(`submittedBy: ${submittedBy}`);
+            fm.push(`dateAdded: ${dateAdded}`);
+            fm.push(`dateModified: ${today}`);
+            fm.push('---', brief, '');
+            const content = fm.join('\n');
+            const contentB64 = Buffer.from(content, 'utf8').toString('base64');
+
+            // --- 6. Write/refresh the skill file on that branch ---
             await github.rest.repos.createOrUpdateFileContents({
               owner, repo, path: filePath, branch,
               message: `feat(skills): add ${displayLabel} community skill (from #${issue.number})`,
@@ -163,7 +182,7 @@ jobs:
               ...(existingSha ? { sha: existingSha } : {}),
             });
 
-            // --- 6. Open the PR (or reuse the existing one) ---
+            // --- 7. Open the PR (or reuse the existing one) ---
             const open = await github.rest.pulls.list({
               owner, repo, state: 'open', head: `${owner}:${branch}`,
             });
@@ -190,7 +209,7 @@ jobs:
               });
             }
 
-            // --- 7. Tell the contributor ---
+            // --- 8. Tell the contributor ---
             await github.rest.issues.removeLabel({
               owner, repo, issue_number: issue.number, name: 'needs-info',
             }).catch(() => {});

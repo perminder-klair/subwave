@@ -160,6 +160,12 @@ export interface CommunitySkill {
   cooldown?: string;           // e.g. "6h" — the frontmatter value, verbatim
   window?: 'any' | 'commute';
   context?: string;            // comma-separated "right now" fields
+  // Provenance stamped by the submission workflow when a skill is approved +
+  // merged (.github/workflows/skill-submission.yml). Absent on hand-added or
+  // pre-provenance catalog entries — parsed defensively, UI degrades gracefully.
+  submittedBy?: string;        // GitHub login of the contributor who submitted it
+  dateAdded?: string;          // ISO date (YYYY-MM-DD) it first entered the catalog
+  dateModified?: string;       // ISO date (YYYY-MM-DD) of the last catalog change
 }
 
 // Parse one community catalog dir into a CommunitySkill, or null when it isn't a
@@ -183,6 +189,9 @@ async function readCommunityDir(slug: string): Promise<CommunitySkill | null> {
     cooldown: data.cooldown ? String(data.cooldown).trim() : undefined,
     window: data.window === 'commute' ? 'commute' : undefined,
     context: (data.context ?? data.contextFields)?.trim() || undefined,
+    submittedBy: data.submittedBy?.trim() || undefined,
+    dateAdded: data.dateAdded?.trim() || undefined,
+    dateModified: data.dateModified?.trim() || undefined,
   };
 }
 
