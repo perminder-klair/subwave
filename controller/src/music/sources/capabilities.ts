@@ -49,6 +49,25 @@ const CAPS: Record<string, SourceCapabilities> = {
     hasRecentlyAdded: true,
     hasFrequent: true,
   },
+  // Plex Media Server: richer than the local folder (a real server with
+  // playlists + play-count/rating signals) but without the Last.fm graph a
+  // Subsonic/Navidrome server layers on. ON: starred (userRating≥3★), top-songs
+  // (viewCount-ranked), playlists, recently-added (addedAt), frequent
+  // (viewCount). OFF: Last.fm similar-songs, the OpenSubsonic sonicSimilarity
+  // extension, artist-info/bio, Last.fm crowd tags, lyrics — none exposed by the
+  // PMS API in the shape the picker consumes.
+  plex: {
+    hasSimilar: false,
+    hasSonicSimilarity: false,
+    hasStarred: true,
+    hasTopSongs: true,
+    hasArtistInfo: false,
+    hasLastfmTags: false,
+    hasLyrics: false,
+    hasPlaylists: true,
+    hasRecentlyAdded: true,
+    hasFrequent: true,
+  },
 };
 
 // Everything off — a source declares only what it can serve.

@@ -263,6 +263,14 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
     Advanced: set `MUSIC_DIR` to use a folder elsewhere, but it must be
     bind-mounted at the *same* path into the controller, broadcast **and**
     analyzer containers.
+  - **Plex** — point SUB/WAVE at a Plex Media Server over its HTTP API. Set
+    `PLEX_URL` + `PLEX_TOKEN` (and optionally `PLEX_LIBRARY` to pin the music
+    section) in `.env`, then switch the source in the admin UI. Playlists,
+    starred (rated ≥3★), play-count-ranked top-songs/favourites, recently-added,
+    genre, random and mood/embedding picks all work; the Last.fm-graph tier
+    (similar songs, artist bios, crowd tags, lyrics) is switched off, since the
+    PMS API doesn't expose it. The server URL must be reachable from the
+    broadcast container too (Liquidsoap fetches the files over curl).
 
   > **Switching sources rebuilds selection, not the library index.** The mood /
   > analysis database is keyed by track id, and reconcile prunes rows for ids the

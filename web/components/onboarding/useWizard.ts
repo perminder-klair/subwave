@@ -9,8 +9,10 @@ import { useAdminAuth } from '@/lib/adminAuth';
 // whole picture without prop-drilling.
 export interface WizardData {
   // Which music backend the station plays from. 'subsonic' needs Navidrome creds
-  // below; 'local' plays files from a folder on the box and skips them entirely.
-  music: { source: 'subsonic' | 'local' };
+  // below; 'local' plays files from a folder on the box; 'plex' talks to a Plex
+  // Media Server (configured via PLEX_URL/PLEX_TOKEN env). Both non-subsonic
+  // sources skip the Navidrome cred form.
+  music: { source: 'subsonic' | 'local' | 'plex' };
 
   navidrome: { url: string; user: string; pass: string };
   // Connection-test result so the step can show a green check across renders.

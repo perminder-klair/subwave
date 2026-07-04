@@ -106,9 +106,33 @@ export function SourceStep({ w }: { w: WizardController }) {
         <SourceSelector
           value={source}
           sourceIds={SOURCE_IDS}
-          onChange={(id) => w.patch({ music: { source: id as 'subsonic' | 'local' } })}
+          onChange={(id) => w.patch({ music: { source: id as 'subsonic' | 'local' | 'plex' } })}
         />
       </div>
+
+      {source === 'plex' && (
+        <div className="grid gap-3">
+          <div className="rounded-md border border-ink/20 bg-ink/5 px-3 py-2.5 text-sm text-ink/80">
+            SUB/WAVE talks to your Plex Media Server over its API. Set{' '}
+            <code>PLEX_URL</code> (e.g. <code>http://host.docker.internal:32400</code>)
+            and <code>PLEX_TOKEN</code> in your <code>.env</code> — the token is under
+            Plex&nbsp;→ any authenticated request&apos;s <code>X-Plex-Token</code>. The URL
+            must be reachable from the broadcast container. The first music
+            (artist) library is used automatically; pin a specific one with{' '}
+            <code>PLEX_LIBRARY</code>. You can confirm the connection in{' '}
+            Admin&nbsp;→&nbsp;Settings once the stack is up.
+          </div>
+          <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-ink/80">
+            <strong>Music licensing:</strong> owning these files covers your own
+            private listening, not <em>public</em> broadcast. If anyone but you
+            can hear the stream, you&apos;re publicly performing copyrighted works
+            and need the relevant licences (PRS&nbsp;+&nbsp;PPL in the UK,
+            ASCAP/BMI&nbsp;+&nbsp;SoundExchange in the US) — or broadcast only
+            content you&apos;re cleared to use. You are the broadcaster and are
+            responsible for clearing these rights. Not legal advice.
+          </div>
+        </div>
+      )}
 
       {source === 'local' && (
         <div className="grid gap-3">
@@ -527,7 +551,9 @@ export function ReviewStep({
   const rows: Array<[string, string]> = [
     ['Music source', w.data.music.source === 'local'
       ? 'Local folder (state/music)'
-      : (w.data.navidrome.url ? `Navidrome · ${w.data.navidrome.user} @ ${w.data.navidrome.url}` : 'Navidrome · — skipped —')],
+      : w.data.music.source === 'plex'
+        ? 'Plex Media Server (PLEX_URL / PLEX_TOKEN)'
+        : (w.data.navidrome.url ? `Navidrome · ${w.data.navidrome.user} @ ${w.data.navidrome.url}` : 'Navidrome · — skipped —')],
     ['LLM', `${w.data.llm.provider} · ${w.data.llm.model}`],
     ['TTS', w.data.tts.defaultEngine + (w.data.tts.cloud.enabled ? ` (+ ${w.data.tts.cloud.provider})` : '')],
     ['Station', `${w.data.dj.stationName} — ${w.data.dj.locationName}`],

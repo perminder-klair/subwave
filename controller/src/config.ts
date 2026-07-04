@@ -57,6 +57,19 @@ export const config = {
   music: {
     localDir: process.env.MUSIC_DIR || `${STATE_DIR}/music`,
   },
+  // Plex Media Server music source (settings.music.source === 'plex'). Static
+  // server URL + X-Plex-Token auth — the token is under Plex → account →
+  // "Get an account token" / any authenticated request's `X-Plex-Token`. The
+  // controller builds `subhttp:` file URLs Liquidsoap fetches over curl (same
+  // path as Navidrome), so the URL must be reachable from the broadcast
+  // container too. `section` optionally pins the music library id (numeric, from
+  // /library/sections); blank → auto-discover the first `artist`-type section.
+  plex: {
+    url: process.env.PLEX_URL || 'http://plex:32400',
+    token: process.env.PLEX_TOKEN || '',
+    section: process.env.PLEX_LIBRARY || '',
+    clientName: 'sub-wave',
+  },
   ollama: {
     // Default-when-blank server URL + model. The admin Settings UI
     // (`llm.ollamaUrl` / `llm.model`) overrides both — there are no

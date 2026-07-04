@@ -19,6 +19,7 @@ export interface SourceMeta {
 export const SOURCES: SourceMeta[] = [
   { id: 'subsonic', label: 'Navidrome / Subsonic', blurb: 'Streaming server · network', kind: 'server' },
   { id: 'local',    label: 'Local folder',         blurb: 'Files on this box · no server', kind: 'local' },
+  { id: 'plex',     label: 'Plex',                  blurb: 'Plex Media Server · network', kind: 'server' },
 ];
 
 export const SOURCE_META: Record<string, SourceMeta> = Object.fromEntries(

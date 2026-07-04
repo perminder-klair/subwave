@@ -255,6 +255,7 @@ export const EMBEDDING_PROVIDERS = [
 export const MUSIC_SOURCES = [
   'subsonic',
   'local',
+  'plex',
 ];
 
 // Coerce a stored Ollama context-window value. 0 disables (use Ollama's own
