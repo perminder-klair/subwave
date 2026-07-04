@@ -142,13 +142,12 @@ app.listen(config.server.port, async () => {
   try {
     if ((settings.get() as any).music?.source === 'local') {
       const scanner = await import('./music/sources/local/scanner.js');
-      await scanner.initFromCache();
+      await scanner.ensureStarted();
       const cached = scanner.getStatus().trackCount;
       console.log(`[local-music] source active — ${cached} track(s) from cache, scanning ${scanner.musicRoot()}…`);
       scanner.scan().then((idx) =>
         console.log(`[local-music] scan done — ${idx.tracks.size} track(s)`)
       ).catch((err: any) => console.error('[local-music] scan failed:', err?.message || err));
-      scanner.startPeriodicRescan();
     }
   } catch (err: any) {
     console.error('[local-music] init failed:', err.message);

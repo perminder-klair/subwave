@@ -41,6 +41,7 @@ let index: LibraryIndex = EMPTY_INDEX;
 let cache = new Map<string, CachedFileRecord>();
 let running: Promise<LibraryIndex> | null = null;
 let periodicTimer: ReturnType<typeof setInterval> | null = null;
+let started = false;
 
 const status: ScanStatus = {
   state: 'idle',
@@ -217,4 +218,16 @@ export function startPeriodicRescan(minutes = 60): void {
   if (periodicTimer) return;
   periodicTimer = setInterval(() => { void scan(); }, Math.max(1, minutes) * 60 * 1000);
   if (typeof periodicTimer.unref === 'function') periodicTimer.unref();
+}
+
+// One-time init: warm the index from the persisted cache and start the periodic
+// rescan. Idempotent — safe to call from boot AND from a runtime source switch
+// (settings/onboarding), so the local source works whether it was active at boot
+// or selected later without a restart. Does NOT scan; callers kick scan() when
+// they want a fresh walk (and can await it before rebuilding the playlist).
+export async function ensureStarted(): Promise<void> {
+  if (started) return;
+  started = true;
+  await initFromCache();
+  startPeriodicRescan();
 }

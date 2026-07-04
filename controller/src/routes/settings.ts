@@ -214,9 +214,20 @@ router.post('/settings', requireAdmin, async (req, res) => {
     // from the OLD source — rebuild it now so Liquidsoap coasts on the new
     // source's tracks. Fire-and-forget, mirroring onboarding's post-save refresh.
     if ('music' in (req.body || {})) {
-      queue.log('scheduler', `music source → ${result.saved.music.source}`);
-      refreshAutoPlaylist().catch((err: any) =>
-        queue.log('error', `music-source playlist refresh failed: ${err?.message || err}`));
+      const newSource = result.saved.music.source;
+      queue.log('scheduler', `music source → ${newSource}`);
+      if (newSource === 'local') {
+        // Switching to local at runtime: the scanner may never have started (boot
+        // only starts it when local is already active). ensureStarted() is
+        // idempotent; scan first so the playlist rebuild sees the real index.
+        localScanner.ensureStarted()
+          .then(() => localScanner.scan())
+          .then(() => refreshAutoPlaylist())
+          .catch((err: any) => queue.log('error', `local-source activation failed: ${err?.message || err}`));
+      } else {
+        refreshAutoPlaylist().catch((err: any) =>
+          queue.log('error', `music-source playlist refresh failed: ${err?.message || err}`));
+      }
     }
     // A changed remote-TTS URL re-probes immediately so availability (and the
     // admin "ready/unreachable" badge) reflects the new endpoint on the next

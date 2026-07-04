@@ -5,7 +5,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import SignInForm from '@/components/admin/SignInForm';
 import { useWizard, STEP_ORDER, STEP_LABELS } from './useWizard';
-import { DjStep, LlmStep, NavidromeStep, ReviewStep, TtsStep } from './steps';
+import { DjStep, LlmStep, SourceStep, ReviewStep, TtsStep } from './steps';
 
 // Outer chrome for the first-run wizard. Sign-in gate (admin creds from .env),
 // step indicator, body, and back/next buttons. The Review step calls `onDone`
@@ -59,7 +59,7 @@ export default function WizardShell() {
   }
 
   const body =
-    w.step === 'navidrome' ? <NavidromeStep w={w} /> :
+    w.step === 'source' ? <SourceStep w={w} /> :
     w.step === 'llm' ? <LlmStep w={w} /> :
     w.step === 'tts' ? <TtsStep w={w} /> :
     w.step === 'dj' ? <DjStep w={w} /> :

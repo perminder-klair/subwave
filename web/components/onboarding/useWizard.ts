@@ -8,6 +8,10 @@ import { useAdminAuth } from '@/lib/adminAuth';
 // `set` updater rather than its own state, so the Review step can show the
 // whole picture without prop-drilling.
 export interface WizardData {
+  // Which music backend the station plays from. 'subsonic' needs Navidrome creds
+  // below; 'local' plays files from a folder on the box and skips them entirely.
+  music: { source: 'subsonic' | 'local' };
+
   navidrome: { url: string; user: string; pass: string };
   // Connection-test result so the step can show a green check across renders.
   navidromeTest: { ok: boolean | null; msg?: string };
@@ -52,6 +56,7 @@ export interface WizardData {
 }
 
 export const DEFAULT_DATA: WizardData = {
+  music: { source: 'subsonic' },
   navidrome: { url: '', user: '', pass: '' },
   navidromeTest: { ok: null },
   llm: {
@@ -82,12 +87,12 @@ export const DEFAULT_DATA: WizardData = {
   apiKeys: {},
 };
 
-export type StepId = 'navidrome' | 'llm' | 'tts' | 'dj' | 'review';
+export type StepId = 'source' | 'llm' | 'tts' | 'dj' | 'review';
 
-export const STEP_ORDER: StepId[] = ['navidrome', 'llm', 'tts', 'dj', 'review'];
+export const STEP_ORDER: StepId[] = ['source', 'llm', 'tts', 'dj', 'review'];
 
 export const STEP_LABELS: Record<StepId, string> = {
-  navidrome: 'Navidrome',
+  source: 'Music source',
   llm: 'LLM',
   tts: 'TTS',
   dj: 'DJ persona',
@@ -211,7 +216,10 @@ export function useWizard() {
     }
 
     const body = {
-      navidrome: data.navidrome,
+      music: { source: data.music.source },
+      // Only persist Navidrome creds when that's the chosen source — a 'local'
+      // operator leaves these blank and we don't want to overwrite env creds.
+      navidrome: data.music.source === 'subsonic' ? data.navidrome : undefined,
       llm: {
         provider: data.llm.provider,
         model: data.llm.model,

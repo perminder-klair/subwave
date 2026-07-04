@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import type { WizardController } from './useWizard';
 import { ProviderSelector } from '../admin/llm/ProviderSelector';
+import { SourceSelector } from '../admin/music/SourceSelector';
+import { SOURCE_IDS } from '../admin/music/sourceMeta';
 import { ModelCombobox } from '../admin/llm/ModelCombobox';
 import { PROVIDER_IDS } from '../admin/llm/providerMeta';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
@@ -77,9 +79,12 @@ function TestPill({ result }: { result: { ok: boolean | null; msg?: string } }) 
   );
 }
 
-// ─── NAVIDROME ─────────────────────────────────────────────────────────────
-export function NavidromeStep({ w }: { w: WizardController }) {
+// ─── MUSIC SOURCE ───────────────────────────────────────────────────────────
+// Pick the backend first: Navidrome/Subsonic (needs creds) or a local folder
+// (no server). The Navidrome form only appears for the subsonic choice.
+export function SourceStep({ w }: { w: WizardController }) {
   const [busy, setBusy] = useState(false);
+  const source = w.data.music.source;
   const onTest = async () => {
     setBusy(true);
     // testNavidrome never throws — it catches its own errors into the pill —
@@ -94,9 +99,42 @@ export function NavidromeStep({ w }: { w: WizardController }) {
   return (
     <div>
       <StepHeader
-        title="Connect Navidrome"
-        blurb="SUB/WAVE plays from your Subsonic-compatible music library. Point it at your Navidrome and the AI DJ takes over."
+        title="Music source"
+        blurb="Where SUB/WAVE gets its music. Point it at a Navidrome/Subsonic server, or play files straight from a folder on this box — no server needed."
       />
+      <div className="mb-5">
+        <SourceSelector
+          value={source}
+          sourceIds={SOURCE_IDS}
+          onChange={(id) => w.patch({ music: { source: id as 'subsonic' | 'local' } })}
+        />
+      </div>
+
+      {source === 'local' && (
+        <div className="grid gap-3">
+          <div className="rounded-md border border-ink/20 bg-ink/5 px-3 py-2.5 text-sm text-ink/80">
+            Drop audio files (<code>.mp3</code>, <code>.m4a</code>, <code>.flac</code>,{' '}
+            <code>.ogg</code>, <code>.opus</code>, <code>.wav</code>) into{' '}
+            <code>state/music</code> on the host. SUB/WAVE reads their tags on scan —
+            no Navidrome required. You can add files any time and hit{' '}
+            <strong>Rescan</strong> in Admin&nbsp;→&nbsp;Settings&nbsp;→&nbsp;Music source.
+            Advanced: set <code>MUSIC_DIR</code> to use a folder elsewhere (it must be
+            bind-mounted at the same path into every container).
+          </div>
+          <div className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-ink/80">
+            <strong>Music licensing:</strong> owning these files covers your own
+            private listening, not <em>public</em> broadcast. If anyone but you
+            can hear the stream, you&apos;re publicly performing copyrighted works
+            and need the relevant licences (PRS&nbsp;+&nbsp;PPL in the UK,
+            ASCAP/BMI&nbsp;+&nbsp;SoundExchange in the US) — or broadcast only
+            content you&apos;re cleared to use (your own, Creative Commons,
+            royalty-free, public domain). You are the broadcaster and are
+            responsible for clearing these rights. Not legal advice.
+          </div>
+        </div>
+      )}
+
+      {source === 'subsonic' && (
       <div className="grid gap-3">
         <Field label="Navidrome URL" hint="e.g. http://host.docker.internal:4533">
           <TextInput
@@ -148,6 +186,7 @@ export function NavidromeStep({ w }: { w: WizardController }) {
           responsible for clearing these rights. Not legal advice.
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -486,7 +525,9 @@ export function ReviewStep({
     }
   };
   const rows: Array<[string, string]> = [
-    ['Navidrome', w.data.navidrome.url ? `${w.data.navidrome.user} @ ${w.data.navidrome.url}` : '— skipped —'],
+    ['Music source', w.data.music.source === 'local'
+      ? 'Local folder (state/music)'
+      : (w.data.navidrome.url ? `Navidrome · ${w.data.navidrome.user} @ ${w.data.navidrome.url}` : 'Navidrome · — skipped —')],
     ['LLM', `${w.data.llm.provider} · ${w.data.llm.model}`],
     ['TTS', w.data.tts.defaultEngine + (w.data.tts.cloud.enabled ? ` (+ ${w.data.tts.cloud.provider})` : '')],
     ['Station', `${w.data.dj.stationName} — ${w.data.dj.locationName}`],
