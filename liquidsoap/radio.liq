@@ -39,7 +39,10 @@ station_name = ref("SUB/WAVE")
 # no threads, no shared state): sample-accurate in AUDIO time, so they hold
 # under any clock — the offline render harness (sync="none") exposed that
 # wall-clock thread envelopes and audio time drift apart.
-# Verified on liquidsoap v2.2.5 AND v2.4.4 (scripts/fx-render-test.sh probe):
+# Verified on liquidsoap v2.2.5, v2.4.4 AND v2.4.5 (scripts/fx-render-test.sh
+# probe). NB: v2.4.5 is the MINIMUM runtime for these effects — on 2.4.4 the
+# clock's O(n) source scan × multi-pull pass-through layers made every effect
+# transition peg a core and stall the stream (see Dockerfile.broadcast).
 # filter.rc and comb instantiate cleanly INSIDE the cross callback on a
 # request.queue-backed source — the "Early computation of source content-type"
 # crash is specific to iir_filter/HPF — and audibly alter the render.

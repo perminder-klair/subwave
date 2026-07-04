@@ -70,6 +70,16 @@ touch /var/sub-wave/archive/.ndignore
 mkdir -p /var/log/liquidsoap
 chown -R liquidsoap:liquidsoap /var/log/liquidsoap 2>/dev/null || true
 
+# Rotate radio.log on boot once it passes 50MB. Liquidsoap has no size-based
+# rotation of its own and appends forever (200MB+ after a couple of months);
+# boot is the one safe moment to move it since liquidsoap isn't holding the
+# fd yet. One .old generation caps disk at ~2x the threshold.
+RADIO_LOG=/var/log/liquidsoap/radio.log
+if [ -f "$RADIO_LOG" ] && [ "$(stat -c %s "$RADIO_LOG" 2>/dev/null || echo 0)" -gt 52428800 ]; then
+    mv -f "$RADIO_LOG" "$RADIO_LOG.old"
+    echo "broadcast: rotated oversized radio.log to radio.log.old" >&2
+fi
+
 # ---- Resolve passwords ------------------------------------------------------
 # Capture env values FIRST so sourcing the secrets file can't clobber them.
 

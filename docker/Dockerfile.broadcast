@@ -13,7 +13,14 @@
 #   - A tiny shell supervisor (broadcast-entrypoint.sh) resolves the shared
 #     password, renders icecast.xml, launches both, and exits if either dies
 #     so the container's restart policy bounces them together.
-FROM savonet/liquidsoap:v2.4.4
+# v2.4.5 minimum: 2.4.4's clock scanned every source in the graph per pull,
+# and pass-through layers (smooth_add/compress) pull more than once per frame —
+# together the per-transition DJ effect chains (sweep/washout/dissolve, ~30
+# operators) pegged a core and stalled the stream clock at every crossfade
+# ("Latency is too high" → dead-air source resets). 2.4.5 makes clock
+# sync-source propagation push-based/O(1), which removes the stall entirely
+# (verified against the dissolve worst case in an isolated sandbox).
+FROM savonet/liquidsoap:v2.4.5
 
 USER root
 
