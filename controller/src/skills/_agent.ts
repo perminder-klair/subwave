@@ -133,7 +133,10 @@ function forcedSchema() {
 // agent and nothing in the schema can be satisfied.
 function sfxBlock(sfxCatalog: any) {
   if (!sfxCatalog || !sfxCatalog.length) return '';
-  const list = sfxCatalog.map((s: any) => `- ${s.name}: ${s.description}`).join('\n');
+  const list = sfxCatalog.map((s: any) => {
+    const dur = s.durationSec ? ` (~${s.durationSec}s)` : '';
+    return `- ${s.name}${dur}: ${s.description}`;
+  }).join('\n');
   return `
 
 SOUND EFFECTS: you may optionally play ONE sound effect underneath your voice for this segment. Use one only when it genuinely sharpens the line — most segments need none, and an effect on every break gets old fast. Set "sfx" to the exact name of an effect below, or null:
