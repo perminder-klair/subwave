@@ -12,7 +12,7 @@ export default function Coda() {
       </p>
 
       <div className="mt-2 flex flex-wrap items-center justify-center gap-4">
-        <Link href="/listen" className="bs-tune">▶ Open the player</Link>
+        <Link href="/stations" className="bs-tune">▶ Browse the stations</Link>
         <Link href="/setup" className="bs-link text-[13px] font-bold tracking-[0.12em] uppercase">
           Run your own station →
         </Link>
