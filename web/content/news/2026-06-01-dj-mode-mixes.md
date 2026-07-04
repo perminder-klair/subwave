@@ -10,7 +10,13 @@ DJ mode used to change what the DJ said. It teased the next track and called bac
 
 ## What's new
 
-When a persona is in DJ mode, the crossfade stops being one fixed length. Two tracks that share a tempo and key lock into a short, tight blend. A clash gets a longer wash that hides the seam. On a big jump up in tempo, the DJ can drop a riser across the join. It also times its between-track line to finish before the vocals come in, and it will string together a short run of tracks that drift in tempo with the time of day.
+When a persona is in DJ mode, the crossfade stops being one fixed length. It shapes each join to the two tracks:
+
+- Tracks that **share a tempo and key** lock into a short, tight blend.
+- A **clash** gets a longer wash that hides the seam.
+- A **big jump up in tempo** can get a riser dropped across the join.
+
+It also times its between-track line to finish before the vocals come in, and it strings together a short run of tracks that drift in tempo with the time of day.
 
 ## How to use it
 

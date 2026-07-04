@@ -15,16 +15,16 @@
 #       crash was with iir_filter/HPF; these two operators were unproven
 #       either way.) Renders dry vs fx and compares md5 so a silent no-op
 #       (like `echo`) can't pass. Decides per-branch (A) vs global-bus (B).
-#   scripts/fx-render-test.sh render <a-audio> <b-audio> [dry|sweep|washout|both]
+#   scripts/fx-render-test.sh render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve]
 #       Phase 1 — render the a→b transition with the production envelope
 #       logic (mirrored from radio.liq) and print an RMS-over-time table.
-#       Default renders all four variants.
+#       Default renders every variant.
 #
 # Output lands in .fx-render/ next to this script (gitignored).
 
 set -euo pipefail
 
-IMAGE="${LIQ_IMAGE:-savonet/liquidsoap:v2.2.5}"
+IMAGE="${LIQ_IMAGE:-savonet/liquidsoap:v2.4.5}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="$HERE/.fx-render"
 mkdir -p "$WORK"
@@ -140,10 +140,11 @@ render() {
 settings.log.stdout := true
 settings.log.level := 3
 
-mode = environment.get("MODE")   # dry | sweep | washout | both | blend
+mode = environment.get("MODE")   # dry | sweep | washout | both | blend | dissolve
 sweep_on   = mode == "sweep"   or mode == "both"
 washout_on = mode == "washout" or mode == "both"
 blend_on   = mode == "blend"
+dissolve_on = mode == "dissolve"
 
 q = request.queue(id="q")
 q.push(request.create("/work/ra.wav"))
@@ -278,6 +279,68 @@ def t(a, b) =
                  filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet, washed))
       amplify(wash_gain, washed)
     else a_src end
+  # DISSOLVE — keep in lockstep with radio.liq's dissolve block: 4 parallel
+  # combs at mutually prime delays, shared swell/hold/release feedback,
+  # cascaded darkening lowpass, late makeup.
+  a_src =
+    if dissolve_on then
+      diss_src = a_src
+      def diss_fb() =
+        e = source.elapsed(diss_src)
+        e = if e < 0. then 0. else e end
+        fb_max = -0.5
+        fb_off = -90.0
+        t_swell = 0.10 * d
+        t_hold  = 0.80 * d
+        t_rel   = 0.93 * d
+        if e < t_swell then
+          x = e / t_swell
+          s = 3.0 * x * x - 2.0 * x * x * x
+          fb_off + s * (fb_max - fb_off)
+        elsif e < t_hold then fb_max
+        elsif e < t_rel then fb_max + ((e - t_hold) / (t_rel - t_hold)) * (fb_off - fb_max)
+        else fb_off end
+      end
+      def diss_gain() =
+        e = source.elapsed(diss_src)
+        e = if e < 0. then 0. else e end
+        g_max = 1.3
+        t_from = 0.25 * d
+        t_to   = 0.50 * d
+        if e <= t_from then 1.0
+        elsif e >= t_to then g_max
+        else
+          x = (e - t_from) / (t_to - t_from)
+          1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
+        end
+      end
+      def diss_cut() =
+        e = source.elapsed(diss_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.30 * d
+        t_to   = 0.90 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        s = 3.0 * x * x - 2.0 * x * x * x
+        7000.0 * pow(1200.0 / 7000.0, s)
+      end
+      def diss_wet() =
+        e = source.elapsed(diss_src)
+        e = if e < 0. then 0. else e end
+        t_on = 0.10 * d
+        x = if e >= t_on then 1.0 else e / t_on end
+        3.0 * x * x - 2.0 * x * x * x
+      end
+      def pure_tail(tap) =
+        add(normalize=false,
+          [comb(delay=tap, feedback=diss_fb, a_src), amplify(-1., a_src)])
+      end
+      washed = add(normalize=false,
+        [amplify(0.7, pure_tail(0.089)), amplify(0.7, pure_tail(0.113)),
+         amplify(0.7, pure_tail(0.151)), amplify(0.7, pure_tail(0.181))])
+      washed = filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet,
+                 filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet, washed))
+      add(normalize=false, [a_src, amplify(diss_gain, washed)])
+    else a_src end
   b_src = fade.in(duration=d, b.source)
   b_src =
     if blend_on then
@@ -345,7 +408,7 @@ LIQ
 
   local modes
   case "$mode" in
-    all) modes="dry sweep washout both blend" ;;
+    all) modes="dry sweep washout both blend dissolve" ;;
     *)   modes="$mode" ;;
   esac
   for m in $modes; do
@@ -392,5 +455,5 @@ case "${1:-}" in
   probe)  probe ;;
   render) shift; render "$@" ;;
   xdur)   xdur ;;
-  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|all] | xdur"; exit 2 ;;
+  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|all] | xdur"; exit 2 ;;
 esac

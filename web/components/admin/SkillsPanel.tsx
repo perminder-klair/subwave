@@ -12,12 +12,13 @@
 // Creating and editing a skill (custom or built-in) opens the SkillEditModal
 // "segment sheet" — the list here is just the roster + quick actions.
 import type { ReactNode } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { notify, errorMessage } from '../../lib/notify';
 import { useAdminAuth } from '../../lib/adminAuth';
-import { RefreshCw, Plus } from 'lucide-react';
+import { RefreshCw, Plus, Users, Upload } from 'lucide-react';
 import { Card, Btn, Pill, Eyebrow, Toggle } from './ui';
 import { V3Alert } from '../ui/alert';
+import { Modal } from '../ui/modal';
 import SkillEditModal from './skills/SkillEditModal';
 
 interface Skill {
@@ -35,8 +36,24 @@ interface Skill {
   feedMaxItems?: number | null;
 }
 
+// One entry in the shipped community catalog (GET /dj/skills/community).
+interface CommunitySkill {
+  slug: string;
+  label: string;
+  brief: string;
+  cooldown?: string;
+  window?: 'any' | 'commute';
+  context?: string;
+  installed?: boolean;   // a state/skills/<slug>/ folder already exists
+  reserved?: boolean;    // slug shadows a built-in kind — can't be installed
+}
+
 interface SkillsResponse {
   skills?: Skill[];
+}
+
+interface CommunityResponse {
+  community?: CommunitySkill[];
 }
 
 interface SkillToggleResponse {
@@ -94,6 +111,11 @@ export default function SkillsPanel() {
   const [busy, setBusy] = useState<string | null>(null);   // skill name currently mutating, or null
   const [rescanning, setRescanning] = useState(false);
   const [modal, setModal] = useState<ModalState | null>(null); // open editor sheet, or null
+  const [community, setCommunity] = useState<CommunitySkill[] | null>(null);
+  const [installing, setInstalling] = useState<string | null>(null); // community slug installing, or null
+  const [communityOpen, setCommunityOpen] = useState(false);         // community catalog modal open?
+  const [importing, setImporting] = useState(false);                 // zip import in flight?
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!hydrated || needsAuth) return;
@@ -109,6 +131,19 @@ export default function SkillsPanel() {
       } catch (e) {
         if (cancelled) return;
         setErr(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    // The community catalog is best-effort — a failure here shouldn't blank the
+    // roster, so it fetches independently and just leaves the section empty.
+    (async () => {
+      try {
+        const r = await adminFetch('/dj/skills/community');
+        if (!r.ok) throw new Error(`failed (${r.status})`);
+        const j = (await r.json()) as CommunityResponse;
+        if (cancelled) return;
+        setCommunity(Array.isArray(j.community) ? j.community : []);
+      } catch {
+        if (!cancelled) setCommunity([]);
       }
     })();
     return () => { cancelled = true; };
@@ -157,6 +192,58 @@ export default function SkillsPanel() {
     } catch (e) {
       notify.err(`Run failed: ${errorMessage(e)}`);
     } finally { setBusy(null); }
+  };
+
+  // Re-fetch the community catalog (after an import may have flipped an entry's
+  // installed flag). Best-effort — leaves the list as-is on failure.
+  const refreshCommunity = async () => {
+    try {
+      const r = await adminFetch('/dj/skills/community');
+      if (!r.ok) return;
+      const j = (await r.json()) as CommunityResponse;
+      if (Array.isArray(j.community)) setCommunity(j.community);
+    } catch { /* keep current list */ }
+  };
+
+  // Import a skill from an uploaded .zip (SKILL.md + optional tool.mjs). Arrives
+  // disabled; a bundle carrying a tool.mjs runs code once enabled, so the toast
+  // says so. The controller derives the slug from the bundle's SKILL.md.
+  const importZip = async (file: File) => {
+    setImporting(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await adminFetch('/dj/skills/import', { method: 'POST', body: fd });
+      const j = (await r.json().catch(() => ({}))) as SkillToggleResponse & { slug?: string; hasTool?: boolean };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      if (Array.isArray(j.skills)) setSkills(j.skills);
+      await refreshCommunity();
+      notify.ok(
+        j.hasTool
+          ? `Imported “${j.slug}” — includes a data tool that runs code; review it before enabling`
+          : `Imported “${j.slug}” — disabled until you enable it`,
+      );
+    } catch (e) {
+      notify.err(`Import failed: ${errorMessage(e)}`);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  // Install a community skill into state/skills (arrives disabled). The route
+  // returns the refreshed roster; we also flip the catalog entry to installed.
+  const install = async (slug: string) => {
+    setInstalling(slug);
+    try {
+      const r = await adminFetch(`/dj/skills/community/${slug}/install`, { method: 'POST' });
+      const j = (await r.json().catch(() => ({}))) as SkillToggleResponse;
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      if (Array.isArray(j.skills)) setSkills(j.skills);
+      setCommunity(cur => cur?.map(c => (c.slug === slug ? { ...c, installed: true } : c)) ?? cur);
+      notify.ok(`Installed “${slug}” — disabled until you enable it`);
+    } catch (e) {
+      notify.err(`Install failed: ${errorMessage(e)}`);
+    } finally { setInstalling(null); }
   };
 
   if (err) {
@@ -218,6 +305,16 @@ export default function SkillsPanel() {
           <span className="caption">{skills.length} skill{skills.length === 1 ? '' : 's'}</span>
           <span className="caption text-vermilion">{enabledCount} enabled</span>
           <div className="ml-auto flex items-center gap-2">
+            <Btn
+              onClick={() => setCommunityOpen(true)}
+              disabled={!community}
+              title="Browse and install skills shared by other stations"
+            >
+              <Users size={14} /> Community
+              {community && community.length > 0 && (
+                <span className="ml-1 text-vermilion">{community.length}</span>
+              )}
+            </Btn>
             <Btn tone="accent" onClick={() => setModal({ mode: 'create' })}>
               <Plus size={14} /> New skill
             </Btn>
@@ -297,6 +394,83 @@ export default function SkillsPanel() {
           </div>
         </Card>
       ))}
+
+      {/* ── COMMUNITY CATALOG MODAL ──────────────────────────────────────── */}
+      <Modal
+        open={communityOpen}
+        onOpenChange={setCommunityOpen}
+        title="community"
+        sub="skills shared by other stations"
+        width={640}
+        footer={
+          <div className="flex w-full items-center justify-between gap-3">
+            <span className="text-[11px] leading-[1.5] text-muted">
+              Got a skill someone shared as a <code>.zip</code>? Import it here — it may include a
+              data tool that runs code, so it arrives disabled for review.
+            </span>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".zip,application/zip"
+              className="hidden"
+              onChange={e => {
+                const f = e.target.files?.[0];
+                if (f) importZip(f);
+                e.target.value = ''; // allow re-selecting the same file
+              }}
+            />
+            <Btn
+              onClick={() => fileInputRef.current?.click()}
+              disabled={importing}
+              title="Install a skill from a .zip bundle"
+            >
+              <Upload size={14} /> {importing ? 'Importing…' : 'Import .zip'}
+            </Btn>
+          </div>
+        }
+      >
+        <div className="text-[12px] leading-[1.65] text-muted">
+          These prompt-only skills ship with SUB/WAVE and update when you do.
+          <strong> Install</strong> copies one into <code>state/skills/</code> as your own
+          editable skill — it arrives <strong>disabled</strong>, so review the brief, then
+          enable it. Made one worth sharing? Hit <strong>Edit → Share to community</strong> on
+          any custom skill.
+        </div>
+        <div className="mt-4 grid gap-3">
+          {community && community.length > 0 ? (
+            community.map(c => (
+              <div key={c.slug} className="grid grid-cols-[1fr_auto] items-center gap-4 border border-ink p-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[13px] font-extrabold">{c.label}</span>
+                    {c.cooldown && <Pill className="text-[8px]">{c.cooldown} cooldown</Pill>}
+                  </div>
+                  <div className="mt-1 line-clamp-3 text-[12px] leading-[1.6] text-muted">{c.brief}</div>
+                </div>
+                <div className="flex flex-col items-end gap-2">
+                  {c.installed ? (
+                    <Pill tone="accent" dot>installed</Pill>
+                  ) : c.reserved ? (
+                    <Pill>reserved name</Pill>
+                  ) : (
+                    <Btn
+                      tone="accent"
+                      onClick={() => install(c.slug)}
+                      disabled={installing === c.slug}
+                    >
+                      {installing === c.slug ? 'Installing…' : 'Install'}
+                    </Btn>
+                  )}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="py-6 text-center text-[13px] text-muted italic">
+              No community skills yet.
+            </div>
+          )}
+        </div>
+      </Modal>
 
       {/* ── EDIT / CREATE MODAL ──────────────────────────────────────────── */}
       {modal && (

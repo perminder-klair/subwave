@@ -106,6 +106,58 @@ skills and library tags as a single archive, restorable later. **Proactively sug
 taking a backup** before big changes (re-tagging, switching providers) and on a
 regular cadence — it's cheap insurance.
 
+## Daily token budget (settings.llm.dailyTokenCap / budgetSoftPct / exemptRequests)
+- \`dailyTokenCap\` (0 = off) is a per-UTC-day token ceiling. It degrades in two tiers:
+  at \`budgetSoftPct\`% of the cap ("soft") the DJ forces the cheap pool picker and
+  mutes optional segments (links, station IDs, hourly, weather/news); at the cap
+  ("hard") it makes NO model call and coasts on the LLM-free auto playlist — music
+  never stops. Listener requests stay exempt through the hard cap unless
+  \`exemptRequests\` is off.
+- The report's **Tuning → token budget** finding projects today's burn rate against
+  the cap ("on track to hit the cap ~15:00 UTC"). If it will exhaust early, advise:
+  raise the cap, turn on **pause-when-empty** so idle hours don't spend tokens, or
+  ease off reasoning / the agentic picker (both spend more per pick).
+- A **soft tier of 0 or 100 disables graceful degrade** — the DJ goes from full to
+  silent with no warning. Recommend ~80.
+
+## Context window (settings.llm.numCtx, Ollama only)
+- The Ollama context size. The **agentic picker** sends a system prompt + tool
+  defs + candidates; too small a window truncates them, the agent can't call its
+  "done" tool, and it falls back to the pool. Keep ≥8192 (16384 default) when the
+  agentic picker is on, or turn the picker off. Not relevant for cloud providers.
+
+## Max response size (settings.llm.maxOutputTokens)
+- Per-call OUTPUT cap (distinct from the daily budget). 0 = strategy defaults
+  (generous). A small value can truncate the agent's tool-call JSON mid-object,
+  forcing a fallback. Leave at 0 unless a small-context local model needs it.
+
+## Agent deadline vs measured latency
+- Beyond the raw \`agentTimeoutMs\` value, the report compares it to the model's
+  **p90 latency** (Tuning → agent deadline vs latency). If p90 crowds or exceeds the
+  deadline, the agentic picker is timing out into the pool on most tracks — the
+  operator is paying for session-aware picks and not getting them. Fix: raise the
+  deadline, or run a faster/smaller model (or reasoning OFF).
+
+## Broadcast stream encoders (settings.stream.* + archive)
+- \`/stream.mp3\` is always on. Opus / FLAC / AAC mounts and the **hourly archive**
+  are each a CONTINUOUS extra encoder = real, constant CPU. The hourly archive is
+  the single biggest cost. On a small / loaded box, recommend disabling mounts the
+  operator's players don't use (the web/native players only ever use MP3, optionally
+  Opus). The report's **Tuning → broadcast encoders** finding weighs the count
+  against host cores + load.
+
+## Audio analysis features vs analyzer flavour (settings.audio.embeddings / vocalActivity)
+- "Sounds-like" audio embeddings need the **heavy analyzer** (CLAP); vocal-range /
+  talk-timing needs the heavy analyzer (Demucs). The default LEAN analyzer image
+  can't do either, so these toggles **silently no-op** on it. If the report flags
+  this, tell the operator to set \`ANALYZER_HEAVY=1\` in .env and re-pull/rebuild the
+  analyzer, or turn the setting off (it's costing nothing but false expectations).
+
+## Listener-request web-resolve (settings.llm.requestWebResolve)
+- Lets the request agent resolve *described* tracks ("that song from the advert")
+  via web search — so it depends on Settings → Search being configured. If it's on
+  while search isn't ready, the feature is dead; either configure search or turn it off.
+
 ## Where to look when things break
 The admin Debug page is a live snapshot (recent AI calls + success, mixer status,
 log tail) — first stop when the stream stalls, the DJ goes quiet, or a voice sounds

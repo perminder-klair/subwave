@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { isIOSDevice } from '@/lib/platform';
 import { useStationOrigin } from '@/lib/stationOrigin';
+import { loadVolumePref, saveVolumePref } from '@/lib/volume';
 
 // We pick MP3 vs Ogg-Opus on the client via canPlayType — Opus is roughly
 // equal-or-better quality at half the bandwidth on browsers that decode it.
@@ -106,6 +107,31 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume;
+  }, [volume]);
+
+  // Restore the listener's last-used volume (issue #783). localStorage is
+  // effect-only (never read during render) so SSR + first paint stay on the
+  // default and there's no hydration mismatch — the knob snaps to the stored
+  // level a tick later, same as the lite-mode toggle. Gate persistence on
+  // `hydrated` so this restoring setVolume doesn't race the persist effect.
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    const stored = loadVolumePref();
+    if (stored !== null) {
+      setVolume(stored);
+      preMuteVolume.current = stored > 0 ? stored : preMuteVolume.current;
+    }
+    hydratedRef.current = true;
+  }, []);
+
+  // Persist volume on change, debounced so a knob drag (dozens of setVolume
+  // calls) collapses to one write. The cleanup clears the pending timer on each
+  // re-run, so the transient default value the mount pass carries before the
+  // restore effect's setVolume lands never actually reaches localStorage.
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    const id = setTimeout(() => saveVolumePref(volume), 300);
+    return () => clearTimeout(id);
   }, [volume]);
 
   // Pick Opus on browsers that *definitively* decode it (Chrome, Edge — they

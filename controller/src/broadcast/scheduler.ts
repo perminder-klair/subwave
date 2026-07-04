@@ -13,7 +13,7 @@ import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { artistKey } from '../music/recency.js';
 import { normGenre, genreMatches, inYearRange, preferEnergy, preferEnergyStrict, preferMood } from '../music/show-filter.js';
-import { resolveShowPlaylistPool } from '../music/show-playlist.js';
+import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
 import * as session from './session.js';
@@ -98,6 +98,7 @@ async function refreshAutoPlaylistInner() {
   const playlistPool = show ? await resolveShowPlaylistPool(show) : null;
   const hasPlaylist = !!playlistPool?.tracks?.length;
   const strictPlaylist = hasPlaylist && !!show?.playlistStrict;
+  const excludedIds = show ? await resolveExcludedPlaylistIds(show) : null;
 
   // Resolve the show's free-text genre to the library's exact tag once, up front.
   // A resolution failure / absent genre leaves genreName null, which disables the
@@ -278,6 +279,17 @@ async function refreshAutoPlaylistInner() {
     if (inPl.length) { pool.length = 0; pool.push(...inPl); }
   }
 
+  // Excluded playlists (blocklist): drop every track from a blocklisted
+  // playlist. The pick paths (picker.ts / picker-tools.ts) apply this as a HARD
+  // filter — an empty pool there just skips the LLM pick and coasts on this
+  // auto.m3u. This IS that coast, the last dead-air guard, so it mirrors the
+  // strict-playlist block above: never-starve if the blocklist would empty the
+  // pool (a mis-set "exclude everything" plays an excluded track over silence).
+  if (excludedIds) {
+    const allowed = pool.filter((t: any) => t?.id && !excludedIds.has(t.id));
+    if (allowed.length) { pool.length = 0; pool.push(...allowed); }
+  }
+
   // Stamp the station cap on every fallback entry (#447). max-track-length is a
   // pure on-air cue_out cut, not a selection filter, so over-length tracks stay
   // in the pool and simply crossfade out at the cap when the queue runs dry.
@@ -322,7 +334,7 @@ async function refreshAutoPlaylistInner() {
 export async function runHourlyCheck() {
   return withTrace({ kind: 'hourly' }, async () => {
     const ctx = await getFullContext();
-    const script = await dj.generateHourlyTime(ctx.time, ctx.weather, {
+    const script = await dj.generateHourlyTime({
       recap: queue.getDjRecap(),
       context: ctx,
       recentOpeners: queue.getRecentOpeners(),
@@ -415,8 +427,12 @@ async function skillsTick() {
 // Random ident every ~45 mins
 // ---------------------------------------------------------------------------
 
-// Gate-free runner — also called directly by the /dj/segment command route.
-export async function runStationId() {
+// Gate-free runner — also called directly by the /dj/segment command route
+// (immediate: an operator pressing the button wants it NOW). The scheduled
+// path passes atNextTrack so the ident holds for the next track boundary
+// instead of ducking the current song mid-vocal at an arbitrary wall-clock
+// minute — an ident has no real-time constraint, so the wait is free.
+export async function runStationId({ atNextTrack = false } = {}) {
   return withTrace({ kind: 'station-id' }, async () => {
     const ctx = await getFullContext();
     const script = await dj.generateStationId({
@@ -424,7 +440,8 @@ export async function runStationId() {
       context: ctx,
       recentOpeners: queue.getRecentOpeners(),
     });
-    await queue.announce(script, 'station-id');
+    if (atNextTrack) await queue.announceAtNextTrack(script, 'station-id');
+    else await queue.announce(script, 'station-id');
     return script;
   });
 }
@@ -434,14 +451,14 @@ async function stationId() {
   if (!djCallsAllowed()) return;  // nobody listening — skip the ident
   if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments
   try {
-    await runStationId();
+    await runStationId({ atNextTrack: true });
   } catch (err) {
     queue.log('error', `Station ID failed: ${err.message}`);
   }
 }
 
 // ---------------------------------------------------------------------------
-// CLEAN UP — old voice WAVs
+// CLEAN UP — old voice WAVs + library DB WAL
 // ---------------------------------------------------------------------------
 
 async function cleanup() {
@@ -449,6 +466,15 @@ async function cleanup() {
     await cleanupOldVoices();
   } catch (err) {
     queue.log('error', `Cleanup failed: ${err.message}`);
+  }
+  // Fold the library DB's WAL sidecar back into the main file. Without a
+  // periodic TRUNCATE checkpoint a bulk write pass (tagging, acoustic
+  // analysis) leaves the WAL at its high-water mark — 730MB in #786 — and
+  // every query afterwards pays to walk it.
+  try {
+    library.checkpoint();
+  } catch (err) {
+    queue.log('error', `Library WAL checkpoint failed: ${err.message}`);
   }
 }
 

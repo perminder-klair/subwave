@@ -3860,11 +3860,23 @@ html.lite *::after {
     padding-left: 22px;
 }
 .bs-prose li {
-    margin-bottom: 0.4em;
+    margin-bottom: 0.5em;
     line-height: 1.6;
 }
 .bs-prose li::marker {
     color: var(--accent);
+}
+/* Loose lists (blank line between items) render each item as a <p>; keep that
+   from inheriting the 1.2em paragraph gap so description-style lists stay tight. */
+.bs-prose li > p {
+    margin: 0 0 0.4em;
+}
+.bs-prose li > p:last-child {
+    margin-bottom: 0;
+}
+/* A bold lead-in term ("Blend — …") reads as the item's label. */
+.bs-prose li > strong:first-child {
+    color: var(--ink);
 }
 .bs-prose code {
     padding: 1px 6px;

@@ -6,6 +6,7 @@
 
 import * as piper from './piper.js';
 import * as kokoro from './kokoro.js';
+import { applyEdgeFades } from './wav-edges.js';
 import * as chatterbox from './chatterbox.js';
 import * as pocketTts from './pocketTts.js';
 import * as remoteTts from './remoteTts.js';
@@ -137,7 +138,11 @@ async function speakWith(engine: string, text: string, opts: any, personaTts: an
     const voice = (personaTts && personaTts.engine === 'kokoro' && personaTts.voice)
       ? personaTts.voice
       : settings.get().tts?.kokoro?.voice;
-    return kokoro.speak(text, { ...opts, voice });
+    // Station-level language override — explicitly chosen phonemizer lang
+    // (e.g. use a Japanese voice code for the accent but British phonemes for
+    // English text). Absent → falls through to KOKORO_LANG env → auto-detect.
+    const lang = opts.lang || settings.get().tts?.kokoro?.lang || undefined;
+    return kokoro.speak(text, { ...opts, voice, lang });
   }
   if (engine === 'chatterbox') {
     // For chatterbox, persona's `voice` is a reference-WAV filename (resolved
@@ -202,11 +207,12 @@ const PREVIEW_TEXT_MAX = 200;
 const DEFAULT_PREVIEW_TEXT = "You're listening to SUB/WAVE. This is a voice preview.";
 
 export async function synthesizeSample(
-  { engine, voice = '', cloudProvider = 'openai', speed, text }: {
+  { engine, voice = '', cloudProvider = 'openai', speed, lang, text }: {
     engine: string;
     voice?: string;
     cloudProvider?: string;
     speed?: number;
+    lang?: string;
     text?: string;
   },
 ): Promise<string> {
@@ -219,7 +225,7 @@ export async function synthesizeSample(
   const personaTts = { engine, voice, cloudProvider };
   // No outPath → each engine self-generates a WAV path under config.piper.outDir
   // (reaped by cleanupOldVoices) and returns it.
-  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '' }, personaTts);
+  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '', lang }, personaTts);
 }
 
 // Public entry point. Tries the configured engine; on failure, falls back to
@@ -290,6 +296,11 @@ export async function speak(
   const chars = (speakText || '').length;
   try {
     const result = await speakWith(primary, speakText, { outPath, speedScale: scale, language, soul }, personaTts);
+    // Bake 40ms edge fades into the rendered clip so hard file boundaries
+    // never reach the broadcast compressor as a click. Render time is the only
+    // place the tail can be faded — see audio/wav-edges.ts. Best-effort:
+    // non-WAV output (cloud mp3) is left as-is.
+    if (typeof result === 'string') await applyEdgeFades(result);
     recordTts({
       kind, engine: primary, requested, fellBack: requested !== primary,
       ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
@@ -311,6 +322,7 @@ export async function speak(
     console.error(`[tts] ${primary} failed for kind=${kind}: ${err.message} — falling back to ${fallback}`);
     try {
       const result = await speakWith(fallback, speakText, { outPath, speedScale: scale, language, soul }, personaTts);
+      if (typeof result === 'string') await applyEdgeFades(result);
       recordTts({
         kind, engine: fallback, requested, fellBack: true,
         ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),

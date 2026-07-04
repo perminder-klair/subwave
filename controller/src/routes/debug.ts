@@ -37,7 +37,36 @@ router.get('/requests', requireAdmin, (req, res) => {
   }
 });
 
+// A debug snapshot is expensive to assemble — it loads the mood library, fetches
+// Icecast + weather, sweeps the state dir with stat(), and serialises the whole
+// DJ session (~170KB). The admin panel polls it every ~2s. Coalesce concurrent
+// and rapid hits behind a tiny single-flight cache so a burst of polls — or
+// several open admin tabs — triggers the build at most once per TTL, instead of
+// stacking that work on the single-threaded event loop and starving other
+// /api/* routes (the cause of the edge 524s).
+const DEBUG_CACHE_TTL_MS = 1000;
+let debugCache: { at: number; payload: any } | null = null;
+let debugInflight: Promise<any> | null = null;
+
 router.get('/debug', requireAdmin, async (req, res) => {
+  try {
+    const now = Date.now();
+    if (debugCache && now - debugCache.at < DEBUG_CACHE_TTL_MS) {
+      res.json(debugCache.payload);
+      return;
+    }
+    if (!debugInflight) {
+      debugInflight = buildDebugSnapshot(req)
+        .then((payload) => { debugCache = { at: Date.now(), payload }; return payload; })
+        .finally(() => { debugInflight = null; });
+    }
+    res.json(await debugInflight);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+async function buildDebugSnapshot(req: express.Request): Promise<any> {
   // Station zone so the DJ-log timestamps render in station-local time, matching
   // what the DJ speaks on-air (#418).
   let settingsSnapshot: any = null;
@@ -257,8 +286,8 @@ router.get('/debug', requireAdmin, async (req, res) => {
     port: config.server.port,
   };
 
-  res.json(out);
-});
+  return out;
+}
 
 // GET /sessions — archived session list, newest first. The live session is
 // served inline by /debug; this lists the rolled-off runs in state/sessions/.

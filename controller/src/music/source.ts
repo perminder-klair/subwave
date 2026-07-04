@@ -16,6 +16,7 @@
 // Nothing under sources/ imports this file — the dependency edge is one-way
 // (facade → registry → source impls), so there is no cycle.
 
+import * as settings from '../settings.js';
 import { activeSource, activeSourceId } from './sources/registry.js';
 import { capabilitiesFor } from './sources/capabilities.js';
 import type { Song, Artist, Album, Genre, Playlist } from './sources/types.js';
@@ -298,9 +299,14 @@ export function getAnnotatedUri(song: Song, opts: { maxDurationSec?: number | nu
   // (seconds) on the track when the persona is in DJ mode and both tracks are
   // analysed. Liquidsoap's `cross` honours `liq_cross_duration` to size the
   // blend for this transition (radio.liq dj_transition reads the same key for
-  // its fades, keeping fade == buffer). Absent → Liquidsoap uses its startup
-  // crossfade_duration(), i.e. today's behaviour.
-  if (song.crossSec != null) fields.push(`liq_cross_duration="${escAnnotate(song.crossSec)}"`);
+  // its fades, keeping fade == buffer). Liquidsoap 2.4 runs cross with
+  // persist_override=true (the only mode where a stamp sizes its own
+  // transition — see radio.liq), which makes a stamp LINGER until the next
+  // one arrives; every annotated track therefore carries an explicit value,
+  // falling back to the operator's configured crossfade, so a washout's 12s
+  // canvas can never outlive its own transition.
+  const crossSec = song.crossSec ?? settings.get()?.crossfadeDuration ?? null;
+  if (crossSec != null) fields.push(`liq_cross_duration="${escAnnotate(crossSec)}"`);
   // Loudness normalisation: the queue stashes a per-track gain offset (dB,
   // clamped) toward the loudness target when the track has a measured LUFS.
   // Emitted in the "<n> dB" form Liquidsoap's amplify override parses natively
@@ -315,6 +321,10 @@ export function getAnnotatedUri(song: Song, opts: { maxDurationSec?: number | nu
   // closes a lowpass over the OUTGOING branch across the blend — the track
   // being left sinks away while this pick rises clean. Absent → normal cross.
   if (song.sweep) fields.push('liq_sweep="true"');
+  // DJ dissolve (reverb wash): like the sweep it rides the INCOMING pick —
+  // radio.liq reads `liq_dissolve` off `b` and washes the OUTGOING branch
+  // into diffuse ambience under it.
+  if (song.dissolve) fields.push('liq_dissolve="true"');
   // DJ washout: the DJ agent may flag a pick (transition:'washout') to dissolve
   // into an echo tail as that track ENDS; the queue validates and stamps
   // `washout` (+ the tempo-synced comb tap below, and a long bar-snapped

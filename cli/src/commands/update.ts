@@ -13,10 +13,13 @@
 // binary itself, not the docker images.
 
 import { spawn } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import { detectCompose } from '../compose.ts';
 import { getSubwaveHome } from '../util.ts';
 import { isCloneMode } from '../home.ts';
+import { cliImageTag, movePinInEnv } from '../version.ts';
 import { banner, header, ok, warn, err, info, muted, pauseForEnter } from '../ui.ts';
 
 export async function runUpdateCommand(): Promise<void> {
@@ -46,6 +49,12 @@ export async function runUpdateCommand(): Promise<void> {
       return;
     }
   }
+
+  // 1b. (standalone only) Move the SUBWAVE_VERSION pin to this CLI's version
+  // before pulling, so a binary that was just `self-update`d pulls the images
+  // matching its frozen compose files instead of whatever the old pin named.
+  // Clone installs track git, not image tags — leave their .env alone.
+  if (!cloneMode) moveVersionPin(home);
 
   // 2. docker compose pull — refresh base images. --ignore-buildable lets
   // it skip services with only a `build:` block (only matters in dev).
@@ -96,6 +105,24 @@ export async function runUpdateCommand(): Promise<void> {
     muted('  `subwave self-update` to refresh the CLI binary itself.');
   }
   await pauseForEnter();
+}
+
+// Move an existing SUBWAVE_VERSION version pin in the install's .env up to this
+// CLI's version. No-op (silent) when: the CLI is a dev build (no published tag
+// to pin to), there's no .env, or there's no concrete version pin to move
+// (fresh pre-pin installs stay on :latest — no surprises). Edits only the pin
+// line, preserving the rest of the file byte-for-byte.
+function moveVersionPin(home: string): void {
+  const target = cliImageTag();
+  if (!target) return;
+  const envPath = resolve(home, '.env');
+  if (!existsSync(envPath)) return;
+  const moved = movePinInEnv(readFileSync(envPath, 'utf8'), target);
+  if (!moved) return;
+  writeFileSync(envPath, moved.text);
+  header('version pin');
+  ok(`moved SUBWAVE_VERSION ${moved.from} → ${target} (matches this CLI)`);
+  console.log();
 }
 
 function run(cmd: string, args: string[], cwd: string): Promise<number> {

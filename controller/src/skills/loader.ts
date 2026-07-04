@@ -15,9 +15,11 @@
 // reserved naming — NOT a separate load path or trust posture.
 //
 // A skill's tool.mjs is the same contract for everyone:
-//   export default async (ctx, state, services, config) => data
+//   export default async (ctx, state, services, config, input) => data
 //   export const description = '…'   // OPTIONAL: tool description for the agent
 //   export const ready = (services) => boolean   // OPTIONAL: gate availability
+//   export const inputs = { query: '…' }   // OPTIONAL: agent-steerable string
+//     params ({ name: description }); validated values arrive as `input`
 // `services` (station-services.ts) is the curated facade onto search, the
 // library, the play log, feeds and durable recall — the one way a tool reaches
 // the world. Every tool runs behind a timeout + try/catch at the call site
@@ -42,6 +44,13 @@ import { buildStationServices } from '../llm/internal/tools/station-services.js'
 // is NOT a runtime load root — it is read only by the seeder + reset route
 // (scaffold.js). Exported so those can resolve template files.
 export const BUILTINS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), 'builtins');
+// Shipped COMMUNITY catalog store — prompt-only skills contributed via the
+// community-submission flow (.github/workflows/skill-submission.yml), COPYd into
+// the image alongside builtins/. Like BUILTINS_DIR this is NOT a runtime load
+// root: it's a read-only catalog the operator browses in /admin/skills and
+// *installs* into state/skills on demand (routes/dj.ts). A community skill,
+// once installed, is an ordinary non-seeded custom skill — no special posture.
+export const COMMUNITY_DIR = resolve(dirname(fileURLToPath(import.meta.url)), 'community');
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
 const SLUG_RE_INNER = /^[a-z0-9][a-z0-9-]{0,48}$/;
 
@@ -141,6 +150,66 @@ export async function readTemplate(kind: string): Promise<SkillTemplate | null> 
   return { kind, skillMd, data, body, toolPath };
 }
 
+// One entry in the shipped community catalog (browse-only). The fields mirror a
+// prompt-only skill's editable knobs so the install route can hand them straight
+// to writeSkillFile and the admin UI can preview them without a second fetch.
+export interface CommunitySkill {
+  slug: string;
+  label: string;
+  brief: string;               // the agent's brief (SKILL.md body)
+  cooldown?: string;           // e.g. "6h" — the frontmatter value, verbatim
+  window?: 'any' | 'commute';
+  context?: string;            // comma-separated "right now" fields
+}
+
+// Parse one community catalog dir into a CommunitySkill, or null when it isn't a
+// valid prompt-only skill (no SKILL.md, bad slug, empty brief). Community skills
+// carry NO tool.mjs by contract — a stray one is ignored (never read/installed).
+async function readCommunityDir(slug: string): Promise<CommunitySkill | null> {
+  if (!SLUG_RE.test(slug)) return null;
+  let raw: string;
+  try {
+    raw = await readFile(join(COMMUNITY_DIR, slug, 'SKILL.md'), 'utf8');
+  } catch {
+    return null;
+  }
+  const { data, body } = parseFrontmatter(raw);
+  const name = (data.name || slug).trim();
+  if (name !== slug || !body) return null; // name must match its folder; brief required
+  return {
+    slug,
+    label: (data.label || titleCase(slug)).trim(),
+    brief: body,
+    cooldown: data.cooldown ? String(data.cooldown).trim() : undefined,
+    window: data.window === 'commute' ? 'commute' : undefined,
+    context: (data.context ?? data.contextFields)?.trim() || undefined,
+  };
+}
+
+// List the shipped community catalog (browse-only). Returns [] when the dir is
+// absent. Never throws — a broken entry is skipped, mirroring loadSkills().
+export async function listCommunitySkills(): Promise<CommunitySkill[]> {
+  let entries: string[] = [];
+  try {
+    const dirents = await readdir(COMMUNITY_DIR, { withFileTypes: true });
+    entries = dirents.filter(d => d.isDirectory()).map(d => d.name);
+  } catch {
+    return []; // no community/ dir shipped — nothing to browse
+  }
+  const out: CommunitySkill[] = [];
+  for (const slug of entries.sort()) {
+    const cs = await readCommunityDir(slug).catch(() => null);
+    if (cs) out.push(cs);
+  }
+  return out;
+}
+
+// Read a single community catalog entry by slug (for the install route). Returns
+// null when there's no such valid entry.
+export async function readCommunitySkill(slug: string): Promise<CommunitySkill | null> {
+  return readCommunityDir(slug);
+}
+
 // Discover the shipped kinds from the template dir names and (re)build the
 // derived SEEDED_KINDS / RESERVED_KINDS sets. Cheap — readdir only; the template
 // FILES are read on demand. Runs once at boot (templates are static).
@@ -158,9 +227,24 @@ export async function discoverSeededKinds(): Promise<Set<string>> {
   return SEEDED_KINDS;
 }
 
+// A tool.mjs `inputs` export declares agent-steerable string parameters:
+// a flat { paramName: 'description for the agent' } object. Sanitised here —
+// only identifier-shaped keys with string descriptions survive, so a malformed
+// export narrows to nothing instead of breaking the tool-call JSON schema.
+const INPUT_KEY_RE = /^[a-zA-Z_][a-zA-Z0-9_]{0,48}$/;
+function sanitizeToolInputs(raw: any): Record<string, string> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (INPUT_KEY_RE.test(k) && typeof v === 'string' && v.trim()) out[k] = v.trim();
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 // Dynamically import a skill's optional tool.mjs. Returns the data function plus
-// its optional `description` / `ready` exports, or null when there's no tool.
-async function loadToolModule(dir: string): Promise<{ fn: any; description?: string; ready?: any } | null> {
+// its optional `description` / `ready` / `inputs` exports, or null when there's
+// no tool.
+async function loadToolModule(dir: string): Promise<{ fn: any; description?: string; ready?: any; inputs?: Record<string, string> } | null> {
   const file = join(dir, 'tool.mjs');
   try {
     await stat(file);
@@ -172,12 +256,13 @@ async function loadToolModule(dir: string): Promise<{ fn: any; description?: str
   const mod = await import(url);
   const fn = mod.default || mod.fetchData || mod.tool;
   if (typeof fn !== 'function') {
-    throw new Error('tool.mjs must export a default async function (ctx, state, services, config) => data');
+    throw new Error('tool.mjs must export a default async function (ctx, state, services, config, input) => data');
   }
   return {
     fn,
     description: typeof mod.description === 'string' ? mod.description : undefined,
     ready: typeof mod.ready === 'function' ? mod.ready : undefined,
+    inputs: sanitizeToolInputs(mod.inputs),
   };
 }
 
@@ -247,6 +332,11 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     cap.toolName = `skill_${name.replace(/-/g, '_')}`;
     cap.toolDesc = (toolMod.description || data.toolDescription || '').trim()
       || `Fetch live data for the ${label} segment before speaking. Returns { available: false } when there is nothing fresh worth airing.`;
+    // Optional agent-steerable parameters ({ name: description }, strings
+    // only) — becomes the tool's input schema in llm/segment-tools.js and is
+    // handed to toolFn as its 5th argument. Absent → zero-arg tool, the
+    // historical shape.
+    cap.toolInputs = toolMod.inputs;
   }
 
   return cap;

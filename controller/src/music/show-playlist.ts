@@ -79,3 +79,26 @@ export async function resolveShowPlaylistPool(show: any): Promise<PlaylistPool |
   if (!tracks.length) return null;
   return { ids: new Set<string>(tracks.map((t: any) => t.id)), tracks, names };
 }
+
+// Resolve a show's excluded playlists (blocklist) into a set of track ids to
+// suppress. Any track whose id is in this set is dropped from the candidate
+// pool before the LLM sees it. Returns null when the show has no excluded
+// playlists (the common case → callers treat it as a no-op). Shares the same
+// `playlist:${id}` memo key as resolveShowPlaylistPool — it's the identical
+// getPlaylist fetch, so a playlist used as both anchor and blocklist is fetched
+// once, not twice.
+export async function resolveExcludedPlaylistIds(show: any): Promise<Set<string> | null> {
+  const ids = Array.isArray(show?.excludedPlaylistIds) ? show.excludedPlaylistIds.filter(Boolean) : [];
+  if (!ids.length) return null;
+
+  const blocked = new Set<string>();
+  for (const id of ids) {
+    try {
+      const songs = await memoFetch(`playlist:${id}`, () => source.getPlaylist(id));
+      for (const t of songs || []) {
+        if (t?.id) blocked.add(t.id);
+      }
+    } catch {}
+  }
+  return blocked.size ? blocked : null;
+}

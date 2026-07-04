@@ -91,13 +91,20 @@ ARG CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 # of the whole tree. The worker carries the torch-2.9 float32 shim. See
 # docs/gpu-tts.md.
 ARG CHATTERBOX_TORCH_SPEC=
+# Version pins (exact, for reproducible rebuilds). chatterbox-tts 0.1.7 pins
+# torch==2.6.0 / torchaudio==2.6.0 / transformers==5.2.0 and numpy<2.0.0 (on
+# py3.11) itself, so we match torch/torchaudio to its pin, hold numpy at the last
+# 1.x (1.26.4) for the pkuseg build scaffolding, and let chatterbox-tts resolve
+# its own transitive transformers. setuptools is held at the last <81 release
+# (80.10.2) — v81 dropped pkg_resources, which perth still imports (see note
+# above). onnxruntime is chatterbox's watermarker dep.
 RUN python3 -m venv /opt/chatterbox/venv && \
-    /opt/chatterbox/venv/bin/pip install --no-cache-dir --upgrade pip "setuptools<81" wheel && \
-    /opt/chatterbox/venv/bin/pip install --no-cache-dir numpy Cython && \
+    /opt/chatterbox/venv/bin/pip install --no-cache-dir --upgrade pip "setuptools==80.10.2" wheel==0.47.0 && \
+    /opt/chatterbox/venv/bin/pip install --no-cache-dir numpy==1.26.4 Cython==3.2.8 && \
     /opt/chatterbox/venv/bin/pip install --no-cache-dir --no-build-isolation \
       --index-url ${CHATTERBOX_TORCH_INDEX_URL} \
       --extra-index-url https://pypi.org/simple \
-      torch torchaudio onnxruntime chatterbox-tts && \
+      torch==2.6.0 torchaudio==2.6.0 onnxruntime==1.27.0 chatterbox-tts==0.1.7 && \
     if [ -n "${CHATTERBOX_TORCH_SPEC}" ]; then \
       echo "Overriding chatterbox torch pin with: ${CHATTERBOX_TORCH_SPEC}" && \
       /opt/chatterbox/venv/bin/pip install --no-cache-dir --force-reinstall \
@@ -116,24 +123,26 @@ RUN python3 -m venv /opt/chatterbox/venv && \
 # needs torch — separate venv so its pip resolution doesn't fight with
 # chatterbox-tts above.
 #
-# HF_TOKEN (optional) unlocks PocketTTS voice cloning (issue #238). The
-# cloning weights (kyutai/pocket-tts) are GATED on Hugging Face; without a
-# token the worker loads the open "without-voice-cloning" weights and cloned
-# .wav voices silently revert to a built-in. Set HF_TOKEN at RUNTIME (compose
-# env) — the worker downloads the gated weights lazily into the HF cache on
-# first /speak — after accepting the model terms on
-# huggingface.co/kyutai/pocket-tts. (We no longer bake weights at build time;
-# see the header note on why the build-time pre-warm was removed.) ARG HF_TOKEN
-# stays declared so the compose files' `build.args: HF_TOKEN` pass-through
-# doesn't warn — it's unused by the build now, but a token there does nothing.
-ARG HF_TOKEN=""
+# HF_TOKEN (optional) unlocks PocketTTS voice cloning (issue #238). The cloning
+# weights (kyutai/pocket-tts) are GATED on Hugging Face; without a token the
+# worker loads the open "without-voice-cloning" weights and cloned .wav voices
+# silently revert to a built-in. It is a pure RUNTIME concern now — set HF_TOKEN
+# in the compose `environment` (the worker downloads the gated weights lazily
+# into the HF cache on first /speak, after you accept the model terms on
+# huggingface.co/kyutai/pocket-tts). The build no longer bakes weights (see the
+# header note on why the build-time pre-warm was removed), so there is no
+# `ARG HF_TOKEN` here — a build-arg token would do nothing.
+#
+# Version pins (exact, for reproducible rebuilds). pocket-tts 2.1.0 needs
+# torch>=2.5.0 / scipy>=1.5.0 / numpy>=2; torch is held at 2.6.0 (same CPU wheel
+# as the chatterbox venv), and numpy is left transitive (pip pulls a 2.x).
 ENV POCKET_HF_HOME=/opt/pocket-tts/hf-cache
 RUN python3 -m venv /opt/pocket-tts/venv && \
     /opt/pocket-tts/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/pocket-tts/venv/bin/pip install --no-cache-dir \
       --index-url https://download.pytorch.org/whl/cpu \
       --extra-index-url https://pypi.org/simple \
-      torch scipy pocket-tts && \
+      torch==2.6.0 scipy==1.17.1 pocket-tts==2.1.0 && \
     /opt/pocket-tts/venv/bin/python -c \
       "from pocket_tts import TTSModel" && \
     find /opt/pocket-tts/venv -depth -type d -name __pycache__ -exec rm -rf {} + && \
@@ -146,7 +155,7 @@ RUN python3 -m venv /opt/pocket-tts/venv && \
 RUN python3 -m venv /opt/server/venv && \
     /opt/server/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/server/venv/bin/pip install --no-cache-dir \
-      fastapi "uvicorn[standard]" pydantic
+      fastapi==0.139.0 "uvicorn[standard]==0.49.0" pydantic==2.13.4
 
 # NOTE: acoustic analysis (librosa bpm/key + CLAP/Demucs) was removed from this
 # image — it now lives solely in the standalone `subwave-analyzer` sidecar
@@ -180,6 +189,24 @@ COPY controller/scripts/pocket_tts_worker.py /app/workers/pocket_tts_worker.py
 # controller image (chmod 777 there); the sidecar just writes into it. We
 # mkdir here too so the image is self-contained when run standalone.
 RUN mkdir -p /var/sub-wave/voice && chmod 777 /var/sub-wave
+
+# --- Drop root: run uvicorn (and both TTS workers) as an unprivileged user ----
+# The server never needs root at runtime — it only writes to (a) the shared
+# /var/sub-wave mount (the entrypoints chmod it 777, and /speak's out paths live
+# there) and (b) the two per-engine HF weight caches below, plus torch's hub
+# cache. It reads no root-only paths (no icecast secrets, no venv writes), so a
+# fixed non-root uid/gid (10001) is safe and keeps any container breakout
+# unprivileged. HOME + the XDG/TORCH cache dirs are pointed at a user-owned tree;
+# /opt/{chatterbox,pocket-tts}/hf-cache are chowned so the compose named volumes
+# mounted over them inherit the ownership on first create.
+ENV HOME=/home/subwave \
+    XDG_CACHE_HOME=/home/subwave/.cache \
+    TORCH_HOME=/home/subwave/.cache/torch
+RUN groupadd -g 10001 subwave && \
+    useradd -u 10001 -g 10001 -m -d /home/subwave -s /usr/sbin/nologin subwave && \
+    mkdir -p /home/subwave/.cache/torch /opt/chatterbox/hf-cache /opt/pocket-tts/hf-cache && \
+    chown -R 10001:10001 /home/subwave /opt/chatterbox/hf-cache /opt/pocket-tts/hf-cache
+USER 10001:10001
 
 EXPOSE 8080
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]

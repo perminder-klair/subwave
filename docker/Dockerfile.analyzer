@@ -54,19 +54,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # `analyzer` service resolves `subwave-analyzer${ANALYZER_HEAVY:+-heavy}`). At
 # runtime each still needs its own flag (ANALYZE_AUDIO_EMBEDDING /
 # ANALYZE_VOCAL_ACTIVITY, or the admin toggle); with the stack absent those are
-# clean no-ops (bpm/key/loudness only). Kept in sync with the analyzer block in
-# docker/Dockerfile.tts-heavy (which stays heavy — it's the voices image).
+# clean no-ops (bpm/key/loudness only).
+#
+# Version pins: every install is pinned to an exact stable so a rebuild months
+# from now resolves the SAME wheels (reproducible, no surprise major bumps).
+# These pins are the single source of truth for the analyzer venv — keep them in
+# lockstep with the mirrored analyzer block in docker/Dockerfile.aio. torch/
+# torchaudio come off the CPU wheel index and are held at 2.6.0 (the version
+# chatterbox pins in docker/Dockerfile.tts-heavy; keeps one CPU-torch repo-wide).
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
 ENV ANALYZER_HF_HOME=/opt/analyzer/hf-cache
 RUN python3 -m venv /opt/analyzer/venv && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
-    /opt/analyzer/venv/bin/pip install --no-cache-dir librosa soundfile pyloudnorm && \
+    /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 && \
     if [ "$WITH_CLAP" = "1" ]; then \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
         --extra-index-url https://pypi.org/simple \
-        torch transformers onnxruntime && \
+        torch==2.6.0 transformers==5.13.0 onnxruntime==1.27.0 && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
     fi && \
     if [ "$WITH_DEMUCS" = "1" ]; then \
@@ -78,7 +84,7 @@ RUN python3 -m venv /opt/analyzer/venv && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
         --extra-index-url https://pypi.org/simple \
-        torch torchaudio demucs diffq && \
+        torch==2.6.0 torchaudio==2.6.0 demucs==4.0.1 diffq==0.2.4 && \
       /opt/analyzer/venv/bin/python -c "import torch, demucs, diffq" && \
       apt-get purge -y gcc libc6-dev && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* ; \
     fi && \
@@ -90,7 +96,7 @@ RUN python3 -m venv /opt/analyzer/venv && \
 RUN python3 -m venv /opt/server/venv && \
     /opt/server/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/server/venv/bin/pip install --no-cache-dir \
-      fastapi "uvicorn[standard]" pydantic
+      fastapi==0.139.0 "uvicorn[standard]==0.49.0" pydantic==2.13.4
 
 ENV PATH=/opt/server/venv/bin:$PATH \
     ANALYZE_PYTHON=/opt/analyzer/venv/bin/python \
@@ -108,6 +114,26 @@ COPY controller/scripts/analyze_worker.py /app/workers/analyze_worker.py
 # off this volume. Created by the controller image (chmod 777 there); we mkdir
 # here too so the image is self-contained when run standalone.
 RUN mkdir -p /var/sub-wave && chmod 777 /var/sub-wave
+
+# --- Drop root: run uvicorn (and the analyze worker) as an unprivileged user --
+# The server never needs root at runtime — it only writes to (a) the shared
+# /var/sub-wave mount (the entrypoints chmod it 777) and (b) the caches below:
+# the HF weights cache (ANALYZER_HF_HOME, only touched when CLAP is enabled) and
+# librosa/numba's JIT cache. It reads no root-only paths (no icecast secrets, no
+# venv writes), so a fixed non-root uid/gid (10001) is safe and keeps any
+# container breakout unprivileged. HOME + the XDG/NUMBA cache dirs are pointed at
+# a user-owned tree so numba's cache=True JIT files land somewhere writable
+# instead of the root-owned site-packages (which would just warn + skip caching).
+# /opt/analyzer/hf-cache is chowned so the compose named volume mounted over it
+# inherits the ownership on first create.
+ENV HOME=/home/subwave \
+    XDG_CACHE_HOME=/home/subwave/.cache \
+    NUMBA_CACHE_DIR=/home/subwave/.cache/numba
+RUN groupadd -g 10001 subwave && \
+    useradd -u 10001 -g 10001 -m -d /home/subwave -s /usr/sbin/nologin subwave && \
+    mkdir -p /home/subwave/.cache/numba /opt/analyzer/hf-cache && \
+    chown -R 10001:10001 /home/subwave /opt/analyzer/hf-cache
+USER 10001:10001
 
 EXPOSE 8080
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]

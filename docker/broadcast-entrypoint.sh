@@ -72,6 +72,16 @@ touch /var/sub-wave/archive/.ndignore
 mkdir -p /var/log/liquidsoap
 chown -R liquidsoap:liquidsoap /var/log/liquidsoap 2>/dev/null || true
 
+# Rotate radio.log on boot once it passes 50MB. Liquidsoap has no size-based
+# rotation of its own and appends forever (200MB+ after a couple of months);
+# boot is the one safe moment to move it since liquidsoap isn't holding the
+# fd yet. One .old generation caps disk at ~2x the threshold.
+RADIO_LOG=/var/log/liquidsoap/radio.log
+if [ -f "$RADIO_LOG" ] && [ "$(stat -c %s "$RADIO_LOG" 2>/dev/null || echo 0)" -gt 52428800 ]; then
+    mv -f "$RADIO_LOG" "$RADIO_LOG.old"
+    echo "broadcast: rotated oversized radio.log to radio.log.old" >&2
+fi
+
 # ---- Resolve passwords ------------------------------------------------------
 # Capture env values FIRST so sourcing the secrets file can't clobber them.
 
@@ -99,7 +109,12 @@ ICECAST_SOURCE_PASSWORD=$ICECAST_SOURCE_PASSWORD
 ICECAST_ADMIN_PASSWORD=$ICECAST_ADMIN_PASSWORD
 ICECAST_RELAY_PASSWORD=$ICECAST_RELAY_PASSWORD
 EOF
-chmod 644 "$SECRETS"
+# 0600: the file holds the Icecast passwords. Only root reads it — this
+# entrypoint sources it (as root, before dropping to the icecast2/liquidsoap
+# users via sudo -E), and the controller container (also root) reads it off the
+# shared /var/sub-wave mount in broadcast/listeners.ts. No non-root reader
+# needs it, so keep it owner-only.
+chmod 600 "$SECRETS"
 
 export ICECAST_SOURCE_PASSWORD ICECAST_ADMIN_PASSWORD ICECAST_RELAY_PASSWORD
 # Liquidsoap connects to icecast over loopback inside this container.
@@ -138,7 +153,15 @@ done
 # ---- Launch liquidsoap in the background -----------------------------------
 
 echo "broadcast: starting liquidsoap" >&2
-sudo -E -u liquidsoap liquidsoap /etc/liquidsoap/radio.liq &
+# TEMPORARY (re-harden later): run liquidsoap as root instead of dropping to
+# the `liquidsoap` user. The savonet base image bump 2.2.5 -> 2.4.4 changed the
+# `liquidsoap` user's uid (10000 -> 100), so the persisted state files under the
+# bind-mounted /var/sub-wave (e.g. now-playing.json, owned 10000:10001 mode 644
+# by the old image) became unwritable to uid 100 — every on_meta write EACCES'd
+# and the UI froze one song behind. Root ignores those perms. Restore the
+# privilege drop once the state files are chowned to the new liquidsoap uid
+# (needs settings.init.allow_root reverted in radio.liq too).
+liquidsoap /etc/liquidsoap/radio.liq &
 LIQ_PID=$!
 
 # ---- Wait for either to die, then exit -------------------------------------

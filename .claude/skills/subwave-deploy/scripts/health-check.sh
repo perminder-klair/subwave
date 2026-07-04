@@ -149,6 +149,22 @@ echo
 # benign "aborting with incomplete response / context canceled" for
 # /stream.mp3. That (and any normal stream-client disconnect) is filtered out
 # below so it doesn't read as a deploy failure.
+#
+# Also filtered: Liquidsoap's playlist-parser probing. On startup (and on the
+# first track resolve) it tries every registered parser in order — the XML and
+# SCPLS parsers reject non-matching content by raising, and Liquidsoap 2.4.x
+# prints those internal exceptions to stderr as "Error -1: Exception raised:
+# xml error: expected root element" / "...: Not_found" with backtraces. They
+# land exactly in the post-restart window this scan covers. Benign; the M3U
+# parser wins right after. Keep the patterns anchored to "Exception raised:"
+# so a real error elsewhere still trips the scan.
+#
+# Also filtered: the controller's raw LLM debug capture (settings
+# llm.debugRawRequests or LLM_DEBUG_RAW). When on, every outbound model
+# request body is mirrored to stderr — a "[llm-debug-raw]" header line plus
+# one huge single-line JSON body starting {"model": — and prompt text inside
+# routinely contains words like "fail"/"error". Diagnostic mirroring, not a
+# fault; without this filter the scan false-fails whenever the toggle is on.
 echo "=== errors in last 2m ==="
 ANY_ERRS=0
 SERVICES=$(docker compose -f "$COMPOSE" config --services 2>/dev/null)
@@ -157,6 +173,8 @@ for svc in $SERVICES; do
          | grep -iE "error|fail|exception|fatal" \
          | grep -viE "no error|errors: 0|stderr|--with-stderr" \
          | grep -viE "aborting with incomplete response|context canceled|reading: context" \
+         | grep -vE "Exception raised: xml error: expected root element|Exception raised: Not_found" \
+         | grep -vE '\[llm-debug-raw\]|\| \{"model":' \
          | head -3)
   if [ -n "$errs" ]; then
     echo "--- $svc ---"

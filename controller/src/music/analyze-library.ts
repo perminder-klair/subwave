@@ -39,6 +39,14 @@ import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
 
 const logEvent = makeEventLogger('analyze');
 
+// Close (and TRUNCATE-checkpoint) the library DB on every exit path. The
+// analysis pass is the biggest bulk writer in the system — fat *_json blobs
+// per track — and exiting without a close is exactly what left a 730MB WAL
+// sidecar behind in #786. db.close() is synchronous, so an 'exit' hook is safe.
+process.on('exit', () => {
+  try { if (db.isOpen()) db.close(); } catch { /* best-effort */ }
+});
+
 function parseIntFlag(args: string[], name: string): number | undefined {
   const idx = args.indexOf(name);
   if (idx < 0) return undefined;

@@ -44,7 +44,18 @@ same images as the Compose stack, just packaged together.
 
 > ⚠️ **Keep Appdata on the array/pool, not the flash drive.** SUB/WAVE's state
 > grows — hourly archives, the library cache, rendered voices — so point it at
-> `/mnt/user/appdata/subwave`, never `/boot/...`.
+> your appdata share, never `/boot/...`.
+
+> ⚠️ **If your appdata share lives on a pool (cache), use the direct pool path**
+> — e.g. `/mnt/cache/appdata/subwave` instead of `/mnt/user/appdata/subwave`.
+> The library cache is a SQLite database in WAL mode, and `/mnt/user` paths go
+> through Unraid's shfs/FUSE layer even for cache-only shares. SQLite
+> [documents](https://www.sqlite.org/wal.html) that WAL doesn't work properly
+> over FUSE-style filesystems — in practice it means sluggish admin pages and
+> a WAL file that balloons to hundreds of MB (issue #786). Same rule the
+> Sonarr/Radarr projects apply to their databases. Already installed on
+> `/mnt/user`? Stop the container, edit the path mapping to the `/mnt/cache/...`
+> equivalent (same data, FUSE bypassed), and start it again.
 
 Fronting this with your own NPM / SWAG / Traefik for TLS + a hostname? See
 [Putting it behind your own reverse

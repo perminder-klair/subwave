@@ -30,7 +30,7 @@ aac_bitrate = ref(192)
 stream_bitrate = ref(192)
 station_name = ref("SUB/WAVE")
 
-# DJ transition effects (filter sweep + echo washout) — see dj_transition
+# DJ transition effects (filter sweep + echo washout + reverb dissolve) — see dj_transition
 # below. Both effects are built PER-BRANCH inside the transition callback, on
 # the OUTGOING track's source only: idle playout never passes through an
 # effect operator at all, and the incoming track always lands clean and dry —
@@ -39,14 +39,18 @@ station_name = ref("SUB/WAVE")
 # no threads, no shared state): sample-accurate in AUDIO time, so they hold
 # under any clock — the offline render harness (sync="none") exposed that
 # wall-clock thread envelopes and audio time drift apart.
-# Verified on liquidsoap v2.2.5 (scripts/fx-render-test.sh probe): filter.rc
-# and comb instantiate cleanly INSIDE the cross callback on a
+# Verified on liquidsoap v2.2.5, v2.4.4 AND v2.4.5 (scripts/fx-render-test.sh
+# probe). NB: v2.4.5 is the MINIMUM runtime for these effects — on 2.4.4 the
+# clock's O(n) source scan × multi-pull pass-through layers made every effect
+# transition peg a core and stall the stream (see Dockerfile.broadcast).
+# filter.rc and comb instantiate cleanly INSIDE the cross callback on a
 # request.queue-backed source — the "Early computation of source content-type"
 # crash is specific to iir_filter/HPF — and audibly alter the render.
 # WHY comb, NOT echo: liquidsoap's native `echo` (incl. its ping_pong flag) is a
-# verified NO-OP in this savonet/liquidsoap:v2.2.5 build — it type-checks but
-# passes audio through bit-for-bit unchanged (confirmed by render: identical
-# md5 dry vs wet). `comb` (a feedback delay line) is the working PCM primitive
+# verified NO-OP in BOTH the v2.2.5 and v2.4.4 savonet builds — it type-checks
+# but passes audio through bit-for-bit unchanged (confirmed by render:
+# identical md5 dry vs wet, re-confirmed on 2.4.4 with the dB-form feedback
+# the 2.4 API demands). `comb` (a feedback delay line) is the working PCM primitive
 # with a getter-controlled `feedback`. The tail is therefore centred, not a true
 # L/R ping-pong; real stereo bounce would need the heavier ffmpeg.filter.aecho
 # send path. Do NOT "simplify" this back to `echo`.
@@ -152,15 +156,15 @@ def proto_subhttp(~rlog, ~maxtime, arg) =
     elsif string.contains(substring=".ogg", arg) then ".ogg"
     elsif string.contains(substring=".flac", arg) then ".flac"
     else ".mp3" end
-  output = file.temp("liq-curl-", ext)
-  cmd = "curl -sS -L --max-time #{timeout} -o #{process.quote(output)} #{process.quote(uri)}"
+  outfile = file.temp("liq-curl-", ext)
+  cmd = "curl -sS -L --max-time #{timeout} -o #{process.quote(outfile)} #{process.quote(uri)}"
   ret = process.run(timeout=float_of_int(timeout), cmd)
-  if ret.status == "exit" and ret.status.code == 0 and file.size(output) > 0 then
-    [output]
+  if ret.status == "exit" and ret.status.code == 0 and file.size(outfile) > 0 then
+    outfile
   else
     log(label="protocol.subhttp", level=3, "curl failed for #{uri}: status=#{ret.status} code=#{ret.status.code} stderr=#{ret.stderr}")
-    file.remove(output)
-    []
+    file.remove(outfile)
+    null
   end
 end
 
@@ -257,7 +261,7 @@ music = cue_cut(music)
 # DJ TRANSITION EFFECTS live INSIDE this callback, per-branch on the outgoing
 # source (see the state block near the top of this file). Instantiating
 # operators here is safe for filter.rc and comb specifically — proven against
-# the real v2.2.5 image by scripts/fx-render-test.sh probe. The historical
+# the real v2.2.5 and v2.4.4 images by scripts/fx-render-test.sh probe. The historical
 # `Early computation of source content-type detected for source iir_filter!`
 # crash is specific to IIR filters (iir_filter/HPF) on a not-yet-typed
 # `request.queue`-backed source; re-test with the probe before adding any OTHER
@@ -285,6 +289,16 @@ def dj_transition(a, b) =
   # filter is applied to the OUTGOING branch: the track we're leaving sinks
   # under a closing lowpass while the pick rises clean underneath.
   sweeping = b.metadata["liq_sweep"] == "true"
+  # Dissolve (reverb wash) rides the INCOMING pick like the sweep — "dissolve
+  # the current track under my pick" — and is likewise applied to the OUTGOING
+  # branch: the track we're leaving loses its transients and pulse to a
+  # diffuse comb-cluster wash while the pick rises clean through it. The
+  # SMOOTH way across a clash (the sweep is the dramatic way); the controller
+  # only arms it between CLASHING tracks (mix.effectAllowedFor).
+  # Precedence: a washout on the outgoing track's own annotation also shapes
+  # this exit (echo tail vs ambient wash are mutually exclusive gestures) —
+  # the washout wins because it may carry the length-cap auto-arm.
+  dissolving = b.metadata["liq_dissolve"] == "true" and not washing
   # Washout drops the dry signal early (exp fade) so the tail reads as a
   # dissolve. An early drop sums BELOW unity mid-cross — a dip, which is the
   # effect; the +6 dB doubling hazard is only for fades that hold full level
@@ -405,9 +419,11 @@ def dj_transition(a, b) =
         sxx = 3.0 * x * x - 2.0 * x * x * x
         30.0 * pow(1800.0 / 30.0, sxx)            # 30 Hz → 1.8 kHz (log space)
       end
-      # SUBTRACT-HPF: filter.rc mode="high" is BROKEN in this v2.2.5 build —
+      # SUBTRACT-HPF: filter.rc mode="high" is BROKEN in the v2.2.5 build —
       # even a static 400 Hz high-pass collapses music to −115 dB (verified by
-      # render; same defect family as the `echo` no-op). High-pass is built
+      # render; same defect family as the `echo` no-op) — and STILL broken on
+      # v2.4.4 (re-verified: 40 Hz HPF on a 440 Hz tone renders −inf silence).
+      # High-pass is built
       # from proven parts instead: dry − lowpass(dry). Polarity inversion and
       # twin-consumer frame alignment verified: src + amplify(-1., src)
       # renders exact silence.
@@ -493,6 +509,114 @@ def dj_transition(a, b) =
       washed = filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet,
                  filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet, washed))
       amplify(wash_gain, washed)
+    else
+      a_source
+    end
+  # DISSOLVE ENVELOPE — the reverb wash. Same topology as the washout (comb →
+  # cascaded damped lowpass → late makeup) with two deliberate differences:
+  #   1. FOUR parallel combs at mutually prime, tempo-UNRELATED delays
+  #      (43/61/79/101 ms) instead of one tempo-synced tap — the tails smear
+  #      into diffuse ambience instead of a rhythmic pulse. No allpass exists
+  #      in the proven kit (native echo is a no-op on both engine builds), so
+  #      diffusion comes from the prime spread plus heavy damping; the wash
+  #      also sits UNDER the rising pick, which hides the metallic edge a
+  #      Schroeder cluster has when exposed.
+  #   2. The damping lowpass closes deeper (7 kHz → 1.2 kHz) — the wash reads
+  #      as the track receding into a large dark space, not echoing in place.
+  # Feedback swells fast (within 15% of d, while the exp-faded dry is still
+  # hot enough to seed the cluster — the washout's on-air lesson), holds, and
+  # releases to silence by 0.93·d so the tail is dead before the transition
+  # source truncates at d. Each comb's tail is isolated from its dry
+  # pass-through (see pure_tail below) so the wash can run hot without
+  # multiplying the dry path.
+  a_source =
+    if dissolving then
+      log("DJ dissolve: reverb wash under the next track (d=#{d}s)")
+      diss_src = a_source
+      def diss_fb() =
+        e = source.elapsed(diss_src)
+        e = if e < 0. then 0. else e end
+        # Per-tap dB. Tail decay = fb/delay per SECOND, so short taps need
+        # near-unity feedback: -0.5 dB on 89–181 ms taps ≈ a 3–6 dB/s,
+        # multi-second wash. The first cut (-2.5 dB on 43–101 ms taps)
+        # decayed 25–58 dB/s — rendered indistinguishable from dry.
+        fb_max = -0.5
+        fb_off = -90.0
+        # The swell must beat the exp fade (the washout's on-air lesson): the
+        # loop only ever holds what it was fed while the dry was still hot.
+        t_swell = 0.10 * d
+        t_hold  = 0.80 * d
+        t_rel   = 0.93 * d
+        if e < t_swell then
+          x = e / t_swell
+          s = 3.0 * x * x - 2.0 * x * x * x
+          fb_off + s * (fb_max - fb_off)
+        elsif e < t_hold then
+          fb_max
+        elsif e < t_rel then
+          fb_max + ((e - t_hold) / (t_rel - t_hold)) * (fb_off - fb_max)
+        else
+          fb_off
+        end
+      end
+      # Late makeup, same rationale as the washout: lift the wash alone after
+      # the exp fade has dropped the dry, so the ambience sits present over
+      # the incoming track instead of buried. Hotter than the washout's 1.95
+      # in linear terms is NOT what this is — the wash's four 0.25-weighted
+      # taps start ~12 dB below the washout's single unity tap, so 2.2 here
+      # still lands the bed several dB under where the washout tail sits.
+      def diss_gain() =
+        e = source.elapsed(diss_src)
+        e = if e < 0. then 0. else e end
+        g_max = 1.3
+        t_from = 0.25 * d
+        t_to   = 0.50 * d
+        if e <= t_from then 1.0
+        elsif e >= t_to then g_max
+        else
+          x = (e - t_from) / (t_to - t_from)
+          1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
+        end
+      end
+      # Darkening: later reflections arrive later in time, so a lowpass
+      # closing across the window makes the wash recede into the dark. Wet
+      # ramps in over the first 10% (an RC at 7 kHz is not transparent —
+      # engaging it full-wet at cross start dulls the still-audible dry;
+      # the sweep's on-air lesson).
+      def diss_cut() =
+        e = source.elapsed(diss_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.30 * d
+        t_to   = 0.90 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        s = 3.0 * x * x - 2.0 * x * x * x
+        7000.0 * pow(1200.0 / 7000.0, s)
+      end
+      def diss_wet() =
+        e = source.elapsed(diss_src)
+        e = if e < 0. then 0. else e end
+        t_on = 0.10 * d
+        x = if e >= t_on then 1.0 else e / t_on end
+        3.0 * x * x - 2.0 * x * x * x
+      end
+      # PURE-TAIL isolation: comb passes its input, so summing four combs
+      # directly forces a 0.25 weight to keep the dry at unity — which buries
+      # the tails 12 dB down before they even start (first render: a −44 dB
+      # mid-cross crater, wash inaudible). Subtracting the input from each
+      # comb leaves ONLY the feedback tail (src + amplify(-1., src) nulls
+      # exactly — the twin-consumer alignment the blend already relies on),
+      # so the dry rides the faded path once and the tails run hot.
+      def pure_tail(tap) =
+        add(normalize=false,
+          [comb(delay=tap, feedback=diss_fb, a_source), amplify(-1., a_source)])
+      end
+      washed = add(normalize=false,
+        [amplify(0.7, pure_tail(0.089)), amplify(0.7, pure_tail(0.113)),
+         amplify(0.7, pure_tail(0.151)), amplify(0.7, pure_tail(0.181))])
+      washed = filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet,
+                 filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet, washed))
+      # Dry (faded) + wash: the track walks out through its own ambience.
+      add(normalize=false, [a_source, amplify(diss_gain, washed)])
     else
       a_source
     end
@@ -633,8 +757,18 @@ music = amplify(override="liq_amplify", 1., music)
 # washout) are built per-transition on the outgoing branch inside dj_transition,
 # so idle playout has no effect operators in its path at all, and jingles can
 # never be caught inside a ramp.
+# persist_override=true (2.4): with the new default (false) the
+# liq_cross_duration override is reset before it ever sizes the stamped
+# track's own end-of-track buffer (verified by scripts/fx-render-test.sh
+# xdur: stamped 12 rendered an 86s output — static buffer — without persist,
+# 78s — stamp honoured — with it). Persist restores the 2.2.5 sizing. The
+# flip side of persist is that a stamp would linger over later unstamped
+# tracks, so the controller now stamps EVERY track it annotates
+# (subsonic.getAnnotatedUri falls back to the operator's crossfade setting),
+# making the lingering value always the intended one.
 music = cross(
   duration=crossfade_duration(),
+  persist_override=true,
   dj_transition,
   music
 )
@@ -766,8 +900,24 @@ end
 # BEFORE mic_chain so the fixed-threshold compressor sees a levelled input. The
 # un-annotated silent lead-in carries no `liq_amplify`, so it plays at the base
 # factor 1. (unity). Un-trimmed clips (gainDb 0) write a bare path → also unity.
-voice = mic_chain(amplify(override="liq_amplify", 1., voice_queue))
-intro = mic_chain(amplify(override="liq_amplify", 1., intro_queue))
+# Micro edge fade-IN on each spoken clip. Some TTS engines cut the WAV hard at
+# the file boundary; once the mic-chain compressor's makeup gain lifts the
+# clip, that hard edge lands as an audible click/tick. 40 ms is short enough
+# not to soften the first word (speech onsets are slower than that) but long
+# enough to zero out the boundary discontinuity. Applied per track, so the
+# silent lead-in clip is faded too (harmless — it's silence). Placed BEFORE
+# amplify/mic_chain so the compressor never sees the raw edge.
+# fade.in ONLY — no fade.out. On a request.queue source this Liquidsoap build
+# doesn't know the track's remaining time, so fade.out treats the whole clip
+# as inside the fade zone and multiplies it to silence (every voice segment
+# aired as dead air under the duck). Verified empirically against the
+# broadcast image. Tail clicks must be faded at WAV-render time instead.
+def edge_fade(s) =
+  fade.in(duration=0.04, s)
+end
+
+voice = mic_chain(amplify(override="liq_amplify", 1., edge_fade(voice_queue)))
+intro = mic_chain(amplify(override="liq_amplify", 1., edge_fade(intro_queue)))
 
 # ---------------------------------------------------------------------------
 # STUDIO BED — continuous low-level ambient room tone (Phase 2)
@@ -945,7 +1095,7 @@ def on_meta(m) =
     # Build via json.stringify so values with embedded quotes/backslashes
     # (e.g. a title like Fall (From "Rabb Da Radio 3")) are properly escaped —
     # raw string interpolation here produced invalid JSON the UI couldn't parse.
-    json = json.stringify(compact=true, {
+    payload = json.stringify(compact=true, {
       title = title,
       artist = artist,
       album = album,
@@ -953,7 +1103,7 @@ def on_meta(m) =
       filename = filename,
       timestamp = ts
     })
-    file.write(data=json, "/var/sub-wave/now-playing.json")
+    file.write(data=payload, "/var/sub-wave/now-playing.json")
     # Push the same metadata onto the Icecast stream so the ICY title
     # tracks the current song instead of lagging a transition behind.
     radio.insert_metadata([
@@ -970,7 +1120,9 @@ end
 # outgoing track usually wins, freezing the UI one song behind.
 # on_metadata is used instead of on_track because on_track gets swallowed
 # by source switches (request queue → auto playlist).
-music_meta.on_metadata(on_meta)
+# synchronous=false (2.3+ mandatory arg): on_meta does file I/O — run it on
+# the task queue, not the streaming thread.
+music_meta.on_metadata(synchronous=false, on_meta)
 
 # ---------------------------------------------------------------------------
 # OUTPUT — broadcast to Icecast
@@ -1001,6 +1153,14 @@ music_meta.on_metadata(on_meta)
 #                  build all decode it; older clients keep using MP3.
 # Per-listener bandwidth is per-mount, so the unused side costs nothing.
 settings.init.force_start := true
+
+# TEMPORARY (re-harden later): allow running as root. The broadcast entrypoint
+# currently launches liquidsoap as root (not the privilege-dropped `liquidsoap`
+# user) because the 2.4.4 base image changed that user's uid and made the
+# persisted state files unwritable — see docker/broadcast-entrypoint.sh. Without
+# this, liquidsoap refuses to start under a root euid. Revert together with the
+# entrypoint once the state files are re-chowned to the liquidsoap uid.
+settings.init.allow_root := true
 
 # Hourly archive path. Wrap in `{time.string(...)}` so the path is a getter that
 # re-runs strftime each time `output.file` reopens (every hour via reopen_when).

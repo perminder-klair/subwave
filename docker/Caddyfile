@@ -6,7 +6,9 @@
 {
 	auto_https off
 	# Trust Cloudflare's X-Forwarded-* headers so logs and rate-limits see real IPs.
-	# Refresh the IP ranges occasionally: https://www.cloudflare.com/ips/
+	# This list is hardcoded and must be refreshed by hand when Cloudflare changes
+	# its ranges — pull the canonical lists from:
+	#   https://www.cloudflare.com/ips-v4  and  https://www.cloudflare.com/ips-v6
 	servers {
 		trusted_proxies static \
  173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 \
@@ -19,6 +21,26 @@
 }
 
 :80 {
+	# -------------------------------------------------------------------------
+	# Security response headers — applied to every response (streams, /api, web)
+	# -------------------------------------------------------------------------
+	# These are inert metadata headers: they don't buffer or rewrite the body, so
+	# they don't interfere with the streams' `flush_interval -1` live path or the
+	# /api reverse proxy. X-Frame-Options SAMEORIGIN is safe — the app never
+	# embeds itself cross-origin (no iframe/postMessage embedding in web/).
+	header {
+		# Drop Caddy's default `Server: Caddy` banner (don't advertise the edge).
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options SAMEORIGIN
+		# HSTS — opt-in. Cloudflare terminates TLS in front of this origin, so
+		# HSTS at the edge is only meaningful when the site is served https-only.
+		# Uncomment to force HTTPS in browsers for a year (operator's call; be
+		# sure every subdomain is https before enabling includeSubDomains):
+		# Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
 	# -------------------------------------------------------------------------
 	# /stream.mp3 + /stream.opus + /stream.flac + /stream.aac — Icecast endpoints
 	# -------------------------------------------------------------------------

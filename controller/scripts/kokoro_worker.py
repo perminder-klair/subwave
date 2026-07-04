@@ -10,8 +10,10 @@ Request:  {"id": "<any>", "text": "...", "voice": "bm_george", "out": "/path/to.
 Response: {"id": "<echoed>", "ok": true,  "path": "/path/to.wav", "duration_s": 3.4}
        |  {"id": "<echoed>", "ok": false, "error": "..."}
 
-`lang` is fixed to "en-gb" for British English — kokoro-onnx picks a phonemizer
-based on this, and the misaki package needs espeak-ng installed in the image.
+`lang` (optional) explicitly overrides the phonemizer language (e.g. "en-gb").
+When provided, the voice's audio/timbre is preserved but the phonemes are
+generated for the given language (e.g. a Japanese voice reading English text).
+When absent, the language is auto-detected from the voice code prefix character.
 """
 
 import json
@@ -41,6 +43,8 @@ def main():
     try:
         from kokoro_onnx import Kokoro
         import soundfile as sf
+        import misaki
+        from misaki import espeak
     except Exception as e:
         emit({"id": None, "ok": False, "fatal": True, "error": f"import failed: {e}"})
         sys.exit(1)
@@ -56,6 +60,34 @@ def main():
     log("ready")
     emit({"id": None, "ready": True})
 
+    lang_mapping = {
+        "a": "en-us",
+        "b": "en-gb",
+        "e": "es",
+        "i": "it",
+        "f": "fr",
+        "h": "hi",
+        "p": "pt-br",
+        "j": "ja",
+        "z": "cmn",
+    }
+    # EspeakG2P construction isn't free, and there are only a handful of
+    # languages, so build each phonemizer once and reuse it across requests.
+    g2p_cache = {}
+
+    def _phonemize(voice_code, lang=None):
+        """Return a cached language-aware phonemizer. When `lang` is explicitly
+        provided use it directly (voice timbre, accent preserved); otherwise
+        auto-detect from the voice code prefix character."""
+        if not lang or lang not in lang_mapping.values():
+            lang = lang_mapping.get(voice_code[0], "en-gb")  # british english fallback
+        g2p = g2p_cache.get(lang)
+        if g2p is None:
+            g2p = espeak.EspeakG2P(language=lang)
+            g2p_cache[lang] = g2p
+        return g2p
+
+
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -68,14 +100,16 @@ def main():
             if not text:
                 raise ValueError("empty text")
             voice = req.get("voice") or DEFAULT_VOICE
-            lang = req.get("lang") or DEFAULT_LANG
+            lang = (req.get("lang") or "").strip() or None
             speed = float(req.get("speed") or 1.0)
             out = req.get("out")
             if not out:
                 raise ValueError("missing 'out' path")
             Path(out).parent.mkdir(parents=True, exist_ok=True)
 
-            samples, sample_rate = kokoro.create(text, voice=voice, speed=speed, lang=lang)
+            phonemes, _ = _phonemize(voice, lang)(text)
+
+            samples, sample_rate = kokoro.create(phonemes, voice=voice, speed=speed, is_phonemes=True)
             sf.write(out, samples, sample_rate)
 
             duration = float(len(samples)) / float(sample_rate)

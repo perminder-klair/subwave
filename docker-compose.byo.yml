@@ -8,6 +8,12 @@
 #   ${CONTROLLER_PORT:-7701} → controller HTTP API
 #   ${ICECAST_PORT:-7702}    → Icecast MP3 broadcast endpoint
 #
+# Bind address: these three ports bind 0.0.0.0 (all interfaces) by default. If
+# your reverse proxy runs on THIS host, set BIND_ADDRESS=127.0.0.1 in .env so the
+# services (including the controller's admin API) are reachable only from the
+# proxy on loopback, not directly from the network. Leave it unset for a proxy
+# on a different host.
+#
 # Liquidsoap stays internal-only — it lives inside the broadcast container
 # alongside icecast and has no public surface.
 #
@@ -27,6 +33,16 @@
 
 x-state: &state-mount ${STATE_DIR:-./state}:/var/sub-wave
 
+# Cap container log growth. Without this the default json-file driver keeps an
+# unbounded log per container, which on a long-running station eventually fills
+# the host disk. 10m × 3 files = ~30MB ceiling per service. Applied to every
+# service below via `logging: *default-logging`.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # -------------------------------------------------------------------------
   # BROADCAST — icecast2 + liquidsoap in one container
@@ -40,13 +56,16 @@ services:
       dockerfile: docker/Dockerfile.broadcast
     container_name: sub-wave-broadcast
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=${ICECAST_RELAY_PASSWORD:-}
       - TZ=${TZ:-Europe/London}
     ports:
-      - "${ICECAST_PORT:-7702}:7702"
+      # BIND_ADDRESS defaults to 0.0.0.0; set 127.0.0.1 in .env for a same-host
+      # proxy (see header comment).
+      - "${BIND_ADDRESS:-0.0.0.0}:${ICECAST_PORT:-7702}:7702"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -73,6 +92,7 @@ services:
         - SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       broadcast:
         condition: service_healthy
@@ -102,9 +122,20 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${CONTROLLER_PORT:-7701}:7701"
+      # Set BIND_ADDRESS=127.0.0.1 in .env to keep the admin API off the network
+      # when the proxy is same-host (see header comment).
+      - "${BIND_ADDRESS:-0.0.0.0}:${CONTROLLER_PORT:-7701}:7701"
     volumes:
       - *state-mount
+    # curl is present in the controller image (see docker/Dockerfile.controller).
+    # /health is served at the router root on :7701 (routes/public.ts). Lets web
+    # gate on the controller being ready via depends_on: service_healthy.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7701/health > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   # -------------------------------------------------------------------------
   # DOCKER-SOCKET-PROXY — locked-down Docker API for the Stats system panel
@@ -121,6 +152,7 @@ services:
     image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
     container_name: sub-wave-docker-proxy
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - CONTAINERS=1
     volumes:
@@ -143,8 +175,13 @@ services:
         - SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
-      - controller
+      # Wait for the controller to pass its healthcheck — the homepage renders
+      # per-request against the controller (CONTROLLER_INTERNAL_URL below), so
+      # starting web before the controller is ready serves broken first pages.
+      controller:
+        condition: service_healthy
     environment:
       - NODE_ENV=production
       - SUBWAVE_HOMEPAGE=${SUBWAVE_HOMEPAGE:-player}
@@ -154,7 +191,8 @@ services:
       # network name — not exposed to the browser (which uses /api via Caddy).
       - CONTROLLER_INTERNAL_URL=http://controller:7701
     ports:
-      - "${WEB_PORT:-7700}:7700"
+      # BIND_ADDRESS defaults to 0.0.0.0; 127.0.0.1 for a same-host proxy.
+      - "${BIND_ADDRESS:-0.0.0.0}:${WEB_PORT:-7700}:7700"
     # Same-origin (/api, /stream.mp3) is the default baked into the image.
     # Your external proxy is responsible for routing those paths to controller
     # and broadcast — see the header comment for the route table.
@@ -172,9 +210,6 @@ services:
       context: .
       dockerfile: docker/Dockerfile.tts-heavy
       args:
-        # Optional — bake the gated PocketTTS cloning weights in at build time.
-        # Runtime HF_TOKEN (below) enables cloning without it.
-        HF_TOKEN: ${HF_TOKEN:-}
         # GPU opt-in for Chatterbox — point torch at a CUDA wheel index (e.g.
         # CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124) and
         # layer on docker-compose.tts-heavy-gpu.yml. Defaults to CPU wheels.
@@ -189,6 +224,13 @@ services:
     platform: linux/amd64
     container_name: sub-wave-tts-heavy
     restart: unless-stopped
+    logging: *default-logging
+    # OOM containment: cap the resident set so a runaway model load (a huge
+    # reference WAV, a wedged PyTorch allocation) is killed inside this
+    # container instead of triggering the host OOM-killer and taking broadcast
+    # or the controller down with it. Default is generous — real Chatterbox +
+    # PocketTTS peaks sit well under it. Raise/lower via TTS_HEAVY_MEM_LIMIT in .env.
+    mem_limit: ${TTS_HEAVY_MEM_LIMIT:-10g}
     profiles: ["tts-heavy"]
     environment:
       - TTS_HEAVY_DEVICE=${TTS_HEAVY_DEVICE:-cpu}
@@ -229,6 +271,14 @@ services:
         WITH_DEMUCS: ${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
     restart: unless-stopped
+    logging: *default-logging
+    # OOM containment: cap the resident set so a runaway analysis (a long track,
+    # a CLAP/Demucs allocation spike on the heavy image) is killed inside this
+    # container instead of triggering the host OOM-killer and taking broadcast or
+    # the controller down with it. Default is generous — librosa passes sit well
+    # under it, and even CLAP + Demucs on the heavy image fit. Raise/lower via
+    # ANALYZER_MEM_LIMIT in .env.
+    mem_limit: ${ANALYZER_MEM_LIMIT:-6g}
     environment:
       # Force CLAP / Demucs on for the whole pass. Usually unnecessary — the
       # admin toggles drive these per request.

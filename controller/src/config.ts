@@ -47,6 +47,10 @@ export const config = {
     password: process.env.NAVIDROME_PASS || '',
     apiVersion: '1.16.1',
     clientName: 'sub-wave',
+    // Per-request cap on Subsonic API calls. Without one, a slow or hung
+    // Navidrome leaves fetches pending forever and admin routes stack up
+    // behind them (#786's "recent failed (500)").
+    timeoutMs: parseInt(process.env.NAVIDROME_TIMEOUT_MS || '', 10) || 30_000,
   },
   // Local-folder music source (settings.music.source === 'local'). The default
   // <STATE_DIR>/music needs no compose changes — the state dir is already
@@ -111,7 +115,7 @@ export const config = {
     model: process.env.KOKORO_MODEL || '/opt/kokoro/models/kokoro-v1.0.onnx',
     voices: process.env.KOKORO_VOICES || '/opt/kokoro/models/voices-v1.0.bin',
     voice: process.env.KOKORO_VOICE || 'bf_isabella',   // British female, BBC-ish
-    lang: process.env.KOKORO_LANG || 'en-gb',
+    lang: process.env.KOKORO_LANG || '',
     speed: parseFloat(process.env.KOKORO_SPEED || TTS_SPEED),
   },
   // Chatterbox is opt-in: the default controller image does not bundle the

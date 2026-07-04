@@ -59,6 +59,14 @@ import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
 // controller relays to the panel — one call site per notable milestone.
 const logEvent = makeEventLogger('tag');
 
+// Close (and TRUNCATE-checkpoint) the library DB on every exit path — this CLI
+// bails via process.exit() from several places, and a bulk run that skips the
+// close leaves the WAL sidecar at its high-water mark forever (#786).
+// db.close() is fully synchronous, so it's safe inside an 'exit' hook.
+process.on('exit', () => {
+  try { if (db.isOpen()) db.close(); } catch { /* best-effort */ }
+});
+
 // ---------------------------------------------------------------------------
 // CLI arg parsing
 // ---------------------------------------------------------------------------
@@ -79,7 +87,7 @@ function clamp01(n: number): number {
 
 interface CliFlags {
   limit: number;
-  batchSize: number;
+  batchSize: number | null;
   seedCount: number | null;
   maxRounds: number | null;
   noPropagate: boolean;
@@ -112,9 +120,11 @@ interface CliFlags {
 
 function parseFlags(): CliFlags {
   const args = process.argv.slice(2);
+  // null = no --batch flag → fall back to settings.embedding.batchSize in main().
+  const rawBatch = parseIntFlag(args, '--batch');
   return {
     limit: parseIntFlag(args, '--limit') ?? Infinity,
-    batchSize: Math.max(1, Math.min(50, parseIntFlag(args, '--batch') ?? 25)),
+    batchSize: rawBatch !== null ? Math.max(1, Math.min(50, rawBatch)) : null,
     seedCount: parseIntFlag(args, '--seeds'),
     // null = fall back to settings.embedding.maxActiveLearningRounds
     maxRounds: parseIntFlag(args, '--max-rounds'),
@@ -318,6 +328,7 @@ async function main() {
   // Tunables from settings.embedding, CLI flags override where present.
   const embedCfg: any = (settings.get() as any).embedding ?? {};
   const maxRounds = flags.maxRounds ?? Math.max(0, embedCfg.maxActiveLearningRounds ?? 3);
+  const tagBatchSize = flags.batchSize ?? Math.max(1, Math.min(50, embedCfg.batchSize ?? 25));
   // Fallbacks kept in sync with DEFAULTS.embedding in settings.ts (settings.get()
   // normally supplies these; the ?? only bites if the field is entirely absent).
   const knnK = Math.max(1, embedCfg.knnNeighbours ?? 10);
@@ -374,7 +385,7 @@ async function main() {
   logEvent('info', `Tagging model — ${activeModelLabel()}`);
   logEvent('info', `Embedding model — ${embeddings.activeModelLabel()} (dim=${embeddingDim})`);
   console.log(
-    `[tag] batch=${flags.batchSize} maxRounds=${maxRounds} knnK=${knnK} ` +
+    `[tag] batch=${tagBatchSize} maxRounds=${maxRounds} knnK=${knnK} ` +
       `moodVote=${moodVoteThreshold} confidence=${confidenceThreshold} ` +
       `audioFusion=${audioFusionWeight}`,
   );
@@ -515,7 +526,7 @@ async function main() {
   let llmTagged = 0;
   if (plan.forwardTag) {
     // ---- Phase 1: EMBED ----------------------------------------------------
-    await phaseEmbed(targetUntagged, flags.batchSize, textMode);
+    await phaseEmbed(targetUntagged, tagBatchSize, textMode);
     lap('embed');
 
     // ---- Phase 2: SEED -----------------------------------------------------
@@ -557,7 +568,7 @@ async function main() {
 
     if (seedSelection.seeds.length > 0) {
       const tagged = await llmTagInBatches(
-        seedSelection.seeds, flags.batchSize, promptHash, 'llm', tagConsumers, { phase: 'seed' },
+        seedSelection.seeds, tagBatchSize, promptHash, 'llm', tagConsumers, { phase: 'seed' },
       );
       llmCalls += tagged.callCount;
       llmTagged += tagged.tagged;
@@ -620,7 +631,7 @@ async function main() {
       logEvent('info', `Round ${round}: re-checking ${uncertain.length} unsure tracks…`);
       const tagged = await llmTagInBatches(
         uncertain,
-        flags.batchSize,
+        tagBatchSize,
         promptHash,
         'uncertain-llm',
         tagConsumers,
@@ -710,7 +721,7 @@ async function main() {
   // model.
   if (plan.reEmbed) {
     console.log(`[tag] re-embed: rebuilding ${reembedIds.length} vectors from scratch`);
-    await phaseEmbed(reembedIds, flags.batchSize, textMode);
+    await phaseEmbed(reembedIds, tagBatchSize, textMode);
     lap('embed');
   }
 
@@ -729,7 +740,7 @@ async function main() {
     } else {
       console.log(`[tag] re-decide: re-tagging ${stale.length} stale row(s)`);
       const tagged = await llmTagInBatches(
-        stale, flags.batchSize, promptHash, 'llm', tagConsumers, { phase: 'seed' },
+        stale, tagBatchSize, promptHash, 'llm', tagConsumers, { phase: 'seed' },
       );
       llmCalls += tagged.callCount;
       llmTagged += tagged.tagged;

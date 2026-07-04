@@ -4,7 +4,9 @@
 // flip the auto-link toggle. Manual triggers are an operator override — they
 // bypass the `shouldFire` frequency gate and skill cooldowns.
 import express from 'express';
+import AdmZip from 'adm-zip';
 import { requireAdmin } from '../middleware/auth.js';
+import { zipUpload } from '../middleware/upload.js';
 import { queue } from '../broadcast/queue.js';
 import * as dj from '../llm/dj.js';
 import * as source from '../music/source.js';
@@ -12,9 +14,10 @@ import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
-import { loadSkills, parseFrontmatter, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate } from '../skills/loader.js';
+import { loadSkills, parseFrontmatter, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
 import { writeSkillFile, msToCooldownStr, resetBuiltinSkill } from '../skills/scaffold.js';
-import { readFile, rm, stat } from 'node:fs/promises';
+import { mapPool } from '../util/async-pool.js';
+import { readFile, rm, stat, mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { STATE_DIR, config } from '../config.js';
 import { skipTrack } from '../broadcast/liquidsoap-control.js';
@@ -46,6 +49,171 @@ router.post('/dj/skills/rescan', requireAdmin, async (req, res) => {
     res.json({ skills: skillCatalog(), custom: caps.filter((c: any) => !c.seeded).length });
   } catch (err) {
     queue.log('error', `/dj/skills/rescan failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /dj/skills/community — the shipped community catalog (prompt-only skills
+// contributed via the community-submission flow, COPYd into the image). Each
+// entry is annotated with `installed` (a state/skills folder already exists) and
+// `reserved` (its slug shadows a built-in / queue-internal kind, so it can't be
+// installed). Browse-only — nothing here airs until the operator installs it.
+// ---------------------------------------------------------------------------
+router.get('/dj/skills/community', requireAdmin, async (req, res) => {
+  try {
+    const catalog = await listCommunitySkills();
+    const annotated = await Promise.all(catalog.map(async (c) => ({
+      ...c,
+      installed: await skillFileExists(c.slug),
+      reserved: RESERVED_KINDS.has(c.slug),
+    })));
+    res.json({ community: annotated });
+  } catch (err: any) {
+    queue.log('error', `/dj/skills/community failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /dj/skills/community/:slug/install — copy a community catalog skill into
+// state/skills/<slug>/SKILL.md so it becomes an ordinary (non-seeded) custom
+// skill: editable, deletable, and — like every custom skill — DISABLED on
+// arrival (the loader posture), so the operator reviews then enables it. Reuses
+// buildCustomSkillFields + writeSkillFile so the on-disk file is byte-identical
+// to a locally-authored skill. Rejects reserved names and re-installs (409).
+// ---------------------------------------------------------------------------
+router.post('/dj/skills/community/:slug/install', requireAdmin, async (req, res) => {
+  const slug = req.params.slug;
+  if (!SLUG_RE.test(slug)) {
+    return res.status(400).json({ error: `invalid skill name: ${slug}` });
+  }
+  if (RESERVED_KINDS.has(slug)) {
+    return res.status(400).json({ error: `"${slug}" is reserved — it shadows a built-in capability and can't be installed` });
+  }
+  if (await skillFileExists(slug)) {
+    return res.status(409).json({ error: `a skill named "${slug}" is already installed` });
+  }
+
+  const cs = await readCommunitySkill(slug);
+  if (!cs) {
+    return res.status(404).json({ error: `no such community skill: ${slug}` });
+  }
+
+  let fields: any;
+  try {
+    // Normalize through the same builder the create/edit routes use, so a bad
+    // catalog entry (unknown context field, malformed cooldown) fails loudly
+    // here rather than writing a skill the loader would later reject.
+    fields = buildCustomSkillFields(slug, {
+      brief: cs.brief,
+      label: cs.label,
+      cooldown: cs.cooldown,
+      context: cs.context,
+      window: cs.window,
+    });
+  } catch (err: any) {
+    return res.status(400).json({ error: `community skill "${slug}" is malformed: ${err.message}` });
+  }
+
+  try {
+    await writeSkillFile(fields);
+    await loadSkills();
+    queue.log('scheduler', `[skills] community "${slug}" installed via admin UI (disabled)`);
+    res.json({ skills: skillCatalog() });
+  } catch (err: any) {
+    queue.log('error', `POST /dj/skills/community/${slug}/install failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /dj/skills/:slug/export — download a skill as a .zip (SKILL.md + tool.mjs
+// if present), files at the archive root. Works for any installed skill —
+// built-in or custom — so an operator can hand a skill to another station or
+// keep it as a portable backup. Auth-gated, so the browser fetches it via
+// adminFetch → blob rather than a plain <a href> (which can't send the header).
+// ---------------------------------------------------------------------------
+router.get('/dj/skills/:slug/export', requireAdmin, async (req, res) => {
+  const slug = req.params.slug;
+  if (!SLUG_RE.test(slug)) return res.status(400).json({ error: `invalid skill name: ${slug}` });
+  if (!(await skillFileExists(slug))) return res.status(404).json({ error: `no such skill: ${slug}` });
+  try {
+    const dir = join(SKILLS_DIR, slug);
+    const zip = new AdmZip();
+    zip.addLocalFile(join(dir, 'SKILL.md'));           // -> SKILL.md at root
+    if (await skillHasTool(slug)) zip.addLocalFile(join(dir, 'tool.mjs'));
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${slug}-skill.zip"`);
+    res.send(zip.toBuffer());
+  } catch (err: any) {
+    queue.log('error', `GET /dj/skills/${slug}/export failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reject absolute paths and any '..' traversal so a malicious zip can't write
+// outside state/skills (mirrors backup.ts isSafeEntry — zip-slip guard).
+function isSafeZipEntry(entryName: string): boolean {
+  const n = entryName.replace(/\\/g, '/');
+  if (n.startsWith('/') || /^[a-zA-Z]:/.test(n)) return false;
+  return !n.split('/').includes('..');
+}
+
+// ---------------------------------------------------------------------------
+// POST /dj/skills/import — install a skill from an uploaded .zip (the inverse of
+// export). The slug is taken from the bundle's SKILL.md `name:` — not the zip
+// filename — and validated against the loader's rules. Only SKILL.md + tool.mjs
+// are extracted; every entry is zip-slip checked and the bundle is size/entry
+// capped. A bundle MAY carry a tool.mjs (this is a direct operator action on
+// their own box — same trust as dropping a folder by hand or a backup restore),
+// so the imported skill arrives DISABLED and the response flags `hasTool` for a
+// "this runs code" warning. Rejects reserved names and re-imports (409).
+// ---------------------------------------------------------------------------
+router.post('/dj/skills/import', requireAdmin, zipUpload('file'), async (req, res) => {
+  const file = (req as any).file as { buffer?: Buffer } | undefined;
+  if (!file?.buffer?.length) return res.status(400).json({ error: 'expected a .zip file in the "file" field' });
+
+  let zip: AdmZip;
+  try { zip = new AdmZip(file.buffer); } catch { return res.status(400).json({ error: 'not a valid zip file' }); }
+
+  const entries = zip.getEntries();
+  if (entries.length > 20) return res.status(400).json({ error: 'zip has too many files for a skill bundle' });
+  // Zip-bomb guard: reject if the uncompressed total is implausible for a skill.
+  const totalRaw = entries.reduce((n, e) => n + (e.header?.size || 0), 0);
+  if (totalRaw > 8 * 1024 * 1024) return res.status(400).json({ error: 'skill bundle is too large uncompressed' });
+
+  // Accept only SKILL.md + tool.mjs (by basename), anywhere safe in the archive.
+  let skillMdEntry: any = null;
+  let toolEntry: any = null;
+  for (const e of entries) {
+    if (e.isDirectory) continue;
+    if (!isSafeZipEntry(e.entryName)) return res.status(400).json({ error: `unsafe path in zip: ${e.entryName}` });
+    const base = e.entryName.replace(/\\/g, '/').split('/').pop();
+    if (base === 'SKILL.md' && !skillMdEntry) skillMdEntry = e;
+    else if (base === 'tool.mjs' && !toolEntry) toolEntry = e;
+  }
+  if (!skillMdEntry) return res.status(400).json({ error: 'zip has no SKILL.md — not a skill bundle' });
+
+  const skillMd = skillMdEntry.getData().toString('utf8');
+  const { data, body } = parseFrontmatter(skillMd);
+  const slug = (data.name || '').trim().toLowerCase();
+  if (!SLUG_RE.test(slug)) return res.status(400).json({ error: 'SKILL.md has no valid "name:" — cannot determine the skill slug' });
+  if (RESERVED_KINDS.has(slug)) return res.status(400).json({ error: `"${slug}" is reserved — it shadows a built-in capability` });
+  if (!body.trim()) return res.status(400).json({ error: 'SKILL.md has an empty brief' });
+  if (await skillFileExists(slug)) return res.status(409).json({ error: `a skill named "${slug}" is already installed` });
+
+  try {
+    const dir = join(SKILLS_DIR, slug);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'SKILL.md'), skillMd, 'utf8');
+    const hasTool = !!toolEntry;
+    if (toolEntry) await writeFile(join(dir, 'tool.mjs'), toolEntry.getData());
+    await loadSkills();
+    queue.log('scheduler', `[skills] imported "${slug}" from zip${hasTool ? ' (with tool.mjs)' : ''} via admin UI (disabled)`);
+    res.json({ skills: skillCatalog(), slug, hasTool });
+  } catch (err: any) {
+    queue.log('error', `POST /dj/skills/import failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -564,8 +732,12 @@ router.get('/dj/recent', requireAdmin, async (req, res) => {
   try {
     await library.load();
     const albums = await source.getRecentlyAddedAlbums({ size: limit });
-    const songLists = await Promise.all(
-      albums.map((a: any) => source.getAlbum(a.id).catch(() => [])),
+    // Bounded fan-out: an unbounded Promise.all fired one getAlbum per album
+    // (~21 parallel Navidrome calls at the default limit), which tipped a
+    // slow/loaded Navidrome into failures (#786). 5-wide keeps it snappy
+    // without the thundering herd.
+    const songLists = await mapPool(albums, 5, (a: any) =>
+      source.getAlbum(a.id).catch(() => []),
     );
     const results = songLists.flat().slice(0, limit).map((s: any) => {
       const tag = library.get(s.id);

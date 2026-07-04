@@ -92,7 +92,10 @@ init_secrets() {
 		ICECAST_ADMIN_PASSWORD=$ICECAST_ADMIN_PASSWORD
 		ICECAST_RELAY_PASSWORD=$ICECAST_RELAY_PASSWORD
 	EOF
-	chmod 644 "$SECRETS"
+	# 0600: holds the Icecast passwords, read only by root (this supervisor
+	# sources it, and the in-process controller reads it off the state dir —
+	# all root in the AIO's single container). Keep it owner-only.
+	chmod 600 "$SECRETS"
 
 	export ICECAST_SOURCE_PASSWORD ICECAST_ADMIN_PASSWORD ICECAST_RELAY_PASSWORD
 	# Liquidsoap connects to icecast over loopback inside this container;
@@ -132,7 +135,14 @@ run_broadcast() {
 	done
 
 	log "starting liquidsoap"
-	sudo -E -u liquidsoap liquidsoap /etc/liquidsoap/radio.liq &
+	# TEMPORARY (re-harden later): run liquidsoap as root instead of dropping to
+	# the `liquidsoap` user — same reason as docker/broadcast-entrypoint.sh. The
+	# savonet base bump 2.2.5 -> 2.4.4 changed that user's uid (10000 -> 100), so
+	# state files persisted under /var/sub-wave by the old image became unwritable
+	# to uid 100 and every on_meta write EACCES'd. Root ignores those perms.
+	# Restore the privilege drop once the state files are chowned to the new uid
+	# (radio.liq's settings.init.allow_root is set for the same reason).
+	liquidsoap /etc/liquidsoap/radio.liq &
 	local lq=$!
 
 	wait -n "$ic" "$lq"
@@ -196,9 +206,16 @@ supervise() {
 init_state
 init_secrets
 
-# On stop, signal the whole process group once and bail (reset the trap first
-# so the kill doesn't re-enter this handler).
-trap 'trap "" TERM INT; log "shutting down"; kill -TERM 0 2>/dev/null; exit 0' TERM INT
+# On stop, signal the whole process group once, then give the children time to
+# shut down before exiting (reset the trap first so the kill doesn't re-enter
+# this handler). The grace period matters: this script is PID 1, and the
+# instant it exits the container namespace is torn down and everything left
+# gets SIGKILLed — which robbed the controller of its SIGTERM handler and left
+# library.db's WAL sidecar un-checkpointed on every stop (#786). `wait` covers
+# the supervise loops; the sleep covers their children (node etc.), which get
+# reparented to us when the loops die and which bash's wait can't see. Docker's
+# stop timeout (default 10s) still hard-caps the whole thing.
+trap 'trap "" TERM INT; log "shutting down"; kill -TERM 0 2>/dev/null; wait; sleep 2; exit 0' TERM INT
 
 supervise broadcast  run_broadcast  &
 supervise controller run_controller &

@@ -26,6 +26,9 @@ on:
       - "cli/src/assets.generated.ts"
       - "cli/scripts/embed-assets.ts"
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -33,10 +36,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - name: Install cli deps
+        # cli/package-lock.json is committed, so use the reproducible `npm ci`.
         working-directory: cli
-        run: npm install --no-fund --no-audit
+        run: npm ci --no-fund --no-audit
       - name: Regenerate embedded assets
         working-directory: cli
         run: npm run embed-assets
