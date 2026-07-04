@@ -43,6 +43,10 @@ export default function StationFooter({ djName }: { djName?: string }) {
           browse the stations
         </AnimatedLink>{' '}
         ·{' '}
+        <AnimatedLink href="/skills" className="font-semibold tracking-[inherit] text-ink hover:text-vermilion">
+          community skills
+        </AnimatedLink>{' '}
+        ·{' '}
         <AnimatedLink href="/listen" className="font-semibold tracking-[inherit] text-ink hover:text-vermilion">
           open the player
         </AnimatedLink>{' '}
