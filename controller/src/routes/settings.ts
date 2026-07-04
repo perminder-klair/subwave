@@ -19,6 +19,7 @@ import { restartLiquidsoap, startStream, stopStream, streamStatus } from '../bro
 import { invalidateWeatherCache } from '../context.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../setup/secrets.js';
+import { listenbrainzApiBase } from '../broadcast/scrobble.js';
 import { generateText, createGateway } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -168,6 +169,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         LASTFM_API_SECRET: !!process.env.LASTFM_API_SECRET,
         LASTFM_SESSION_KEY: !!process.env.LASTFM_SESSION_KEY,
         LISTENBRAINZ_USER_TOKEN: !!process.env.LISTENBRAINZ_USER_TOKEN,
+        LISTENBRAINZ_API_URL: !!process.env.LISTENBRAINZ_API_URL,
       },
       // Skill catalogue — consumed by the Skills page and by Personas for the
       // per-persona skill-assignment checklist.
@@ -376,7 +378,7 @@ async function probeKey(
       return { ok: true, message: '✓ Last.fm API key valid' };
     }
     case 'LISTENBRAINZ_USER_TOKEN': {
-      const r = await fetch('https://api.listenbrainz.org/1/validate-token', {
+      const r = await fetch(`${listenbrainzApiBase()}/validate-token`, {
         headers: { Authorization: `Token ${value}` },
         signal: AbortSignal.timeout(8000),
       });

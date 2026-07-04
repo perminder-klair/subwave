@@ -24,7 +24,24 @@ import { getListenerCount } from './listeners.js';
 
 const TIMEOUT_MS = 5000;
 const LASTFM_API = 'https://ws.audioscrobbler.com/2.0/';
-const LISTENBRAINZ_API = 'https://api.listenbrainz.org/1/submit-listens';
+
+// Shared base for submit + validate-token. Env LISTENBRAINZ_API_URL wins, then
+// settings baseUrl (for self-hosted LB-compatible scrobblers), else LB.org. Both
+// inputs may be either the API root (…/1) or the submit endpoint
+// (…/1/submit-listens) — normalize to a base.
+export function listenbrainzApiBase(): string {
+  const raw =
+    process.env.LISTENBRAINZ_API_URL?.trim() ||
+    settings.get()?.scrobble?.listenbrainz?.baseUrl?.trim() ||
+    '';
+  const base = raw.replace(/\/submit-listens\/?$/i, '').replace(/\/$/, '');
+  return base || 'https://api.listenbrainz.org/1';
+}
+
+// The submit endpoint is always the base + /submit-listens.
+function listenbrainzSubmitUrl(): string {
+  return `${listenbrainzApiBase()}/submit-listens`;
+}
 
 // Last.fm's documented rule for a "valid scrobble":
 //   - the track must be longer than 30 seconds
@@ -272,7 +289,7 @@ async function postListenbrainz(payload: Record<string, unknown>, token: string,
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
-    const r = await fetch(LISTENBRAINZ_API, {
+    const r = await fetch(listenbrainzSubmitUrl(), {
       method: 'POST',
       headers: {
         'Authorization': `Token ${token}`,

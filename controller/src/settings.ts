@@ -1080,6 +1080,9 @@ const DEFAULTS = {
       enabled: false,
       userToken: '',
       username: '',
+      // Optional override for self-hosted LB-compatible scrobblers (e.g. Koito).
+      // Full submit URL is `${baseUrl}/submit-listens`. Env LISTENBRAINZ_API_URL wins.
+      baseUrl: '',
     },
   },
 };
@@ -1732,6 +1735,10 @@ export async function load() {
         username:
           typeof stored.scrobble?.listenbrainz?.username === 'string'
             ? stored.scrobble.listenbrainz.username.trim().slice(0, 40)
+            : '',
+        baseUrl:
+          typeof stored.scrobble?.listenbrainz?.baseUrl === 'string'
+            ? stored.scrobble.listenbrainz.baseUrl.trim().slice(0, 500)
             : '',
       },
     },
@@ -2840,6 +2847,14 @@ export async function update(patch) {
         const v = String(lb.userToken ?? '').trim();
         if (v.length > 200) throw new Error('scrobble.listenbrainz.userToken must be 0-200 chars');
         next.scrobble.listenbrainz.userToken = v;
+      }
+      if (lb.baseUrl !== undefined) {
+        const trimmed = String(lb.baseUrl ?? '').trim();
+        if (trimmed.length > 500) throw new Error('scrobble.listenbrainz.baseUrl too long');
+        if (trimmed && !/^https?:\/\//i.test(trimmed)) {
+          throw new Error('scrobble.listenbrainz.baseUrl must start with http:// or https://');
+        }
+        next.scrobble.listenbrainz.baseUrl = trimmed;
       }
     }
   }

@@ -203,6 +203,7 @@ interface ScrobbleListenbrainzForm {
   enabled: boolean;
   userToken: string;
   username: string;
+  baseUrl: string;
 }
 
 interface ScrobbleForm {
@@ -561,6 +562,7 @@ export default function SettingsPanel() {
           enabled: !!v.scrobble?.listenbrainz?.enabled,
           userToken: v.scrobble?.listenbrainz?.userToken ?? '',
           username: v.scrobble?.listenbrainz?.username ?? '',
+          baseUrl: v.scrobble?.listenbrainz?.baseUrl ?? '',
         },
       },
     });
@@ -5768,6 +5770,7 @@ function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch, 
     const patch: Partial<ScrobbleListenbrainzForm> = {
       enabled: lb.enabled,
       username: lb.username,
+      baseUrl: lb.baseUrl,
     };
     if (lb.userToken && lb.userToken !== 'set') patch.userToken = lb.userToken;
     saveSettings({ scrobble: { listenbrainz: patch } });
@@ -6033,6 +6036,30 @@ function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch, 
             <div className="field-hint">
               ListenBrainz is the open-source alternative to Last.fm, with the same listener gate
               and eligibility rules.
+            </div>
+          </div>
+
+          <div className="field">
+            <Label>API base URL</Label>
+            <Input
+              type="url"
+              value={lb.baseUrl}
+              placeholder="https://api.listenbrainz.org/1"
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({
+                  ...f,
+                  scrobble: {
+                    ...f.scrobble,
+                    listenbrainz: { ...f.scrobble.listenbrainz, baseUrl: e.target.value },
+                  },
+                }))
+              }
+              className="max-w-[360px]"
+            />
+            <div className="field-hint">
+              Leave blank for listenbrainz.org. For self-hosted LB-compatible scrobblers, use the
+              API root (e.g. <code>http://koito:4110/apis/listenbrainz/1</code>). Overrides via{' '}
+              <code>LISTENBRAINZ_API_URL</code> env when set.
             </div>
           </div>
 
