@@ -59,6 +59,14 @@ import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
 // controller relays to the panel — one call site per notable milestone.
 const logEvent = makeEventLogger('tag');
 
+// Close (and TRUNCATE-checkpoint) the library DB on every exit path — this CLI
+// bails via process.exit() from several places, and a bulk run that skips the
+// close leaves the WAL sidecar at its high-water mark forever (#786).
+// db.close() is fully synchronous, so it's safe inside an 'exit' hook.
+process.on('exit', () => {
+  try { if (db.isOpen()) db.close(); } catch { /* best-effort */ }
+});
+
 // ---------------------------------------------------------------------------
 // CLI arg parsing
 // ---------------------------------------------------------------------------

@@ -40,9 +40,37 @@ import { router as doctorRoutes } from './routes/doctor.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
 import { loadSetupConfig } from './setup/config.js';
 import { getSetupStatus } from './setup/firstRun.js';
+import * as library from './music/library.js';
 
 // Fail fast in production if the admin gate isn't configured.
 assertAdminConfigured();
+
+// Log-don't-die guard. Node's default since v15 is to CRASH the process on any
+// unhandled promise rejection — under the AIO supervisor (and compose's
+// restart policy) that showed up as random 502s while the controller bounced
+// (#786). A stray rejection from a background poll is never worth taking the
+// station's API down; log it loudly and keep serving.
+process.on('unhandledRejection', (reason: any) => {
+  console.error('[fatal-ish] unhandled promise rejection (continuing):', reason?.stack || reason);
+});
+
+// Graceful shutdown: fold the library DB's WAL back into library.db before the
+// process dies. Without this, `docker stop` (SIGTERM) left the -wal sidecar
+// behind on every restart, and it only ever grew (#786). Synchronous work only.
+let shuttingDown = false;
+function shutdown(signal: string): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} — closing library DB`);
+  try {
+    library.shutdown();
+  } catch (err: any) {
+    console.error('[shutdown] library close failed:', err.message);
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 const app = express();
 // Global cap covers small JSON payloads everywhere; the persona-avatar route

@@ -206,9 +206,16 @@ supervise() {
 init_state
 init_secrets
 
-# On stop, signal the whole process group once and bail (reset the trap first
-# so the kill doesn't re-enter this handler).
-trap 'trap "" TERM INT; log "shutting down"; kill -TERM 0 2>/dev/null; exit 0' TERM INT
+# On stop, signal the whole process group once, then give the children time to
+# shut down before exiting (reset the trap first so the kill doesn't re-enter
+# this handler). The grace period matters: this script is PID 1, and the
+# instant it exits the container namespace is torn down and everything left
+# gets SIGKILLed — which robbed the controller of its SIGTERM handler and left
+# library.db's WAL sidecar un-checkpointed on every stop (#786). `wait` covers
+# the supervise loops; the sleep covers their children (node etc.), which get
+# reparented to us when the loops die and which bash's wait can't see. Docker's
+# stop timeout (default 10s) still hard-caps the whole thing.
+trap 'trap "" TERM INT; log "shutting down"; kill -TERM 0 2>/dev/null; wait; sleep 2; exit 0' TERM INT
 
 supervise broadcast  run_broadcast  &
 supervise controller run_controller &

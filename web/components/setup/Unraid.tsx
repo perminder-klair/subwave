@@ -95,6 +95,24 @@ export default function Unraid() {
                 <code className="bs-code-inline">/boot/…</code>.
               </p>
             </div>
+            <div className="bs-callout">
+              <div className="bs-eyebrow">ON A POOL? USE THE DIRECT PATH</div>
+              <p>
+                If your appdata share lives on a pool (cache), prefer the direct
+                pool path — e.g.{' '}
+                <code className="bs-code-inline">/mnt/cache/appdata/subwave</code>{' '}
+                instead of{' '}
+                <code className="bs-code-inline">/mnt/user/appdata/subwave</code>.
+                The library cache is a SQLite database, and{' '}
+                <code className="bs-code-inline">/mnt/user</code> paths route
+                through Unraid&apos;s shfs/FUSE layer, which SQLite performs
+                poorly over — sluggish admin pages and a ballooning{' '}
+                <code className="bs-code-inline">library.db-wal</code> file.
+                Already installed? Stop the container, edit the path mapping to
+                the <code className="bs-code-inline">/mnt/cache/…</code>{' '}
+                equivalent (same data), and start it again.
+              </p>
+            </div>
           </div>
         </div>
 

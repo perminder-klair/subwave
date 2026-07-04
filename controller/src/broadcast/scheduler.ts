@@ -441,7 +441,7 @@ async function stationId() {
 }
 
 // ---------------------------------------------------------------------------
-// CLEAN UP — old voice WAVs
+// CLEAN UP — old voice WAVs + library DB WAL
 // ---------------------------------------------------------------------------
 
 async function cleanup() {
@@ -449,6 +449,15 @@ async function cleanup() {
     await cleanupOldVoices();
   } catch (err) {
     queue.log('error', `Cleanup failed: ${err.message}`);
+  }
+  // Fold the library DB's WAL sidecar back into the main file. Without a
+  // periodic TRUNCATE checkpoint a bulk write pass (tagging, acoustic
+  // analysis) leaves the WAL at its high-water mark — 730MB in #786 — and
+  // every query afterwards pays to walk it.
+  try {
+    library.checkpoint();
+  } catch (err) {
+    queue.log('error', `Library WAL checkpoint failed: ${err.message}`);
   }
 }
 

@@ -47,6 +47,10 @@ export const config = {
     password: process.env.NAVIDROME_PASS || '',
     apiVersion: '1.16.1',
     clientName: 'sub-wave',
+    // Per-request cap on Subsonic API calls. Without one, a slow or hung
+    // Navidrome leaves fetches pending forever and admin routes stack up
+    // behind them (#786's "recent failed (500)").
+    timeoutMs: parseInt(process.env.NAVIDROME_TIMEOUT_MS || '', 10) || 30_000,
   },
   ollama: {
     // Default-when-blank server URL + model. The admin Settings UI

@@ -67,9 +67,13 @@
           Type="Port" Display="always" Required="true" Mask="false">7700</Config>
 
   <!-- Persistent state. Keep this on the array/pool, NOT the flash drive —
-       it grows (hourly archives, library cache, rendered voices). -->
+       it grows (hourly archives, library cache, rendered voices). Prefer a
+       direct pool path (/mnt/cache/...) over /mnt/user/...: the library cache
+       is a SQLite database, and /mnt/user routes through Unraid's shfs/FUSE
+       layer, which SQLite's WAL mode is documented not to work well over
+       (slow queries, checkpoint stalls — issue #786). -->
   <Config Name="Appdata" Target="/var/sub-wave" Default="/mnt/user/appdata/subwave" Mode="rw"
-          Description="Persistent state: settings, library cache, rendered voices, hourly archives."
+          Description="Persistent state: settings, library cache, rendered voices, hourly archives. If your appdata share lives on a pool, prefer the direct pool path (e.g. /mnt/cache/appdata/subwave) over /mnt/user/... — the library cache is a SQLite database and performs poorly through Unraid's FUSE layer."
           Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/subwave</Config>
 
   <Config Name="ADMIN_USER" Target="ADMIN_USER" Default="admin"
