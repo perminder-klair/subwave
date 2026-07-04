@@ -52,7 +52,7 @@ https://github.com/user-attachments/assets/fac7b723-c54f-438d-8440-bad1e0471e85
 - **One shared Icecast stream.** Every listener hears the same broadcast at the same time.
 - **AI DJ that picks and talks.** Curates tracks, writes intros, and reads station idents, the time, and the weather.
 - **Plain-language requests.** "Play something more upbeat" or "anything by Radiohead" works.
-- **Your own music library.** Pulls from Navidrome over the Subsonic API. No external catalogue.
+- **Your own music library.** Pulls from Navidrome over the Subsonic API, or from a plain folder of files on the box — pick the source in the admin UI. No external catalogue.
 - **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy.
 - **Six TTS engines.** Piper and Kokoro in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) and a Remote engine (any self-hosted HTTP endpoint, audio over the wire) round it out. Pick a different engine per kind of speech.
 - **Multiple DJ personas.** Up to 10 souls in rotation, each with its own voice and writing style.
@@ -247,6 +247,29 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
   restart is enough after editing it.
 - **The LLM provider is swappable at runtime** from the admin UI. Every model
   call goes through the Vercel AI SDK.
+- **The music source is pluggable** (Admin → Settings → Music source), one
+  active source at a time:
+  - **Navidrome / Subsonic** (default) — a streaming server on your network,
+    the full-featured source (similar songs, playlists, starred, lyrics).
+  - **Local folder** — point SUB/WAVE at a directory of audio files (`.mp3`,
+    `.m4a`, `.flac`, `.ogg`, `.opus`, `.wav`) with **no server**. Drop files into
+    `state/music` (already mounted into every container — no compose changes),
+    switch the source in the admin UI, and hit **Rescan**. Tags are read on
+    scan; discovery legs the folder can't provide (Last.fm similarity, server
+    playlists, stars, lyrics) are automatically switched off while genre, random,
+    recently-added, artist and mood/embedding-based picks still work. Track ids
+    are derived from each file's path, so **moving or renaming a file re-mints
+    its id** and its accrued mood/analysis rows re-accrue on the next tag pass.
+    Advanced: set `MUSIC_DIR` to use a folder elsewhere, but it must be
+    bind-mounted at the *same* path into the controller, broadcast **and**
+    analyzer containers.
+
+  > **Switching sources rebuilds selection, not the library index.** The mood /
+  > analysis database is keyed by track id, and reconcile prunes rows for ids the
+  > *active* source doesn't return — so running reconcile after switching sources
+  > clears the other source's tags/vectors. That's expected; re-tag after a
+  > deliberate switch. The onboarding wizard stays Navidrome-first for now; the
+  > local folder is selected in the admin UI.
 - **There is no `/skip` for listeners.** Track-end is the only natural
   transition; operators have an admin-only skip endpoint.
 - **Add to Sonos / VLC with one link.** Hardware and software players take a
