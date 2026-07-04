@@ -491,17 +491,11 @@ export const KOKORO_VOICE_LANGUAGES: Record<string, string> = {
   'z': 'Mandarin Chinese',
 };
 
-export function formatKokoroVoiceLabel(code: string): string {
-  const [langGender, name] = code.split('_');
-  const gender = (langGender?.[1] ?? '').toUpperCase();
-  const displayName = name.charAt(0).toUpperCase() + name.slice(1);
-  return `${displayName} (${gender})`;
-}
-
 const KOKORO_VOICE_RE = /^[a-z]{2}_[a-z0-9]+$/;
 
-// Kokoro language override — the set of phonemizer languages the worker accepts
-// (passed through _espeak_code()). Empty string = auto-detect from voice prefix.
+// Kokoro language override — the set of phonemizer languages the worker accepts.
+// The worker builds an espeak.EspeakG2P for the chosen language (see _phonemize
+// in kokoro_worker.py). Empty string = auto-detect from the voice-code prefix.
 // Synced with the prefix→lang mapping in controller/scripts/kokoro_worker.py.
 export const KOKORO_LANGS = ['en-gb', 'en-us', 'es', 'it', 'fr', 'hi', 'pt-br', 'ja', 'cmn'];
 const KOKORO_LANG_RE = new RegExp(`^(${KOKORO_LANGS.join('|')})$`);
