@@ -6,6 +6,7 @@
 
 import * as piper from './piper.js';
 import * as kokoro from './kokoro.js';
+import { applyEdgeFades } from './wav-edges.js';
 import * as chatterbox from './chatterbox.js';
 import * as pocketTts from './pocketTts.js';
 import * as remoteTts from './remoteTts.js';
@@ -295,6 +296,11 @@ export async function speak(
   const chars = (speakText || '').length;
   try {
     const result = await speakWith(primary, speakText, { outPath, speedScale: scale, language, soul }, personaTts);
+    // Bake 40ms edge fades into the rendered clip so hard file boundaries
+    // never reach the broadcast compressor as a click. Render time is the only
+    // place the tail can be faded — see audio/wav-edges.ts. Best-effort:
+    // non-WAV output (cloud mp3) is left as-is.
+    if (typeof result === 'string') await applyEdgeFades(result);
     recordTts({
       kind, engine: primary, requested, fellBack: requested !== primary,
       ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
@@ -316,6 +322,7 @@ export async function speak(
     console.error(`[tts] ${primary} failed for kind=${kind}: ${err.message} — falling back to ${fallback}`);
     try {
       const result = await speakWith(fallback, speakText, { outPath, speedScale: scale, language, soul }, personaTts);
+      if (typeof result === 'string') await applyEdgeFades(result);
       recordTts({
         kind, engine: fallback, requested, fellBack: true,
         ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
