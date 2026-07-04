@@ -1213,6 +1213,62 @@ html.lite *::after {
     text-transform: uppercase;
 }
 
+/* Off-register ink plate behind the nameplate — the vermilion plate printed a
+   hair off-register, the way cheap newsprint presses actually drifted. Em
+   offsets so the drift scales with the clamp()ed wordmark. Hovering the
+   nameplate pulls the plate into perfect register — the press operator's
+   micro-adjust — and reduced-motion readers get the settled plate outright. */
+.bs-wordmark-plate {
+    text-shadow: 0.032em 0.026em 0 color-mix(in oklab, var(--accent) 42%, transparent);
+    transition: text-shadow 280ms ease;
+}
+.bs-wordmark-plate:hover {
+    text-shadow: 0 0 0 color-mix(in oklab, var(--accent) 42%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+    .bs-wordmark-plate,
+    .bs-wordmark-plate:hover {
+        text-shadow: none;
+        transition: none;
+    }
+}
+
+/* Motto rule — the line under the nameplate carries the paper's motto (the
+   system's one load-bearing promise) between full-width hairlines, flanked
+   by the ✦ used in the footer's press credit. Replaces the plain .bs-rule
+   in the masthead, so it must keep reading as a rule at a glance. */
+.bs-masthead-motto {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--accent);
+    font-size: 9px;
+}
+.bs-masthead-motto::before,
+.bs-masthead-motto::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--ink);
+}
+.bs-masthead-motto-text {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+@media (max-width: 560px) {
+    .bs-masthead-motto {
+        gap: 8px;
+    }
+    .bs-masthead-motto-text {
+        font-size: 8px;
+        letter-spacing: 0.14em;
+    }
+}
+
 /* Eyebrow — vermilion small-caps section label, sits above each section. */
 .bs-eyebrow {
     font-size: 10px;
