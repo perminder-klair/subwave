@@ -80,14 +80,18 @@ export async function speak(
   });
 }
 
-// Clean up old voice files (call periodically)
+// Clean up old voice files (call periodically). Per-file try/catch: a WAV
+// removed concurrently between readdir and stat (ENOENT) must not abort the
+// sweep and leave the rest of the stale files unreaped until the next hour.
 export async function cleanupOldVoices(maxAgeMs = 60 * 60 * 1000) {
   const files = await readdir(config.piper.outDir);
   const now = Date.now();
   for (const f of files) {
     const fp = path.join(config.piper.outDir, f);
-    const s = await stat(fp);
-    if (now - s.mtimeMs > maxAgeMs) await unlink(fp);
+    try {
+      const s = await stat(fp);
+      if (now - s.mtimeMs > maxAgeMs) await unlink(fp);
+    } catch {}
   }
 }
 

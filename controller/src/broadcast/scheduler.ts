@@ -5,8 +5,8 @@
 //   - agentic segment tick (weather, news, now-playing digs, facts, web search) every 5 min
 
 import cron from 'node-cron';
-import { writeFile } from 'node:fs/promises';
 import { config } from '../config.js';
+import { writeFileAtomic } from '../util/atomic-file.js';
 import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
@@ -23,7 +23,8 @@ import { shouldFire } from './dj-gate.js';
 import { djCallsAllowed } from './listeners.js';
 import { optionalSegmentsAllowed } from './dj-budget.js';
 import { agenticTick, skillCatalog } from '../skills/_agent.js';
-import { withTrace } from '../observability/events.js';
+import { withTrace, pruneOldEvents } from '../observability/events.js';
+import * as archives from './archives.js';
 import * as doctor from '../doctor.js';
 
 const TARGET_POOL = 30;
@@ -295,7 +296,9 @@ async function refreshAutoPlaylistInner() {
   // pure on-air cue_out cut, not a selection filter, so over-length tracks stay
   // in the pool and simply crossfade out at the cap when the queue runs dry.
   const lines = ['#EXTM3U', ...pool.map((t: any) => subsonic.getAnnotatedUri(t, { maxDurationSec }))];
-  await writeFile(config.liquidsoap.autoPlaylist, lines.join('\n'));
+  // Atomic replace: Liquidsoap watches this file (reload_mode="watch"), so an
+  // in-place write can trigger a reload that loads a truncated playlist.
+  await writeFileAtomic(config.liquidsoap.autoPlaylist, lines.join('\n'));
 
   // Make the show-scoping visible to the operator (acceptance criteria #629):
   // a misspelled / absent strict genre that silently degraded, and a strict show
@@ -476,6 +479,28 @@ async function cleanup() {
     library.checkpoint();
   } catch (err) {
     queue.log('error', `Library WAL checkpoint failed: ${err.message}`);
+  }
+  // Drop event day-files past the retention horizon — the JSONL timeline
+  // rotates daily but nothing ever deleted old days.
+  try {
+    const removed = await pruneOldEvents();
+    if (removed) queue.log('scheduler', `Cleanup: pruned ${removed} old event log file(s)`);
+  } catch (err) {
+    queue.log('error', `Event log prune failed: ${err.message}`);
+  }
+  // Archive retention — delete hourly recordings older than the operator's
+  // window. 0 (the default) keeps everything, matching prior behaviour.
+  try {
+    const days = settings.get().archive?.retentionDays || 0;
+    if (days > 0) {
+      const { removed, bytes } = await archives.pruneOlderThan(days);
+      if (removed) {
+        queue.log('scheduler',
+          `Archive retention: removed ${removed} recording(s) older than ${days}d (${Math.round(bytes / 1_000_000)} MB freed)`);
+      }
+    }
+  } catch (err) {
+    queue.log('error', `Archive retention failed: ${err.message}`);
   }
 }
 

@@ -15,7 +15,7 @@
 // Best-effort everywhere: a write failure or a logging bug must never break a
 // broadcast. logEvent swallows its own errors and never throws into callers.
 
-import { appendFile, mkdir } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, unlink } from 'node:fs/promises';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { STATE_DIR } from '../config.js';
@@ -70,6 +70,36 @@ export function logEvent(type: string, data: any = {}) {
   } catch {
     // Logging must never break a broadcast.
   }
+}
+
+// Delete event day-files older than `maxAgeDays`. Daily rotation means old
+// days are never reopened, but nothing ever removed them either — on a busy
+// station the JSONL files were the biggest unbounded state-dir growth vector.
+// The horizon is generous: recent-plays backfill (queue.ts) needs 2 days and
+// the budget seed (telemetry/budget.ts) needs today only. Called from the
+// hourly scheduler cleanup; best-effort per file so one unlink failure can't
+// stop the sweep.
+export const EVENTS_MAX_AGE_DAYS = 14;
+
+export async function pruneOldEvents(maxAgeDays = EVENTS_MAX_AGE_DAYS): Promise<number> {
+  // Lexicographic compare works because the filename embeds YYYY-MM-DD.
+  const cutoff = new Date(Date.now() - maxAgeDays * 86_400_000).toISOString().slice(0, 10);
+  let removed = 0;
+  let names: string[] = [];
+  try {
+    names = await readdir(LOGS_DIR);
+  } catch {
+    return 0;
+  }
+  for (const name of names) {
+    const m = name.match(/^events-(\d{4}-\d{2}-\d{2})\.jsonl$/);
+    if (!m || m[1] >= cutoff) continue;
+    try {
+      await unlink(`${LOGS_DIR}/${name}`);
+      removed += 1;
+    } catch {}
+  }
+  return removed;
 }
 
 // Run `fn` inside a fresh trace scope. Emits a `trace.start` event up front and

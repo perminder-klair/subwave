@@ -10,6 +10,7 @@ import { existsSync } from 'node:fs';
 import crypto from 'node:crypto';
 import { speak } from '../audio/tts.js';
 import { STATE_DIR } from '../config.js';
+import { writeFileAtomic } from '../util/atomic-file.js';
 import {
   transcodeAudio, hasFfmpeg, extOf, baseName, isAcceptedAudio,
 } from '../audio/audio-import.js';
@@ -33,12 +34,14 @@ async function loadMeta(): Promise<any> {
 }
 
 async function saveMeta(meta: any) {
-  await writeFile(META, JSON.stringify(meta, null, 2));
+  await writeFileAtomic(META, JSON.stringify(meta, null, 2));
 }
 
+// Atomic replace: Liquidsoap watches jingles.m3u (reload_mode="watch"), so an
+// in-place rewrite can reload a truncated playlist mid-write.
 async function rewritePlaylist(filenames: string[]) {
   const lines = filenames.map((f: string) => `${DIR}/${f}`);
-  await writeFile(PLAYLIST, lines.join('\n') + (lines.length ? '\n' : ''));
+  await writeFileAtomic(PLAYLIST, lines.join('\n') + (lines.length ? '\n' : ''));
 }
 
 async function statOrNull(p: string) {

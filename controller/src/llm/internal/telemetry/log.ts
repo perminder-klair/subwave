@@ -6,6 +6,7 @@
 // prompt layer (prompts) can record without an import cycle.
 
 import { appendFile } from 'node:fs/promises';
+import { statSync, renameSync } from 'node:fs';
 import { STATE_DIR } from '../../../config.js';
 import { logEvent, cap } from '../../../observability/events.js';
 import { addDailyUsage } from './budget.js';
@@ -74,8 +75,27 @@ export function record(call: any) {
 // survives, so repeated-pick patterns stay reviewable after the fact.
 // Best-effort: a write failure must never break a pick.
 const PICKS_LOG = `${STATE_DIR}/logs/picks.log`;
+// Rotate to one .old backup at this cap — same policy as subsonic.log and
+// requests.log. Checked on module load and every 500 picks; this was the one
+// append log in the state dir with no size bound at all.
+const PICKS_LOG_MAX_BYTES = 10 * 1024 * 1024;
+
+function maybeRotatePicksLog() {
+  try {
+    if (statSync(PICKS_LOG).size > PICKS_LOG_MAX_BYTES) {
+      renameSync(PICKS_LOG, `${PICKS_LOG}.old`);
+    }
+  } catch {}
+}
+
+maybeRotatePicksLog();
+let _picksSinceRotateCheck = 0;
 
 export function recordPick({ song, reason, source }: { song: any; reason?: string; source?: string }) {
+  if (++_picksSinceRotateCheck >= 500) {
+    _picksSinceRotateCheck = 0;
+    maybeRotatePicksLog();
+  }
   const line = [
     new Date().toISOString(),
     source || '?',

@@ -215,6 +215,7 @@ interface ScrobbleForm {
 interface ArchiveForm {
   enabled: boolean;
   bitrate: string;
+  retentionDays: string;
 }
 
 interface StreamForm {
@@ -287,7 +288,7 @@ interface SettingsData {
     crossfadeDuration?: number;
     maxTrackSeconds?: number;
     minTrackSeconds?: number;
-    archive?: { enabled?: boolean; bitrate?: number };
+    archive?: { enabled?: boolean; bitrate?: number; retentionDays?: number };
     stream?: {
       opusEnabled?: boolean;
       opusBitrate?: number;
@@ -442,6 +443,7 @@ export default function SettingsPanel() {
       archive: {
         enabled: v.archive?.enabled ?? true,
         bitrate: String(v.archive?.bitrate ?? 128),
+        retentionDays: String(v.archive?.retentionDays ?? 0),
       },
       stream: {
         opusEnabled: v.stream?.opusEnabled ?? true,
@@ -936,6 +938,45 @@ export default function SettingsPanel() {
                       Lower bitrate = smaller archives, less encoder CPU
                       (current: {data?.values?.archive?.bitrate ?? '—'} kbps). 128 kbps is the
                       original default.
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <Label>Keep recordings for</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="mono-num w-28"
+                        type="number"
+                        min={0}
+                        max={3650}
+                        step={1}
+                        value={form.archive.retentionDays}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f =>
+                            f
+                              ? { ...f, archive: { ...f.archive, retentionDays: e.target.value } }
+                              : f,
+                          )
+                        }
+                      />
+                      <span className="text-[12px] text-muted">days</span>
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({
+                            archive: { retentionDays: parseInt(form.archive.retentionDays, 10) },
+                          })
+                        }
+                        disabled={busy}
+                      >
+                        Save retention
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      0 = keep forever (the default). With a window set, the hourly cleanup
+                      deletes whole days of recordings once they age past it — at 128 kbps the
+                      archive grows ~1.4 GB per day, so an unbounded archive eventually fills
+                      the disk. Applies live, no restart.
                     </div>
                   </div>
                 </div>

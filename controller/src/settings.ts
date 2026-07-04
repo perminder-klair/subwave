@@ -7,6 +7,7 @@ import { readFile, writeFile, unlink, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { STATE_DIR, config } from './config.js';
+import { writeFileAtomic } from './util/atomic-file.js';
 import { DEFAULT_THEME_ID, isValidThemeId, listThemes } from './themes.js';
 import { isValidTimezone, setStationTimezone, zonedParts } from './time.js';
 
@@ -735,7 +736,10 @@ const DEFAULTS = {
   // container — operators who don't use the archives can switch this off to
   // reclaim that headroom (issue #137). Dropping the bitrate (e.g. 128 → 64
   // mono in a future change) also helps for operators who want the tape.
-  archive: { enabled: true, bitrate: 128 },
+  // retentionDays: hourly recordings older than this many days are deleted by
+  // the scheduler's hourly cleanup. 0 = keep forever — the default, because a
+  // retention default would silently delete archives operators already have.
+  archive: { enabled: true, bitrate: 128, retentionDays: 0 },
   // Secondary Ogg-Opus broadcast mount (/stream.opus). Off by default — only
   // Blink (Chrome/Edge) clients ever select it (web/hooks/usePlayer.ts keeps
   // Safari/iOS/Firefox on MP3), and it adds a continuous Opus encoder + a
@@ -1398,6 +1402,10 @@ export async function load() {
           ? stored.archive.enabled
           : DEFAULTS.archive.enabled,
       bitrate: archiveBitrate,
+      retentionDays:
+        Number.isInteger(stored.archive?.retentionDays) && stored.archive.retentionDays >= 0
+          ? stored.archive.retentionDays
+          : DEFAULTS.archive.retentionDays,
     },
     stream: {
       opusEnabled:
@@ -2314,6 +2322,15 @@ export async function update(patch) {
         restart = true;
       }
     }
+    if (a.retentionDays !== undefined) {
+      const v = parseInt(a.retentionDays, 10);
+      if (!Number.isInteger(v) || v < 0 || v > 3650) {
+        throw new Error('archive.retentionDays must be 0 (keep forever) or 1–3650 days');
+      }
+      // Enforced controller-side (scheduler cleanup), no Liquidsoap file or
+      // restart involved.
+      next.archive.retentionDays = v;
+    }
   }
   if ('stream' in patch) {
     const st = patch.stream || {};
@@ -2957,8 +2974,10 @@ export async function update(patch) {
   // resolveActiveShow / getEffectivePersona / the integrity sweep all
   // continue to work against one merged view.
   const { shows: _shows, schedule: _schedule, ...settingsPersist } = next;
-  await writeFile(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2));
-  await writeFile(
+  // Atomic replace — a crash mid-write must not take the operator's whole
+  // config (or show schedule) with it.
+  await writeFileAtomic(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2));
+  await writeFileAtomic(
     SCHEDULE_PATH,
     JSON.stringify({ shows: next.shows, schedule: next.schedule }, null, 2),
   );
