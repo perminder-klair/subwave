@@ -10,7 +10,7 @@
 // probe, Subsonic ping, listener monitor, TTS routing, library stats); nothing
 // here adds new probing infrastructure.
 
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { config, STATE_DIR } from './config.js';
 import * as settings from './settings.js';
@@ -77,6 +77,10 @@ export interface ReviewPriority {
   severity: 'low' | 'med' | 'high';
   why: string;
   suggestedFix: string;
+  // When set, the panel can render the matching one-click fix button right on
+  // this priority. The panel still cross-checks it against the report's own
+  // findings, so a stray/hallucinated id never surfaces a button.
+  fixId?: FixId | null;
 }
 
 export interface DoctorReview {
@@ -91,28 +95,136 @@ export interface DoctorReview {
 // runDoctor — assemble all sections.
 // ---------------------------------------------------------------------------
 
-export async function runDoctor(): Promise<DoctorReport> {
-  let s: any = null;
-  try { s = settings.get(); } catch { s = null; }
+// The section roster, in display order. Each check swallows its own errors and
+// degrades to a 'skip'/'fail' finding (via `safe`), so one failing subsystem
+// never blanks the whole report. Kept as data so both the batch runner and the
+// streaming generator drive the same list.
+const SECTION_CHECKS: Array<{ name: string; run: (s: any) => Promise<Finding[]> }> = [
+  { name: 'LLM', run: (s) => checkLlm(s) },
+  { name: 'Navidrome & library', run: () => checkNavidrome() },
+  { name: 'Broadcast', run: () => checkBroadcast() },
+  { name: 'Voice (TTS)', run: (s) => checkTts(s) },
+  { name: 'Capabilities', run: (s) => checkCapabilities(s) },
+  { name: 'Content', run: () => checkContent() },
+  { name: 'Resources', run: () => checkResources() },
+  { name: 'Tuning', run: (s) => checkTuning(s) },
+  { name: 'Storage', run: () => checkStorage() },
+  { name: 'Setup', run: () => checkSetup() },
+];
 
-  const sections: DoctorSection[] = [];
-  // Each check swallows its own errors and degrades to a 'skip'/'fail' finding,
-  // so one failing subsystem never blanks the whole report.
-  sections.push({ name: 'LLM', findings: await safe(() => checkLlm(s)) });
-  sections.push({ name: 'Navidrome & library', findings: await safe(checkNavidrome) });
-  sections.push({ name: 'Broadcast', findings: await safe(checkBroadcast) });
-  sections.push({ name: 'Voice (TTS)', findings: await safe(() => checkTts(s)) });
-  sections.push({ name: 'Capabilities', findings: await safe(() => checkCapabilities(s)) });
-  sections.push({ name: 'Content', findings: await safe(checkContent) });
-  sections.push({ name: 'Resources', findings: await safe(checkResources) });
-  sections.push({ name: 'Tuning', findings: await safe(() => checkTuning(s)) });
-  sections.push({ name: 'Storage', findings: await safe(checkStorage) });
-  sections.push({ name: 'Setup', findings: await safe(checkSetup) });
+function loadSettingsSafe(): any {
+  try { return settings.get(); } catch { return null; }
+}
 
+// Yield each section as its check completes, so the streaming route can flush
+// partial results to the panel instead of blocking on the whole assessment
+// (some checks — an unreachable LLM host, the live web-search probe — take
+// several seconds each).
+export async function* runDoctorSections(): AsyncGenerator<DoctorSection> {
+  const s = loadSettingsSafe();
+  for (const c of SECTION_CHECKS) {
+    yield { name: c.name, findings: await safe(() => c.run(s)) };
+  }
+}
+
+export function tallyCounts(sections: DoctorSection[]): DoctorReport['counts'] {
   const counts = { ok: 0, warn: 0, fail: 0, skip: 0 };
   for (const sec of sections) for (const f of sec.findings) counts[f.status]++;
+  return counts;
+}
 
-  return { t: new Date().toISOString(), sections, counts };
+// Stamp + tally a completed set of sections into a report, and cache it as the
+// station's last-known health. The single place a report is minted, so every
+// path (batch, stream, nightly cron) caches consistently.
+export function finalizeReport(sections: DoctorSection[]): DoctorReport {
+  const report: DoctorReport = { t: new Date().toISOString(), sections, counts: tallyCounts(sections) };
+  rememberReport(report);
+  return report;
+}
+
+export async function runDoctor(): Promise<DoctorReport> {
+  const sections: DoctorSection[] = [];
+  for await (const sec of runDoctorSections()) sections.push(sec);
+  return finalizeReport(sections);
+}
+
+// ---------------------------------------------------------------------------
+// Last-run cache — the panel hydrates from this on mount and the admin header
+// badges station health from it, so a report survives navigation and a restart
+// without forcing an immediate re-run. Deterministic data only (counts + DJ
+// Doc's verdict when a review has run). Best-effort disk mirror under STATE_DIR;
+// never throws into a check path.
+// ---------------------------------------------------------------------------
+
+const CACHE_FILE = `${STATE_DIR}/doctor-last.json`;
+
+interface DoctorCache {
+  report: DoctorReport | null;
+  review: DoctorReview | null;
+}
+
+let cache: DoctorCache = { report: null, review: null };
+let cacheLoaded = false;
+
+async function ensureCacheLoaded(): Promise<void> {
+  if (cacheLoaded) return;
+  cacheLoaded = true;
+  try {
+    const parsed = JSON.parse(await readFile(CACHE_FILE, 'utf8'));
+    if (parsed && typeof parsed === 'object') {
+      cache = { report: parsed.report ?? null, review: parsed.review ?? null };
+    }
+  } catch { /* no prior run persisted — fine */ }
+}
+
+function persistCache(): void {
+  // Fire-and-forget: the in-memory cache is the source of truth for this
+  // session; the disk mirror only bootstraps the next boot.
+  writeFile(CACHE_FILE, JSON.stringify(cache)).catch(() => {});
+}
+
+export function rememberReport(report: DoctorReport): void {
+  cacheLoaded = true; // a fresh run supersedes anything still on disk
+  // A new report describes a new moment — the old review no longer matches it.
+  cache = { report, review: null };
+  persistCache();
+}
+
+export function rememberReview(review: DoctorReview): void {
+  if (!cache.report) return; // a review with no report to attach to is meaningless
+  cache = { ...cache, review };
+  persistCache();
+}
+
+// Derive a headline verdict from the counts alone — used for the header badge
+// when no LLM review has run (runDoctor is LLM-free). A real review's `overall`
+// takes precedence when present.
+export function derivedOverall(counts: DoctorReport['counts']): 'healthy' | 'attention' | 'critical' {
+  if (counts.fail > 0) return 'critical';
+  if (counts.warn > 0) return 'attention';
+  return 'healthy';
+}
+
+export interface DoctorSummary {
+  t: string | null;
+  counts: DoctorReport['counts'] | null;
+  overall: 'healthy' | 'attention' | 'critical' | null;
+}
+
+// Compact health headline for the admin header badge — no section detail.
+export async function lastSummary(): Promise<DoctorSummary> {
+  await ensureCacheLoaded();
+  const r = cache.report;
+  if (!r) return { t: null, counts: null, overall: null };
+  const overall =
+    cache.review?.available && cache.review.overall ? cache.review.overall : derivedOverall(r.counts);
+  return { t: r.t, counts: r.counts, overall };
+}
+
+// Full last-run payload for the panel to hydrate from on mount.
+export async function lastRun(): Promise<DoctorCache> {
+  await ensureCacheLoaded();
+  return cache;
 }
 
 // Wrap a check so a thrown error becomes a single fail finding rather than
@@ -805,6 +917,13 @@ const REVIEW_SCHEMA = z.object({
         severity: z.enum(['low', 'med', 'high']),
         why: z.string().describe('one sentence: why it matters for listeners or reliability'),
         suggestedFix: z.string().describe('the concrete next step the operator should take'),
+        fixId: z
+          .enum(['refresh-playlist', 'restart-mixer', 'generate-jingles', 'tag-library', 'subsonic-reset'])
+          .nullable()
+          .optional()
+          .describe(
+            'When this priority is resolved by one of the one-click fixes listed in the prompt, you MUST set this to that exact fix id (so the operator gets a button). Leave it out only when no listed fix applies.',
+          ),
       }),
     )
     .describe('0-5 items, highest severity first; empty array when everything is healthy'),
@@ -856,6 +975,8 @@ export async function reviewReport(report: DoctorReport): Promise<DoctorReview> 
         '',
         renderReportText(report),
         '',
+        renderAvailableFixes(report),
+        '',
         'Review it for the operator. Lean on the knowledge base above. Cross-reference the "Tuning"',
         'section and the current settings snapshot against the host resources, and tailor any model /',
         'picker / chain-of-thought / agent-deadline / budget / encoder / TTS recommendations to what',
@@ -865,7 +986,9 @@ export async function reviewReport(report: DoctorReport): Promise<DoctorReview> 
       temperature: 0.5,
       kind: 'doctor:review',
     });
-    return { available: true, ...review };
+    const result: DoctorReview = { available: true, ...review };
+    rememberReview(result);
+    return result;
   } catch (err: any) {
     // A schema/shape mismatch here is itself a diagnosis: the review model can't
     // do structured output. Say so plainly instead of dumping the Zod error, and
@@ -934,6 +1057,28 @@ function renderSettingsSnapshot(): string {
     `- Voice: default TTS ${s?.tts?.defaultEngine || 'piper'}`,
     `- Analysis: audio.embeddings ${s?.audio?.embeddings ? 'ON' : 'OFF'} · vocalActivity ${s?.audio?.vocalActivity ? 'ON' : 'OFF'} · analyzer ${analyzerLabel}`,
     `- Search: ${s?.search?.provider || 'duckduckgo'}`,
+  ].join('\n');
+}
+
+// Tell the reviewer which one-click fixes are actually applicable right now —
+// the set of fix ids the findings surfaced this run — so it only attaches a
+// `fixId` to a priority when the corresponding button really exists.
+function renderAvailableFixes(report: DoctorReport): string {
+  const seen = new Map<FixId, string>();
+  for (const sec of report.sections) {
+    for (const f of sec.findings) {
+      if (f.fix && !seen.has(f.fix.id)) seen.set(f.fix.id, f.fix.label);
+    }
+  }
+  if (!seen.size) {
+    return 'One-click fixes available this run: none. Do NOT set fixId on any priority.';
+  }
+  const lines = [...seen.entries()].map(([id, label]) => `- ${id} — ${label}`);
+  return [
+    'One-click fixes available this run — for ANY priority that one of these resolves, you MUST set that',
+    'priority\'s `fixId` to the exact id shown here (the operator then gets a working button, not just',
+    'prose telling them to run it):',
+    ...lines,
   ].join('\n');
 }
 

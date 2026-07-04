@@ -24,6 +24,7 @@ import { djCallsAllowed } from './listeners.js';
 import { optionalSegmentsAllowed } from './dj-budget.js';
 import { agenticTick, skillCatalog } from '../skills/_agent.js';
 import { withTrace } from '../observability/events.js';
+import * as doctor from '../doctor.js';
 
 const TARGET_POOL = 30;
 const MOOD_WEIGHT = 12;          // up to this many mood-tagged tracks per pool
@@ -479,6 +480,21 @@ async function cleanup() {
 }
 
 // ---------------------------------------------------------------------------
+// NIGHTLY HEALTH CHECK
+// Run the deterministic doctor assessment once a day so the admin header badge
+// and the DJ Doc panel reflect the station's health even before the operator
+// opens it. No LLM call — runDoctor is LLM-free; the result is just cached.
+// ---------------------------------------------------------------------------
+
+async function nightlyDoctor() {
+  try {
+    await withTrace({ kind: 'doctor' }, () => doctor.runDoctor());
+  } catch (err) {
+    queue.log('error', `Nightly health check failed: ${err.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // START
 // ---------------------------------------------------------------------------
 
@@ -503,6 +519,10 @@ export function startScheduler() {
 
   // Cleanup every hour
   cron.schedule('0 * * * *', cleanup);
+
+  // Nightly health check at 04:17 — populates the DJ Doc last-run cache + header
+  // badge without the operator having to open the panel. Deterministic (no LLM).
+  cron.schedule('17 4 * * *', nightlyDoctor);
 
   queue.log('scheduler', `Scheduler started · skills: ${skillCatalog().map((s: any) => s.name).join(', ')}`);
 }
