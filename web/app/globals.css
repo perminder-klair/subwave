@@ -1213,6 +1213,151 @@ html.lite *::after {
     text-transform: uppercase;
 }
 
+/* Off-register ink plate behind the nameplate — the vermilion plate printed a
+   hair off-register, the way cheap newsprint presses actually drifted. Em
+   offsets so the drift scales with the clamp()ed wordmark. Hovering the
+   nameplate pulls the plate into perfect register — the press operator's
+   micro-adjust — and reduced-motion readers get the settled plate outright. */
+.bs-wordmark-plate {
+    text-shadow: 0.032em 0.026em 0 color-mix(in oklab, var(--accent) 42%, transparent);
+    transition: text-shadow 280ms ease;
+}
+.bs-wordmark-plate:hover {
+    text-shadow: 0 0 0 color-mix(in oklab, var(--accent) 42%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+    .bs-wordmark-plate,
+    .bs-wordmark-plate:hover {
+        text-shadow: none;
+        transition: none;
+    }
+}
+
+/* Slash → disc morph — hovering the nameplate spins the slash away and the
+   station's disc mark (the .bs-dj-glyph / .player-mark vocabulary) drops
+   into the gap already turning. The slash glyph keeps its box (opacity only)
+   so the nameplate never reflows; the disc is absolutely centred over it and
+   em-sized, so the morph scales with the clamp()ed wordmark. The face spins
+   on its own inner element — the outer element owns the scale/fade
+   transition, so the two transforms never fight. */
+.bs-wordmark-slash {
+    position: relative;
+    display: inline-block;
+    /* Hover eases SUB and WAVE apart a touch so the disc gets clear air —
+       symmetric padding keeps the mark optically centred while it spreads. */
+    transition: padding 420ms cubic-bezier(0.34, 1.3, 0.4, 1);
+}
+.bs-wordmark-plate:hover .bs-wordmark-slash {
+    padding: 0 0.09em;
+}
+.bs-wordmark-slash-glyph {
+    display: inline-block;
+    transition:
+        opacity 300ms ease,
+        transform 380ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.bs-wordmark-plate:hover .bs-wordmark-slash-glyph {
+    opacity: 0;
+    transform: rotate(114deg) scale(0.5);
+}
+.bs-wordmark-disc {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0.56em;
+    height: 0.56em;
+    /* -0.28em centres the box; +0.006em drops it onto the caps' optical
+       centre (baseline minus half the measured cap-ink height). */
+    margin: -0.274em 0 0 -0.28em;
+    transform: scale(0.3);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+        opacity 300ms ease,
+        transform 420ms cubic-bezier(0.34, 1.3, 0.4, 1);
+}
+.bs-wordmark-plate:hover .bs-wordmark-disc {
+    opacity: 1;
+    transform: scale(1);
+}
+.bs-wordmark-disc-face {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    border: 1px solid var(--ink);
+    background: repeating-conic-gradient(
+        from 0deg,
+        var(--ink) 0deg 9deg,
+        transparent 9deg 18deg
+    );
+    position: relative;
+    /* Always turning (it's invisible at rest), so the disc arrives mid-spin
+       instead of starting from a standstill. */
+    animation: bs-dj-spin 4s linear infinite;
+}
+.bs-wordmark-disc-face::after {
+    content: "";
+    position: absolute;
+    inset: 33%;
+    background: var(--accent);
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px var(--bg);
+}
+@media (prefers-reduced-motion: reduce) {
+    /* No morph for reduced-motion readers — the slash simply stays put. */
+    .bs-wordmark-disc {
+        display: none;
+    }
+    .bs-wordmark-slash,
+    .bs-wordmark-plate:hover .bs-wordmark-slash {
+        transition: none;
+        padding: 0;
+    }
+    .bs-wordmark-slash-glyph,
+    .bs-wordmark-plate:hover .bs-wordmark-slash-glyph {
+        transition: none;
+        opacity: 1;
+        transform: none;
+    }
+}
+
+/* Motto rule — the line under the nameplate carries the paper's motto (the
+   system's one load-bearing promise) between full-width hairlines, flanked
+   by the ✦ used in the footer's press credit. Replaces the plain .bs-rule
+   in the masthead, so it must keep reading as a rule at a glance. */
+.bs-masthead-motto {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--accent);
+    font-size: 9px;
+}
+.bs-masthead-motto::before,
+.bs-masthead-motto::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--ink);
+}
+.bs-masthead-motto-text {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+@media (max-width: 560px) {
+    .bs-masthead-motto {
+        gap: 8px;
+    }
+    .bs-masthead-motto-text {
+        font-size: 8px;
+        letter-spacing: 0.14em;
+    }
+}
+
 /* Eyebrow — vermilion small-caps section label, sits above each section. */
 .bs-eyebrow {
     font-size: 10px;
