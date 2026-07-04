@@ -12,7 +12,11 @@ export function getTimeContext(date = new Date()) {
   if (h >= 9 && h < 12) return { period: 'morning', mood: 'morning', vibe: 'productive', show: 'morning' };
   if (h >= 12 && h < 14) return { period: 'midday', mood: 'energetic', vibe: 'lunch hour', show: 'midday' };
   if (h >= 14 && h < 17) return { period: 'afternoon', mood: 'focus', vibe: 'sustained energy', show: 'afternoon' };
-  if (h >= 17 && h < 19) return { period: 'drive-time', mood: 'driving', vibe: 'drive home', show: 'drive-time' };
+  // vibe reads 'end of the workday', not 'drive home': the vibe string lands in
+  // every spoken-segment prompt (Period: drive-time (…)) and the commute framing
+  // had the DJ doing traffic-jockey patter for two hours a day. The period/mood
+  // keep their names — they drive pick energy, not talk.
+  if (h >= 17 && h < 19) return { period: 'drive-time', mood: 'driving', vibe: 'end of the workday', show: 'drive-time' };
   if (h >= 19 && h < 22) return { period: 'evening', mood: 'evening', vibe: 'wind down', show: 'evening' };
   if (h >= 22 || h < 1) return { period: 'late-evening', mood: 'night', vibe: 'late hours', show: 'late' };
   return { period: 'after-hours', mood: 'reflective', vibe: 'after hours', show: 'graveyard' };

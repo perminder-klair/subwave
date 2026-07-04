@@ -18,7 +18,7 @@
 // The test:
 // - Pre-populates a synthetic library of ~20 songs with Subsonic-shape ids
 // - Faked-out discovery tools return slices of that library and populate `seen`
-// - Uses the LIVE pickSystem + PICK_SCHEMA imported from dj-agent.js (so the
+// - Uses the LIVE pickSystem + pickSchema imported from dj-agent.js (so the
 //   test stays in sync with whatever prompt cleanups land there)
 // - Catches three failure modes: NoObjectGenerated, hallucinated id, or thrown
 // - Reports per-iteration outcome + summary stats at the end
@@ -27,7 +27,7 @@ import { z } from 'zod';
 import { tool } from 'ai';
 import * as settings from '../src/settings.js';
 import { djAgent } from '../src/llm/sdk.js';
-import { pickSystem, PICK_SCHEMA, pickerAgent } from '../src/broadcast/dj-agent.js';
+import { pickSystem, pickSchema, pickerAgent } from '../src/broadcast/dj-agent.js';
 
 const FAKE_SONGS = [
   { id: 'aaaa1111bbbb2222cccc01', title: 'Late Drive', artist: 'Tegi Pannu', album: 'Drive', year: 2024, genre: 'punjabi' },
@@ -54,7 +54,7 @@ const FAKE_SONGS = [
 
 const VALID_IDS = new Set(FAKE_SONGS.map(s => s.id));
 
-// PICK_SCHEMA is imported from dj-agent.js — we use the live one verbatim so
+// pickSchema is imported from dj-agent.js — we resolve the live one per run so
 // schema description changes there flow into the test automatically.
 
 // Synthetic discovery tools — same names as llm/tools.js so the agent prompt
@@ -149,7 +149,7 @@ async function runOnce(label, messagesMode) {
       system: pickSystem(),  // live prompt, imported from dj-agent.js
       messages,
       tools,
-      schema: PICK_SCHEMA,
+      schema: pickSchema(),
       // Mirror the live picker call site (dj-agent.js pickViaAgent).
       // maxSteps/timeoutMs overridable via argv for tuning runs.
       maxSteps: TEST_MAX_STEPS,

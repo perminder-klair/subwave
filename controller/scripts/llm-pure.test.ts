@@ -590,33 +590,38 @@ async function main() {
   await test('soft genre-only show is byte-for-byte the legacy line', () => {
     assert.equal(showMusicLean({ name: 'x', topic: 'y', genre: 'Jazz' }), SOFT_GENRE_LINE);
   });
-  await test('genreStrict=false leaves the soft path unchanged', () => {
-    assert.equal(showMusicLean({ name: 'x', topic: 'y', genre: 'Jazz', genreStrict: false }), SOFT_GENRE_LINE);
+  await test('filtersStrict=false leaves the soft path unchanged', () => {
+    assert.equal(showMusicLean({ name: 'x', topic: 'y', genre: 'Jazz', filtersStrict: false }), SOFT_GENRE_LINE);
   });
-  await test('strict genre is a hard rule, not a soft lean', () => {
-    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Hip-Hop', genreStrict: true });
-    assert.match(out, /Hip-Hop-only/);                              // the strict "{genre}-only" lock (#618)
-    assert.match(out, /keep your picks and your talk in Hip-Hop/);  // stay-in-genre instruction
-    assert.match(out, /only step outside if there is genuinely no Hip-Hop track/); // hard rule + escape hatch
+  await test('strict filters are a hard rule, not a soft lean', () => {
+    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Hip-Hop', filtersStrict: true });
+    assert.match(out, /music filters are STRICT/);                  // the unified strict lock (#766)
+    assert.match(out, /Hip-Hop tracks/);                            // genre carried into the lock
+    assert.match(out, /Keep your talk inside them too/);            // stay-in-filter instruction
+    assert.match(out, /only step outside if there is genuinely nothing left that fits/); // hard rule + escape hatch
     assert.doesNotMatch(out, /lean toward Hip-Hop/);
-    assert.doesNotMatch(out, /Music steer/);     // no soft line when only the genre is pinned
+    assert.doesNotMatch(out, /Music steer/);     // no soft line when strict is on
   });
   await test('strict carries the never-starve escape hatch', () => {
-    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Metal', genreStrict: true });
-    assert.match(out, /no Metal track/i);        // can stray only to avoid dead air
+    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Metal', filtersStrict: true });
+    assert.match(out, /never leave dead air/i);   // can stray only to avoid dead air
   });
-  await test('strict needs a genre — genreStrict alone is inert', () => {
-    assert.equal(showMusicLean({ name: 'x', topic: 'y', genreStrict: true }), '');
-    // energy still produces a soft line; no genre lock without a genre
-    const out = showMusicLean({ name: 'x', topic: 'y', energy: 'high', genreStrict: true });
-    assert.doesNotMatch(out, /-only —/);   // no genre lock without a genre
-    assert.match(out, /favour high-energy tracks/);
+  await test('strict needs a filter — filtersStrict alone is inert', () => {
+    assert.equal(showMusicLean({ name: 'x', topic: 'y', filtersStrict: true }), '');
+    // energy alone still bites: the unified toggle locks any pinned filter, not just genre
+    const out = showMusicLean({ name: 'x', topic: 'y', energy: 'high', filtersStrict: true });
+    assert.match(out, /music filters are STRICT/);
+    assert.match(out, /high-energy tracks/);
+    assert.doesNotMatch(out, /Music steer/);   // strict, so no soft line
   });
-  await test('strict genre coexists with soft era/energy steers', () => {
-    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Soul', genreStrict: true, fromYear: 1970, toYear: 1979, energy: 'medium' });
-    assert.match(out, /Soul-only/);   // strict genre lock (#618)
-    assert.match(out, /Music steer for this show — prefer tracks from 1970–1979; favour medium-energy tracks/);
-    assert.doesNotMatch(out, /lean toward Soul/);  // genre is the hard rule, not a soft part
+  await test('strict locks genre, era and energy together (unified toggle)', () => {
+    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Soul', filtersStrict: true, fromYear: 1970, toYear: 1979, energy: 'medium' });
+    assert.match(out, /music filters are STRICT/);   // unified strict lock (#766)
+    assert.match(out, /Soul tracks/);
+    assert.match(out, /the 1970–1979 era/);
+    assert.match(out, /medium-energy tracks/);
+    assert.doesNotMatch(out, /Music steer/);       // era/energy are strict too — no soft line
+    assert.doesNotMatch(out, /lean toward Soul/);  // genre is part of the hard lock
   });
 
   // ---- clampMaxOutputTokens / resolveMaxOutputTokens (per-call cap, #712) ----

@@ -43,7 +43,10 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # Pinned: this exact Bun version compiles the binaries we ship, so
+          # keep it fixed (bump deliberately, not via `latest`) to avoid a
+          # silent toolchain drift changing the released artifacts.
+          bun-version: 1.2.19
 
       - name: Refresh embedded assets
         # The embed-assets script regenerates cli/src/assets.generated.ts
@@ -68,10 +71,11 @@ jobs:
             --target="$TARGET" \
             --outfile="dist/$ASSET"
 
-      - name: Smoke test
-        # Only the linux-x64 binary runs on the GH runner. The others are
-        # cross-compiled artifacts we can't exec here; trust bun's compile
-        # output for those.
+      - name: Smoke test (native, in-runner)
+        # The linux-x64 binary is the only one that runs natively on this amd64
+        # runner, so smoke it inline for fast feedback. The other three targets
+        # are cross-compiled here and exercised by the `smoke-*` jobs below
+        # (native macOS / Rosetta / QEMU).
         if: matrix.target == 'bun-linux-x64'
         env:
           ASSET: ${{ matrix.asset }}
@@ -79,9 +83,127 @@ jobs:
           chmod +x "cli/dist/$ASSET"
           "cli/dist/$ASSET" --version
 
+      - name: Upload binary artifact
+        # Share every built binary (not just on tags) so the smoke jobs can
+        # download and exec them on both tag pushes and workflow_dispatch runs.
+        # Short retention — these are throwaway CI artifacts, not releases.
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.asset }}
+          path: cli/dist/${{ matrix.asset }}
+          retention-days: 1
+
       - name: Upload to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: cli/dist/${{ matrix.asset }}
+          fail_on_unmatched_files: true
+
+      - name: Compute checksum
+        # Standard `<hex>  <filename>` line (run from dist/ so the filename is
+        # just the bare asset name). The fan-in job below concatenates every
+        # matrix job's fragment into one SHA256SUMS.
+        working-directory: cli/dist
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: sha256sum "$ASSET" > "$ASSET.sha256"
+
+      - name: Upload checksum fragment
+        uses: actions/upload-artifact@v4
+        with:
+          name: sha256-${{ matrix.asset }}
+          path: cli/dist/${{ matrix.asset }}.sha256
+          retention-days: 1
+
+  # Cross-arch smoke tests. Informational only — they do NOT gate the release
+  # upload (that happens inside `build`). The darwin jobs are stable enough to
+  # be made `required` branch-protection checks later; the QEMU one is flaky by
+  # nature and stays continue-on-error.
+  #
+  # macOS runners are Apple Silicon (arm64): darwin-arm64 runs natively, and
+  # darwin-x64 runs through Rosetta 2 on the same box.
+  smoke-darwin:
+    needs: build
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - asset: subwave-darwin-arm64   # native arm64
+            rosetta: false
+          - asset: subwave-darwin-x64     # x64 via Rosetta 2
+            rosetta: true
+    steps:
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: bin-${{ matrix.asset }}
+          path: dist
+
+      - name: Install Rosetta 2
+        # arm64 macOS runners exec x64 Mach-O binaries transparently once
+        # Rosetta is present; the native arm64 binary needs nothing extra.
+        if: matrix.rosetta
+        run: softwareupdate --install-rosetta --agree-to-license
+
+      - name: Smoke test
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: |
+          chmod +x "dist/$ASSET"
+          "dist/$ASSET" --version
+          "dist/$ASSET" --help
+
+  # linux-arm64 under QEMU user-mode emulation. bun-under-QEMU can be flaky
+  # (illegal-instruction / segfault on some syscalls under emulation), so this
+  # is best-effort: continue-on-error keeps a bad emulation run from failing
+  # the workflow. We run the arm64 ELF inside an arm64 container so its dynamic
+  # loader + libs match the binary; docker uses the QEMU binfmt handler
+  # registered by setup-qemu-action.
+  smoke-linux-arm64:
+    needs: build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Set up QEMU binfmt
+        uses: docker/setup-qemu-action@v3
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: bin-subwave-linux-arm64
+          path: dist
+
+      - name: Smoke test (QEMU)
+        run: |
+          chmod +x dist/subwave-linux-arm64
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/dist:/d" ubuntu:24.04 \
+            sh -c '/d/subwave-linux-arm64 --version && /d/subwave-linux-arm64 --help'
+
+  # Fan-in: gather every per-binary checksum fragment into a single
+  # SHA256SUMS file (the standard `sha256sum -c` format) and attach it to the
+  # release. install.sh downloads this to verify the binary before install.
+  checksums:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download checksum fragments
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sha256-*
+          path: sums
+          merge-multiple: true
+
+      - name: Aggregate into SHA256SUMS
+        run: |
+          cat sums/*.sha256 | sort -k2 > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload SHA256SUMS to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SHA256SUMS
           fail_on_unmatched_files: true

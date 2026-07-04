@@ -49,7 +49,7 @@ RUN npm run build
 FROM caddy:2 AS caddybin
 
 # ---- final: everything under the liquidsoap (Debian bookworm) base ----------
-FROM savonet/liquidsoap:v2.2.5
+FROM savonet/liquidsoap:v2.4.4
 
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
@@ -133,16 +133,20 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
 # extra dimensions repoint their container at that tag. When on, both lazy-load
 # their weights the first time the admin toggles them during a rescan (into
 # HF_HOME, under the persisted state dir).
+#
+# Version pins mirror the analyzer venv in docker/Dockerfile.analyzer — keep the
+# two in lockstep (same wheels, reproducible rebuilds). torch/torchaudio are held
+# at 2.6.0 off the CPU wheel index.
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
 RUN python3 -m venv /opt/analyzer/venv && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
-    /opt/analyzer/venv/bin/pip install --no-cache-dir librosa soundfile pyloudnorm && \
+    /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 && \
     if [ "$WITH_CLAP" = "1" ]; then \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
         --extra-index-url https://pypi.org/simple \
-        torch transformers onnxruntime && \
+        torch==2.6.0 transformers==5.13.0 onnxruntime==1.27.0 && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
     fi && \
     if [ "$WITH_DEMUCS" = "1" ]; then \
@@ -156,7 +160,7 @@ RUN python3 -m venv /opt/analyzer/venv && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
         --extra-index-url https://pypi.org/simple \
-        torch torchaudio demucs diffq && \
+        torch==2.6.0 torchaudio==2.6.0 demucs==4.0.1 diffq==0.2.4 && \
       /opt/analyzer/venv/bin/python -c "import torch, demucs, diffq" && \
       apt-get purge -y gcc libc6-dev python3-dev && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* ; \
     fi && \
@@ -174,7 +178,10 @@ WORKDIR /app
 # stale `peer ai@^6` after the AI SDK v7 upgrade); it must land before install
 # or npm hits ERESOLVE.
 COPY controller/package*.json controller/.npmrc ./
-RUN npm install --omit=dev
+# npm ci (not install): controller ships a package-lock.json, so ci gives a
+# reproducible, lockfile-exact install. The package*.json glob above already
+# brings the lockfile in before this runs.
+RUN npm ci --omit=dev
 COPY controller/src ./src
 COPY controller/scripts ./scripts
 

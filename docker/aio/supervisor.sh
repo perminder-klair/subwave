@@ -92,7 +92,10 @@ init_secrets() {
 		ICECAST_ADMIN_PASSWORD=$ICECAST_ADMIN_PASSWORD
 		ICECAST_RELAY_PASSWORD=$ICECAST_RELAY_PASSWORD
 	EOF
-	chmod 644 "$SECRETS"
+	# 0600: holds the Icecast passwords, read only by root (this supervisor
+	# sources it, and the in-process controller reads it off the state dir —
+	# all root in the AIO's single container). Keep it owner-only.
+	chmod 600 "$SECRETS"
 
 	export ICECAST_SOURCE_PASSWORD ICECAST_ADMIN_PASSWORD ICECAST_RELAY_PASSWORD
 	# Liquidsoap connects to icecast over loopback inside this container;
@@ -132,7 +135,14 @@ run_broadcast() {
 	done
 
 	log "starting liquidsoap"
-	sudo -E -u liquidsoap liquidsoap /etc/liquidsoap/radio.liq &
+	# TEMPORARY (re-harden later): run liquidsoap as root instead of dropping to
+	# the `liquidsoap` user — same reason as docker/broadcast-entrypoint.sh. The
+	# savonet base bump 2.2.5 -> 2.4.4 changed that user's uid (10000 -> 100), so
+	# state files persisted under /var/sub-wave by the old image became unwritable
+	# to uid 100 and every on_meta write EACCES'd. Root ignores those perms.
+	# Restore the privilege drop once the state files are chowned to the new uid
+	# (radio.liq's settings.init.allow_root is set for the same reason).
+	liquidsoap /etc/liquidsoap/radio.liq &
 	local lq=$!
 
 	wait -n "$ic" "$lq"

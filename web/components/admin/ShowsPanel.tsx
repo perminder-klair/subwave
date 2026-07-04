@@ -1169,7 +1169,7 @@ function ShowEditor({
               placeholder="e.g. Jazz (optional)"
             />
             <datalist id="show-genre-options">
-              {genres.map(g => <option key={g} value={g} />)}
+              {[...genres].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })).map(g => <option key={g} value={g} />)}
             </datalist>
           </Field>
 

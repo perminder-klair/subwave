@@ -5,7 +5,15 @@
 # State + sounds + radio.liq are bind-mounted from the repo so dev cycles
 # don't need image rebuilds. The prod composes bake them into images instead.
 
-x-state: &state-mount ./state:/var/sub-wave
+x-state: &state-mount ${STATE_DIR:-./state}:/var/sub-wave
+
+# Cap container log growth so a long dev session can't fill the host disk.
+# 10m × 3 files = ~30MB ceiling per service. Applied via `logging: *default-logging`.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   # -------------------------------------------------------------------------
@@ -23,11 +31,12 @@ services:
     # syscall fails with `Unix.Unix_error(EUNKNOWNERR 0, "", "")` — the
     # clock loop dies on every boot and Icecast ends up with no source.
     # The savonet/liquidsoap:v2.2.5 base is multi-arch, so building natively
-    # (arm64 on M-series Macs, amd64 on Linux dev hosts) just works. Prod
-    # composes still pin amd64 because the GHCR-published images are amd64
-    # only for now.
+    # (arm64 on M-series Macs, amd64 on Linux dev hosts) just works. The prod
+    # composes don't pin broadcast/controller platform either — the GHCR images
+    # are multi-arch and auto-select per host.
     container_name: sub-wave-broadcast
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "7702:7702"
     environment:
@@ -48,7 +57,7 @@ services:
       - ./liquidsoap/radio.liq:/etc/liquidsoap/radio.liq:ro
       - ./sounds:/sounds:ro
       - *state-mount
-      - ./state/logs:/var/log/liquidsoap
+      - ${STATE_DIR:-./state}/logs:/var/log/liquidsoap
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:7702/status-json.xsl > /dev/null"]
       interval: 5s
@@ -72,6 +81,7 @@ services:
     platform: linux/amd64
     container_name: sub-wave-controller
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       broadcast:
         condition: service_healthy
@@ -119,6 +129,15 @@ services:
       # /app/node_modules with the (possibly empty) host node_modules.
       - ./controller/src:/app/src
       - ./controller/scripts:/app/scripts
+    # curl is present in the controller image (see docker/Dockerfile.controller).
+    # /health is served at the router root on :7701 (routes/public.ts). start_period
+    # is generous here: dev runs under `tsx watch`, which is slower to first boot.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7701/health > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   # -------------------------------------------------------------------------
   # DOCKER-SOCKET-PROXY — locked-down Docker API for the Stats system panel
@@ -134,6 +153,7 @@ services:
     image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
     container_name: sub-wave-docker-proxy
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - CONTAINERS=1
     volumes:
@@ -152,8 +172,6 @@ services:
       context: .
       dockerfile: docker/Dockerfile.tts-heavy
       args:
-        # Optional — bake the gated PocketTTS cloning weights in at build time.
-        HF_TOKEN: ${HF_TOKEN:-}
         # GPU opt-in for Chatterbox — point torch at a CUDA wheel index (e.g.
         # CHATTERBOX_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124) and
         # layer on docker-compose.tts-heavy-gpu.yml. Defaults to CPU wheels.
@@ -166,6 +184,13 @@ services:
     platform: linux/amd64
     container_name: sub-wave-tts-heavy
     restart: unless-stopped
+    logging: *default-logging
+    # OOM containment: cap the resident set so a runaway model load (a huge
+    # reference WAV, a wedged PyTorch allocation) is killed inside this
+    # container instead of triggering the host OOM-killer and taking broadcast
+    # or the controller down with it. Default is generous — real Chatterbox +
+    # PocketTTS peaks sit well under it. Raise/lower via TTS_HEAVY_MEM_LIMIT in .env.
+    mem_limit: ${TTS_HEAVY_MEM_LIMIT:-10g}
     profiles: ["tts-heavy"]
     environment:
       - TTS_HEAVY_DEVICE=${TTS_HEAVY_DEVICE:-cpu}
@@ -203,6 +228,14 @@ services:
         WITH_DEMUCS: ${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
     restart: unless-stopped
+    logging: *default-logging
+    # OOM containment: cap the resident set so a runaway analysis (a long track,
+    # a CLAP/Demucs allocation spike on the heavy image) is killed inside this
+    # container instead of triggering the host OOM-killer and taking broadcast or
+    # the controller down with it. Default is generous — librosa passes sit well
+    # under it, and even CLAP + Demucs on the heavy image fit. Raise/lower via
+    # ANALYZER_MEM_LIMIT in .env.
+    mem_limit: ${ANALYZER_MEM_LIMIT:-6g}
     environment:
       - ANALYZE_AUDIO_EMBEDDING=${ANALYZE_AUDIO_EMBEDDING:-}
       - ANALYZE_VOCAL_ACTIVITY=${ANALYZE_VOCAL_ACTIVITY:-}

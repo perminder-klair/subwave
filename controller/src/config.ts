@@ -89,7 +89,7 @@ export const config = {
     model: process.env.KOKORO_MODEL || '/opt/kokoro/models/kokoro-v1.0.onnx',
     voices: process.env.KOKORO_VOICES || '/opt/kokoro/models/voices-v1.0.bin',
     voice: process.env.KOKORO_VOICE || 'bf_isabella',   // British female, BBC-ish
-    lang: process.env.KOKORO_LANG || 'en-gb',
+    lang: process.env.KOKORO_LANG || '',
     speed: parseFloat(process.env.KOKORO_SPEED || TTS_SPEED),
   },
   // Chatterbox is opt-in: the default controller image does not bundle the

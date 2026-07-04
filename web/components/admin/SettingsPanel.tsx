@@ -246,6 +246,7 @@ interface FormState {
   station: string;
   timezone: string;
   locale: StationLocale;
+  kokoroLang: string;
   weather: WeatherCfg;
   tts: TtsForm;
   llm: LlmForm;
@@ -300,7 +301,7 @@ interface SettingsData {
     weather?: { lat?: number; lng?: number; locationName?: string; units?: 'metric' | 'imperial' };
     tts?: {
       defaultEngine?: string;
-      kokoro?: { voice?: string };
+      kokoro?: { voice?: string; lang?: string };
       chatterbox?: { referenceVoice?: string };
       pocketTts?: { voice?: string };
       cloud?: Partial<CloudTtsCfg>;
@@ -334,7 +335,9 @@ interface SettingsData {
   tts?: {
     engines?: string[];
     available?: Record<string, boolean>;
-    kokoroVoices?: Array<{ id: string; label: string }>;
+    kokoroVoices?: string[];
+    kokoroVoiceLanguages?: Record<string, string>;
+    kokoroLangs?: string[];
     chatterboxVoices?: string[];
     // `voiceDir` is the new shared name (issue #213). `chatterboxVoiceDir` is
     // kept as an alias so the UI keeps working against older controllers.
@@ -451,6 +454,7 @@ export default function SettingsPanel() {
       station: v.station ?? '',
       timezone: v.timezone ?? '',
       locale: normalizeStationLocale(v.locale),
+      kokoroLang: v.tts?.kokoro?.lang ?? '',
       weather: {
         lat: String(v.weather?.lat ?? ''),
         lng: String(v.weather?.lng ?? ''),
@@ -1860,7 +1864,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     await saveSettings({
       tts: {
         defaultEngine: form.tts.defaultEngine,
-        kokoro: { voice: form.tts.kokoro?.voice },
+        kokoro: { voice: form.tts.kokoro?.voice, lang: form.kokoroLang },
         chatterbox: { referenceVoice: form.tts.chatterbox?.referenceVoice ?? '' },
         pocketTts: { voice: form.tts.pocketTts?.voice ?? 'alba' },
         cloud: {
@@ -1910,7 +1914,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   type SavedCloud = { provider?: string; voice?: string; model?: string; baseUrl?: string };
   const savedTts: {
     defaultEngine?: string;
-    kokoro?: { voice?: string };
+    kokoro?: { voice?: string; lang?: string };
     chatterbox?: { referenceVoice?: string };
     pocketTts?: { voice?: string };
     cloud?: SavedCloud;
@@ -1920,6 +1924,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   } = data.values?.tts || {};
   const savedEngine: string = savedTts.defaultEngine || 'piper';
   const savedKokoroVoice: string = savedTts.kokoro?.voice || '';
+  const savedKokoroLang: string = savedTts.kokoro?.lang || '';
   const savedChatterboxVoice: string = savedTts.chatterbox?.referenceVoice || '';
   const savedPocketTtsVoice: string = savedTts.pocketTts?.voice || '';
   const savedCloud: SavedCloud = savedTts.cloud || {};
@@ -1942,6 +1947,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   const ttsDirty =
     form.tts.defaultEngine !== savedEngine
     || (form.tts.kokoro?.voice || '') !== savedKokoroVoice
+    || (form.kokoroLang || '') !== savedKokoroLang
     || (form.tts.chatterbox?.referenceVoice || '') !== savedChatterboxVoice
     || (form.tts.pocketTts?.voice || '') !== savedPocketTtsVoice
     || form.tts.cloud.provider !== (savedCloud.provider || '')
@@ -2044,42 +2050,99 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
           </>
         )}
 
-        {form.tts.defaultEngine === 'kokoro' && (
-          <>
-            <div className="field mt-4">
-              <Label>Kokoro voice</Label>
-              {available.kokoro === false && (
-                <div className="field-hint text-[var(--danger)]">
-                  Kokoro is not installed in this build, so it will fall back to Piper.
+        {form.tts.defaultEngine === 'kokoro' && (() => {
+          const voices = data.tts?.kokoroVoices || [];
+          const languages = data.tts?.kokoroVoiceLanguages || {};
+          const voice = form.tts.kokoro?.voice ?? 'bf_isabella';
+          const langPrefix = voice.charAt(0);
+          const filtered = voices.filter(v => v.startsWith(langPrefix));
+          const fmt = (code: string) => {
+            const [lg, name = ''] = code.split('_');
+            const g = (lg?.[1] ?? '').toUpperCase();
+            const n = name.charAt(0).toUpperCase() + name.slice(1);
+            return `${n} (${g})`;
+          };
+          const setVoice = (val: string) => setForm(f => ({
+            ...f, tts: { ...f.tts, kokoro: { ...f.tts.kokoro, voice: val } },
+          }));
+          return (
+            <>
+              <div className="field mt-4">
+                <Label>Kokoro voice</Label>
+                {available.kokoro === false && (
+                  <div className="field-hint text-[var(--danger)]">
+                    Kokoro is not installed in this build, so it will fall back to Piper.
+                  </div>
+                )}
+                {voices.length > 0 ? (
+                  <>
+                    <div className="field mt-3">
+                      <Label>Language</Label>
+                      <Select
+                        value={langPrefix}
+                        onValueChange={lang => {
+                          const first = voices.find(v => v.startsWith(lang));
+                          if (first) setVoice(first);
+                        }}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {Object.entries(languages).map(([k, v]) => (
+                              <SelectItem key={k} value={k}>{v}</SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="field mt-3">
+                      <Label>Voice</Label>
+                      <Select value={voice} onValueChange={setVoice}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {!filtered.includes(voice) && (
+                              <SelectItem value={voice}>{fmt(voice)}</SelectItem>
+                            )}
+                            {filtered.map(v => (
+                              <SelectItem key={v} value={v}>{fmt(v)}</SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </>
+                ) : (
+                  <div className="field-hint">This build reports no Kokoro voices.</div>
+                )}
+              </div>
+              <div className="field mt-3">
+                <Label>Language override</Label>
+                <Select
+                  value={form.kokoroLang || '__auto__'}
+                  onValueChange={val =>
+                    setForm(f => ({ ...f, kokoroLang: val === '__auto__' ? '' : val }))
+                  }
+                >
+                  <SelectTrigger className="w-[260px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="__auto__">Natural, voice default</SelectItem>
+                      {(data.tts?.kokoroLangs || []).map(v => (
+                        <SelectItem key={v} value={v}>{KOKORO_LANG_LABELS[v] || v}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <div className="field-hint">
+                  Force the Kokoro TTS engine to assume a specific language. Leave on <em>Natural</em> to auto-detect from each selected voice.
                 </div>
-              )}
-              {(data.tts?.kokoroVoices?.length || 0) > 0 ? (
-                <>
-                  <Select
-                    value={form.tts.kokoro?.voice ?? 'bf_isabella'}
-                    onValueChange={val => setForm(f => ({
-                      ...f, tts: { ...f.tts, kokoro: { ...f.tts.kokoro, voice: val } },
-                    }))}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {data.tts?.kokoroVoices?.map(v => (
-                          <SelectItem key={v.id} value={v.id}>{v.label} — {v.id}</SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <div className="field-hint">British English only. Applies to every kind routed through Kokoro.</div>
-                </>
-              ) : (
-                <div className="field-hint">This build reports no Kokoro voices.</div>
-              )}
-            </div>
-            <TtsGainField engineId="kokoro" form={form} setForm={setForm} />
-            <TtsSpeedField engineId="kokoro" form={form} setForm={setForm} />
-          </>
-        )}
+              </div>
+              <TtsGainField engineId="kokoro" form={form} setForm={setForm} />
+              <TtsSpeedField engineId="kokoro" form={form} setForm={setForm} />
+            </>
+          );
+        })()}
 
         {form.tts.defaultEngine === 'chatterbox' && (
           <>
@@ -2426,11 +2489,13 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   voice={previewVoice}
                   cloudProvider={form.tts.cloud.provider}
                   speed={form.tts.speed?.[e] ?? 1}
+                  lang={form.kokoroLang || undefined}
                   adminFetch={adminFetch}
                 />
                 <div className="field-hint">
                   Plays a short sample in the selected engine &amp; voice. Reflects voice
                   and speed; the dB trim is applied later, on air.
+                  {e === 'kokoro' || e === 'pocket-tts' ? "Sample text is English; non-English language settings may sound strange" : ""}
                 </div>
               </div>
             );
@@ -4511,6 +4576,20 @@ const TZ_GROUPS: Array<{ region: string; zones: string[] }> = (() => {
 function clockPreview(timeZone: string, locale: StationLocale) {
   return fmtClockMinute(new Date(), timeZone || undefined, locale);
 }
+
+// Labels for Kokoro phonemizer language override options. Keyed by the lang
+// codes exposed by the controller (synced with KOKORO_LANGS in settings.ts).
+const KOKORO_LANG_LABELS: Record<string, string> = {
+  'en-gb': 'English (UK)',
+  'en-us': 'English (US)',
+  cmn: 'Chinese (Mandarin)',
+  fr: 'French',
+  hi: 'Hindi',
+  it: 'Italian',
+  ja: 'Japanese',
+  'pt-br': 'Portuguese (Brazilian)',
+  es: 'Spanish',
+};
 
 function StationSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const save = () => saveSettings({

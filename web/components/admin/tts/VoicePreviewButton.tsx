@@ -16,6 +16,8 @@ interface VoicePreviewButtonProps {
   cloudProvider?: string;
   // Final rate multiplier to audition (server clamps to 0.5–2.0×).
   speed?: number;
+  // Kokoro phonemizer language override (e.g. "en-gb", "ja").
+  lang?: string;
   adminFetch: AdminAuth['adminFetch'];
   disabled?: boolean;
   className?: string;
@@ -24,7 +26,7 @@ interface VoicePreviewButtonProps {
 type PreviewState = 'idle' | 'loading' | 'playing' | 'error';
 
 export function VoicePreviewButton({
-  engine, voice, cloudProvider, speed, adminFetch, disabled, className,
+  engine, voice, cloudProvider, speed, lang, adminFetch, disabled, className,
 }: VoicePreviewButtonProps) {
   const [state, setState] = useState<PreviewState>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +50,7 @@ export function VoicePreviewButton({
       const r = await adminFetch('/settings/tts/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ engine, voice, cloudProvider, speed }),
+        body: JSON.stringify({ engine, voice, cloudProvider, speed, lang }),
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({})) as { message?: string };

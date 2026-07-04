@@ -55,6 +55,11 @@ export interface LiveTrackMeta {
   artist?: string;
   album?: string;
   artwork?: string;
+  // HTTP headers for the stream request — carries `Authorization: Basic …` when
+  // the station uses URL-embedded basic auth. RNTP maps these onto the iOS
+  // AVURLAsset (AVURLAssetHTTPHeaderFieldsKey) and the Android DataSource, the
+  // only auth path AVPlayer honours (it ignores userinfo in the URL — #764).
+  headers?: Record<string, string>;
 }
 
 // The last stream meta we loaded, remembered so the headless playback service
@@ -83,6 +88,7 @@ export async function loadAndPlay(meta: LiveTrackMeta): Promise<void> {
     album: meta.album || 'SUB/WAVE',
     artwork: meta.artwork,
     isLiveStream: true,
+    headers: meta.headers,
   });
   lastLiveMeta = meta;
   await TrackPlayer.play();

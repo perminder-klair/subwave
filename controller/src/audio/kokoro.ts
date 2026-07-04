@@ -153,7 +153,7 @@ async function ensureWorker(): Promise<KokoroWorker> {
 
 export async function speak(
   text: string,
-  { outPath: customPath, voice, speedScale }: { outPath?: string; voice?: string; speedScale?: number } = {},
+  { outPath: customPath, voice, lang, speedScale }: { outPath?: string; voice?: string; lang?: string; speedScale?: number } = {},
 ): Promise<string> {
   if (!text || !text.trim()) throw new Error('Empty TTS text');
   await mkdir(config.piper.outDir, { recursive: true });
@@ -166,7 +166,7 @@ export async function speak(
   const msg = await w.send(id, {
     text: text.trim(),
     voice: voice || config.kokoro.voice,
-    lang: config.kokoro.lang,
+    lang: lang || config.kokoro.lang,
     // Per-call speedScale (daypart energy) composes on top of the config speed.
     speed: config.kokoro.speed * (speedScale != null ? speedScale : 1),
     out: outPath,

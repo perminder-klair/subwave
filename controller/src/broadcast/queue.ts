@@ -450,10 +450,11 @@ class Queue {
   // Drop any transition-effect flags from a track (with a logged reason) so
   // getAnnotatedUri never stamps an effect the gate rejected.
   stripEffect(track: any, reason: string) {
-    const kind = track.sweep ? 'sweep' : track.blend ? 'blend' : 'washout';
+    const kind = track.sweep ? 'sweep' : track.blend ? 'blend' : track.dissolve ? 'dissolve' : 'washout';
     delete track.sweep;
     delete track.washout;
     delete track.blend;
+    delete track.dissolve;
     this.log('mix', `${kind} dropped (${reason})`);
   }
 
@@ -468,7 +469,7 @@ class Queue {
     // Persona flipped out of DJ mode between the pick and the drain: the
     // effects gate below never runs, so make sure no flag survives to annotate.
     if (!persona?.djMode) {
-      if (item.track.sweep || item.track.washout || item.track.blend) this.stripEffect(item.track, 'dj mode off');
+      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve) this.stripEffect(item.track, 'dj mode off');
       return;
     }
 
@@ -477,7 +478,7 @@ class Queue {
     if (!prevTrack) {
       // Nothing on-air to validate against (first track after boot) — an
       // effect on a cold start would garnish silence; drop it.
-      if (item.track.sweep || item.track.washout || item.track.blend) this.stripEffect(item.track, 'no predecessor');
+      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve) this.stripEffect(item.track, 'no predecessor');
       return;
     }
 
@@ -559,6 +560,7 @@ class Queue {
     // deterministic, not choices — invisible to the ledger in both directions.
     const choice: string | null =
       item.track.sweep ? 'sweep' : item.track.blend ? 'blend'
+        : item.track.dissolve ? 'dissolve'
         : (item.track.washout && !item.track.washoutAuto) ? 'washout'
         : item.track.washoutAuto ? null : 'normal';
     const last2 = this._recentEffects.slice(-2);
@@ -582,13 +584,28 @@ class Queue {
       this.log('mix', 'blend dropped (tracks clash — a handover needs a compatible pair)');
     }
     if (item.track.blend) this.log('mix', `blend armed → ${item.track.title}`);
+    // dissolve (reverb wash) — blend's mirror: beatless ambience only earns
+    // its place across a measurable clash. Also yields to a washout already
+    // riding the PREVIOUS track's exit: both gestures shape the same outgoing
+    // ending (echo tail vs ambient wash), and the washout may carry the
+    // length-cap auto-arm. radio.liq enforces the same precedence as a
+    // belt-and-braces guard; stripping here keeps the pick log honest.
+    if (item.track.dissolve && prevTrack.washout) {
+      delete item.track.dissolve;
+      this.log('mix', 'dissolve dropped (previous track already exits through a washout)');
+    }
+    if (item.track.dissolve && !mix.effectAllowedFor('dissolve', cur, next)) {
+      delete item.track.dissolve;
+      this.log('mix', 'dissolve dropped (tracks too compatible — a blend keeps the groove a wash would kill)');
+    }
+    if (item.track.dissolve) this.log('mix', `dissolve armed → ${item.track.title}`);
     if (item.track.washout) {
       item.track.crossSec = mix.washoutCrossSecondsFor(next, maxSec);
       item.track.washoutDelay = mix.washoutDelayFor(next.bpm);
       const why = item.track.washoutAuto ? ' (length-cap exit)' : '';
       this.log('mix', `washout armed${why}: ${item.track.crossSec}s canvas, ${item.track.washoutDelay}s tap → ${item.track.title}`);
     }
-    const effectFired = !!(item.track.sweep || item.track.washout || item.track.blend);
+    const effectFired = !!(item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve);
 
     // Feature 2 — transition FX, spaced by the chattiness ladder and gated on
     // settings.sfx.enabled; never two transitions in a row, and never a riser

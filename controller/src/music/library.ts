@@ -121,6 +121,21 @@ export function allTaggedIds(): string[] {
   return loaded ? db.allTaggedIds() : [];
 }
 
+// COUNT(*) of tagged tracks — for callers that only need the tally (e.g. the
+// coverage meter), not the id list. Avoids materialising a ~30k-element array
+// just to read its length (#723).
+export function countTagged(): number {
+  return loaded ? db.countTagged() : 0;
+}
+
+// Lean metadata for the /now-playing hot path — only the fields the player's
+// metadata strip renders (genre · BPM · key · mood · energy · year). Backed by
+// db.getTrackLite so a per-listener poll never SELECTs or JSON.parses the heavy
+// acoustic *_json blobs the way the full get()/getTrack() path does (#723).
+export function getPlaybackMeta(songId: string): db.TrackLite | null {
+  return loaded ? db.getTrackLite(songId) : null;
+}
+
 // Musically-adjacent moods. The LLM tagger is told to tag by how a track
 // FEELS, so it rarely assigns time-of-day moods — `morning` ends up with 0
 // tracks, `evening` with 1 — which leaves the picker's mood source dark for

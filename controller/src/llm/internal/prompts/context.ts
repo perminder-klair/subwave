@@ -38,7 +38,7 @@ export const ANGLES = {
     'Anchor the ident to the current moment (a Tuesday afternoon, a quiet evening, the slow part of Sunday).',
     'Make it a near-aside: like someone reminding themselves where they are.',
     'Open with the time of day, then drop the station name in the middle of the sentence.',
-    'A single observation about broadcasting from a homelab, with the station name woven in.',
+    'One small observation about the station itself — its scale, its late hours, its one-room intimacy — with the name woven in.',
   ],
   hourly: [
     'State the time as a small fact, then anchor it with one observation about the day.',
@@ -100,7 +100,10 @@ export function buildContextLines(
     if (context.clock.isDark) tags.push('after dark');
     if (context.clock.isWeekend) tags.push('weekend');
     if (context.clock.isLateNight) tags.push('late night');
-    if (context.clock.isCommute) tags.push('commute hour');
+    // No 'commute hour' tag: stapling it to every spoken segment (alongside the
+    // drive-time period label) made the DJ read as a traffic-report station for
+    // two hours a day. isCommute still gates commute-window skills and the
+    // energy pacing in code (context.ts) — it just isn't prompt fodder anymore.
     lines.push(`Local time: ${context.clock.hhmm}${tags.length ? ' · ' + tags.join(' · ') : ''}`);
   }
   if (on('time') && context?.time) lines.push(`Period: ${context.time.period} (${context.time.vibe})`);

@@ -62,8 +62,17 @@ export interface StationApi {
    *  endpoint. */
   avatar(path: string): string;
   /** The live MP3 Icecast mount — the universal floor; Opus/Ogg is skipped on
-   *  native for the same chained-Ogg reasons the web pins iOS to MP3. */
+   *  native for the same chained-Ogg reasons the web pins iOS to MP3. Carries NO
+   *  embedded credentials — see streamHeaders(). */
   streamUrl(): string;
+  /** Headers to attach to the audio stream request. When the station URL
+   *  embedded HTTP basic-auth credentials (`https://user:pass@host`), this
+   *  returns `{ Authorization: 'Basic …' }`; otherwise `undefined`. iOS AVPlayer
+   *  (via react-native-track-player) ignores userinfo in the URL, so the
+   *  credential MUST travel as a header or the stream 401s and never starts —
+   *  unlike the fetch/Image paths, which honour userinfo, so they keep using the
+   *  credentialed base (#764). */
+  streamHeaders(): Record<string, string> | undefined;
 }
 
 /** Strip a trailing slash; default to https:// if the user typed a bare host. */
@@ -72,6 +81,68 @@ export function normalizeBase(raw: string): string {
   if (!s) return s;
   if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
   return s.replace(/\/+$/, '');
+}
+
+// Standard base64 over the UTF-8 bytes of a string. Self-contained rather than
+// relying on global `btoa` (Hermes-version-dependent, and latin1-only) so a
+// credential with non-ASCII characters still encodes the way a browser would.
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+function base64(input: string): string {
+  const bytes: number[] = [];
+  for (let i = 0; i < input.length; i++) {
+    let c = input.charCodeAt(i);
+    if (c < 0x80) bytes.push(c);
+    else if (c < 0x800) bytes.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < input.length) {
+      // surrogate pair → single code point
+      const lo = input.charCodeAt(++i);
+      c = 0x10000 + ((c & 0x3ff) << 10) + (lo & 0x3ff);
+      bytes.push(
+        0xf0 | (c >> 18),
+        0x80 | ((c >> 12) & 0x3f),
+        0x80 | ((c >> 6) & 0x3f),
+        0x80 | (c & 0x3f),
+      );
+    } else {
+      bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+    }
+  }
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i];
+    const b1 = bytes[i + 1];
+    const b2 = bytes[i + 2];
+    out += B64[b0 >> 2];
+    out += B64[((b0 & 3) << 4) | (b1 === undefined ? 0 : b1 >> 4)];
+    out += b1 === undefined ? '=' : B64[((b1 & 15) << 2) | (b2 === undefined ? 0 : b2 >> 6)];
+    out += b2 === undefined ? '=' : B64[b2 & 63];
+  }
+  return out;
+}
+
+/** Split a normalized base into a credential-free base URL and, if the URL
+ *  carried `user:pass@` userinfo, an `Authorization: Basic` header value.
+ *  Percent-encoded userinfo is decoded per-component before encoding, matching
+ *  how a browser forms the credential from a URL. */
+export function splitCredentials(rawBase: string): {
+  base: string;
+  authorization: string | null;
+} {
+  const norm = normalizeBase(rawBase);
+  const m = norm.match(/^(https?:\/\/)(?:([^/@]+)@)?(.+)$/i);
+  if (!m || !m[2]) return { base: norm, authorization: null };
+  const [, scheme, userinfo, rest] = m;
+  const idx = userinfo.indexOf(':');
+  const dec = (s: string) => {
+    try {
+      return decodeURIComponent(s);
+    } catch {
+      return s;
+    }
+  };
+  const user = dec(idx >= 0 ? userinfo.slice(0, idx) : userinfo);
+  const pass = idx >= 0 ? dec(userinfo.slice(idx + 1)) : '';
+  return { base: `${scheme}${rest}`, authorization: `Basic ${base64(`${user}:${pass}`)}` };
 }
 
 // Every call carries a hard timeout: a hung origin must not stall the 5s
@@ -102,7 +173,18 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
 }
 
 export function createApi(rawBase: string): StationApi {
+  // `base` deliberately KEEPS any URL-embedded credentials: RN's fetch and
+  // <Image> (both NSURLSession on iOS / OkHttp on Android) honour `user:pass@`
+  // userinfo, so the API polls and cover/avatar artwork already work with a
+  // basic-auth station. Only the audio path is broken — iOS AVPlayer drops
+  // userinfo — so we produce a credential-free URL + Authorization header for
+  // the stream alone (streamUrl/streamHeaders below), leaving every other
+  // request untouched (#764).
   const base = normalizeBase(rawBase);
+  const { base: cleanBase, authorization } = splitCredentials(rawBase);
+  const streamAuthHeaders: Record<string, string> | undefined = authorization
+    ? { Authorization: authorization }
+    : undefined;
   const api = (p: string) => `${base}/api${p}`;
   // Single source of the health logic; health() below is just its boolean.
   const probeHealth = async (signal?: AbortSignal): Promise<HealthResult> => {
@@ -151,6 +233,7 @@ export function createApi(rawBase: string): StationApi {
       if (/^https?:\/\//i.test(path)) return path;
       return api(path.startsWith('/') ? path : `/${path}`);
     },
-    streamUrl: () => `${base}/stream.mp3`,
+    streamUrl: () => `${cleanBase}/stream.mp3`,
+    streamHeaders: () => streamAuthHeaders,
   };
 }

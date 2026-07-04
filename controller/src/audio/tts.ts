@@ -137,7 +137,11 @@ async function speakWith(engine: string, text: string, opts: any, personaTts: an
     const voice = (personaTts && personaTts.engine === 'kokoro' && personaTts.voice)
       ? personaTts.voice
       : settings.get().tts?.kokoro?.voice;
-    return kokoro.speak(text, { ...opts, voice });
+    // Station-level language override — explicitly chosen phonemizer lang
+    // (e.g. use a Japanese voice code for the accent but British phonemes for
+    // English text). Absent → falls through to KOKORO_LANG env → auto-detect.
+    const lang = opts.lang || settings.get().tts?.kokoro?.lang || undefined;
+    return kokoro.speak(text, { ...opts, voice, lang });
   }
   if (engine === 'chatterbox') {
     // For chatterbox, persona's `voice` is a reference-WAV filename (resolved
@@ -202,11 +206,12 @@ const PREVIEW_TEXT_MAX = 200;
 const DEFAULT_PREVIEW_TEXT = "You're listening to SUB/WAVE. This is a voice preview.";
 
 export async function synthesizeSample(
-  { engine, voice = '', cloudProvider = 'openai', speed, text }: {
+  { engine, voice = '', cloudProvider = 'openai', speed, lang, text }: {
     engine: string;
     voice?: string;
     cloudProvider?: string;
     speed?: number;
+    lang?: string;
     text?: string;
   },
 ): Promise<string> {
@@ -219,7 +224,7 @@ export async function synthesizeSample(
   const personaTts = { engine, voice, cloudProvider };
   // No outPath → each engine self-generates a WAV path under config.piper.outDir
   // (reaped by cleanupOldVoices) and returns it.
-  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '' }, personaTts);
+  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '', lang }, personaTts);
 }
 
 // Public entry point. Tries the configured engine; on failure, falls back to
