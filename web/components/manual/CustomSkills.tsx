@@ -161,6 +161,48 @@ export const ready = (services) => services.searchReady();`}</CodeBlock>
       </section>
 
       <section className="bs-section">
+        <p className="bs-eyebrow">SHARING</p>
+        <h2>Send one out, pull one in.</h2>
+        <p>
+          Wrote a skill worth passing on? On the admin <strong>Skills</strong> page, any
+          prompt-only skill (no <code className="bs-code-inline">tool.mjs</code>) grows a{' '}
+          <strong>Share to community</strong> button. It opens a prefilled GitHub issue; a
+          workflow checks the slug and frontmatter and opens a one-file PR. Once that&rsquo;s
+          merged the skill ships in the next controller image, so any station can pick it up.
+        </p>
+        <p>
+          The other direction is the <strong>Community</strong> button next to{' '}
+          <strong>New skill</strong>. It lists the shipped catalog; <strong>Install</strong>{' '}
+          drops a copy into <code className="bs-code-inline">state/skills/</code> — toggled
+          off, for you to read before it airs. The catalog is prompt-only by design, so
+          installing from it never runs anyone else&rsquo;s code.
+        </p>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">ZIP EXPORT / IMPORT</p>
+        <h2>Hand a skill straight to another operator.</h2>
+        <p>
+          To pass a skill directly instead, the edit sheet has an{' '}
+          <strong>↓ Export</strong> that streams a <code className="bs-code-inline">.zip</code>{' '}
+          (the <code className="bs-code-inline">SKILL.md</code>, plus{' '}
+          <code className="bs-code-inline">tool.mjs</code> if it has one). The Community modal
+          has the matching <strong>Import .zip</strong>. Like everything else, an import lands
+          disabled.
+        </p>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">A ZIP CAN CARRY CODE</div>
+          <p>
+            Unlike the reviewed catalog, an imported{' '}
+            <code className="bs-code-inline">.zip</code> may include a{' '}
+            <code className="bs-code-inline">tool.mjs</code> — the same trust as dropping a
+            folder in by hand. When it does, the UI flags it on arrival; read the code before
+            you enable it.
+          </p>
+        </div>
+      </section>
+
+      <section className="bs-section">
         <p className="bs-eyebrow">GOING LIVE</p>
         <h2>Discovered, then enabled by you.</h2>
         <p>
