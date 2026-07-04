@@ -897,15 +897,20 @@ end
 # BEFORE mic_chain so the fixed-threshold compressor sees a levelled input. The
 # un-annotated silent lead-in carries no `liq_amplify`, so it plays at the base
 # factor 1. (unity). Un-trimmed clips (gainDb 0) write a bare path → also unity.
-# Micro edge fades on each spoken clip. Some TTS engines cut the WAV hard at
+# Micro edge fade-IN on each spoken clip. Some TTS engines cut the WAV hard at
 # the file boundary; once the mic-chain compressor's makeup gain lifts the
 # clip, that hard edge lands as an audible click/tick. 40 ms is short enough
 # not to soften the first word (speech onsets are slower than that) but long
 # enough to zero out the boundary discontinuity. Applied per track, so the
 # silent lead-in clip is faded too (harmless — it's silence). Placed BEFORE
 # amplify/mic_chain so the compressor never sees the raw edge.
+# fade.in ONLY — no fade.out. On a request.queue source this Liquidsoap build
+# doesn't know the track's remaining time, so fade.out treats the whole clip
+# as inside the fade zone and multiplies it to silence (every voice segment
+# aired as dead air under the duck). Verified empirically against the
+# broadcast image. Tail clicks must be faded at WAV-render time instead.
 def edge_fade(s) =
-  fade.in(duration=0.04, fade.out(duration=0.04, s))
+  fade.in(duration=0.04, s)
 end
 
 voice = mic_chain(amplify(override="liq_amplify", 1., edge_fade(voice_queue)))
