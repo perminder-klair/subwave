@@ -226,7 +226,13 @@ function requestSchema() {
 // settings.effectsActive; there is no separate toggle). Invisible otherwise,
 // so the model leaves "transition" null.
 
-export function pickSystem() {
+// `showAt` — resolve the show brief/leans for that future moment instead of
+// now: the pick airs when the current track ends, so near a show boundary the
+// INCOMING show's rules are the ones to follow (see the look-ahead in
+// queue.onTrackStarted). The persona stays the live one — the outgoing DJ
+// tees the changeover up in their own voice; the on-air mic-pass is
+// runPersonaHandoff's job.
+export function pickSystem(showAt: Date | null = null) {
   const persona = settings.getEffectivePersona();
   // In DJ mode, lean on the live session history: a working DJ runs threads
   // and calls back to a track or a remark from earlier in the shift. This pairs
@@ -239,7 +245,7 @@ export function pickSystem() {
   // opening message: the session window (~40 turns) scrolls past the opener
   // within the first hour, after which the picker would lose every show
   // constraint mid-show and revert to generic picks.
-  const activeShow = settings.resolveActiveShow();
+  const activeShow = settings.resolveActiveShow(showAt ?? undefined);
   const showLine = activeShow?.topic
     ? `\n\nCurrent show brief — follow this for every pick:\n${activeShow.topic}`
     : '';
@@ -336,14 +342,17 @@ export const pickerAgent = defineAgent({
   // on every provider now; maxSteps is just the backstop.
   maxSteps: 4,
   timeoutMs: agentDeadline,
-  buildSystem: () => pickSystem(),
-  buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, playlistLock, playlistTracks, excludedIds }) => {
-    // Resolve the active show live (a show that just came on air takes effect):
-    // for a strict show (filtersStrict), EVERY set music filter — genre, era,
-    // mood, energy — becomes a hard lock the discovery tools enforce on
-    // candidates, not just the prompt. Track length is enforced as an on-air
-    // cut, NOT a pick filter (issue #447), so no length cap is passed here.
-    const activeShow = settings.resolveActiveShow();
+  buildSystem: ({ showAt }: any = {}) => pickSystem(showAt ?? null),
+  buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, playlistLock, playlistTracks, excludedIds, showAt }) => {
+    // Resolve the active show live (a show that just came on air takes effect),
+    // at the pick's look-ahead moment when one is threaded through (showAt —
+    // same clock the system prompt's brief resolved against, so prompt and
+    // locks can't disagree across a boundary): for a strict show
+    // (filtersStrict), EVERY set music filter — genre, era, mood, energy —
+    // becomes a hard lock the discovery tools enforce on candidates, not just
+    // the prompt. Track length is enforced as an on-air cut, NOT a pick filter
+    // (issue #447), so no length cap is passed here.
+    const activeShow = settings.resolveActiveShow(showAt ?? undefined);
     const strict = !!(activeShow?.filtersStrict);
     const genreLock = strict && activeShow?.genre ? activeShow.genre : null;
     const eraLock = strict && (activeShow?.fromYear != null || activeShow?.toYear != null)
@@ -482,7 +491,7 @@ async function repickFromSeen({ seen, badId, wantLink }: { seen: Map<string, any
   }
 }
 
-async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = null }: { wantLink: boolean; audioWaypoint?: number[] | null; current?: any }): Promise<boolean> {
+async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = null, showAt = null }: { wantLink: boolean; audioWaypoint?: number[] | null; current?: any; showAt?: Date | null }): Promise<boolean> {
   await library.load();
   const stats = library.stats();
   const windows = recencyWindowsForLibrary(stats.distinctArtists);
@@ -508,8 +517,11 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   // thread it into the agent's tools. Strict → a hard lock set so every tool's
   // results are intersected with the playlist (the agent can only pick in-set);
   // soft → just the tracks, exposed via showPlaylistTracks for a strong prompt
-  // preference, no lock. Null when the show pins no playlists.
-  const activeShow = settings.resolveActiveShow();
+  // preference, no lock. Null when the show pins no playlists. Resolved at the
+  // pick's look-ahead moment (showAt) so the anchored playlist is the show's
+  // that will be on air when the pick plays — same clock as pickSystem's brief
+  // and buildTools' locks.
+  const activeShow = settings.resolveActiveShow(showAt ?? undefined);
   const playlistPool = activeShow ? await resolveShowPlaylistPool(activeShow) : null;
   const playlistLock = playlistPool && activeShow?.playlistStrict ? playlistPool.ids : null;
   const playlistTracks = playlistPool?.tracks ?? null;
@@ -528,6 +540,7 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
     playlistLock,
     playlistTracks,
     excludedIds,
+    showAt,
   });
   const { steps, toolCalls, extras } = run;
   let object = run.object;
@@ -682,7 +695,12 @@ async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm:
 // Called by the queue watcher when an autonomous track starts and the queue is
 // empty. Posts the event to the session, then picks the next track (and an
 // optional between-track link) via the agent, falling back to the pool.
-export async function runTrackEvent(queue, ctx, { wantLink }) {
+// `ctx` is the pick's context — near a show boundary the queue watcher hands
+// in a look-ahead snapshot (getFullContext at the pick's expected airtime) plus
+// the matching `showAt` clock, so both pick paths follow the show that will
+// actually be on air when the pick plays. `showAt` null → resolve at now,
+// exactly the pre-look-ahead behaviour.
+export async function runTrackEvent(queue, ctx, { wantLink, showAt = null }: { wantLink: boolean; showAt?: Date | null }) {
   return withTrace({ kind: 'track-event', wantLink }, async () => {
     // Daily token cap. At the hard cap we make NO model call: skip the pick and
     // let Liquidsoap fall through to the LLM-free auto playlist (music keeps
@@ -778,7 +796,7 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
     // and go straight to the one-call pool picker below to stretch the budget.
     if (settings.get().llm?.pickerAgent && !cheap && !breakerOpen()) {
       try {
-        const queued = await pickViaAgent(queue, { wantLink, audioWaypoint, current });
+        const queued = await pickViaAgent(queue, { wantLink, audioWaypoint, current, showAt });
         breakerSuccess();
         if (queued) return;
         // The agent produced a valid pick but it was already queued/on-air, so

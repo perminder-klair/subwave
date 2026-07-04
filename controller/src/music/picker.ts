@@ -486,8 +486,13 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
   const currentTrack = queue.current?.track || null;
   // Resolve the active show once: its music-steering filters shape the pool
-  // (below) and its brief steers the LLM pick (further down).
-  const activeShow = settings.resolveActiveShow();
+  // (below) and its brief steers the LLM pick (further down). Prefer the show
+  // already resolved into ctx — near a show boundary the queue watcher passes
+  // a look-ahead context (getFullContext at the pick's expected airtime), so
+  // the pool follows the show that will be on air when the pick plays, and
+  // stays consistent with ctx.dominantMood below. Contexts without the field
+  // (picker-test's stub) fall back to resolving at now.
+  const activeShow = ctx?.activeShow !== undefined ? ctx.activeShow : settings.resolveActiveShow();
   const showFilter: ShowFilter = activeShow
     ? { mood: activeShow.mood, genre: activeShow.genre, fromYear: activeShow.fromYear, toYear: activeShow.toYear, energy: activeShow.energy, strict: activeShow.filtersStrict }
     : null;

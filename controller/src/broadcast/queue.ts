@@ -56,6 +56,15 @@ const EMPTY_DJ_QUEUE_CLEAR_THRESHOLD = 3;
 // length apart — keeps its own entry rather than being merged away.
 export const BACKFILL_DEDUP_MAX_GAP_MS = 15 * 60_000;
 
+// How far PAST the next pick's expected start the show-boundary look-ahead
+// probes (see onTrackStarted). The pick's start time alone under-corrects: a
+// track starting 30s before a boundary plays almost entirely inside the new
+// show but would still resolve the old one. Two minutes ≈ the midpoint of a
+// typical track, so whichever show owns most of the pick's airtime wins. The
+// symmetric cost — an on-format-for-the-NEXT-show track starting a minute or
+// two early — is how real radio tees up a changeover anyway.
+const PICK_SHOW_LOOKAHEAD_SEC = 120;
+
 // Has this events-log play already been recorded by recordPlay? The old dedup
 // keyed on `${endedAt}|${title}` — an EXACT timestamp match — but recordPlay's
 // end-stamp never equals the event's start `t`, so it never fired and every
@@ -1021,7 +1030,23 @@ class Queue {
           } catch (err: any) {
             this.log('error', `Persona handoff failed: ${err.message}`);
           }
-          await djAgent.runTrackEvent(this, ctx, { wantLink });
+          // The pick made now airs when the track that just started ends — so
+          // near a show boundary the rules to pick by are the NEXT show's, not
+          // this one's (a pick queued minutes before the boundary used to
+          // follow the outgoing show's brief, handing the incoming DJ an
+          // off-format opener). Probe a little past the pick's expected start
+          // so a pick that begins just shy of the boundary — and plays mostly
+          // inside the new show — also counts as the new show's. The session
+          // roll and handoff above stay on the live clock: only the pick
+          // looks ahead. Unknown duration → no look-ahead, today's behaviour.
+          const durSec = Number(this.current?.track?.duration);
+          let pickCtx = ctx;
+          let showAt: Date | null = null;
+          if (Number.isFinite(durSec) && durSec > 0) {
+            showAt = new Date(Date.now() + (durSec + PICK_SHOW_LOOKAHEAD_SEC) * 1000);
+            pickCtx = await getFullContext(showAt);
+          }
+          await djAgent.runTrackEvent(this, pickCtx, { wantLink, showAt });
         } catch (err: any) {
           this.log('error', `DJ track event failed: ${err.message}`);
         } finally {

@@ -258,9 +258,15 @@ export function energyForDaypart(date = new Date()) {
   return base;
 }
 
-// Combined snapshot — what's the vibe right now?
-export async function getFullContext() {
-  const now = new Date();
+// Combined snapshot — what's the vibe right now? Pass `at` to resolve the
+// clock-derived parts (time, festival, date, clock, active show, and therefore
+// dominantMood) for a future moment instead — the queue watcher uses this to
+// pick the NEXT track under the rules of the show that will actually be on air
+// when it plays (issue: a pick made minutes before a show boundary followed the
+// outgoing show's brief). Weather and listener count stay live: they're
+// station-now facts and drift too little over one track to matter.
+export async function getFullContext(at?: Date) {
+  const now = at ?? new Date();
   const time = getTimeContext(now);
   const weather = await getWeather();
   const festival = getFestivalContext(now);
