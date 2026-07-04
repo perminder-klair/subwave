@@ -197,11 +197,18 @@ export function pickSchema() {
   });
 }
 
-const REQUEST_SCHEMA = z.object({
-  id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
-  ack: z.string().describe('short on-air acknowledgement of the listener, in character — max 20 words; no "thank you for listening" or self-intros'),
-  intro: z.string().describe('a natural DJ intro for the track in the DJ voice; weave in what the listener asked for without reading the request back verbatim'),
-});
+// Resolved per run, like pickSchema: the intro length follows the on-air
+// persona's scriptLength. The stateless fallback's generateIntro gets
+// lengthPhrase('intro') in its prompt, so without this overlay an 'extended'
+// storytelling persona kept its long intros on the cascade path but snapped
+// back to an unspecified length whenever the agent handled the request.
+function requestSchema() {
+  return z.object({
+    id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
+    ack: z.string().describe('short on-air acknowledgement of the listener, in character — max 20 words; no "thank you for listening" or self-intros'),
+    intro: z.string().describe(`a natural DJ intro for the track in the DJ voice; weave in what the listener asked for without reading the request back verbatim. ${dj.lengthPhrase('intro')}`),
+  });
+}
 
 // Ultra-minimal — persona + editorial criteria, nothing else. The AI SDK
 // already conveys everything else through its own channels: tool descriptions
@@ -266,7 +273,7 @@ function requestSystem() {
   const persona = settings.getEffectivePersona();
   return `${settings.agentPersonaPreamble(persona, { rules: false })}
 
-The messages above are the live session — the last user turn is a listener request.${settings.agentLanguageReminder(persona, 'the "ack" and "intro" lines')}`;
+The messages above are the live session. The final user line names the ONE listener request you are resolving now — any earlier request lines are already handled by someone else; ignore them. If the exact ask isn't in the library, pick the closest thing your tools actually returned and own the substitution in the "ack" and "intro" — never pretend it's what they asked for.${settings.agentLanguageReminder(persona, 'the "ack" and "intro" lines')}`;
 }
 
 // --- Agent circuit breaker ---------------------------------------------------
@@ -319,6 +326,16 @@ function agentDeadline(): number {
   return settings.get().llm?.agentTimeoutMs ?? 45000;
 }
 
+// Requests get a tighter deadline than picks: a pick has a whole track length
+// of slack, but a request has a listener polling GET /request/:id, and the
+// stateless matcher cascade only STARTS after the agent gives up — so the
+// worst case before the cascade even begins is ~2× this (main + recovery runs
+// each get the full budget). Half the operator's agent timeout, floored so a
+// low setting still leaves room for one real tool-loop run.
+function requestDeadline(): number {
+  return Math.max(15000, Math.round(agentDeadline() / 2));
+}
+
 export const pickerAgent = defineAgent({
   kind: 'djAgentPick',
   // Resolved per run: the effects coaching in the transition field follows
@@ -358,9 +375,11 @@ export const pickerAgent = defineAgent({
 
 export const requestAgent = defineAgent({
   kind: 'djAgentRequest',
-  schema: REQUEST_SCHEMA,
+  // Function form — resolved per run so the intro length follows the on-air
+  // persona's scriptLength (see requestSchema).
+  schema: () => requestSchema(),
   maxSteps: 4,
-  timeoutMs: agentDeadline,
+  timeoutMs: requestDeadline,
   buildSystem: () => requestSystem(),
   // resolveReferences adds the web-backed reference resolver (request path only;
   // no-op without a search provider) when the operator opts in via
@@ -798,7 +817,7 @@ export async function runTrackEvent(queue, ctx, { wantLink }) {
 // so its failures are the same symptom.
 // The caller (routes/request.js) owns the request `event` turn — it posts one
 // for every request path, so the agent only appends its own `dj` reply here.
-export async function runRequest(queue: any, ctx: any, { requester, text: _text }: { requester: string; text: string }) {
+export async function runRequest(queue: any, ctx: any, { requester, text }: { requester: string; text: string }) {
   if (!settings.get().llm?.pickerAgent || breakerOpen()) return null;
   // Over the hard token cap the request agent only runs when requests are
   // exempt (llm.exemptRequests, on by default); otherwise return null and let
@@ -806,7 +825,7 @@ export async function runRequest(queue: any, ctx: any, { requester, text: _text 
   if (!budget.requestsAllowed()) return null;
 
   try {
-    const out = await runRequestViaAgent(queue, { requester });
+    const out = await runRequestViaAgent(queue, { requester, text });
     breakerSuccess();
     return out;
   } catch (err) {
@@ -815,7 +834,7 @@ export async function runRequest(queue: any, ctx: any, { requester, text: _text 
   }
 }
 
-async function runRequestViaAgent(queue: any, { requester }: { requester: string }) {
+async function runRequestViaAgent(queue: any, { requester, text }: { requester: string; text: string }) {
   return withTrace({ kind: 'request', requester }, async () => {
     // Requests stay near-unfiltered — listeners must be able to re-request a
     // song from earlier in the day. 2h covers the "don't repeat the song still
@@ -823,8 +842,25 @@ async function runRequestViaAgent(queue: any, { requester }: { requester: string
     const recentIds = queue.recentlyPlayedIds(2);
     for (const id of queue.queuedIds()) recentIds.add(id);
 
+    // Pin THIS run to THIS request with an explicit tail message instead of
+    // trusting the session's last event turn. resolveRequest posts request
+    // events into the SHARED session, so with two requests in flight the other
+    // listener's event can be the more recent one (agent runs take tens of
+    // seconds), and the session append is best-effort — if it failed, the
+    // window holds no request at all. Either way the tail is what the system
+    // prompt points the agent at ("the final user line"). Coalesced into a
+    // trailing user message because some providers require strict alternation;
+    // windowMessages() returns fresh copies, so appending in place is safe.
+    const cur = queue.current?.track || null;
+    const tail = `The request to resolve now — listener "${requester}" asks: "${text}"`
+      + (cur ? ` (currently playing "${cur.title}" by ${cur.artist}${cur.id ? ` [id: ${cur.id}]` : ''})` : '');
+    const messages = session.windowMessages();
+    const last = messages[messages.length - 1];
+    if (last && last.role === 'user') last.content += '\n' + tail;
+    else messages.push({ role: 'user', content: tail });
+
     const { object, toolCalls, extras } = await requestAgent.run({
-      messages: session.windowMessages(),
+      messages,
       recentIds,
     });
 
