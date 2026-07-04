@@ -4,7 +4,7 @@
 import express from 'express';
 import { stat, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import * as subsonic from '../music/subsonic.js';
+import * as source from '../music/source.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { getFullContext, geocodePlace } from '../context.js';
@@ -89,21 +89,31 @@ router.get('/cover/:id', async (req, res) => {
     return sendCover(hit);
   }
 
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
-    const r = await fetch(subsonic.getCoverArtUrl(id, 512), { signal: ctrl.signal });
-    clearTimeout(timer);
-    if (!r.ok) return res.status(502).end();
-    const entry = {
-      buf: Buffer.from(await r.arrayBuffer()),
-      contentType: r.headers.get('content-type') || 'image/jpeg',
-    };
+  const store = (entry: { buf: Buffer; contentType: string }) => {
     coverCache.set(id, entry);
     if (coverCache.size > COVER_CACHE_MAX) {
       coverCache.delete(coverCache.keys().next().value!);
     }
     sendCover(entry);
+  };
+
+  try {
+    // The active source hands back either a proxied URL (Subsonic — fetch the
+    // bytes here so creds never reach the browser) or the bytes directly (the
+    // local-folder source reads embedded/sidecar art off disk).
+    const art = await source.getCoverArt(id, 512);
+    if (!art) return res.status(502).end();
+    if ('buf' in art) return store(art);
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const r = await fetch(art.url, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!r.ok) return res.status(502).end();
+    store({
+      buf: Buffer.from(await r.arrayBuffer()),
+      contentType: r.headers.get('content-type') || 'image/jpeg',
+    });
   } catch {
     res.status(502).end();
   }

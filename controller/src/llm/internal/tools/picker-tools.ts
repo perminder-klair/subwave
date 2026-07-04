@@ -211,6 +211,11 @@ export function buildPickerTools({
   const hasAudioEmbeddings = (_stats.withAudioEmbedding ?? 0) > 0;
   const hasEmbeddingProvider = embeddings.isAvailable();
 
+  // Snapshot the active source's capabilities so tools it can't serve are never
+  // offered to the model (same reasoning as the embedding gates above: a dead
+  // tool wastes a turn). For Subsonic every flag is true → the full tool set.
+  const srcCaps = source.activeCapabilities();
+
   const tools = {
     searchLibrary: tool({
       description: 'Search the music library. Matches a literal artist name, song title, or real genre (e.g. "jazz", "punjabi") first; if nothing matches it falls back to semantic / vibe search, so descriptive multi-word queries like "punjabi r&b romantic" also work. Returns matching songs.',
@@ -246,6 +251,10 @@ export function buildPickerTools({
       },
     }),
 
+    // similarSongs (Last.fm graph) and topSongsByArtist are only registered when
+    // the active source can serve them — a local-folder source has neither, so
+    // offering them would steer the model into a dead tool.
+    ...(srcCaps.hasSimilar ? {
     similarSongs: tool({
       description: 'Find songs similar to a given song id. Pass the currently-playing song id to keep the flow going.',
       inputSchema: z.object({ songId: z.string() }),
@@ -258,7 +267,9 @@ export function buildPickerTools({
         catch (err) { return { error: err.message }; }
       },
     }),
+    } : {}),
 
+    ...(srcCaps.hasTopSongs ? {
     topSongsByArtist: tool({
       description: 'Top songs for a named artist — good for staying in an artist\'s orbit without repeating a track.',
       inputSchema: z.object({ artist: z.string() }),
@@ -271,6 +282,7 @@ export function buildPickerTools({
         catch (err) { return { error: err.message }; }
       },
     }),
+    } : {}),
 
     recentByArtist: tool({
       description: 'A named artist\'s NEWEST releases, latest first — songs from their most recent albums/singles. Use this (not topSongsByArtist) when the listener asks for an artist\'s "latest", "newest", "new", or "most recent" song: topSongsByArtist ranks by popularity, so it cannot answer recency. Returns [] when the artist isn\'t in the library. Note: "latest in the library" — bounded by what has been added, not the artist\'s globally-newest release.',
@@ -442,6 +454,7 @@ export function buildPickerTools({
       }),
     } : {}),
 
+    ...(srcCaps.hasRecentlyAdded ? {
     recentlyAdded: tool({
       description: 'A sample of tracks from recently-added albums — "new in the crates".',
       inputSchema: z.object({}),
@@ -456,7 +469,9 @@ export function buildPickerTools({
         } catch (err) { return { error: err.message }; }
       },
     }),
+    } : {}),
 
+    ...(srcCaps.hasStarred ? {
     starredSongs: tool({
       description: "The operator's starred / favourite songs — always a safe, on-brand pick.",
       inputSchema: z.object({}),
@@ -465,6 +480,7 @@ export function buildPickerTools({
         catch (err) { return { error: err.message }; }
       },
     }),
+    } : {}),
 
     randomSongs: tool({
       description: 'A random sample of songs from the library — use to break a predictable run.',
