@@ -253,7 +253,7 @@ export function pickSystem() {
         ? `\n\nThis show is anchored to a curated playlist: every track you pick MUST come from it. Call showPlaylistTracks first and choose from what it returns.`
         : `\n\nThis show leans on a curated playlist: call showPlaylistTracks first and strongly prefer those tracks; only step outside occasionally when the flow calls for it.`)
     : '';
-  return `${settings.agentPersonaPreamble(persona, { rules: false })}
+  return `${settings.agentPersonaPreamble(persona)}
 
 You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}${musicLean}${playlistLean}
 
@@ -264,7 +264,7 @@ Finding candidates: prefer tools backed by the local library — searchLibrary, 
 
 function requestSystem() {
   const persona = settings.getEffectivePersona();
-  return `${settings.agentPersonaPreamble(persona, { rules: false })}
+  return `${settings.agentPersonaPreamble(persona)}
 
 The messages above are the live session — the last user turn is a listener request.${settings.agentLanguageReminder(persona, 'the "ack" and "intro" lines')}`;
 }

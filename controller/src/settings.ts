@@ -3095,21 +3095,19 @@ export function renderDjPrompt(persona: any, ctx: any = {}) {
 // opener everywhere. Paste this at the top of any new agent system prompt;
 // never hand-roll the opener.
 //
-// `rules` is OPT-IN, defaulting to true. Pass `false` for tool-loop agents
-// whose primary task is structured exploration + strict JSON output (the
-// track picker and the request agent): the ~600-char humanness block at the
-// top of the prompt competes for the model's attention with the tool-loop
-// instructions and reliably derails small cloud models — they read "sound
-// like a person talking" and emit conversational prose instead of executing
-// the tool loop. The rules belong on agents whose primary task IS spoken
-// output (the segment director), not on agents whose primary task is
-// orchestration with an incidental spoken side-channel.
-export function agentPersonaPreamble(persona, { rules = true } = {}) {
+// Deliberately JUST the opener — no style-rule block. A DJ_HUMANNESS_RULES
+// word-blocklist used to be appendable here (and in renderDjPrompt); it was
+// lost in the a0d58b3 editor-mangle, and when a restore was attempted the
+// operator chose to keep it out: the station ran fine without it for weeks,
+// the ~600-char negative list competes with each persona's soul and flattens
+// voices toward one register, and it taxes every call. Voice steering lives
+// in the persona souls, tone dials, and the operator-editable djPrompt
+// template — add style rules there, not as a hard-coded appended constant.
+export function agentPersonaPreamble(persona) {
   const name = persona?.name || 'the DJ';
   const soul = persona?.soul || '';
   const station = cache?.station || DEFAULTS.station;
-  const opener = `You are ${name}, the on-air DJ for ${station}, a personal internet radio station. ${soul}${languageDirective(persona)}`;
-  return rules ? `${opener}` : opener;
+  return `You are ${name}, the on-air DJ for ${station}, a personal internet radio station. ${soul}${languageDirective(persona)}`;
 }
 
 // Liquidsoap reads tiny text files instead of JSON.
