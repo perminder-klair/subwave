@@ -897,8 +897,19 @@ end
 # BEFORE mic_chain so the fixed-threshold compressor sees a levelled input. The
 # un-annotated silent lead-in carries no `liq_amplify`, so it plays at the base
 # factor 1. (unity). Un-trimmed clips (gainDb 0) write a bare path → also unity.
-voice = mic_chain(amplify(override="liq_amplify", 1., voice_queue))
-intro = mic_chain(amplify(override="liq_amplify", 1., intro_queue))
+# Micro edge fades on each spoken clip. Some TTS engines cut the WAV hard at
+# the file boundary; once the mic-chain compressor's makeup gain lifts the
+# clip, that hard edge lands as an audible click/tick. 40 ms is short enough
+# not to soften the first word (speech onsets are slower than that) but long
+# enough to zero out the boundary discontinuity. Applied per track, so the
+# silent lead-in clip is faded too (harmless — it's silence). Placed BEFORE
+# amplify/mic_chain so the compressor never sees the raw edge.
+def edge_fade(s) =
+  fade.in(duration=0.04, fade.out(duration=0.04, s))
+end
+
+voice = mic_chain(amplify(override="liq_amplify", 1., edge_fade(voice_queue)))
+intro = mic_chain(amplify(override="liq_amplify", 1., edge_fade(intro_queue)))
 
 # ---------------------------------------------------------------------------
 # STUDIO BED — continuous low-level ambient room tone (Phase 2)
