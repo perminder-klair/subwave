@@ -15,9 +15,11 @@
 // reserved naming — NOT a separate load path or trust posture.
 //
 // A skill's tool.mjs is the same contract for everyone:
-//   export default async (ctx, state, services, config) => data
+//   export default async (ctx, state, services, config, input) => data
 //   export const description = '…'   // OPTIONAL: tool description for the agent
 //   export const ready = (services) => boolean   // OPTIONAL: gate availability
+//   export const inputs = { query: '…' }   // OPTIONAL: agent-steerable string
+//     params ({ name: description }); validated values arrive as `input`
 // `services` (station-services.ts) is the curated facade onto search, the
 // library, the play log, feeds and durable recall — the one way a tool reaches
 // the world. Every tool runs behind a timeout + try/catch at the call site
@@ -225,9 +227,24 @@ export async function discoverSeededKinds(): Promise<Set<string>> {
   return SEEDED_KINDS;
 }
 
+// A tool.mjs `inputs` export declares agent-steerable string parameters:
+// a flat { paramName: 'description for the agent' } object. Sanitised here —
+// only identifier-shaped keys with string descriptions survive, so a malformed
+// export narrows to nothing instead of breaking the tool-call JSON schema.
+const INPUT_KEY_RE = /^[a-zA-Z_][a-zA-Z0-9_]{0,48}$/;
+function sanitizeToolInputs(raw: any): Record<string, string> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (INPUT_KEY_RE.test(k) && typeof v === 'string' && v.trim()) out[k] = v.trim();
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 // Dynamically import a skill's optional tool.mjs. Returns the data function plus
-// its optional `description` / `ready` exports, or null when there's no tool.
-async function loadToolModule(dir: string): Promise<{ fn: any; description?: string; ready?: any } | null> {
+// its optional `description` / `ready` / `inputs` exports, or null when there's
+// no tool.
+async function loadToolModule(dir: string): Promise<{ fn: any; description?: string; ready?: any; inputs?: Record<string, string> } | null> {
   const file = join(dir, 'tool.mjs');
   try {
     await stat(file);
@@ -239,12 +256,13 @@ async function loadToolModule(dir: string): Promise<{ fn: any; description?: str
   const mod = await import(url);
   const fn = mod.default || mod.fetchData || mod.tool;
   if (typeof fn !== 'function') {
-    throw new Error('tool.mjs must export a default async function (ctx, state, services, config) => data');
+    throw new Error('tool.mjs must export a default async function (ctx, state, services, config, input) => data');
   }
   return {
     fn,
     description: typeof mod.description === 'string' ? mod.description : undefined,
     ready: typeof mod.ready === 'function' ? mod.ready : undefined,
+    inputs: sanitizeToolInputs(mod.inputs),
   };
 }
 
@@ -314,6 +332,11 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     cap.toolName = `skill_${name.replace(/-/g, '_')}`;
     cap.toolDesc = (toolMod.description || data.toolDescription || '').trim()
       || `Fetch live data for the ${label} segment before speaking. Returns { available: false } when there is nothing fresh worth airing.`;
+    // Optional agent-steerable parameters ({ name: description }, strings
+    // only) — becomes the tool's input schema in llm/segment-tools.js and is
+    // handed to toolFn as its 5th argument. Absent → zero-arg tool, the
+    // historical shape.
+    cap.toolInputs = toolMod.inputs;
   }
 
   return cap;

@@ -114,11 +114,13 @@ tool the segment director can call **before** writing the line. This is the
 directories with a `SKILL.md` and a `tool.mjs`, loaded the same way as yours.
 
 ```js
-export default async function (ctx, state, services, config) {
+export default async function (ctx, state, services, config, input) {
   // ctx      — the moment: { time, weather, festival, dominantMood, clock }
   // state    — cross-tick dedup memory (persists between firings)
   // services — the curated station facade (see below)
   // config   — this skill's own SKILL.md frontmatter (e.g. a custom `feed:`)
+  // input    — the agent's values for your declared `inputs` (see below); {}
+  //            when you declare none
   // Return any JSON-serialisable object. The `{ available: false }` convention
   // tells the agent there's nothing worth airing right now.
   return { available: true, foo: 'bar' };
@@ -130,6 +132,13 @@ export const description = 'Fetch X for the … segment.';
 // OPTIONAL: gate the whole skill on a runtime condition — when this returns
 // false the skill is never even offered (e.g. no search provider configured).
 export const ready = (services) => services.searchReady();
+
+// OPTIONAL: agent-steerable parameters — a flat { name: description } object of
+// string params. The agent may pass a value or null for each; handle null by
+// falling back to your own default (see the web-search built-in's `query`).
+// Without this export the tool is zero-arg, which small models handle best —
+// only declare inputs the agent genuinely benefits from steering.
+export const inputs = { query: 'what to search for; null for the default dig' };
 ```
 
 ### `services` — the station facade
