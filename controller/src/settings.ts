@@ -1007,6 +1007,7 @@ const DEFAULTS = {
     // (today's behaviour); 1 = trust audio similarity as much as text. Only
     // bites where the acoustic analysis has produced audio vectors.
     audioFusionWeight: 0.5,
+    batchSize: 25,
     enrichment: {
       // Last.fm crowd tags. Tri-state: true = always fetch, false = never,
       // null = auto (fetch only when a Last.fm api_key is configured — see
@@ -1672,6 +1673,10 @@ export async function load() {
         Number.isFinite(stored.embedding?.audioFusionWeight)
           ? clamp01(stored.embedding.audioFusionWeight)
           : DEFAULTS.embedding.audioFusionWeight,
+      batchSize:
+        Number.isFinite(stored.embedding?.batchSize) && stored.embedding.batchSize >= 1
+          ? Math.max(1, Math.min(50, Math.floor(stored.embedding.batchSize)))
+          : DEFAULTS.embedding.batchSize,
       enrichment: {
         lastfmTags:
           typeof stored.embedding?.enrichment?.lastfmTags === 'boolean'
@@ -2766,6 +2771,16 @@ export async function update(patch) {
         throw new Error('embedding.audioFusionWeight must be between 0 and 1');
       }
       next.embedding.audioFusionWeight = v;
+    }
+    // LLM tag batch size — how many tracks per tagging call. Weaker models
+    // truncate/error on large batches, so operators can drop this. Clamp kept in
+    // sync with the CLI --batch flag + load() normalisation (music/tag-library.ts).
+    if (e.batchSize !== undefined) {
+      const v = parseInt(e.batchSize, 10);
+      if (!Number.isFinite(v) || v < 1 || v > 50) {
+        throw new Error('embedding.batchSize must be an integer 1-50');
+      }
+      next.embedding.batchSize = v;
     }
     if (e.enrichment !== undefined) {
       const en = e.enrichment || {};

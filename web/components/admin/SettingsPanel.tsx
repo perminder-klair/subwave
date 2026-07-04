@@ -188,6 +188,7 @@ interface EmbeddingForm {
   confidenceThreshold: string;
   maxActiveLearningRounds: string;
   audioFusionWeight: string; // '0' = text-only vote (fusion off)
+  batchSize: string;         // '5', '10', or '25'
   enrichment: EmbeddingEnrichmentForm;
 }
 
@@ -236,6 +237,7 @@ const MP3_BITRATES = [64, 96, 128, 160, 192, 320] as const;
 // Keep in sync with OPUS_BITRATES / AAC_BITRATES in controller/src/settings.ts.
 const OPUS_BITRATES = [96, 128, 192, 256, 320] as const;
 const AAC_BITRATES = [128, 192, 256] as const;
+const LLM_BATCH_SIZES = [5, 10, 25] as const;
 
 interface FormState {
   jingleRatio: string;
@@ -324,6 +326,7 @@ interface SettingsData {
       confidenceThreshold?: number;
       maxActiveLearningRounds?: number;
       audioFusionWeight?: number;
+      batchSize?: number;
       enrichment?: Partial<EmbeddingEnrichmentForm>;
     };
     sfx?: { enabled?: boolean };
@@ -544,6 +547,7 @@ export default function SettingsPanel() {
         confidenceThreshold: String(v.embedding?.confidenceThreshold ?? 0.35),
         maxActiveLearningRounds: String(v.embedding?.maxActiveLearningRounds ?? 3),
         audioFusionWeight: String(v.embedding?.audioFusionWeight ?? 0.5),
+        batchSize: String(v.embedding?.batchSize ?? 25),
         enrichment: {
           lastfmTags: v.embedding?.enrichment?.lastfmTags ?? false,
           lyrics: v.embedding?.enrichment?.lyrics ?? true,
@@ -3851,6 +3855,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
         audioFusionWeight: Number.isFinite(parseFloat(e.audioFusionWeight))
           ? parseFloat(e.audioFusionWeight)
           : 0.5,
+        batchSize: parseInt(e.batchSize, 10) || 25,
         enrichment: {
           lastfmTags: e.enrichment.lastfmTags,
           lyrics: e.enrichment.lyrics,
@@ -4041,6 +4046,29 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
               setForm(f => ({ ...f, embedding: { ...f.embedding, enabled: v === 'on' } }))
             }
           />
+        </div>
+
+        <hr className="my-5 border-[var(--border)]" />
+
+        <div className="field">
+          <Label>LLM batch size</Label>
+          <Select
+            value={e.batchSize}
+            onValueChange={v => setForm(f => ({ ...f, embedding: { ...f.embedding, batchSize: v } }))}
+          >
+            <SelectTrigger className="max-w-[100px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {LLM_BATCH_SIZES.map(s => (
+                  <SelectItem key={s} value={String(s)}>{s} songs</SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <div className="field-hint">
+            How many songs to tag in a single LLM call. Smaller models may need
+            a lower batch size to avoid truncation or errors. 25 is the default.
+          </div>
         </div>
       </Card>
 
