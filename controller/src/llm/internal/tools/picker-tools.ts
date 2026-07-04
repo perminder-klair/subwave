@@ -172,10 +172,14 @@ export function buildPickerTools({
     // Strict playlist: HARD-intersect with the lock set, with NO never-starve to
     // off-playlist (a playlist is an exact set, so a tool with no overlap simply
     // contributes nothing). The guaranteed in-set source is showPlaylistTracks
-    // below, so `seen` is never empty and the agent's pick is always in-playlist.
+    // below, so `seen` is normally non-empty and the agent's pick is in-playlist
+    // — unless the blocklist below drops it too (see next).
     if (playlistLock) pool = pool.filter((s: any) => s?.id && playlistLock.has(s.id));
     // Excluded playlists (blocklist): hard-drop tracks from any blocklisted
-    // playlist. The agent simply never sees these ids.
+    // playlist, AFTER the playlist lock so it overrides the anchor (this runs on
+    // every source, showPlaylistTracks included). No never-starve: if a show
+    // excludes its whole pool `seen` can end up empty and the LLM pick is
+    // skipped — the auto.m3u coast (scheduler.ts) is the dead-air backstop.
     if (excludedIds) pool = pool.filter((s: any) => s?.id && !excludedIds.has(s.id));
     const accepted = filterPickerCandidates(pool, {
       recentIds,

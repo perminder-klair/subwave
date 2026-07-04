@@ -280,7 +280,11 @@ async function refreshAutoPlaylistInner() {
   }
 
   // Excluded playlists (blocklist): drop every track from a blocklisted
-  // playlist. Hard exclusion, no never-starve fallback.
+  // playlist. The pick paths (picker.ts / picker-tools.ts) apply this as a HARD
+  // filter — an empty pool there just skips the LLM pick and coasts on this
+  // auto.m3u. This IS that coast, the last dead-air guard, so it mirrors the
+  // strict-playlist block above: never-starve if the blocklist would empty the
+  // pool (a mis-set "exclude everything" plays an excluded track over silence).
   if (excludedIds) {
     const allowed = pool.filter((t: any) => t?.id && !excludedIds.has(t.id));
     if (allowed.length) { pool.length = 0; pool.push(...allowed); }
