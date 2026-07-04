@@ -11,13 +11,10 @@ A crossfade used to be a crossfade, one fixed shape for every pair of songs. DJ 
 
 ## The four moves
 
-A blend is for tracks that already sit well together. The outgoing song hands off its bass, then its mids, to the incoming one, and keeps only its highs to the end. The next track comes up from underneath, low end first. For a moment it sounds like one piece of music whose ingredients are quietly swapping.
-
-A washout is a dub echo tail. As the outgoing track fades, its last bar loads into a delay that swells and decays over the new song coming up. That one is the DJ closing a chapter rather than smoothing a seam.
-
-A sweep is the dramatic one. A filter closes down hard over the track you're leaving, choking it into the dark while the new pick rises clean underneath it.
-
-A dissolve is a reverb wash. The outgoing track loses its beat to a diffuse haze and recedes into a big dark room, and the next track walks in through the cloud.
+- **Blend** — for tracks that already sit well together. The outgoing song hands off its bass, then its mids, to the incoming one, and keeps only its highs to the end. The next track comes up from underneath, low end first. For a moment it sounds like one piece of music whose ingredients are quietly swapping.
+- **Washout** — a dub echo tail. As the outgoing track fades, its last bar loads into a delay that swells and decays over the new song coming up. That one is the DJ closing a chapter rather than smoothing a seam.
+- **Sweep** — the dramatic one. A filter closes down hard over the track you're leaving, choking it into the dark while the new pick rises clean underneath it.
+- **Dissolve** — a reverb wash. The outgoing track loses its beat to a diffuse haze and recedes into a big dark room, and the next track walks in through the cloud.
 
 ## How to use it
 

@@ -11,7 +11,11 @@ Voice cloning used to be a Chatterbox-only party trick. PocketTTS can do it too 
 
 ## What's new
 
-PocketTTS does zero-shot cloning from one reference WAV. There's also a single shared voices folder both heavy engines look in, and the voice picker in admin scrolls properly when you've got a lot of them.
+Three things landed:
+
+- **Zero-shot cloning in PocketTTS** — one reference WAV is enough.
+- **A single shared voices folder** both heavy engines read from.
+- **A voice picker that scrolls** properly when you've got a lot of them.
 
 ## How to use it
 
