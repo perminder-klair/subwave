@@ -99,6 +99,7 @@ class Queue {
   _recentPlaysTimer: NodeJS.Timeout | null = null; // debounce for the recent-plays.json sidecar
   _recentPlays: { id: string | null; title: string | null; artist: string | null; endedAt: string }[] = [];
   _emptyDjQueueStreak = 0;      // consecutive reconcile checks seeing an empty dj_queue while sent items remain — see reconcileWithDjQueue
+  _pendingVoice: { text: string; kind: string; wavPath: string; persona: any; meta: any; t: number } | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
 
   // Snapshot upcoming/current/history to disk. The queue is otherwise purely
   // in-memory, so a controller restart (every `--build controller` rebuild)
@@ -328,6 +329,20 @@ class Queue {
       if (out.length >= n) break;
     }
     return out;
+  }
+
+  // Timestamp (ms) of the most recent on-air spoken segment, or 0. Defaults to
+  // every voice kind; pass `kinds` to narrow it (the segment director's
+  // frequency floor asks only about the scheduler's wall-clock talkers —
+  // idents/hourly/handoff — since track-tied links would mute it entirely on a
+  // chatty station). Its private lastAnySegment counter only ever saw its own
+  // segments, so this is how a just-aired ident suppresses a back-to-back one.
+  getLastVoiceAt(kinds?: readonly string[]) {
+    const match = kinds ? new Set(kinds) : VOICE_KINDS;
+    for (const entry of this.djLog) {
+      if (match.has(entry.kind)) return new Date(entry.t).getTime();
+    }
+    return 0;
   }
 
   // Push a listener request. Adds to upcoming and kicks off the Liquidsoap sender.
@@ -709,6 +724,55 @@ class Queue {
     }
   }
 
+  // Defer a spoken segment to the NEXT track boundary instead of airing it
+  // immediately. Used for station idents: they have no real-time constraint
+  // (unlike the hourly time check), so ducking the current song mid-vocal at
+  // an arbitrary wall-clock minute is pure loss — at a transition the same
+  // ident lands like real radio. The WAV is rendered NOW (TTS latency off the
+  // air path); onTrackStarted airs it via the light-duck intro channel so the
+  // incoming song stays audible underneath, same feel as an auto-DJ link.
+  //
+  // One slot only: a newer pending segment replaces an unaired older one (on
+  // an aggressive station a fresh ident supersedes a stale one rather than
+  // stacking). All bookkeeping (djLog → recap/opener anti-repeat, session
+  // turn, webhook) happens at AIR time, so the DJ's memory reflects what
+  // actually reached the stream, not what was merely scheduled.
+  async announceAtNextTrack(text, kind = 'announcement', { persona = null, meta = {} }: { persona?: any; meta?: any } = {}) {
+    if (!text || !text.trim()) return;
+    try {
+      const wavPath = await speak(text, { kind, persona });
+      this._pendingVoice = { text, kind, wavPath, persona, meta, t: Date.now() };
+      this.log('scheduler', `Holding ${kind} for the next track boundary`);
+    } catch (err: any) {
+      this.log('error', `Deferred announce failed: ${err.message}`);
+    }
+  }
+
+  // Air the boundary-deferred segment, if one is pending. Called from
+  // onTrackStarted BEFORE airIntro so the ident lands ahead of the track's own
+  // link in the shared voice chain (ident → link reads as a natural hand-off).
+  // The prompt context bakes in the local clock, so a clip that waited past
+  // PENDING_VOICE_MAX_AGE_MS (a long mix, a stream stall) is dropped rather
+  // than aired with a stale time reference — the next cron fire replaces it.
+  async airPendingVoice() {
+    const p = this._pendingVoice;
+    if (!p) return;
+    this._pendingVoice = null;
+    if (Date.now() - p.t > PENDING_VOICE_MAX_AGE_MS) {
+      this.log('scheduler', `Dropped pending ${p.kind} — waited too long for a track boundary`);
+      return;
+    }
+    if (!existsSync(p.wavPath)) return;
+    try {
+      await airVoice(config.liquidsoap.introFile, p.wavPath, p.text, voiceGainDb(p.kind, p.persona));
+      this.log(p.kind, p.text);
+      session.appendTurn({ role: 'segment', kind: p.kind, text: p.text, meta: p.meta });
+      webhooks.notify('dj.say', { text: p.text, kind: p.kind });
+    } catch (err: any) {
+      this.log('error', `Air pending voice failed: ${err.message}`);
+    }
+  }
+
   // Air a queued item's track-tied intro/link. Called from onTrackStarted the
   // moment the item's track actually starts playing, so the voice lands over
   // the RIGHT song rather than over whatever was on-air when it was queued
@@ -782,6 +846,12 @@ class Queue {
     const key = `${np.subsonic_id || ''}|${np.title}|${np.artist || ''}`;
     if (key === this.lastSeenKey) return;
     this.lastSeenKey = key;
+
+    // A fresh track boundary — air any boundary-deferred segment (station
+    // ident) now. Fired BEFORE airIntro below so the shared voice chain plays
+    // ident → link in that order. Fire-and-forget for the same reason as
+    // airIntro: must not stall the watcher tick.
+    void this.airPendingVoice();
 
     // Snapshot the outgoing track BEFORE the history roll mutates `this.current`
     // — scrobble.onTrackEvent below needs the previous play + its start time
@@ -1403,6 +1473,10 @@ function wavDurationMs(path: string): number | null {
 // 'handoff' (the two-voice persona mic-pass) counts too, so the incoming DJ's
 // next segments don't echo the greeting's opener.
 const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check', 'handoff']);
+// How long a boundary-deferred segment may wait for a track start before it's
+// dropped as stale (its prompt context baked in the clock at generation time).
+// Comfortably past a long album cut, well short of the next ident sounding odd.
+const PENDING_VOICE_MAX_AGE_MS = 20 * 60_000;
 // Kinds whose recap entries are de-duped. Skills are added at load time too.
 // 'handoff' is deliberately NOT deduped — its two lines (sign-off + greeting)
 // are distinct utterances by different voices.

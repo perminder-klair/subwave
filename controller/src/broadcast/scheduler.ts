@@ -427,8 +427,12 @@ async function skillsTick() {
 // Random ident every ~45 mins
 // ---------------------------------------------------------------------------
 
-// Gate-free runner — also called directly by the /dj/segment command route.
-export async function runStationId() {
+// Gate-free runner — also called directly by the /dj/segment command route
+// (immediate: an operator pressing the button wants it NOW). The scheduled
+// path passes atNextTrack so the ident holds for the next track boundary
+// instead of ducking the current song mid-vocal at an arbitrary wall-clock
+// minute — an ident has no real-time constraint, so the wait is free.
+export async function runStationId({ atNextTrack = false } = {}) {
   return withTrace({ kind: 'station-id' }, async () => {
     const ctx = await getFullContext();
     const script = await dj.generateStationId({
@@ -436,7 +440,8 @@ export async function runStationId() {
       context: ctx,
       recentOpeners: queue.getRecentOpeners(),
     });
-    await queue.announce(script, 'station-id');
+    if (atNextTrack) await queue.announceAtNextTrack(script, 'station-id');
+    else await queue.announce(script, 'station-id');
     return script;
   });
 }
@@ -446,7 +451,7 @@ async function stationId() {
   if (!djCallsAllowed()) return;  // nobody listening — skip the ident
   if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments
   try {
-    await runStationId();
+    await runStationId({ atNextTrack: true });
   } catch (err) {
     queue.log('error', `Station ID failed: ${err.message}`);
   }

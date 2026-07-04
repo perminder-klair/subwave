@@ -263,8 +263,19 @@ export async function agenticTick(ctx) {
   // between-track segments (weather, curiosity, deep cuts) get through.
   const freq = settings.effectiveFrequency(persona);
 
-  // Floor on the gap between any two segments.
-  if (now.getTime() - segmentState.lastAnySegment < frequencyFloorMs(freq)) return;
+  // Floor on the gap between any two spoken breaks. lastAnySegment only sees
+  // what THIS agent aired, but the scheduler's station idents and hourly
+  // checks share the same on-air voice (and the ident cron minutes
+  // :15/:30/:45 all land on this 5-minute tick), so without queue's view the
+  // DJ could talk twice in the same minute — the same stacking issue #310
+  // fixed for ident+hourly at :00. Deliberately narrowed to the wall-clock
+  // talkers: track-tied links/intros fire every few tracks and would mute the
+  // director outright under a 15-minute moderate floor.
+  const lastSpoke = Math.max(
+    segmentState.lastAnySegment,
+    queue.getLastVoiceAt(['station-id', 'hourly-check', 'handoff']),
+  );
+  if (now.getTime() - lastSpoke < frequencyFloorMs(freq)) return;
 
   const caps = availableCapabilities(ctx, now);
   if (caps.length === 0) return;

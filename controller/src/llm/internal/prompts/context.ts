@@ -39,6 +39,9 @@ export const ANGLES = {
     'Make it a near-aside: like someone reminding themselves where they are.',
     'Open with the time of day, then drop the station name in the middle of the sentence.',
     'One small observation about the station itself — its scale, its late hours, its one-room intimacy — with the name woven in.',
+    'Address the listener directly for once — wherever they are, whatever they\'re doing, they found the right place.',
+    'Say it like a signature at the bottom of a letter — brief, warm, done.',
+    'Fold the ident into a quiet promise of what the next stretch holds — more of this, whatever this is.',
   ],
   hourly: [
     'State the time as a small fact, then anchor it with one observation about the day.',
@@ -49,10 +52,19 @@ export const ANGLES = {
   ],
 };
 
+// Uniform random, but never the same angle twice running for a kind — on an
+// aggressive station (3 idents/hour) a ~20% consecutive-repeat chance made the
+// segment shape audibly settle. The opener blocklist only guards first words;
+// this guards the whole framing.
+const lastAngleIdx = new Map<string, number>();
+
 export function pickAngle(kind: string) {
   const list = (ANGLES as any)[kind];
   if (!list || list.length === 0) return null;
-  return list[Math.floor(Math.random() * list.length)];
+  let idx = Math.floor(Math.random() * list.length);
+  if (list.length > 1 && idx === lastAngleIdx.get(kind)) idx = (idx + 1) % list.length;
+  lastAngleIdx.set(kind, idx);
+  return list[idx];
 }
 
 export function randomSeed() {
