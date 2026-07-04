@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-IMAGE="${LIQ_IMAGE:-savonet/liquidsoap:v2.4.4}"
+IMAGE="${LIQ_IMAGE:-savonet/liquidsoap:v2.4.5}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="$HERE/.fx-render"
 mkdir -p "$WORK"

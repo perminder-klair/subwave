@@ -49,7 +49,9 @@ RUN npm run build
 FROM caddy:2 AS caddybin
 
 # ---- final: everything under the liquidsoap (Debian bookworm) base ----------
-FROM savonet/liquidsoap:v2.4.4
+# v2.4.5 minimum — same reason as Dockerfile.broadcast: 2.4.4's O(n) clock
+# scan made the per-transition DJ effect chains stall the stream clock.
+FROM savonet/liquidsoap:v2.4.5
 
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
