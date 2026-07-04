@@ -5979,8 +5979,8 @@ function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch, 
             />
             <div className="field-hint">
               Leave blank for listenbrainz.org. For self-hosted LB-compatible scrobblers, use the
-              API root (e.g. <code>http://koito:4110/apis/listenbrainz/1</code>). Overrides via
-              <code> LISTENBRAINZ_API_URL</code> env when set.
+              API root (e.g. <code>http://koito:4110/apis/listenbrainz/1</code>). Overrides via{' '}
+              <code>LISTENBRAINZ_API_URL</code> env when set.
             </div>
           </div>
 
