@@ -19,7 +19,7 @@ import { queue } from '../../../broadcast/queue.js';
 import { searchWeb, searchReady } from '../../../skills/web-search.js';
 import { fetchOnThisDay, curiositySeen, recordCuriosity } from '../../../skills/curiosity.js';
 import { fetchHeadlines, hashHeadline } from '../../../skills/news.js';
-import { getArtist, getAlbum, searchArtists } from '../../../music/subsonic.js';
+import { getArtist, getAlbum, searchArtists } from '../../../music/source.js';
 
 export interface StationServices {
   // Web search via the operator's configured provider (DuckDuckGo / Tavily /

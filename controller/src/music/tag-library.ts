@@ -33,7 +33,7 @@
 // On boot the library-db auto-migrates any state/moods.json into the SQLite
 // tracks table as legacy v1 entries (see library-db.ts).
 
-import * as subsonic from './subsonic.js';
+import * as source from './source.js';
 import * as lastfm from './lastfm.js';
 import * as db from './library-db.js';
 import * as settings from '../settings.js';
@@ -149,7 +149,7 @@ async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<string> }
   reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
   let walked = 0;
   const liveIds = new Set<string>();
-  for await (const song of subsonic.iterateAllSongs()) {
+  for await (const song of source.iterateAllSongs()) {
     db.upsertTrackMeta(song.id, {
       title: song.title,
       artist: song.artist,
@@ -870,7 +870,7 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
     let lyricExcerpt: string | null = null;
     if (lyricsEnabled) {
       try {
-        const raw = await subsonic.getLyrics(id);
+        const raw = await source.getLyrics(id);
         if (typeof raw === 'string' && raw.trim()) {
           lyricExcerpt = raw.trim();
         }

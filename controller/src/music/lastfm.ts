@@ -1,7 +1,7 @@
 // Direct Last.fm tag client (read-only).
 //
 // Library tag enrichment wants Last.fm's crowd tags for an artist. The older
-// path went *through* Navidrome (subsonic.getArtistLastfmTags → getArtistInfo2),
+// path went *through* Navidrome (source.getArtistLastfmTags → getArtistInfo2),
 // but vanilla Navidrome's agent only surfaces bio + images there, never the
 // tag[] array — so tags always came back empty. This module skips Navidrome and
 // hits the Last.fm REST API directly, reusing the api_key the operator already
@@ -14,7 +14,7 @@
 // API is generous and the tagger loop is already sequential + per-artist cached).
 
 import * as settings from '../settings.js';
-import * as subsonic from './subsonic.js';
+import * as source from './source.js';
 
 const TIMEOUT_MS = 5000;
 const LASTFM_API = 'https://ws.audioscrobbler.com/2.0/';
@@ -122,10 +122,10 @@ export async function getArtistTags(
     return getArtistTopTags(artist, { count });
   }
   try {
-    const matches = await subsonic.searchArtists(artist, { artistCount: 1 });
+    const matches = await source.searchArtists(artist, { artistCount: 1 });
     const artistId = matches?.[0]?.id;
     if (!artistId) return [];
-    const tags = await subsonic.getArtistLastfmTags(artistId, { count });
+    const tags = await source.getArtistLastfmTags(artistId, { count });
     return Array.isArray(tags) ? tags : [];
   } catch {
     return [];

@@ -6,7 +6,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
 import { stat, rename } from 'node:fs/promises';
 import { config } from '../config.js';
-import * as subsonic from '../music/subsonic.js';
+import * as source from '../music/source.js';
 import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
 import { speak, voiceGainDb } from '../audio/tts.js';
@@ -460,7 +460,7 @@ class Queue {
   // DJ-mode mixing applied to the transition INTO `item`'s track (features 1 &
   // 2, plus the sweep/washout transition effects). No-op unless the active
   // persona is in DJ mode. Stashes a per-transition crossfade length on the
-  // track (read by subsonic.getAnnotatedUri → liq_cross_duration) and, on a
+  // track (read by source.getAnnotatedUri → liq_cross_duration) and, on a
   // notable upward tempo jump, fires a rate-limited riser across the blend.
   applyMixTransition(item: any) {
     const persona = settings.getEffectivePersona();
@@ -636,7 +636,7 @@ class Queue {
         // Loudness normalisation (feature: LUFS gain) — applies to EVERY track,
         // not just DJ mode. Resolve the track's integrated loudness (from the
         // item or a library lookup) and stash a clamped gain offset toward the
-        // target; subsonic.getAnnotatedUri folds it into liq_amplify. Un-measured
+        // target; source.getAnnotatedUri folds it into liq_amplify. Un-measured
         // tracks resolve to null → no liq_amplify → unity gain, i.e. today.
         this.applyLoudnessGain(item.track);
 
@@ -645,7 +645,7 @@ class Queue {
         // (requestedBy set) stay exempt — a requested long mix plays in full,
         // mirroring the request path's selection-cap exemption in picker-tools.
         const maxDurationSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
-        const uri = subsonic.getAnnotatedUri(item.track, { maxDurationSec });
+        const uri = source.getAnnotatedUri(item.track, { maxDurationSec });
         await writeHandoff(config.liquidsoap.queueFile, uri);
         item.sent = true;
         this.persist();  // record the sent flag — these are now live in dj_queue
@@ -1319,7 +1319,7 @@ async function airVoice(path: string, wavPath: string, text: string, gainDb = 0)
 // liq_amplify gain, so the per-engine/persona voice trim is applied as the clip
 // plays (radio.liq wraps the voice queues in amplify(override="liq_amplify")).
 // 0 dB → the bare path, no annotation — byte-for-byte today's behaviour. Mirrors
-// subsonic.getAnnotatedUri's liq_amplify="<n> dB" form (the music loudness path).
+// source.getAnnotatedUri's liq_amplify="<n> dB" form (the music loudness path).
 function voiceUriWithGain(wavPath: string, gainDb: number): string {
   return gainDb !== 0 ? `annotate:liq_amplify="${gainDb} dB":${wavPath}` : wavPath;
 }

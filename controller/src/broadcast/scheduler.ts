@@ -7,7 +7,7 @@
 import cron from 'node-cron';
 import { writeFile } from 'node:fs/promises';
 import { config } from '../config.js';
-import * as subsonic from '../music/subsonic.js';
+import * as source from '../music/source.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
@@ -52,7 +52,7 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   for (const a of albums) {
     if (out.length >= max) break;
     try {
-      const songs = await subsonic.getAlbum(a.id);
+      const songs = await source.getAlbum(a.id);
       out.push(...shuffle(songs).slice(0, perAlbum));
     } catch {}
   }
@@ -105,7 +105,7 @@ async function refreshAutoPlaylistInner() {
   // path (a misspelled / library-absent genre falls back to the normal pool).
   let genreName: string | null = null;
   if (showGenre) {
-    try { genreName = await subsonic.resolveGenreName(showGenre); } catch {}
+    try { genreName = await source.resolveGenreName(showGenre); } catch {}
   }
   const strictGenreNorm = strict && genreName ? normGenre(genreName) : null;
   // Strict: hard-drop off-genre / off-era tracks from every discovery source
@@ -165,14 +165,14 @@ async function refreshAutoPlaylistInner() {
   if (narrow) {
     try {
       const collected: any[] = [];
-      collected.push(...await subsonic.getRandomSongs({
+      collected.push(...await source.getRandomSongs({
         size: strict ? 60 : 40,
         genre: genreName || undefined,
         fromYear: fromYear ?? undefined,
         toYear: toYear ?? undefined,
       }));
       if (genreName) {
-        const g = await subsonic.getSongsByGenre(genreName, { count: strict ? 100 : 60 });
+        const g = await source.getSongsByGenre(genreName, { count: strict ? 100 : 60 });
         const ranged = inYearRange(g, { fromYear, toYear });
         collected.push(...(ranged.length ? ranged : g));
       }
@@ -204,12 +204,12 @@ async function refreshAutoPlaylistInner() {
   // fallback pool (#642). Autonomous hours (no pinned playlists) keep it.
   if (mood && !hasPlaylist) {
     try {
-      const playlists = await subsonic.getPlaylists();
+      const playlists = await source.getPlaylists();
       const matched = playlists.filter((p: any) => p.name?.toLowerCase().includes(mood.toLowerCase()));
       const tracks: any[] = [];
       for (const pl of matched.slice(0, 2)) {
         try {
-          const songs = await subsonic.getPlaylist(pl.id);
+          const songs = await source.getPlaylist(pl.id);
           tracks.push(...songs);
         } catch {}
       }
@@ -221,7 +221,7 @@ async function refreshAutoPlaylistInner() {
 
   // 3. Recently-added albums — surfaces new music without any tagging.
   try {
-    const recentAlbums = await subsonic.getRecentlyAddedAlbums({ size: 8 });
+    const recentAlbums = await source.getRecentlyAddedAlbums({ size: 8 });
     const tracks = await tracksFromAlbums(shuffle(recentAlbums).slice(0, 4), 2, RECENT_WEIGHT * 2);
     take('recent', enforce(tracks), nz(RECENT_WEIGHT));
   } catch (err) {
@@ -230,7 +230,7 @@ async function refreshAutoPlaylistInner() {
 
   // 4. Frequent albums — Navidrome's scrobble-backed favourites.
   try {
-    const freqAlbums = await subsonic.getFrequentAlbums({ size: 8 });
+    const freqAlbums = await source.getFrequentAlbums({ size: 8 });
     const tracks = await tracksFromAlbums(shuffle(freqAlbums).slice(0, 4), 2, FREQUENT_WEIGHT * 2);
     take('frequent', enforce(tracks), nz(FREQUENT_WEIGHT));
   } catch (err) {
@@ -239,7 +239,7 @@ async function refreshAutoPlaylistInner() {
 
   // 5. Starred — hand-curated.
   try {
-    const starred = shuffle(await subsonic.getStarred());
+    const starred = shuffle(await source.getStarred());
     take('starred', enforce(starred), nz(STARRED_WEIGHT));
   } catch (err) {
     queue.log('error', `Starred fetch failed: ${err.message}`);
@@ -253,8 +253,8 @@ async function refreshAutoPlaylistInner() {
   if (pool.length < TARGET_POOL && !strictPlaylist) {
     try {
       const random = narrow
-        ? await subsonic.getRandomSongs({ size: TARGET_POOL, genre: genreName || undefined, fromYear: fromYear ?? undefined, toYear: toYear ?? undefined })
-        : await subsonic.getRandomSongs({ size: TARGET_POOL });
+        ? await source.getRandomSongs({ size: TARGET_POOL, genre: genreName || undefined, fromYear: fromYear ?? undefined, toYear: toYear ?? undefined })
+        : await source.getRandomSongs({ size: TARGET_POOL });
       take('random', shuffle(random), TARGET_POOL);
     } catch (err) {
       queue.log('error', `Random fetch failed: ${err.message}`);
@@ -264,7 +264,7 @@ async function refreshAutoPlaylistInner() {
     // skip this — better a short, looping in-genre playlist than off-genre filler.
     if (narrow && !strict && pool.length < TARGET_POOL) {
       try {
-        take('random', shuffle(await subsonic.getRandomSongs({ size: TARGET_POOL })), TARGET_POOL);
+        take('random', shuffle(await source.getRandomSongs({ size: TARGET_POOL })), TARGET_POOL);
       } catch {}
     }
   }
@@ -281,7 +281,7 @@ async function refreshAutoPlaylistInner() {
   // Stamp the station cap on every fallback entry (#447). max-track-length is a
   // pure on-air cue_out cut, not a selection filter, so over-length tracks stay
   // in the pool and simply crossfade out at the cap when the queue runs dry.
-  const lines = ['#EXTM3U', ...pool.map((t: any) => subsonic.getAnnotatedUri(t, { maxDurationSec }))];
+  const lines = ['#EXTM3U', ...pool.map((t: any) => source.getAnnotatedUri(t, { maxDurationSec }))];
   await writeFile(config.liquidsoap.autoPlaylist, lines.join('\n'));
 
   // Make the show-scoping visible to the operator (acceptance criteria #629):

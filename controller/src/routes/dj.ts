@@ -7,7 +7,7 @@ import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import { queue } from '../broadcast/queue.js';
 import * as dj from '../llm/dj.js';
-import * as subsonic from '../music/subsonic.js';
+import * as source from '../music/source.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, refreshAutoPlaylist } from '../broadcast/scheduler.js';
@@ -506,7 +506,7 @@ router.get('/dj/search', requireAdmin, async (req, res) => {
   if (!q) return res.status(400).json({ error: 'q is required' });
   try {
     await library.load();
-    const songs = await subsonic.search(q, { songCount: 12 });
+    const songs = await source.search(q, { songCount: 12 });
     const results = songs.map(s => {
       const tag = library.get(s.id);
       return {
@@ -541,7 +541,7 @@ router.get('/dj/search', requireAdmin, async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/dj/playlists', requireAdmin, async (_req, res) => {
   try {
-    const playlists = await subsonic.getPlaylists();
+    const playlists = await source.getPlaylists();
     const results = (Array.isArray(playlists) ? playlists : []).map((p: any) => ({
       id: p.id,
       name: p.name,
@@ -563,9 +563,9 @@ router.get('/dj/recent', requireAdmin, async (req, res) => {
   const limit = Math.min(Math.max(parseInt(String(req.query?.limit || ''), 10) || 20, 1), 50);
   try {
     await library.load();
-    const albums = await subsonic.getRecentlyAddedAlbums({ size: limit });
+    const albums = await source.getRecentlyAddedAlbums({ size: limit });
     const songLists = await Promise.all(
-      albums.map((a: any) => subsonic.getAlbum(a.id).catch(() => [])),
+      albums.map((a: any) => source.getAlbum(a.id).catch(() => [])),
     );
     const results = songLists.flat().slice(0, limit).map((s: any) => {
       const tag = library.get(s.id);
