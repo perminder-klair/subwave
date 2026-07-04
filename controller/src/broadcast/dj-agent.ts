@@ -330,10 +330,12 @@ function agentDeadline(): number {
 // of slack, but a request has a listener polling GET /request/:id, and the
 // stateless matcher cascade only STARTS after the agent gives up — so the
 // worst case before the cascade even begins is ~2× this (main + recovery runs
-// each get the full budget). Half the operator's agent timeout, floored so a
-// low setting still leaves room for one real tool-loop run.
+// each get the full budget). Half the operator's agent timeout, floored at
+// 25s: a cold reasoning-model run was measured at ~20.6s end-to-end
+// (glm-5.1:cloud, no warm prompt cache), so the floor keeps real headroom
+// above that instead of clipping the first request after a quiet spell.
 function requestDeadline(): number {
-  return Math.max(15000, Math.round(agentDeadline() / 2));
+  return Math.max(25000, Math.round(agentDeadline() / 2));
 }
 
 export const pickerAgent = defineAgent({
