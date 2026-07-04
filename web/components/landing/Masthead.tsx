@@ -56,7 +56,7 @@ export default function Masthead() {
       <div className="bs-masthead-motto" aria-label="Motto">
         <span aria-hidden="true">✦</span>
         <span className="bs-masthead-motto-text">
-          No skips&nbsp;·&nbsp;No shuffle&nbsp;·&nbsp;No mercy
+          No skips&nbsp;·&nbsp;No shuffle&nbsp;·&nbsp;Just radio
         </span>
         <span aria-hidden="true">✦</span>
       </div>
