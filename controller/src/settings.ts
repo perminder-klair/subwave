@@ -247,6 +247,15 @@ export const EMBEDDING_PROVIDERS = [
   'requesty',
 ];
 
+// Pluggable music sources — the enum backing settings.music.source. One active
+// source at a time. Only list sources with a registered implementation (the
+// music/sources/registry.ts switch): validating a source that can't be built
+// would let an operator strand the station on a backend nothing can resolve.
+// Part B appends 'local'.
+export const MUSIC_SOURCES = [
+  'subsonic',
+];
+
 // Coerce a stored Ollama context-window value. 0 disables (use Ollama's own
 // default); any other number is clamped to a sane [2048, 131072] band and
 // floored to an integer. Non-numeric/NaN falls back to `def`. Shared by the
@@ -800,6 +809,12 @@ const DEFAULTS = {
     // audio/tts.ts:speak(). Only Piper/Kokoro/cloud honour it; chatterbox/
     // pocket-tts/remote ignore speed so their entries are inert. See clampTtsSpeed().
     speed: { piper: 1, kokoro: 1, chatterbox: 1, 'pocket-tts': 1, cloud: 1, remote: 1 },
+  },
+  // Active music source. Only `source` lives here — per-source connection config
+  // stays where it already is (Navidrome creds in config.navidrome / setup
+  // overlay). See music/sources/registry.ts.
+  music: {
+    source: 'subsonic',
   },
   llm: {
     provider: 'ollama',
@@ -1501,6 +1516,11 @@ export async function load() {
       // Per-engine speed map — one clean multiplier per known engine, missing
       // keys → 1.0, unknown keys dropped. An older save (no speed) loads at unity.
       speed: normalizeTtsSpeedMap(stored.tts?.speed),
+    },
+    music: {
+      source: MUSIC_SOURCES.includes(stored.music?.source)
+        ? stored.music.source
+        : DEFAULTS.music.source,
     },
     llm: {
       provider: LLM_PROVIDERS.includes(stored.llm?.provider)
@@ -2549,6 +2569,15 @@ export async function update(patch) {
         }
         next.tts.speed[key] = clampTtsSpeed(t.speed[key]);
       }
+    }
+  }
+  if ('music' in patch) {
+    const m = patch.music || {};
+    if (m.source !== undefined) {
+      if (!MUSIC_SOURCES.includes(m.source)) {
+        throw new Error(`music.source must be one of: ${MUSIC_SOURCES.join(', ')}`);
+      }
+      next.music.source = m.source;
     }
   }
   if ('llm' in patch) {
