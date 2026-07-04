@@ -216,31 +216,58 @@ export default function DebugPanel() {
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     let cancelled = false;
+    let running = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const tick = async () => {
-      if (paused) return;
+      // Single-flight: never start a new poll while one is in flight. A slow
+      // /debug (it can take several seconds) must not stack overlapping
+      // requests on the single-threaded controller — that pileup starved every
+      // other /api/* call and caused edge 524s.
+      if (cancelled || running) return;
+      running = true;
       try {
-        const r = await adminFetch('/debug');
-        if (r.status === 401) {
-          if (!cancelled) setData(null);
-          return;
-        }
-        const j = (await r.json()) as DebugData;
-        if (!cancelled) {
-          if (!j || typeof j !== 'object' || !j.queue) {
-            setErr(j?.error || 'unexpected response shape from /debug');
-            setData(null);
+        // Skip the fetch when paused or the tab is hidden — no point polling a
+        // backgrounded tab — but keep the loop alive so it resumes cleanly.
+        if (!paused && !(typeof document !== 'undefined' && document.hidden)) {
+          const r = await adminFetch('/debug');
+          if (r.status === 401) {
+            if (!cancelled) setData(null);
           } else {
-            setData(j);
-            setErr(null);
+            const j = (await r.json()) as DebugData;
+            if (!cancelled) {
+              if (!j || typeof j !== 'object' || !j.queue) {
+                setErr(j?.error || 'unexpected response shape from /debug');
+                setData(null);
+              } else {
+                setData(j);
+                setErr(null);
+              }
+            }
           }
         }
       } catch (e) {
         if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
+      } finally {
+        running = false;
+        // Schedule the next poll only after this one settles, so the gap is
+        // measured from completion, not from start — no overlap is possible.
+        if (!cancelled) timer = setTimeout(tick, 2000);
       }
     };
     tick();
-    const id = setInterval(tick, 2000);
-    return () => { cancelled = true; clearInterval(id); };
+    // Refresh promptly when the tab regains focus so the panel isn't stale.
+    const onVisible = () => {
+      if (!cancelled && !document.hidden) {
+        if (timer) { clearTimeout(timer); timer = null; }
+        tick();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [paused, needsAuth, hydrated, adminFetch]);
 
   useEffect(() => {
