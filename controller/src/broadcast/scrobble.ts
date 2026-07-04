@@ -24,10 +24,10 @@ import { getListenerCount } from './listeners.js';
 
 const TIMEOUT_MS = 5000;
 const LASTFM_API = 'https://ws.audioscrobbler.com/2.0/';
-const LISTENBRAINZ_DEFAULT = 'https://api.listenbrainz.org/1/submit-listens';
 
-// Shared base for submit + validate-token. Env LISTENBRAINZ_API_URL wins. Both env +
-// settings inputs may be either the API root (…/1) or the submit endpoint
+// Shared base for submit + validate-token. Env LISTENBRAINZ_API_URL wins, then
+// settings baseUrl (for self-hosted LB-compatible scrobblers), else LB.org. Both
+// inputs may be either the API root (…/1) or the submit endpoint
 // (…/1/submit-listens) — normalize to a base.
 export function listenbrainzApiBase(): string {
   const raw =
@@ -38,18 +38,9 @@ export function listenbrainzApiBase(): string {
   return base || 'https://api.listenbrainz.org/1';
 }
 
-// Env wins (LISTENBRAINZ_API_URL in .env / secrets.env), then settings baseUrl
-// (for self-hosted ListenBrainz-compatible scrobblers), else LB.org.
+// The submit endpoint is always the base + /submit-listens.
 function listenbrainzSubmitUrl(): string {
-  const raw =
-    process.env.LISTENBRAINZ_API_URL?.trim() ||
-    settings.get()?.scrobble?.listenbrainz?.baseUrl?.trim() ||
-    '';
-  const normalized = raw.replace(/\/$/, '');
-  if (!normalized) return LISTENBRAINZ_DEFAULT;
-  return /\/submit-listens$/i.test(normalized)
-    ? normalized
-    : `${normalized.replace(/\/submit-listens$/i, '')}/submit-listens`;
+  return `${listenbrainzApiBase()}/submit-listens`;
 }
 
 // Last.fm's documented rule for a "valid scrobble":
