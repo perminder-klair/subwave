@@ -18,8 +18,8 @@ import type { MusicSource, Song, Artist, Album, Genre, Playlist, CoverArt, Analy
 
 export { isStationArchive };
 
-// Plex `type` codes for the library query API.
-const TYPE_ARTIST = 8;
+// Plex `type` codes for the library query API. (8 = artist — unused; artist
+// lookups go through /hubs/search and metadata children instead.)
 const TYPE_ALBUM = 9;
 const TYPE_TRACK = 10;
 

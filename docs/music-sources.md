@@ -36,7 +36,7 @@ what each source can and can't do.
 | Artist bio / info | ✅ | ❌ | ❌ |
 | Last.fm crowd tags (tagger enrichment) | ✅ | ✅ | ✅ (direct API, needs `LASTFM_API_KEY`) |
 | Lyrics | ✅ | ❌ | ❌ |
-| Stable track ids | ✅ (server DB) | ✅ (ratingKey) | ⚠️ path-derived |
+| Stable track ids | ✅ (server DB) | ✅ (ratingKey) | ⚠️ path-derived (tags survive via metadata matching) |
 
 **Rule of thumb:** Navidrome gives the DJ the richest ear (the Last.fm
 similarity graph, bios for on-air patter, lyrics-informed mood tags). Plex
@@ -165,12 +165,16 @@ never offered to the LLM, so the DJ never wastes a turn calling a dead tool.
 - **Track-id stability.** Mood and analysis rows are keyed by track id.
   Subsonic ids come from the server's database and Plex ids are ratingKeys —
   both stable. **Local ids are derived from the file's relative path**, so
-  moving or renaming a file re-mints its id; its accrued mood/analysis data
-  re-accrues on the next tag/analyze pass.
-- **Reconcile prunes for the *active* source.** The library reconcile step
-  removes rows for ids the active source doesn't return — so running reconcile
-  after a switch clears the other source's tags and vectors. Expected;
-  re-tag/re-analyze after a deliberate switch.
+  moving or renaming a file re-mints its id. Reconcile absorbs this: an
+  orphaned row is matched to the live track with the same artist/title/album
+  (one-to-one, duration-checked) and its tags, analysis and embeddings are
+  carried to the new id before anything is pruned. The same rescue applies
+  when a Navidrome full rescan re-mints its ids.
+- **Reconcile migrates first, then prunes for the *active* source.** After a
+  source switch, rows whose metadata matches between the two sources carry
+  their tags and vectors across; rows the active source can't match are
+  removed. Re-tag/re-analyze whatever didn't match (sources that tag the same
+  files differently — a different album name, say — won't line up).
 - **Reachability spans containers.** Whatever serves the audio must be
   reachable from the **broadcast** container (Liquidsoap fetches tracks
   itself) and, for analysis, from the **analyzer**. The local folder must be

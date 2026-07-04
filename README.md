@@ -260,7 +260,8 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
     playlists, stars, lyrics) are automatically switched off while genre, random,
     recently-added, artist and mood/embedding-based picks still work. Track ids
     are derived from each file's path, so **moving or renaming a file re-mints
-    its id** and its accrued mood/analysis rows re-accrue on the next tag pass.
+    its id** — but reconcile carries the accrued mood/analysis data across to
+    the new id when the file's artist/title/album tags still match.
     Advanced: set `MUSIC_DIR` to use a folder elsewhere, but it must be
     bind-mounted at the *same* path into the controller, broadcast **and**
     analyzer containers.
@@ -273,12 +274,14 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
     PMS API doesn't expose it. The server URL must be reachable from the
     broadcast container too (Liquidsoap fetches the files over curl).
 
-  > **Switching sources rebuilds selection, not the library index.** The mood /
-  > analysis database is keyed by track id, and reconcile prunes rows for ids the
-  > *active* source doesn't return — so running reconcile after switching sources
-  > clears the other source's tags/vectors. That's expected; re-tag after a
-  > deliberate switch. The onboarding wizard stays Navidrome-first for now; the
-  > local folder is selected in the admin UI.
+  > **Tags and analysis follow the track across id changes.** The mood /
+  > analysis database is keyed by track id, and ids re-mint (a Navidrome full
+  > rescan, a moved file, a source switch) — but reconcile first matches
+  > orphaned rows to live tracks by artist/title/album (+ duration sanity) and
+  > carries their tags, analysis and embeddings to the new id; only unmatched
+  > rows are pruned. After a deliberate source switch, run reconcile then
+  > re-tag whatever couldn't be matched (metadata that differs between
+  > sources won't carry over).
 - **There is no `/skip` for listeners.** Track-end is the only natural
   transition; operators have an admin-only skip endpoint.
 - **Add to Sonos / VLC with one link.** Hardware and software players take a

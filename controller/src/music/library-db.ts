@@ -18,6 +18,7 @@ import * as sqliteVec from 'sqlite-vec';
 import { readFile, rename, copyFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { STATE_DIR } from '../config.js';
+import { matchOrphansToLive, type TrackIdentityFields } from './track-identity.js';
 
 const DB_PATH = `${STATE_DIR}/library.db`;
 const LEGACY_MOODS_JSON = `${STATE_DIR}/moods.json`;
@@ -1151,6 +1152,88 @@ export function pruneMissingTracks(liveIds: ReadonlySet<string>): number {
   });
   runPrune(orphans);
   return orphans.length;
+}
+
+// Carry tags/analysis/vectors across an id change BEFORE pruneMissingTracks
+// deletes the orphaned rows. Ids re-mint under every source (Navidrome full
+// rescan, local file move/rename, a deliberate source switch); the DATA —
+// moods, enrichment, acoustic analysis, embedding vectors — is still valid for
+// the same recording under its new id. For each orphaned row that carries
+// data, find the freshly-walked live row with the same metadata identity
+// (music/track-identity.ts: artist|title|album, duration-checked, one-to-one
+// both ways) that has no data of its own yet, copy the data columns over, move
+// the vector rows, and drop the orphan. Anything unmatched is left for the
+// prune, exactly as before.
+//
+// Same contract as pruneMissingTracks: `liveIds` MUST come from a complete,
+// successful walk (callers already guard on a non-empty walk). Returns the
+// number of rows whose data was carried across.
+export function adoptOrphanTracks(liveIds: ReadonlySet<string>): number {
+  const d = requireDb();
+  const HAS_DATA = `(${SQL_HAS_MOODS} OR bpm IS NOT NULL OR enriched_at IS NOT NULL)`;
+  const toFields = (r: any): TrackIdentityFields => ({
+    id: r.id,
+    title: r.title,
+    artist: r.artist,
+    album: r.album,
+    durationSec: r.duration_sec,
+  });
+  const idCols = 'id, title, artist, album, duration_sec';
+  const orphans = (
+    d.prepare(`SELECT ${idCols} FROM tracks WHERE ${HAS_DATA}`).all() as any[]
+  ).filter(r => !liveIds.has(r.id));
+  if (orphans.length === 0) return 0;
+  const candidates = (
+    d
+      .prepare(`SELECT ${idCols} FROM tracks WHERE ${SQL_NO_MOODS} AND bpm IS NULL AND enriched_at IS NULL`)
+      .all() as any[]
+  ).filter(r => liveIds.has(r.id));
+  const pairs = matchOrphansToLive(orphans.map(toFields), candidates.map(toFields));
+  if (pairs.length === 0) return 0;
+
+  // Copy every data column; the live row keeps its own identity metadata
+  // (title/artist/album/year/genre/duration), which reflects the live source.
+  const DATA_COLS = [
+    'lastfm_tags', 'lyric_excerpt', 'enriched_at',
+    'moods', 'energy', 'source', 'confidence',
+    'tagger_version', 'prompt_hash', 'model', 'tagged_at',
+    'bpm', 'musical_key', 'intro_ms', 'analysis_confidence', 'analysis_version',
+    'loudness_lufs', 'peak_db', 'structure_json', 'vocal_ranges_json',
+    'pace_json', 'beats_json', 'bars_json', 'key_ranges_json',
+  ];
+  const copyData = d.prepare(
+    `UPDATE tracks SET ${DATA_COLS.map(c => `${c} = o.${c}`).join(', ')}
+     FROM (SELECT * FROM tracks WHERE id = @orphanId) AS o
+     WHERE tracks.id = @liveId`,
+  );
+  const getVec = d.prepare('SELECT embedding FROM track_vectors WHERE id = ?');
+  const getAudioVec = d.prepare('SELECT embedding FROM track_audio_vectors WHERE id = ?');
+  const delVec = d.prepare('DELETE FROM track_vectors WHERE id = ?');
+  const delAudioVec = d.prepare('DELETE FROM track_audio_vectors WHERE id = ?');
+  const insVec = d.prepare('INSERT INTO track_vectors (id, embedding) VALUES (?, ?)');
+  const insAudioVec = d.prepare('INSERT INTO track_audio_vectors (id, embedding) VALUES (?, ?)');
+  const delTrack = d.prepare('DELETE FROM tracks WHERE id = ?');
+
+  const runAdopt = d.transaction((matches: typeof pairs) => {
+    for (const { orphanId, liveId } of matches) {
+      copyData.run({ orphanId, liveId });
+      const vec = getVec.get(orphanId) as { embedding: Buffer } | undefined;
+      if (vec) {
+        delVec.run(liveId);
+        delVec.run(orphanId);
+        insVec.run(liveId, vec.embedding);
+      }
+      const audioVec = getAudioVec.get(orphanId) as { embedding: Buffer } | undefined;
+      if (audioVec) {
+        delAudioVec.run(liveId);
+        delAudioVec.run(orphanId);
+        insAudioVec.run(liveId, audioVec.embedding);
+      }
+      delTrack.run(orphanId);
+    }
+  });
+  runAdopt(pairs);
+  return pairs.length;
 }
 
 // Tracks with acoustic analysis. A track is "analysed" iff bpm IS NOT NULL
