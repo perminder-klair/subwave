@@ -26,6 +26,11 @@ router.post('/sfx', requireAdmin, async (req, res) => {
   if (!name) return res.status(400).json({ error: 'name is required' });
   if (!prompt) return res.status(400).json({ error: 'prompt is required' });
   if (prompt.length > 500) return res.status(400).json({ error: 'prompt too long (max 500)' });
+  if (durationSec != null && durationSec !== '') {
+    const d = Number(durationSec);
+    if (!Number.isFinite(d) || d <= 0) return res.status(400).json({ error: 'durationSec must be a positive number' });
+    if (d > sfx.MAX_DURATION_SEC) return res.status(400).json({ error: `durationSec is capped at ${sfx.MAX_DURATION_SEC}s` });
+  }
   try {
     const created = await sfx.create({ name, description, prompt, durationSec });
     queue.log('scheduler', `New sound effect created: "${created.name}"`);

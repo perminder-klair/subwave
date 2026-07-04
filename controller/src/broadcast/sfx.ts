@@ -12,7 +12,13 @@
 import { readFile, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/promises';
 import { STATE_DIR, SOUNDS_DIR } from '../config.js';
 import { generateSfx, isConfigured } from '../audio/sfx-gen.js';
-import { transcodeAudio, hasFfmpeg, extOf, isAcceptedAudio } from '../audio/audio-import.js';
+import { transcodeAudio, hasFfmpeg, extOf, isAcceptedAudio, probeDurationSec } from '../audio/audio-import.js';
+
+// Hard ceiling on any effect's length, generated or uploaded. Effects are
+// stingers that ride under a voice line or a crossfade, not beds — Liquidsoap
+// mixes them at 0.7 gain with only a light music duck, so a long clip keeps
+// droning over the programme after the voice has finished.
+export const MAX_DURATION_SEC = 10;
 
 const DIR = `${STATE_DIR}/sfx`;
 const META = `${STATE_DIR}/sfx.json`;
@@ -110,10 +116,11 @@ export async function list() {
   return out;
 }
 
-// Name + description only — the slim view the segment agent reads to decide
-// whether (and which) effect fits a line.
+// The slim view the segment agent reads to decide whether (and which) effect
+// fits a line. Duration rides along so the prompt can show it — a name and
+// description alone hide how long a clip will sit under the voice.
 export async function catalog() {
-  return (await list()).map((s: any) => ({ name: s.name, description: s.description }));
+  return (await list()).map((s: any) => ({ name: s.name, description: s.description, durationSec: s.durationSec }));
 }
 
 // Absolute path to an effect's audio file, or null if unknown / missing.
@@ -129,17 +136,29 @@ export async function create({ name, description, prompt, durationSec, builtin =
   const slug = slugify(name);
   if (!slug) throw new Error('Sound effect name is required');
   if (!prompt || !prompt.trim()) throw new Error('Sound effect prompt is required');
+  const requestedSec = Number(durationSec) || null;
+  if (requestedSec && requestedSec > MAX_DURATION_SEC) {
+    throw new Error(`sound effects are capped at ${MAX_DURATION_SEC}s — shorter stingers sit better under the voice`);
+  }
   await mkdir(DIR, { recursive: true });
 
-  const file = `${slug}.mp3`;
-  await generateSfx(prompt, { durationSec, outPath: `${DIR}/${file}` });
-
+  // Same guard as importAudio: regenerating into an existing name would
+  // silently clobber its audio — and flip a built-in to deletable, since
+  // `builtin` defaults false here. Delete first, then create.
   const meta = await loadMeta();
+  if (meta.items[slug]) throw new Error(`a sound effect named "${slug}" already exists`);
+
+  const file = `${slug}.mp3`;
+  await generateSfx(prompt, { durationSec: requestedSec ?? undefined, outPath: `${DIR}/${file}` });
+  // ElevenLabs picks its own length when none was requested — record what it
+  // actually rendered so the agent-facing catalogue shows real numbers.
+  const measured = await probeDurationSec(`${DIR}/${file}`);
+
   meta.items[slug] = {
     name: slug,
     description: (description || '').trim(),
     prompt: prompt.trim(),
-    durationSec: Number(durationSec) || null,
+    durationSec: measured ?? requestedSec,
     file,
     builtin,
     createdAt: new Date().toISOString(),
@@ -177,11 +196,20 @@ export async function importAudio(
     await writeFile(`${DIR}/${file}`, buffer);
   }
 
+  // Length gate — a 3-minute "effect" would drone under the programme long
+  // after the voice line ends. Unknown duration (no ffprobe on a bare-host
+  // dev box) is accepted rather than blocking the feature there.
+  const measured = await probeDurationSec(`${DIR}/${file}`);
+  if (measured && measured > MAX_DURATION_SEC) {
+    await unlink(`${DIR}/${file}`).catch(() => {});
+    throw new Error(`"${originalName || slug}" is ${measured}s long — sound effects are capped at ${MAX_DURATION_SEC}s`);
+  }
+
   meta.items[slug] = {
     name: slug,
     description: (description || '').trim(),
     prompt: '',
-    durationSec: null,
+    durationSec: measured,
     file,
     builtin: false,
     source: 'upload',

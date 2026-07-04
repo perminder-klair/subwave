@@ -633,13 +633,19 @@ class Queue {
 
     // Feature 2 — transition FX, spaced by the chattiness ladder and gated on
     // settings.sfx.enabled; never two transitions in a row, and never a riser
-    // over a sweep/washout transition.
+    // over a sweep/washout transition. Only ARMED here: this runs at drain
+    // time, right after the PREVIOUS track started — the crossfade this
+    // stinger is sized for (prevTrack → item) is a full track away. Playing it
+    // now (the original behaviour) landed a drum-roll a few seconds into a
+    // song, apropos of nothing. onTrackStarted fires it when item airs, i.e.
+    // while that crossfade is actually happening.
     this._transitionsSinceSfx++;
     if (!effectFired && settings.get().sfx?.enabled && this._transitionsSinceSfx >= this.sfxTransitionGap()) {
       const fx = mix.transitionSfxFor(cur, next);
       if (fx) {
         this._transitionsSinceSfx = 0;
-        void this.playSfx(fx);
+        item.transitionSfx = fx;
+        this.log('mix', `transition stinger armed (${fx}) → ${item.track.title}`);
       }
     }
   }
@@ -825,8 +831,8 @@ class Queue {
   // Writes the effect's file path straight to sfx.txt — no TTS, the audio is
   // already rendered. Liquidsoap's sfx_queue mixes it beneath the voice
   // channels (see liquidsoap/radio.liq). Used by the segment-director agent
-  // to garnish a spoken line, and by applyMixTransition for between-track
-  // stingers.
+  // to garnish a spoken line, and by onTrackStarted for the between-track
+  // stingers applyMixTransition arms at drain time.
   //
   // `underVoice` offsets the write by the voice lead-in (VOICE_LEADIN_MS) so a
   // stinger meant to sit under a spoken line lands with the DJ's first word
@@ -919,6 +925,13 @@ class Queue {
       // A tracked item matched → controller and Liquidsoap are in sync; clear any
       // dj_queue-empty desync streak accumulated from prior untracked plays.
       this._emptyDjQueueStreak = 0;
+      // Transition stinger armed at drain (applyMixTransition) — fired HERE
+      // because the crossfade this stinger was sized for is airing right now.
+      // Re-gated on the live toggle: the operator may have switched SFX off
+      // in the minutes between drain and air.
+      if (item.transitionSfx && settings.get().sfx?.enabled) {
+        void this.playSfx(item.transitionSfx);
+      }
       // Air this track's intro/link now that it's actually on-air — deferred
       // from queue time so the voice lands over the right song (#189). Fire-
       // and-forget: airIntro's writeHandoff can block up to maxWaitMs and must
