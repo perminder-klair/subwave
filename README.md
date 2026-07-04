@@ -248,7 +248,8 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 - **The LLM provider is swappable at runtime** from the admin UI. Every model
   call goes through the Vercel AI SDK.
 - **The music source is pluggable** (Admin → Settings → Music source), one
-  active source at a time:
+  active source at a time (full comparison — including what the mood tagger and
+  acoustic analyzer can do on each — in [docs/music-sources.md](docs/music-sources.md)):
   - **Navidrome / Subsonic** (default) — a streaming server on your network,
     the full-featured source (similar songs, playlists, starred, lyrics).
   - **Local folder** — point SUB/WAVE at a directory of audio files (`.mp3`,
