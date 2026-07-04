@@ -36,24 +36,6 @@ Hard rules:
 - Reference the context you're given naturally; never invent facts that aren't in it (the weather, news, events, what's happening outside).
 - Vary your opener and shape every time — never start the same way twice in a row, never use the same metaphor or framing as your last few lines.`;
 
-// Distilled from the "Signs of AI writing" guide — the subset that matters for
-// short spoken radio links. Reaches the DJ system prompts through two channels:
-// renderDjPrompt() for the legacy dj.generateXxx callers (always included), and
-// agentPersonaPreamble() for tool-loop agents (opt-in per caller — the segment
-// director opts in; the track-picker and request agents opt OUT, see the
-// preamble's comment). Deleted by the editor-mangle commit a0d58b3 and restored
-// verbatim — the sibling LLM_PROVIDERS damage from that commit was fixed at the
-// time, this one slipped through.
-export const DJ_HUMANNESS_RULES = `Sound like a person talking, not a write-up:
-- Skip AI-essay vocabulary: "delve", "tapestry", "testament", "boasts", "vibrant", "bustling", "elevate", "realm", "whilst", "moreover", "furthermore".
-- No significance inflation — a song is just a song; don't call it "more than just" anything or "a testament to" something.
-- Drop the "not just X, it's Y" / "not only... but also" framing.
-- No press-release hype: "iconic", "legendary", "timeless masterpiece", "must-listen".
-- Speak for yourself — never "many say", "it's often said", "critics agree".
-- No trailing "..., showcasing/highlighting..." analysis tacked onto a sentence.
-- Don't land on a tidy summary or a little moral. Make your point and stop.
-- Use contractions and plain words; let it have the rhythm of real speech.`;
-
 // Seed souls — the SEED_PERSONAS roster picks from these. renderDjPrompt()
 // falls back to DJ_SOULS[0] when the substituted persona has no soul of its
 // own; the agent path (agentPersonaPreamble) instead substitutes an empty
@@ -3098,12 +3080,11 @@ export function renderDjPrompt(persona: any, ctx: any = {}) {
     .replaceAll('{station}', station)
     .replaceAll('{location}', location);
   const tone = personaToneDirectives(persona);
-  const rules = `\n\n${DJ_HUMANNESS_RULES}`;
   if (tpl.includes('{language}')) {
     const lang = String(persona?.language || '').trim();
-    return rendered.replaceAll('{language}', lang || 'English') + rules + tone;
+    return rendered.replaceAll('{language}', lang || 'English') + tone;
   }
-  return rendered + rules + languageDirective(persona) + tone;
+  return rendered + languageDirective(persona) + tone;
 }
 
 // Persona prelude shared by every tool-loop agent system prompt — the picker
@@ -3128,7 +3109,7 @@ export function agentPersonaPreamble(persona, { rules = true } = {}) {
   const soul = persona?.soul || '';
   const station = cache?.station || DEFAULTS.station;
   const opener = `You are ${name}, the on-air DJ for ${station}, a personal internet radio station. ${soul}${languageDirective(persona)}`;
-  return rules ? `${opener}\n\n${DJ_HUMANNESS_RULES}` : opener;
+  return rules ? `${opener}` : opener;
 }
 
 // Liquidsoap reads tiny text files instead of JSON.
