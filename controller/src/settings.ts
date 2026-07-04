@@ -461,6 +461,24 @@ export const SHOW_MOODS = [
 // tagger's per-track energy classes and the `tracksByMood` agent-tool filter.
 export const SHOW_ENERGY = ['low', 'medium', 'high'];
 
+// Default festival calendar — the seeded set the admin UI shows on first boot.
+// After the operator edits the list, persisted festivals replace these.
+export const FESTIVAL_DEFAULTS = [
+  { month: 1, day: 1, name: "New Year's Day", mood: 'celebratory' },
+  { month: 2, day: 14, name: "Valentine's Day", mood: 'romantic' },
+  { month: 3, day: 17, name: "St. Patrick's Day", mood: 'celebratory' },
+  { month: 4, day: 13, name: 'Vaisakhi', mood: 'festival', windowDays: 1 },
+  { month: 5, day: 1, name: 'May Day', mood: 'festival' },
+  { month: 6, day: 21, name: 'Summer Solstice', mood: 'celebratory' },
+  { month: 10, day: 31, name: 'Halloween', mood: 'festival' },
+  { month: 11, day: 1, name: 'Diwali', mood: 'festival', windowDays: 3 },
+  { month: 11, day: 5, name: 'Bonfire Night', mood: 'festival' },
+  { month: 12, day: 21, name: 'Winter Solstice', mood: 'reflective' },
+  { month: 12, day: 25, name: 'Christmas', mood: 'celebratory', windowDays: 1 },
+  { month: 12, day: 26, name: 'Boxing Day', mood: 'celebratory' },
+  { month: 12, day: 31, name: "New Year's Eve", mood: 'celebratory' },
+];
+
 // All 54 official Kokoro voices from kokoro-onnx v1.0. The UI filters by
 // language prefix and formats display names from the code (bm_george → "George (M)").
 // Any voice matching KOKORO_VOICE_RE passes validation.
@@ -780,6 +798,10 @@ const DEFAULTS = {
   // ${STATE_DIR}/themes/. Stored as id only; the actual token map lives with
   // the theme registry so it stays in sync with the file on disk.
   theme: { active: DEFAULT_THEME_ID },
+  // Festival calendar — mood-forming dates the DJ leans into. Persisted here
+  // so operators can add/edit/remove entries from the admin UI. Fall back to
+  // FESTIVAL_DEFAULTS when empty/absent.
+  festivals: FESTIVAL_DEFAULTS,
   // Listener-player UI toggles — purely presentational, station-wide. The web
   // player reads these via GET /state (alongside the theme) and applies them
   // live; no restart. `boothBuddy` gates the DJ-line mascot — OFF by default,
@@ -1475,6 +1497,12 @@ export async function load() {
           ? stored.theme.active.trim()
           : DEFAULTS.theme.active,
     },
+    // Festivals loaded from settings.json. An empty array (or missing/non-array)
+    // falls back to the seeded defaults so the DJ always has a mood calendar.
+    festivals:
+      Array.isArray(stored.festivals) && stored.festivals.length > 0
+        ? stored.festivals
+        : FESTIVAL_DEFAULTS,
     ui: {
       boothBuddy:
         typeof stored.ui?.boothBuddy === 'boolean'
@@ -2238,6 +2266,38 @@ function validateWebhooksStrict(raw: any, existing: any[] = []) {
   });
 }
 
+const FESTIVALS_LIMIT = 50;
+
+function validateFestivalsStrict(raw) {
+  if (!Array.isArray(raw)) throw new Error('festivals must be an array');
+  if (raw.length > FESTIVALS_LIMIT) {
+    throw new Error(`festivals must be at most ${FESTIVALS_LIMIT} entries`);
+  }
+  return raw.map((item, i) => {
+    if (!item || typeof item !== 'object') throw new Error(`festivals[${i}] must be an object`);
+    const name = String(item.name ?? '').trim();
+    if (name.length < 1 || name.length > 80) throw new Error(`festivals[${i}].name must be 1-80 chars`);
+    const month = Number(item.month);
+    if (!Number.isInteger(month) || month < 1 || month > 12) {
+      throw new Error(`festivals[${i}].month must be an integer 1-12`);
+    }
+    const day = Number(item.day);
+    if (!Number.isInteger(day) || day < 1 || day > 31) {
+      throw new Error(`festivals[${i}].day must be an integer 1-31`);
+    }
+    const mood = String(item.mood ?? '').trim();
+    if (!SHOW_MOODS.includes(mood)) {
+      throw new Error(`festivals[${i}].mood must be one of: ${SHOW_MOODS.join(', ')}`);
+    }
+    const description = typeof item.description === 'string' ? item.description.trim().slice(0, 200) : '';
+    const windowDays = Number(item.windowDays ?? 0);
+    if (!Number.isInteger(windowDays) || windowDays < 0 || windowDays > 14) {
+      throw new Error(`festivals[${i}].windowDays must be an integer 0-14`);
+    }
+    return { month, day, name, mood, description, windowDays };
+  });
+}
+
 // Validate + persist. Returns { saved, requiresRestart } so the UI can react.
 export async function update(patch) {
   const cur = await load();
@@ -2453,6 +2513,9 @@ export async function update(patch) {
       }
       next.theme.active = v;
     }
+  }
+  if ('festivals' in patch) {
+    next.festivals = validateFestivalsStrict(patch.festivals);
   }
   if ('djPrompt' in patch) {
     const v = String(patch.djPrompt ?? '').trim();
