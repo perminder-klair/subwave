@@ -72,6 +72,9 @@ interface Show {
    *  hourly checks, weather/news segments) to a guest, in their own voice.
    *  Empty = solo show, exactly today's behaviour. */
   guestPersonaIds: string[];
+  /** Scripted banter breaks: short multi-voice exchanges between the host and
+   *  guests, aired up to twice an hour. Only meaningful with guests set. */
+  banter: boolean;
   /** '' = Any — the show pins no mood; the autonomous mood (festival >
    *  weather > time of day) applies while it's on air. */
   mood: string;
@@ -387,6 +390,7 @@ export default function ShowsPanel() {
           topic: s.topic ?? '',
           personaId: s.personaId ?? '',
           guestPersonaIds: Array.isArray(s.guestPersonaIds) ? s.guestPersonaIds : [],
+          banter: s.banter ?? false,
           mood: s.mood ?? '',
           themeId: s.themeId ?? '',
           genre: s.genre ?? '',
@@ -489,7 +493,7 @@ export default function ShowsPanel() {
         ...f,
         shows: [...f.shows, {
           id, name: '', topic: '',
-          personaId: personas[0]?.id || '', guestPersonaIds: [], mood: '',
+          personaId: personas[0]?.id || '', guestPersonaIds: [], banter: false, mood: '',
           themeId: '', genre: '', fromYear: null, toYear: null, energy: '',
           filtersStrict: false, maxTrackSeconds: null,
           playlistIds: [], playlistStrict: false, excludedPlaylistIds: [],
@@ -683,6 +687,8 @@ export default function ShowsPanel() {
             // Belt-and-suspenders: the host can be switched after guests were
             // picked, and the server rejects a guest that duplicates the host.
             guestPersonaIds: (s.guestPersonaIds || []).filter(id => id !== s.personaId),
+            // Banter only means something with guests in the studio.
+            banter: (s.guestPersonaIds?.length ?? 0) > 0 && s.banter,
             mood: s.mood,
             themeId: s.themeId || '',
             genre: s.genre.trim(), fromYear: s.fromYear, toYear: s.toYear, energy: s.energy || '',
@@ -1130,6 +1136,27 @@ function ShowEditor({
                 weather/news segments — in their own voice. The host still
                 drives the music and the track intros.
               </span>
+
+              <div className="mt-1 flex items-start gap-3">
+                <div className="pt-0.5">
+                  <Toggle
+                    on={show.banter && (show.guestPersonaIds?.length ?? 0) > 0}
+                    disabled={(show.guestPersonaIds?.length ?? 0) === 0}
+                    onClick={() => update({ banter: !show.banter })}
+                  />
+                </div>
+                <div className="grid gap-0.5">
+                  <Label className={(show.guestPersonaIds?.length ?? 0) === 0 ? 'opacity-40' : undefined}>
+                    Banter breaks
+                  </Label>
+                  <span className="field-hint">
+                    Short scripted exchanges between the host and guests — a few
+                    lines of real back-and-forth, each voice rendered
+                    separately — up to twice an hour depending on the
+                    persona&apos;s talk frequency. Needs at least one guest.
+                  </span>
+                </div>
+              </div>
             </Field>
           )}
 

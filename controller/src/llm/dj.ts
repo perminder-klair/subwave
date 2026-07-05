@@ -23,6 +23,7 @@ export {
   generateLink,
   generateHourlyTime,
 } from './internal/prompts/scripts.js';
+export { generateBanter } from './internal/prompts/banter.js';
 export { PICKER_CRITERIA, pickNextTrack, showMusicLean, effectsGuidance } from './internal/prompts/picker.js';
 export { generatePersona, generateShow, generateTheme } from './internal/prompts/generate.js';
 

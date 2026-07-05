@@ -37,5 +37,17 @@ export function shouldFire(kind, now = new Date()) {
     return true;
   }
 
+  if (kind === 'banter') {
+    // Guest-show banter breaks. The cron ticks at :20/:50 — minutes the ident
+    // (:15/:30/:45) and hourly (:00) crons never own, so an exchange can't
+    // land on the same minute as another wall-clock talker by construction.
+    // Banter is chatty by nature: a quiet persona never auto-fires it (the
+    // operator's manual /dj/segment trigger still works), moderate gets at
+    // most one an hour.
+    if (f === 'quiet')    return false;
+    if (f === 'moderate') return m === 20;
+    return m === 20 || m === 50;
+  }
+
   return true;
 }

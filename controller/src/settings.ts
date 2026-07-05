@@ -1324,12 +1324,16 @@ function normalizeShows(raw: any, personaIds: string[]) {
     // deleted under our feet) and the host itself are silently dropped so the
     // show survives with whatever roster is still real.
     const guestPersonaIds = coerceGuestPersonaIds(item.guestPersonaIds, item.personaId, personaIds);
+    // Scripted banter breaks (multi-voice exchanges). Only meaningful with
+    // guests — stored as given, checked against the live roster at air time.
+    const banter = item.banter === true;
     out.push({
       id,
       name,
       topic: typeof item.topic === 'string' ? item.topic.trim().slice(0, 1000) : '',
       personaId: item.personaId,
       guestPersonaIds,
+      banter,
       mood,
       themeId,
       genre,
@@ -2210,10 +2214,13 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
       }
       guestPersonaIds = coerceGuestPersonaIds(item.guestPersonaIds, item.personaId, personaIds);
     }
+    // Banter without guests is inert, not an error — the tick re-checks the
+    // live roster anyway, so a stale true can't air a one-person "exchange".
+    const banter = item.banter === true;
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, guestPersonaIds, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
+    return { id, name, topic, personaId: item.personaId, guestPersonaIds, banter, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
   });
 }
 
@@ -3096,6 +3103,8 @@ export function resolveActiveShow(date = new Date(), s = get()) {
       .map(gid => s.personas?.find(p => p.id === gid))
       .filter(Boolean)
       .map(p => ({ id: p.id, name: p.name, avatar: p.avatar || '' })),
+    // Scripted multi-voice banter breaks — only fires when guests exist.
+    banter: show.banter === true,
   };
 }
 

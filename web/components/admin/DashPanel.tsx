@@ -35,12 +35,15 @@ const SAY_MODES = [
   { id: 'styled', label: 'Styled' },
 ];
 
-type SegmentType = 'station-id' | 'hourly' | 'link';
+type SegmentType = 'station-id' | 'hourly' | 'link' | 'banter';
 const SEGMENTS: { type: SegmentType; label: string }[] = [
   { type: 'station-id', label: 'Station ID' },
   { type: 'hourly', label: 'Time check' },
   { type: 'link', label: 'Track link' },
 ];
+// Only offered while a show with guest co-hosts is on air — a one-person
+// "exchange" is a 400 from the controller anyway.
+const BANTER_SEGMENT: { type: SegmentType; label: string } = { type: 'banter', label: 'Banter' };
 
 interface QueueState {
   upcoming?: QueueEntry[];
@@ -537,7 +540,7 @@ export default function DashPanel() {
 
           <Card title="DJ segments" sub="fire on demand">
             <div className="grid grid-cols-3 gap-2">
-              {SEGMENTS.map(s => {
+              {[...SEGMENTS, ...((status?.activeShow?.guests?.length ?? 0) > 0 ? [BANTER_SEGMENT] : [])].map(s => {
                 const k = `seg:${s.type}`;
                 return (
                   <SegmentButton

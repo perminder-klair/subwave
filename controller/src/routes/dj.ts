@@ -12,7 +12,7 @@ import * as dj from '../llm/dj.js';
 import * as subsonic from '../music/subsonic.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { runStationId, runHourlyCheck, runLink, refreshAutoPlaylist } from '../broadcast/scheduler.js';
+import { runStationId, runHourlyCheck, runLink, runBanter, refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
 import { loadSkills, parseFrontmatter, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
 import { writeSkillFile, msToCooldownStr, resetBuiltinSkill } from '../skills/scaffold.js';
@@ -587,12 +587,16 @@ router.post('/dj/say', requireAdmin, async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // POST /dj/segment — fire a voice segment on demand
-// Body: { type: 'station-id' | 'hourly' | 'link' }
+// Body: { type: 'station-id' | 'hourly' | 'link' | 'banter' }
 // ---------------------------------------------------------------------------
 const SEGMENTS = {
   'station-id': runStationId,
   hourly: runHourlyCheck,
   link: runLink,
+  // Multi-voice guest exchange. Needs a show with guests on air (the runner
+  // throws a clear error otherwise); ignores the show's banter toggle — an
+  // explicit operator press always fires.
+  banter: runBanter,
 };
 
 router.post('/dj/segment', requireAdmin, async (req, res) => {

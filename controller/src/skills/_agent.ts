@@ -293,7 +293,7 @@ export async function agenticTick(ctx) {
   // director outright under a 15-minute moderate floor.
   const lastSpoke = Math.max(
     segmentState.lastAnySegment,
-    queue.getLastVoiceAt(['station-id', 'hourly-check', 'handoff']),
+    queue.getLastVoiceAt(['station-id', 'hourly-check', 'handoff', 'banter']),
   );
   if (now.getTime() - lastSpoke < frequencyFloorMs(freq)) return;
 
