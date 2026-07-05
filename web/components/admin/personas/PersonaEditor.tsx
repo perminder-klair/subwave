@@ -92,33 +92,9 @@ export function PersonaEditor({
       title={<Eyebrow className="text-vermilion">{isNew ? 'New persona' : 'Edit persona'}</Eyebrow>}
       sub={<span className="caption truncate">{persona.name.trim() || `Persona ${index + 1}`} · {index + 1} of {personaCount}</span>}
       footer={
-        <div className="flex flex-wrap items-center gap-3">
-          {/* left — persona-scoped actions */}
-          <span className="flex items-center gap-2">
-            {persona.id === onAirPersonaId && <Pill tone="accent" className="text-[8px]">on air</Pill>}
-            {persona.id === activePersonaId
-              ? <Pill className="text-[8px]">default</Pill>
-              : <Btn lg onClick={onSetActive}>Set as default</Btn>}
-            <Btn
-              lg
-              tone="danger"
-              onClick={onRemove}
-              disabled={personaCount <= 1}
-              title={personaCount > 1 ? 'Remove this persona' : 'At least one persona is required'}
-            >
-              Remove
-            </Btn>
-            <Btn
-              lg
-              onClick={shareToCommunity}
-              disabled={!persona.name.trim() || !persona.soul.trim()}
-              title="Open a prefilled GitHub form to share this persona with every station (voice and avatar stay yours)"
-            >
-              Share to community
-            </Btn>
-          </span>
-          {/* right — status + discard/save */}
-          <span className="ml-auto flex items-center gap-3">
+        <div className="flex w-full flex-col gap-2">
+          {/* status line — its own row so the action buttons never wrap */}
+          <div className="flex items-center gap-2">
             <span
               className={cn(
                 'size-1.5 flex-none rounded-full',
@@ -134,11 +110,41 @@ export function PersonaEditor({
                     ? <span className="text-[var(--danger)]">fix the custom system prompt</span>
                     : 'changes apply on the next spoken line · no mixer restart'}
             </span>
-            <Btn lg onClick={onDiscard} disabled={busy}>Discard</Btn>
-            <Btn lg tone="accent" onClick={onSave} disabled={busy || !canSave}>
-              {busy ? 'Saving…' : 'Save persona'}
-            </Btn>
-          </span>
+          </div>
+          {/* action row */}
+          <div className="flex flex-wrap items-center gap-3">
+            {/* left — persona-scoped actions */}
+            <span className="flex items-center gap-2">
+              {persona.id === onAirPersonaId && <Pill tone="accent" className="text-[8px]">on air</Pill>}
+              {persona.id === activePersonaId
+                ? <Pill className="text-[8px]">default</Pill>
+                : <Btn lg onClick={onSetActive}>Set as default</Btn>}
+              <Btn
+                lg
+                tone="danger"
+                onClick={onRemove}
+                disabled={personaCount <= 1}
+                title={personaCount > 1 ? 'Remove this persona' : 'At least one persona is required'}
+              >
+                Remove
+              </Btn>
+              <Btn
+                lg
+                onClick={shareToCommunity}
+                disabled={!persona.name.trim() || !persona.soul.trim()}
+                title="Open a prefilled GitHub form to share this persona with every station (voice and avatar stay yours)"
+              >
+                Share to community
+              </Btn>
+            </span>
+            {/* right — discard/save */}
+            <span className="ml-auto flex items-center gap-3">
+              <Btn lg onClick={onDiscard} disabled={busy}>Discard</Btn>
+              <Btn lg tone="accent" onClick={onSave} disabled={busy || !canSave}>
+                {busy ? 'Saving…' : 'Save persona'}
+              </Btn>
+            </span>
+          </div>
         </div>
       }
     >
