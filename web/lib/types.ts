@@ -48,6 +48,9 @@ export interface ActiveShow {
    *  full public URL (e.g. `/api/persona-avatar/p_default0`) — the controller
    *  serves a transparent 1×1 placeholder when no avatar is set. */
   persona?: { id?: string; name?: string; avatar?: string };
+  /** Guest co-hosts on the current show (same shape as persona). Empty or
+   *  absent = solo show. */
+  guests?: { id?: string; name?: string; avatar?: string }[];
 }
 
 /** `/dj` response used by Landing + lock-screen artwork. */

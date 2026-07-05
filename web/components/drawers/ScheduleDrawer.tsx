@@ -353,6 +353,9 @@ function OnNowCard(props: {
   }
   const personaName = onNow.persona?.name || activeShow?.persona?.name || 'Host';
   const avatar = resolveAvatar(apiUrl, onNow.persona?.avatar || activeShow?.persona?.avatar || '');
+  // Guest co-hosts in the studio this hour (only known for the LIVE show —
+  // /state doesn't expose future rosters, so upcoming slots stay host-only).
+  const guestNames = (activeShow?.guests || []).map(g => g?.name).filter(Boolean);
   return (
     <section>
       <SectionLabel>On now · until {fmtHour((onNow.endHour + 1) % 24, locale)}</SectionLabel>
@@ -361,6 +364,9 @@ function OnNowCard(props: {
         <div className="min-w-0 flex-1">
           <div className="text-[10px] tracking-[0.3em] text-vermilion uppercase">
             {personaName}
+            {guestNames.length > 0 && (
+              <span className="text-muted"> · with {guestNames.join(' & ')}</span>
+            )}
           </div>
           <div className="mt-0.5 text-lg leading-tight font-semibold">
             {onNow.show.name}

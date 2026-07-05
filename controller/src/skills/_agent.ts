@@ -273,7 +273,12 @@ export async function agenticTick(ctx) {
   if (tickBusy) return;
 
   const now = new Date();
+  // Cadence and capability gating stay keyed to the HOST persona (stable per
+  // show); only the VOICE rotates. A guest co-host may speak this tick's
+  // segment, but which segments are on offer and how often the station talks
+  // never depends on who happened to win the mic.
   const persona = settings.getEffectivePersona(now);
+  const speaker = settings.pickOnAirSpeaker(now);
   // DJ-mode personas read one rung chattier, lowering the floor so more
   // between-track segments (weather, curiosity, deep cuts) get through.
   const freq = settings.effectiveFrequency(persona);
@@ -311,7 +316,7 @@ export async function agenticTick(ctx) {
     const recentCuriosity = caps.some(c => c.kind === 'curiosity') ? recentAiredCuriosity() : undefined;
     const { object } = await directorAgent.run({
       messages: [{ role: 'user', content: buildSituation(ctx, { contextFields: unionContextFields(caps), recentCuriosity }) }],
-      persona, caps, freq, sfxCatalog,
+      persona: speaker, caps, freq, sfxCatalog,
       ctx, segmentState,
     });
 
@@ -336,8 +341,12 @@ export async function agenticTick(ctx) {
       segmentState.lastWeatherCondition = ctx.weather.condition;
     }
 
-    // queue.announce appends the segment turn into the live session.
-    await queue.announce(seg.text.trim(), seg.kind);
+    // queue.announce appends the segment turn into the live session. The
+    // speaker's id rides in meta so session.windowMessages names a guest's
+    // turn as theirs rather than the host's own words.
+    await queue.announce(seg.text.trim(), seg.kind, {
+      persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name },
+    });
 
     // Record what actually aired so the durable ledger can keep both the tool
     // and the fallback path from repeating it after a restart (issue #577).

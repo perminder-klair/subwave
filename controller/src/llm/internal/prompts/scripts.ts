@@ -52,13 +52,14 @@ export async function generateIntro({ track, context, requestedBy = null, reques
   });
 }
 
-export async function generateStationId({ recap = null, context = null, recentOpeners = null }: any = {}) {
-  const djName = settings.getEffectivePersona()?.name || 'your host';
+export async function generateStationId({ recap = null, context = null, recentOpeners = null, persona = null }: any = {}) {
+  const speaker = persona || settings.getEffectivePersona();
+  const djName = speaker?.name || 'your host';
   const stationName = settings.get().station;
   const ctxLines = buildContextLines(context, { contextFields: SCRIPT_CONTEXT_FIELDS });
-  ctxLines.push(`Task: ${lengthPhrase('stationId')} for ${stationName} with ${djName}. A little understated.`);
+  ctxLines.push(`Task: ${lengthPhrase('stationId', speaker)} for ${stationName} with ${djName}. A little understated.`);
   return djText({
-    system: djSystem(),
+    system: djSystem(speaker),
     prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'station_id', recap, recentOpeners }),
     temperature: 1.0, topP: 0.9, repeatPenalty: 1.25, seed: randomSeed(),
     kind: 'generateStationId',
@@ -125,7 +126,8 @@ export async function generateAdLib({ instruction, context = null, recap = null,
   });
 }
 
-export async function generateLink({ previous, current, context, recap = null, recentTracks = null, recentOpeners = null }: any) {
+export async function generateLink({ previous, current, context, recap = null, recentTracks = null, recentOpeners = null, persona = null }: any) {
+  const speaker = persona || settings.getEffectivePersona();
   const ctxLines = buildContextLines(context, { recentTracks, contextFields: SCRIPT_CONTEXT_FIELDS });
   // Forward-looking only: the link is written when the pick is made but doesn't
   // air until that pick actually starts — and a listener request can slip ahead
@@ -137,7 +139,7 @@ export async function generateLink({ previous, current, context, recap = null, r
   if (current?.title) ctxLines.push(`Now playing: "${current.title}" by ${current.artist || 'unknown'}`);
 
   // DJ-mode personas lean harder into teasing the track's feel / artist.
-  const djMode = !!settings.getEffectivePersona()?.djMode;
+  const djMode = !!speaker?.djMode;
   const teaseClause = djMode
     ? ` Name the artist or capture the feel so listeners know what they're hearing.`
     : '';
@@ -152,21 +154,21 @@ export async function generateLink({ previous, current, context, recap = null, r
     : '';
   // Talk-within-the-intro budget for the track now starting (current = the pick).
   const budget = introBudgetPhrase(introMsFor(current));
-  const prompt = `Write a short DJ link to carry into the track now starting — set it up, capture its feel, weave in the moment.${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhrase('link')}, conversational. Vary how you open — don't default to "here's", "this is", "coming up", or "that was"; find a different way in each time. Keep it forward-looking: don't back-announce, recap, or name the track that just played — focus on what's playing now.\n\n${ctxLines.join('\n')}`;
+  const prompt = `Write a short DJ link to carry into the track now starting — set it up, capture its feel, weave in the moment.${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhrase('link', speaker)}, conversational. Vary how you open — don't default to "here's", "this is", "coming up", or "that was"; find a different way in each time. Keep it forward-looking: don't back-announce, recap, or name the track that just played — focus on what's playing now.\n\n${ctxLines.join('\n')}`;
 
   return djText({
-    system: djSystem(),
+    system: djSystem(speaker),
     prompt: decoratePrompt(prompt, { kind: 'link', recap, recentOpeners }),
     temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(),
     kind: 'generateLink',
   });
 }
 
-export async function generateHourlyTime({ recap = null, context = null, recentOpeners = null }: any = {}) {
+export async function generateHourlyTime({ recap = null, context = null, recentOpeners = null, persona = null }: any = {}) {
   const ctxLines = buildContextLines(context, { contextFields: SCRIPT_CONTEXT_FIELDS });
-  ctxLines.push(`Task: a brief top-of-the-hour time check, in character. ${lengthPhrase('hourly')}. Say the time in natural spoken words ("two in the afternoon", "just gone eight") — never digits or 24-hour form.`);
+  ctxLines.push(`Task: a brief top-of-the-hour time check, in character. ${lengthPhrase('hourly', persona || undefined)}. Say the time in natural spoken words ("two in the afternoon", "just gone eight") — never digits or 24-hour form.`);
   return djText({
-    system: djSystem(),
+    system: djSystem(persona || undefined),
     prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'hourly', recap, recentOpeners }),
     temperature: 0.9, topP: 0.95, repeatPenalty: 1.15, seed: randomSeed(),
     kind: 'generateHourlyTime',

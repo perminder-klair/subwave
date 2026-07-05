@@ -338,12 +338,18 @@ async function refreshAutoPlaylistInner() {
 export async function runHourlyCheck() {
   return withTrace({ kind: 'hourly' }, async () => {
     const ctx = await getFullContext();
+    // Guest rotation: on a show with co-hosts the time check may come from a
+    // guest. Solo shows get the effective persona — behaviour-identical.
+    const speaker = settings.pickOnAirSpeaker();
     const script = await dj.generateHourlyTime({
       recap: queue.getDjRecap(),
       context: ctx,
       recentOpeners: queue.getRecentOpeners(),
+      persona: speaker,
     });
-    await queue.announce(script, 'hourly-check');
+    await queue.announce(script, 'hourly-check', {
+      persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name },
+    });
     return script;
   });
 }
@@ -391,6 +397,7 @@ export async function runLink() {
     if (!current) throw new Error('nothing is playing — no track to link from');
     const previous = queue.history[0]?.track || null;
     const ctx = await getFullContext();
+    const speaker = settings.pickOnAirSpeaker();
     const script = await dj.generateLink({
       previous,
       current,
@@ -398,8 +405,11 @@ export async function runLink() {
       recap: queue.getDjRecap(),
       recentTracks: queue.getRecentTracks(),
       recentOpeners: queue.getRecentOpeners(),
+      persona: speaker,
     });
-    await queue.announce(script, 'link');
+    await queue.announce(script, 'link', {
+      persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name },
+    });
     return script;
   });
 }
@@ -439,13 +449,16 @@ async function skillsTick() {
 export async function runStationId({ atNextTrack = false } = {}) {
   return withTrace({ kind: 'station-id' }, async () => {
     const ctx = await getFullContext();
+    const speaker = settings.pickOnAirSpeaker();
     const script = await dj.generateStationId({
       recap: queue.getDjRecap(),
       context: ctx,
       recentOpeners: queue.getRecentOpeners(),
+      persona: speaker,
     });
-    if (atNextTrack) await queue.announceAtNextTrack(script, 'station-id');
-    else await queue.announce(script, 'station-id');
+    const opts = { persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name } };
+    if (atNextTrack) await queue.announceAtNextTrack(script, 'station-id', opts);
+    else await queue.announce(script, 'station-id', opts);
     return script;
   });
 }

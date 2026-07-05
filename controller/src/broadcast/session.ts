@@ -339,18 +339,19 @@ export function windowMessages() {
     //
     // Same identity guard for a turn VOICED BY A DIFFERENT PERSONA: the handoff
     // sign-off is spoken by the outgoing DJ but stored in the new session
-    // (dj-agent.runPersonaHandoff tags it with the speaker's id + name).
-    // Untagged it would read as the incoming DJ's own words — name the real
-    // speaker instead.
+    // (dj-agent.runPersonaHandoff tags it with the speaker's id + name), and a
+    // guest co-host's segments land the same way (the speaker rotation stamps
+    // every rotated announce with the speaker's id). Untagged they would read
+    // as the session persona's own words — name the real speaker instead.
     const foreignSpeaker = (m.role === 'segment'
       && m.meta?.personaId
       && m.meta.personaId !== _session.persona?.id)
-      ? (m.meta.personaName || 'the previous host')
+      ? (m.meta.personaName || 'another host')
       : null;
     const content = (m.role === 'dj' && m.kind === 'pick')
       ? `(pick note to self — not aired) ${m.text}`
       : foreignSpeaker
-        ? `(${foreignSpeaker} said this on air while handing over — their words, not yours) ${m.text}`
+        ? `(${foreignSpeaker} said this on air — their words, not yours) ${m.text}`
         : m.text;
     raw.push({ role, content });
   }

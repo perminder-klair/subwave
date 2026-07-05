@@ -542,6 +542,10 @@ const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
 
 const PERSONA_LIMIT = 24;
 const SHOWS_LIMIT = 64;
+// Guest co-hosts per show. Small on purpose: each guest is a full persona the
+// speaker rotation can hand a segment to, and past ~3 the host stops sounding
+// like the host.
+const GUESTS_PER_SHOW = 3;
 const PLAYLISTS_PER_SHOW = 10;
 const EXCLUDED_PLAYLISTS_PER_SHOW = 10;
 const SKILLS_PER_PERSONA_LIMIT = 20;
@@ -552,6 +556,24 @@ const WEBHOOKS_LIMIT = 16;
 // trimmed, capped. Never validated against the live Navidrome here (offline
 // validation, same as `genre` free-text) — an id that no longer exists simply
 // contributes nothing at pick time (never-starve). Empty = no anchor.
+// A show's guest co-hosts: persona ids other than the host, resolved against
+// the live persona list. Order preserved (it's the operator's billing order);
+// dupes, the host itself, and dangling ids are dropped.
+function coerceGuestPersonaIds(raw: any, hostId: string, personaIds: string[]): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const id = v.trim();
+    if (!id || id === hostId || seen.has(id) || !personaIds.includes(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= GUESTS_PER_SHOW) break;
+  }
+  return out;
+}
+
 function coercePlaylistIds(raw: any): string[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
@@ -1298,11 +1320,16 @@ function normalizeShows(raw: any, personaIds: string[]) {
     // Optional Navidrome playlist blocklist — tracks from these playlists are
     // excluded from the candidate pool. Empty = no exclusions.
     const excludedPlaylistIds = coerceExcludedPlaylistIds(item.excludedPlaylistIds);
+    // Optional guest co-hosts. Lenient path: dangling persona ids (persona
+    // deleted under our feet) and the host itself are silently dropped so the
+    // show survives with whatever roster is still real.
+    const guestPersonaIds = coerceGuestPersonaIds(item.guestPersonaIds, item.personaId, personaIds);
     out.push({
       id,
       name,
       topic: typeof item.topic === 'string' ? item.topic.trim().slice(0, 1000) : '',
       personaId: item.personaId,
+      guestPersonaIds,
       mood,
       themeId,
       genre,
@@ -2163,10 +2190,30 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
       }
       excludedPlaylistIds = coerceExcludedPlaylistIds(item.excludedPlaylistIds);
     }
+    // Optional guest co-hosts. Strict path: unknown personas and a guest that
+    // duplicates the host are operator mistakes worth surfacing, not dropping.
+    let guestPersonaIds: string[] = [];
+    if (item.guestPersonaIds !== undefined && item.guestPersonaIds !== null) {
+      if (!Array.isArray(item.guestPersonaIds)) {
+        throw new Error(`shows[${i}].guestPersonaIds must be an array of persona ids`);
+      }
+      if (item.guestPersonaIds.length > GUESTS_PER_SHOW) {
+        throw new Error(`shows[${i}].guestPersonaIds must have at most ${GUESTS_PER_SHOW} entries`);
+      }
+      for (const v of item.guestPersonaIds) {
+        if (typeof v !== 'string' || !personaIds.includes(v)) {
+          throw new Error(`shows[${i}].guestPersonaIds must reference existing personas`);
+        }
+        if (v === item.personaId) {
+          throw new Error(`shows[${i}].guestPersonaIds must not include the show's host persona`);
+        }
+      }
+      guestPersonaIds = coerceGuestPersonaIds(item.guestPersonaIds, item.personaId, personaIds);
+    }
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
+    return { id, name, topic, personaId: item.personaId, guestPersonaIds, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
   });
 }
 
@@ -2934,6 +2981,11 @@ export async function update(patch) {
   {
     const personaIds = next.personas.map(p => p.id);
     next.shows = next.shows.filter(s => personaIds.includes(s.personaId));
+    // A deleted persona also vanishes from every guest roster (the show itself
+    // survives — losing a guest is not losing the show).
+    for (const s of next.shows) {
+      s.guestPersonaIds = coerceGuestPersonaIds(s.guestPersonaIds, s.personaId, personaIds);
+    }
     const showIds = next.shows.map(s => s.id);
     for (let d = 0; d < 7; d++) {
       for (let h = 0; h < 24; h++) {
@@ -3038,6 +3090,12 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     persona: persona
       ? { id: persona.id, name: persona.name, avatar: persona.avatar || '' }
       : null,
+    // Guest co-hosts, resolved to live personas (a guest deleted after the
+    // show was saved simply vanishes from the roster). Empty = solo show.
+    guests: (Array.isArray(show.guestPersonaIds) ? show.guestPersonaIds : [])
+      .map(gid => s.personas?.find(p => p.id === gid))
+      .filter(Boolean)
+      .map(p => ({ id: p.id, name: p.name, avatar: p.avatar || '' })),
   };
 }
 
@@ -3051,6 +3109,38 @@ export function getEffectivePersona(date: Date = new Date()) {
     if (p) return p;
   }
   return getActivePersona();
+}
+
+// Everyone in the studio right now: the effective persona as host, plus the
+// active show's guest co-hosts (full persona objects — the speaker rotation
+// needs their tts config, not just names). Outside a show, or on a show with
+// no guests, `guests` is empty and the roster degenerates to today's solo DJ.
+export function getOnAirRoster(date: Date = new Date()) {
+  const s: any = get();
+  const host = getEffectivePersona(date);
+  const show: any = resolveActiveShow(date, s);
+  const guests = (show?.guests || [])
+    .map((g: any) => s.personas?.find((p: any) => p.id === g.id))
+    .filter((p: any) => p && p.id !== host?.id);
+  return { host, guests, show };
+}
+
+// How much of the mic the host keeps when guests are in the studio. The rest
+// is split evenly across the guests, so one guest speaks ~2 segments in 5 and
+// the host stays unmistakably the host.
+const HOST_MIC_SHARE = 0.6;
+
+// The persona who speaks the NEXT standalone segment (station ID, hourly
+// check, weather/news/etc.). Weighted random: host most of the time, a guest
+// otherwise. Solo shows and off-show hours always return the effective
+// persona, so every existing call site is behaviour-identical until a show
+// actually lists guests. Track picks and their tied links stay with the host —
+// the pick agent reads the session from the host's perspective.
+export function pickOnAirSpeaker(date: Date = new Date()) {
+  const { host, guests } = getOnAirRoster(date);
+  if (!guests.length || !host) return host;
+  if (Math.random() < HOST_MIC_SHARE) return host;
+  return guests[Math.floor(Math.random() * guests.length)];
 }
 
 // The persona's on-air language as a blunt system-prompt directive. Empty
@@ -3126,7 +3216,32 @@ export function agentPersonaPreamble(persona) {
   const name = persona?.name || 'the DJ';
   const soul = persona?.soul || '';
   const station = cache?.station || DEFAULTS.station;
-  return `You are ${name}, the on-air DJ for ${station}, a personal internet radio station. ${soul}${languageDirective(persona)}`;
+  return `You are ${name}, the on-air DJ for ${station}, a personal internet radio station. ${soul}${languageDirective(persona)}${onAirRosterClause(persona)}`;
+}
+
+// When the active show has guest co-hosts, tell the speaking persona who else
+// is in the studio — from ITS OWN seat (host vs guest). Empty when the show is
+// solo, off-show, or the speaker isn't part of the current roster (so a
+// handoff rendered for the PREVIOUS show's outgoing persona never inherits the
+// new show's cast). Appended to both prompt paths — renderDjPrompt via
+// djSystem, and agentPersonaPreamble for the pick/segment agents. The "never
+// invent quotes" rule matters: only genuinely aired turns reach the session
+// history, so any other words attributed to a co-host would be fabricated.
+export function onAirRosterClause(persona: any, date: Date = new Date()): string {
+  if (!persona?.id) return '';
+  const { host, guests, show } = getOnAirRoster(date);
+  if (!guests.length || !host) return '';
+  const showName = show?.name ? ` on "${show.name}"` : '';
+  if (persona.id === host.id) {
+    const names = guests.map((g: any) => g.name).join(' and ');
+    return `\n\nYou are hosting${showName} with ${names} in the studio as your co-host${guests.length > 1 ? 's' : ''}. They take some of the talk breaks. When it fits, refer to them naturally — react to something they said on air, tee them up, share the room — but never invent quotes or opinions for them; only riff on what they actually said.`;
+  }
+  if (guests.some((g: any) => g.id === persona.id)) {
+    const others = guests.filter((g: any) => g.id !== persona.id).map((g: any) => g.name);
+    const othersClause = others.length ? ` ${others.join(' and ')} ${others.length > 1 ? 'are' : 'is'} also in the studio.` : '';
+    return `\n\nYou are a guest co-host${showName}; ${host.name} is the host and carries the show.${othersClause} Speak as yourself, in your own voice — you're a visitor with a seat at the desk, not the station's main DJ. React to the host and the music naturally, but never invent quotes or opinions for the others; only riff on what they actually said.`;
+  }
+  return '';
 }
 
 // Liquidsoap reads tiny text files instead of JSON.

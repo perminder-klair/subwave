@@ -196,6 +196,13 @@ router.get('/now-playing', async (req, res) => {
                 avatar: avatarUrlFor(ctx.activeShow.persona.id),
               }
             : null,
+          // Guest co-hosts on the current show, same shape as persona. Empty
+          // for a solo show, so existing clients see a harmless extra [].
+          guests: (ctx.activeShow.guests || []).map((g: any) => ({
+            id: g.id,
+            name: g.name,
+            avatar: avatarUrlFor(g.id),
+          })),
         }
       : null;
     const s = session.getSession();

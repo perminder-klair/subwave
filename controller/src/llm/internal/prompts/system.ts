@@ -14,13 +14,16 @@ const CHATTERBOX_TAG_HINT =
 // `persona` overrides the on-air persona — used by the persona-handoff
 // generators (generateSignoff / generateHandoffGreeting) to render the sign-off
 // under the OUTGOING persona and the greeting under the incoming one, since the
-// clock-driven getEffectivePersona() has already moved on by the time they run.
+// clock-driven getEffectivePersona() has already moved on by the time they run —
+// and by the guest-speaker rotation (settings.pickOnAirSpeaker) to voice a
+// standalone segment under a co-host. The roster clause tells the speaker who
+// else is in the studio when the active show has guests (empty otherwise).
 export function djSystem(persona: any = settings.getEffectivePersona()) {
   const s = settings.get();
   const base = settings.renderDjPrompt(persona, {
     station: s.station,
     location: s.weather?.locationName,
-  });
+  }) + settings.onAirRosterClause(persona);
   if (persona?.tts?.engine === 'chatterbox') return base + CHATTERBOX_TAG_HINT;
   return base;
 }

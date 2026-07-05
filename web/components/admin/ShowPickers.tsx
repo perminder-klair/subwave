@@ -125,6 +125,70 @@ export function PersonaPicker({
 
 // ---------------------------------------------------------------------------
 
+// Multi-select variant for the show's guest co-hosts: same persona cards, but
+// each toggles in/out of the selection. The host is excluded by the caller;
+// unselected cards go inert once `max` guests are picked.
+export function GuestPersonaPicker({
+  personas,
+  value,
+  onChange,
+  apiBase,
+  max,
+}: {
+  personas: PersonaOpt[];
+  value: string[];
+  onChange: (ids: string[]) => void;
+  apiBase: string;
+  max: number;
+}) {
+  if (!personas.length) return null;
+  const toggle = (id: string) => {
+    if (value.includes(id)) onChange(value.filter((v) => v !== id));
+    else if (value.length < max) onChange([...value, id]);
+  };
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {personas.map((p) => {
+        const selected = value.includes(p.id);
+        const full = !selected && value.length >= max;
+        const src = p.avatar ? `${apiBase}/persona-avatar/${encodeURIComponent(p.id)}` : null;
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => toggle(p.id)}
+            aria-pressed={selected}
+            disabled={full}
+            className={cn(cardClass(selected), 'gap-2.5 p-2.5', full && 'opacity-40')}
+          >
+            <span className="relative grid size-9 flex-none place-items-center overflow-hidden border border-ink bg-[var(--ink-softer)]">
+              <span className="text-[11px] font-extrabold text-muted">{initials(p.name)}</span>
+              {src && (
+                <img
+                  src={src}
+                  alt=""
+                  className="absolute inset-0 h-full w-full object-cover"
+                  onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }}
+                />
+              )}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13px] font-extrabold text-ink">
+                {p.name?.trim() || 'Unnamed'}
+              </span>
+              <span className="block truncate text-[11px] text-muted">
+                {selected ? 'in the studio' : p.tagline?.trim() || 'no tagline'}
+              </span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
 function ThemeCard({
   selected,
   name,
