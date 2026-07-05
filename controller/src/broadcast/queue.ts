@@ -17,7 +17,7 @@ import * as session from './session.js';
 import { getFullContext, energyForDaypart } from '../context.js';
 import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
-import { djCallsAllowed, getListenerCount } from './listeners.js';
+import { djCallsAllowed, presentListeners } from './listeners.js';
 import * as webhooks from './webhooks.js';
 import * as scrobble from './scrobble.js';
 import * as liquidsoapControl from './liquidsoap-control.js';
@@ -994,9 +994,7 @@ class Queue {
     // like scrobble — see scrobble.ts. Silent skip when gated and count unknown.
     const gated = !!settings.get()?.webhooksPolicy?.trackPlayListenerGated;
     if (gated) {
-      const raw = getListenerCount();
-      const listeners =
-        typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
+      const listeners = presentListeners();
       if (listeners !== null) {
         webhooks.notify('track.play', { ...trackPayload, listeners });
       }

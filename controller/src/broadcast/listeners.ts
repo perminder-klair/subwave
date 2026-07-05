@@ -181,6 +181,17 @@ export function getListenerCount() {
   return lastCount;
 }
 
+// Fail-closed presence check: the listener count when it is known and > 0,
+// else null. The single definition of "someone is tuned in" for outbound
+// side effects (scrobbles, gated track.play webhooks) — an unknown count
+// must never fire to an empty room. Contrast djCallsAllowed() below, which
+// deliberately fails OPEN so a stats outage can't take the DJ off the air.
+export function presentListeners(): number | null {
+  return typeof lastCount === 'number' && Number.isFinite(lastCount) && lastCount > 0
+    ? lastCount
+    : null;
+}
+
 // Last known stream status, from the same 15s poll. Returns offline + 0/0
 // until the first successful poll — same shape /now-playing always exposed.
 export function getStreamStatus(): StreamStatus {
