@@ -107,6 +107,26 @@ export function get(songId: string): any {
   };
 }
 
+// A usable tempo measurement, or null. Navidrome emits an ID3-derived `bpm: 0`
+// on files with no tempo tag, so a non-positive bpm means "unknown", never a
+// measurement (#862).
+export function realBpm(v: any): number | null {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+}
+
+// Resolve {bpm, key} for a track: the analyzer's numbers from the library DB
+// first, then whatever the track object itself carries (a Subsonic candidate's
+// bpm is the file's ID3 tag). Single source of truth for the pick/transition
+// paths — per-caller "carries analysis?" guards let Navidrome's bpm 0 skip the
+// DB lookup and mask the analyzed value (#862).
+export function bpmKeyFor(track: any): { bpm: number | null; key: string | null } {
+  const rec = track?.id ? get(track.id) : null;
+  return {
+    bpm: realBpm(rec?.bpm) ?? realBpm(track?.bpm),
+    key: rec?.musicalKey ?? track?.musicalKey ?? null,
+  };
+}
+
 // Back-compat shim. Old callers pass {title, artist, album, year, genre,
 // moods, energy} in one shot. The DB has split write surfaces (metadata +
 // tags + enrichment) but for a single-track legacy write we collapse them.
@@ -221,6 +241,13 @@ export function paceMeanOf(pace: Array<{ value: number }> | null | undefined): n
   return pace && pace.length
     ? Math.round((pace.reduce((s, p) => s + p.value, 0) / pace.length) * 1000) / 1000
     : null;
+}
+
+// Structural-part count over the opening (arrangement complexity), or null
+// when un-analysed. Shared by both pick payloads (pool + agent) so `sections`
+// means the same thing on either path.
+export function sectionCount(t: { structure?: any[] | null } | null | undefined): number | null {
+  return Array.isArray(t?.structure) && t.structure.length ? t.structure.length : null;
 }
 
 // plus the two tagger axes. Matches what songsByMood returns above; pulled
