@@ -357,6 +357,19 @@ class Queue {
     return 0;
   }
 
+  // Timestamp (ms) of the most recent STANDALONE talk break, or 0 — every
+  // voice kind except the track-tied intro channels ('link'/'dj-speak', which
+  // air with nearly every pick and would mute a gap check outright on a chatty
+  // station). Skill kinds (weather/news/…) count via VOICE_KINDS, so a gap
+  // gated on this can't stack onto a segment the listener just heard.
+  getLastTalkBreakAt() {
+    for (const entry of this.djLog) {
+      if (TRACK_TIED_KINDS.has(entry.kind)) continue;
+      if (VOICE_KINDS.has(entry.kind)) return new Date(entry.t).getTime();
+    }
+    return 0;
+  }
+
   // Push a listener request. Adds to upcoming and kicks off the Liquidsoap sender.
   // `introScript` is the spoken intro/link tied to THIS track — it is NOT aired
   // at queue time. drainToLiquidsoap renders it to a WAV ahead of time and
@@ -1572,6 +1585,9 @@ function wavDurationMs(path: string): number | null {
 // 'handoff' (the two-voice persona mic-pass) counts too, so the incoming DJ's
 // next segments don't echo the greeting's opener.
 const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check', 'handoff', 'banter']);
+// The intro channels tied to a track start rather than the wall clock — the
+// standalone-talk-break clock (getLastTalkBreakAt) skips them.
+const TRACK_TIED_KINDS = new Set(['dj-speak', 'link']);
 // How long a boundary-deferred segment may wait for a track start before it's
 // dropped as stale (its prompt context baked in the clock at generation time).
 // Comfortably past a long album cut, well short of the next ident sounding odd.

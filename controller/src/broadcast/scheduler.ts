@@ -457,7 +457,10 @@ async function banterTick() {
   if (!shouldFire('banter')) return;
   if (!djCallsAllowed()) return;  // nobody listening — save the tokens and the breath
   if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments
-  if (Date.now() - queue.getLastVoiceAt(['station-id', 'hourly-check', 'handoff', 'banter']) < BANTER_MIN_GAP_MS) return;
+  // Every standalone talk break counts — idents, hourly, handoff, banter AND
+  // the segment-director spots (weather/news/…). Track-tied links don't, or a
+  // chatty DJ-mode station would never banter.
+  if (Date.now() - queue.getLastTalkBreakAt() < BANTER_MIN_GAP_MS) return;
   try {
     await runBanter();
   } catch (err) {
