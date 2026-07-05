@@ -749,7 +749,7 @@ def dj_transition(a, b) =
   # the incoming pick, then filtered down and released.
   #
   # HOW THE LOOP IS BUILT — measured comb facts first (burst-probed on the
-  # real v2.4.5 image; see the combprobe history in PR #862): this build's
+  # real v2.4.5 image; see the combprobe history in PR #863): this build's
   # `comb` is a ONE-SHOT feed-forward echo, NOT a recirculating feedback
   # comb — a single burst in yields exactly one delayed copy, then silence,
   # whatever the feedback value (getter or constant). So no single comb can
