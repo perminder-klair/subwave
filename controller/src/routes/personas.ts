@@ -14,6 +14,9 @@ import express from 'express';
 import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises';
 import * as settings from '../settings.js';
 import { requireAdmin } from '../middleware/auth.js';
+import { readCommunityPersona } from '../personas/community.js';
+import { SLUG_RE } from '../skills/loader.js';
+import { queue } from '../broadcast/queue.js';
 
 export const router = express.Router();
 
@@ -159,6 +162,66 @@ router.delete('/personas/:id/avatar', requireAdmin, async (req, res) => {
     const result = await clearAvatar(String(req.params.id));
     res.json(result);
   } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /personas/community/:slug/install — append a community catalog persona
+// to the station's roster as an ordinary persona: editable, deletable, and NOT
+// on air (activePersonaId is untouched — the analogue of a community skill
+// arriving disabled). Station-specific fields get the roster defaults: a
+// minted id, the piper tts block, no avatar, skills=null ("all skills").
+// Rejects a roster at PERSONA_LIMIT and a duplicate on-air name (409) so the
+// operator isn't left with two indistinguishable DJs.
+// ---------------------------------------------------------------------------
+router.post('/personas/community/:slug/install', requireAdmin, async (req, res) => {
+  const slug = String(req.params.slug);
+  if (!SLUG_RE.test(slug)) {
+    return res.status(400).json({ error: `invalid persona slug: ${slug}` });
+  }
+
+  const cp = await readCommunityPersona(slug);
+  if (!cp) {
+    return res.status(404).json({ error: `no such community persona: ${slug}` });
+  }
+
+  await settings.load();
+  const personas = settings.get().personas || [];
+  if (personas.length >= settings.PERSONA_LIMIT) {
+    return res.status(409).json({ error: `the roster is full (${settings.PERSONA_LIMIT} personas max) — remove one first` });
+  }
+  const wanted = cp.displayName.trim().toLowerCase();
+  if (personas.some((p: any) => String(p.name).trim().toLowerCase() === wanted)) {
+    return res.status(409).json({ error: `a persona named "${cp.displayName}" is already in the roster` });
+  }
+
+  // A complete persona object — settings.update() validates strictly and
+  // mints the id (no valid `id` supplied → mintId('p_')).
+  const persona = {
+    name: cp.displayName,
+    tagline: cp.tagline || '',
+    frequency: cp.frequency,
+    scriptLength: cp.scriptLength,
+    djMode: cp.djMode,
+    humour: cp.humour ?? 5,
+    localColour: cp.localColour ?? 5,
+    warmth: cp.warmth ?? 5,
+    soul: cp.soul,
+    language: cp.language || '',
+    avatar: '',
+    tts: { engine: 'piper', cloudProvider: 'openai', voice: '', gainDb: 0, speed: 1 },
+    skills: null,
+  };
+
+  try {
+    await settings.update({ personas: [...personas, persona] });
+    const next = settings.get().personas || [];
+    const installed = next.find((p: any) => String(p.name).trim().toLowerCase() === wanted) || null;
+    queue.log('scheduler', `[personas] community "${slug}" installed via admin UI as "${cp.displayName}"`);
+    res.json({ personas: next, persona: installed });
+  } catch (err: any) {
+    queue.log('error', `POST /personas/community/${slug}/install failed: ${err.message}`);
     res.status(400).json({ error: err.message });
   }
 });

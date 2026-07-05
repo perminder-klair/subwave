@@ -3,6 +3,7 @@
 // avatar + tagline + meta pills on the left, status pills + Edit on the right.
 // Click Edit to open the full-screen editor; adding lives in the hero's
 // "+ Add persona" button.
+import { Users } from 'lucide-react';
 import type { Persona } from './types';
 import { API_BASE, PERSONA_MAX } from './constants';
 import { initialsFor, personaValid } from './helpers';
@@ -20,17 +21,30 @@ interface PersonaRosterProps {
   onTogglePrompt: () => void;
   onAdd: () => void;
   onSelect: (idx: number) => void;
+  // Shipped community catalog size (null = still loading — button disabled).
+  communityCount: number | null;
+  onCommunity: () => void;
 }
 
 export function PersonaRoster({
   personas, activePersonaId, onAirPersonaId, avatarTick,
-  showPrompt, onTogglePrompt, onAdd, onSelect,
+  showPrompt, onTogglePrompt, onAdd, onSelect, communityCount, onCommunity,
 }: PersonaRosterProps) {
   return (
     <section className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="caption">roster · {personas.length} / {PERSONA_MAX}</span>
         <div className="flex flex-wrap gap-2">
+          <Btn
+            onClick={onCommunity}
+            disabled={communityCount === null}
+            title="Browse and install personas shared by other stations"
+          >
+            <Users size={14} /> Community
+            {communityCount !== null && communityCount > 0 && (
+              <span className="ml-1 text-vermilion">{communityCount}</span>
+            )}
+          </Btn>
           <Btn onClick={onTogglePrompt}>
             {showPrompt ? 'Hide system prompt' : 'System prompt'}
           </Btn>

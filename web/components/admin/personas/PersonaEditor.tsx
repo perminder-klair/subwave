@@ -9,6 +9,8 @@ import type { Persona, PersonaTts, SettingsResponse, SkillCatalogEntry } from '.
 import type { AdminAuth } from '../../../lib/adminAuth';
 import { Btn, Eyebrow, Pill } from '../ui';
 import { cn } from '../../../lib/cn';
+import { personaSubmitUrl } from '../../../lib/repo';
+import { DIAL_NEUTRAL } from './constants';
 import { EditorDialog } from '../../ui/editor-dialog';
 import { PersonaIdentityCard } from './PersonaIdentityCard';
 import { PersonaBehaviorCard } from './PersonaBehaviorCard';
@@ -60,6 +62,29 @@ export function PersonaEditor({
   const updateTts = (patch: Partial<PersonaTts>) => setPersonaTts(index, patch);
   const setSkills = (skills: string[]) => setPersonaSkills(index, skills);
 
+  // Share this persona to the community: open the prefilled add-persona Issue
+  // Form on GitHub in a new tab. A workflow turns the issue into a one-file PR;
+  // once merged it ships to everyone as an installable community persona. Only
+  // the portable fields travel — voice and avatar stay station-side.
+  const shareToCommunity = () => {
+    const slug = persona.name.trim().toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 49);
+    const url = personaSubmitUrl({
+      'persona-slug': slug,
+      'display-name': persona.name.trim(),
+      tagline: persona.tagline.trim(),
+      soul: persona.soul.trim(),
+      frequency: persona.frequency,
+      'script-length': persona.scriptLength,
+      'dj-mode': persona.djMode ? 'on' : '',
+      humour: persona.humour !== DIAL_NEUTRAL ? String(persona.humour) : '',
+      'local-colour': persona.localColour !== DIAL_NEUTRAL ? String(persona.localColour) : '',
+      warmth: persona.warmth !== DIAL_NEUTRAL ? String(persona.warmth) : '',
+      language: persona.language.trim(),
+    });
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   return (
     <EditorDialog
       open={open}
@@ -82,6 +107,14 @@ export function PersonaEditor({
               title={personaCount > 1 ? 'Remove this persona' : 'At least one persona is required'}
             >
               Remove
+            </Btn>
+            <Btn
+              lg
+              onClick={shareToCommunity}
+              disabled={!persona.name.trim() || !persona.soul.trim()}
+              title="Open a prefilled GitHub form to share this persona with every station (voice and avatar stay yours)"
+            >
+              Share to community
             </Btn>
           </span>
           {/* right — status + discard/save */}

@@ -15,6 +15,7 @@ import { getSetupStatusSync } from '../setup/firstRun.js';
 import { getStationTimezone } from '../time.js';
 import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
 import { listCommunitySkills } from '../skills/loader.js';
+import { listCommunityPersonas } from '../personas/community.js';
 import { lifetimeTokenCount } from '../llm/log.js';
 
 export const router = express.Router();
@@ -463,6 +464,25 @@ router.get('/skills/community', async (req, res) => {
     res.json({ community });
   } catch (err) {
     queue.log('error', `/skills/community failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /personas/community — the shipped community persona catalog (DJ personas
+// contributed via the community-submission flow, COPYd into the image). Same
+// posture as /skills/community: browse-only public reference powering the
+// public /personas showcase AND the admin Personas → Community modal (which
+// computes per-station "installed" client-side from the roster it already
+// holds). Never throws — an empty catalog returns []. No admin gate: static
+// shipped data, identical across every install of the same version.
+// ---------------------------------------------------------------------------
+router.get('/personas/community', async (req, res) => {
+  try {
+    const community = await listCommunityPersonas();
+    res.json({ community });
+  } catch (err) {
+    queue.log('error', `/personas/community failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
