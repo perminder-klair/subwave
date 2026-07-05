@@ -103,14 +103,10 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 // Resolve {bpm, key} for a track via the library DB (queued/agent picks carry
-// only id/title/artist).
+// only id/title/artist). library.bpmKeyFor prefers the analyzer's numbers and
+// treats Navidrome's ID3-derived `bpm: 0` as unknown (#862).
 function analysisOf(track: any): { bpm: number | null; key: string | null } {
-  if (!track) return { bpm: null, key: null };
-  if (track.bpm != null || track.musicalKey != null) {
-    return { bpm: track.bpm ?? null, key: track.musicalKey ?? null };
-  }
-  const rec = track.id ? library.get(track.id) : null;
-  return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
+  return library.bpmKeyFor(track);
 }
 
 // Resolve a track's measured intro runway (ms), for the talk-within-the-intro
