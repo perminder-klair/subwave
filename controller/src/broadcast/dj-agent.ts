@@ -169,7 +169,7 @@ export function runActive(): boolean {
 export const PICK_SCHEMA = z.object({
   id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
   reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just note what makes THIS pick a fresh step (new artist, a shift in energy/era/texture), not a vibe label you would recycle pick after pick (e.g. "new artist, lifts the energy", never a repeated "mellow reflective step")'),
-  say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). When the event says stay silent, set this to null'),
+  say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). Never state a clock time unless the event message tells you when the link airs — then use exactly that time. When the event says stay silent, set this to null'),
   // Transition effects (only honoured when the system prompt offers them — persona djMode, see settings.effectsActive).
   transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve']).nullable().describe('transition treatment for this pick: "blend" — spectral handover: your pick and the track before it trade the spectrum in complementary bands across a long crossfade so they feel like ONE continuous piece; reserve it for an exceptionally locked pair (near-identical tempo, close key) — a plain crossfade already handles an ordinary same-lane pick, so this should be an occasional call, not your default. "sweep" — the track playing before your pick sinks under a slowly closing filter while your pick rises clean; choose it for a real gear-change (big jump in energy, tempo, or mood). "washout" — THIS pick dissolves into a pulsing echo tail as it ENDS, ringing out into whatever follows; choose it to close a chapter (end of a themed run, before a talk break, or out of a dreamy track). "dissolve" — the track playing before your pick melts into a diffuse ambient wash as your pick rises clean through it; the SMOOTH way across a clash (sweep is the dramatic way) — choose it for a tempo/mood mismatch you want to hide rather than announce. "normal" or null for a plain crossfade'),
 });
@@ -193,7 +193,7 @@ export const PICK_SCHEMA_NO_FX = PICK_SCHEMA.extend({
 export function pickSchema() {
   const base = settings.effectsActive() ? PICK_SCHEMA : PICK_SCHEMA_NO_FX;
   return base.extend({
-    say: z.string().nullable().describe(`when the latest event message says to write a spoken link, set this to ${dj.lengthPhrase('link')} of natural speech in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). When the event says stay silent, set this to null`),
+    say: z.string().nullable().describe(`when the latest event message says to write a spoken link, set this to ${dj.lengthPhrase('link')} of natural speech in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). Never state a clock time unless the event message tells you when the link airs — then use exactly that time. When the event says stay silent, set this to null`),
   });
 }
 
@@ -628,7 +628,7 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   return true;
 }
 
-async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null) {
+async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { wantLink: boolean; current?: any; showAt?: Date | null }, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null) {
   // A DJ-mode mini-run (feature 4) anchors the pool re-rank to the run's
   // tempo/key target instead of the current track. null → today's behaviour.
   // A sonic journey (Phase 2) additionally anchors the audio-KNN source to the
@@ -647,6 +647,10 @@ async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm:
     try {
       link = await dj.generateLink({
         previous: current, current: result.song, context: ctx,
+        // ctx is the queue watcher's look-ahead snapshot exactly when showAt is
+        // set, so its clock is the link's air time — the only case the link may
+        // speak it (issue #864: generation-time clocks aired a track late).
+        clockIsAirTime: !!showAt,
         recap: queue.getDjRecap(),
         recentTracks: queue.getRecentTracks(),
         recentOpeners: queue.getRecentOpeners(),
@@ -755,6 +759,18 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null }: { w
     // steer clear of. Only when a link is actually being written.
     const linkAngle = wantLink ? dj.pickAngle('link') : null;
     const recentOpeners = wantLink ? queue.getRecentOpeners() : [];
+    // Clock discipline for the link (issue #864). The agent path carries no
+    // clock at all — the model extrapolates one from stale stamped lines in
+    // its session window, then the link airs a further full track after it's
+    // written, so spoken times ran 10-20 minutes behind. When the queue
+    // watcher resolved the look-ahead (showAt), ctx's clock IS the link's air
+    // time — hand it over as the only time the link may speak; without the
+    // look-ahead (unknown duration), ban the clock outright.
+    const clockClause = wantLink
+      ? (showAt && ctx?.clock?.hhmm
+          ? ` The link airs at about ${ctx.clock.hhmm} — if you mention the clock, that is the time to use, never an earlier one.`
+          : ` Never state the clock time in the link — you can't know exactly when it airs.`)
+      : '';
     const varietyClause = wantLink
       ? ` Approach for this link: ${linkAngle} Vary your first words — don't default to "here's", "this is", or "coming up".`
         + (recentOpeners.length
@@ -787,6 +803,7 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null }: { w
       + (previous ? ` (after "${previous.title}" by ${previous.artist})` : '')
       + '. Pick the track to play next.'
       + linkClause
+      + clockClause
       + effectClause
       + runClause
       + journeyClause;
@@ -809,7 +826,7 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null }: { w
         breakerFailure(queue);
       }
     }
-    await pickViaPool(queue, ctx, { wantLink, current }, rankTarget, audioWaypoint);
+    await pickViaPool(queue, ctx, { wantLink, current, showAt }, rankTarget, audioWaypoint);
   });
 }
 

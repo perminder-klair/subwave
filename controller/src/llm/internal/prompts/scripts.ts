@@ -56,7 +56,10 @@ export async function generateStationId({ recap = null, context = null, recentOp
   const djName = settings.getEffectivePersona()?.name || 'your host';
   const stationName = settings.get().station;
   const ctxLines = buildContextLines(context, { contextFields: SCRIPT_CONTEXT_FIELDS });
-  ctxLines.push(`Task: ${lengthPhrase('stationId')} for ${stationName} with ${djName}. A little understated.`);
+  // Loose clock only: an ident is generated at the cron tick but airs after
+  // LLM + TTS + voice-queue latency — an exact "18:15" routinely lands on air
+  // minutes late (issue #864). Time-of-day colour is fine; minutes are not.
+  ctxLines.push(`Task: ${lengthPhrase('stationId')} for ${stationName} with ${djName}. A little understated. If you nod to the clock, keep it loose — the time of day, never the exact minutes (this airs a few minutes after you write it).`);
   return djText({
     system: djSystem(),
     prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'station_id', recap, recentOpeners }),
@@ -125,8 +128,21 @@ export async function generateAdLib({ instruction, context = null, recap = null,
   });
 }
 
-export async function generateLink({ previous, current, context, recap = null, recentTracks = null, recentOpeners = null }: any) {
-  const ctxLines = buildContextLines(context, { recentTracks, contextFields: SCRIPT_CONTEXT_FIELDS });
+export async function generateLink({ previous, current, context, clockIsAirTime = false, recap = null, recentTracks = null, recentOpeners = null }: any) {
+  // A pick-attached link is written when the pick is made but airs a full
+  // track later, so a clock reference baked in at generation time is stale by
+  // the length of whatever is playing now — "18:10" spoken at 18:20 (issue
+  // #864). `clockIsAirTime` says the caller resolved `context` at the link's
+  // expected AIR time (the queue watcher's look-ahead, or the manual runLink
+  // that airs immediately): only then may the model speak the clock; otherwise
+  // the Local time line is withheld entirely so it can't leak on air.
+  const contextFields = clockIsAirTime
+    ? SCRIPT_CONTEXT_FIELDS
+    : SCRIPT_CONTEXT_FIELDS.filter((f) => f !== 'clock');
+  const clockClause = clockIsAirTime
+    ? ` If you mention the clock, "Local time" below is the moment this link airs — use that, never an earlier time.`
+    : ` Never state the clock time — this line airs when the next track starts, and you can't know exactly when that is.`;
+  const ctxLines = buildContextLines(context, { recentTracks, contextFields });
   // Forward-looking only: the link is written when the pick is made but doesn't
   // air until that pick actually starts — and a listener request can slip ahead
   // of it in the meantime, so we can't know what really played just before it.
@@ -152,7 +168,7 @@ export async function generateLink({ previous, current, context, recap = null, r
     : '';
   // Talk-within-the-intro budget for the track now starting (current = the pick).
   const budget = introBudgetPhrase(introMsFor(current));
-  const prompt = `Write a short DJ link to carry into the track now starting — set it up, capture its feel, weave in the moment.${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhrase('link')}, conversational. Vary how you open — don't default to "here's", "this is", "coming up", or "that was"; find a different way in each time. Keep it forward-looking: don't back-announce, recap, or name the track that just played — focus on what's playing now.\n\n${ctxLines.join('\n')}`;
+  const prompt = `Write a short DJ link to carry into the track now starting — set it up, capture its feel, weave in the moment.${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhrase('link')}, conversational. Vary how you open — don't default to "here's", "this is", "coming up", or "that was"; find a different way in each time. Keep it forward-looking: don't back-announce, recap, or name the track that just played — focus on what's playing now.${clockClause}\n\n${ctxLines.join('\n')}`;
 
   return djText({
     system: djSystem(),
