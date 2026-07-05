@@ -2,7 +2,8 @@
 // in broadcast/webhooks.ts and reads its config from settings on each fire.
 //
 // Event payloads emitted by the fan-out:
-//   track.play       { event, t, title, artist, album?, source, requestedBy? }
+//   track.play       { event, t, title, artist, album?, source, requestedBy?, listeners }
+//                    (only POSTs when listener count > 0; fail-closed on null/0)
 //   dj.say           { event, t, text, kind }      // kind is the original `announce` kind
 //   dj.link          { event, t, text }
 //   request.received { event, t, requestedBy, text }   // text is the listener's raw ask

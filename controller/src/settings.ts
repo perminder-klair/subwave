@@ -1085,7 +1085,9 @@ const DEFAULTS = {
   },
   // Outbound webhooks. Each entry POSTs station events (see broadcast/
   // webhooks.ts for the event list) to `url` with a fire-and-forget HTTP
-  // call. Empty by default — operators add hooks via the admin UI.
+  // call. `track.play` is listener-gated like scrobble (fail-closed on
+  // null/0 — see broadcast/queue.ts). Empty by default — operators add hooks
+  // via the admin UI.
   webhooks: [] as any[],
   // Station-wide scrobbling. Each backend is independent; both are paste-only
   // (no OAuth) and both are gated on listener count > 0 at scrobble time (a

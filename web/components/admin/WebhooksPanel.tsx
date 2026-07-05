@@ -61,7 +61,7 @@ interface PayloadDoc {
 const PAYLOADS: PayloadDoc[] = [
   {
     event: 'track.play',
-    blurb: 'A track started. `source` is "auto" (the playlist), "ai" (picker agent) or "request"; `artist`/`album`/`requestedBy` may be null.',
+    blurb: 'A track started. Only delivered when at least one listener is tuned in (fail-closed on unknown/zero count). `source` is "auto" (the playlist), "ai" (picker agent) or "request"; `artist`/`album`/`requestedBy` may be null; `listeners` is the current count when fired.',
     json: `{
   "event": "track.play",
   "t": "2026-06-02T19:04:12.880Z",
@@ -69,7 +69,8 @@ const PAYLOADS: PayloadDoc[] = [
   "artist": "Massive Attack",
   "album": "Mezzanine",
   "source": "auto",
-  "requestedBy": null
+  "requestedBy": null,
+  "listeners": 1
 }`,
   },
   {
