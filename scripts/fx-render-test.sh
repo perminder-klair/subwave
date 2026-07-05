@@ -343,20 +343,27 @@ def t(a, b) =
                  filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet, washed))
       add(normalize=false, [a_src, amplify(diss_gain, washed)])
     else a_src end
-  # CHOP — keep in lockstep with radio.liq's chop block: beat-synced gate
-  # (duty shrink → floor decay → exit sparsening), 12 ms smoothstep edges,
-  # engage ramp, master release. Fixed p=0.5 here (the harness has no BPM).
+  # CHOP — keep in lockstep with radio.liq's chop block: compressed clock
+  # dd=min(d,10), accelerating gate (beat → eighths → sixteenth stutter),
+  # duty shrink, floor decay, 12 ms smoothstep edges, engage ramp, master
+  # release. Fixed p=0.5 here (the harness has no BPM).
   a_src =
     if chop_on then
       p = 0.5
+      dd = if d > 10. then 10. else d end
       chop_src = a_src
       def chop_gain() =
         e = source.elapsed(chop_src)
         e = if e < 0. then 0. else e end
-        beat = int_of_float(e / p)
-        ph = e / p - float_of_int(beat)
-        t1 = 0.25 * d
-        t2 = 0.70 * d
+        pp =
+          if e < 0.40 * dd then p
+          elsif e < 0.72 * dd then 0.5 * p
+          else 0.25 * p
+          end
+        beat = int_of_float(e / pp)
+        ph = e / pp - float_of_int(beat)
+        t1 = 0.15 * dd
+        t2 = 0.72 * dd
         duty =
           if e < t1 then
             x = e / t1
@@ -367,19 +374,16 @@ def t(a, b) =
           else
             0.30
           end
-        f_end = 0.40 * d
+        f_end = 0.25 * dd
         floor_g =
           if e >= f_end then 0.0
           else
             x = e / f_end
             0.45 * (1.0 - (3.0 * x * x - 2.0 * x * x * x))
           end
-        odd = beat - 2 * (beat / 2) == 1
-        gate_on = not (e >= t2 and odd)
-        eps = 0.012 / p
+        eps = 0.012 / pp
         shape =
-          if not gate_on then 0.0
-          elsif ph < eps then
+          if ph < eps then
             x = ph / eps
             3.0 * x * x - 2.0 * x * x * x
           elsif ph < duty then 1.0
@@ -389,7 +393,7 @@ def t(a, b) =
           else 0.0
           end
         g_gate = floor_g + (1.0 - floor_g) * shape
-        t_eng = 0.08 * d
+        t_eng = 0.08 * dd
         wet =
           if e >= t_eng then 1.0
           else
@@ -398,9 +402,9 @@ def t(a, b) =
           end
         g = 1.0 - wet * (1.0 - g_gate)
         master =
-          if e < 0.85 * d then 1.0
-          elsif e < 0.92 * d then
-            x = (e - 0.85 * d) / (0.07 * d)
+          if e < 0.82 * dd then 1.0
+          elsif e < 0.92 * dd then
+            x = (e - 0.82 * dd) / (0.10 * dd)
             1.0 - (3.0 * x * x - 2.0 * x * x * x)
           else 0.0
           end

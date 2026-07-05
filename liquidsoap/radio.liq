@@ -659,34 +659,51 @@ def dj_transition(a, b) =
   # survives) and closing for the rest of the beat. Pure `amplify` driven by a
   # pure function of the branch's own source.elapsed() — the same proven
   # closure pattern as sweep_gain/wash_gain, no new operator class, so no
-  # fx-render-test re-probe needed. Three envelopes compose per frame:
-  #   duty    — how much of each beat stays open: 1.0 (transparent engage) →
-  #             0.55 by 25% of the blend → 0.30 by 70% (stabs tighten).
-  #   floor   — gain UNDER the closed gate: 0.45 → 0 over the first 40%, so
-  #             early holes read as beat-synced pumping (transform-style)
-  #             while the incoming is still quiet, hardening into true cuts
-  #             once it can carry; full silence between stabs at cross start
-  #             read as dropouts, not craft.
-  #   sparsen — past 70% only every OTHER beat fires: the exit stabs.
+  # fx-render-test re-probe needed. The gesture runs on its own compressed
+  # clock dd = min(d, 10 s): a cut is a cut — stretched over a long operator
+  # crossfade it read as slow pumping (heard on-air, #861), so the envelope
+  # finishes in ≤10 s and leaves the rest of the buffer to the incoming ramp.
+  # Four envelopes compose per frame:
+  #   rate    — the gate ACCELERATES like a DJ transform cut: one cut per beat
+  #             through 40% of dd, eighths to 72%, sixteenth stutter into the
+  #             throw. p/2 and p/4 divide p, so every original beat start is
+  #             still a gate-open and the downbeat transient survives; a zone
+  #             switch mid-gate costs one irregular gap, inaudible at speed.
+  #   duty    — how much of each gate stays open: 1.0 (transparent engage) →
+  #             0.55 by 15% of dd → 0.30 by 72% (stabs tighten).
+  #   floor   — gain UNDER the closed gate: 0.45 → 0 over the first 25% of dd:
+  #             the first holes read as beat-synced pumping just long enough
+  #             to establish the move, then harden into true cuts (full
+  #             silence between the very first stabs read as dropouts).
+  #   (the old every-other-beat sparsen is gone — the stutter accelerando IS
+  #   the exit now; isolated late stabs read as slowing down, the wrong
+  #   direction for a cut.)
   # Gate edges are ~12 ms smoothsteps (square edges click); a wet ramp over
-  # the first 8% makes the engage bit-transparent (at e=0 gain is exactly 1 —
-  # any instant dip against the pre-cross signal is a step); a master release
-  # kills the last stab by 0.92·d so the branch is silent before the
-  # transition source truncates at d (amplify vanishes at the boundary like
-  # every branch operator — it must already be emitting silence by then).
+  # the first 8% of dd makes the engage bit-transparent (at e=0 gain is
+  # exactly 1 — any instant dip against the pre-cross signal is a step); a
+  # master release kills the stutter by 0.92·dd so the branch is silent long
+  # before the transition source truncates at d (amplify vanishes at the
+  # boundary like every branch operator).
   a_source =
     if chopping then
       p = float_of_string(default=0.5, b.metadata["liq_chop_period"])
       p = if p <= 0.05 then 0.5 else p end
-      log("DJ chop: cutting the outgoing track on the beat (p=#{p}s, d=#{d}s)")
+      dd = if d > 10. then 10. else d end
+      log("DJ chop: cutting the outgoing track on the beat (p=#{p}s, dd=#{dd}s, d=#{d}s)")
       chop_src = a_source
       def chop_gain() =
         e = source.elapsed(chop_src)
         e = if e < 0. then 0. else e end
-        beat = int_of_float(e / p)
-        ph = e / p - float_of_int(beat)          # 0..1 within the beat
-        t1 = 0.25 * d
-        t2 = 0.70 * d
+        # Accelerating clock: quarters → eighths → sixteenth stutter.
+        pp =
+          if e < 0.40 * dd then p
+          elsif e < 0.72 * dd then 0.5 * p
+          else 0.25 * p
+          end
+        beat = int_of_float(e / pp)
+        ph = e / pp - float_of_int(beat)         # 0..1 within the gate
+        t1 = 0.15 * dd
+        t2 = 0.72 * dd
         duty =
           if e < t1 then
             x = e / t1
@@ -697,21 +714,16 @@ def dj_transition(a, b) =
           else
             0.30
           end
-        f_end = 0.40 * d
+        f_end = 0.25 * dd
         floor_g =
           if e >= f_end then 0.0
           else
             x = e / f_end
             0.45 * (1.0 - (3.0 * x * x - 2.0 * x * x * x))
           end
-        # Exit stabs: past 70% odd-numbered beats stay shut (int division —
-        # no float mod in the proven kit).
-        odd = beat - 2 * (beat / 2) == 1
-        gate_on = not (e >= t2 and odd)
-        eps = 0.012 / p                          # ~12 ms edges, in phase units
+        eps = 0.012 / pp                         # ~12 ms edges, in phase units
         shape =
-          if not gate_on then 0.0
-          elsif ph < eps then
+          if ph < eps then
             x = ph / eps
             3.0 * x * x - 2.0 * x * x * x
           elsif ph < duty then 1.0
@@ -721,8 +733,8 @@ def dj_transition(a, b) =
           else 0.0
           end
         g_gate = floor_g + (1.0 - floor_g) * shape
-        # Engage ramp: gain 1.0 at e=0, gate fully in by 8% of the blend.
-        t_eng = 0.08 * d
+        # Engage ramp: gain 1.0 at e=0, gate fully in by 8% of the gesture.
+        t_eng = 0.08 * dd
         wet =
           if e >= t_eng then 1.0
           else
@@ -730,11 +742,12 @@ def dj_transition(a, b) =
             3.0 * x * x - 2.0 * x * x * x
           end
         g = 1.0 - wet * (1.0 - g_gate)
-        # Master release: silent from 0.92·d, before the branch truncates.
+        # Master release: silent from 0.92·dd — the throw. The rest of the
+        # buffer belongs to the incoming ramp.
         master =
-          if e < 0.85 * d then 1.0
-          elsif e < 0.92 * d then
-            x = (e - 0.85 * d) / (0.07 * d)
+          if e < 0.82 * dd then 1.0
+          elsif e < 0.92 * dd then
+            x = (e - 0.82 * dd) / (0.10 * dd)
             1.0 - (3.0 * x * x - 2.0 * x * x * x)
           else 0.0
           end
