@@ -2,7 +2,7 @@
 // Used by the autonomous scheduler to pick mood-appropriate tracks.
 
 import { config } from './config.js';
-import { resolveActiveShow, get as getSettings, FESTIVAL_DEFAULTS } from './settings.js';
+import { resolveActiveShow, get as getSettings } from './settings.js';
 import { getListenerCount } from './broadcast/listeners.js';
 import { zonedParts, zonedISODate } from './time.js';
 
@@ -23,16 +23,23 @@ export function getTimeContext(date = new Date()) {
 }
 
 // Festival calendar — read from persisted settings so the operator can
-// add/edit/remove entries from the admin UI. Falls back to the seeded
-// defaults (FESTIVAL_DEFAULTS in settings.ts) when empty/absent.
+// add/edit/remove entries from the admin UI. settings.load() seeds
+// FESTIVAL_DEFAULTS when the key is absent; an emptied list stays empty
+// (the operator turned the calendar off), so no fallback here.
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 export function getFestivalContext(date = new Date()) {
-  const { month: m, day: d } = zonedParts(date);
-  const festivals = (getSettings().festivals?.length ? getSettings().festivals : null)
-    || FESTIVAL_DEFAULTS;
-  for (const f of festivals) {
+  const { year: y, month: m, day: d } = zonedParts(date);
+  const today = Date.UTC(y, m - 1, d);
+  for (const f of getSettings().festivals ?? []) {
     const window = f.windowDays || 0;
-    if (f.month === m && Math.abs(f.day - d) <= window) {
-      return { name: f.name, mood: f.mood };
+    // Compare real dates so the window spans month and year boundaries
+    // (New Year's Day with windowDays 3 is active from Dec 29). Adjacent
+    // years cover a window reaching across Dec 31 / Jan 1.
+    for (const yy of [y - 1, y, y + 1]) {
+      if (Math.abs(Date.UTC(yy, f.month - 1, f.day) - today) <= window * DAY_MS) {
+        return { name: f.name, mood: f.mood };
+      }
     }
   }
   return null;

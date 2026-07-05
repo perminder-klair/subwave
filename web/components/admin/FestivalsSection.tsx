@@ -31,26 +31,6 @@ const DAYS_IN_MONTH = (m: number) => {
   return 31;
 };
 
-const FESTIVAL_MOODS = [
-  'energetic',
-  'calm',
-  'reflective',
-  'celebratory',
-  'romantic',
-  'spiritual',
-  'focus',
-  'workout',
-  'driving',
-  'cooking',
-  'rainy',
-  'sunny',
-  'night',
-  'morning',
-  'evening',
-  'festival',
-  'cultural',
-];
-
 const EMPTY_FESTIVAL: Festival = {
   month: 1,
   day: 1,
@@ -60,23 +40,15 @@ const EMPTY_FESTIVAL: Festival = {
   windowDays: 0,
 };
 
-function festivalKey(f: Festival): string {
-  return `${f.month}-${f.day}-${f.name}`;
-}
-
 function monthDayLabel(f: Festival): string {
   const m = MONTH_NAMES[f.month - 1] || String(f.month);
   return `${m} ${f.day}`;
 }
 
-interface FestivalsSectionProps {
-  onLoad?: (data: { festivals: Festival[]; moods: string[] }) => void;
-}
-
-export default function FestivalsSection({ onLoad }: FestivalsSectionProps) {
+export default function FestivalsSection() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [festivals, setFestivals] = useState<Festival[] | null>(null);
-  const [moods] = useState<string[]>(FESTIVAL_MOODS);
+  const [moods, setMoods] = useState<string[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<Festival | null>(null);
@@ -88,16 +60,14 @@ export default function FestivalsSection({ onLoad }: FestivalsSectionProps) {
       const r = await adminFetch('/settings');
       if (!r.ok) throw new Error(`failed (${r.status})`);
       const j = (await r.json()) as any;
+      // The controller validates + normalises festivals on every save
+      // (validateFestivalsStrict), so trust the shape as-is here.
       const vals = j?.values?.festivals;
-      const loaded = Array.isArray(vals) ? vals : [];
-      setFestivals(loaded.map((f: any) => ({
-        month: Number(f.month) || 1,
-        day: Number(f.day) || 1,
-        name: String(f.name ?? '').trim(),
-        mood: FESTIVAL_MOODS.includes(f.mood) ? f.mood : 'festival',
-        description: typeof f.description === 'string' ? f.description : '',
-        windowDays: Number(f.windowDays ?? 0),
-      })).sort((a, b) => a.month - b.month || a.day - b.day));
+      const loaded: Festival[] = Array.isArray(vals) ? vals : [];
+      setFestivals([...loaded].sort((a, b) => a.month - b.month || a.day - b.day));
+      // Mood vocabulary comes from the server (SHOW_MOODS via tts.moods) so
+      // the dropdown never drifts from what the controller will accept.
+      setMoods(Array.isArray(j?.tts?.moods) ? j.tts.moods : []);
       setErr(null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -108,12 +78,6 @@ export default function FestivalsSection({ onLoad }: FestivalsSectionProps) {
     if (!hydrated || needsAuth) return;
     void load();
   }, [hydrated, needsAuth, load]);
-
-  useEffect(() => {
-    if (festivals && onLoad) {
-      onLoad({ festivals, moods });
-    }
-  }, [festivals, moods, onLoad]);
 
   const save = async (updated: Festival[]) => {
     setBusy(true);
@@ -227,7 +191,16 @@ export default function FestivalsSection({ onLoad }: FestivalsSectionProps) {
                       <Label>Month</Label>
                       <Select
                         value={String(editing.month)}
-                        onValueChange={v => updateField('month', Number(v))}
+                        onValueChange={v => {
+                          // Clamp the day so switching e.g. Oct 31 → February
+                          // can't leave an impossible date in the form.
+                          const month = Number(v);
+                          setEditing(cur => cur && ({
+                            ...cur,
+                            month,
+                            day: Math.min(cur.day, DAYS_IN_MONTH(month)),
+                          }));
+                        }}
                       >
                         <SelectTrigger>
                           <SelectValue />
@@ -337,13 +310,18 @@ export default function FestivalsSection({ onLoad }: FestivalsSectionProps) {
               <div className="grid gap-2">
                 {festivals.map((f, i) => (
                   <div
-                    key={festivalKey(f)}
+                    key={i}
                     className="flex items-center gap-3 border border-ink bg-bg p-3"
                   >
                     <Pill tone="ink">{monthDayLabel(f)}</Pill>
-                    <span className="min-w-0 flex-1 truncate text-[12px] font-bold tracking-[0.08em] uppercase">
-                      {f.name}
-                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[12px] font-bold tracking-[0.08em] uppercase">
+                        {f.name}
+                      </div>
+                      {f.description ? (
+                        <div className="truncate text-[12px] text-muted">{f.description}</div>
+                      ) : null}
+                    </div>
                     <Pill>{f.mood}</Pill>
                     {f.windowDays ? (
                       <Pill tone="ink">{f.windowDays}d window</Pill>

@@ -1497,12 +1497,10 @@ export async function load() {
           ? stored.theme.active.trim()
           : DEFAULTS.theme.active,
     },
-    // Festivals loaded from settings.json. An empty array (or missing/non-array)
-    // falls back to the seeded defaults so the DJ always has a mood calendar.
-    festivals:
-      Array.isArray(stored.festivals) && stored.festivals.length > 0
-        ? stored.festivals
-        : FESTIVAL_DEFAULTS,
+    // Festivals loaded from settings.json. Seeded from FESTIVAL_DEFAULTS only
+    // when the key is absent/invalid — a persisted empty array means the
+    // operator deleted every entry and must stay empty (calendar off).
+    festivals: Array.isArray(stored.festivals) ? stored.festivals : FESTIVAL_DEFAULTS,
     ui: {
       boothBuddy:
         typeof stored.ui?.boothBuddy === 'boolean'
@@ -2282,8 +2280,11 @@ function validateFestivalsStrict(raw) {
       throw new Error(`festivals[${i}].month must be an integer 1-12`);
     }
     const day = Number(item.day);
-    if (!Number.isInteger(day) || day < 1 || day > 31) {
-      throw new Error(`festivals[${i}].day must be an integer 1-31`);
+    // Feb allows 29 — in common years a leap-day festival fires Mar 1
+    // (Date.UTC rolls the date over in getFestivalContext).
+    const daysInMonth = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+    if (!Number.isInteger(day) || day < 1 || day > daysInMonth) {
+      throw new Error(`festivals[${i}].day must be an integer 1-${daysInMonth} for month ${month}`);
     }
     const mood = String(item.mood ?? '').trim();
     if (!SHOW_MOODS.includes(mood)) {
