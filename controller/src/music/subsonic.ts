@@ -631,6 +631,13 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } =
   // OUTGOING track's metadata. Absent → normal cross.
   if (song.washout) fields.push('liq_washout="true"');
   if (song.washoutDelay != null) fields.push(`liq_washout_delay="${escAnnotate(song.washoutDelay)}"`);
+  // DJ exit loop: rides the ENDING track like the washout — its last bar is
+  // caught in a comb-cascade loop as the dry is hard-cut, repeating in
+  // tempo under whatever follows. liq_loop_bar is one bar of THIS track's
+  // own tempo (mix.loopBarFor); the canvas rides liq_cross_duration exactly
+  // like the washout's. radio.liq reads both off the OUTGOING track.
+  if (song.loop) fields.push('liq_loop="true"');
+  if (song.loopBar != null) fields.push(`liq_loop_bar="${escAnnotate(song.loopBar)}"`);
   // DJ blend (spectral handover): validated same-lane picks trade the spectrum
   // with their predecessor across the cross — dj_transition reads liq_blend on
   // the INCOMING track, like the sweep.
