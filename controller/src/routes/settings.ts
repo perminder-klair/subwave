@@ -96,6 +96,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         timezone: s.timezone,
         locale: s.locale,
         theme: s.theme,
+        festivals: s.festivals,
         weather: s.weather,
         djPrompt: s.djPrompt,
         personas: s.personas,

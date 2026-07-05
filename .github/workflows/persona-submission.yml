@@ -1,0 +1,233 @@
+name: Persona submission → PR
+
+# Turns a "🎙️ Share a DJ persona" issue (see .github/ISSUE_TEMPLATE/add-persona.yml)
+# into a one-file pull request that adds a community persona under
+# controller/src/personas/community/<slug>/PERSONA.md — so contributors can share
+# a persona WITHOUT forking the repo or hand-writing frontmatter. A maintainer
+# then reviews and merges the generated PR; the persona ships in the controller
+# image on the next release and becomes installable from every station's
+# /admin/personas.
+#
+# This mirrors .github/workflows/skill-submission.yml. Security: the issue body
+# is UNTRUSTED user input. It is parsed and written to a file entirely inside
+# actions/github-script via the REST API (Buffer/base64, createOrUpdateFileContents)
+# — NEVER interpolated into a shell `run:` step, so there is no command-injection
+# surface. The only file this workflow can write is
+# controller/src/personas/community/<slug>/PERSONA.md (slug sanitised + validated
+# against the loader's SLUG_RE). Personas are data-only by construction — no code
+# ever ships through this path.
+
+# NOTE: the `persona-submission` label MUST exist as a repo label, otherwise
+# GitHub silently drops it from the issue template and the `if:` guard below
+# never matches (every run shows "skipped"). `labeled` is included so a
+# maintainer can re-trigger a stuck submission by re-applying the label.
+on:
+  issues:
+    types: [opened, edited, labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: persona-submission-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  build-pr:
+    name: Build persona PR from issue
+    runs-on: ubuntu-latest
+    if: contains(join(github.event.issue.labels.*.name, ','), 'persona-submission')
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const { owner, repo } = context.repo;
+            const BASE = 'develop';
+            const DIR = 'controller/src/personas/community';
+
+            const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,48}$/;
+            const FREQUENCIES = new Set(['quiet', 'moderate', 'aggressive']);
+            const SCRIPT_LENGTHS = new Set(['concise', 'extended']);
+
+            // --- 1. Parse the issue-form body into a { heading: value } map ---
+            // GitHub renders each field as "### <label>\n\n<value>"; empty optional
+            // fields render as "_No response_". Walk line-by-line so a multi-line
+            // soul isn't truncated.
+            const body = issue.body || '';
+            const fields = {};
+            let curKey = null, buf = [];
+            const flush = () => {
+              if (curKey === null) return;
+              let v = buf.join('\n').trim();
+              if (v === '_No response_') v = '';
+              fields[curKey] = v;
+            };
+            for (const line of body.split(/\r?\n/)) {
+              const h = line.match(/^###\s+(.+?)\s*$/);
+              if (h) { flush(); curKey = h[1].trim(); buf = []; }
+              else if (curKey !== null) { buf.push(line); }
+            }
+            flush();
+            const get = (label) => (fields[label] || '').trim();
+
+            const slug = get('Persona slug').toLowerCase();
+            const displayName = get('On-air name');
+            const tagline = get('Tagline');
+            const soul = get('The soul');
+            const frequency = get('Talk frequency').toLowerCase();
+            const scriptLength = get('Script length').toLowerCase();
+            const djMode = get('DJ mode').toLowerCase();
+            const language = get('On-air language');
+
+            // Optional 0-10 integer dial; '' → unset (neutral downstream).
+            // Returns { ok, value } so a malformed value fails loudly instead of
+            // being silently dropped.
+            const dial = (label) => {
+              const raw = get(label);
+              if (!raw) return { ok: true, value: '' };
+              const n = Number(raw);
+              if (!Number.isInteger(n) || n < 0 || n > 10) return { ok: false, value: raw };
+              return { ok: true, value: String(n) };
+            };
+            const humour = dial('Humour dial');
+            const localColour = dial('Local colour dial');
+            const warmth = dial('Warmth dial');
+
+            // --- 2. Validate (mirrors controller settings.validatePersonasStrict
+            // bounds so the installed persona always passes) ---
+            const problems = [];
+            if (!slug) problems.push('**Persona slug** is required.');
+            else if (!SLUG_RE.test(slug)) problems.push('**Persona slug** must be a lowercase slug: start with a letter or digit, then letters/digits/hyphens, ≤49 chars (e.g. `saffron-am`).');
+            if (!displayName) problems.push('**On-air name** is required.');
+            else if (displayName.length > 40) problems.push('**On-air name** must be at most 40 characters.');
+            if (tagline.length > 80) problems.push('**Tagline** must be at most 80 characters.');
+            if (!soul) problems.push('**The soul** is required — it\'s the character prose the DJ speaks from.');
+            else if (soul.length > 1000) problems.push(`**The soul** must be at most 1000 characters (currently ${soul.length}).`);
+            if (frequency && !FREQUENCIES.has(frequency)) problems.push('**Talk frequency** must be quiet, moderate, or aggressive.');
+            if (scriptLength && !SCRIPT_LENGTHS.has(scriptLength)) problems.push('**Script length** must be concise or extended.');
+            if (!humour.ok) problems.push('**Humour dial** must be a whole number 0–10.');
+            if (!localColour.ok) problems.push('**Local colour dial** must be a whole number 0–10.');
+            if (!warmth.ok) problems.push('**Warmth dial** must be a whole number 0–10.');
+            if (language.length > 60) problems.push('**On-air language** must be at most 60 characters.');
+
+            const fail = async (lines) => {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: issue.number,
+                body: `⚠️ I couldn't build a pull request from this submission:\n\n` +
+                  lines.map((l) => `- ${l}`).join('\n') +
+                  `\n\nEdit the issue to fix it and I'll try again automatically.`,
+              });
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: issue.number, labels: ['needs-info'],
+              }).catch(() => {});
+            };
+
+            if (problems.length) { await fail(problems); return; }
+
+            const filePath = `${DIR}/${slug}/PERSONA.md`;
+            // Provenance: who submitted it (the issue author) and when. `new Date`
+            // is the CI clock (UTC) — this runs in real Node, not a sandbox.
+            const submittedBy = (issue.user && issue.user.login) || '';
+            const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+
+            // --- 3. Ensure a branch off develop ---
+            const branch = `persona/${slug}`;
+            const baseRef = await github.rest.git.getRef({
+              owner, repo, ref: `heads/${BASE}`,
+            });
+            const baseSha = baseRef.data.object.sha;
+            try {
+              await github.rest.git.createRef({
+                owner, repo, ref: `refs/heads/${branch}`, sha: baseSha,
+              });
+            } catch (e) {
+              if (e.status !== 422) throw e; // 422 = branch already exists (edited issue)
+            }
+
+            // --- 4. Find any existing copy on the branch (an edited issue, or a
+            // version already merged into develop that this branch carries). We
+            // need its blob sha to update in place, and its `dateAdded:` so the
+            // original added-date survives re-runs — only dateModified moves. ---
+            let existingSha;
+            let existingAdded = '';
+            try {
+              const existing = await github.rest.repos.getContent({
+                owner, repo, path: filePath, ref: branch,
+              });
+              existingSha = existing.data.sha;
+              const prev = Buffer.from(existing.data.content || '', 'base64').toString('utf8');
+              const m = prev.match(/^dateAdded:\s*(.+?)\s*$/m);
+              if (m) existingAdded = m[1].trim();
+            } catch (e) {
+              if (e.status !== 404) throw e;
+            }
+            const dateAdded = existingAdded || today;
+
+            // --- 5. Render PERSONA.md — frontmatter matching the catalog reader
+            // (controller/src/personas/community.ts CommunityPersona), plus the
+            // provenance it reads back (submittedBy / dateAdded / dateModified). ---
+            const fm = ['---', `name: ${slug}`, `displayName: ${displayName}`];
+            if (tagline) fm.push(`tagline: ${tagline}`);
+            if (frequency && frequency !== 'moderate') fm.push(`frequency: ${frequency}`);
+            if (scriptLength && scriptLength !== 'concise') fm.push(`scriptLength: ${scriptLength}`);
+            if (djMode === 'on') fm.push('djMode: true');
+            if (humour.value) fm.push(`humour: ${humour.value}`);
+            if (localColour.value) fm.push(`localColour: ${localColour.value}`);
+            if (warmth.value) fm.push(`warmth: ${warmth.value}`);
+            if (language) fm.push(`language: ${language}`);
+            if (submittedBy) fm.push(`submittedBy: ${submittedBy}`);
+            fm.push(`dateAdded: ${dateAdded}`);
+            fm.push(`dateModified: ${today}`);
+            fm.push('---', soul, '');
+            const content = fm.join('\n');
+            const contentB64 = Buffer.from(content, 'utf8').toString('base64');
+
+            // --- 6. Write/refresh the persona file on that branch ---
+            await github.rest.repos.createOrUpdateFileContents({
+              owner, repo, path: filePath, branch,
+              message: `feat(personas): add ${displayName} community persona (from #${issue.number})`,
+              content: contentB64,
+              ...(existingSha ? { sha: existingSha } : {}),
+            });
+
+            // --- 7. Open the PR (or reuse the existing one) ---
+            const open = await github.rest.pulls.list({
+              owner, repo, state: 'open', head: `${owner}:${branch}`,
+            });
+            let pr = open.data[0];
+            const summary = get('What are they like? (for reviewers)');
+            const prBody =
+              `Adds the **${displayName}** community persona.\n\n` +
+              (summary ? `> ${summary}\n\n` : '') +
+              `Generated automatically from #${issue.number}. Closes #${issue.number}.\n\n` +
+              '```markdown\n' + content + '```\n';
+            if (!pr) {
+              const created = await github.rest.pulls.create({
+                owner, repo, base: BASE, head: branch,
+                title: `feat(personas): add ${displayName} community persona`,
+                body: prBody,
+              });
+              pr = created.data;
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: pr.number, labels: ['personas'],
+              }).catch(() => {});
+            } else {
+              await github.rest.pulls.update({
+                owner, repo, pull_number: pr.number, body: prBody,
+              });
+            }
+
+            // --- 8. Tell the contributor ---
+            await github.rest.issues.removeLabel({
+              owner, repo, issue_number: issue.number, name: 'needs-info',
+            }).catch(() => {});
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: issue.number,
+              body: `✅ Opened ${pr.html_url} with your persona at \`${filePath}\`.\n\n` +
+                `A maintainer will review and merge it — your persona then ships with the next ` +
+                `release and becomes installable from every station's admin panel. Need to ` +
+                `change something? Just edit this issue and the PR updates automatically.`,
+            });

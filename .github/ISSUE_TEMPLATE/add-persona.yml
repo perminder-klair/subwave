@@ -1,0 +1,151 @@
+name: 🎙️ Share a DJ persona with the community
+description: Contribute a DJ persona (a name, a soul, a few behaviour knobs) to the shared catalog — no fork, no YAML. Fill this in and a pull request is opened for you automatically.
+title: "Add persona: "
+labels: ["persona-submission"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing a persona! A persona is a DJ identity — a name, a short
+        soul (the character prose that shapes everything they say on air), and a few
+        behaviour knobs. A bot turns this issue into a one-file pull request; a
+        maintainer reviews and merges it, and it ships to every station as an
+        installable community persona.
+
+        Voices and avatars stay station-side — every operator picks their own TTS
+        engine and artwork after installing. **You don't need to fork anything.**
+  - type: input
+    id: persona-slug
+    attributes:
+      label: Persona slug
+      description: Lowercase, hyphenated, starts with a letter or digit (a–z, 0–9, hyphens), ≤49 chars. This is the folder name in the catalog and must be unique.
+      placeholder: saffron-am
+    validations:
+      required: true
+  - type: input
+    id: display-name
+    attributes:
+      label: On-air name
+      description: The DJ's name as it appears in the roster and on air. Up to 40 characters.
+      placeholder: Saffron
+    validations:
+      required: true
+  - type: input
+    id: tagline
+    attributes:
+      label: Tagline
+      description: One line that sells the persona in the roster. Up to 80 characters.
+      placeholder: Breakfast-show warmth, whatever the hour.
+    validations:
+      required: false
+  - type: textarea
+    id: soul
+    attributes:
+      label: The soul
+      description: >
+        The character prose — who this DJ is, how they talk, what they never do.
+        Written as description, not instructions to a model. 1–1000 characters;
+        this becomes the persona's `soul` verbatim.
+      placeholder: A morning-show host at heart, even at midnight. Warm, quick to smile, talks to one listener at a time…
+    validations:
+      required: true
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: Talk frequency
+      description: How often this persona speaks between tracks.
+      options:
+        - moderate
+        - quiet
+        - aggressive
+      default: 0
+    validations:
+      required: false
+  - type: dropdown
+    id: script-length
+    attributes:
+      label: Script length
+      description: Concise is the standard one-to-four sentence segment; extended is roughly double, for storytellers.
+      options:
+        - concise
+        - extended
+      default: 0
+    validations:
+      required: false
+  - type: dropdown
+    id: dj-mode
+    attributes:
+      label: DJ mode
+      description: On = behaves like a working radio DJ (back-announces, teases what's next, runs callbacks). Off = the tasteful-narrator default.
+      options:
+        - "off"
+        - "on"
+      default: 0
+    validations:
+      required: false
+  - type: input
+    id: humour
+    attributes:
+      label: Humour dial
+      description: 0–10, where 0 plays it straight and 10 is playful & dry. Leave blank for neutral (5).
+      placeholder: "7"
+    validations:
+      required: false
+  - type: input
+    id: local-colour
+    attributes:
+      label: Local colour dial
+      description: 0–10, where 0 is universal and 10 leans local. Leave blank for neutral (5).
+      placeholder: "5"
+    validations:
+      required: false
+  - type: input
+    id: warmth
+    attributes:
+      label: Warmth dial
+      description: 0–10, where 0 is cool & dry and 10 is warm & earnest. Leave blank for neutral (5).
+      placeholder: "8"
+    validations:
+      required: false
+  - type: input
+    id: language
+    attributes:
+      label: On-air language
+      description: Free text, e.g. "Turkish" or "Türkçe". Leave blank for English.
+    validations:
+      required: false
+  - type: textarea
+    id: description
+    attributes:
+      label: What are they like? (for reviewers)
+      description: One or two sentences on the persona and why it's worth sharing. Not saved into the persona — just helps the maintainer review.
+      placeholder: A gentle breakfast-radio host for stations that want warmth without chatter.
+    validations:
+      required: false
+  - type: markdown
+    attributes:
+      value: |
+        ### Contribution terms
+
+        By submitting a persona you agree:
+
+        - The soul is your own work (or cleared for sharing), contains nothing
+          unlawful, hateful, or designed to deceive listeners, and does not
+          imitate a real, living person without their consent.
+        - It contains no secrets or personal data.
+        - Your GitHub username is recorded as the persona's submitter (shown as a
+          credit line in the community catalog), along with the dates it was added
+          and last updated.
+        - SUB/WAVE may include, edit, or remove it from the catalog at its discretion.
+        - It's shared under the same licence as the SUB/WAVE repository.
+
+        This isn't legal advice.
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before you submit
+      options:
+        - label: I understand a pull request will be opened from this issue and a maintainer will review it.
+          required: true
+        - label: I agree to the contribution terms above.
+          required: true

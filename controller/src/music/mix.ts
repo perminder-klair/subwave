@@ -233,6 +233,42 @@ export function washoutDelayFor(bpm: number | null): number {
   return Math.round(clamped * 100) / 100;
 }
 
+// Loop tap for the exit loop — one bar (4 beats, 4/4) of the flagged track's
+// own tempo, halved/doubled into a 1.2–3.4 s window so extreme tempi still
+// yield a musical, comb-sized loop (a half-bar at very slow tempi, two bars
+// at very fast ones — both still whole beat multiples, so the loop repeats
+// in time). Unknown BPM → 2.0 s, but the queue strips the effect before that
+// matters (a loop without a measured bar is noise); 2.0 is only the
+// radio.liq fallback when the stamp is somehow absent.
+export function loopBarFor(bpm: number | null): number {
+  if (!bpm || bpm <= 0) return 2.0;
+  let bar = (4 * 60) / bpm;
+  while (bar > 3.4) bar = bar / 2;
+  while (bar < 1.2) bar = bar * 2;
+  return Math.round(bar * 100) / 100;
+}
+
+export const LOOP_CROSS_TARGET_SECONDS = 12;
+
+// Canvas for a loop exit — like the washout's, but snapped to a whole number
+// of LOOPS (not bars) so the ride-out holds an integral repeat count before
+// the release; the [8, ceiling] clamp still wins at the edges (an off-grid
+// last repeat under the master fade beats a canvas outside the broadcast
+// range). Same no-incoming-cap rationale as washoutCrossSecondsFor: the next
+// track isn't known when this track is annotated.
+export function loopCrossSecondsFor(a: Analysis, maxSec: number | null = null): number {
+  const ceil = typeof maxSec === 'number' && maxSec > 0 ? Math.min(maxSec, CROSS_MAX_SECONDS) : CROSS_MAX_SECONDS;
+  const lo = Math.min(8, ceil);
+  let secs = 10;
+  if (a.bpm && a.bpm > 0) {
+    const bar = loopBarFor(a.bpm);
+    const loops = Math.max(3, Math.round(LOOP_CROSS_TARGET_SECONDS / bar));
+    secs = loops * bar;
+  }
+  secs = Math.max(lo, Math.min(ceil, secs));
+  return Math.round(secs * 10) / 10;
+}
+
 // The LLM proposes, the data disposes. A sweep is the move that hides a seam —
 // between tempo/key-locked tracks a tight beat-blend is better and a filter
 // ride reads as gratuitous — so it only survives a real clash. Un-analysed
@@ -240,12 +276,18 @@ export function washoutDelayFor(bpm: number | null): number {
 // "close the chapter" gesture, not a compatibility repair: always allowed —
 // the caller's cooldown rations it.
 //
-// The four effects form a 2×2: blend = the rhythmic move for COMPATIBLE
+// The effects map onto a small grid: blend = the rhythmic move for COMPATIBLE
 // pairs, washout = the rhythmic exit (always allowed), sweep = the dramatic
 // textural move across a clash, dissolve = the smooth textural move across a
-// clash (the reverb wash — hides the seam the sweep would announce).
-export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend' | 'dissolve', cur: Analysis, next: Analysis): boolean {
+// clash (the reverb wash — hides the seam the sweep would announce), chop =
+// the percussive move across a clash (the crossfader cut — announces the seam
+// on the beat instead of choking it like the sweep).
+export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend' | 'dissolve' | 'chop' | 'loop', cur: Analysis, next: Analysis): boolean {
   if (kind === 'washout') return true;
+  // loop (exit loop) is editorial like the washout — an intentful way to
+  // leave a track, not a compatibility repair. The queue separately requires
+  // the flagged track's own measured tempo (a loop needs a bar length).
+  if (kind === 'loop') return true;
   if (!analysed(cur) || !analysed(next)) return true;
   const compat = mixCompat(cur, next);
   // blend (spectral handover) is the sweep's mirror: it makes COMPATIBLE
@@ -257,7 +299,20 @@ export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend' | 'dissolve
   // glue for a pair that measurably clashes; between compatible tracks a
   // blend keeps the groove alive and a wash just kills it.
   if (kind === 'dissolve') return compat < 0.4;
+  // sweep and chop are both gear-change moves — musically wrong between
+  // locked tracks where a tight beat-blend serves better.
   return compat < 0.6;
+}
+
+// Gate period for the chop — one beat of the OUTGOING track (the one being
+// cut), clamped so extreme tempi stay in the stab-audible range. Unknown BPM →
+// 0.5 s (the neutral default radio.liq also falls back to when the stamp is
+// absent). Unlike the washout's dotted-eighth echo tap, the chop cuts ON the
+// beat: the gate opens at each beat start so the downbeat transient survives.
+export function chopPeriodFor(bpm: number | null): number {
+  if (!bpm || bpm <= 0) return 0.5;
+  const clamped = Math.max(0.25, Math.min(0.75, 60 / bpm));
+  return Math.round(clamped * 100) / 100;
 }
 
 // --- Feature 2: transition FX ----------------------------------------------

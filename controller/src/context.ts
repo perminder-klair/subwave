@@ -2,7 +2,7 @@
 // Used by the autonomous scheduler to pick mood-appropriate tracks.
 
 import { config } from './config.js';
-import { resolveActiveShow } from './settings.js';
+import { resolveActiveShow, get as getSettings } from './settings.js';
 import { getListenerCount } from './broadcast/listeners.js';
 import { zonedParts, zonedISODate } from './time.js';
 
@@ -22,32 +22,24 @@ export function getTimeContext(date = new Date()) {
   return { period: 'after-hours', mood: 'reflective', vibe: 'after hours', show: 'graveyard' };
 }
 
-// Festival calendar — general / cross-cultural defaults. Edit to taste; the
-// DJ leans into `mood` around these dates. Fixed-date only; lunar holidays
-// (Easter, Eid, Lunar New Year) shift year-to-year and would need a
-// per-year lookup.
-const FESTIVALS = [
-  { month: 1, day: 1, name: "New Year's Day", mood: 'celebratory' },
-  { month: 2, day: 14, name: "Valentine's Day", mood: 'romantic' },
-  { month: 3, day: 17, name: "St. Patrick's Day", mood: 'celebratory' },
-  { month: 4, day: 13, name: 'Vaisakhi', mood: 'festival', windowDays: 1 },
-  { month: 5, day: 1, name: 'May Day', mood: 'festival' },
-  { month: 6, day: 21, name: 'Summer Solstice', mood: 'celebratory' },
-  { month: 10, day: 31, name: 'Halloween', mood: 'festival' },
-  { month: 11, day: 1, name: 'Diwali', mood: 'festival', windowDays: 3 },
-  { month: 11, day: 5, name: 'Bonfire Night', mood: 'festival' },
-  { month: 12, day: 21, name: 'Winter Solstice', mood: 'reflective' },
-  { month: 12, day: 25, name: 'Christmas', mood: 'celebratory', windowDays: 1 },
-  { month: 12, day: 26, name: 'Boxing Day', mood: 'celebratory' },
-  { month: 12, day: 31, name: "New Year's Eve", mood: 'celebratory' },
-];
+// Festival calendar — read from persisted settings so the operator can
+// add/edit/remove entries from the admin UI. settings.load() seeds
+// FESTIVAL_DEFAULTS when the key is absent; an emptied list stays empty
+// (the operator turned the calendar off), so no fallback here.
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function getFestivalContext(date = new Date()) {
-  const { month: m, day: d } = zonedParts(date);
-  for (const f of FESTIVALS) {
+  const { year: y, month: m, day: d } = zonedParts(date);
+  const today = Date.UTC(y, m - 1, d);
+  for (const f of getSettings().festivals ?? []) {
     const window = f.windowDays || 0;
-    if (f.month === m && Math.abs(f.day - d) <= window) {
-      return { name: f.name, mood: f.mood };
+    // Compare real dates so the window spans month and year boundaries
+    // (New Year's Day with windowDays 3 is active from Dec 29). Adjacent
+    // years cover a window reaching across Dec 31 / Jan 1.
+    for (const yy of [y - 1, y, y + 1]) {
+      if (Math.abs(Date.UTC(yy, f.month - 1, f.day) - today) <= window * DAY_MS) {
+        return { name: f.name, mood: f.mood, description: f.description || '' };
+      }
     }
   }
   return null;

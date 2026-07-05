@@ -12,9 +12,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
-import { Card } from './ui';
+import { Card, Btn, Pill } from './ui';
 import { V3AlertDialog } from '../ui/alert-dialog';
-import type { Persona, PersonaTts, FormState, SettingsResponse } from './personas/types';
+import { Modal } from '../ui/modal';
+import type { Persona, PersonaTts, FormState, SettingsResponse, CommunityPersona } from './personas/types';
 import { DIAL_NEUTRAL, PERSONA_MAX, PROMPT_MIN, PROMPT_MAX } from './personas/constants';
 import {
   clientMintId, fetchDicebearAvatar, fileToAvatarDataUrl, personaValid, voiceForSave, cloudIssue,
@@ -48,6 +49,10 @@ export default function PersonasPanel() {
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   // Index of the persona pending a delete-confirm (null = no dialog open).
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
+  // The shipped community persona catalog (best-effort; null = still loading).
+  const [community, setCommunity] = useState<CommunityPersona[] | null>(null);
+  const [communityOpen, setCommunityOpen] = useState(false); // catalog modal open?
+  const [installing, setInstalling] = useState<string | null>(null); // community slug installing, or null
   // The editor block. After adding a persona we scroll it into view so the
   // operator actually sees the new persona open for editing — it stacks below
   // the roster and would otherwise be off-screen.
@@ -119,6 +124,18 @@ export default function PersonasPanel() {
         });
       }
     })();
+    // The community catalog is best-effort — a failure here shouldn't blank the
+    // roster, so it fetches independently and just leaves the modal empty.
+    (async () => {
+      try {
+        const r = await adminFetch('/personas/community');
+        if (!r.ok) throw new Error(`failed (${r.status})`);
+        const j = (await r.json()) as { community?: CommunityPersona[] };
+        setCommunity(Array.isArray(j.community) ? j.community : []);
+      } catch {
+        setCommunity([]);
+      }
+    })();
   }, [hydrated, needsAuth, adminFetch]);
 
   // After an add bumps focus to the new persona, bring the editor into view.
@@ -167,6 +184,51 @@ export default function PersonasPanel() {
     setEditorOpen(true);
     notify.ok('New persona added. Fill in its details, then Save persona.');
   };
+  // Install a community persona: the controller appends it to the persisted
+  // roster (off-air, default voice) and returns the stored persona. We append
+  // that to the local form too — mapped through the same defaulting as the
+  // initial load — so any unsaved edits to other personas survive.
+  const installCommunity = async (slug: string) => {
+    setInstalling(slug);
+    try {
+      const r = await adminFetch(`/personas/community/${encodeURIComponent(slug)}/install`, { method: 'POST' });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; persona?: Partial<Persona> | null };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const p = j.persona;
+      if (p && typeof p.id === 'string') {
+        const allSkills = (data?.skills?.catalog || []).map(s => s.name);
+        setForm(f => f ? {
+          ...f,
+          personas: [...f.personas, {
+            id: p.id as string,
+            name: p.name ?? '',
+            tagline: p.tagline ?? '',
+            frequency: p.frequency ?? 'moderate',
+            scriptLength: p.scriptLength ?? 'concise',
+            djMode: p.djMode === true,
+            humour: typeof p.humour === 'number' ? p.humour : DIAL_NEUTRAL,
+            localColour: typeof p.localColour === 'number' ? p.localColour : DIAL_NEUTRAL,
+            warmth: typeof p.warmth === 'number' ? p.warmth : DIAL_NEUTRAL,
+            soul: p.soul ?? '',
+            language: typeof p.language === 'string' ? p.language : '',
+            avatar: '',
+            tts: {
+              engine: p.tts?.engine ?? 'piper',
+              cloudProvider: p.tts?.cloudProvider ?? 'openai',
+              voice: p.tts?.voice ?? '',
+              gainDb: typeof p.tts?.gainDb === 'number' ? p.tts.gainDb : 0,
+              speed: typeof p.tts?.speed === 'number' ? p.tts.speed : 1,
+            },
+            skills: Array.isArray(p.skills) ? p.skills : allSkills,
+          }],
+        } : f);
+      }
+      notify.ok(`Installed “${p?.name || slug}” — off air until you put them on the desk`);
+    } catch (e) {
+      notify.err(`Install failed: ${errorMessage(e)}`);
+    } finally { setInstalling(null); }
+  };
+
   const removePersona = (i: number) =>
     setForm(f => {
       if (!f) return f;
@@ -391,7 +453,92 @@ export default function PersonasPanel() {
         onTogglePrompt={() => setShowPrompt(s => !s)}
         onAdd={addPersona}
         onSelect={(i) => { setCreatingId(null); setFocusIdx(i); setEditorOpen(true); }}
+        communityCount={community?.length ?? null}
+        onCommunity={() => setCommunityOpen(true)}
       />
+
+      {/* ── COMMUNITY CATALOG MODAL ──────────────────────────────────────── */}
+      <Modal
+        open={communityOpen}
+        onOpenChange={setCommunityOpen}
+        title="community"
+        sub="personas shared by other stations"
+        width={640}
+      >
+        <div className="text-[12px] leading-[1.65] text-muted">
+          These personas ship with SUB/WAVE and update when you do.
+          <strong> Install</strong> adds one to your roster as your own editable persona — it
+          arrives <strong>off air</strong> with your station&rsquo;s default voice, so give it a
+          voice and an avatar, then put it on the desk. Made one worth sharing? Hit{' '}
+          <strong>Edit → Share to community</strong> on any persona.
+        </div>
+        <div className="mt-4 grid gap-3">
+          {community && community.length > 0 ? (
+            community.map(c => {
+              const inRoster = form.personas.some(
+                p => p.name.trim().toLowerCase() === c.displayName.trim().toLowerCase(),
+              );
+              return (
+                <div key={c.slug} className="grid grid-cols-[1fr_auto] items-center gap-4 border border-ink p-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[13px] font-extrabold">{c.displayName}</span>
+                      <Pill className="text-[8px]">{c.frequency}</Pill>
+                      {c.scriptLength === 'extended' && <Pill className="text-[8px]">extended</Pill>}
+                      {c.djMode && <Pill className="text-[8px]">dj mode</Pill>}
+                      {c.language && <Pill className="max-w-[120px] truncate text-[8px]">{c.language}</Pill>}
+                    </div>
+                    {c.tagline && (
+                      <div className="mt-0.5 text-[11px] font-bold text-muted">{c.tagline}</div>
+                    )}
+                    <div className="mt-1 line-clamp-3 text-[12px] leading-[1.6] text-muted">{c.soul}</div>
+                    {(c.submittedBy || c.dateAdded) && (
+                      <div className="mt-1.5 text-[10px] leading-[1.5] text-muted">
+                        {c.submittedBy && (
+                          <>
+                            by{' '}
+                            <a
+                              href={`https://github.com/${c.submittedBy}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
+                            >
+                              @{c.submittedBy}
+                            </a>
+                          </>
+                        )}
+                        {c.submittedBy && c.dateAdded && ' · '}
+                        {c.dateAdded && <>added {c.dateAdded}</>}
+                        {c.dateAdded && c.dateModified && c.dateModified !== c.dateAdded && (
+                          <> · updated {c.dateModified}</>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    {inRoster ? (
+                      <Pill tone="accent" dot>in roster</Pill>
+                    ) : (
+                      <Btn
+                        tone="accent"
+                        onClick={() => installCommunity(c.slug)}
+                        disabled={installing === c.slug || form.personas.length >= PERSONA_MAX}
+                        title={form.personas.length >= PERSONA_MAX ? 'The roster is full' : undefined}
+                      >
+                        {installing === c.slug ? 'Installing…' : 'Install'}
+                      </Btn>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <div className="py-6 text-center text-[13px] text-muted italic">
+              No community personas yet.
+            </div>
+          )}
+        </div>
+      </Modal>
 
       <PersonaEditor
         persona={focused}

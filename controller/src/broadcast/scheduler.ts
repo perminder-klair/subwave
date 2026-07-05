@@ -402,6 +402,9 @@ export async function runLink() {
       previous,
       current,
       context: ctx,
+      // Unlike a pick-attached link, this one airs right now (announce below),
+      // so the live clock in ctx is the air time — the model may speak it.
+      clockIsAirTime: true,
       recap: queue.getDjRecap(),
       recentTracks: queue.getRecentTracks(),
       recentOpeners: queue.getRecentOpeners(),

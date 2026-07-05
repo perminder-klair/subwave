@@ -57,14 +57,23 @@ function dist2(a: { x: number; y: number }, b: { x: number; y: number }): number
 }
 
 // nearest neighbours among a candidate list (spatial — used for synapse links
-// and as the mix-next fallback when the server returned no KNN neighbours)
+// and as the mix-next fallback when the server returned no KNN neighbours).
+// Single-pass top-k insertion rather than sorting the whole list — the pool can
+// be the full node set, and k is tiny (6), so O(n·k) beats O(n log n) with none
+// of the per-item object allocation.
 export function nearest(track: ObsTrack, list: ObsTrack[], k: number): ObsTrack[] {
-  return list
-    .filter((t) => t.idx !== track.idx)
-    .map((t) => ({ t, d: dist2(track, t) }))
-    .sort((p, q) => p.d - q.d)
-    .slice(0, k)
-    .map((p) => p.t);
+  if (k <= 0) return [];
+  const best: { t: ObsTrack; d: number }[] = [];
+  for (const t of list) {
+    if (t.idx === track.idx) continue;
+    const d = dist2(track, t);
+    if (best.length === k && d >= best[best.length - 1]!.d) continue;
+    let i = best.length;
+    while (i > 0 && best[i - 1]!.d > d) i--;
+    best.splice(i, 0, { t, d });
+    if (best.length > k) best.pop();
+  }
+  return best.map((p) => p.t);
 }
 
 // tally — count occurrences (single value or array per item), sorted desc
@@ -192,6 +201,7 @@ export interface ObsTrack extends RawTrack {
   x: number;
   y: number;
   _eseed: number; // seed for the fallback fingerprint
+  searchText: string; // precomputed lowercase haystack for the rail search
 }
 
 export interface ObservatoryStats {
@@ -214,6 +224,7 @@ export interface LibraryData {
   moodVocab: string[];
   truncated: boolean;
   sampled: boolean; // truncated via a stratified per-genre sample (vs. full)
+  max: number | null; // node cap the server applied to this load (null: mock)
   hardMax: number; // ceiling the UI may raise the node cap to
   mock: boolean;
 }
@@ -264,6 +275,15 @@ export interface TrackDetail {
 }
 
 const NO_GENRE = '—';
+
+// Lowercased haystack the rail search scans with a single includes() — built
+// once per load so a keystroke doesn't re-lowercase five fields per track.
+function searchTextOf(t: Pick<RawTrack, 'title' | 'artist' | 'album' | 'genre' | 'moods'>): string {
+  return [t.title, t.artist, t.album, t.genre, ...(t.moods || [])]
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase();
+}
 
 // Continuous energy value (for the heat ramp) from the discrete band, jittered
 // per-track off a dedicated seed so positions don't shift if this logic changes.
@@ -323,6 +343,7 @@ export function layoutTracks(raw: RawTrack[]): {
       x,
       y,
       _eseed: hashStr(t.id),
+      searchText: searchTextOf(t),
     };
   });
 
@@ -539,12 +560,17 @@ export function buildMockLibrary(count = 400): LibraryData {
     byGenre[scene.genre] = (byGenre[scene.genre] || 0) + 1;
     bySource[source] = (bySource[source] || 0) + 1;
 
+    // Hoisted in the same order the picks used to run inline, so the seeded
+    // RNG stream (and thus the sample layout) is unchanged.
+    const title = `${mpick(rng, MOCK_ADJ)} ${mpick(rng, MOCK_NOUN)}`;
+    const artist = (a1 ? a1 + ' ' : '') + a2;
+    const album = mpick(rng, MOCK_ALBUM);
     tracks.push({
       id,
       idx: i,
-      title: `${mpick(rng, MOCK_ADJ)} ${mpick(rng, MOCK_NOUN)}`,
-      artist: (a1 ? a1 + ' ' : '') + a2,
-      album: mpick(rng, MOCK_ALBUM),
+      title,
+      artist,
+      album,
       year,
       genre: scene.genre,
       durationSec: 150 + Math.floor(rng() * 200),
@@ -565,6 +591,7 @@ export function buildMockLibrary(count = 400): LibraryData {
       x,
       y,
       _eseed: Math.floor(rng() * 1e9),
+      searchText: searchTextOf({ title, artist, album, genre: scene.genre, moods }),
     });
   }
 
@@ -586,7 +613,8 @@ export function buildMockLibrary(count = 400): LibraryData {
     moodVocab: [...new Set(MOCK_SCENES.flatMap((s) => s.moods))],
     truncated: false,
     sampled: false,
-    hardMax: 50000,
+    max: null,
+    hardMax: 100000,
     mock: true,
   };
 }

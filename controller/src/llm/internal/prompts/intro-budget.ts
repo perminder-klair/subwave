@@ -14,12 +14,11 @@ export function introMsFor(track: any): number | null {
   return rec?.introMs ?? null;
 }
 
+// Delegates to library.bpmKeyFor — the shared resolver that prefers the
+// analyzer's numbers and treats Navidrome's ID3-derived `bpm: 0` as unknown
+// rather than "carries analysis" (#862).
 export function bpmKeyFor(track: any): { bpm: number | null; key: string | null } {
-  if (track && (track.bpm != null || track.musicalKey != null)) {
-    return { bpm: track.bpm ?? null, key: track.musicalKey ?? null };
-  }
-  const rec = track?.id ? library.get(track.id) : null;
-  return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
+  return library.bpmKeyFor(track);
 }
 
 // Advisory spoken-line budget (Stage A.3 phase 1). Returns '' when there's no

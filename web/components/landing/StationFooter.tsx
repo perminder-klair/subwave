@@ -4,10 +4,11 @@ import Link from 'next/link';
 
 import { AnimatedLink } from '@/components/ui/animated-link';
 
-// The Back Pages — the footer as a broadsheet back-page index. Three ruled
+// The Back Pages — the footer as a broadsheet back-page index. Four ruled
 // section panels give the station's secondary destinations (dispatches,
-// stations, skills) real front-of-house billing, then a single colophon
-// strip carries the small print. Copy ends with the press-room "-30-" mark.
+// stations, skills, personas) real front-of-house billing, then a single
+// colophon strip carries the small print. Copy ends with the press-room
+// "-30-" mark.
 const BACK_PAGES = [
   {
     no: '01',
@@ -33,6 +34,14 @@ const BACK_PAGES = [
     cta: 'Explore the skills',
     href: '/skills',
   },
+  {
+    no: '04',
+    tag: 'The Green Room',
+    title: 'Community Personas',
+    teaser: 'DJs other operators dreamed up — book one for your booth.',
+    cta: 'Meet the personas',
+    href: '/personas',
+  },
 ] as const;
 
 export default function StationFooter({ djName }: { djName?: string }) {
@@ -42,20 +51,20 @@ export default function StationFooter({ djName }: { djName?: string }) {
 
       <div className="flex items-baseline justify-between gap-4 py-[7px] text-[10px] tracking-[0.3em] text-muted uppercase">
         <span className="font-bold text-ink">The Back Pages</span>
-        <span className="hidden sm:inline">Reader services · §§ 01–03</span>
+        <span className="hidden sm:inline">Reader services · §§ 01–04</span>
       </div>
 
       <div className="bs-rule" />
 
       <nav
         aria-label="Back pages"
-        className="grid divide-y divide-ink/20 sm:grid-cols-3 sm:divide-x sm:divide-y-0"
+        className="grid divide-y divide-ink/20 lg:grid-cols-4 lg:divide-x lg:divide-y-0"
       >
         {BACK_PAGES.map((page) => (
           <Link
             key={page.href}
             href={page.href}
-            className="group relative flex flex-col gap-[10px] overflow-hidden px-5 py-6 no-underline transition-colors duration-300 hover:bg-ink/[0.04] sm:first:pl-1 sm:last:pr-1"
+            className="group relative flex flex-col gap-[10px] overflow-hidden px-5 py-6 no-underline transition-colors duration-300 hover:bg-ink/[0.04] lg:first:pl-1 lg:last:pr-1"
           >
             <span
               aria-hidden="true"

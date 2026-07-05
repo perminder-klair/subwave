@@ -57,24 +57,39 @@ function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; c
 
 // Node-cap ladder offered in the MAP SIZE control. Values above ~3k render on
 // the canvas renderer (see CANVAS_THRESHOLD). Clamped to the server's hardMax.
-const MAX_LADDER = [2000, 4000, 8000, 10000, 16000, 32000, 50000];
+const MAX_LADDER = [2000, 4000, 8000, 10000, 16000, 25000, 50000, 100000];
 const CANVAS_THRESHOLD = 3000; // node count above which the canvas renderer wins
-const DEFAULT_MAX = 10000; // matches the controller's OBSERVATORY_DEFAULT_MAX
+// Display fallback for the MAP SIZE selector before the first load resolves.
+// The real default lives on the server (OBSERVATORY_MAX): with nothing stored
+// we fetch without ?max= and adopt the cap the response reports, so an
+// operator's env override actually reaches the UI.
+const DEFAULT_MAX = 25000;
 const MAX_STORAGE_KEY = 'subwave_obs_max';
 
 export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch }) {
-  // Persisted node cap (MAP SIZE control). Read once from localStorage; falls
-  // back to DEFAULT_MAX, which mirrors the server default so a fresh browser and
-  // a direct API caller see the same cap.
-  const [maxNodes, setMaxNodes] = useState<number>(() => {
-    if (typeof window === 'undefined') return DEFAULT_MAX;
+  // Persisted node cap (MAP SIZE control). Read once from localStorage; null
+  // means "follow the server default" — useObservatory then omits ?max=.
+  const [maxNodes, setMaxNodes] = useState<number | null>(() => {
+    if (typeof window === 'undefined') return null;
     const stored = Number(window.localStorage.getItem(MAX_STORAGE_KEY));
-    return Number.isFinite(stored) && stored > 0 ? stored : DEFAULT_MAX;
+    return Number.isFinite(stored) && stored > 0 ? stored : null;
   });
   const { data: lib, loading, error } = useObservatory(adminFetch, true, maxNodes);
   const { detail, loadingId, fetchDetail } = useTrackDetail(adminFetch);
 
   const [q, setQ] = useState('');
+  // Debounced copy of the search query — `matched` scans every node, so at
+  // large caps filtering on each keystroke makes typing lag. 150ms is under
+  // perception but coalesces a burst of keys into one scan.
+  const [qDebounced, setQDebounced] = useState('');
+  useEffect(() => {
+    if (q === '') {
+      setQDebounced(''); // clearing (incl. RESET DIAL) applies instantly
+      return;
+    }
+    const id = setTimeout(() => setQDebounced(q), 150);
+    return () => clearTimeout(id);
+  }, [q]);
   const [colorBy, setColorBy] = useState<ColorBy>('energy');
   const [energy, setEnergy] = useState<Set<string>>(new Set());
   const [moods, setMoods] = useState<Set<string>>(new Set());
@@ -124,27 +139,17 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
 
   const matched = useMemo(() => {
     if (!lib) return [];
-    const qq = q.trim().toLowerCase();
+    const qq = qDebounced.trim().toLowerCase();
     return lib.tracks.filter((t) => {
       if (energy.size && !(t.energy && energy.has(t.energy))) return false;
       if (sources.size && !(t.source && sources.has(t.source))) return false;
       if (genres.size && !(t.genre && genres.has(t.genre))) return false;
       if (moods.size && !t.moods.some((m) => moods.has(m))) return false;
       if (analysedOnly && !t.analysed) return false;
-      if (
-        qq &&
-        !(
-          (t.title || '').toLowerCase().includes(qq) ||
-          (t.artist || '').toLowerCase().includes(qq) ||
-          (t.album || '').toLowerCase().includes(qq) ||
-          (t.genre || '').toLowerCase().includes(qq) ||
-          t.moods.some((m) => m.includes(qq))
-        )
-      )
-        return false;
+      if (qq && !t.searchText.includes(qq)) return false;
       return true;
     });
-  }, [lib, q, energy, moods, genres, sources, analysedOnly]);
+  }, [lib, qDebounced, energy, moods, genres, sources, analysedOnly]);
 
   const matchSet = useMemo(() => new Set(matched.map((t) => t.idx)), [matched]);
 
@@ -187,9 +192,11 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const total = lib?.tracks.length ?? 0;
   const useCanvas = rendererOverride === 'canvas' || (rendererOverride !== 'svg' && total > CANVAS_THRESHOLD);
 
-  // Cap options: the ladder up to the server's hardMax, plus the current value.
+  // Cap options: the ladder up to the server's hardMax, plus the current value
+  // (which, with nothing stored, is whatever cap the server applied).
   const hardMax = lib?.hardMax ?? 50000;
-  const maxOptions = Array.from(new Set([...MAX_LADDER.filter((n) => n <= hardMax), maxNodes])).sort(
+  const effectiveMax = maxNodes ?? lib?.max ?? DEFAULT_MAX;
+  const maxOptions = Array.from(new Set([...MAX_LADDER.filter((n) => n <= hardMax), effectiveMax])).sort(
     (a, b) => a - b,
   );
 
@@ -329,7 +336,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
               <div className="obs-maxrow">
                 <select
                   className="obs-maxsel"
-                  value={maxNodes}
+                  value={effectiveMax}
                   onChange={(e) => setMax(Number(e.target.value))}
                   aria-label="maximum nodes on the map"
                 >

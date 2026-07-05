@@ -17,6 +17,7 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { readFile, rename, copyFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { STATE_DIR } from '../config.js';
 
 const DB_PATH = `${STATE_DIR}/library.db`;
@@ -62,6 +63,10 @@ const SQL_NO_MOODS = `(moods IS NULL OR json_array_length(moods) = 0)`;
 
 let db: Database.Database | null = null;
 let currentEmbeddingDim: number | null = null;
+// Minted per open() — makes change tokens from different handles (restart,
+// reload, restore-from-backup) never comparable, so a stale 304 can't happen
+// across a swap even though both counters below restart from scratch.
+let dbNonce = '0';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -216,6 +221,7 @@ export async function open(opts: {
   }
   currentEmbeddingDim = opts.embeddingDim;
   db = new Database(DB_PATH);
+  dbNonce = randomUUID().slice(0, 8);
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = NORMAL');
   // Cap the -wal sidecar: after any checkpoint SQLite truncates it back to this
@@ -1514,6 +1520,19 @@ export function stats(): LibraryStats {
   const value = computeStats();
   statsCache = { at: now, value };
   return value;
+}
+
+// A cheap opaque token that changes whenever ANY write lands in the library:
+// `data_version` bumps on commits from OTHER connections (the tagger and
+// analyzer hold the DB concurrently), `total_changes()` counts THIS
+// connection's row changes, and the per-open nonce covers handle swaps. Both
+// reads are O(1). Powers the observatory ETag — anything derived purely from
+// library rows can be revalidated with this instead of rebuilding the payload.
+export function changeToken(): string {
+  const d = requireDb();
+  const dataVersion = d.pragma('data_version', { simple: true }) as number;
+  const ownChanges = (d.prepare('SELECT total_changes() AS c').get() as { c: number }).c;
+  return `${dbNonce}.${dataVersion}.${ownChanges}`;
 }
 
 function computeStats(): LibraryStats {

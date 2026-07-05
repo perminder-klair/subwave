@@ -33,7 +33,7 @@ Click any point to open its dossier: BPM, key, energy, loudness, its mood and la
 
 ![A track dossier: BPM, key, energy, mood tags, acoustic meters, the text and audio embedding fingerprints, and the nearest tracks in vector space](/screenshots/observatory-track.webp)
 
-Big library? Use the MAP SIZE control in the rail. It draws up to 10,000 tracks by default and goes to 50,000. Past that it shows an even sample across genres, so the shape stays honest.
+Big library? Use the MAP SIZE control in the rail. It draws up to 25,000 tracks by default and goes to 100,000. Past that it shows an even sample across genres, so the shape stays honest.
 
 ## Why it helps
 

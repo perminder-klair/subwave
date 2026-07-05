@@ -17,7 +17,7 @@ import * as session from './session.js';
 import { getFullContext, energyForDaypart } from '../context.js';
 import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
-import { djCallsAllowed } from './listeners.js';
+import { djCallsAllowed, presentListeners } from './listeners.js';
 import * as webhooks from './webhooks.js';
 import * as scrobble from './scrobble.js';
 import * as liquidsoapControl from './liquidsoap-control.js';
@@ -490,11 +490,13 @@ class Queue {
   // Drop any transition-effect flags from a track (with a logged reason) so
   // getAnnotatedUri never stamps an effect the gate rejected.
   stripEffect(track: any, reason: string) {
-    const kind = track.sweep ? 'sweep' : track.blend ? 'blend' : track.dissolve ? 'dissolve' : 'washout';
+    const kind = track.sweep ? 'sweep' : track.blend ? 'blend' : track.dissolve ? 'dissolve' : track.chop ? 'chop' : track.loop ? 'loop' : 'washout';
     delete track.sweep;
     delete track.washout;
     delete track.blend;
     delete track.dissolve;
+    delete track.chop;
+    delete track.loop;
     this.log('mix', `${kind} dropped (${reason})`);
   }
 
@@ -509,7 +511,7 @@ class Queue {
     // Persona flipped out of DJ mode between the pick and the drain: the
     // effects gate below never runs, so make sure no flag survives to annotate.
     if (!persona?.djMode) {
-      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve) this.stripEffect(item.track, 'dj mode off');
+      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop || item.track.loop) this.stripEffect(item.track, 'dj mode off');
       return;
     }
 
@@ -518,7 +520,7 @@ class Queue {
     if (!prevTrack) {
       // Nothing on-air to validate against (first track after boot) — an
       // effect on a cold start would garnish silence; drop it.
-      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve) this.stripEffect(item.track, 'no predecessor');
+      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop || item.track.loop) this.stripEffect(item.track, 'no predecessor');
       return;
     }
 
@@ -579,7 +581,10 @@ class Queue {
     // the source tool didn't surface one).
     if (!durSec && item.track.id) durSec = Number(library.get(item.track.id)?.durationSec) || 0;
     const cappedExit = !!(capSec && durSec > capSec);
-    if (cappedExit && !item.track.washout) {
+    // A DJ-chosen loop exit already makes a capped cut sound intentional —
+    // don't stack the auto-washout on top of it (both shape the same ending,
+    // and radio.liq's washout-wins precedence would silently eat the loop).
+    if (cappedExit && !item.track.washout && !item.track.loop) {
       item.track.washout = true;
       item.track.washoutAuto = true;
     }
@@ -601,6 +606,8 @@ class Queue {
     const choice: string | null =
       item.track.sweep ? 'sweep' : item.track.blend ? 'blend'
         : item.track.dissolve ? 'dissolve'
+        : item.track.chop ? 'chop'
+        : item.track.loop ? 'loop'
         : (item.track.washout && !item.track.washoutAuto) ? 'washout'
         : item.track.washoutAuto ? null : 'normal';
     const last2 = this._recentEffects.slice(-2);
@@ -611,6 +618,15 @@ class Queue {
       this._recentEffects.push(choice);
       if (this._recentEffects.length > 4) this._recentEffects.shift();
     }
+    // Entry-side effects (sweep/dissolve/chop) garnish the PREVIOUS track's
+    // ending — a loop exit already armed on that track IS the transition, so
+    // they all yield to it (radio.liq enforces the same precedence; stripping
+    // here keeps the pick log honest). Loops are FIFO-armed on their own
+    // applyMixTransition pass, so prevTrack.loop is already validated.
+    if (item.track.sweep && prevTrack.loop) {
+      delete item.track.sweep;
+      this.log('mix', 'sweep dropped (previous track already exits through a loop)');
+    }
     if (item.track.sweep && !mix.effectAllowedFor('sweep', cur, next)) {
       delete item.track.sweep;
       this.log('mix', 'sweep dropped (tracks too compatible — beat-blend beats a sweep)');
@@ -619,6 +635,10 @@ class Queue {
     // blend is the sweep's mirror (entry-side, flagged on the incoming pick):
     // it only makes sense between COMPATIBLE tracks — the handover exposes a
     // clash rather than hiding it.
+    if (item.track.blend && prevTrack.loop) {
+      delete item.track.blend;
+      this.log('mix', 'blend dropped (previous track already exits through a loop)');
+    }
     if (item.track.blend && !mix.effectAllowedFor('blend', cur, next)) {
       delete item.track.blend;
       this.log('mix', 'blend dropped (tracks clash — a handover needs a compatible pair)');
@@ -630,22 +650,60 @@ class Queue {
     // ending (echo tail vs ambient wash), and the washout may carry the
     // length-cap auto-arm. radio.liq enforces the same precedence as a
     // belt-and-braces guard; stripping here keeps the pick log honest.
-    if (item.track.dissolve && prevTrack.washout) {
+    if (item.track.dissolve && (prevTrack.washout || prevTrack.loop)) {
       delete item.track.dissolve;
-      this.log('mix', 'dissolve dropped (previous track already exits through a washout)');
+      this.log('mix', `dissolve dropped (previous track already exits through a ${prevTrack.washout ? 'washout' : 'loop'})`);
     }
     if (item.track.dissolve && !mix.effectAllowedFor('dissolve', cur, next)) {
       delete item.track.dissolve;
       this.log('mix', 'dissolve dropped (tracks too compatible — a blend keeps the groove a wash would kill)');
     }
     if (item.track.dissolve) this.log('mix', `dissolve armed → ${item.track.title}`);
+    // chop (crossfader cut) — the percussive clash move: the outgoing track is
+    // gated rhythmically on its own beat, stabs thinning out as this pick rises
+    // through the gaps. Entry-side like the sweep, so it needs no canvas — but
+    // it DOES need a tempo: the gate period is one beat of the OUTGOING track
+    // (the one being cut), stamped on this pick because the predecessor's
+    // annotation has already been sent by the time this runs. Yields to a
+    // washout riding the previous track's exit, same reasoning as the
+    // dissolve: both gestures shape the same outgoing ending.
+    if (item.track.chop && (prevTrack.washout || prevTrack.loop)) {
+      delete item.track.chop;
+      this.log('mix', `chop dropped (previous track already exits through a ${prevTrack.washout ? 'washout' : 'loop'})`);
+    }
+    if (item.track.chop && !mix.effectAllowedFor('chop', cur, next)) {
+      delete item.track.chop;
+      this.log('mix', 'chop dropped (tracks too compatible — a beat-blend beats a cut)');
+    }
+    if (item.track.chop) {
+      item.track.chopPeriod = mix.chopPeriodFor(cur.bpm);
+      this.log('mix', `chop armed: ${item.track.chopPeriod}s gate → ${item.track.title}`);
+    }
+    // loop (exit loop) — exit-side like the washout: THIS pick's last bar is
+    // caught in a comb-cascade loop as it ends (see radio.liq's loop block
+    // for the delay-tiling mechanics), riding under whatever follows before
+    // it cuts away. Cross-duration physics puts everything on
+    // the flagged track itself: its liq_cross_duration is the canvas, its
+    // liq_loop_bar is one bar of its OWN tempo. The one hard data gate: the
+    // loop needs the track's measured BPM — an arbitrary-length loop of an
+    // unmeasured track is noise, not craft (editorial otherwise, like the
+    // washout — the variety ledger rations it).
+    if (item.track.loop && !(next.bpm && next.bpm > 0)) {
+      delete item.track.loop;
+      this.log('mix', 'loop dropped (no measured tempo — a loop needs a bar length)');
+    }
+    if (item.track.loop) {
+      item.track.crossSec = mix.loopCrossSecondsFor(next, maxSec);
+      item.track.loopBar = mix.loopBarFor(next.bpm);
+      this.log('mix', `loop armed: ${item.track.crossSec}s canvas, ${item.track.loopBar}s bar → ${item.track.title}`);
+    }
     if (item.track.washout) {
       item.track.crossSec = mix.washoutCrossSecondsFor(next, maxSec);
       item.track.washoutDelay = mix.washoutDelayFor(next.bpm);
       const why = item.track.washoutAuto ? ' (length-cap exit)' : '';
       this.log('mix', `washout armed${why}: ${item.track.crossSec}s canvas, ${item.track.washoutDelay}s tap → ${item.track.title}`);
     }
-    const effectFired = !!(item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve);
+    const effectFired = !!(item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop || item.track.loop);
 
     // Feature 2 — transition FX, spaced by the chattiness ladder and gated on
     // settings.sfx.enabled; never two transitions in a row, and never a riser
@@ -1034,14 +1092,26 @@ class Queue {
       requestedBy: this.current.requestedBy || null,
     });
 
-    // Outbound fan-out — fire-and-forget; never blocks the picker path.
-    webhooks.notify('track.play', {
+    const trackPayload = {
       title: this.current.track.title,
       artist: this.current.track.artist || null,
       album: this.current.track.album || null,
       source: this.current.source,
       requestedBy: this.current.requestedBy || null,
-    });
+    };
+
+    // Outbound fan-out — fire-and-forget; never blocks the picker path.
+    // Optional listener gate (webhooksPolicy.trackPlayListenerGated): fail-closed
+    // like scrobble — see scrobble.ts. Silent skip when gated and count unknown.
+    const gated = !!settings.get()?.webhooksPolicy?.trackPlayListenerGated;
+    if (gated) {
+      const listeners = presentListeners();
+      if (listeners !== null) {
+        webhooks.notify('track.play', { ...trackPayload, listeners });
+      }
+    } else {
+      webhooks.notify('track.play', trackPayload);
+    }
 
     // Last.fm / ListenBrainz — also fire-and-forget. Internally gated on
     // listener count > 0 (fail-closed) and per-backend enable flags.

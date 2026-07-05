@@ -20,7 +20,7 @@
 
 import { createHash } from 'node:crypto';
 import * as settings from '../settings.js';
-import { getListenerCount } from './listeners.js';
+import { getListenerCount, presentListeners } from './listeners.js';
 
 const TIMEOUT_MS = 5000;
 const LASTFM_API = 'https://ws.audioscrobbler.com/2.0/';
@@ -366,9 +366,9 @@ async function listenbrainzSubmit(track: ScrobbleTrack, startedAt: string, token
 // side-effects — never throws, never blocks the caller. Fires both backends
 // in parallel (fire-and-forget).
 export function onTrackEvent({ outgoing, outgoingStartedAt, incoming }: TrackEventArgs): void {
-  const listeners = getListenerCount();
-  if (typeof listeners !== 'number' || listeners <= 0) {
-    console.log(`[scrobble] skip: ${listeners ?? 'null'} listener(s)`);
+  const listeners = presentListeners();
+  if (listeners === null) {
+    console.log(`[scrobble] skip: ${getListenerCount() ?? 'null'} listener(s)`);
     return;
   }
 
