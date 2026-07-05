@@ -586,7 +586,7 @@ export function buildMockLibrary(count = 400): LibraryData {
     moodVocab: [...new Set(MOCK_SCENES.flatMap((s) => s.moods))],
     truncated: false,
     sampled: false,
-    hardMax: 50000,
+    hardMax: 100000,
     mock: true,
   };
 }

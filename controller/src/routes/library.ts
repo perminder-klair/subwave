@@ -128,14 +128,14 @@ router.get('/library/genres/related', requireAdmin, async (_req, res) => {
 // (issue #273).
 // ---------------------------------------------------------------------------
 // Default node cap (env-overridable) and the hard ceiling the client may raise
-// it to from the UI (?max=). 10000 covers most personal libraries in full while
+// it to from the UI (?max=). 25000 covers most personal libraries in full while
 // keeping the payload sane; above it the observatory's MAP SIZE control dials up
 // to OBSERVATORY_HARD_MAX. Above the cap we return a stratified sample. The web
 // client mirrors this default (ObservatoryApp DEFAULT_MAX) so a fresh browser
 // and a direct API caller agree. (Libraries above ~3k render on the canvas
 // renderer; only small ones keep the animated SVG path.)
-const OBSERVATORY_DEFAULT_MAX = Math.max(500, Number(process.env.OBSERVATORY_MAX) || 10000);
-const OBSERVATORY_HARD_MAX = Math.max(OBSERVATORY_DEFAULT_MAX, Number(process.env.OBSERVATORY_HARD_MAX) || 50000);
+const OBSERVATORY_DEFAULT_MAX = Math.max(500, Number(process.env.OBSERVATORY_MAX) || 25000);
+const OBSERVATORY_HARD_MAX = Math.max(OBSERVATORY_DEFAULT_MAX, Number(process.env.OBSERVATORY_HARD_MAX) || 100000);
 router.get('/library/observatory', requireAdmin, async (req, res) => {
   try {
     await library.load();

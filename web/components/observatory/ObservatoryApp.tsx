@@ -57,9 +57,9 @@ function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; c
 
 // Node-cap ladder offered in the MAP SIZE control. Values above ~3k render on
 // the canvas renderer (see CANVAS_THRESHOLD). Clamped to the server's hardMax.
-const MAX_LADDER = [2000, 4000, 8000, 10000, 16000, 32000, 50000];
+const MAX_LADDER = [2000, 4000, 8000, 10000, 16000, 25000, 50000, 100000];
 const CANVAS_THRESHOLD = 3000; // node count above which the canvas renderer wins
-const DEFAULT_MAX = 10000; // matches the controller's OBSERVATORY_DEFAULT_MAX
+const DEFAULT_MAX = 25000; // matches the controller's OBSERVATORY_DEFAULT_MAX
 const MAX_STORAGE_KEY = 'subwave_obs_max';
 
 export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch }) {
