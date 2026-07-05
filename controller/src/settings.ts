@@ -1085,10 +1085,15 @@ const DEFAULTS = {
   },
   // Outbound webhooks. Each entry POSTs station events (see broadcast/
   // webhooks.ts for the event list) to `url` with a fire-and-forget HTTP
-  // call. `track.play` is listener-gated like scrobble (fail-closed on
-  // null/0 — see broadcast/queue.ts). Empty by default — operators add hooks
+  // call. `track.play` can be listener-gated via webhooksPolicy (off by
+  // default — see broadcast/queue.ts). Empty by default — operators add hooks
   // via the admin UI.
   webhooks: [] as any[],
+  webhooksPolicy: {
+    // When true, track.play POSTs only when listener count > 0 (fail-closed on
+    // null/unknown/non-finite, like scrobble). Default false = always send.
+    trackPlayListenerGated: false,
+  },
   // Station-wide scrobbling. Each backend is independent; both are paste-only
   // (no OAuth) and both are gated on listener count > 0 at scrobble time (a
   // null/unknown count is treated as zero — fail closed, see broadcast/
@@ -1738,6 +1743,12 @@ export async function load() {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
     },
     webhooks: normalizeWebhooks(stored.webhooks),
+    webhooksPolicy: {
+      trackPlayListenerGated:
+        typeof stored.webhooksPolicy?.trackPlayListenerGated === 'boolean'
+          ? stored.webhooksPolicy.trackPlayListenerGated
+          : DEFAULTS.webhooksPolicy.trackPlayListenerGated,
+    },
     scrobble: {
       lastfm: {
         enabled:
@@ -2886,6 +2897,12 @@ export async function update(patch) {
   }
   if ('webhooks' in patch) {
     next.webhooks = validateWebhooksStrict(patch.webhooks, next.webhooks || []);
+  }
+  if ('webhooksPolicy' in patch) {
+    const wp = patch.webhooksPolicy || {};
+    if (wp.trackPlayListenerGated !== undefined) {
+      next.webhooksPolicy.trackPlayListenerGated = !!wp.trackPlayListenerGated;
+    }
   }
   if ('scrobble' in patch) {
     const sb = patch.scrobble || {};

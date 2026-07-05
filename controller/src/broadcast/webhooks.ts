@@ -10,8 +10,8 @@
 //
 // The shape of the payload is documented in routes/webhooks.ts. Each event
 // is a stable JSON object with `event`, `t`, and event-specific fields.
-// `track.play` is gated at the call site in queue.ts (listener count > 0);
-// notify() does not apply that gate to other events.
+// `track.play` can be listener-gated at the call site in queue.ts when
+// webhooksPolicy.trackPlayListenerGated is on; notify() does not gate events.
 
 import * as settings from '../settings.js';
 

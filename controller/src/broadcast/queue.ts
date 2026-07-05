@@ -981,20 +981,27 @@ class Queue {
       requestedBy: this.current.requestedBy || null,
     });
 
+    const trackPayload = {
+      title: this.current.track.title,
+      artist: this.current.track.artist || null,
+      album: this.current.track.album || null,
+      source: this.current.source,
+      requestedBy: this.current.requestedBy || null,
+    };
+
     // Outbound fan-out — fire-and-forget; never blocks the picker path.
-    // track.play is listener-gated (fail-closed) like scrobble — see scrobble.ts.
-    const listeners = getListenerCount();
-    if (typeof listeners !== 'number' || listeners <= 0) {
-      console.log(`[webhook] skip track.play: ${listeners ?? 'null'} listener(s)`);
+    // Optional listener gate (webhooksPolicy.trackPlayListenerGated): fail-closed
+    // like scrobble — see scrobble.ts. Silent skip when gated and count unknown.
+    const gated = !!settings.get()?.webhooksPolicy?.trackPlayListenerGated;
+    if (gated) {
+      const raw = getListenerCount();
+      const listeners =
+        typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
+      if (listeners !== null) {
+        webhooks.notify('track.play', { ...trackPayload, listeners });
+      }
     } else {
-      webhooks.notify('track.play', {
-        title: this.current.track.title,
-        artist: this.current.track.artist || null,
-        album: this.current.track.album || null,
-        source: this.current.source,
-        requestedBy: this.current.requestedBy || null,
-        listeners,
-      });
+      webhooks.notify('track.play', trackPayload);
     }
 
     // Last.fm / ListenBrainz — also fire-and-forget. Internally gated on
