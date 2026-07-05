@@ -240,11 +240,13 @@ export function washoutDelayFor(bpm: number | null): number {
 // "close the chapter" gesture, not a compatibility repair: always allowed —
 // the caller's cooldown rations it.
 //
-// The four effects form a 2×2: blend = the rhythmic move for COMPATIBLE
+// The effects map onto a small grid: blend = the rhythmic move for COMPATIBLE
 // pairs, washout = the rhythmic exit (always allowed), sweep = the dramatic
 // textural move across a clash, dissolve = the smooth textural move across a
-// clash (the reverb wash — hides the seam the sweep would announce).
-export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend' | 'dissolve', cur: Analysis, next: Analysis): boolean {
+// clash (the reverb wash — hides the seam the sweep would announce), chop =
+// the percussive move across a clash (the crossfader cut — announces the seam
+// on the beat instead of choking it like the sweep).
+export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend' | 'dissolve' | 'chop', cur: Analysis, next: Analysis): boolean {
   if (kind === 'washout') return true;
   if (!analysed(cur) || !analysed(next)) return true;
   const compat = mixCompat(cur, next);
@@ -257,7 +259,20 @@ export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend' | 'dissolve
   // glue for a pair that measurably clashes; between compatible tracks a
   // blend keeps the groove alive and a wash just kills it.
   if (kind === 'dissolve') return compat < 0.4;
+  // sweep and chop are both gear-change moves — musically wrong between
+  // locked tracks where a tight beat-blend serves better.
   return compat < 0.6;
+}
+
+// Gate period for the chop — one beat of the OUTGOING track (the one being
+// cut), clamped so extreme tempi stay in the stab-audible range. Unknown BPM →
+// 0.5 s (the neutral default radio.liq also falls back to when the stamp is
+// absent). Unlike the washout's dotted-eighth echo tap, the chop cuts ON the
+// beat: the gate opens at each beat start so the downbeat transient survives.
+export function chopPeriodFor(bpm: number | null): number {
+  if (!bpm || bpm <= 0) return 0.5;
+  const clamped = Math.max(0.25, Math.min(0.75, 60 / bpm));
+  return Math.round(clamped * 100) / 100;
 }
 
 // --- Feature 2: transition FX ----------------------------------------------

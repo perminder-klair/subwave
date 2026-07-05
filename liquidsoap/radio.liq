@@ -30,8 +30,9 @@ aac_bitrate = ref(192)
 stream_bitrate = ref(192)
 station_name = ref("SUB/WAVE")
 
-# DJ transition effects (filter sweep + echo washout + reverb dissolve) — see dj_transition
-# below. Both effects are built PER-BRANCH inside the transition callback, on
+# DJ transition effects (filter sweep + echo washout + reverb dissolve + beat
+# chop) — see dj_transition
+# below. The effects are built PER-BRANCH inside the transition callback, on
 # the OUTGOING track's source only: idle playout never passes through an
 # effect operator at all, and the incoming track always lands clean and dry —
 # the way a DJ's filter/echo ride the channel that's leaving. The envelopes
@@ -299,6 +300,17 @@ def dj_transition(a, b) =
   # this exit (echo tail vs ambient wash are mutually exclusive gestures) —
   # the washout wins because it may carry the length-cap auto-arm.
   dissolving = b.metadata["liq_dissolve"] == "true" and not washing
+  # Chop (crossfader cut) rides the INCOMING pick like the sweep/dissolve —
+  # "cut the current track out on the beat under my pick" — and is likewise
+  # applied to the OUTGOING branch: the track we're leaving is gated
+  # rhythmically at full level, stabs thinning and sparsening while the pick
+  # rises clean through the gaps. The PERCUSSIVE way across a clash (sweep =
+  # dramatic, dissolve = smooth); the controller only arms it between CLASHING
+  # tracks (mix.effectAllowedFor) and stamps liq_chop_period (one beat of the
+  # OUTGOING track's BPM) alongside the flag. Same washout precedence as the
+  # dissolve: an echo tail and a beat gate fight over the same exit, and the
+  # washout may carry the length-cap auto-arm.
+  chopping = b.metadata["liq_chop"] == "true" and not washing
   # Washout drops the dry signal early (exp fade) so the tail reads as a
   # dissolve. An early drop sums BELOW unity mid-cross — a dip, which is the
   # effect; the +6 dB doubling hazard is only for fades that hold full level
@@ -312,6 +324,12 @@ def dj_transition(a, b) =
       # heard choking a still-loud track — with the default fade the track was
       # already quiet by the time the cutoff got dramatic and the sweep felt
       # powerless (found on-air).
+      fade.out(duration=d, type="log", initial_metadata=a.metadata, a.source)
+    elsif chopping then
+      # Same reasoning as the sweep: the GATE does the removal, not the fader.
+      # A log fade keeps the stabs hot deep into the window — a DJ cutting the
+      # crossfader cuts at full level; the gate envelope (duty shrink + beat
+      # sparsening + master exit) is what takes the track out.
       fade.out(duration=d, type="log", initial_metadata=a.metadata, a.source)
     else
       fade.out(duration=d, initial_metadata=a.metadata, a.source)
@@ -617,6 +635,96 @@ def dj_transition(a, b) =
                  filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet, washed))
       # Dry (faded) + wash: the track walks out through its own ambience.
       add(normalize=false, [a_source, amplify(diss_gain, washed)])
+    else
+      a_source
+    end
+  # CHOP ENVELOPE — the crossfader cut: rhythmic amplitude gating of the
+  # outgoing track, opening AT each beat start (the downbeat transient
+  # survives) and closing for the rest of the beat. Pure `amplify` driven by a
+  # pure function of the branch's own source.elapsed() — the same proven
+  # closure pattern as sweep_gain/wash_gain, no new operator class, so no
+  # fx-render-test re-probe needed. Three envelopes compose per frame:
+  #   duty    — how much of each beat stays open: 1.0 (transparent engage) →
+  #             0.55 by 25% of the blend → 0.30 by 70% (stabs tighten).
+  #   floor   — gain UNDER the closed gate: 0.45 → 0 over the first 40%, so
+  #             early holes read as beat-synced pumping (transform-style)
+  #             while the incoming is still quiet, hardening into true cuts
+  #             once it can carry; full silence between stabs at cross start
+  #             read as dropouts, not craft.
+  #   sparsen — past 70% only every OTHER beat fires: the exit stabs.
+  # Gate edges are ~12 ms smoothsteps (square edges click); a wet ramp over
+  # the first 8% makes the engage bit-transparent (at e=0 gain is exactly 1 —
+  # any instant dip against the pre-cross signal is a step); a master release
+  # kills the last stab by 0.92·d so the branch is silent before the
+  # transition source truncates at d (amplify vanishes at the boundary like
+  # every branch operator — it must already be emitting silence by then).
+  a_source =
+    if chopping then
+      p = float_of_string(default=0.5, b.metadata["liq_chop_period"])
+      p = if p <= 0.05 then 0.5 else p end
+      log("DJ chop: cutting the outgoing track on the beat (p=#{p}s, d=#{d}s)")
+      chop_src = a_source
+      def chop_gain() =
+        e = source.elapsed(chop_src)
+        e = if e < 0. then 0. else e end
+        beat = int_of_float(e / p)
+        ph = e / p - float_of_int(beat)          # 0..1 within the beat
+        t1 = 0.25 * d
+        t2 = 0.70 * d
+        duty =
+          if e < t1 then
+            x = e / t1
+            1.0 - (3.0 * x * x - 2.0 * x * x * x) * 0.45
+          elsif e < t2 then
+            x = (e - t1) / (t2 - t1)
+            0.55 - (3.0 * x * x - 2.0 * x * x * x) * 0.25
+          else
+            0.30
+          end
+        f_end = 0.40 * d
+        floor_g =
+          if e >= f_end then 0.0
+          else
+            x = e / f_end
+            0.45 * (1.0 - (3.0 * x * x - 2.0 * x * x * x))
+          end
+        # Exit stabs: past 70% odd-numbered beats stay shut (int division —
+        # no float mod in the proven kit).
+        odd = beat - 2 * (beat / 2) == 1
+        gate_on = not (e >= t2 and odd)
+        eps = 0.012 / p                          # ~12 ms edges, in phase units
+        shape =
+          if not gate_on then 0.0
+          elsif ph < eps then
+            x = ph / eps
+            3.0 * x * x - 2.0 * x * x * x
+          elsif ph < duty then 1.0
+          elsif ph < duty + eps then
+            x = (ph - duty) / eps
+            1.0 - (3.0 * x * x - 2.0 * x * x * x)
+          else 0.0
+          end
+        g_gate = floor_g + (1.0 - floor_g) * shape
+        # Engage ramp: gain 1.0 at e=0, gate fully in by 8% of the blend.
+        t_eng = 0.08 * d
+        wet =
+          if e >= t_eng then 1.0
+          else
+            x = e / t_eng
+            3.0 * x * x - 2.0 * x * x * x
+          end
+        g = 1.0 - wet * (1.0 - g_gate)
+        # Master release: silent from 0.92·d, before the branch truncates.
+        master =
+          if e < 0.85 * d then 1.0
+          elsif e < 0.92 * d then
+            x = (e - 0.85 * d) / (0.07 * d)
+            1.0 - (3.0 * x * x - 2.0 * x * x * x)
+          else 0.0
+          end
+        g * master
+      end
+      amplify(chop_gain, a_source)
     else
       a_source
     end

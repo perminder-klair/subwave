@@ -171,7 +171,7 @@ export const PICK_SCHEMA = z.object({
   reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just note what makes THIS pick a fresh step (new artist, a shift in energy/era/texture), not a vibe label you would recycle pick after pick (e.g. "new artist, lifts the energy", never a repeated "mellow reflective step")'),
   say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). When the event says stay silent, set this to null'),
   // Transition effects (only honoured when the system prompt offers them — persona djMode, see settings.effectsActive).
-  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve']).nullable().describe('transition treatment for this pick: "blend" — spectral handover: your pick and the track before it trade the spectrum in complementary bands across a long crossfade so they feel like ONE continuous piece; reserve it for an exceptionally locked pair (near-identical tempo, close key) — a plain crossfade already handles an ordinary same-lane pick, so this should be an occasional call, not your default. "sweep" — the track playing before your pick sinks under a slowly closing filter while your pick rises clean; choose it for a real gear-change (big jump in energy, tempo, or mood). "washout" — THIS pick dissolves into a pulsing echo tail as it ENDS, ringing out into whatever follows; choose it to close a chapter (end of a themed run, before a talk break, or out of a dreamy track). "dissolve" — the track playing before your pick melts into a diffuse ambient wash as your pick rises clean through it; the SMOOTH way across a clash (sweep is the dramatic way) — choose it for a tempo/mood mismatch you want to hide rather than announce. "normal" or null for a plain crossfade'),
+  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop']).nullable().describe('transition treatment for this pick: "blend" — spectral handover: your pick and the track before it trade the spectrum in complementary bands across a long crossfade so they feel like ONE continuous piece; reserve it for an exceptionally locked pair (near-identical tempo, close key) — a plain crossfade already handles an ordinary same-lane pick, so this should be an occasional call, not your default. "sweep" — the track playing before your pick sinks under a slowly closing filter while your pick rises clean; choose it for a real gear-change (big jump in energy, tempo, or mood). "washout" — THIS pick dissolves into a pulsing echo tail as it ENDS, ringing out into whatever follows; choose it to close a chapter (end of a themed run, before a talk break, or out of a dreamy track). "dissolve" — the track playing before your pick melts into a diffuse ambient wash as your pick rises clean through it; the SMOOTH way across a clash (sweep is the dramatic way) — choose it for a tempo/mood mismatch you want to hide rather than announce. "chop" — the track playing before your pick is cut rhythmically on its own beat, stabs thinning out as your pick rises through the gaps; the PERCUSSIVE way across a clash — choose it to jump energy UP on a beat-driven track (a drop, a takeover moment), never out of something ambient. "normal" or null for a plain crossfade'),
 });
 
 // Same shape, transition coaching stripped. Zod field descriptions travel to
@@ -181,7 +181,7 @@ export const PICK_SCHEMA = z.object({
 // the LLM log showed effects that could never air. The enum stays identical
 // (validation must not depend on persona state); only the description flips.
 export const PICK_SCHEMA_NO_FX = PICK_SCHEMA.extend({
-  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve']).nullable().describe('always set to null — transition effects are not available for this persona'),
+  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop']).nullable().describe('always set to null — transition effects are not available for this persona'),
 });
 
 // The live pick schema, resolved per run: the transition coaching follows the
@@ -430,18 +430,20 @@ async function enqueuePick(
   queue, song, reason, source,
   link: string | null = null,
   linkPrev: any = null,
-  { sweep = false, washout = false, blend = false, dissolve = false }: { sweep?: boolean; washout?: boolean; blend?: boolean; dissolve?: boolean } = {},
+  { sweep = false, washout = false, blend = false, dissolve = false, chop = false }: { sweep?: boolean; washout?: boolean; blend?: boolean; dissolve?: boolean; chop?: boolean } = {},
 ): Promise<number> {
   const track: any = trackFields(song);
   // Flag the transition effects on this pick (DJ mode only). getAnnotatedUri
-  // stamps liq_sweep / liq_washout / liq_dissolve; radio.liq ramps them. sweep
-  // muffles the crossfade INTO this pick; dissolve melts the PREVIOUS track
-  // into ambience under this pick; washout rings this track out into an echo
-  // tail as it ENDS.
+  // stamps liq_sweep / liq_washout / liq_dissolve / liq_chop; radio.liq ramps
+  // them. sweep muffles the crossfade INTO this pick; dissolve melts the
+  // PREVIOUS track into ambience under this pick; chop cuts the PREVIOUS
+  // track out on the beat under this pick; washout rings this track out into
+  // an echo tail as it ENDS.
   if (sweep) track.sweep = true;
   if (washout) track.washout = true;
   if (blend) track.blend = true;
   if (dissolve) track.dissolve = true;
+  if (chop) track.chop = true;
   const pos = await queue.push({
     track,
     requestedBy: null,
@@ -608,11 +610,12 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   const washout = fxActive && object.transition === 'washout';
   const blend = fxActive && object.transition === 'blend';
   const dissolve = fxActive && object.transition === 'dissolve';
+  const chop = fxActive && object.transition === 'chop';
   // Attach the link to the pick so it airs as the pick starts (back-announcing
   // the track on-air now), instead of immediately over that on-air track (#189).
   // Stamp `current` as the link's back-announce target so the queue can drop the
   // link if a request jumps ahead of this pick before it airs.
-  const queued = await enqueuePick(queue, song, object.reason, 'agent', link, current, { sweep, washout, blend, dissolve });
+  const queued = await enqueuePick(queue, song, object.reason, 'agent', link, current, { sweep, washout, blend, dissolve, chop });
   // Pick was already queued/on-air and got deduped — don't record a session turn
   // for a track that never airs. Returning false lets runTrackEvent fall through
   // to the pool for a fresh pick.
@@ -667,6 +670,7 @@ async function pickViaPool(queue, ctx, { wantLink, current }, rankTarget: { bpm:
     washout: fxActive && result.transition === 'washout',
     blend: fxActive && result.transition === 'blend',
     dissolve: fxActive && result.transition === 'dissolve',
+    chop: fxActive && result.transition === 'chop',
   };
   // `current` is the link's back-announce target (passed to generateLink as
   // `previous`); stamp it so the queue drops the link if a request jumps ahead.
@@ -780,7 +784,7 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null }: { w
       ? ` Your recent transition choices, oldest first: ${recentT.join(', ')} — the station strips a third repeat, so vary deliberately.`
       : '';
     const effectClause = settings.effectsActive()
-      ? ` Set "transition" by what THIS moment needs — "washout" to dissolve out as it ends, "sweep" for a gear-change entry, "dissolve" to melt a clash into ambience, "blend" ONLY for an exceptionally locked pair (a plain crossfade already handles ordinary same-lane picks), "normal" for a plain hand-off. Vary your craft: never the same transition three picks running, and if your last pick used an effect, lean "normal" now unless the moment clearly calls again.${historyNote}`
+      ? ` Set "transition" by what THIS moment needs — "washout" to dissolve out as it ends, "sweep" for a gear-change entry, "dissolve" to melt a clash into ambience, "chop" to cut a beat-driven track out on the beat for an energy jump, "blend" ONLY for an exceptionally locked pair (a plain crossfade already handles ordinary same-lane picks), "normal" for a plain hand-off. Vary your craft: never the same transition three picks running, and if your last pick used an effect, lean "normal" now unless the moment clearly calls again.${historyNote}`
       : '';
     const eventText = `Now playing "${current?.title}" by ${current?.artist}`
       + (current?.id ? ` [id: ${current.id}]` : '')

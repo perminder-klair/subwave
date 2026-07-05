@@ -15,7 +15,7 @@
 #       crash was with iir_filter/HPF; these two operators were unproven
 #       either way.) Renders dry vs fx and compares md5 so a silent no-op
 #       (like `echo`) can't pass. Decides per-branch (A) vs global-bus (B).
-#   scripts/fx-render-test.sh render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve]
+#   scripts/fx-render-test.sh render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop]
 #       Phase 1 — render the a→b transition with the production envelope
 #       logic (mirrored from radio.liq) and print an RMS-over-time table.
 #       Default renders every variant.
@@ -140,11 +140,12 @@ render() {
 settings.log.stdout := true
 settings.log.level := 3
 
-mode = environment.get("MODE")   # dry | sweep | washout | both | blend | dissolve
+mode = environment.get("MODE")   # dry | sweep | washout | both | blend | dissolve | chop
 sweep_on   = mode == "sweep"   or mode == "both"
 washout_on = mode == "washout" or mode == "both"
 blend_on   = mode == "blend"
 dissolve_on = mode == "dissolve"
+chop_on    = mode == "chop"
 
 q = request.queue(id="q")
 q.push(request.create("/work/ra.wav"))
@@ -156,7 +157,7 @@ def t(a, b) =
   a_src =
     if washout_on then
       fade.out(duration=d, type="exp", a.source)
-    elsif sweep_on then
+    elsif sweep_on or chop_on then
       fade.out(duration=d, type="log", a.source)
     else
       fade.out(duration=d, a.source)
@@ -341,6 +342,71 @@ def t(a, b) =
                  filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet, washed))
       add(normalize=false, [a_src, amplify(diss_gain, washed)])
     else a_src end
+  # CHOP — keep in lockstep with radio.liq's chop block: beat-synced gate
+  # (duty shrink → floor decay → exit sparsening), 12 ms smoothstep edges,
+  # engage ramp, master release. Fixed p=0.5 here (the harness has no BPM).
+  a_src =
+    if chop_on then
+      p = 0.5
+      chop_src = a_src
+      def chop_gain() =
+        e = source.elapsed(chop_src)
+        e = if e < 0. then 0. else e end
+        beat = int_of_float(e / p)
+        ph = e / p - float_of_int(beat)
+        t1 = 0.25 * d
+        t2 = 0.70 * d
+        duty =
+          if e < t1 then
+            x = e / t1
+            1.0 - (3.0 * x * x - 2.0 * x * x * x) * 0.45
+          elsif e < t2 then
+            x = (e - t1) / (t2 - t1)
+            0.55 - (3.0 * x * x - 2.0 * x * x * x) * 0.25
+          else
+            0.30
+          end
+        f_end = 0.40 * d
+        floor_g =
+          if e >= f_end then 0.0
+          else
+            x = e / f_end
+            0.45 * (1.0 - (3.0 * x * x - 2.0 * x * x * x))
+          end
+        odd = beat - 2 * (beat / 2) == 1
+        gate_on = not (e >= t2 and odd)
+        eps = 0.012 / p
+        shape =
+          if not gate_on then 0.0
+          elsif ph < eps then
+            x = ph / eps
+            3.0 * x * x - 2.0 * x * x * x
+          elsif ph < duty then 1.0
+          elsif ph < duty + eps then
+            x = (ph - duty) / eps
+            1.0 - (3.0 * x * x - 2.0 * x * x * x)
+          else 0.0
+          end
+        g_gate = floor_g + (1.0 - floor_g) * shape
+        t_eng = 0.08 * d
+        wet =
+          if e >= t_eng then 1.0
+          else
+            x = e / t_eng
+            3.0 * x * x - 2.0 * x * x * x
+          end
+        g = 1.0 - wet * (1.0 - g_gate)
+        master =
+          if e < 0.85 * d then 1.0
+          elsif e < 0.92 * d then
+            x = (e - 0.85 * d) / (0.07 * d)
+            1.0 - (3.0 * x * x - 2.0 * x * x * x)
+          else 0.0
+          end
+        g * master
+      end
+      amplify(chop_gain, a_src)
+    else a_src end
   b_src = fade.in(duration=d, b.source)
   b_src =
     if blend_on then
@@ -408,7 +474,7 @@ LIQ
 
   local modes
   case "$mode" in
-    all) modes="dry sweep washout both blend dissolve" ;;
+    all) modes="dry sweep washout both blend dissolve chop" ;;
     *)   modes="$mode" ;;
   esac
   for m in $modes; do
@@ -455,5 +521,5 @@ case "${1:-}" in
   probe)  probe ;;
   render) shift; render "$@" ;;
   xdur)   xdur ;;
-  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|all] | xdur"; exit 2 ;;
+  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|all] | xdur"; exit 2 ;;
 esac

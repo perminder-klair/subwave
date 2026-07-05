@@ -477,11 +477,12 @@ class Queue {
   // Drop any transition-effect flags from a track (with a logged reason) so
   // getAnnotatedUri never stamps an effect the gate rejected.
   stripEffect(track: any, reason: string) {
-    const kind = track.sweep ? 'sweep' : track.blend ? 'blend' : track.dissolve ? 'dissolve' : 'washout';
+    const kind = track.sweep ? 'sweep' : track.blend ? 'blend' : track.dissolve ? 'dissolve' : track.chop ? 'chop' : 'washout';
     delete track.sweep;
     delete track.washout;
     delete track.blend;
     delete track.dissolve;
+    delete track.chop;
     this.log('mix', `${kind} dropped (${reason})`);
   }
 
@@ -496,7 +497,7 @@ class Queue {
     // Persona flipped out of DJ mode between the pick and the drain: the
     // effects gate below never runs, so make sure no flag survives to annotate.
     if (!persona?.djMode) {
-      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve) this.stripEffect(item.track, 'dj mode off');
+      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop) this.stripEffect(item.track, 'dj mode off');
       return;
     }
 
@@ -505,7 +506,7 @@ class Queue {
     if (!prevTrack) {
       // Nothing on-air to validate against (first track after boot) — an
       // effect on a cold start would garnish silence; drop it.
-      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve) this.stripEffect(item.track, 'no predecessor');
+      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop) this.stripEffect(item.track, 'no predecessor');
       return;
     }
 
@@ -588,6 +589,7 @@ class Queue {
     const choice: string | null =
       item.track.sweep ? 'sweep' : item.track.blend ? 'blend'
         : item.track.dissolve ? 'dissolve'
+        : item.track.chop ? 'chop'
         : (item.track.washout && !item.track.washoutAuto) ? 'washout'
         : item.track.washoutAuto ? null : 'normal';
     const last2 = this._recentEffects.slice(-2);
@@ -626,13 +628,33 @@ class Queue {
       this.log('mix', 'dissolve dropped (tracks too compatible — a blend keeps the groove a wash would kill)');
     }
     if (item.track.dissolve) this.log('mix', `dissolve armed → ${item.track.title}`);
+    // chop (crossfader cut) — the percussive clash move: the outgoing track is
+    // gated rhythmically on its own beat, stabs thinning out as this pick rises
+    // through the gaps. Entry-side like the sweep, so it needs no canvas — but
+    // it DOES need a tempo: the gate period is one beat of the OUTGOING track
+    // (the one being cut), stamped on this pick because the predecessor's
+    // annotation has already been sent by the time this runs. Yields to a
+    // washout riding the previous track's exit, same reasoning as the
+    // dissolve: both gestures shape the same outgoing ending.
+    if (item.track.chop && prevTrack.washout) {
+      delete item.track.chop;
+      this.log('mix', 'chop dropped (previous track already exits through a washout)');
+    }
+    if (item.track.chop && !mix.effectAllowedFor('chop', cur, next)) {
+      delete item.track.chop;
+      this.log('mix', 'chop dropped (tracks too compatible — a beat-blend beats a cut)');
+    }
+    if (item.track.chop) {
+      item.track.chopPeriod = mix.chopPeriodFor(cur.bpm);
+      this.log('mix', `chop armed: ${item.track.chopPeriod}s gate → ${item.track.title}`);
+    }
     if (item.track.washout) {
       item.track.crossSec = mix.washoutCrossSecondsFor(next, maxSec);
       item.track.washoutDelay = mix.washoutDelayFor(next.bpm);
       const why = item.track.washoutAuto ? ' (length-cap exit)' : '';
       this.log('mix', `washout armed${why}: ${item.track.crossSec}s canvas, ${item.track.washoutDelay}s tap → ${item.track.title}`);
     }
-    const effectFired = !!(item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve);
+    const effectFired = !!(item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop);
 
     // Feature 2 — transition FX, spaced by the chattiness ladder and gated on
     // settings.sfx.enabled; never two transitions in a row, and never a riser
