@@ -127,7 +127,10 @@ export function buildContextLines(
   if (on('weather') && context?.weather && context.weather.condition && context.weather.condition !== 'unknown') {
     lines.push(`Weather in ${context.weather.location}: ${context.weather.condition}${context.weather.temp != null ? `, ${context.weather.temp}°${context.weather.tempUnit || 'C'}` : ''}`);
   }
-  if (on('festival') && context?.festival) lines.push(`Festival: ${context.festival.name}`);
+  if (on('festival') && context?.festival) {
+    const note = context.festival.description ? ` — ${context.festival.description}` : '';
+    lines.push(`Festival: ${context.festival.name}${note}`);
+  }
   if (on('show') && context?.activeShow) {
     const topic = context.activeShow.topic ? ` — ${context.activeShow.topic}` : '';
     lines.push(`On now: the show "${context.activeShow.name}"${topic}. Stay loosely on its theme.`);

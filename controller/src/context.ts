@@ -38,7 +38,7 @@ export function getFestivalContext(date = new Date()) {
     // years cover a window reaching across Dec 31 / Jan 1.
     for (const yy of [y - 1, y, y + 1]) {
       if (Math.abs(Date.UTC(yy, f.month - 1, f.day) - today) <= window * DAY_MS) {
-        return { name: f.name, mood: f.mood };
+        return { name: f.name, mood: f.mood, description: f.description || '' };
       }
     }
   }

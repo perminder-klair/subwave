@@ -249,7 +249,10 @@ export default function FestivalsSection() {
                       placeholder="Short note about the festival"
                       maxLength={200}
                     />
-                    <div className="field-hint mt-1">A brief note shown only in the admin list.</div>
+                    <div className="field-hint mt-1">
+                      A brief note the DJ can weave into its on-air talk when the festival
+                      is active — also shown in the list below.
+                    </div>
                   </div>
 
                   <div className="field">
