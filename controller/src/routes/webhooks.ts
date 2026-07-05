@@ -35,8 +35,13 @@ router.get('/webhooks', requireAdmin, async (req, res) => {
 router.post('/webhooks', requireAdmin, async (req, res) => {
   // The UI sends the whole list back. settings.update() validates the array
   // strictly and replaces it atomically — same pattern as personas/shows.
+  // Both fields are optional so the gate toggle can save on its own without
+  // re-submitting (and re-validating) the hook list, and vice versa.
   try {
-    const patch: Record<string, unknown> = { webhooks: req.body?.webhooks };
+    const patch: Record<string, unknown> = {};
+    if (req.body?.webhooks !== undefined) {
+      patch.webhooks = req.body.webhooks;
+    }
     if (req.body?.trackPlayListenerGated !== undefined) {
       patch.webhooksPolicy = { trackPlayListenerGated: !!req.body.trackPlayListenerGated };
     }

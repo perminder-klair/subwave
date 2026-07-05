@@ -240,23 +240,44 @@ export default function WebhooksPanel() {
     return () => { cancelled = true; };
   }, [hydrated, needsAuth, adminFetch]);
 
-  const save = async (next: Webhook[], gated = trackPlayListenerGated) => {
+  const save = async (next: Webhook[]) => {
     setBusy(true);
     try {
       const r = await adminFetch('/webhooks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ webhooks: next, trackPlayListenerGated: gated }),
+        body: JSON.stringify({ webhooks: next }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { webhooks?: Webhook[]; error?: string };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      setHooks(j.webhooks || []);
+      notify.ok('Webhooks saved.');
+    } catch (e) {
+      notify.err(`Save failed: ${errorMessage(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // The gate persists on its own the moment it's flipped (like the skills
+  // toggles) — it must not ride the hooks Save button, which an invalid
+  // draft row would disable. Doesn't touch `hooks`, so unsaved row edits
+  // survive a toggle.
+  const saveGate = async (next: boolean) => {
+    setBusy(true);
+    try {
+      const r = await adminFetch('/webhooks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trackPlayListenerGated: next }),
       });
       const j = (await r.json().catch(() => ({}))) as {
-        webhooks?: Webhook[];
         trackPlayListenerGated?: boolean;
         error?: string;
       };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setHooks(j.webhooks || []);
       setTrackPlayListenerGated(!!j.trackPlayListenerGated);
-      notify.ok('Webhooks saved.');
+      notify.ok(`track.play listener gate ${j.trackPlayListenerGated ? 'on' : 'off'}.`);
     } catch (e) {
       notify.err(`Save failed: ${errorMessage(e)}`);
     } finally {
@@ -319,7 +340,7 @@ export default function WebhooksPanel() {
           <Btn
             sm
             tone="accent"
-            onClick={() => save(hooks, trackPlayListenerGated)}
+            onClick={() => save(hooks)}
             disabled={!allValid || busy}
           >{busy ? 'Saving…' : 'Save'}</Btn>
         </div>
@@ -330,7 +351,8 @@ export default function WebhooksPanel() {
         right={
           <Toggle
             on={trackPlayListenerGated}
-            onClick={() => setTrackPlayListenerGated(v => !v)}
+            onClick={() => saveGate(!trackPlayListenerGated)}
+            disabled={busy}
           />
         }
       >
@@ -338,7 +360,7 @@ export default function WebhooksPanel() {
           Gate <code>track.play</code> on listener count (off by default). When on, hooks only
           receive the event when at least one listener is tuned in — unknown or zero count is
           skipped silently, matching scrobble. The payload includes <code>listeners</code> when
-          fired.
+          fired. Applies immediately — no Save needed.
         </div>
       </Card>
 
