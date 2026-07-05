@@ -131,9 +131,11 @@ router.get('/library/genres/related', requireAdmin, async (_req, res) => {
 // it to from the UI (?max=). 25000 covers most personal libraries in full while
 // keeping the payload sane; above it the observatory's MAP SIZE control dials up
 // to OBSERVATORY_HARD_MAX. Above the cap we return a stratified sample. The web
-// client mirrors this default (ObservatoryApp DEFAULT_MAX) so a fresh browser
-// and a direct API caller agree. (Libraries above ~3k render on the canvas
-// renderer; only small ones keep the animated SVG path.)
+// client sends no ?max= until the operator picks one, so this default (and the
+// OBSERVATORY_MAX override) governs the UI too; the response reports the
+// applied `max` + `defaultMax` so the MAP SIZE control can display it.
+// (Libraries above ~3k render on the canvas renderer; only small ones keep the
+// animated SVG path.)
 const OBSERVATORY_DEFAULT_MAX = Math.max(500, Number(process.env.OBSERVATORY_MAX) || 25000);
 const OBSERVATORY_HARD_MAX = Math.max(OBSERVATORY_DEFAULT_MAX, Number(process.env.OBSERVATORY_HARD_MAX) || 100000);
 router.get('/library/observatory', requireAdmin, async (req, res) => {
@@ -146,6 +148,18 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
       OBSERVATORY_HARD_MAX,
       Math.max(500, Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : OBSERVATORY_DEFAULT_MAX),
     );
+
+    // Revalidation: the payload is a pure function of library rows + max, so a
+    // token that changes on any library write is a sound ETag. Matching lets us
+    // skip the (multi-MB at high caps) body AND the row scan that builds it.
+    const etag = `W/"obs-${db.changeToken()}-${max}"`;
+    res.set('ETag', etag);
+    res.set('Cache-Control', 'private, no-cache');
+    const inm = req.headers['if-none-match'];
+    if (inm && inm.split(',').some((v) => v.trim() === etag)) {
+      return res.status(304).end();
+    }
+
     const sampled = total > max;
     const all = sampled ? db.allTaggedSampled(max, total) : db.allTagged();
     const truncated = sampled;
@@ -179,6 +193,7 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
       truncated,
       sampled,
       max,
+      defaultMax: OBSERVATORY_DEFAULT_MAX,
       hardMax: OBSERVATORY_HARD_MAX,
       moodVocab: settings.SHOW_MOODS,
       stats: {
