@@ -5,15 +5,15 @@
 //   - agentic segment tick (weather, news, now-playing digs, facts, web search) every 5 min
 
 import cron from 'node-cron';
-import { writeFile } from 'node:fs/promises';
 import { config } from '../config.js';
+import { writeFileAtomic } from '../util/atomic-file.js';
 import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { artistKey } from '../music/recency.js';
 import { normGenre, genreMatches, inYearRange, preferEnergy, preferEnergyStrict, preferMood } from '../music/show-filter.js';
-import { resolveShowPlaylistPool } from '../music/show-playlist.js';
+import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
 import * as session from './session.js';
@@ -23,7 +23,9 @@ import { shouldFire } from './dj-gate.js';
 import { djCallsAllowed } from './listeners.js';
 import { optionalSegmentsAllowed } from './dj-budget.js';
 import { agenticTick, skillCatalog } from '../skills/_agent.js';
-import { withTrace } from '../observability/events.js';
+import { withTrace, pruneOldEvents } from '../observability/events.js';
+import * as archives from './archives.js';
+import * as doctor from '../doctor.js';
 
 const TARGET_POOL = 30;
 const MOOD_WEIGHT = 12;          // up to this many mood-tagged tracks per pool
@@ -98,6 +100,7 @@ async function refreshAutoPlaylistInner() {
   const playlistPool = show ? await resolveShowPlaylistPool(show) : null;
   const hasPlaylist = !!playlistPool?.tracks?.length;
   const strictPlaylist = hasPlaylist && !!show?.playlistStrict;
+  const excludedIds = show ? await resolveExcludedPlaylistIds(show) : null;
 
   // Resolve the show's free-text genre to the library's exact tag once, up front.
   // A resolution failure / absent genre leaves genreName null, which disables the
@@ -278,11 +281,24 @@ async function refreshAutoPlaylistInner() {
     if (inPl.length) { pool.length = 0; pool.push(...inPl); }
   }
 
+  // Excluded playlists (blocklist): drop every track from a blocklisted
+  // playlist. The pick paths (picker.ts / picker-tools.ts) apply this as a HARD
+  // filter — an empty pool there just skips the LLM pick and coasts on this
+  // auto.m3u. This IS that coast, the last dead-air guard, so it mirrors the
+  // strict-playlist block above: never-starve if the blocklist would empty the
+  // pool (a mis-set "exclude everything" plays an excluded track over silence).
+  if (excludedIds) {
+    const allowed = pool.filter((t: any) => t?.id && !excludedIds.has(t.id));
+    if (allowed.length) { pool.length = 0; pool.push(...allowed); }
+  }
+
   // Stamp the station cap on every fallback entry (#447). max-track-length is a
   // pure on-air cue_out cut, not a selection filter, so over-length tracks stay
   // in the pool and simply crossfade out at the cap when the queue runs dry.
   const lines = ['#EXTM3U', ...pool.map((t: any) => subsonic.getAnnotatedUri(t, { maxDurationSec }))];
-  await writeFile(config.liquidsoap.autoPlaylist, lines.join('\n'));
+  // Atomic replace: Liquidsoap watches this file (reload_mode="watch"), so an
+  // in-place write can trigger a reload that loads a truncated playlist.
+  await writeFileAtomic(config.liquidsoap.autoPlaylist, lines.join('\n'));
 
   // Make the show-scoping visible to the operator (acceptance criteria #629):
   // a misspelled / absent strict genre that silently degraded, and a strict show
@@ -322,7 +338,7 @@ async function refreshAutoPlaylistInner() {
 export async function runHourlyCheck() {
   return withTrace({ kind: 'hourly' }, async () => {
     const ctx = await getFullContext();
-    const script = await dj.generateHourlyTime(ctx.time, ctx.weather, {
+    const script = await dj.generateHourlyTime({
       recap: queue.getDjRecap(),
       context: ctx,
       recentOpeners: queue.getRecentOpeners(),
@@ -415,8 +431,12 @@ async function skillsTick() {
 // Random ident every ~45 mins
 // ---------------------------------------------------------------------------
 
-// Gate-free runner — also called directly by the /dj/segment command route.
-export async function runStationId() {
+// Gate-free runner — also called directly by the /dj/segment command route
+// (immediate: an operator pressing the button wants it NOW). The scheduled
+// path passes atNextTrack so the ident holds for the next track boundary
+// instead of ducking the current song mid-vocal at an arbitrary wall-clock
+// minute — an ident has no real-time constraint, so the wait is free.
+export async function runStationId({ atNextTrack = false } = {}) {
   return withTrace({ kind: 'station-id' }, async () => {
     const ctx = await getFullContext();
     const script = await dj.generateStationId({
@@ -424,7 +444,8 @@ export async function runStationId() {
       context: ctx,
       recentOpeners: queue.getRecentOpeners(),
     });
-    await queue.announce(script, 'station-id');
+    if (atNextTrack) await queue.announceAtNextTrack(script, 'station-id');
+    else await queue.announce(script, 'station-id');
     return script;
   });
 }
@@ -434,14 +455,14 @@ async function stationId() {
   if (!djCallsAllowed()) return;  // nobody listening — skip the ident
   if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments
   try {
-    await runStationId();
+    await runStationId({ atNextTrack: true });
   } catch (err) {
     queue.log('error', `Station ID failed: ${err.message}`);
   }
 }
 
 // ---------------------------------------------------------------------------
-// CLEAN UP — old voice WAVs
+// CLEAN UP — old voice WAVs + library DB WAL
 // ---------------------------------------------------------------------------
 
 async function cleanup() {
@@ -449,6 +470,52 @@ async function cleanup() {
     await cleanupOldVoices();
   } catch (err) {
     queue.log('error', `Cleanup failed: ${err.message}`);
+  }
+  // Fold the library DB's WAL sidecar back into the main file. Without a
+  // periodic TRUNCATE checkpoint a bulk write pass (tagging, acoustic
+  // analysis) leaves the WAL at its high-water mark — 730MB in #786 — and
+  // every query afterwards pays to walk it.
+  try {
+    library.checkpoint();
+  } catch (err) {
+    queue.log('error', `Library WAL checkpoint failed: ${err.message}`);
+  }
+  // Drop event day-files past the retention horizon — the JSONL timeline
+  // rotates daily but nothing ever deleted old days.
+  try {
+    const removed = await pruneOldEvents();
+    if (removed) queue.log('scheduler', `Cleanup: pruned ${removed} old event log file(s)`);
+  } catch (err) {
+    queue.log('error', `Event log prune failed: ${err.message}`);
+  }
+  // Archive retention — delete hourly recordings older than the operator's
+  // window. 0 (the default) keeps everything, matching prior behaviour.
+  try {
+    const days = settings.get().archive?.retentionDays || 0;
+    if (days > 0) {
+      const { removed, bytes } = await archives.pruneOlderThan(days);
+      if (removed) {
+        queue.log('scheduler',
+          `Archive retention: removed ${removed} recording(s) older than ${days}d (${Math.round(bytes / 1_000_000)} MB freed)`);
+      }
+    }
+  } catch (err) {
+    queue.log('error', `Archive retention failed: ${err.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// NIGHTLY HEALTH CHECK
+// Run the deterministic doctor assessment once a day so the admin header badge
+// and the DJ Doc panel reflect the station's health even before the operator
+// opens it. No LLM call — runDoctor is LLM-free; the result is just cached.
+// ---------------------------------------------------------------------------
+
+async function nightlyDoctor() {
+  try {
+    await withTrace({ kind: 'doctor' }, () => doctor.runDoctor());
+  } catch (err) {
+    queue.log('error', `Nightly health check failed: ${err.message}`);
   }
 }
 
@@ -477,6 +544,10 @@ export function startScheduler() {
 
   // Cleanup every hour
   cron.schedule('0 * * * *', cleanup);
+
+  // Nightly health check at 04:17 — populates the DJ Doc last-run cache + header
+  // badge without the operator having to open the panel. Deterministic (no LLM).
+  cron.schedule('17 4 * * *', nightlyDoctor);
 
   queue.log('scheduler', `Scheduler started · skills: ${skillCatalog().map((s: any) => s.name).join(', ')}`);
 }

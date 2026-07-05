@@ -10,7 +10,7 @@
 // probe, Subsonic ping, listener monitor, TTS routing, library stats); nothing
 // here adds new probing infrastructure.
 
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { config, STATE_DIR } from './config.js';
 import * as settings from './settings.js';
@@ -33,6 +33,8 @@ import { getSetupStatus } from './setup/firstRun.js';
 import { djObject } from './llm/sdk.js';
 import { searchReady, searchWeb } from './skills/web-search.js';
 import * as system from './system.js';
+import { budgetStatus } from './broadcast/dj-budget.js';
+import * as analyzer from './music/analyzer.js';
 import { DJ_DOC_KNOWLEDGE } from './doctor-knowledge.js';
 
 export type Status = 'ok' | 'warn' | 'fail' | 'skip';
@@ -75,6 +77,10 @@ export interface ReviewPriority {
   severity: 'low' | 'med' | 'high';
   why: string;
   suggestedFix: string;
+  // When set, the panel can render the matching one-click fix button right on
+  // this priority. The panel still cross-checks it against the report's own
+  // findings, so a stray/hallucinated id never surfaces a button.
+  fixId?: FixId | null;
 }
 
 export interface DoctorReview {
@@ -89,27 +95,136 @@ export interface DoctorReview {
 // runDoctor — assemble all sections.
 // ---------------------------------------------------------------------------
 
-export async function runDoctor(): Promise<DoctorReport> {
-  let s: any = null;
-  try { s = settings.get(); } catch { s = null; }
+// The section roster, in display order. Each check swallows its own errors and
+// degrades to a 'skip'/'fail' finding (via `safe`), so one failing subsystem
+// never blanks the whole report. Kept as data so both the batch runner and the
+// streaming generator drive the same list.
+const SECTION_CHECKS: Array<{ name: string; run: (s: any) => Promise<Finding[]> }> = [
+  { name: 'LLM', run: (s) => checkLlm(s) },
+  { name: 'Navidrome & library', run: () => checkNavidrome() },
+  { name: 'Broadcast', run: () => checkBroadcast() },
+  { name: 'Voice (TTS)', run: (s) => checkTts(s) },
+  { name: 'Capabilities', run: (s) => checkCapabilities(s) },
+  { name: 'Content', run: () => checkContent() },
+  { name: 'Resources', run: () => checkResources() },
+  { name: 'Tuning', run: (s) => checkTuning(s) },
+  { name: 'Storage', run: () => checkStorage() },
+  { name: 'Setup', run: () => checkSetup() },
+];
 
-  const sections: DoctorSection[] = [];
-  // Each check swallows its own errors and degrades to a 'skip'/'fail' finding,
-  // so one failing subsystem never blanks the whole report.
-  sections.push({ name: 'LLM', findings: await safe(() => checkLlm(s)) });
-  sections.push({ name: 'Navidrome & library', findings: await safe(checkNavidrome) });
-  sections.push({ name: 'Broadcast', findings: await safe(checkBroadcast) });
-  sections.push({ name: 'Voice (TTS)', findings: await safe(() => checkTts(s)) });
-  sections.push({ name: 'Capabilities', findings: await safe(() => checkCapabilities(s)) });
-  sections.push({ name: 'Content', findings: await safe(checkContent) });
-  sections.push({ name: 'Resources', findings: await safe(checkResources) });
-  sections.push({ name: 'Storage', findings: await safe(checkStorage) });
-  sections.push({ name: 'Setup', findings: await safe(checkSetup) });
+function loadSettingsSafe(): any {
+  try { return settings.get(); } catch { return null; }
+}
 
+// Yield each section as its check completes, so the streaming route can flush
+// partial results to the panel instead of blocking on the whole assessment
+// (some checks — an unreachable LLM host, the live web-search probe — take
+// several seconds each).
+export async function* runDoctorSections(): AsyncGenerator<DoctorSection> {
+  const s = loadSettingsSafe();
+  for (const c of SECTION_CHECKS) {
+    yield { name: c.name, findings: await safe(() => c.run(s)) };
+  }
+}
+
+export function tallyCounts(sections: DoctorSection[]): DoctorReport['counts'] {
   const counts = { ok: 0, warn: 0, fail: 0, skip: 0 };
   for (const sec of sections) for (const f of sec.findings) counts[f.status]++;
+  return counts;
+}
 
-  return { t: new Date().toISOString(), sections, counts };
+// Stamp + tally a completed set of sections into a report, and cache it as the
+// station's last-known health. The single place a report is minted, so every
+// path (batch, stream, nightly cron) caches consistently.
+export function finalizeReport(sections: DoctorSection[]): DoctorReport {
+  const report: DoctorReport = { t: new Date().toISOString(), sections, counts: tallyCounts(sections) };
+  rememberReport(report);
+  return report;
+}
+
+export async function runDoctor(): Promise<DoctorReport> {
+  const sections: DoctorSection[] = [];
+  for await (const sec of runDoctorSections()) sections.push(sec);
+  return finalizeReport(sections);
+}
+
+// ---------------------------------------------------------------------------
+// Last-run cache — the panel hydrates from this on mount and the admin header
+// badges station health from it, so a report survives navigation and a restart
+// without forcing an immediate re-run. Deterministic data only (counts + DJ
+// Doc's verdict when a review has run). Best-effort disk mirror under STATE_DIR;
+// never throws into a check path.
+// ---------------------------------------------------------------------------
+
+const CACHE_FILE = `${STATE_DIR}/doctor-last.json`;
+
+interface DoctorCache {
+  report: DoctorReport | null;
+  review: DoctorReview | null;
+}
+
+let cache: DoctorCache = { report: null, review: null };
+let cacheLoaded = false;
+
+async function ensureCacheLoaded(): Promise<void> {
+  if (cacheLoaded) return;
+  cacheLoaded = true;
+  try {
+    const parsed = JSON.parse(await readFile(CACHE_FILE, 'utf8'));
+    if (parsed && typeof parsed === 'object') {
+      cache = { report: parsed.report ?? null, review: parsed.review ?? null };
+    }
+  } catch { /* no prior run persisted — fine */ }
+}
+
+function persistCache(): void {
+  // Fire-and-forget: the in-memory cache is the source of truth for this
+  // session; the disk mirror only bootstraps the next boot.
+  writeFile(CACHE_FILE, JSON.stringify(cache)).catch(() => {});
+}
+
+export function rememberReport(report: DoctorReport): void {
+  cacheLoaded = true; // a fresh run supersedes anything still on disk
+  // A new report describes a new moment — the old review no longer matches it.
+  cache = { report, review: null };
+  persistCache();
+}
+
+export function rememberReview(review: DoctorReview): void {
+  if (!cache.report) return; // a review with no report to attach to is meaningless
+  cache = { ...cache, review };
+  persistCache();
+}
+
+// Derive a headline verdict from the counts alone — used for the header badge
+// when no LLM review has run (runDoctor is LLM-free). A real review's `overall`
+// takes precedence when present.
+export function derivedOverall(counts: DoctorReport['counts']): 'healthy' | 'attention' | 'critical' {
+  if (counts.fail > 0) return 'critical';
+  if (counts.warn > 0) return 'attention';
+  return 'healthy';
+}
+
+export interface DoctorSummary {
+  t: string | null;
+  counts: DoctorReport['counts'] | null;
+  overall: 'healthy' | 'attention' | 'critical' | null;
+}
+
+// Compact health headline for the admin header badge — no section detail.
+export async function lastSummary(): Promise<DoctorSummary> {
+  await ensureCacheLoaded();
+  const r = cache.report;
+  if (!r) return { t: null, counts: null, overall: null };
+  const overall =
+    cache.review?.available && cache.review.overall ? cache.review.overall : derivedOverall(r.counts);
+  return { t: r.t, counts: r.counts, overall };
+}
+
+// Full last-run payload for the panel to hydrate from on mount.
+export async function lastRun(): Promise<DoctorCache> {
+  await ensureCacheLoaded();
+  return cache;
 }
 
 // Wrap a check so a thrown error becomes a single fail finding rather than
@@ -497,6 +612,196 @@ async function checkResources(): Promise<Finding[]> {
   return out;
 }
 
+// Tuning — the cross-setting + telemetry-vs-config checks that the settings
+// panel itself can't show. Each finding weighs one performance knob against the
+// OTHER settings, the live LLM telemetry, or the host resources — the stuff an
+// operator can't eyeball. Findings are advisory (no one-click fix): the remedy
+// is a settings change, which DJ Doc's review then narrates the trade-off for.
+async function checkTuning(s: any): Promise<Finding[]> {
+  const out: Finding[] = [];
+  const llm = s?.llm || {};
+
+  // --- Daily token budget: cliff detection + burn-rate projection ---
+  // Uses the live tally (broadcast/dj-budget), not just the configured number,
+  // so it can say "you'll hit the cap by mid-afternoon" instead of "a cap is set".
+  try {
+    const b = budgetStatus();
+    if (!b.enabled) {
+      out.push({ label: 'token budget', status: 'skip', detail: 'no daily cap (unlimited)' });
+    } else {
+      // A soft tier of 0 or 100 disables graceful degrade — the DJ jumps from
+      // full service straight to silent at the cap.
+      if (b.softPct <= 0 || b.softPct >= 100) {
+        out.push({
+          label: 'budget soft tier',
+          status: 'warn',
+          detail: `soft tier disabled (softPct ${b.softPct})`,
+          hint: 'With no soft tier the DJ jumps straight from full service to silent at the cap. Set Settings → LLM → budget soft % to ~80 so it first drops to the cheap pool picker and mutes optional segments, warning you before it hits the wall.',
+        });
+      }
+      // Project today's exhaustion from the burn rate so far (UTC day).
+      const now = Date.now();
+      const dayStart = Date.parse(new Date().toISOString().slice(0, 10) + 'T00:00:00Z');
+      const hrsElapsed = Math.max(0.05, (now - dayStart) / 3600000);
+      const rate = b.usedToday / hrsElapsed; // tokens/hour
+      const willExhaust = b.mode !== 'hard' && rate * 24 > b.cap && b.usedToday > 0;
+      const hitHour = willExhaust ? Math.min(24, Math.round(b.cap / rate)) : null;
+      const pct = b.cap > 0 ? Math.round((b.usedToday / b.cap) * 100) : 0;
+      out.push({
+        label: 'token budget',
+        status: b.mode === 'hard' ? 'fail' : b.mode === 'soft' || willExhaust ? 'warn' : 'ok',
+        detail:
+          b.mode === 'hard'
+            ? `cap reached (${fmtTokens(b.usedToday)}/${fmtTokens(b.cap)}) — DJ is coasting on the auto playlist`
+            : `${fmtTokens(b.usedToday)}/${fmtTokens(b.cap)} used today (${pct}%)${willExhaust ? ` · on track to hit the cap ~${hitHour}:00 UTC` : ''}`,
+        hint:
+          b.mode === 'hard'
+            ? 'No model calls until UTC midnight (listener requests still run if exempt). Raise Settings → LLM → daily token cap, or turn on pause-when-empty so idle hours don’t burn the budget.'
+            : willExhaust
+              ? 'At the current rate the DJ drops to the cheap picker (soft), then goes silent (hard) before the day ends. Raise the cap, enable pause-when-empty, or ease off reasoning / the agentic picker to slow the burn.'
+              : undefined,
+      });
+    }
+  } catch { /* budget module best-effort */ }
+
+  // --- Agent deadline vs MEASURED latency ---
+  // checkLlm only warns when the configured number looks low; here we compare it
+  // to what the model is actually doing. If p90 latency crowds the deadline, the
+  // agentic picker is silently timing out into the pool on most tracks.
+  if (llm.pickerAgent !== false) {
+    const lat = recentCalls
+      .filter((c: any) => c && c.ok !== false && Number.isFinite(c.ms) && c.ms > 0)
+      .map((c: any) => c.ms as number)
+      .sort((a, b) => a - b);
+    const deadlineMs = Number(llm.agentTimeoutMs);
+    if (lat.length >= 5 && Number.isFinite(deadlineMs) && deadlineMs > 0) {
+      const p90 = lat[Math.min(lat.length - 1, Math.floor(lat.length * 0.9))];
+      const ratio = p90 / deadlineMs;
+      out.push({
+        label: 'agent deadline vs latency',
+        status: ratio >= 1 ? 'fail' : ratio >= 0.8 ? 'warn' : 'ok',
+        detail: `p90 model latency ${(p90 / 1000).toFixed(1)}s vs ${Math.round(deadlineMs / 1000)}s deadline`,
+        hint:
+          ratio >= 0.8
+            ? 'Recent calls are running close to (or past) the agent deadline, so the agentic picker is probably timing out into the pool fallback on many tracks — you lose the session-aware picks you’re paying for. Raise Settings → LLM → agent deadline, or switch to a faster/smaller model (or turn reasoning OFF).'
+            : undefined,
+      });
+    }
+  }
+
+  // --- Context window too small for the agentic picker (Ollama only) ---
+  if (llm.provider === 'ollama' && llm.pickerAgent !== false) {
+    const nc = Number(llm.numCtx);
+    if (Number.isFinite(nc) && nc > 0 && nc < 8192) {
+      out.push({
+        label: 'context window',
+        status: 'warn',
+        detail: `numCtx ${nc} — tight for the agentic picker`,
+        hint: 'The agentic picker sends a system prompt + tool definitions + candidates; a small Ollama context window truncates them so the agent can’t call its “done” tool and falls back to the pool. Raise Settings → LLM → context window to ≥8192 (16384 is the default), or turn the agentic picker off.',
+      });
+    }
+  }
+
+  // --- Reasoning vs structured output (cross-setting, telemetry-backed) ---
+  // "Thinking" tokens are a common cause of malformed JSON. Tie the risk to the
+  // actual schema-failure count so it only fires when both are true.
+  if (llm.reasoning) {
+    const schemaFails = recentCalls.filter(isSchemaFailure).length;
+    if (schemaFails > 0) {
+      out.push({
+        label: 'reasoning vs structured output',
+        status: 'warn',
+        detail: `reasoning ON with ${schemaFails} recent schema failure(s)`,
+        hint: 'Chain-of-thought output is a common cause of malformed structured JSON (the picker, request matcher, tagger and this report all need strict JSON). Try turning Settings → LLM → reasoning OFF and re-checking — most local models emit cleaner JSON without it.',
+      });
+    }
+  }
+
+  // --- Max response size too small for the agentic picker ---
+  {
+    const mo = Number(llm.maxOutputTokens);
+    if (Number.isFinite(mo) && mo > 0 && mo < 1000 && llm.pickerAgent !== false) {
+      out.push({
+        label: 'max response size',
+        status: 'warn',
+        detail: `maxOutputTokens ${mo} — low for the agentic picker`,
+        hint: 'A small per-call output cap can truncate the agent’s tool calls mid-JSON, forcing a fallback. Leave Settings → LLM → max response size at 0 (strategy default) unless a small-context local model specifically needs it.',
+      });
+    }
+  }
+
+  // --- Listener-request web-resolve needs web search configured ---
+  if (llm.requestWebResolve) {
+    let ready = true;
+    try { ready = searchReady(); } catch { ready = true; }
+    if (!ready) {
+      out.push({
+        label: 'request web-resolve',
+        status: 'warn',
+        detail: 'on, but web search isn’t ready',
+        hint: 'Resolving described track requests ("that song from the film") needs a working web search. Configure it in Settings → Search, or turn Settings → LLM → request web-resolve off.',
+      });
+    }
+  }
+
+  // --- Audio-analysis features vs the analyzer flavour actually running ---
+  // audio.embeddings / vocalActivity silently no-op on the lean analyzer image
+  // (no CLAP / Demucs). Cross-check the setting against the live capability probe.
+  try {
+    const wantEmb = !!s?.audio?.embeddings;
+    const wantVocal = !!s?.audio?.vocalActivity;
+    if (wantEmb || wantVocal) {
+      try { await analyzer.refreshCapabilities(); } catch { /* best-effort probe */ }
+      if (wantEmb && analyzer.audioEmbeddingAvailable() === false) {
+        out.push({
+          label: 'audio embeddings',
+          status: 'warn',
+          detail: 'enabled, but the analyzer can’t produce them',
+          hint: 'The “sounds-like” audio embeddings need the heavy analyzer (CLAP). You’re on the lean image, so this setting silently does nothing. Set ANALYZER_HEAVY=1 in .env and re-pull/rebuild the analyzer, or turn the setting off.',
+        });
+      }
+      if (wantVocal && analyzer.vocalActivityAvailable() === false) {
+        out.push({
+          label: 'vocal activity',
+          status: 'warn',
+          detail: 'enabled, but the analyzer can’t produce it',
+          hint: 'Vocal-range / talk-timing analysis needs the heavy analyzer (Demucs). The lean image can’t, so this setting no-ops. Set ANALYZER_HEAVY=1 in .env and rebuild the analyzer, or turn the setting off.',
+        });
+      }
+    }
+  } catch { /* analyzer unavailable — skip */ }
+
+  // --- Broadcast encoder load vs host CPU ---
+  // Every extra mount and the hourly archive is a continuous encoder — real CPU.
+  // Flag it only when several are on AND the host is already under pressure.
+  try {
+    const st = s?.stream || {};
+    const extra: string[] = [];
+    if (st.opusEnabled) extra.push('opus');
+    if (st.flacEnabled) extra.push('flac');
+    if (st.aacEnabled) extra.push('aac');
+    if (s?.archive?.enabled) extra.push('hourly archive');
+    const encoderCount = 1 + extra.length; // /stream.mp3 always
+    const sys = await system.summary();
+    const cores = sys.host?.cpus || 0;
+    const load1 = Array.isArray(sys.host?.loadavg) ? sys.host.loadavg[0] : 0;
+    const perCore = cores > 0 ? load1 / cores : 0;
+    const pressured = (cores > 0 && cores <= 2) || perCore > 0.8;
+    const heavy = extra.length >= 2;
+    out.push({
+      label: 'broadcast encoders',
+      status: heavy && pressured ? 'warn' : 'ok',
+      detail: `${encoderCount} encoder${encoderCount === 1 ? '' : 's'} (mp3${extra.length ? ' + ' + extra.join(' + ') : ''}) · ${cores} cores, load ${load1.toFixed(2)}`,
+      hint:
+        heavy && pressured
+          ? 'Each extra stream mount and the hourly archive is a continuous encoder, and this host is already loaded for its core count. The hourly archive is the single biggest cost — disable mounts you don’t use (Settings → Broadcast) to free CPU for the DJ and TTS.'
+          : undefined,
+    });
+  } catch { /* resources unavailable — skip encoder check */ }
+
+  return out;
+}
+
 async function checkContent(): Promise<Finding[]> {
   const out: Finding[] = [];
 
@@ -612,6 +917,13 @@ const REVIEW_SCHEMA = z.object({
         severity: z.enum(['low', 'med', 'high']),
         why: z.string().describe('one sentence: why it matters for listeners or reliability'),
         suggestedFix: z.string().describe('the concrete next step the operator should take'),
+        fixId: z
+          .enum(['refresh-playlist', 'restart-mixer', 'generate-jingles', 'tag-library', 'subsonic-reset'])
+          .nullable()
+          .optional()
+          .describe(
+            'When this priority is resolved by one of the one-click fixes listed in the prompt, you MUST set this to that exact fix id (so the operator gets a button). Leave it out only when no listed fix applies.',
+          ),
       }),
     )
     .describe('0-5 items, highest severity first; empty array when everything is healthy'),
@@ -626,9 +938,11 @@ const REVIEW_SYSTEM = [
   'personal internet radio station (Navidrome library, an LLM DJ, Liquidsoap mixer, Icecast stream,',
   'local/cloud TTS).',
   'A knowledge base about how SUB/WAVE works is provided below — USE IT. Ground every recommendation',
-  'in it, and tailor model / picker / chain-of-thought / agent-deadline / TTS-engine advice to the',
-  'HOST RESOURCES and CURRENT SETTINGS shown in the report (e.g. don\'t tell a small-CPU box to run',
-  'Chatterbox or the agentic picker on a 9B model).',
+  'in it, and tailor model / picker / chain-of-thought / agent-deadline / budget / stream-encoder /',
+  'TTS-engine advice to the HOST RESOURCES and CURRENT SETTINGS shown in the report (e.g. don\'t tell',
+  'a small-CPU box to run Chatterbox, four stream encoders, or the agentic picker on a 9B model). The',
+  '"Tuning" section and the settings snapshot spell out the current knob values — use them to spot',
+  'settings that fight each other or the hardware, and say plainly which knob to change and to what.',
   'Interpret the findings for a non-expert operator: what is fine, what needs attention, what to do',
   'first. Be concrete and brief — keep the swagger to a light seasoning, no fluff, don\'t restate',
   'every finding. Prioritise anything that takes the station off air or starves the DJ (stream',
@@ -655,19 +969,26 @@ export async function reviewReport(report: DoctorReport): Promise<DoctorReview> 
       prompt: [
         DJ_DOC_KNOWLEDGE,
         '\n---\n',
+        renderSettingsSnapshot(),
+        '',
         'Here is the latest station health report.',
         '',
         renderReportText(report),
         '',
-        'Review it for the operator. Lean on the knowledge base above, and tailor any model / picker /',
-        'chain-of-thought / agent-deadline / TTS recommendations to the host resources and current',
-        'settings shown in the report.',
+        renderAvailableFixes(report),
+        '',
+        'Review it for the operator. Lean on the knowledge base above. Cross-reference the "Tuning"',
+        'section and the current settings snapshot against the host resources, and tailor any model /',
+        'picker / chain-of-thought / agent-deadline / budget / encoder / TTS recommendations to what',
+        'this specific box can actually handle.',
       ].join('\n'),
       schema: REVIEW_SCHEMA,
       temperature: 0.5,
       kind: 'doctor:review',
     });
-    return { available: true, ...review };
+    const result: DoctorReview = { available: true, ...review };
+    rememberReview(result);
+    return result;
   } catch (err: any) {
     // A schema/shape mismatch here is itself a diagnosis: the review model can't
     // do structured output. Say so plainly instead of dumping the Zod error, and
@@ -701,6 +1022,64 @@ function classifyModel(label: string): { code: boolean; sizeB: number | null } {
   const sizeMatch = m.match(/(\d+(?:\.\d+)?)\s*b(?:[^a-z0-9]|$)/);
   const sizeB = sizeMatch ? parseFloat(sizeMatch[1]) : null;
   return { code, sizeB };
+}
+
+// Compact snapshot of the live performance-affecting settings, so the AI review
+// can reason about the actual knob values + trade-offs (not just the findings
+// that fired). Pairs with the "Tuning" section and the knowledge base.
+function renderSettingsSnapshot(): string {
+  let s: any = null;
+  try { s = settings.get(); } catch { return ''; }
+  const llm = s?.llm || {};
+  const st = s?.stream || {};
+  const mounts = ['mp3'];
+  if (st.opusEnabled) mounts.push('opus');
+  if (st.flacEnabled) mounts.push('flac');
+  if (st.aacEnabled) mounts.push('aac');
+
+  let budget = 'unlimited';
+  try {
+    const b = budgetStatus();
+    budget = b.enabled
+      ? `${fmtTokens(b.usedToday)}/${fmtTokens(b.cap)} today (soft ${b.softPct}%, mode ${b.mode})`
+      : 'unlimited';
+  } catch { /* budget best-effort */ }
+
+  let analyzerLabel = 'unknown';
+  try { analyzerLabel = analyzer.backendLabel(); } catch { /* best-effort */ }
+
+  return [
+    '## Current settings (tune these against the findings + host resources)',
+    `- LLM: ${providerName()} · ${activeModelLabel()} · pickerAgent ${llm.pickerAgent === false ? 'OFF' : 'ON'} · reasoning ${llm.reasoning ? 'ON' : 'OFF'} · agentDeadline ${Math.round(Number(llm.agentTimeoutMs || 0) / 1000)}s · numCtx ${llm.numCtx ?? 'n/a'} · toolChoice ${llm.toolChoice || 'required'} · maxOutputTokens ${llm.maxOutputTokens || 'default'}`,
+    `- Budget: ${budget} · exemptRequests ${llm.exemptRequests === false ? 'OFF' : 'ON'} · pauseWhenEmpty ${llm.pauseWhenEmpty ? 'ON' : 'OFF'}`,
+    `- Picking: noRepeatWindow ${llm.noRepeatWindow ?? 'n/a'} · requestWebResolve ${llm.requestWebResolve ? 'ON' : 'OFF'}`,
+    `- Broadcast: crossfade ${s?.crossfadeDuration ?? '?'}s · jingle 1/${s?.jingleRatio ?? '?'} · maxTrack ${s?.maxTrackSeconds ? s.maxTrackSeconds + 's' : 'unlimited'} · loudness ${s?.loudness?.targetLufs ?? '?'} LUFS · mounts ${mounts.join('+')} · archive ${s?.archive?.enabled ? 'ON' : 'OFF'}`,
+    `- Voice: default TTS ${s?.tts?.defaultEngine || 'piper'}`,
+    `- Analysis: audio.embeddings ${s?.audio?.embeddings ? 'ON' : 'OFF'} · vocalActivity ${s?.audio?.vocalActivity ? 'ON' : 'OFF'} · analyzer ${analyzerLabel}`,
+    `- Search: ${s?.search?.provider || 'duckduckgo'}`,
+  ].join('\n');
+}
+
+// Tell the reviewer which one-click fixes are actually applicable right now —
+// the set of fix ids the findings surfaced this run — so it only attaches a
+// `fixId` to a priority when the corresponding button really exists.
+function renderAvailableFixes(report: DoctorReport): string {
+  const seen = new Map<FixId, string>();
+  for (const sec of report.sections) {
+    for (const f of sec.findings) {
+      if (f.fix && !seen.has(f.fix.id)) seen.set(f.fix.id, f.fix.label);
+    }
+  }
+  if (!seen.size) {
+    return 'One-click fixes available this run: none. Do NOT set fixId on any priority.';
+  }
+  const lines = [...seen.entries()].map(([id, label]) => `- ${id} — ${label}`);
+  return [
+    'One-click fixes available this run — for ANY priority that one of these resolves, you MUST set that',
+    'priority\'s `fixId` to the exact id shown here (the operator then gets a working button, not just',
+    'prose telling them to run it):',
+    ...lines,
+  ].join('\n');
 }
 
 // Compact, prompt-friendly rendering of the report — labels/status/detail/hint
@@ -753,6 +1132,13 @@ async function dirSize(path: string, cap = 5000): Promise<{ bytes: number; files
   }
   await walk(path);
   return { bytes, files };
+}
+
+function fmtTokens(n: number): string {
+  if (!Number.isFinite(n)) return '?';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
+  return String(n);
 }
 
 function fmtBytes(n: number): string {

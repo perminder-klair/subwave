@@ -114,11 +114,13 @@ tool the segment director can call **before** writing the line. This is the
 directories with a `SKILL.md` and a `tool.mjs`, loaded the same way as yours.
 
 ```js
-export default async function (ctx, state, services, config) {
+export default async function (ctx, state, services, config, input) {
   // ctx      — the moment: { time, weather, festival, dominantMood, clock }
   // state    — cross-tick dedup memory (persists between firings)
   // services — the curated station facade (see below)
   // config   — this skill's own SKILL.md frontmatter (e.g. a custom `feed:`)
+  // input    — the agent's values for your declared `inputs` (see below); {}
+  //            when you declare none
   // Return any JSON-serialisable object. The `{ available: false }` convention
   // tells the agent there's nothing worth airing right now.
   return { available: true, foo: 'bar' };
@@ -130,6 +132,13 @@ export const description = 'Fetch X for the … segment.';
 // OPTIONAL: gate the whole skill on a runtime condition — when this returns
 // false the skill is never even offered (e.g. no search provider configured).
 export const ready = (services) => services.searchReady();
+
+// OPTIONAL: agent-steerable parameters — a flat { name: description } object of
+// string params. The agent may pass a value or null for each; handle null by
+// falling back to your own default (see the web-search built-in's `query`).
+// Without this export the tool is zero-arg, which small models handle best —
+// only declare inputs the agent genuinely benefits from steering.
+export const inputs = { query: 'what to search for; null for the default dig' };
 ```
 
 ### `services` — the station facade
@@ -226,3 +235,48 @@ there (or in `/admin/skills`), not in `.env`.
   fires autonomously when it's enabled *and* assigned to the persona on air
   (Personas page). **Run now** is an operator override that bypasses the toggle,
   the persona assignment, the frequency gate, and the cooldown.
+
+## Sharing skills
+
+Three ways to move a skill between stations, sorted from most-reviewed to
+most-direct.
+
+### The community catalog
+
+`/admin/skills` has a **Community** button (next to **New skill**) that lists a
+catalog of skills shipped in the controller image. **Install** copies one into
+`state/skills/` as an ordinary custom skill — **disabled on arrival**, for you to
+read before it airs. The catalog is **prompt-only by contract**: no `tool.mjs` is
+ever shipped or written, so installing from it never runs third-party code.
+
+### Sharing your own
+
+Any **prompt-only** custom skill (no `tool.mjs`) shows a **Share to community**
+button. It opens a prefilled GitHub Issue Form; a workflow
+(`skill-submission.yml`) validates the slug, reserved names, and context fields,
+then opens a one-file PR adding `controller/src/skills/community/<slug>/SKILL.md`
+— no fork, no code. Once merged it ships in the next image and reaches every
+operator through the normal update path. A skill that carries a `tool.mjs` can't
+be shared this way; use a zip.
+
+The workflow also stamps **provenance** into the frontmatter it writes:
+`submittedBy` (the GitHub login that filed the issue), `dateAdded` (when it first
+entered the catalog), and `dateModified` (each time the PR is refreshed).
+`dateAdded` is preserved across issue edits — only `dateModified` moves — so an
+approved skill keeps its original credit line. The Community modal shows this
+under each entry ("by @who · added … · updated …").
+
+### Zip export / import
+
+For a direct operator-to-operator handoff, the skill edit sheet has **↓ Export**
+(`GET /api/dj/skills/:slug/export`) that streams a `.zip` of `SKILL.md` plus
+`tool.mjs` if present. The **Import .zip** button in the Community modal
+(`POST /api/dj/skills/import`) takes it back in, deriving the slug from the
+bundle's `name:`.
+
+> **A zip may carry code.** Unlike the reviewed catalog, an imported `.zip` can
+> include a `tool.mjs` — a direct action on your own box, the same trust as
+> dropping a folder in by hand or restoring a backup. Imports arrive **disabled**;
+> when the bundle has a tool, the response flags it so the UI can warn you before
+> you enable it. (Hardened against zip-slip; 5 MB upload cap, only `SKILL.md` +
+> `tool.mjs` are extracted. Reserved names and re-imports are rejected.)

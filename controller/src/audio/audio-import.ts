@@ -66,6 +66,31 @@ export async function hasFfmpeg(): Promise<boolean> {
   return ffmpegOk;
 }
 
+// Duration of an audio file in seconds via ffprobe (ships alongside ffmpeg in
+// the Docker image). Returns null when ffprobe is missing or the file can't be
+// probed — callers treat unknown length as acceptable rather than fail.
+export function probeDurationSec(filePath: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    try {
+      const proc = spawn('ffprobe', [
+        '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        filePath,
+      ]);
+      let out = '';
+      proc.stdout.on('data', (d) => { out += d.toString(); });
+      proc.on('error', () => resolve(null));
+      proc.on('close', (code) => {
+        const n = parseFloat(out.trim());
+        resolve(code === 0 && Number.isFinite(n) && n > 0 ? Math.round(n * 10) / 10 : null);
+      });
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 export type TranscodeFormat = 'wav' | 'mp3';
 
 function runFfmpeg(args: string[]): Promise<void> {

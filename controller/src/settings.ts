@@ -7,6 +7,7 @@ import { readFile, writeFile, unlink, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { STATE_DIR, config } from './config.js';
+import { writeFileAtomic } from './util/atomic-file.js';
 import { DEFAULT_THEME_ID, isValidThemeId, listThemes } from './themes.js';
 import { isValidTimezone, setStationTimezone, zonedParts } from './time.js';
 
@@ -461,21 +462,47 @@ export const SHOW_MOODS = [
 // tagger's per-track energy classes and the `tracksByMood` agent-tool filter.
 export const SHOW_ENERGY = ['low', 'medium', 'high'];
 
-// British English Kokoro voices — the ones that fit a BBC 6 Music tone. The
-// underlying model ships 54 voices total; we expose only the British subset to
-// keep the UI tidy. Any voice matching KOKORO_VOICE_RE still passes validation.
-export const KOKORO_VOICES_BRITISH = [
-  { id: 'bm_george', label: 'George (M)' },
-  { id: 'bm_fable', label: 'Fable (M)' },
-  { id: 'bm_daniel', label: 'Daniel (M)' },
-  { id: 'bm_lewis', label: 'Lewis (M)' },
-  { id: 'bf_emma', label: 'Emma (F)' },
-  { id: 'bf_isabella', label: 'Isabella (F)' },
-  { id: 'bf_alice', label: 'Alice (F)' },
-  { id: 'bf_lily', label: 'Lily (F)' },
+// All 54 official Kokoro voices from kokoro-onnx v1.0. The UI filters by
+// language prefix and formats display names from the code (bm_george → "George (M)").
+// Any voice matching KOKORO_VOICE_RE passes validation.
+export const KOKORO_VOICES = [
+  'af_alloy', 'af_aoede', 'af_bella', 'af_heart', 'af_jessica', 'af_kore',
+  'af_nicole', 'af_nova', 'af_river', 'af_sarah', 'af_sky',
+  'am_adam', 'am_echo', 'am_eric', 'am_fenrir', 'am_liam', 'am_michael',
+  'am_onyx', 'am_puck', 'am_santa',
+  'bf_alice', 'bf_emma', 'bf_isabella', 'bf_lily',
+  'bm_daniel', 'bm_fable', 'bm_george', 'bm_lewis',
+  'ef_dora', 'em_alex', 'em_santa',
+  'ff_siwis',
+  'hf_alpha', 'hf_beta', 'hm_omega', 'hm_psi',
+  'if_sara', 'im_nicola',
+  'jf_alpha', 'jf_gongitsune', 'jf_nezumi', 'jf_tebukuro', 'jm_kumo',
+  'pf_dora', 'pm_alex', 'pm_santa',
+  'zf_xiaobei', 'zf_xiaoni', 'zf_xiaoxiao', 'zf_xiaoyi',
+  'zm_yunjian', 'zm_yunxi', 'zm_yunxia', 'zm_yunyang',
 ];
 
+export const KOKORO_VOICE_LANGUAGES: Record<string, string> = {
+  'a': 'English (US)',
+  'b': 'English (UK)',
+  'e': 'Spanish',
+  'f': 'French',
+  'h': 'Hindi',
+  'i': 'Italian',
+  'j': 'Japanese',
+  'p': 'Portuguese (Brazilian)',
+  'z': 'Mandarin Chinese',
+};
+
 const KOKORO_VOICE_RE = /^[a-z]{2}_[a-z0-9]+$/;
+
+// Kokoro language override — the set of phonemizer languages the worker accepts.
+// The worker builds an espeak.EspeakG2P for the chosen language (see _phonemize
+// in kokoro_worker.py). Empty string = auto-detect from the voice-code prefix.
+// Synced with the prefix→lang mapping in controller/scripts/kokoro_worker.py.
+export const KOKORO_LANGS = ['en-gb', 'en-us', 'es', 'it', 'fr', 'hi', 'pt-br', 'ja', 'cmn'];
+const KOKORO_LANG_RE = new RegExp(`^(${KOKORO_LANGS.join('|')})$`);
+
 // PocketTTS built-in voices — the curated set the admin UI offers. Issue #213
 // also surfaced zero-shot cloning, so `tts.voice` for pocket-tts may now be
 // either an entry from this list (or another id passing POCKET_TTS_VOICE_RE)
@@ -516,6 +543,7 @@ const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
 const PERSONA_LIMIT = 24;
 const SHOWS_LIMIT = 64;
 const PLAYLISTS_PER_SHOW = 10;
+const EXCLUDED_PLAYLISTS_PER_SHOW = 10;
 const SKILLS_PER_PERSONA_LIMIT = 20;
 const WEBHOOKS_LIMIT = 16;
 
@@ -535,6 +563,24 @@ function coercePlaylistIds(raw: any): string[] {
     seen.add(id);
     out.push(id);
     if (out.length >= PLAYLISTS_PER_SHOW) break;
+  }
+  return out;
+}
+
+// A show can exclude tracks from one or more Navidrome playlists: any track
+// that appears in these playlists is dropped from the candidate pool at pick
+// time. Same shape/rules as coercePlaylistIds. Empty = no exclusions.
+function coerceExcludedPlaylistIds(raw: any): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const id = v.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= EXCLUDED_PLAYLISTS_PER_SHOW) break;
   }
   return out;
 }
@@ -690,7 +736,10 @@ const DEFAULTS = {
   // container — operators who don't use the archives can switch this off to
   // reclaim that headroom (issue #137). Dropping the bitrate (e.g. 128 → 64
   // mono in a future change) also helps for operators who want the tape.
-  archive: { enabled: true, bitrate: 128 },
+  // retentionDays: hourly recordings older than this many days are deleted by
+  // the scheduler's hourly cleanup. 0 = keep forever — the default, because a
+  // retention default would silently delete archives operators already have.
+  archive: { enabled: true, bitrate: 128, retentionDays: 0 },
   // Secondary Ogg-Opus broadcast mount (/stream.opus). Off by default — only
   // Blink (Chrome/Edge) clients ever select it (web/hooks/usePlayer.ts keeps
   // Safari/iOS/Firefox on MP3), and it adds a continuous Opus encoder + a
@@ -760,7 +809,7 @@ const DEFAULTS = {
     // is the source of truth. This is purely for the UI to show consistent
     // state and for the CLI to know whether to write COMPOSE_PROFILES.
     heavyEnabled: false,
-    kokoro: { voice: 'bf_isabella' },
+    kokoro: { voice: 'bf_isabella', lang: '' },
     // Global Chatterbox fallback — used as the reference voice when the
     // engine resolves to chatterbox but no persona-level voice is set.
     // Empty filename means "use the model's built-in default voice".
@@ -981,6 +1030,7 @@ const DEFAULTS = {
     // (today's behaviour); 1 = trust audio similarity as much as text. Only
     // bites where the acoustic analysis has produced audio vectors.
     audioFusionWeight: 0.5,
+    batchSize: 25,
     enrichment: {
       // Last.fm crowd tags. Tri-state: true = always fetch, false = never,
       // null = auto (fetch only when a Last.fm api_key is configured — see
@@ -1054,6 +1104,9 @@ const DEFAULTS = {
       enabled: false,
       userToken: '',
       username: '',
+      // Optional override for self-hosted LB-compatible scrobblers (e.g. Koito).
+      // Full submit URL is `${baseUrl}/submit-listens`. Env LISTENBRAINZ_API_URL wins.
+      baseUrl: '',
     },
   },
 };
@@ -1242,6 +1295,9 @@ function normalizeShows(raw: any, personaIds: string[]) {
     // so existing shows are byte-for-byte unchanged.
     const playlistIds = coercePlaylistIds(item.playlistIds);
     const playlistStrict = item.playlistStrict === true;
+    // Optional Navidrome playlist blocklist — tracks from these playlists are
+    // excluded from the candidate pool. Empty = no exclusions.
+    const excludedPlaylistIds = coerceExcludedPlaylistIds(item.excludedPlaylistIds);
     out.push({
       id,
       name,
@@ -1257,6 +1313,7 @@ function normalizeShows(raw: any, personaIds: string[]) {
       maxTrackSeconds,
       playlistIds,
       playlistStrict,
+      excludedPlaylistIds,
     });
     if (out.length >= SHOWS_LIMIT) break;
   }
@@ -1345,6 +1402,10 @@ export async function load() {
           ? stored.archive.enabled
           : DEFAULTS.archive.enabled,
       bitrate: archiveBitrate,
+      retentionDays:
+        Number.isInteger(stored.archive?.retentionDays) && stored.archive.retentionDays >= 0
+          ? stored.archive.retentionDays
+          : DEFAULTS.archive.retentionDays,
     },
     stream: {
       opusEnabled:
@@ -1448,6 +1509,11 @@ export async function load() {
           KOKORO_VOICE_RE.test(stored.tts.kokoro.voice)
             ? stored.tts.kokoro.voice
             : DEFAULTS.tts.kokoro.voice,
+        lang:
+          typeof stored.tts?.kokoro?.lang === 'string' &&
+          KOKORO_LANG_RE.test(stored.tts.kokoro.lang)
+            ? stored.tts.kokoro.lang
+            : DEFAULTS.tts.kokoro.lang,
       },
       chatterbox: {
         referenceVoice:
@@ -1638,6 +1704,10 @@ export async function load() {
         Number.isFinite(stored.embedding?.audioFusionWeight)
           ? clamp01(stored.embedding.audioFusionWeight)
           : DEFAULTS.embedding.audioFusionWeight,
+      batchSize:
+        Number.isFinite(stored.embedding?.batchSize) && stored.embedding.batchSize >= 1
+          ? Math.max(1, Math.min(50, Math.floor(stored.embedding.batchSize)))
+          : DEFAULTS.embedding.batchSize,
       enrichment: {
         lastfmTags:
           typeof stored.embedding?.enrichment?.lastfmTags === 'boolean'
@@ -1701,6 +1771,10 @@ export async function load() {
         username:
           typeof stored.scrobble?.listenbrainz?.username === 'string'
             ? stored.scrobble.listenbrainz.username.trim().slice(0, 40)
+            : '',
+        baseUrl:
+          typeof stored.scrobble?.listenbrainz?.baseUrl === 'string'
+            ? stored.scrobble.listenbrainz.baseUrl.trim().slice(0, 500)
             : '',
       },
     },
@@ -2074,10 +2148,25 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
       playlistIds = coercePlaylistIds(item.playlistIds);
     }
     const playlistStrict = item.playlistStrict === true;
+    // Optional Navidrome playlist blocklist. Shape-checked only — same rules as
+    // playlistIds; stale ids contribute nothing at pick time.
+    let excludedPlaylistIds: string[] = [];
+    if (item.excludedPlaylistIds !== undefined && item.excludedPlaylistIds !== null) {
+      if (!Array.isArray(item.excludedPlaylistIds)) {
+        throw new Error(`shows[${i}].excludedPlaylistIds must be an array of strings`);
+      }
+      if (item.excludedPlaylistIds.length > EXCLUDED_PLAYLISTS_PER_SHOW) {
+        throw new Error(`shows[${i}].excludedPlaylistIds must have at most ${EXCLUDED_PLAYLISTS_PER_SHOW} entries`);
+      }
+      for (const v of item.excludedPlaylistIds) {
+        if (typeof v !== 'string') throw new Error(`shows[${i}].excludedPlaylistIds entries must be strings`);
+      }
+      excludedPlaylistIds = coerceExcludedPlaylistIds(item.excludedPlaylistIds);
+    }
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict };
+    return { id, name, topic, personaId: item.personaId, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
   });
 }
 
@@ -2232,6 +2321,15 @@ export async function update(patch) {
         next.archive.bitrate = v;
         restart = true;
       }
+    }
+    if (a.retentionDays !== undefined) {
+      const v = parseInt(a.retentionDays, 10);
+      if (!Number.isInteger(v) || v < 0 || v > 3650) {
+        throw new Error('archive.retentionDays must be 0 (keep forever) or 1–3650 days');
+      }
+      // Enforced controller-side (scheduler cleanup), no Liquidsoap file or
+      // restart involved.
+      next.archive.retentionDays = v;
     }
   }
   if ('stream' in patch) {
@@ -2428,6 +2526,13 @@ export async function update(patch) {
           throw new Error('tts.kokoro.voice must match <lang><gender>_<name>, e.g. bf_isabella');
         }
         next.tts.kokoro.voice = v;
+      }
+      if (k.lang !== undefined) {
+        const v = String(k.lang).trim();
+        if (v && !KOKORO_LANG_RE.test(v)) {
+          throw new Error(`tts.kokoro.lang must be one of: ${KOKORO_LANGS.join(', ')}`);
+        }
+        next.tts.kokoro.lang = v;
       }
     }
     if (t.chatterbox !== undefined) {
@@ -2722,6 +2827,16 @@ export async function update(patch) {
       }
       next.embedding.audioFusionWeight = v;
     }
+    // LLM tag batch size — how many tracks per tagging call. Weaker models
+    // truncate/error on large batches, so operators can drop this. Clamp kept in
+    // sync with the CLI --batch flag + load() normalisation (music/tag-library.ts).
+    if (e.batchSize !== undefined) {
+      const v = parseInt(e.batchSize, 10);
+      if (!Number.isFinite(v) || v < 1 || v > 50) {
+        throw new Error('embedding.batchSize must be an integer 1-50');
+      }
+      next.embedding.batchSize = v;
+    }
     if (e.enrichment !== undefined) {
       const en = e.enrichment || {};
       if (en.lastfmTags !== undefined) {
@@ -2803,6 +2918,14 @@ export async function update(patch) {
         if (v.length > 200) throw new Error('scrobble.listenbrainz.userToken must be 0-200 chars');
         next.scrobble.listenbrainz.userToken = v;
       }
+      if (lb.baseUrl !== undefined) {
+        const trimmed = String(lb.baseUrl ?? '').trim();
+        if (trimmed.length > 500) throw new Error('scrobble.listenbrainz.baseUrl too long');
+        if (trimmed && !/^https?:\/\//i.test(trimmed)) {
+          throw new Error('scrobble.listenbrainz.baseUrl must start with http:// or https://');
+        }
+        next.scrobble.listenbrainz.baseUrl = trimmed;
+      }
     }
   }
 
@@ -2851,8 +2974,10 @@ export async function update(patch) {
   // resolveActiveShow / getEffectivePersona / the integrity sweep all
   // continue to work against one merged view.
   const { shows: _shows, schedule: _schedule, ...settingsPersist } = next;
-  await writeFile(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2));
-  await writeFile(
+  // Atomic replace — a crash mid-write must not take the operator's whole
+  // config (or show schedule) with it.
+  await writeFileAtomic(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2));
+  await writeFileAtomic(
     SCHEDULE_PATH,
     JSON.stringify({ shows: next.shows, schedule: next.schedule }, null, 2),
   );
@@ -2989,21 +3114,19 @@ export function renderDjPrompt(persona: any, ctx: any = {}) {
 // opener everywhere. Paste this at the top of any new agent system prompt;
 // never hand-roll the opener.
 //
-// `rules` is OPT-IN, defaulting to true. Pass `false` for tool-loop agents
-// whose primary task is structured exploration + strict JSON output (the
-// track picker and the request agent): the ~600-char humanness block at the
-// top of the prompt competes for the model's attention with the tool-loop
-// instructions and reliably derails small cloud models — they read "sound
-// like a person talking" and emit conversational prose instead of executing
-// the tool loop. The rules belong on agents whose primary task IS spoken
-// output (the segment director), not on agents whose primary task is
-// orchestration with an incidental spoken side-channel.
-export function agentPersonaPreamble(persona, { rules = true } = {}) {
+// Deliberately JUST the opener — no style-rule block. A DJ_HUMANNESS_RULES
+// word-blocklist used to be appendable here (and in renderDjPrompt); it was
+// lost in the a0d58b3 editor-mangle, and when a restore was attempted the
+// operator chose to keep it out: the station ran fine without it for weeks,
+// the ~600-char negative list competes with each persona's soul and flattens
+// voices toward one register, and it taxes every call. Voice steering lives
+// in the persona souls, tone dials, and the operator-editable djPrompt
+// template — add style rules there, not as a hard-coded appended constant.
+export function agentPersonaPreamble(persona) {
   const name = persona?.name || 'the DJ';
   const soul = persona?.soul || '';
   const station = cache?.station || DEFAULTS.station;
-  const opener = `You are ${name}, the on-air DJ for ${station}, a personal internet radio station. ${soul}${languageDirective(persona)}`;
-  return rules ? `${opener}` : opener;
+  return `You are ${name}, the on-air DJ for ${station}, a personal internet radio station. ${soul}${languageDirective(persona)}`;
 }
 
 // Liquidsoap reads tiny text files instead of JSON.

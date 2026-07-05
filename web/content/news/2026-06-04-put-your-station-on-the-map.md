@@ -10,7 +10,11 @@ SUB/WAVE is self-hosted, so anyone can run their own station. Until now there wa
 
 ## What's new
 
-Visit /stations and you get three things. A live grid of station cards, each one showing what it is playing this second. A world map with every station plotted as a dot and labelled by city. And a strip at the top counting the stations and countries on the network.
+Visit /stations and you get three things:
+
+- **A live grid of station cards**, each showing what it's playing this second.
+- **A world map** with every station plotted as a dot and labelled by city.
+- **A strip at the top** counting the stations and countries on the network.
 
 Each card checks its station's public now-playing feed straight from your browser and refreshes every 30 seconds. It flips between ON AIR with the artist and title, and Offline when a station is down or unreachable. Nothing is mocked up. The cards are reading the real streams.
 

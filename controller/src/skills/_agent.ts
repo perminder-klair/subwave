@@ -37,7 +37,7 @@ import { z } from 'zod';
 import { queue } from '../broadcast/queue.js';
 import * as settings from '../settings.js';
 import { defineAgent } from '../llm/agent.js';
-import { buildContextLines, CONTEXT_FIELDS, lengthPhrase } from '../llm/dj.js';
+import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase } from '../llm/dj.js';
 import { buildSegmentTools } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
@@ -96,8 +96,17 @@ function unionContextFields(caps: any[]): string[] {
 // lengthPhrase('segment'), so an 'extended' storytelling persona stretches its
 // segments the way it already stretches intros and links. A hard-coded
 // description here previously pinned every persona to one-liners.
+// Field order is deliberate: models generate JSON in property order, so
+// `reason` comes FIRST (decide and justify before writing the line — a free
+// mini chain-of-thought), then the explicit `air` boolean, then the segment.
+// The boolean exists because a nullable nested object alone proved hard for
+// small models to encode "stay silent" with — they emitted bare top-level
+// `null` or prose instead (see isBareNullSilent / isSilentFailure below);
+// `air: false` gives them an unambiguous silence token to reach for.
 function segmentSchema() {
   return z.object({
+    reason: z.string().describe('one short internal sentence on why this segment (or why silent) — never shown to the listener; write this BEFORE deciding the segment'),
+    air: z.boolean().describe('true to air one segment now, false to stay silent — silence is a perfectly good answer, often the best one, when the data is dull, stale, unchanged, or there is nothing fresh worth a listener\'s attention'),
     segment: z.object({
       // Kept as a free string (not a fixed enum) so operator-dropped custom
       // skills get valid kinds too. The agent is told which kinds are on offer in
@@ -106,8 +115,7 @@ function segmentSchema() {
         .describe('the segment kind — MUST be one of the kinds offered in the system prompt for this tick'),
       text: z.string().describe(`the spoken line in the DJ voice — ${lengthPhrase('segment')}`),
       sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect (null is usually right — most segments need none)'),
-    }).nullable().describe('the segment to air, or null to stay silent — silence is a perfectly good answer, often the best one, when the data is dull, stale, unchanged, or there is nothing fresh worth a listener\'s attention'),
-    reason: z.string().describe('one short internal sentence on why this segment (or why silent) — never shown to the listener'),
+    }).nullable().describe('the segment to air when air is true; null when air is false'),
   });
 }
 
@@ -125,7 +133,10 @@ function forcedSchema() {
 // agent and nothing in the schema can be satisfied.
 function sfxBlock(sfxCatalog: any) {
   if (!sfxCatalog || !sfxCatalog.length) return '';
-  const list = sfxCatalog.map((s: any) => `- ${s.name}: ${s.description}`).join('\n');
+  const list = sfxCatalog.map((s: any) => {
+    const dur = s.durationSec ? ` (~${s.durationSec}s)` : '';
+    return `- ${s.name}${dur}: ${s.description}`;
+  }).join('\n');
   return `
 
 SOUND EFFECTS: you may optionally play ONE sound effect underneath your voice for this segment. Use one only when it genuinely sharpens the line — most segments need none, and an effect on every break gets old fast. Set "sfx" to the exact name of an effect below, or null:
@@ -234,7 +245,11 @@ function buildSituation(ctx: any, { forced = false, contextFields, recentCuriosi
   if (ctxLines.length) lines.push(...ctxLines);
   const cur = queue.current?.track;
   if (cur) lines.push(`On air now: "${cur.title}" by ${cur.artist || 'unknown'}`);
-  const recap = queue.getDjRecap();
+  // The default 140-char recap truncation fits a concise one-liner segment,
+  // but an 'extended' persona's 3-5-sentence segment gets cut after roughly
+  // its first sentence — a topic repeated mid-segment would be invisible to
+  // the anti-repeat instruction. Scale the cap with the persona's verbosity.
+  const recap = queue.getDjRecap({ maxChars: lengthMode() === 'extended' ? 360 : 140 });
   if (recap) {
     lines.push(`\nWhat you have already said on air recently (do NOT repeat these topics or phrasing):\n${recap}`);
   }
@@ -263,8 +278,19 @@ export async function agenticTick(ctx) {
   // between-track segments (weather, curiosity, deep cuts) get through.
   const freq = settings.effectiveFrequency(persona);
 
-  // Floor on the gap between any two segments.
-  if (now.getTime() - segmentState.lastAnySegment < frequencyFloorMs(freq)) return;
+  // Floor on the gap between any two spoken breaks. lastAnySegment only sees
+  // what THIS agent aired, but the scheduler's station idents and hourly
+  // checks share the same on-air voice (and the ident cron minutes
+  // :15/:30/:45 all land on this 5-minute tick), so without queue's view the
+  // DJ could talk twice in the same minute — the same stacking issue #310
+  // fixed for ident+hourly at :00. Deliberately narrowed to the wall-clock
+  // talkers: track-tied links/intros fire every few tracks and would mute the
+  // director outright under a 15-minute moderate floor.
+  const lastSpoke = Math.max(
+    segmentState.lastAnySegment,
+    queue.getLastVoiceAt(['station-id', 'hourly-check', 'handoff']),
+  );
+  if (now.getTime() - lastSpoke < frequencyFloorMs(freq)) return;
 
   const caps = availableCapabilities(ctx, now);
   if (caps.length === 0) return;
@@ -289,7 +315,9 @@ export async function agenticTick(ctx) {
       ctx, segmentState,
     });
 
-    const seg = object?.segment;
+    // `air: false` is the explicit silence signal; a missing/empty segment
+    // despite air=true still degrades to silence rather than erroring.
+    const seg = object?.air ? object?.segment : null;
     if (!seg || !seg.text || !seg.text.trim()) {
       queue.log('scheduler', `Segment agent stayed silent — ${object?.reason || 'nothing to add'}`);
       return;
@@ -327,8 +355,8 @@ export async function agenticTick(ctx) {
     }
   } catch (err) {
     // Distinguish a model that couldn't produce parseable JSON from a real
-    // outage. The schema explicitly allows {segment: null} as "stay silent",
-    // and the system prompt actively encourages silence — so a model that
+    // outage. The schema explicitly allows {air: false, segment: null} as
+    // "stay silent", and the system prompt actively encourages silence — so a model that
     // emits unparseable output was most likely TRYING to stay silent but
     // expressing it wrong. The listener-facing outcome is the same either way
     // (silence), so report it as silence with a parse note instead of
@@ -355,7 +383,7 @@ export async function agenticTick(ctx) {
 // `did not call the done tool` (issue #555) is included for the same reason:
 // gemma-class models on the forced done-tool path occasionally emit prose
 // instead of the `done` call — even through the recovery — and throw. On the
-// autonomous tick the schema allows {segment: null} and the prompt encourages
+// autonomous tick the schema allows {air: false} and the prompt encourages
 // silence, so a botched done call is overwhelmingly the model either staying
 // silent in prose or fumbling a segment; either way the listener gets silence.
 // (The operator-forced path doesn't use this classifier, so it still errors.)

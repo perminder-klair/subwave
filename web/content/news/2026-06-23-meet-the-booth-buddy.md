@@ -10,7 +10,13 @@ The player has a new resident. It's a small pixel creature that sits at the head
 
 ## What's new
 
-The booth buddy is a tiny mascot drawn entirely in CSS, so it adds nothing to load and picks up your theme colours on its own. It has five moods. Open mouth and a pulsing antenna when the DJ is talking. A head tilt and wide eyes when the DJ is picking the next track. A calm face when things are quiet, and droopy eyes with little z's once it has been idle a while. Tap it on the player and it gets spooked, eyes blown wide, then settles back down.
+The booth buddy is a tiny mascot drawn entirely in CSS, so it adds nothing to load and picks up your theme colours on its own. It has five moods:
+
+- **On air** — open mouth and a pulsing antenna while the DJ is talking.
+- **Curious** — a head tilt and wide eyes while the DJ picks the next track.
+- **Content** — a calm face when things are quiet.
+- **Sleepy** — droopy eyes and little z's once it's been idle a while.
+- **Spooked** — tap it and its eyes blow wide, then it settles back down.
 
 ![The booth buddy's five moods, each a small pixel face: content with an even mouth, on air with an open mouth, curious with a head tilt, sleepy with droopy eyes and drifting z's, and spooked with eyes blown wide](/screenshots/booth-buddy.webp)
 

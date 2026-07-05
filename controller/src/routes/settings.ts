@@ -19,6 +19,7 @@ import { restartLiquidsoap, startStream, stopStream, streamStatus } from '../bro
 import { invalidateWeatherCache } from '../context.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../setup/secrets.js';
+import { listenbrainzApiBase } from '../broadcast/scrobble.js';
 import { generateText, createGateway } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -122,7 +123,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
       tts: {
         engines: tts.ENGINES,
         available: tts.availableEngines(),
-        kokoroVoices: settings.KOKORO_VOICES_BRITISH,
+        kokoroVoices: settings.KOKORO_VOICES,
+        kokoroVoiceLanguages: settings.KOKORO_VOICE_LANGUAGES,
+        kokoroLangs: settings.KOKORO_LANGS,
         voiceDir,
         piperVoices,
         chatterboxVoices: customVoices,
@@ -166,6 +169,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         LASTFM_API_SECRET: !!process.env.LASTFM_API_SECRET,
         LASTFM_SESSION_KEY: !!process.env.LASTFM_SESSION_KEY,
         LISTENBRAINZ_USER_TOKEN: !!process.env.LISTENBRAINZ_USER_TOKEN,
+        LISTENBRAINZ_API_URL: !!process.env.LISTENBRAINZ_API_URL,
       },
       // Skill catalogue — consumed by the Skills page and by Personas for the
       // per-persona skill-assignment checklist.
@@ -374,7 +378,7 @@ async function probeKey(
       return { ok: true, message: '✓ Last.fm API key valid' };
     }
     case 'LISTENBRAINZ_USER_TOKEN': {
-      const r = await fetch('https://api.listenbrainz.org/1/validate-token', {
+      const r = await fetch(`${listenbrainzApiBase()}/validate-token`, {
         headers: { Authorization: `Token ${value}` },
         signal: AbortSignal.timeout(8000),
       });
@@ -424,10 +428,10 @@ router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
 // POST /settings/tts/preview — synthesize a short sample in an EXPLICIT engine +
 // voice (not the on-air persona) so the admin "Play sample" button can audition
 // a voice/speed before saving. Body: { engine, voice?, cloudProvider?, speed?,
-// text? }. On success streams the rendered WAV (audio/wav). On a synth failure —
-// e.g. the tts-heavy sidecar is down or no cloud key — returns 422 with
-// { ok, message } instead of silently falling back to Piper, so the operator
-// sees why. The temp WAV is unlinked once sent.
+// lang?, text? }. On success streams the rendered WAV (audio/wav). On a synth
+// failure — e.g. the tts-heavy sidecar is down or no cloud key — returns 422
+// with { ok, message } instead of silently falling back to Piper, so the
+// operator sees why. The temp WAV is unlinked once sent.
 // ---------------------------------------------------------------------------
 router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
   const body = req.body || {};
@@ -442,6 +446,7 @@ router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
       voice: typeof body.voice === 'string' ? body.voice : '',
       cloudProvider: typeof body.cloudProvider === 'string' ? body.cloudProvider : 'openai',
       speed: typeof body.speed === 'number' ? body.speed : undefined,
+      lang: typeof body.lang === 'string' ? body.lang : undefined,
       text: typeof body.text === 'string' ? body.text : undefined,
     });
     const buf = await readFile(filePath);

@@ -15,7 +15,9 @@ function issueNo(d: Date): number {
 // DJ-name strip that belonged on a newspaper but not a marketing site.
 //
 // No motion on the masthead — wordmark and meta row land static. The page's
-// reference frame should feel like print, not a performance.
+// reference frame should feel like print, not a performance. (The wordmark's
+// off-register ink plate settling on hover is the one exception: it only
+// fires on intent, never on load.)
 export default function Masthead() {
   const now = useClock();
 
@@ -33,9 +35,16 @@ export default function Masthead() {
         <Link
           href="/"
           aria-label="SUB/WAVE home"
-          className="bs-wordmark bs-masthead-mark text-ink no-underline"
+          className="bs-wordmark bs-wordmark-plate bs-masthead-mark text-ink no-underline"
         >
-          SUB/WAVE
+          SUB
+          <span className="bs-wordmark-slash">
+            <span className="bs-wordmark-slash-glyph text-vermilion">/</span>
+            <span className="bs-wordmark-disc" aria-hidden="true">
+              <span className="bs-wordmark-disc-face" />
+            </span>
+          </span>
+          WAVE
         </Link>
 
         <div className="bs-masthead-status flex items-center gap-2 text-[11px] font-bold tracking-[0.3em] uppercase">
@@ -44,7 +53,13 @@ export default function Masthead() {
         </div>
       </div>
 
-      <div className="bs-rule" />
+      <div className="bs-masthead-motto" aria-label="Motto">
+        <span aria-hidden="true">✦</span>
+        <span className="bs-masthead-motto-text">
+          No skips&nbsp;·&nbsp;No shuffle&nbsp;·&nbsp;Just radio
+        </span>
+        <span aria-hidden="true">✦</span>
+      </div>
 
       <nav aria-label="Primary" className="bs-masthead-nav">
         <AnimatedLink href="/listen" className="bs-masthead-link">

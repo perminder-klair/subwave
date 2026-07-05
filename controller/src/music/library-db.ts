@@ -218,6 +218,12 @@ export async function open(opts: {
   db = new Database(DB_PATH);
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = NORMAL');
+  // Cap the -wal sidecar: after any checkpoint SQLite truncates it back to this
+  // size instead of leaving it at its high-water mark. Without it a bulk write
+  // pass (acoustic analysis, tagging) balloons the WAL to hundreds of MB — 2.4×
+  // the DB itself in #786 — and every later query walks that giant WAL on
+  // better-sqlite3's synchronous thread, stalling the whole event loop.
+  db.pragma('journal_size_limit = 67108864'); // 64 MiB
   sqliteVec.load(db);
 
   // migrate() may adopt the stored dim; trust its return as the live schema dim.
@@ -231,6 +237,17 @@ export async function open(opts: {
 
 export function close(): void {
   if (db) {
+    // Fold the WAL back into the main DB file before closing. SQLite only
+    // auto-checkpoints on the LAST connection to close, and the controller,
+    // tagger and analyzer can hold the DB concurrently — so an explicit
+    // best-effort TRUNCATE here is what keeps the sidecar from surviving
+    // (and regrowing across) restarts. Synchronous, so it also runs safely
+    // from a process 'exit' hook.
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+    } catch {
+      /* busy/readonly — the hourly checkpoint or next close gets it */
+    }
     db.close();
     db = null;
     currentEmbeddingDim = null;
@@ -243,6 +260,26 @@ export function close(): void {
 
 export function isOpen(): boolean {
   return db !== null;
+}
+
+// Best-effort PRAGMA wal_checkpoint(TRUNCATE): fold the WAL into the main DB
+// file and truncate the sidecar to zero. Returns what SQLite reports — busy=1
+// means a concurrent reader/writer kept the checkpoint from completing (fine;
+// the next run catches up) — or null when the DB isn't open. Called after bulk
+// passes and hourly from the scheduler so the WAL can never balloon unbounded
+// again (#786).
+export function checkpointWal(): { busy: number; log: number; checkpointed: number } | null {
+  if (!db) return null;
+  try {
+    const row = db.pragma('wal_checkpoint(TRUNCATE)') as Array<{
+      busy: number;
+      log: number;
+      checkpointed: number;
+    }>;
+    return row?.[0] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // Write a consistent, single-file copy of the live DB to `destPath`. Uses

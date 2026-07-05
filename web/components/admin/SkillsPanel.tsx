@@ -44,6 +44,9 @@ interface CommunitySkill {
   cooldown?: string;
   window?: 'any' | 'commute';
   context?: string;
+  submittedBy?: string;  // GitHub login of the contributor who submitted it
+  dateAdded?: string;    // ISO date (YYYY-MM-DD) it first entered the catalog
+  dateModified?: string; // ISO date (YYYY-MM-DD) of the last catalog change
   installed?: boolean;   // a state/skills/<slug>/ folder already exists
   reserved?: boolean;    // slug shadows a built-in kind — can't be installed
 }
@@ -446,6 +449,28 @@ export default function SkillsPanel() {
                     {c.cooldown && <Pill className="text-[8px]">{c.cooldown} cooldown</Pill>}
                   </div>
                   <div className="mt-1 line-clamp-3 text-[12px] leading-[1.6] text-muted">{c.brief}</div>
+                  {(c.submittedBy || c.dateAdded) && (
+                    <div className="mt-1.5 text-[10px] leading-[1.5] text-muted">
+                      {c.submittedBy && (
+                        <>
+                          by{' '}
+                          <a
+                            href={`https://github.com/${c.submittedBy}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
+                          >
+                            @{c.submittedBy}
+                          </a>
+                        </>
+                      )}
+                      {c.submittedBy && c.dateAdded && ' · '}
+                      {c.dateAdded && <>added {c.dateAdded}</>}
+                      {c.dateAdded && c.dateModified && c.dateModified !== c.dateAdded && (
+                        <> · updated {c.dateModified}</>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="flex flex-col items-end gap-2">
                   {c.installed ? (

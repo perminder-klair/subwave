@@ -39,7 +39,10 @@ station_name = ref("SUB/WAVE")
 # no threads, no shared state): sample-accurate in AUDIO time, so they hold
 # under any clock — the offline render harness (sync="none") exposed that
 # wall-clock thread envelopes and audio time drift apart.
-# Verified on liquidsoap v2.2.5 AND v2.4.4 (scripts/fx-render-test.sh probe):
+# Verified on liquidsoap v2.2.5, v2.4.4 AND v2.4.5 (scripts/fx-render-test.sh
+# probe). NB: v2.4.5 is the MINIMUM runtime for these effects — on 2.4.4 the
+# clock's O(n) source scan × multi-pull pass-through layers made every effect
+# transition peg a core and stall the stream (see Dockerfile.broadcast).
 # filter.rc and comb instantiate cleanly INSIDE the cross callback on a
 # request.queue-backed source — the "Early computation of source content-type"
 # crash is specific to iir_filter/HPF — and audibly alter the render.
@@ -897,8 +900,24 @@ end
 # BEFORE mic_chain so the fixed-threshold compressor sees a levelled input. The
 # un-annotated silent lead-in carries no `liq_amplify`, so it plays at the base
 # factor 1. (unity). Un-trimmed clips (gainDb 0) write a bare path → also unity.
-voice = mic_chain(amplify(override="liq_amplify", 1., voice_queue))
-intro = mic_chain(amplify(override="liq_amplify", 1., intro_queue))
+# Micro edge fade-IN on each spoken clip. Some TTS engines cut the WAV hard at
+# the file boundary; once the mic-chain compressor's makeup gain lifts the
+# clip, that hard edge lands as an audible click/tick. 40 ms is short enough
+# not to soften the first word (speech onsets are slower than that) but long
+# enough to zero out the boundary discontinuity. Applied per track, so the
+# silent lead-in clip is faded too (harmless — it's silence). Placed BEFORE
+# amplify/mic_chain so the compressor never sees the raw edge.
+# fade.in ONLY — no fade.out. On a request.queue source this Liquidsoap build
+# doesn't know the track's remaining time, so fade.out treats the whole clip
+# as inside the fade zone and multiplies it to silence (every voice segment
+# aired as dead air under the duck). Verified empirically against the
+# broadcast image. Tail clicks must be faded at WAV-render time instead.
+def edge_fade(s) =
+  fade.in(duration=0.04, s)
+end
+
+voice = mic_chain(amplify(override="liq_amplify", 1., edge_fade(voice_queue)))
+intro = mic_chain(amplify(override="liq_amplify", 1., edge_fade(intro_queue)))
 
 # ---------------------------------------------------------------------------
 # STUDIO BED — continuous low-level ambient room tone (Phase 2)
@@ -1084,7 +1103,11 @@ def on_meta(m) =
       filename = filename,
       timestamp = ts
     })
-    file.write(data=payload, "/var/sub-wave/now-playing.json")
+    # atomic=true (temp file + rename) — the controller re-reads this file
+    # every 1.5s and per /now-playing request, and its reader treats ANY parse
+    # failure as null; an in-place truncate-then-write here made it possible to
+    # observe a half-written JSON and blank the now-playing data for a tick.
+    file.write(data=payload, atomic=true, "/var/sub-wave/now-playing.json")
     # Push the same metadata onto the Icecast stream so the ICY title
     # tracks the current song instead of lagging a transition behind.
     radio.insert_metadata([
@@ -1346,6 +1369,13 @@ def stream_down() =
     fn = stream_shutdown()
     fn()
     stream_on := false
+    # Off air — drop now-playing.json so the UI stops advertising the last
+    # track that played. on_meta rewrites it as soon as we're back on air and
+    # the next track's metadata fires; the controller reads a missing file as
+    # "nothing playing".
+    if file.exists("/var/sub-wave/now-playing.json") then
+      file.remove("/var/sub-wave/now-playing.json")
+    end
   end
 end
 

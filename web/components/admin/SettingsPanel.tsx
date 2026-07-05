@@ -188,6 +188,7 @@ interface EmbeddingForm {
   confidenceThreshold: string;
   maxActiveLearningRounds: string;
   audioFusionWeight: string; // '0' = text-only vote (fusion off)
+  batchSize: string;         // '5', '10', or '25'
   enrichment: EmbeddingEnrichmentForm;
 }
 
@@ -203,6 +204,7 @@ interface ScrobbleListenbrainzForm {
   enabled: boolean;
   userToken: string;
   username: string;
+  baseUrl: string;
 }
 
 interface ScrobbleForm {
@@ -213,6 +215,7 @@ interface ScrobbleForm {
 interface ArchiveForm {
   enabled: boolean;
   bitrate: string;
+  retentionDays: string;
 }
 
 interface StreamForm {
@@ -235,6 +238,7 @@ const MP3_BITRATES = [64, 96, 128, 160, 192, 320] as const;
 // Keep in sync with OPUS_BITRATES / AAC_BITRATES in controller/src/settings.ts.
 const OPUS_BITRATES = [96, 128, 192, 256, 320] as const;
 const AAC_BITRATES = [128, 192, 256] as const;
+const LLM_BATCH_SIZES = [5, 10, 25] as const;
 
 interface FormState {
   jingleRatio: string;
@@ -246,6 +250,7 @@ interface FormState {
   station: string;
   timezone: string;
   locale: StationLocale;
+  kokoroLang: string;
   weather: WeatherCfg;
   tts: TtsForm;
   llm: LlmForm;
@@ -283,7 +288,7 @@ interface SettingsData {
     crossfadeDuration?: number;
     maxTrackSeconds?: number;
     minTrackSeconds?: number;
-    archive?: { enabled?: boolean; bitrate?: number };
+    archive?: { enabled?: boolean; bitrate?: number; retentionDays?: number };
     stream?: {
       opusEnabled?: boolean;
       opusBitrate?: number;
@@ -300,7 +305,7 @@ interface SettingsData {
     weather?: { lat?: number; lng?: number; locationName?: string; units?: 'metric' | 'imperial' };
     tts?: {
       defaultEngine?: string;
-      kokoro?: { voice?: string };
+      kokoro?: { voice?: string; lang?: string };
       chatterbox?: { referenceVoice?: string };
       pocketTts?: { voice?: string };
       cloud?: Partial<CloudTtsCfg>;
@@ -322,6 +327,7 @@ interface SettingsData {
       confidenceThreshold?: number;
       maxActiveLearningRounds?: number;
       audioFusionWeight?: number;
+      batchSize?: number;
       enrichment?: Partial<EmbeddingEnrichmentForm>;
     };
     sfx?: { enabled?: boolean };
@@ -334,7 +340,9 @@ interface SettingsData {
   tts?: {
     engines?: string[];
     available?: Record<string, boolean>;
-    kokoroVoices?: Array<{ id: string; label: string }>;
+    kokoroVoices?: string[];
+    kokoroVoiceLanguages?: Record<string, string>;
+    kokoroLangs?: string[];
     chatterboxVoices?: string[];
     // `voiceDir` is the new shared name (issue #213). `chatterboxVoiceDir` is
     // kept as an alias so the UI keeps working against older controllers.
@@ -435,6 +443,7 @@ export default function SettingsPanel() {
       archive: {
         enabled: v.archive?.enabled ?? true,
         bitrate: String(v.archive?.bitrate ?? 128),
+        retentionDays: String(v.archive?.retentionDays ?? 0),
       },
       stream: {
         opusEnabled: v.stream?.opusEnabled ?? true,
@@ -451,6 +460,7 @@ export default function SettingsPanel() {
       station: v.station ?? '',
       timezone: v.timezone ?? '',
       locale: normalizeStationLocale(v.locale),
+      kokoroLang: v.tts?.kokoro?.lang ?? '',
       weather: {
         lat: String(v.weather?.lat ?? ''),
         lng: String(v.weather?.lng ?? ''),
@@ -539,6 +549,7 @@ export default function SettingsPanel() {
         confidenceThreshold: String(v.embedding?.confidenceThreshold ?? 0.35),
         maxActiveLearningRounds: String(v.embedding?.maxActiveLearningRounds ?? 3),
         audioFusionWeight: String(v.embedding?.audioFusionWeight ?? 0.5),
+        batchSize: String(v.embedding?.batchSize ?? 25),
         enrichment: {
           lastfmTags: v.embedding?.enrichment?.lastfmTags ?? false,
           lyrics: v.embedding?.enrichment?.lyrics ?? true,
@@ -557,6 +568,7 @@ export default function SettingsPanel() {
           enabled: !!v.scrobble?.listenbrainz?.enabled,
           userToken: v.scrobble?.listenbrainz?.userToken ?? '',
           username: v.scrobble?.listenbrainz?.username ?? '',
+          baseUrl: v.scrobble?.listenbrainz?.baseUrl ?? '',
         },
       },
     });
@@ -926,6 +938,45 @@ export default function SettingsPanel() {
                       Lower bitrate = smaller archives, less encoder CPU
                       (current: {data?.values?.archive?.bitrate ?? '—'} kbps). 128 kbps is the
                       original default.
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <Label>Keep recordings for</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="mono-num w-28"
+                        type="number"
+                        min={0}
+                        max={3650}
+                        step={1}
+                        value={form.archive.retentionDays}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f =>
+                            f
+                              ? { ...f, archive: { ...f.archive, retentionDays: e.target.value } }
+                              : f,
+                          )
+                        }
+                      />
+                      <span className="text-[12px] text-muted">days</span>
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({
+                            archive: { retentionDays: parseInt(form.archive.retentionDays, 10) },
+                          })
+                        }
+                        disabled={busy}
+                      >
+                        Save retention
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      0 = keep forever (the default). With a window set, the hourly cleanup
+                      deletes whole days of recordings once they age past it — at 128 kbps the
+                      archive grows ~1.4 GB per day, so an unbounded archive eventually fills
+                      the disk. Applies live, no restart.
                     </div>
                   </div>
                 </div>
@@ -1860,7 +1911,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     await saveSettings({
       tts: {
         defaultEngine: form.tts.defaultEngine,
-        kokoro: { voice: form.tts.kokoro?.voice },
+        kokoro: { voice: form.tts.kokoro?.voice, lang: form.kokoroLang },
         chatterbox: { referenceVoice: form.tts.chatterbox?.referenceVoice ?? '' },
         pocketTts: { voice: form.tts.pocketTts?.voice ?? 'alba' },
         cloud: {
@@ -1910,7 +1961,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   type SavedCloud = { provider?: string; voice?: string; model?: string; baseUrl?: string };
   const savedTts: {
     defaultEngine?: string;
-    kokoro?: { voice?: string };
+    kokoro?: { voice?: string; lang?: string };
     chatterbox?: { referenceVoice?: string };
     pocketTts?: { voice?: string };
     cloud?: SavedCloud;
@@ -1920,6 +1971,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   } = data.values?.tts || {};
   const savedEngine: string = savedTts.defaultEngine || 'piper';
   const savedKokoroVoice: string = savedTts.kokoro?.voice || '';
+  const savedKokoroLang: string = savedTts.kokoro?.lang || '';
   const savedChatterboxVoice: string = savedTts.chatterbox?.referenceVoice || '';
   const savedPocketTtsVoice: string = savedTts.pocketTts?.voice || '';
   const savedCloud: SavedCloud = savedTts.cloud || {};
@@ -1942,6 +1994,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
   const ttsDirty =
     form.tts.defaultEngine !== savedEngine
     || (form.tts.kokoro?.voice || '') !== savedKokoroVoice
+    || (form.kokoroLang || '') !== savedKokoroLang
     || (form.tts.chatterbox?.referenceVoice || '') !== savedChatterboxVoice
     || (form.tts.pocketTts?.voice || '') !== savedPocketTtsVoice
     || form.tts.cloud.provider !== (savedCloud.provider || '')
@@ -2044,42 +2097,99 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
           </>
         )}
 
-        {form.tts.defaultEngine === 'kokoro' && (
-          <>
-            <div className="field mt-4">
-              <Label>Kokoro voice</Label>
-              {available.kokoro === false && (
-                <div className="field-hint text-[var(--danger)]">
-                  Kokoro is not installed in this build, so it will fall back to Piper.
+        {form.tts.defaultEngine === 'kokoro' && (() => {
+          const voices = data.tts?.kokoroVoices || [];
+          const languages = data.tts?.kokoroVoiceLanguages || {};
+          const voice = form.tts.kokoro?.voice ?? 'bf_isabella';
+          const langPrefix = voice.charAt(0);
+          const filtered = voices.filter(v => v.startsWith(langPrefix));
+          const fmt = (code: string) => {
+            const [lg, name = ''] = code.split('_');
+            const g = (lg?.[1] ?? '').toUpperCase();
+            const n = name.charAt(0).toUpperCase() + name.slice(1);
+            return `${n} (${g})`;
+          };
+          const setVoice = (val: string) => setForm(f => ({
+            ...f, tts: { ...f.tts, kokoro: { ...f.tts.kokoro, voice: val } },
+          }));
+          return (
+            <>
+              <div className="field mt-4">
+                <Label>Kokoro voice</Label>
+                {available.kokoro === false && (
+                  <div className="field-hint text-[var(--danger)]">
+                    Kokoro is not installed in this build, so it will fall back to Piper.
+                  </div>
+                )}
+                {voices.length > 0 ? (
+                  <>
+                    <div className="field mt-3">
+                      <Label>Language</Label>
+                      <Select
+                        value={langPrefix}
+                        onValueChange={lang => {
+                          const first = voices.find(v => v.startsWith(lang));
+                          if (first) setVoice(first);
+                        }}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {Object.entries(languages).map(([k, v]) => (
+                              <SelectItem key={k} value={k}>{v}</SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="field mt-3">
+                      <Label>Voice</Label>
+                      <Select value={voice} onValueChange={setVoice}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {!filtered.includes(voice) && (
+                              <SelectItem value={voice}>{fmt(voice)}</SelectItem>
+                            )}
+                            {filtered.map(v => (
+                              <SelectItem key={v} value={v}>{fmt(v)}</SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </>
+                ) : (
+                  <div className="field-hint">This build reports no Kokoro voices.</div>
+                )}
+              </div>
+              <div className="field mt-3">
+                <Label>Language override</Label>
+                <Select
+                  value={form.kokoroLang || '__auto__'}
+                  onValueChange={val =>
+                    setForm(f => ({ ...f, kokoroLang: val === '__auto__' ? '' : val }))
+                  }
+                >
+                  <SelectTrigger className="w-[260px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="__auto__">Natural, voice default</SelectItem>
+                      {(data.tts?.kokoroLangs || []).map(v => (
+                        <SelectItem key={v} value={v}>{KOKORO_LANG_LABELS[v] || v}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <div className="field-hint">
+                  Force the Kokoro TTS engine to assume a specific language. Leave on <em>Natural</em> to auto-detect from each selected voice.
                 </div>
-              )}
-              {(data.tts?.kokoroVoices?.length || 0) > 0 ? (
-                <>
-                  <Select
-                    value={form.tts.kokoro?.voice ?? 'bf_isabella'}
-                    onValueChange={val => setForm(f => ({
-                      ...f, tts: { ...f.tts, kokoro: { ...f.tts.kokoro, voice: val } },
-                    }))}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {data.tts?.kokoroVoices?.map(v => (
-                          <SelectItem key={v.id} value={v.id}>{v.label} — {v.id}</SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <div className="field-hint">British English only. Applies to every kind routed through Kokoro.</div>
-                </>
-              ) : (
-                <div className="field-hint">This build reports no Kokoro voices.</div>
-              )}
-            </div>
-            <TtsGainField engineId="kokoro" form={form} setForm={setForm} />
-            <TtsSpeedField engineId="kokoro" form={form} setForm={setForm} />
-          </>
-        )}
+              </div>
+              <TtsGainField engineId="kokoro" form={form} setForm={setForm} />
+              <TtsSpeedField engineId="kokoro" form={form} setForm={setForm} />
+            </>
+          );
+        })()}
 
         {form.tts.defaultEngine === 'chatterbox' && (
           <>
@@ -2426,11 +2536,13 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   voice={previewVoice}
                   cloudProvider={form.tts.cloud.provider}
                   speed={form.tts.speed?.[e] ?? 1}
+                  lang={form.kokoroLang || undefined}
                   adminFetch={adminFetch}
                 />
                 <div className="field-hint">
                   Plays a short sample in the selected engine &amp; voice. Reflects voice
                   and speed; the dB trim is applied later, on air.
+                  {e === 'kokoro' || e === 'pocket-tts' ? "Sample text is English; non-English language settings may sound strange" : ""}
                 </div>
               </div>
             );
@@ -3784,6 +3896,7 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
         audioFusionWeight: Number.isFinite(parseFloat(e.audioFusionWeight))
           ? parseFloat(e.audioFusionWeight)
           : 0.5,
+        batchSize: parseInt(e.batchSize, 10) || 25,
         enrichment: {
           lastfmTags: e.enrichment.lastfmTags,
           lyrics: e.enrichment.lyrics,
@@ -3974,6 +4087,29 @@ function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, r
               setForm(f => ({ ...f, embedding: { ...f.embedding, enabled: v === 'on' } }))
             }
           />
+        </div>
+
+        <hr className="my-5 border-[var(--border)]" />
+
+        <div className="field">
+          <Label>LLM batch size</Label>
+          <Select
+            value={e.batchSize}
+            onValueChange={v => setForm(f => ({ ...f, embedding: { ...f.embedding, batchSize: v } }))}
+          >
+            <SelectTrigger className="max-w-[100px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {LLM_BATCH_SIZES.map(s => (
+                  <SelectItem key={s} value={String(s)}>{s} songs</SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <div className="field-hint">
+            How many songs to tag in a single LLM call. Smaller models may need
+            a lower batch size to avoid truncation or errors. 25 is the default.
+          </div>
         </div>
       </Card>
 
@@ -4511,6 +4647,20 @@ const TZ_GROUPS: Array<{ region: string; zones: string[] }> = (() => {
 function clockPreview(timeZone: string, locale: StationLocale) {
   return fmtClockMinute(new Date(), timeZone || undefined, locale);
 }
+
+// Labels for Kokoro phonemizer language override options. Keyed by the lang
+// codes exposed by the controller (synced with KOKORO_LANGS in settings.ts).
+const KOKORO_LANG_LABELS: Record<string, string> = {
+  'en-gb': 'English (UK)',
+  'en-us': 'English (US)',
+  cmn: 'Chinese (Mandarin)',
+  fr: 'French',
+  hi: 'Hindi',
+  it: 'Italian',
+  ja: 'Japanese',
+  'pt-br': 'Portuguese (Brazilian)',
+  es: 'Spanish',
+};
 
 function StationSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const save = () => saveSettings({
@@ -5689,6 +5839,7 @@ function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch, 
     const patch: Partial<ScrobbleListenbrainzForm> = {
       enabled: lb.enabled,
       username: lb.username,
+      baseUrl: lb.baseUrl,
     };
     if (lb.userToken && lb.userToken !== 'set') patch.userToken = lb.userToken;
     saveSettings({ scrobble: { listenbrainz: patch } });
@@ -5954,6 +6105,30 @@ function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch, 
             <div className="field-hint">
               ListenBrainz is the open-source alternative to Last.fm, with the same listener gate
               and eligibility rules.
+            </div>
+          </div>
+
+          <div className="field">
+            <Label>API base URL</Label>
+            <Input
+              type="url"
+              value={lb.baseUrl}
+              placeholder="https://api.listenbrainz.org/1"
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({
+                  ...f,
+                  scrobble: {
+                    ...f.scrobble,
+                    listenbrainz: { ...f.scrobble.listenbrainz, baseUrl: e.target.value },
+                  },
+                }))
+              }
+              className="max-w-[360px]"
+            />
+            <div className="field-hint">
+              Leave blank for listenbrainz.org. For self-hosted LB-compatible scrobblers, use the
+              API root (e.g. <code>http://koito:4110/apis/listenbrainz/1</code>). Overrides via{' '}
+              <code>LISTENBRAINZ_API_URL</code> env when set.
             </div>
           </div>
 

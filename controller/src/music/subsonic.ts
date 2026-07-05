@@ -90,7 +90,20 @@ async function call(endpoint, params = {}) {
   const started = Date.now();
   try {
     const url = buildUrl(endpoint, params);
-    const res = await fetch(url);
+    // Bounded fetch: a hung Navidrome must fail fast, not pin the request
+    // (and every admin route queued behind it) forever (#786). The abort
+    // rejects with a TimeoutError, translated into a readable message.
+    let res;
+    try {
+      res = await fetch(url, { signal: AbortSignal.timeout(config.navidrome.timeoutMs) });
+    } catch (err) {
+      if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+        throw new Error(
+          `Subsonic ${endpoint} timed out after ${config.navidrome.timeoutMs}ms — is Navidrome responding?`,
+        );
+      }
+      throw err;
+    }
     if (!res.ok) {
       // Capture the first 200 chars of the body so outage triage gets the
       // actual server message (Cloudflare 522, Navidrome 5xx detail, etc.)

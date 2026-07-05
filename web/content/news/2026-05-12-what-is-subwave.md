@@ -14,7 +14,14 @@ It's a radio station for one person to run and anyone to tune into. You point it
 
 ## How it works
 
-Four small pieces do the work. Navidrome holds your music. An LLM is the DJ's brain and decides what plays next and what to say. A text-to-speech voice turns those lines into audio. Liquidsoap and Icecast mix it all into one stream and broadcast it. That's the whole machine.
+Four small pieces do the work:
+
+- **Navidrome** holds your music.
+- **An LLM** is the DJ's brain — it decides what plays next and what to say.
+- **A text-to-speech voice** turns those lines into audio.
+- **Liquidsoap and Icecast** mix it all into one stream and broadcast it.
+
+That's the whole machine.
 
 The DJ pulls from what you actually own, so the station sounds like your taste, not an algorithm's idea of it.
 

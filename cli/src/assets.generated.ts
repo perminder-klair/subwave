@@ -1087,6 +1087,12 @@ SITE_URL=
 # chat key. OpenRouter embeddings also fall back to OPENROUTER_API_KEY above.
 # EMBEDDING_API_KEY=
 
+# ───────── Scrobbling (optional — also configurable in admin UI) ─────────
+# LISTENBRAINZ_USER_TOKEN=          # ListenBrainz or LB-compatible scrobbler token
+# LISTENBRAINZ_API_URL=             # optional full submit-listens URL override
+#                                   # e.g. http://koito:4110/apis/listenbrainz/1/submit-listens
+#                                   # otherwise set base URL in admin → Settings → Scrobbling
+
 # ───────── Acoustic analysis (CLAP audio-similarity + Demucs vocals) ─────────
 # The analysis pass (npm run analyze / admin "Analyze audio") computes bpm, key,
 # loudness, structure, pace and a beat grid for every track. This runs by

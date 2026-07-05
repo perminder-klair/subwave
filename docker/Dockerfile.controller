@@ -48,7 +48,7 @@ RUN mkdir -p /opt/piper/voices && \
 RUN python3 -m venv /opt/kokoro/venv && \
     /opt/kokoro/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/kokoro/venv/bin/pip install --no-cache-dir \
-      kokoro-onnx==0.4.9 soundfile==0.12.1
+      kokoro-onnx==0.5.0 soundfile==0.12.1 misaki==0.9.4
 
 RUN mkdir -p /opt/kokoro/models && \
     wget -q ${WGET_RETRY} -O /opt/kokoro/models/kokoro-v1.0.onnx \

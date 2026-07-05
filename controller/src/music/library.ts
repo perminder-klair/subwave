@@ -52,6 +52,24 @@ export async function save() {
   // no-op
 }
 
+// Fold the WAL sidecar back into library.db (best-effort TRUNCATE checkpoint).
+// Safe to call whether or not the DB is open. Wired to the scheduler's hourly
+// cleanup and the server's shutdown path (#786).
+export function checkpoint(): void {
+  if (!db.isOpen()) return;
+  const r = db.checkpointWal();
+  if (r && r.busy) {
+    console.log('[library] WAL checkpoint incomplete (concurrent reader/writer); will retry next pass');
+  }
+}
+
+// Close the backing DB (checkpointing the WAL on the way out). The graceful-
+// shutdown counterpart to load(); a later load() reopens.
+export function shutdown(): void {
+  if (db.isOpen()) db.close();
+  loaded = false;
+}
+
 export function get(songId: string): any {
   if (!loaded) return null;
   const t = db.getTrack(songId);

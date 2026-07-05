@@ -88,7 +88,7 @@ function runDeadlined(timeoutMs: any, kind: string, label: string, agent: any, m
     withTransientRetry(kind, () => agent.generate({
       messages,
       ...(signal ? { abortSignal: signal } : {}),
-    })));
+    }), signal));
 }
 
 export async function djAgent({

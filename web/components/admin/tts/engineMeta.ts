@@ -15,7 +15,7 @@ export interface EngineMeta {
 // Order mirrors the on-air dispatcher (controller audio/tts.ts ENGINES).
 export const ENGINES: EngineMeta[] = [
   { id: 'piper',      label: 'Piper',      blurb: 'Local · fast · keyless' },
-  { id: 'kokoro',     label: 'Kokoro',     blurb: 'More natural, slower' },
+  { id: 'kokoro',     label: 'Kokoro',     blurb: 'More natural · multilingual' },
   { id: 'chatterbox', label: 'Chatterbox', blurb: 'Clone a voice from a clip' },
   { id: 'pocket-tts', label: 'PocketTTS',  blurb: 'Multilingual · CPU-only' },
   { id: 'cloud',      label: 'Cloud',      blurb: 'OpenAI / ElevenLabs' },

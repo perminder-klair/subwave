@@ -16,6 +16,7 @@ import { runStationId, runHourlyCheck, runLink, refreshAutoPlaylist } from '../b
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
 import { loadSkills, parseFrontmatter, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
 import { writeSkillFile, msToCooldownStr, resetBuiltinSkill } from '../skills/scaffold.js';
+import { mapPool } from '../util/async-pool.js';
 import { readFile, rm, stat, mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { STATE_DIR, config } from '../config.js';
@@ -731,8 +732,12 @@ router.get('/dj/recent', requireAdmin, async (req, res) => {
   try {
     await library.load();
     const albums = await subsonic.getRecentlyAddedAlbums({ size: limit });
-    const songLists = await Promise.all(
-      albums.map((a: any) => subsonic.getAlbum(a.id).catch(() => [])),
+    // Bounded fan-out: an unbounded Promise.all fired one getAlbum per album
+    // (~21 parallel Navidrome calls at the default limit), which tipped a
+    // slow/loaded Navidrome into failures (#786). 5-wide keeps it snappy
+    // without the thundering herd.
+    const songLists = await mapPool(albums, 5, (a: any) =>
+      subsonic.getAlbum(a.id).catch(() => []),
     );
     const results = songLists.flat().slice(0, limit).map((s: any) => {
       const tag = library.get(s.id);

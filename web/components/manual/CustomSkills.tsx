@@ -67,6 +67,7 @@ name: moon-phase          # the slug (defaults to the folder name)
 label: Moon phase         # label shown in admin (defaults to a title-cased name)
 cooldown: 6h              # min gap between auto firings — "90m" | "6h" | "2d" | "45" (minutes)
 window: any               # "any" (default) | "commute" — commute hours only
+context: time, festival   # OPTIONAL: "right now" fields it may mention (see below)
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; unset → stays inert
 ---
 If tonight's moon is at a notable phase, work it into one short, in-character
@@ -78,6 +79,17 @@ the phase is unremarkable.`}</CodeBlock>
           <em>edits</em> that one instead (see below). Bad frontmatter is logged and
           skipped, and never crashes the station.
         </p>
+        <p className="text-muted">
+          <code className="bs-code-inline">context:</code> is an allow-list of the &ldquo;right
+          now&rdquo; fields the DJ may weave in — <code className="bs-code-inline">date</code>,{' '}
+          <code className="bs-code-inline">clock</code>, <code className="bs-code-inline">time</code>,{' '}
+          <code className="bs-code-inline">weather</code>, <code className="bs-code-inline">festival</code>,{' '}
+          <code className="bs-code-inline">show</code>, <code className="bs-code-inline">listeners</code>.
+          Leave it off and the skill gets everything <em>except</em> weather, which stays with
+          the dedicated weather skill so the DJ doesn&rsquo;t staple the forecast to every break.
+          Tick it back on (in the frontmatter, or per-field on the admin Edit sheet) where
+          it&rsquo;s genuinely topical.
+        </p>
       </section>
 
       <section className="bs-section">
@@ -85,14 +97,24 @@ the phase is unremarkable.`}</CodeBlock>
         <h2>The shipped skills are files too.</h2>
         <p>
           The seven built-ins — weather, news, now-playing digs, curiosity, album anniversaries,
-          library deep-cuts, and web search — ship as directories (under{' '}
+          library deep-cuts, and web search — ship as read-only templates (under{' '}
           <code className="bs-code-inline">controller/src/skills/builtins/&lt;kind&gt;/</code>) and
-          load through the same loader as your own. Each is scaffolded into{' '}
-          <code className="bs-code-inline">state/skills/&lt;kind&gt;/SKILL.md</code> the first
-          time the station boots. Editing that (on the admin <strong>Skills</strong> page, or
-          the file directly) overrides its brief, cooldown, context, or label in place — without
-          touching the built-in&rsquo;s <code className="bs-code-inline">tool.mjs</code>, which
-          always runs. An override may leave the body empty to keep the default wording.
+          are seeded into <code className="bs-code-inline">state/skills/&lt;kind&gt;/</code> —
+          both <code className="bs-code-inline">SKILL.md</code> <em>and</em>{' '}
+          <code className="bs-code-inline">tool.mjs</code> — the first time the station boots.
+          From then on they&rsquo;re ordinary editable skills: change the brief, cooldown,
+          context, or label on the admin <strong>Skills</strong> page, and edit the{' '}
+          <code className="bs-code-inline">tool.mjs</code> on disk + Rescan, exactly as you
+          would for a skill you wrote. The seeder never overwrites a file that already exists,
+          so your edits survive restarts and upgrades.
+        </p>
+        <p>
+          A built-in still differs from a skill you add in three ways: it&rsquo;s enabled by
+          default, it can be disabled but not deleted (delete its folder and the seeder
+          restores it on the next boot), and its edit sheet has a{' '}
+          <strong>↺ Reset to default</strong> that overwrites both files from the shipped
+          template — the way back from a broken edit, and the way to pull in a newer
+          image&rsquo;s <code className="bs-code-inline">tool.mjs</code>.
         </p>
         <p>
           The big one: <strong>News reads the BBC by default</strong>. Hit{' '}
@@ -132,18 +154,23 @@ not a newsreader's. Skip anything dull or stale; silence is fine.`}</CodeBlock>
           <code className="bs-code-inline">fetchHeadlines</code>, durable{' '}
           <code className="bs-code-inline">recall</code> — so a custom skill can reach as far as a built-in.
         </p>
-        <CodeBlock>{`export default async function (ctx, state, services, config) {
+        <CodeBlock>{`export default async function (ctx, state, services, config, input) {
   // ctx      — the moment: { time, weather, festival, dominantMood, clock }
   // state    — cross-tick memory (persists between firings)
   // services — the station facade (searchWeb, library, nowPlaying, onThisDay…)
   // config   — this skill's own SKILL.md frontmatter
+  // input    — the agent's values for your declared inputs ({} if none)
   const artist = services.nowPlaying()?.artist;
   if (!artist) return { available: false };
   return { available: true, artist };
 }
 
 // OPTIONAL: gate the skill on a runtime condition (e.g. a search provider).
-export const ready = (services) => services.searchReady();`}</CodeBlock>
+export const ready = (services) => services.searchReady();
+
+// OPTIONAL: agent-steerable string params — the agent may pass a value or
+// null for each; without this the tool is zero-arg (best for small models).
+export const inputs = { query: 'what to search for; null for the default dig' };`}</CodeBlock>
         <p>
           The call is timeout-guarded and any error degrades cleanly to &ldquo;no
           data&rdquo;; a slow or broken skill can never hang the station. With no{' '}
@@ -156,6 +183,50 @@ export const ready = (services) => services.searchReady();`}</CodeBlock>
             <code className="bs-code-inline">tool.mjs</code> executes inside the controller,
             the same trust model as installing a local tool. Only drop in code you&rsquo;ve
             read and trust.
+          </p>
+        </div>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">SHARING</p>
+        <h2>Send one out, pull one in.</h2>
+        <p>
+          Wrote a skill worth passing on? On the admin <strong>Skills</strong> page, any
+          prompt-only skill (no <code className="bs-code-inline">tool.mjs</code>) grows a{' '}
+          <strong>Share to community</strong> button. It opens a prefilled GitHub issue; a
+          workflow checks the slug and frontmatter and opens a one-file PR. Once that&rsquo;s
+          merged the skill ships in the next controller image, so any station can pick it up —
+          with your GitHub handle and the dates stamped on it (the Community list shows
+          &ldquo;by @who · added · updated&rdquo; under each entry).
+        </p>
+        <p>
+          The other direction is the <strong>Community</strong> button next to{' '}
+          <strong>New skill</strong>. It lists the shipped catalog; <strong>Install</strong>{' '}
+          drops a copy into <code className="bs-code-inline">state/skills/</code> — toggled
+          off, for you to read before it airs. The catalog is prompt-only by design, so
+          installing from it never runs anyone else&rsquo;s code.
+        </p>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">ZIP EXPORT / IMPORT</p>
+        <h2>Hand a skill straight to another operator.</h2>
+        <p>
+          To pass a skill directly instead, the edit sheet has an{' '}
+          <strong>↓ Export</strong> that streams a <code className="bs-code-inline">.zip</code>{' '}
+          (the <code className="bs-code-inline">SKILL.md</code>, plus{' '}
+          <code className="bs-code-inline">tool.mjs</code> if it has one). The Community modal
+          has the matching <strong>Import .zip</strong>. Like everything else, an import lands
+          disabled.
+        </p>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">A ZIP CAN CARRY CODE</div>
+          <p>
+            Unlike the reviewed catalog, an imported{' '}
+            <code className="bs-code-inline">.zip</code> may include a{' '}
+            <code className="bs-code-inline">tool.mjs</code> — the same trust as dropping a
+            folder in by hand. When it does, the UI flags it on arrival; read the code before
+            you enable it.
           </p>
         </div>
       </section>
