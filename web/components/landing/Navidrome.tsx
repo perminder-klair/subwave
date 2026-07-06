@@ -34,6 +34,7 @@ export default function Navidrome() {
             <li><strong>No licensing fees.</strong> You already own (or, you know, have on disk) the music. SUB/WAVE doesn't add a streaming bill on top.</li>
             <li><strong>Private by default.</strong> Listeners hit one MP3 stream. Nobody outside your stack ever sees your library, your tags, or who requested what.</li>
             <li><strong>BYO Subsonic-compatible server.</strong> Subsonic, Airsonic, Gonic, Funkwhale. If it speaks the Subsonic API, it works.</li>
+            <li><strong>Scrobbles like a real station.</strong> Every spin can report to Last.fm or ListenBrainz, including your own self-hosted instance.</li>
           </ul>
 
           <div className="bs-navidrome-cta">

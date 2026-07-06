@@ -25,7 +25,7 @@ const POINTS = [
     eyebrow: 'INSTALL IT',
     title: 'A real app on the lock screen.',
     body:
-      'SUB/WAVE installs as a PWA: a home-screen icon, full-screen, offline-aware. The OS media controls wire straight through, so the lock screen, your headphones, and the car display all show the station and pause it cleanly.',
+      'Native iOS and Android apps are on the stores, and the web player installs as a PWA. The OS media controls wire straight through, so the lock screen, your headphones, and the car display all show the station. Old-school hardware? /listen.m3u and /listen.pls tune in VLC, Sonos, and internet radios.',
   },
 ];
 

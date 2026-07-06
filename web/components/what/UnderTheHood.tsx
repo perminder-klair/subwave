@@ -21,7 +21,8 @@ export default function UnderTheHood() {
         small Node.js process that decides what plays and what gets said.
         Liquidsoap mixes the music, crossfades the tracks, ducks the DJ’s voice
         over the bed, and rotates the jingles. Icecast pushes the one stream out
-        to every browser. The pieces talk through plain files in a shared folder.
+        to every browser: MP3 for everything, with optional Opus, AAC, and
+        lossless FLAC mounts. The pieces talk through plain files in a shared folder.
         No socket, no message queue, the Unix way.
       </div>
 

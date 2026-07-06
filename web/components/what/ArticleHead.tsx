@@ -35,7 +35,7 @@ export default function ArticleHead() {
         <span aria-hidden="true">·</span>
         <span>Cloned-voice personas</span>
         <span aria-hidden="true">·</span>
-        <span>Scheduled shows &amp; skills</span>
+        <span>Shows, skills &amp; guest co-hosts</span>
         <span aria-hidden="true">·</span>
         <span>Bring any LLM</span>
         <span aria-hidden="true">·</span>
