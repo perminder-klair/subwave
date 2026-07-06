@@ -138,7 +138,11 @@ export function buildContextLines(
   }
   if (on('show') && context?.activeShow) {
     const topic = context.activeShow.topic ? ` — ${context.activeShow.topic}` : '';
-    lines.push(`On now: the show "${context.activeShow.name}"${topic}. Stay loosely on its theme.`);
+    // A programme episode's angle (set by the producer plan, riding on
+    // getFullContext) keeps mid-show links and segments on today's line, not
+    // just the standing brief.
+    const angle = context.activeShow.episodeAngle ? ` Today's episode angle: ${context.activeShow.episodeAngle}.` : '';
+    lines.push(`On now: the show "${context.activeShow.name}"${topic}.${angle} Stay loosely on its theme.`);
   }
   if (on('listeners') && context?.listeners?.count != null) {
     const n = context.listeners.count;

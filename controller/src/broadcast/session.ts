@@ -154,6 +154,11 @@ export function start(ctx: any, handoff: any = null): any {
     persona: persona ? { id: persona.id, name: persona.name } : null,
     scenario: scenarioOf(ctx),
     handoff: handoff || null,
+    // Programme episode state (plan + which beats aired) — attached lazily by
+    // broadcast/programme.ts when the session belongs to a programme show.
+    // Lives on the persisted session so a restart mid-episode can't re-plan or
+    // double-air a beat, and dies with the session at the show boundary.
+    programme: null,
     messages: [],
   };
   // appendTurn above already scheduled a debounced persist. No immediate
@@ -241,6 +246,29 @@ export function pendingHandoff(): { personaId: string; personaName: string | nul
 export function markHandoffAired() {
   if (!_session) return;
   _session.handoffAired = true;
+  schedulePersist();
+}
+
+// --- Programme episode state (broadcast/programme.ts) -----------------------
+// Same persistence contract as handoffAired: state rides the session file so a
+// controller restart mid-episode resumes the plan and never double-airs a beat.
+
+export function getProgramme(): any {
+  return _session?.programme || null;
+}
+
+export function attachProgramme(programme: any) {
+  if (!_session) return;
+  _session.programme = programme;
+  schedulePersist();
+}
+
+// Flip one beat flag (e.g. 'intro', 'outro', 'feature:0'). Called BEFORE the
+// beat generates/airs — the markHandoffAired idempotency pattern.
+export function markProgrammeBeat(beat: string) {
+  if (!_session?.programme) return;
+  _session.programme.beats = _session.programme.beats || {};
+  _session.programme.beats[beat] = true;
   schedulePersist();
 }
 

@@ -12,7 +12,7 @@ import * as dj from '../llm/dj.js';
 import * as subsonic from '../music/subsonic.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { runStationId, runHourlyCheck, runLink, runBanter, refreshAutoPlaylist } from '../broadcast/scheduler.js';
+import { runStationId, runHourlyCheck, runLink, runBanter, runProgrammeIntro, runProgrammeFeature, runProgrammeOutro, refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
 import { loadSkills, parseFrontmatter, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
 import { writeSkillFile, msToCooldownStr, resetBuiltinSkill } from '../skills/scaffold.js';
@@ -587,7 +587,8 @@ router.post('/dj/say', requireAdmin, async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // POST /dj/segment — fire a voice segment on demand
-// Body: { type: 'station-id' | 'hourly' | 'link' | 'banter' }
+// Body: { type: 'station-id' | 'hourly' | 'link' | 'banter'
+//         | 'programme-intro' | 'programme-feature' | 'programme-outro' }
 // ---------------------------------------------------------------------------
 const SEGMENTS = {
   'station-id': runStationId,
@@ -597,6 +598,12 @@ const SEGMENTS = {
   // throws a clear error otherwise); ignores the show's banter toggle — an
   // explicit operator press always fires.
   banter: runBanter,
+  // Programme episode beats. Need a programme show on air (the runners throw
+  // a clear error otherwise); like every manual trigger they bypass the
+  // listener/budget gates and the beat-already-aired flags.
+  'programme-intro': runProgrammeIntro,
+  'programme-feature': runProgrammeFeature,
+  'programme-outro': runProgrammeOutro,
 };
 
 router.post('/dj/segment', requireAdmin, async (req, res) => {

@@ -1014,9 +1014,13 @@ export async function runPersonaHandoff(queue: any, ctx: any): Promise<void> {
 
     // 2. Greeting, in the INCOMING persona's voice — fed the sign-off text so
     //    it can genuinely respond. Stands alone if the sign-off didn't air.
+    //    On a programme show the greeting doubles as the episode's intro, so
+    //    the producer's angle (planned before this runs — see the call sites)
+    //    rides along; the standalone intro is then skipped (programme.ts).
     try {
       const greeting = await dj.generateHandoffGreeting({
         personaIn, personaOut, signoffText, showIn,
+        episodeAngle: session.getProgramme()?.plan?.angle || null,
         context: ctx, recap: queue.getDjRecap(), recentOpeners,
       });
       await queue.announce(greeting, 'handoff', { persona: personaIn });

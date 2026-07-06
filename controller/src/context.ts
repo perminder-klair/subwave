@@ -3,6 +3,7 @@
 
 import { config } from './config.js';
 import { resolveActiveShow, get as getSettings } from './settings.js';
+import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
 import { zonedParts, zonedISODate } from './time.js';
 
@@ -274,7 +275,18 @@ export async function getFullContext(at?: Date) {
 
   // A scheduled show for this hour, if any. Its mood wins everything below —
   // an empty hour leaves the station running autonomously.
-  const activeShow = resolveActiveShow(now);
+  const activeShow: any = resolveActiveShow(now);
+
+  // Programme shows: ride today's episode angle on the show context so every
+  // prompt built from it (links, picker brief, segments) breathes the same
+  // episode. Only once the session has actually rolled into this show — a
+  // lingering previous session's plan must not leak across the boundary.
+  if (activeShow?.programme) {
+    const sess = session.getSession();
+    if (sess?.key === `show:${activeShow.id}` && sess.programme?.plan?.angle) {
+      activeShow.episodeAngle = String(sess.programme.plan.angle);
+    }
+  }
 
   // Show > festival > weather > time, in that order of priority for mood.
   const dominantMood = activeShow?.mood || festival?.mood || weather.mood || time.mood;

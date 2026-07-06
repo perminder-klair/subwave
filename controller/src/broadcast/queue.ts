@@ -12,6 +12,7 @@ import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
 import { speak, voiceGainDb } from '../audio/tts.js';
 import * as djAgent from './dj-agent.js';
+import * as programme from './programme.js';
 import * as sfx from './sfx.js';
 import * as session from './session.js';
 import { getFullContext, energyForDaypart } from '../context.js';
@@ -1161,6 +1162,13 @@ class Queue {
         try {
           const ctx = await getFullContext();
           await session.maybeRoll(ctx);
+          // Plan a programme episode BEFORE the mic-pass so a handoff into a
+          // programme show can weave the episode angle into its greeting.
+          try {
+            await programme.ensurePlan(ctx);
+          } catch (err: any) {
+            this.log('error', `Programme plan failed: ${err.message}`);
+          }
           // If that roll crossed a persona boundary, air the mic-pass first
           // (sign-off + greeting) so it plays before the incoming DJ's first
           // pick. Guarded so a handoff failure never blocks the next track.
@@ -1168,6 +1176,14 @@ class Queue {
             await djAgent.runPersonaHandoff(this, ctx);
           } catch (err: any) {
             this.log('error', `Persona handoff failed: ${err.message}`);
+          }
+          // Programme shows: open the episode if the hourly cron hasn't
+          // already (whichever call site settles the session first wins; the
+          // beat flag makes the other a no-op).
+          try {
+            await programme.onSessionSettled(this, ctx);
+          } catch (err: any) {
+            this.log('error', `Programme episode hook failed: ${err.message}`);
           }
           // The pick made now airs when the track that just started ends — so
           // near a show boundary the rules to pick by are the NEXT show's, not

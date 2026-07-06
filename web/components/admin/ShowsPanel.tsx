@@ -110,6 +110,14 @@ interface Show {
   /** Navidrome playlist blocklist — tracks from these playlists are excluded
    *  from the candidate pool regardless of other filters. Empty = no exclusions. */
   excludedPlaylistIds: string[];
+  /** Programme mode: the show airs as a produced episode — intro at the top,
+   *  a planned feature segment mid-hour, a sign-off in the final minutes —
+   *  all driven by the topic brief via a per-episode producer plan. */
+  programme: boolean;
+  /** Optional: pin the feature segment to one skill (e.g. news for a morning
+   *  roundup). Empty = the producer picks per episode. Only used with
+   *  programme on. */
+  segmentSkill: string;
 }
 
 // Decade presets for the era dropdown → fromYear/toYear. 'any' clears the window.
@@ -144,6 +152,15 @@ interface ThemeOption {
   mode?: string;
   description?: string;
   tokens?: Record<string, string>;
+}
+
+/** One entry of the /dj/skills catalogue — the programme feature-segment pin
+ *  only needs the kind + a label; disabled skills are filtered on fetch. */
+interface SkillOption {
+  kind: string;
+  label?: string;
+  name?: string;
+  enabled?: boolean;
 }
 
 interface Persona {
@@ -295,6 +312,7 @@ export default function ShowsPanel() {
   // Theme list for the per-show override dropdown. Public endpoint, no auth
   // needed — same source the player ThemeBootstrap reads.
   const [themes, setThemes] = useState<ThemeOption[]>([]);
+  const [skills, setSkills] = useState<SkillOption[]>([]);
   const [activeThemeId, setActiveThemeId] = useState('');
   // Library genres for the show genre autocomplete. Admin-gated endpoint, so it
   // runs after sign-in; failures are silent (the field still accepts free text).
@@ -402,6 +420,8 @@ export default function ShowsPanel() {
           playlistIds: Array.isArray(s.playlistIds) ? s.playlistIds : [],
           playlistStrict: s.playlistStrict ?? false,
           excludedPlaylistIds: Array.isArray(s.excludedPlaylistIds) ? s.excludedPlaylistIds : [],
+          programme: s.programme ?? false,
+          segmentSkill: s.segmentSkill ?? '',
         }));
         setForm({ shows, schedule: week });
         // Arm the first valid show as the brush so the grid is paintable at once.
@@ -409,6 +429,23 @@ export default function ShowsPanel() {
         if (firstValid) setBrush(b => b ?? firstValid.id);
       }
     })();
+  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch the skill catalogue once for the programme feature-segment pin.
+  // Admin endpoint, so it waits for sign-in. Failures are silent: the picker
+  // just shows "Producer's choice" with no pin options.
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await adminFetch('/dj/skills');
+        if (!r.ok || cancelled) return;
+        const j = (await r.json()) as { skills?: SkillOption[] };
+        if (Array.isArray(j.skills)) setSkills(j.skills.filter(s => s.enabled !== false));
+      } catch {}
+    })();
+    return () => { cancelled = true; };
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch the theme list once for the per-show override dropdown. Public
@@ -497,6 +534,7 @@ export default function ShowsPanel() {
           themeId: '', genre: '', fromYear: null, toYear: null, energy: '',
           filtersStrict: false, maxTrackSeconds: null,
           playlistIds: [], playlistStrict: false, excludedPlaylistIds: [],
+          programme: false, segmentSkill: '',
         }],
       };
     });
@@ -699,6 +737,9 @@ export default function ShowsPanel() {
             // Strict only means something with at least one playlist pinned.
             playlistStrict: (s.playlistIds?.length ?? 0) > 0 && s.playlistStrict,
             excludedPlaylistIds: s.excludedPlaylistIds || [],
+            programme: s.programme ?? false,
+            // A skill pin only means something in programme mode.
+            segmentSkill: s.programme ? (s.segmentSkill || '') : '',
           })),
           schedule: form.schedule,
         }),
@@ -952,6 +993,7 @@ export default function ShowsPanel() {
           personas={personas}
           moods={moods}
           themes={themes}
+          skills={skills}
           activeThemeId={activeThemeId}
           genres={genres}
           playlists={playlists}
@@ -1022,6 +1064,7 @@ interface ShowEditorProps {
   personas: Persona[];
   moods: string[];
   themes: ThemeOption[];
+  skills: SkillOption[];
   activeThemeId: string;
   genres: string[];
   playlists: { id: string; name: string; songCount: number | null }[];
@@ -1041,7 +1084,7 @@ interface ShowEditorProps {
 }
 
 function ShowEditor({
-  show, editorRef, personas, moods, themes, activeThemeId, genres, playlists, apiBase,
+  show, editorRef, personas, moods, themes, skills, activeThemeId, genres, playlists, apiBase,
   adminFetch, minTrackSeconds, allShowsOk, canSave, busy, isNew,
   update, onSave, onClose, onRemove,
 }: ShowEditorProps) {
@@ -1159,6 +1202,52 @@ function ShowEditor({
               </div>
             </Field>
           )}
+
+          <Field>
+            <div className="flex items-start gap-3">
+              <div className="pt-0.5">
+                <Toggle
+                  on={show.programme}
+                  onClick={() => update({ programme: !show.programme })}
+                />
+              </div>
+              <div className="grid gap-0.5">
+                <Label>Programme (produced episode)</Label>
+                <span className="field-hint">
+                  The DJ produces each airing as a coherent episode from the
+                  topic brief: an intro at the top of the show, a planned
+                  feature segment mid-hour, and a sign-off in the closing
+                  minutes — with a fresh angle every episode.
+                </span>
+              </div>
+            </div>
+            {show.programme && (
+              <div className="mt-2 grid gap-1">
+                <Label>feature segment skill</Label>
+                <Select
+                  value={show.segmentSkill || ANY_SENTINEL}
+                  onValueChange={val => update({ segmentSkill: val === ANY_SENTINEL ? '' : val })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value={ANY_SENTINEL}>Producer&apos;s choice</SelectItem>
+                      {skills.map(s => (
+                        <SelectItem key={s.kind} value={s.kind}>{s.label || s.name || s.kind}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <span className="field-hint">
+                  Optional. Pin the mid-hour feature to one skill — e.g. news
+                  for a morning roundup. Producer&apos;s choice lets each
+                  episode&apos;s plan decide.
+                </span>
+              </div>
+            )}
+          </Field>
 
           <Field>
             <Label>theme override (applied while this show is on air)</Label>

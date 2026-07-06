@@ -1358,6 +1358,13 @@ function normalizeShows(raw: any, personaIds: string[]) {
     // Scripted banter breaks (multi-voice exchanges). Only meaningful with
     // guests — stored as given, checked against the live roster at air time.
     const banter = item.banter === true;
+    // Programme mode: the show airs as a produced episode (intro → feature →
+    // outro arc — broadcast/programme.ts). segmentSkill optionally pins the
+    // feature beat to one segment capability kind; free text, resolved against
+    // the live skill catalog at air time (a stale kind degrades to the
+    // producer's choice, same tolerance as playlistIds).
+    const programme = item.programme === true;
+    const segmentSkill = typeof item.segmentSkill === 'string' ? item.segmentSkill.trim().slice(0, 64) : '';
     out.push({
       id,
       name,
@@ -1365,6 +1372,8 @@ function normalizeShows(raw: any, personaIds: string[]) {
       personaId: item.personaId,
       guestPersonaIds,
       banter,
+      programme,
+      segmentSkill,
       mood,
       themeId,
       genre,
@@ -2258,10 +2267,16 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     // Banter without guests is inert, not an error — the tick re-checks the
     // live roster anyway, so a stale true can't air a one-person "exchange".
     const banter = item.banter === true;
+    // Programme mode + optional feature-beat capability pin. The kind is
+    // shape-checked only — resolved against the live skill catalog at air time,
+    // so a stale/misspelled kind degrades instead of blocking a settings save.
+    const programme = item.programme === true;
+    const segmentSkill = String(item.segmentSkill ?? '').trim();
+    if (segmentSkill.length > 64) throw new Error(`shows[${i}].segmentSkill must be 0-64 chars`);
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, guestPersonaIds, banter, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
+    return { id, name, topic, personaId: item.personaId, guestPersonaIds, banter, programme, segmentSkill, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
   });
 }
 
@@ -3190,6 +3205,10 @@ export function resolveActiveShow(date = new Date(), s = get()) {
       .map(p => ({ id: p.id, name: p.name, avatar: p.avatar || '' })),
     // Scripted multi-voice banter breaks — only fires when guests exist.
     banter: show.banter === true,
+    // Programme mode: produced episode arc (broadcast/programme.ts). The
+    // optional segmentSkill pins the feature beat to one capability kind.
+    programme: show.programme === true,
+    segmentSkill: typeof show.segmentSkill === 'string' ? show.segmentSkill : '',
   };
 }
 
