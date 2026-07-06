@@ -7,7 +7,7 @@
 // node:assert-via-tsx style, matching scripts/auto-pool.test.ts.
 
 import assert from 'node:assert/strict';
-import { showSpan, planFeature } from '../src/broadcast/programme-pure.js';
+import { showSpan, planFeature, beatWindow } from '../src/broadcast/programme-pure.js';
 
 // A 7×24 grid with every slot null.
 function emptyWeek(): Record<number, (string | null)[]> {
@@ -101,6 +101,36 @@ function emptyWeek(): Record<number, (string | null)[]> {
   assert.equal(planFeature({ features: [] }, 0), null, 'empty features');
   assert.equal(planFeature({ features: [{ kind: 'news' }] }, 0), null, 'feature without a topic is unusable');
   assert.deepEqual(planFeature({ features: [{ topic: 't' }] }, -2), { topic: 't', kind: null }, 'negative index clamps to the first feature');
+}
+
+// ── beatWindow ───────────────────────────────────────────────────────────────
+
+// Station-minute windows: feature :35–:39, outro :55–:59, silence elsewhere.
+{
+  assert.equal(beatWindow(34), null, ':34 is quiet');
+  assert.equal(beatWindow(35), 'feature', ':35 opens the feature window');
+  assert.equal(beatWindow(39), 'feature', ':39 still feature');
+  assert.equal(beatWindow(40), null, ':40 is quiet again');
+  assert.equal(beatWindow(54), null, ':54 is quiet');
+  assert.equal(beatWindow(55), 'outro', ':55 opens the outro window');
+  assert.equal(beatWindow(59), 'outro', ':59 still outro');
+  assert.equal(beatWindow(0), null, 'top of the hour belongs to the hourly/intro');
+}
+
+// Every 15-minute zone offset lands a */5 process cron inside each window
+// exactly once — the invariant that lets one 5-min tick serve IST/Nepal/etc.
+{
+  for (let offset = 0; offset < 60; offset += 15) {
+    for (const [start, kind] of [[35, 'feature'], [55, 'outro']] as const) {
+      const hits = [];
+      for (let p = 0; p < 60; p += 5) {
+        const stationMin = (p + offset) % 60;
+        const w = beatWindow(stationMin);
+        if (w === kind && stationMin >= start && stationMin < start + 5) hits.push(p);
+      }
+      assert.equal(hits.length, 1, `offset ${offset}: exactly one */5 tick lands in the ${kind} window`);
+    }
+  }
 }
 
 console.log('programme.test.ts: all assertions passed');

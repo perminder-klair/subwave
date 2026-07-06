@@ -25,6 +25,20 @@ export function showSpan(schedule: any, day: number, hour: number): { index: num
   return { index: before, total: before + 1 + after };
 }
 
+// Which beat a STATION-ZONE minute belongs to. The arc's placement is a
+// station-clock fact (":55 of the final hour" must be the show's closing
+// minutes), but crons fire on fixed process-local minutes — and station zones
+// sit at :30/:45 offsets (IST, Nepal), so a process-minute :55 cron can land
+// mid-show on the station clock. The scheduler therefore ticks every 5
+// minutes and dispatches on this window instead: offsets are multiples of 15,
+// so a 5-minute cadence always lands inside each 5-minute station window
+// exactly once (the beat flags make repeats no-ops).
+export function beatWindow(stationMinute: number): 'feature' | 'outro' | null {
+  if (stationMinute >= 55) return 'outro';
+  if (stationMinute >= 35 && stationMinute < 40) return 'feature';
+  return null;
+}
+
 // The plan's feature for a given show hour. The producer writes one per hour,
 // but a degraded/short plan just reuses its last feature rather than going
 // silent for the tail hours.

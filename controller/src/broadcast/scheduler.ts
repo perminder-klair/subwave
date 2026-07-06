@@ -523,30 +523,26 @@ async function skillsTick() {
 
 // ---------------------------------------------------------------------------
 // PROGRAMME BEATS
-// The feature beat at :35 each show hour and the outro at :55 of the final
-// hour (minutes no other wall-clock talker owns — idents take :15/:30/:45,
-// banter :20/:50, the hourly check :00). The intro has no cron of its own: it
-// rides the session-settled hook (hourlyCheck above + queue's track-start
+// The feature beat mid-hour (station-minute :35–:39) and the outro in the
+// closing minutes of the final hour (station-minute :55+). Placement is a
+// STATION-clock fact, but station zones sit at :30/:45 offsets (IST, Nepal),
+// so fixed process-minute crons can land mid-show — the tick runs every 5
+// minutes and dispatches on programme.dueBeat() instead; the beat flags make
+// the repeat ticks inside a window no-ops. The intro has no cron of its own:
+// it rides the session-settled hook (hourlyCheck above + queue's track-start
 // path). Gating (listeners, budget, beat-already-aired) lives in programme.ts.
 // ---------------------------------------------------------------------------
 
-async function programmeFeatureTick() {
+async function programmeTick() {
   if (!programme.onAir()) return;
+  const beat = programme.dueBeat();
+  if (!beat) return;
   try {
     const ctx = await getFullContext();
-    await programme.featureTick(queue, ctx);
+    if (beat === 'feature') await programme.featureTick(queue, ctx);
+    else await programme.outroTick(queue, ctx);
   } catch (err) {
-    queue.log('error', `Programme feature tick failed: ${err.message}`);
-  }
-}
-
-async function programmeOutroTick() {
-  if (!programme.onAir()) return;
-  try {
-    const ctx = await getFullContext();
-    await programme.outroTick(queue, ctx);
-  } catch (err) {
-    queue.log('error', `Programme outro tick failed: ${err.message}`);
+    queue.log('error', `Programme ${beat} tick failed: ${err.message}`);
   }
 }
 
@@ -704,9 +700,9 @@ export function startScheduler() {
   cron.schedule('20,50 * * * *', banterTick);
 
   // Programme beats: feature mid-hour, outro in the final minutes of the
-  // show's last hour. Both no-op outside a programme episode.
-  cron.schedule('35 * * * *', programmeFeatureTick);
-  cron.schedule('55 * * * *', programmeOutroTick);
+  // show's last hour — dispatched on STATION-zone minute windows (see
+  // programmeTick). No-ops outside a programme episode.
+  cron.schedule('*/5 * * * *', programmeTick);
 
   // Cleanup every hour
   cron.schedule('0 * * * *', cleanup);

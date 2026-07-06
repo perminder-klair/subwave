@@ -41,8 +41,15 @@ const INTRO_SUPPRESSES_HOURLY_MS = 45 * 60 * 1000;
 
 // Pure arc helpers live in programme-pure.ts (dependency-free, so the unit
 // test doesn't drag in the queue/settings graph) — re-exported for callers.
-import { showSpan, planFeature } from './programme-pure.js';
-export { showSpan, planFeature };
+import { showSpan, planFeature, beatWindow } from './programme-pure.js';
+export { showSpan, planFeature, beatWindow };
+
+// The beat due at this moment on the STATION clock, for the scheduler's
+// 5-minute programme tick (see beatWindow for why crons can't fire on fixed
+// station minutes directly).
+export function dueBeat(now = new Date()): 'feature' | 'outro' | null {
+  return beatWindow(zonedParts(now).minute);
+}
 
 // ---------------------------------------------------------------------------
 // Episode state
