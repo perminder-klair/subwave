@@ -108,11 +108,17 @@ export function preferEnergyStrict(tracks: any[], energy?: string | null): any[]
 // ── Mood ─────────────────────────────────────────────────────────────────────
 
 // Per-track mood tags — from the track itself (library sources carry them) or a
-// library lookup (Subsonic sources don't). Empty when un-tagged.
+// library lookup (Subsonic sources don't). Empty when un-tagged. Unions the
+// editorial LLM moods with the zero-shot audio moods (sound-derived —
+// music/audio-moods.ts), matching the blend songsByMood applies at retrieval,
+// so a track surfaced via its audio mood isn't filtered back out here.
 export function trackMoods(t: any): string[] {
-  if (Array.isArray(t?.moods)) return t.moods;
-  const rec = t?.id ? library.get(t.id) : null;
-  return Array.isArray(rec?.moods) ? rec.moods : [];
+  const rec = Array.isArray(t?.moods) && Array.isArray(t?.audioMoods)
+    ? t
+    : (t?.id ? library.get(t.id) : null) ?? t;
+  const moods = Array.isArray(rec?.moods) ? rec.moods : [];
+  const audio = Array.isArray(rec?.audioMoods) ? rec.audioMoods : [];
+  return audio.length ? [...new Set([...moods, ...audio])] : moods;
 }
 
 // Strict mood filter (show.filtersStrict): only tracks tagged with the show's

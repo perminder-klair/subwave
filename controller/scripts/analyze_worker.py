@@ -26,6 +26,14 @@ tts-heavy sidecar's analyzer venv, or in a standalone offline venv on the
 operator's machine. Audio is fetched from the Subsonic stream URL (auth baked
 into the query string) to a temp file, then only the first ANALYZE_SECONDS are
 decoded — enough for tempo/key and the intro estimate, a fraction of the bytes.
+(The CLAP embedding additionally decodes a mid-song and a late window from the
+same file — see embed_windows — so the vector reflects the whole track, not
+just its intro.)
+
+The embedder also answers text requests ({"texts": [...]}) with CLAP
+text-tower embeddings in the SAME 512-d space, which is what makes
+natural-language "sounds like ..." search and zero-shot mood scoring against
+the stored audio vectors possible.
 """
 
 import importlib.util
@@ -58,6 +66,11 @@ EMBED_ENABLED = os.environ.get("ANALYZE_AUDIO_EMBEDDING", "").strip().lower() in
 )
 CLAP_SR = 48000
 CLAP_EMBED_DIM = 512
+# How many windows the CLAP embed averages over (clamped 1..3): 3 = start/mid/
+# late (default), 2 = start/mid, 1 = the pre-multi-window leading-window-only
+# behaviour. CLAP cost per track scales linearly — this is the speed lever for
+# the embedding pass (ANALYZE_SECONDS scales everything else too).
+CLAP_WINDOWS = int(os.environ.get("ANALYZE_CLAP_WINDOWS", "").strip() or "3")
 
 # --- Vocal-activity ranges (optional, opt-in) ------------------------------
 # Off unless ANALYZE_VOCAL_ACTIVITY is truthy. Runs Demucs source separation to
@@ -249,6 +262,7 @@ class ClapEmbedder:
         self.session = None   # onnx
         self.input_name = None
         self.model = None     # transformers
+        self.text_model = None  # lazy text tower for onnx mode
 
     def load(self):
         from transformers import ClapProcessor
@@ -328,6 +342,117 @@ class ClapEmbedder:
         if norm > 0:
             vec = vec / norm
         return [float(x) for x in vec]
+
+    def _resolve_text_model(self):
+        """The CLAP text tower. In transformers mode it's the loaded ClapModel;
+        in onnx mode the on-disk export is the AUDIO encoder only, so the text
+        tower is lazily loaded via ClapTextModelWithProjection (torch required
+        — a lean venv without torch raises here and the caller degrades)."""
+        if self.mode == "transformers":
+            return self.model
+        if self.text_model is None:
+            from transformers import ClapTextModelWithProjection
+
+            hf_id = os.environ.get("CLAP_MODEL", "").strip() or "laion/clap-htsat-unfused"
+            feat_id = os.environ.get("CLAP_FEATURE_MODEL", "").strip() or hf_id
+            m = ClapTextModelWithProjection.from_pretrained(feat_id)
+            m.eval()
+            self.text_model = m
+            log(f"CLAP text tower loaded: {feat_id}")
+        return self.text_model
+
+    def embed_texts(self, texts):
+        """CLAP text-tower embeddings — 512-d, L2-normalised, in the SAME space
+        as the audio vectors (CLAP is trained contrastively on audio–text
+        pairs), so cosine against stored audio vectors is meaningful. Powers
+        natural-language "sounds like ..." search and zero-shot mood scoring."""
+        import numpy as np
+        import torch
+
+        model = self._resolve_text_model()
+        inputs = self.processor(text=list(texts), return_tensors="pt", padding=True)
+        with torch.no_grad():
+            emb = model.get_text_features(**inputs) if hasattr(model, "get_text_features") \
+                else model(**inputs)
+        # transformers ≤4.x returns the projected tensor directly; 5.x wraps it
+        # (text_embeds on the projection model, pooler_output on ClapModel).
+        if hasattr(emb, "text_embeds"):
+            emb = emb.text_embeds
+        elif hasattr(emb, "pooler_output"):
+            emb = emb.pooler_output
+        arr = np.asarray(emb.cpu().numpy(), dtype=np.float64)
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+        if arr.shape[1] != CLAP_EMBED_DIM:
+            raise RuntimeError(
+                f"unexpected CLAP text embedding dim {arr.shape[1]} (want {CLAP_EMBED_DIM})"
+            )
+        out = []
+        for row in arr:
+            n = float(np.linalg.norm(row))
+            out.append([float(x) for x in (row / n if n > 0 else row)])
+        return out
+
+
+def clap_window_offsets(duration_s, window_s, max_windows=None):
+    """Start offsets (seconds) of the CLAP embed windows. Short tracks keep the
+    single leading window; longer tracks add a mid-song window, and genuinely
+    long ones a late (~80%) window, so the vector reflects the whole track.
+    `max_windows` (default CLAP_WINDOWS / ANALYZE_CLAP_WINDOWS, clamped 1..3)
+    caps the count — 1 restores the old leading-window-only behaviour."""
+    n = CLAP_WINDOWS if max_windows is None else max_windows
+    n = max(1, min(3, n))
+    if n == 1 or not duration_s or duration_s <= window_s * 1.5:
+        return [0.0]
+    span = duration_s - window_s
+    offsets = [0.0, span * 0.5]
+    if n >= 3 and duration_s >= window_s * 3.0:
+        offsets.append(span * 0.8)
+    return offsets
+
+
+def embed_windows(embedder, path, librosa):
+    """CLAP embedding averaged over up to three windows spread across the track
+    (start / middle / late), mean + L2-renormalised. A single leading window
+    misrepresents any track whose intro doesn't sound like the song (a quiet
+    build-up embeds as ambient); averaging windows fixes that with the same
+    model, dim and storage schema. The local file may be byte-capped
+    (fetch_audio / the controller's downloadCapped truncate), so its real
+    decodable length can be shorter than the header duration — a non-leading
+    window that decodes to under ~5s is skipped, and the worst case degrades to
+    exactly the old leading-window behaviour."""
+    import numpy as np
+
+    if CLAP_WINDOWS <= 1:
+        duration_s = 0.0  # single-window mode — no need to probe duration
+    else:
+        try:
+            duration_s = float(librosa.get_duration(path=path))
+        except Exception as e:  # noqa: BLE001 — fall back to the leading window
+            log(f"duration probe failed ({e}); embedding leading window only")
+            duration_s = 0.0
+
+    vecs = []
+    for offset in clap_window_offsets(duration_s, ANALYZE_SECONDS):
+        try:
+            y48, _sr48 = librosa.load(
+                path, sr=CLAP_SR, mono=True, offset=offset, duration=ANALYZE_SECONDS
+            )
+        except Exception as e:  # noqa: BLE001 — a bad window never kills the embed
+            log(f"CLAP window decode at {offset:.0f}s failed: {e}")
+            continue
+        if y48 is None or len(y48) == 0:
+            continue
+        if offset > 0 and len(y48) < CLAP_SR * 5:
+            continue  # truncated tail of a byte-capped download
+        vecs.append(np.asarray(embedder.embed(y48, CLAP_SR), dtype=np.float64))
+    if not vecs:
+        return None
+    mean = np.mean(vecs, axis=0)
+    norm = float(np.linalg.norm(mean))
+    if norm > 0:
+        mean = mean / norm
+    return [float(x) for x in mean]
 
 
 # Lazily loaded, at most once. None means "no embeddings this run" — either
@@ -548,21 +673,18 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None):
     vocal_ranges = None
     try:
         y, sr = librosa.load(path, sr=ANALYZE_SR, mono=True, duration=ANALYZE_SECONDS)
-        # CLAP wants 48 kHz mono — decode a second copy at that rate from the
-        # SAME file (still present here, before the finally removes owned temps).
-        # A model/feature failure on one track never fails the whole analyze:
-        # we log and emit bpm/key without the embedding.
+        # CLAP wants 48 kHz mono — decode fresh copies at that rate from the
+        # SAME file (still present here, before the finally removes owned
+        # temps), windowed across the track (see embed_windows). A model/
+        # feature failure on one track never fails the whole analyze: we log
+        # and emit bpm/key without the embedding.
         # Per-request `embed` wins over the env default in the ON direction
         # only: True forces a (lazy) CLAP load, None/absent keeps the env-driven
         # behaviour. False is never sent by the controller today.
         embedder = None if embed is False else get_embedder(force=embed is True)
         if embedder is not None:
             try:
-                y48, _sr48 = librosa.load(
-                    path, sr=CLAP_SR, mono=True, duration=ANALYZE_SECONDS
-                )
-                if y48 is not None and len(y48) > 0:
-                    audio_embedding = embedder.embed(y48, CLAP_SR)
+                audio_embedding = embed_windows(embedder, path, librosa)
             except Exception as e:  # noqa: BLE001 — embedding is best-effort
                 log(f"audio embedding failed: {e}")
                 audio_embedding = None
@@ -720,6 +842,11 @@ def main():
         _vocal_detector is not None
         or all(importlib.util.find_spec(m) is not None for m in ("torch", "demucs"))
     )
+    # Text-tower probe: unlike onnx-mode audio (which runs without torch), the
+    # text tower always needs torch + transformers, in both backend modes.
+    text_capable = (not _embed_failed) and all(
+        importlib.util.find_spec(m) is not None for m in ("torch", "transformers")
+    )
 
     log("ready")
     emit({
@@ -727,6 +854,7 @@ def main():
         "ready": True,
         "audio_embedding_capable": audio_capable,
         "vocal_activity_capable": vocal_capable,
+        "text_embedding_capable": text_capable,
     })
 
     for line in sys.stdin:
@@ -739,6 +867,28 @@ def main():
             emit({"id": None, "ok": False, "error": f"bad json: {e}"})
             continue
         rid = req.get("id")
+        # Text-embedding request — {"texts": ["...", ...]} instead of url/path.
+        # An explicit text request force-loads CLAP like embed:true does (the
+        # caller asked for the shared audio-text space; env default irrelevant).
+        texts = req.get("texts")
+        if texts is not None:
+            if (
+                not isinstance(texts, list)
+                or not texts
+                or len(texts) > 64
+                or not all(isinstance(t, str) and t.strip() for t in texts)
+            ):
+                emit({"id": rid, "ok": False, "error": "texts must be 1-64 non-empty strings"})
+                continue
+            embedder = get_embedder(force=True)
+            if embedder is None:
+                emit({"id": rid, "ok": False, "error": "CLAP unavailable (load failed or libs absent)"})
+                continue
+            try:
+                emit({"id": rid, "ok": True, "text_embeddings": embedder.embed_texts(texts)})
+            except Exception as e:  # noqa: BLE001 — one bad request never kills the worker
+                emit({"id": rid, "ok": False, "error": str(e)})
+            continue
         url = req.get("url")
         path = req.get("path")
         if not url and not path:

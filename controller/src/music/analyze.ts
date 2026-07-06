@@ -14,6 +14,7 @@ import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
 import * as settings from '../settings.js';
 import { config } from '../config.js';
+import { runAudioMoodPass } from './audio-moods.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
 
 // Structured status events for the panel, mirrored to the terse `[analyze] …`
@@ -97,6 +98,16 @@ export interface AnalyzeStats {
 // the actual model; this is just what the controller stamps alongside the
 // vectors it stores. Env-overridable so a model swap is self-documenting.
 const AUDIO_MODEL_LABEL = process.env.CLAP_MODEL || 'laion-clap';
+
+// Best-effort wrapper — a mood-scoring failure must never fail (or re-run) the
+// analysis pass itself; the next pass simply retries the un-scored remainder.
+async function scoreAudioMoods(): Promise<void> {
+  try {
+    await runAudioMoodPass();
+  } catch (err: any) {
+    console.error(`[audio-moods] pass failed (non-fatal): ${err?.message || err}`);
+  }
+}
 
 export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<AnalyzeStats> {
   if (!(await analyzer.isAvailable())) {
@@ -193,6 +204,9 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
 
   if (ids.length === 0) {
     console.log('[analyze] nothing to analyse — all tracks current');
+    // Audio-mood scoring can still have work (vectors from past passes that
+    // predate the scorer, or a changed vocabulary) — run it before returning.
+    await scoreAudioMoods();
     return { available: true, backend, analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0, vocalAnalyzed: 0 };
   }
   logEvent('info', `Analysing audio for ${ids.length.toLocaleString('en-GB')} tracks…`);
@@ -312,6 +326,12 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // Best-effort sweep of the staging dir in case a prefetch left an orphan
   // (e.g. a download that resolved after its analyze slot already errored).
   await rm(`${config.stateDir}/analyze-tmp`, { recursive: true, force: true }).catch(() => {});
+
+  // Zero-shot audio moods over the vectors this pass (and past passes) wrote —
+  // one CLAP text-tower round-trip + in-process cosines (music/audio-moods.ts).
+  // No-ops in seconds when there's nothing new and skips cleanly on backends
+  // without the text tower.
+  await scoreAudioMoods();
 
   logEvent(
     'success',

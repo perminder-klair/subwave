@@ -13,6 +13,7 @@ import { z } from 'zod';
 import * as subsonic from '../../../music/subsonic.js';
 import * as library from '../../../music/library.js';
 import * as embeddings from '../../../music/embeddings.js';
+import * as analyzer from '../../../music/analyzer.js';
 import { filterPickerCandidates, durationSeconds } from '../../../music/recency.js';
 import { preferGenre, preferEra, preferMood, preferEnergyStrict } from '../../../music/show-filter.js';
 import { searchWeb, searchReady } from '../../../skills/web-search.js';
@@ -455,6 +456,39 @@ export function buildPickerTools({
             const list = library.tracksByVector(vec, 60);
             const out = collect(list);
             return out.length ? out : emptyResult(list.length, 'no thematic match — try tracksByMood or songsByGenre');
+          }
+          catch (err) { return { error: err.message }; }
+        },
+      }),
+    } : {}),
+
+    // Only registered when the audio index exists AND the analysis backend can
+    // embed text through the CLAP text tower (heavy analyzer; lean builds and
+    // pre-text-tower sidecars report false). CLAP text and audio vectors share
+    // one space, so a described SOUND maps straight onto the stored track
+    // vectors — no per-track metadata involved. null capability (not yet
+    // probed / local venv) keeps the tool on; execute degrades cleanly.
+    ...(hasAudioEmbeddings && analyzer.textEmbeddingAvailable() !== false ? {
+      searchBySound: tool({
+        description: 'Describe a SOUND in words and get tracks whose actual audio matches — e.g. "dusty late-night jazz with brushed drums", "aggressive distorted synths", "warm acoustic fingerpicking". Embeds the description through the CLAP text tower into the same space as the audio vectors. Use for sonic/texture asks the mood vocab and metadata can\'t express; searchByLyrics matches THEMES/lyrics, this matches TIMBRE/instrumentation/energy.',
+        // No k input, same rationale as the other similarity tools: wide fixed
+        // KNN (60), collect() caps to 8 fresh ones.
+        inputSchema: z.object({
+          query: z.string().min(3).describe('a description of how the music should sound'),
+        }),
+        execute: async ({ query }) => {
+          try {
+            await library.load();
+            // Short deadline: this runs mid-pick, and a bulk analysis pass may
+            // hold the backend's single-threaded worker — better to come back
+            // empty (the agent falls through to other tools) than stall the DJ.
+            const vecs = await analyzer.embedTexts([query.trim()], { timeoutMs: 20_000 });
+            if (!vecs || !vecs[0]) {
+              return { error: 'sound search unavailable right now — use tracksByMood, searchByLyrics or similarSongs' };
+            }
+            const list = library.tracksByAudioVector(vecs[0], 60);
+            const out = collect(list);
+            return out.length ? out : emptyResult(list.length, 'nothing in the library sounds like that — try tracksByMood or songsByGenre');
           }
           catch (err) { return { error: err.message }; }
         },

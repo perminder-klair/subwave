@@ -243,6 +243,12 @@ async def health():
         "analyze_vocal_capable": (
             analyzer_worker.ready_meta.get("vocal_activity_capable") if analyzer_worker.ready else None
         ),
+        # Whether the worker can embed TEXT through the CLAP text tower (same
+        # 512-d space as the audio vectors) — powers "sounds like ..." search
+        # and zero-shot mood scoring. Needs torch, so lean images report false.
+        "analyze_text_capable": (
+            analyzer_worker.ready_meta.get("text_embedding_capable") if analyzer_worker.ready else None
+        ),
     }
 
 
@@ -297,3 +303,25 @@ async def analyze(req: AnalyzeRequest):
     if "audio_embedding" in msg:
         out["audio_embedding"] = msg["audio_embedding"]
     return out
+
+
+class EmbedTextRequest(BaseModel):
+    # 1-64 non-empty strings (the worker enforces the same envelope). One
+    # request = one worker round-trip, so mood-vocabulary batches go in a
+    # single call.
+    texts: list[str]
+
+
+@app.post("/embed-text")
+async def embed_text(req: EmbedTextRequest):
+    """CLAP text-tower embeddings — 512-d vectors in the SAME space as the
+    audio vectors, so the controller can cosine them against stored track
+    embeddings (natural-language "sounds like ..." search, zero-shot mood
+    scoring). 500s cleanly on a lean build (no torch); the controller's client
+    treats any failure as "text embedding unavailable"."""
+    if not req.texts:
+        raise HTTPException(400, "missing 'texts'")
+    msg = await analyzer_worker.request({"id": "1", "texts": req.texts})
+    if not msg.get("ok"):
+        raise HTTPException(500, msg.get("error") or "embed-text failed")
+    return {"ok": True, "embeddings": msg.get("text_embeddings") or []}

@@ -300,6 +300,8 @@ async function analyzeViaLocalPath(path: string, opts: AnalyzeRequestOpts = {}):
 let _sidecarAudioCapable: boolean | null = null;
 // Same, for vocal-activity (Demucs) support — null until probed/absent field.
 let _sidecarVocalCapable: boolean | null = null;
+// Same, for the CLAP TEXT tower (embed-text) — null until probed/absent field.
+let _sidecarTextCapable: boolean | null = null;
 // The candidate base URL that last reported the 'analyze' engine — the one
 // sidecarRequest POSTs to. Set by sidecarReachable; '' until a probe succeeds.
 let _sidecarBase = '';
@@ -318,12 +320,14 @@ async function probeSidecar(url: string): Promise<boolean> {
       engines?: string[];
       analyze_audio_capable?: boolean | null;
       analyze_vocal_capable?: boolean | null;
+      analyze_text_capable?: boolean | null;
     };
     const reachable = !!body.ok && Array.isArray(body.engines) && body.engines.includes('analyze');
     if (reachable) {
       _sidecarBase = url;
       _sidecarAudioCapable = typeof body.analyze_audio_capable === 'boolean' ? body.analyze_audio_capable : null;
       _sidecarVocalCapable = typeof body.analyze_vocal_capable === 'boolean' ? body.analyze_vocal_capable : null;
+      _sidecarTextCapable = typeof body.analyze_text_capable === 'boolean' ? body.analyze_text_capable : null;
     }
     return reachable;
   } catch {
@@ -430,6 +434,90 @@ export function vocalActivityAvailable(): boolean | null {
 // driven on the coverage staleness cadence.
 export async function refreshCapabilities(): Promise<void> {
   if ((await resolveBackend()) === 'sidecar') await sidecarReachable();
+}
+
+// Whether the active backend can embed TEXT through the CLAP text tower (same
+// semantics as audioEmbeddingAvailable: null = unknown/local, false = sidecar
+// definitively can't — lean build or pre-text-tower image).
+export function textEmbeddingAvailable(): boolean | null {
+  return _backend === 'sidecar' ? _sidecarTextCapable : null;
+}
+
+// Coerce a worker text_embeddings payload to clean number[][] or null: one
+// finite-valued vector per input text, all the same length. Anything less is
+// treated as "no text embedding this pass" — callers degrade, never throw.
+function parseVectors(v: unknown, expected: number): number[][] | null {
+  if (!Array.isArray(v) || v.length !== expected) return null;
+  const out: number[][] = [];
+  for (const row of v) {
+    const vec = parseAudioEmbedding(row);
+    if (!vec || (out.length && vec.length !== out[0].length)) return null;
+    out.push(vec);
+  }
+  return out;
+}
+
+// Write a {texts} request to the local stdio worker and resolve its vectors.
+function localEmbedTexts(texts: string[], timeoutMs: number): Promise<number[][] | null> {
+  const id = `a${++reqSeq}`;
+  return new Promise<number[][] | null>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error('embed-text request timed out'));
+    }, timeoutMs);
+    pending.set(id, {
+      resolve: (msg: any) => resolve(parseVectors(msg.text_embeddings, texts.length)),
+      reject,
+      timer,
+    });
+    proc?.stdin.write(JSON.stringify({ id, texts }) + '\n');
+  });
+}
+
+// Embed a batch of texts through the CLAP TEXT tower — 512-d L2-normalised
+// vectors in the SAME space as the stored track audio vectors, so cosine
+// against them is meaningful (CLAP is contrastive audio–text). Used for
+// natural-language "sounds like ..." search and zero-shot mood scoring.
+// Returns null whenever the capability is absent (no backend, lean build, old
+// sidecar without /embed-text, worker without torch) — callers degrade to
+// their non-text behaviour, never throw. `timeoutMs` lets interactive callers
+// (a picker tool mid-pick) use a shorter deadline than a bulk pass.
+export async function embedTexts(
+  texts: string[],
+  opts: { timeoutMs?: number } = {},
+): Promise<number[][] | null> {
+  if (texts.length === 0) return [];
+  const timeoutMs = opts.timeoutMs ?? config.analyzer.requestTimeoutMs;
+  const backend = await resolveBackend();
+  if (!backend) return null;
+  if (backend === 'sidecar') {
+    if (_sidecarTextCapable === false) return null;
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${_sidecarBase}/embed-text`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texts }),
+        signal: ac.signal,
+      });
+      // 404 = pre-text-tower sidecar, 500 = lean build (no torch) — both mean
+      // "no text embeddings", not an error worth surfacing per call.
+      if (!res.ok) return null;
+      const body = (await res.json()) as any;
+      return body?.ok ? parseVectors(body.embeddings, texts.length) : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+  try {
+    if (!ready) await startWorker();
+    return await localEmbedTexts(texts, timeoutMs);
+  } catch {
+    return null;
+  }
 }
 
 // Analyse one track by id. Throws on failure — the caller (analyze pass) logs
