@@ -1,7 +1,8 @@
 import { ImageResponse } from 'next/og';
+import { DiscMark } from '../../../lib/discMark';
 
-// Renders the SUB/WAVE slash mark at any size, with an optional maskable
-// variant that respects the Android 80% safe zone (smaller slash + larger
+// Renders the SUB/WAVE disc mark at any size, with an optional maskable
+// variant that respects the Android 80% safe zone (smaller disc + larger
 // dark padding so it fills the adaptive icon mask without clipping).
 // Routes (all served as PNG):
 //   /icons/192            — manifest standard 192
@@ -29,35 +30,12 @@ export async function GET(_req, { params }) {
   if (!variant) return new Response('Not Found', { status: 404 });
 
   const { size, maskable } = variant;
-  // Standard icons fill more of the canvas; maskable shrinks to ~62% so the
-  // slash stays inside the launcher's safe zone after the mask is applied.
-  const slashHeight = maskable ? size * 0.42 : size * 0.62;
-  const slashWidth = maskable ? size * 0.085 : size * 0.12;
-  const radius = slashWidth * 0.45;
+  // Standard icons fill most of the canvas; maskable shrinks the disc to
+  // ~58% so it stays inside the launcher's safe zone after the mask.
+  const fill = maskable ? 0.58 : 0.8;
 
-  return new ImageResponse(
-    (
-      <div
-        style={{
-          width: size,
-          height: size,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: '#100e0c',
-        }}
-      >
-        <div
-          style={{
-            width: slashWidth,
-            height: slashHeight,
-            background: '#f3efe6',
-            transform: 'rotate(35deg)',
-            borderRadius: radius,
-          }}
-        />
-      </div>
-    ),
-    { width: size, height: size }
-  );
+  return new ImageResponse(<DiscMark size={size} fill={fill} />, {
+    width: size,
+    height: size,
+  });
 }
