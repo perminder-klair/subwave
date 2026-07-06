@@ -32,7 +32,13 @@ function spokePaths(r) {
 // `fill` (0-1) is how much of the canvas the disc occupies — standard icons
 // fill most of it (~0.8); maskable icons shrink so the disc stays inside the
 // Android launcher safe zone once the adaptive mask is applied.
-export function DiscMark({ size, fill = 0.8 }) {
+//
+// `opaque` fills the canvas behind the disc with the dark plate. Off by
+// default so the favicon / apple-touch / standard PWA icons read as a round
+// disc on transparent corners rather than a black square. Maskable icons must
+// set it — Android's adaptive mask needs a full-bleed opaque background or it
+// drops the icon onto a system backdrop and clips it.
+export function DiscMark({ size, fill = 0.8, opaque = false }) {
   const r = 50 * fill;
   const hub = r * 0.31;
   const wedges = spokePaths(r);
@@ -42,7 +48,7 @@ export function DiscMark({ size, fill = 0.8 }) {
         width: '100%',
         height: '100%',
         display: 'flex',
-        background: BG,
+        background: opaque ? BG : 'transparent',
       }}
     >
       <svg width={size} height={size} viewBox="0 0 100 100">
