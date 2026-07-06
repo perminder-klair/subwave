@@ -115,6 +115,24 @@ export async function skipTrack() {
   return sendCommand('skip', 2000);
 }
 
+// Force the auto.m3u fallback playlist to re-read from disk. The playlist
+// (id="auto" in radio.liq) uses reload_mode="watch", but that inotify watch can
+// silently orphan itself — the controller rewrites auto.m3u via atomic rename,
+// which swaps the inode each time, and a single missed watch means Liquidsoap
+// loops the last-loaded ~30-track snapshot forever until the container restarts
+// (issue #874). Calling the playlist's built-in `auto.reload` telnet command
+// after every write makes the reload deterministic instead of trusting inotify.
+// Best-effort: swallow errors (telnet may be unreachable in dev or mid-restart)
+// so a refresh never fails on the reload.
+export async function reloadAutoPlaylist(): Promise<boolean> {
+  try {
+    await sendCommand('auto.reload', 2000);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Start / stop / query the broadcast. radio.liq registers stream_on /
 // stream_off / stream_status server commands: stream_off shuts the Icecast
 // output down so the /stream.mp3 mount disconnects (the station goes off

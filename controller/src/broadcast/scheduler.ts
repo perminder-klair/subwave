@@ -11,11 +11,12 @@ import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { artistKey } from '../music/recency.js';
 import { normGenre, genreMatches, inYearRange, preferEnergy, preferEnergyStrict, preferMood } from '../music/show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
+import { createPoolBuilder } from './auto-pool.js';
+import { reloadAutoPlaylist } from './liquidsoap-control.js';
 import * as session from './session.js';
 import * as djAgent from './dj-agent.js';
 import { cleanupOldVoices } from '../audio/tts.js';
@@ -73,8 +74,12 @@ export async function refreshAutoPlaylist() {
 async function refreshAutoPlaylistInner() {
   const ctx = await getFullContext();
   const mood = ctx.dominantMood;
-  // Match the auto-DJ picker's window (dj-agent.pickViaAgent) — 12h.
-  const recent = queue.recentlyPlayedIds(12);
+  // Match the auto-DJ picker's window (dj-agent.pickViaAgent) — 12h. Keyed by
+  // BOTH id and lowercased `title|artist`: a library with duplicate copies of a
+  // song holds N Subsonic ids for it, so an id-only recency filter lets copies
+  // #2..N sail into the fallback and re-air a just-played track (issue #874).
+  // Mirrors collect() in the picker's tool layer.
+  const { ids: recentIds, keys: recentKeys } = queue.recentlyPlayed(12);
 
   // The fallback is what airs when the live AI picks pause (e.g. pause-when-empty
   // with zero listeners). When a show is scheduled for this hour, the fallback
@@ -137,26 +142,21 @@ async function refreshAutoPlaylistInner() {
   // genre/era it honours its track-length cap too.
   const maxDurationSec = settings.effectiveMaxTrackSec(show);
 
-  const pool: any[] = [];
-  const fromSource: Record<string, number> = { 'show-genre': 0, 'show-playlist': 0, mood: 0, playlist: 0, recent: 0, frequent: 0, starred: 0, random: 0 };
-  // Cap each artist's share of the pool. Without this, a deep-catalogue artist
-  // (many mood-tagged / starred / frequent tracks) can dominate the fallback
-  // playlist, so whenever Liquidsoap coasts on auto.m3u the same artist clusters
-  // on air — e.g. one artist's tracks airing 7× purely from this source.
-  const artistInPool = new Map<string, number>();
-  const take = (label: string, items: any[], cap: number) => {
-    let n = 0;
-    for (const t of items) {
-      if (n >= cap || pool.length >= TARGET_POOL) break;
-      if (!t?.id || recent.has(t.id) || pool.find((p: any) => p.id === t.id)) continue;
-      const ak = artistKey(t);
-      if (ak && (artistInPool.get(ak) || 0) >= AUTO_MAX_PER_ARTIST) continue;
-      pool.push({ ...t, _source: label });
-      fromSource[label] = (fromSource[label] || 0) + 1;
-      if (ak) artistInPool.set(ak, (artistInPool.get(ak) || 0) + 1);
-      n++;
-    }
-  };
+  // Balanced pool builder — applies the recency / dedup / artist-cap guards on
+  // every candidate. Recency and dedup key on BOTH id and `title|artist` so a
+  // library with duplicate copies of a song (N distinct ids for one track)
+  // can't slip a just-played track back in or stack copies into the pool (#874).
+  // The artist cap stops a deep-catalogue artist from dominating the fallback.
+  // Pure + unit-tested in scripts/auto-pool.test.ts.
+  const builder = createPoolBuilder({
+    recentIds,
+    recentKeys,
+    targetPool: TARGET_POOL,
+    maxPerArtist: AUTO_MAX_PER_ARTIST,
+  });
+  const pool = builder.pool;
+  const fromSource = builder.fromSource;
+  const take = builder.take;
 
   await library.load();
 
@@ -299,6 +299,14 @@ async function refreshAutoPlaylistInner() {
   // Atomic replace: Liquidsoap watches this file (reload_mode="watch"), so an
   // in-place write can trigger a reload that loads a truncated playlist.
   await writeFileAtomic(config.liquidsoap.autoPlaylist, lines.join('\n'));
+  // Deterministic reload: don't trust Liquidsoap's inotify watch. The atomic
+  // rename above swaps the file's inode, and if the watch ever orphans itself
+  // the fallback loops the last-loaded ~30-track snapshot forever until the
+  // container restarts (issue #874). Telnet `auto.reload` forces a re-read every
+  // time; best-effort so an unreachable mixer (dev / mid-restart) never fails
+  // the refresh — the watch remains as a backstop.
+  const reloaded = await reloadAutoPlaylist();
+  if (!reloaded) queue.log('scheduler', 'Auto-playlist written but telnet reload failed — relying on inotify watch');
 
   // Make the show-scoping visible to the operator (acceptance criteria #629):
   // a misspelled / absent strict genre that silently degraded, and a strict show
