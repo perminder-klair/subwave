@@ -20,18 +20,18 @@ export default function Navidrome() {
       <div className="bs-navidrome-grid">
         <div className="bs-navidrome-copy">
           <p className="bs-eyebrow">WORKS WITH YOUR LIBRARY</p>
-          <h2>We don't bring the music. You do.</h2>
+          <h2>We don&rsquo;t bring the music. You do.</h2>
           <p className="text-muted">
             SUB/WAVE is the DJ, the mixer, and the broadcast layer. The music
             comes from <strong className="text-ink">your</strong>{' '}
             Navidrome, the self-hosted music server with a Subsonic API. Run
             Navidrome on your homelab, point SUB/WAVE at it, and the DJ
-            picks from your collection. Nobody else's algorithm. Nobody else's catalogue.
+            picks from your collection. Nobody else&rsquo;s algorithm. Nobody else&rsquo;s catalogue.
           </p>
 
           <ul className="bs-navidrome-bullets">
             <li><strong>Your taste, not a recommendation engine.</strong> The picker reads the metadata you tagged (genres, moods, your own folders) and chooses from there.</li>
-            <li><strong>No licensing fees.</strong> You already own (or, you know, have on disk) the music. SUB/WAVE doesn't add a streaming bill on top.</li>
+            <li><strong>No licensing fees.</strong> You already own (or, you know, have on disk) the music. SUB/WAVE doesn&rsquo;t add a streaming bill on top.</li>
             <li><strong>Private by default.</strong> Listeners hit one MP3 stream. Nobody outside your stack ever sees your library, your tags, or who requested what.</li>
             <li><strong>BYO Subsonic-compatible server.</strong> Subsonic, Airsonic, Gonic, Funkwhale. If it speaks the Subsonic API, it works.</li>
             <li><strong>Scrobbles like a real station.</strong> Every spin can report to Last.fm or ListenBrainz, including your own self-hosted instance.</li>
@@ -39,7 +39,7 @@ export default function Navidrome() {
 
           <div className="bs-navidrome-cta">
             <Link href="/setup" className="bs-tune">
-              Connect your library &nbsp;→
+              Connect your library <span aria-hidden="true">&nbsp;→</span>
             </Link>
             <AnimatedLink
               href="https://www.navidrome.org/"

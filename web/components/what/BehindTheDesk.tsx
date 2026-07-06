@@ -66,6 +66,8 @@ export default function BehindTheDesk() {
         src="/screenshots/admin-dash.webp"
         alt="Admin — Dash"
         label="Admin — Dash"
+        width={2360}
+        height={1640}
         caption="The Dash panel: live status, the queue, the booth log, and manual voice control."
       />
 
@@ -86,6 +88,8 @@ export default function BehindTheDesk() {
                   alt={p.fig.label}
                   label={p.fig.label}
                   caption={p.fig.caption}
+                  width={2360}
+                  height={1640}
                 />
               </div>
             )}
@@ -98,12 +102,16 @@ export default function BehindTheDesk() {
           src="/screenshots/admin-library.webp"
           alt="Admin — Library"
           label="Admin — Library"
+          width={2360}
+          height={1640}
           caption="Library: search by text, mood, and energy, queue any track, and run the mood tagger."
         />
         <Figure
           src="/screenshots/admin-debug.webp"
           alt="Admin — Debug"
           label="Admin — Debug"
+          width={2360}
+          height={1640}
           caption="Debug: a health strip, Liquidsoap logs, and recent LLM calls, refreshed live."
         />
       </div>

@@ -12,9 +12,11 @@ export default function Coda() {
       </p>
 
       <div className="mt-2 flex flex-wrap items-center justify-center gap-4">
-        <Link href="/stations" className="bs-tune">▶ Browse the stations</Link>
+        <Link href="/stations" className="bs-tune">
+          <span aria-hidden="true">▶ </span>Browse the stations
+        </Link>
         <Link href="/setup" className="bs-link text-[13px] font-bold tracking-[0.12em] uppercase">
-          Run your own station →
+          Run your own station <span aria-hidden="true">→</span>
         </Link>
       </div>
 
@@ -26,7 +28,7 @@ export default function Coda() {
           rel="noreferrer"
           className="bs-link font-semibold tracking-[inherit] text-ink"
         >
-          App Store ↗
+          App Store <span aria-hidden="true">↗</span>
         </a>
         <span aria-hidden>·</span>
         <a
@@ -35,7 +37,7 @@ export default function Coda() {
           rel="noreferrer"
           className="bs-link font-semibold tracking-[inherit] text-ink"
         >
-          Google Play ↗
+          Google Play <span aria-hidden="true">↗</span>
         </a>
       </p>
     </EditorialReveal>

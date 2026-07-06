@@ -38,7 +38,11 @@ export default function UnderTheHood() {
                 {b.note}
               </div>
             </div>
-            {i < BOXES.length - 1 && <div className="bs-arrow">⟶</div>}
+            {i < BOXES.length - 1 && (
+              <div className="bs-arrow" aria-hidden="true">
+                ⟶
+              </div>
+            )}
           </Fragment>
         ))}
       </div>

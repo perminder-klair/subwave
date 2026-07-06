@@ -89,7 +89,7 @@ export default function PlayerShowcase({ stations = [] }: PlayerShowcaseProps) {
     <div className="bs-frame">
       {visible.length > 1 && (
         <div className="bs-frame-tabs" role="tablist" aria-label="Stations">
-          {visible.map((s) => {
+          {visible.map((s, i) => {
             const selected = s.slug === active?.slug;
             return (
               <button
@@ -97,9 +97,34 @@ export default function PlayerShowcase({ stations = [] }: PlayerShowcaseProps) {
                 type="button"
                 role="tab"
                 aria-selected={selected}
+                tabIndex={selected ? 0 : -1}
                 className="bs-frame-tab"
                 data-active={selected || undefined}
                 onClick={() => setActiveSlug(s.slug)}
+                onKeyDown={(e) => {
+                  // Roving-tabindex tablist: arrows move between station tabs,
+                  // selection follows focus (each tab swap is cheap — a remount
+                  // of the embedded player).
+                  const delta =
+                    e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+                  const next =
+                    delta !== 0
+                      ? (i + delta + visible.length) % visible.length
+                      : e.key === 'Home'
+                        ? 0
+                        : e.key === 'End'
+                          ? visible.length - 1
+                          : null;
+                  const target = next === null ? undefined : visible[next];
+                  if (next === null || !target) return;
+                  e.preventDefault();
+                  setActiveSlug(target.slug);
+                  const tabs =
+                    e.currentTarget.parentElement?.querySelectorAll<HTMLElement>(
+                      '[role="tab"]',
+                    );
+                  tabs?.[next]?.focus();
+                }}
                 title={s.genre || s.name}
               >
                 <span className="bs-frame-tab-dot" aria-hidden="true" />

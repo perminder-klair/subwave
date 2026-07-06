@@ -67,6 +67,8 @@ export default function MakeARequest() {
             label="Player — Request a Song"
             caption="The request drawer: type a song, get an instant ack, watch the match land."
             ratio="9 / 16"
+            width={828}
+            height={1792}
           />
         </div>
       </div>
