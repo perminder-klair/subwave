@@ -536,11 +536,8 @@ function SessionChat({ session }: { session: DebugSession }) {
         <div
           key={i}
           className={cn(
-            // 178px fits the widest role·kind label, 'segment·album-anniversary'
-            // (~170px at text-[9px]/tracking-[0.12em]/uppercase) + breathing room.
-            // Each row is its own grid, so a fixed width is needed to keep the
-            // kind column aligned across rows — bump it if a longer kind is added.
-            'grid grid-cols-[auto_178px_1fr] items-baseline gap-2 py-0.5 text-[12px]',
+            // Single column: time, role·kind, and text stack vertically per turn.
+            'grid grid-cols-1 gap-0.5 py-0.5 text-[12px]',
             i < msgs.length - 1 && 'border-b border-dashed border-separator-strong',
           )}
         >

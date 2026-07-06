@@ -3141,8 +3141,8 @@ html.lite *::after {
 /* Log line */
 .admin-root .log {
     display: grid;
-    grid-template-columns: 64px 96px 1fr;
-    gap: 12px;
+    grid-template-columns: 1fr;
+    gap: 2px;
     font-size: 11px;
     line-height: 1.6;
     padding: 4px 0;
