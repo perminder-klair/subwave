@@ -4,7 +4,7 @@
 // These functions are side-effect-free and unit-pinned here so a wiring slip
 // (a provider routed to the wrong path, a thinking knob flipped, the failover
 // gate widened) fails an assert BEFORE it ever reaches a model. Matches the
-// node:assert-via-tsx style of scripts/picker-recency-regression.ts.
+// node:assert-via-tsx style of scripts/picker-recency-regression.test.ts.
 
 import assert from 'node:assert/strict';
 import { generateText, APICallError } from 'ai';

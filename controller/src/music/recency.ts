@@ -96,7 +96,7 @@ export function recencyWindowsForLibrary(distinctArtists: number | null | undefi
 }
 
 // Clamp a configured count-based no-repeat window to what the tagged library
-// can safely support. Pure + unit-pinned (picker-recency-regression.ts).
+// can safely support. Pure + unit-pinned (picker-recency-regression.test.ts).
 //   - configuredN <= 0, or an unknown/empty library  → 0 (guard self-disables)
 //   - never block more than NO_REPEAT_MAX_LIBRARY_FRACTION of the library
 //   - if the result would be below NO_REPEAT_MIN_EFFECTIVE              → 0
