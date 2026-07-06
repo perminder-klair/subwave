@@ -11,11 +11,11 @@ import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { artistKey, trackKey } from '../music/recency.js';
 import { normGenre, genreMatches, inYearRange, preferEnergy, preferEnergyStrict, preferMood } from '../music/show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
+import { createPoolBuilder } from './auto-pool.js';
 import { reloadAutoPlaylist } from './liquidsoap-control.js';
 import * as session from './session.js';
 import * as djAgent from './dj-agent.js';
@@ -142,40 +142,21 @@ async function refreshAutoPlaylistInner() {
   // genre/era it honours its track-length cap too.
   const maxDurationSec = settings.effectiveMaxTrackSec(show);
 
-  const pool: any[] = [];
-  const fromSource: Record<string, number> = { 'show-genre': 0, 'show-playlist': 0, mood: 0, playlist: 0, recent: 0, frequent: 0, starred: 0, random: 0 };
-  // Cap each artist's share of the pool. Without this, a deep-catalogue artist
-  // (many mood-tagged / starred / frequent tracks) can dominate the fallback
-  // playlist, so whenever Liquidsoap coasts on auto.m3u the same artist clusters
-  // on air — e.g. one artist's tracks airing 7× purely from this source.
-  const artistInPool = new Map<string, number>();
-  // Track what's already in the pool by BOTH id and `title|artist` key, so N
-  // duplicate copies of one song (N distinct ids) can't each claim a slot — the
-  // fallback would otherwise stack the same track and defeat the anti-repeat the
-  // recency filter above provides (issue #874). Key only used when the song has
-  // a title (mirrors queue.recentlyPlayed's keyOf guard).
-  const poolIds = new Set<string>();
-  const poolKeys = new Set<string>();
-  const take = (label: string, items: any[], cap: number) => {
-    let n = 0;
-    for (const t of items) {
-      if (n >= cap || pool.length >= TARGET_POOL) break;
-      if (!t?.id) continue;
-      const tk = t.title ? trackKey(t) : '';
-      // Recency: block by id AND title|artist key (defeats duplicate copies).
-      if (recentIds.has(t.id) || (tk && recentKeys.has(tk))) continue;
-      // Pool dedup: by id AND key, so copies #2..N don't re-fill the pool.
-      if (poolIds.has(t.id) || (tk && poolKeys.has(tk))) continue;
-      const ak = artistKey(t);
-      if (ak && (artistInPool.get(ak) || 0) >= AUTO_MAX_PER_ARTIST) continue;
-      pool.push({ ...t, _source: label });
-      poolIds.add(t.id);
-      if (tk) poolKeys.add(tk);
-      fromSource[label] = (fromSource[label] || 0) + 1;
-      if (ak) artistInPool.set(ak, (artistInPool.get(ak) || 0) + 1);
-      n++;
-    }
-  };
+  // Balanced pool builder — applies the recency / dedup / artist-cap guards on
+  // every candidate. Recency and dedup key on BOTH id and `title|artist` so a
+  // library with duplicate copies of a song (N distinct ids for one track)
+  // can't slip a just-played track back in or stack copies into the pool (#874).
+  // The artist cap stops a deep-catalogue artist from dominating the fallback.
+  // Pure + unit-tested in scripts/auto-pool.test.ts.
+  const builder = createPoolBuilder({
+    recentIds,
+    recentKeys,
+    targetPool: TARGET_POOL,
+    maxPerArtist: AUTO_MAX_PER_ARTIST,
+  });
+  const pool = builder.pool;
+  const fromSource = builder.fromSource;
+  const take = builder.take;
 
   await library.load();
 
