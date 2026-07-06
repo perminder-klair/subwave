@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "subwave": {
+      "command": "node",
+      "args": ["mcp-subwave/dist/index.js"],
+      "env": {
+        "SUBWAVE_API_URL": "http://localhost:7701"
+      }
+    }
+  }
+}

@@ -52,7 +52,7 @@ docker compose up -d --build broadcast      # after radio.liq / icecast.xml.temp
 
 `web` runs as a Next.js dev server (`npm run dev`) and hot-reloads in dev; prod builds the web image and needs a rebuild like the others.
 
-No test runner. `controller/` and `web/` each expose `npm run lint` (`eslint . && tsc --noEmit`); CI runs both on every PR (`.github/workflows/lint.yml`) and they are the merge gate.
+No test runner. `controller/` and `web/` each expose `npm run lint` (`eslint . && tsc --noEmit`), and `mcp-subwave/` exposes `npm run lint` (`tsc --noEmit`); CI runs all three on every PR (`.github/workflows/lint.yml`) and they are the merge gate.
 
 ## Architecture
 
