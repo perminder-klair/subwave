@@ -105,6 +105,9 @@ export function get(songId: string): any {
     structure: t.structure,
     vocalRanges: t.vocalRanges, // [] = instrumental, null = not computed
     paceMean: paceMeanOf(t.pace),
+    // Measured ending (fade vs cold, tail loudness/tempo/grid) — feeds the
+    // queue's ending-aware exit canvas + effect gating. null = no signal.
+    outro: t.outro,
   };
 }
 

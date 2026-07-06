@@ -438,13 +438,17 @@ class Queue {
 
   // Resolve {bpm, key} for a queued track: from the track object if it carries
   // analysis, else a library lookup (queued items hold only id/title/artist).
-  mixAnalysisFor(track: any): { bpm: number | null; key: string | null } {
+  mixAnalysisFor(track: any): mix.Analysis {
     if (!track) return { bpm: null, key: null };
-    if (track.bpm != null || track.musicalKey != null) {
-      return { bpm: track.bpm ?? null, key: track.musicalKey ?? null };
-    }
     const rec = track.id ? library.get(track.id) : null;
-    return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
+    // Measured ending (outro analysis) — track object first, else the library
+    // record. Feeds the ending-aware exit canvas + the chop-over-fade veto.
+    const outro = track.outro ?? rec?.outro ?? null;
+    const ending = outro?.ending === 'fade' || outro?.ending === 'cold' ? outro.ending : null;
+    if (track.bpm != null || track.musicalKey != null) {
+      return { bpm: track.bpm ?? null, key: track.musicalKey ?? null, ending };
+    }
+    return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null, ending };
   }
 
   // Resolve a track's integrated loudness + measured peak (track object first,
@@ -588,6 +592,32 @@ class Queue {
     if (cappedExit && !item.track.washout && !item.track.loop) {
       item.track.washout = true;
       item.track.washoutAuto = true;
+    }
+
+    // Ending-aware exit canvas (feature: outro analysis). The pair-sized
+    // feature-1 value above can't be applied (#749), but a track's measured
+    // ENDING is a property of the track alone, so its OWN exit canvas can be
+    // stamped correctly here: a fade rides out long under whatever follows, a
+    // cold end cuts tight. Skipped for a capped exit (the real ending never
+    // airs — the auto-washout owns that cut); a washout/loop stamped below
+    // overwrites it (those gestures own the exit).
+    if (!cappedExit) {
+      const outro = item.track.outro ?? (item.track.id ? library.get(item.track.id)?.outro : null) ?? null;
+      if (outro) {
+        const windDownSec = durSec > 0 && Number.isFinite(outro.startMs)
+          ? Math.max(0, durSec - outro.startMs / 1000)
+          : null;
+        // Bar-snap to the TAIL tempo when measured — outros drift/ritard.
+        const exitSecs = mix.endingCrossSecondsFor(
+          { bpm: outro.bpm ?? next.bpm, key: next.key, ending: outro.ending },
+          windDownSec,
+          maxSec,
+        );
+        if (exitSecs != null) {
+          item.track.crossSec = exitSecs;
+          this.log('mix', `exit canvas ${exitSecs}s (${outro.ending} ending) → ${item.track.title}`);
+        }
+      }
     }
 
     // The two flags are independent boundaries — sweep shapes this pick's

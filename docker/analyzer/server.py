@@ -265,6 +265,10 @@ class AnalyzeRequest(BaseModel):
     embed: bool | None = None
     # Same, for Demucs vocal-activity ranges (ANALYZE_VOCAL_ACTIVITY default).
     vocal: bool | None = None
+    # Whether `path` holds the COMPLETE file (the controller's capped prefetch
+    # knows). False vetoes outro analysis — a truncated file's "tail" is
+    # mid-song audio. None = unknown; the worker's decode-length check guards.
+    complete: bool | None = None
 
 
 @app.post("/analyze")
@@ -279,6 +283,8 @@ async def analyze(req: AnalyzeRequest):
         payload["embed"] = req.embed
     if req.vocal is not None:
         payload["vocal"] = req.vocal
+    if req.complete is not None:
+        payload["complete"] = req.complete
     msg = await analyzer_worker.request(payload)
     if not msg.get("ok"):
         raise HTTPException(500, msg.get("error") or "analyze failed")
@@ -294,7 +300,7 @@ async def analyze(req: AnalyzeRequest):
     # them to null.
     for k in (
         "loudness_lufs", "peak_db", "sections", "vocal_ranges",
-        "pace_curve", "beats", "bars", "key_ranges",
+        "pace_curve", "beats", "bars", "key_ranges", "outro",
     ):
         if k in msg:
             out[k] = msg[k]

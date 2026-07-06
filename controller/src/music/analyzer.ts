@@ -78,6 +78,21 @@ export interface AnalysisResult {
   // treats null as "no audio vector this pass", so a backend without CLAP is
   // byte-for-byte today's behaviour.
   audioEmbedding: number[] | null;
+  // Outro (tail) features — measured off the END of a COMPLETE file. null when
+  // not computed (truncated download, short track, decode failure); consumers
+  // treat null as "no outro signal, behave as today".
+  outro: OutroInfo | null;
+}
+
+// The outgoing track's measured ending — what actually decides whether a
+// transition lands. Timestamps are absolute ms into the track.
+export interface OutroInfo {
+  startMs: number;             // where the wind-down starts
+  ending: 'fade' | 'cold';     // fades to silence vs ends at level
+  lufs: number | null;         // integrated loudness of the tail (BS.1770)
+  bpm: number | null;          // tail tempo (outros drift/ritard vs the lead)
+  beats: number[] | null;      // tail beat grid, absolute ms
+  bars: number[] | null;       // tail downbeat (bar) grid, absolute ms
 }
 
 // Coerce a worker numeric field to a finite number or null. The worker omits
@@ -152,6 +167,23 @@ function parsePaceCurve(v: unknown): PaceSpan[] | null {
     out.push({ startMs, endMs, value });
   }
   return out.length ? out : null;
+}
+
+// Coerce the worker's outro object to a clean OutroInfo or null. The worker
+// omits it entirely when not computed; startMs + a valid ending are the
+// required core, everything else is optional garnish.
+function parseOutro(v: unknown): OutroInfo | null {
+  const startMs = parseFinite((v as any)?.startMs);
+  const ending = (v as any)?.ending;
+  if (startMs == null || startMs < 0 || (ending !== 'fade' && ending !== 'cold')) return null;
+  return {
+    startMs: Math.round(startMs),
+    ending,
+    lufs: parseFinite((v as any)?.lufs),
+    bpm: parseFinite((v as any)?.bpm),
+    beats: parseMsList((v as any)?.beats),
+    bars: parseMsList((v as any)?.bars),
+  };
 }
 
 // Coerce the worker's audio_embedding field to a clean number[] or null. The
@@ -246,6 +278,10 @@ export interface AnalyzeRequestOpts {
   // Force a (lazy) Demucs load for vocal-activity ranges even when the backend's
   // ANALYZE_VOCAL_ACTIVITY env is off — the admin/backfill path, mirroring embed.
   vocal?: boolean;
+  // Whether the handed-over `path` holds the COMPLETE file (downloadCapped
+  // knows). false vetoes outro analysis — a truncated file's "tail" is
+  // mid-song audio. Omitted on the url path: the backend's own fetch decides.
+  complete?: boolean;
 }
 
 // Write a request to the local stdio worker and resolve its response. The
@@ -273,6 +309,7 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
           bars: parseMsList(msg.bars),
           keyRanges: parseKeyRanges(msg.key_ranges),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
+          outro: parseOutro(msg.outro),
         }),
       reject,
       timer,
@@ -374,6 +411,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
       bars: parseMsList(resBody.bars),
       keyRanges: parseKeyRanges(resBody.key_ranges),
       audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
+      outro: parseOutro(resBody.outro),
     };
   } finally {
     clearTimeout(t);
@@ -559,12 +597,16 @@ function subsonicErrorMessage(body: string): string {
 }
 
 // Download a track's audio to a capped temp file on the shared state volume
-// and return the absolute path. The controller does this AHEAD of the
+// and return {path, complete}. The controller does this AHEAD of the
 // backend's compute so network fetch (controller) overlaps DSP (backend) —
 // the path is valid in both containers because the shared dir mounts at the
-// same location. Caps bytes + applies the analyzer request timeout. Throws
-// on any error; the caller falls back to the url path for that one track.
-export async function downloadCapped(songId: string): Promise<string> {
+// same location. Caps bytes + applies the analyzer request timeout; `complete`
+// is false when the cap truncated the file (vetoes outro analysis — the
+// file's "tail" would be mid-song audio). Throws on any error; the caller
+// falls back to the url path for that one track.
+export async function downloadCapped(
+  songId: string,
+): Promise<{ path: string; complete: boolean }> {
   mkdirSync(ANALYZE_TMP_DIR, { recursive: true });
   const dest = `${ANALYZE_TMP_DIR}/${encodeURIComponent(songId)}.audio`;
   const url = subsonic.getRawStreamUrl(songId);
@@ -619,7 +661,10 @@ export async function downloadCapped(songId: string): Promise<string> {
         );
       }
     }
-    return dest;
+    // A read that hit the cap stopped early — the tail is missing. (A file of
+    // exactly cap bytes is flagged incomplete too; erring that way only skips
+    // outro analysis, never mis-measures it.)
+    return { path: dest, complete: read < ANALYZE_MAX_BYTES };
   } finally {
     clearTimeout(t);
   }
