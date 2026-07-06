@@ -1232,6 +1232,22 @@ export function idsNeedingAudioMoods(): string[] {
   return rows.map(r => r.id);
 }
 
+// The full {mood: cosine} score map behind a track's audio_moods — the
+// dossier/tuning surface only (hot paths read the pre-picked audio_moods
+// labels; this column is never parsed on a playback path).
+export function getAudioMoodScores(id: string): Record<string, number> | null {
+  const row = requireDb()
+    .prepare('SELECT audio_mood_scores_json AS s FROM tracks WHERE id = ?')
+    .get(id) as { s: string | null } | undefined;
+  if (!row?.s) return null;
+  try {
+    const v = JSON.parse(row.s);
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 // The vocabulary hash the current audio_moods were scored with, or null (never
 // scored / legacy meta row). A mismatch re-scores everything.
 export function getAudioMoodVocabHash(): string | null {

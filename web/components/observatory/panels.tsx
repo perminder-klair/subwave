@@ -216,7 +216,9 @@ function SongShape({ detail, durationSec }: { detail: TrackDetail; durationSec: 
   const total = Math.max(1, durationSec != null ? durationSec * 1000 : 0, ...spans.map((s) => s.endMs));
   const pct = (ms: number) => Math.max(0, Math.min(100, (ms / total) * 100));
 
-  if (!pace.length && !structure.length && vocal == null && !keys.length) {
+  const outro = d.outro ?? null;
+
+  if (!pace.length && !structure.length && vocal == null && !keys.length && !outro) {
     return <span className="t-caption ad-muted">no acoustic analysis</span>;
   }
 
@@ -246,6 +248,13 @@ function SongShape({ detail, durationSec }: { detail: TrackDetail; durationSec: 
           )}
           {structure.map((s, i) => (i === 0 ? null : <span key={i} className="ss-sect" style={{ left: pct(s.startMs) + '%' }} />))}
           {introPct != null && <span className="ss-intro" style={{ left: introPct + '%' }} title="intro ends" />}
+          {outro && (
+            <span
+              className={outro.ending === 'fade' ? 'ss-outro ss-outro-fade' : 'ss-outro'}
+              style={{ left: pct(outro.startMs) + '%', width: 100 - pct(outro.startMs) + '%' }}
+              title={`${outro.ending} ending${outro.lufs != null ? ` · tail ${outro.lufs.toFixed(1)} LUFS` : ''}${outro.bpm != null ? ` · tail ${outro.bpm} bpm` : ''}`}
+            />
+          )}
         </div>
       </div>
 
@@ -298,6 +307,17 @@ function SongShape({ detail, durationSec }: { detail: TrackDetail; durationSec: 
               {k.tonic} {k.mode === 'major' ? 'maj' : 'min'}
             </span>
           ))}
+        </div>
+      )}
+
+      {outro && (
+        <div className="ss-legend">
+          <span className="ss-legend-item">
+            <span className={outro.ending === 'fade' ? 'ss-swatch ss-swatch-outro fade' : 'ss-swatch ss-swatch-outro'} />
+            {outro.ending === 'fade' ? 'fade-out ending' : 'cold ending'}
+            {outro.lufs != null ? ` · tail ${outro.lufs.toFixed(1)} LUFS` : ''}
+            {outro.bpm != null ? ` · tail ${outro.bpm} bpm` : ''}
+          </span>
         </div>
       )}
     </div>
@@ -553,6 +573,24 @@ export function Dossier({
             <span className="t-caption ad-muted">—</span>
           )}
         </div>
+        {d?.audioMoods && d.audioMoods.length > 0 && (
+          <>
+            <div className="t-caption ad-muted" style={{ margin: '12px 0 8px' }}>
+              SOUNDS LIKE
+            </div>
+            <div className="pill-row">
+              {d.audioMoods.map((m) => (
+                <span
+                  key={m}
+                  className="ad-pill"
+                  title={d.audioMoodScores?.[m] != null ? `cosine ${d.audioMoodScores[m]}` : undefined}
+                >
+                  {m}
+                </span>
+              ))}
+            </div>
+          </>
+        )}
         {lastfm && lastfm.length > 0 && (
           <>
             <div className="t-caption ad-muted" style={{ margin: '12px 0 8px' }}>
