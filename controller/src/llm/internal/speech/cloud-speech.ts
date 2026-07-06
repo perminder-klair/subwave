@@ -71,9 +71,8 @@ function isoCodeFor(name: string): string | null {
 // a pronunciation directive so a non-English script isn't read with English
 // phonetics (issue #558). ElevenLabs has no free-text field — it honours only an
 // ISO `language` code, so the soul can't ride there. openai-compatible servers
-// vary on which fields they accept (the same reason `speed` is skipped for
-// them), so they get no hint. No soul and no language → {} so the bare default
-// path stays byte-identical.
+// vary on which fields they accept, so they get no hint. No soul and no
+// language → {} so the bare default path stays byte-identical.
 function deliveryHint(
   { language, soul }: { language?: string; soul?: string },
   provider: string,
@@ -188,12 +187,14 @@ export async function speak(
   // Speech rate — the per-call speedScale (daypart energy) composes on top of
   // CLOUD_TTS_SPEED / TTS_SPEED, then clamped to the provider's range. Only
   // sent when it differs from default so default stations are unaffected and
-  // providers that ignore the field never see it. Skipped for openai-compatible
-  // — local engines vary on whether they accept `speed`.
+  // providers that ignore the field never see it. openai-compatible servers
+  // get it too (issue: the admin speed slider was silently inert for them):
+  // the common self-hosted /v1/audio/speech servers (Kokoro-FastAPI,
+  // openedai-speech, Chatterbox shims) honour `speed`, the rest ignore the
+  // extra field, and the non-unity guard keeps untouched stations sending
+  // exactly the request they always did.
   const isCompat = c.provider === 'openai-compatible';
-  const speed = isCompat
-    ? 1.0
-    : clampSpeed(config.tts.cloudSpeed * (speedScale != null ? speedScale : 1), c.provider);
+  const speed = clampSpeed(config.tts.cloudSpeed * (speedScale != null ? speedScale : 1), c.provider);
 
   const result = await generateSpeech({
     model: speechModel(c),
