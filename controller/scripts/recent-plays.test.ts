@@ -3,7 +3,7 @@
 // recent-plays sidecar from double-counting every play (live-repeats fix).
 // Run: `tsx scripts/recent-plays.test.ts`.
 //
-// node:assert-via-tsx style, matching scripts/picker-recency-regression.ts and
+// node:assert-via-tsx style, matching scripts/picker-recency-regression.test.ts and
 // scripts/request-dedup.test.ts.
 
 import assert from 'node:assert/strict';

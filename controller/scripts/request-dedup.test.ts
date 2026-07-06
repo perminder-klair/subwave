@@ -10,7 +10,7 @@
 // test and upcoming.push()), with an allowDuplicate opt-out for explicit
 // operator actions. These asserts pin every branch of that behaviour.
 //
-// node:assert-via-tsx style, matching scripts/picker-recency-regression.ts.
+// node:assert-via-tsx style, matching scripts/picker-recency-regression.test.ts.
 
 import assert from 'node:assert/strict';
 import { queue } from '../src/broadcast/queue.js';
