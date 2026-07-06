@@ -555,7 +555,7 @@ export async function runProgrammeIntro() {
   await session.maybeRoll(ctx);
   await programme.ensurePlan(ctx);
   const out = await programme.runIntro(queue, ctx);
-  session.markProgrammeBeat('intro');
+  programme.markIntroAired();
   return out;
 }
 

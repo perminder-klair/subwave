@@ -180,18 +180,26 @@ export async function maybeRunIntro(queue: any, ctx: any, now = new Date()): Pro
 
   // A persona handoff at this boundary already opened the show on air.
   if (ep.sess.rolledFrom && ep.sess.handoffAired) {
-    session.markProgrammeBeat('intro');
-    prog.introAiredAt = new Date().toISOString();
-    session.attachProgramme(prog);
+    markIntroAired();
     return false;
   }
   if (!djCallsAllowed() || !optionalSegmentsAllowed()) return false;  // stays pending — may air later this hour
 
+  markIntroAired();
+  await runIntro(queue, ctx, now);
+  return true;
+}
+
+// Mark the intro beat + stamp its air time (suppressHourly keys off the
+// stamp). One helper so the autonomous path and the manual runner agree —
+// a manual intro must also stand the generic hourly check down (issue seen
+// live: manual intro at :52, generic hourly still aired at the next :00).
+export function markIntroAired() {
+  const prog = session.getProgramme();
+  if (!prog) return;
   session.markProgrammeBeat('intro');
   prog.introAiredAt = new Date().toISOString();
   session.attachProgramme(prog);
-  await runIntro(queue, ctx, now);
-  return true;
 }
 
 // Gate-free intro core — also the manual /dj/segment runner (via scheduler's
