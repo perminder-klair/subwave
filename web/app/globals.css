@@ -3141,8 +3141,10 @@ html.lite *::after {
 /* Log line */
 .admin-root .log {
     display: grid;
-    grid-template-columns: 1fr;
-    gap: 2px;
+    grid-template-columns: auto 1fr;
+    align-items: baseline;
+    column-gap: 8px;
+    row-gap: 2px;
     font-size: 11px;
     line-height: 1.6;
     padding: 4px 0;
@@ -3152,12 +3154,14 @@ html.lite *::after {
     color: var(--muted);
 }
 .admin-root .log .k {
+    justify-self: start;
     font-size: 9px;
     letter-spacing: 0.22em;
     text-transform: uppercase;
     font-weight: 700;
 }
 .admin-root .log .msg {
+    grid-column: 1 / -1;
     color: var(--ink);
     word-break: break-word;
 }
