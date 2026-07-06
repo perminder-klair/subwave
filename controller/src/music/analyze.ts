@@ -233,9 +233,9 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // default --unhandled-rejections=throw crashed the whole pass when a one-ahead
   // prefetch rejected during the previous track's compute window. The .then(_,_)
   // attaches handlers immediately, so the rejection is always owned.
-  type Prefetch = Promise<{ path: string } | { err: any }>;
+  type Prefetch = Promise<{ path: string; complete: boolean } | { err: any }>;
   const prefetch = (songId: string): Prefetch =>
-    analyzer.downloadCapped(songId).then((path) => ({ path }), (err) => ({ err }));
+    analyzer.downloadCapped(songId).then((r) => r, (err) => ({ err }));
   let inflight: Prefetch | null = ids.length > 0 ? prefetch(ids[0]) : null;
 
   for (let i = 0; i < ids.length; i++) {
@@ -246,6 +246,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     inflight = i + 1 < ids.length ? prefetch(ids[i + 1]) : null;
 
     let localPath: string | null = null;
+    let localComplete: boolean | undefined;
     try {
       const settled = downloadPromise ? await downloadPromise : null;
       if (settled && 'err' in settled) {
@@ -259,6 +260,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         localPath = null;
       } else {
         localPath = settled?.path ?? null;
+        localComplete = settled && 'complete' in settled ? settled.complete : undefined;
       }
       // embed:true makes the backend lazy-load CLAP even when its own env
       // doesn't have ANALYZE_AUDIO_EMBEDDING (the admin-toggle path); omitted
@@ -268,7 +270,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       // mirroring embed; omitted when vocal activity is off.
       const vocal = vocalBackfill ? true : undefined;
       const a = localPath
-        ? await analyzer.analyzePath(localPath, { embed, vocal })
+        ? await analyzer.analyzePath(localPath, { embed, vocal, complete: localComplete })
         : await analyzer.analyze(id, { embed, vocal });
       db.upsertTrackAnalysis(id, {
         bpm: a.bpm,
@@ -283,6 +285,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         bars: a.bars,
         keyRanges: a.keyRanges,
         vocalRanges: a.vocalRanges,
+        outro: a.outro,
       });
       if (a.vocalRanges != null) vocalAnalyzed += 1;
       // Opportunistically store the CLAP audio vector whenever the backend

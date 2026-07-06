@@ -114,6 +114,20 @@ export interface TrackRecord {
   // the track's CLAP audio vector (music/audio-moods.ts). [] until scored;
   // sound-derived, so they complement (never replace) the LLM `moods`.
   audioMoods: string[];
+  // Outro (tail) features — the track's measured ending (fade vs cold, tail
+  // loudness/tempo/bar grid). null → no outro signal, today's transitions.
+  outro: TrackOutro | null;
+}
+
+// The measured ending of a track — what the crossfade seam actually lands on.
+// Timestamps are absolute ms into the track.
+export interface TrackOutro {
+  startMs: number;           // where the wind-down starts
+  ending: 'fade' | 'cold';   // fades to silence vs ends at level
+  lufs: number | null;       // integrated tail loudness (BS.1770)
+  bpm: number | null;        // tail tempo (outros drift/ritard vs the lead)
+  beats: number[] | null;    // tail beat grid (ms)
+  bars: number[] | null;     // tail downbeat grid (ms)
 }
 
 // A key over a time range: tonic note (sharps) + mode.
@@ -486,6 +500,14 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
       ALTER TABLE audio_embedding_meta ADD COLUMN mood_vocab_hash TEXT;
     `);
     d.pragma('user_version = 11');
+  }
+
+  if (userVersion < 12) {
+    // Outro (tail) features (JSON {startMs,ending,lufs?,bpm?,beats?,bars?}) —
+    // the outgoing track's measured ending, analysed off the END of a complete
+    // file. Nullable; NULL → no outro signal, today's transition behaviour.
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN outro_json TEXT;`);
+    d.pragma('user_version = 12');
   }
 
   // Reconcile the requested embedding dim against what physically exists.
@@ -902,6 +924,10 @@ export interface TrackAnalysisWrite {
   beats?: number[] | null;
   bars?: number[] | null;
   keyRanges?: TrackKeyRange[] | null;
+  // Outro features — null keeps an existing value (COALESCE, like vocal): a
+  // pass that couldn't compute the tail (capped download, url path) must not
+  // wipe an outro a previous complete-file pass measured.
+  outro?: TrackOutro | null;
 }
 
 // Write acoustic-analysis results for a track. Stamps ANALYSIS_VERSION so
@@ -927,6 +953,9 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         -- existing vocal_ranges_json. A non-null value (incl. "[]" for an
         -- analysed instrumental) overwrites; null keeps what's there.
         vocal_ranges_json   = COALESCE(?, vocal_ranges_json),
+        -- Same for the outro: only computable off a COMPLETE file, so a pass
+        -- that analysed a capped download passes null and keeps what's there.
+        outro_json          = COALESCE(?, outro_json),
         analysis_version    = ?
       WHERE id = ?`,
     )
@@ -943,6 +972,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       a.bars && a.bars.length ? JSON.stringify(a.bars) : null,
       a.keyRanges && a.keyRanges.length ? JSON.stringify(a.keyRanges) : null,
       a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
+      a.outro != null ? JSON.stringify(a.outro) : null,
       ANALYSIS_VERSION,
       id,
     );
@@ -970,7 +1000,7 @@ export function clearAnalysis(opts: { keepVocal?: boolean } = {}): void {
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
       analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
       structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
-      key_ranges_json = NULL,${vocalCol} analysis_version = NULL,
+      key_ranges_json = NULL, outro_json = NULL,${vocalCol} analysis_version = NULL,
       audio_moods = NULL, audio_mood_scores_json = NULL`,
   ).run();
   // The audio (CLAP) vectors are written in the same pass, so a --re-analyze
@@ -1747,7 +1777,31 @@ function rowToTrack(row: any): TrackRecord {
     bars: row.bars_json ? parseMsArray(row.bars_json) : null,
     keyRanges: row.key_ranges_json ? parseKeyRanges(row.key_ranges_json) : null,
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
+    outro: row.outro_json ? parseOutroJson(row.outro_json) : null,
   };
+}
+
+// Parse an outro_json column into TrackOutro or null. Malformed → null.
+function parseOutroJson(s: string): TrackOutro | null {
+  try {
+    const v = JSON.parse(s);
+    const startMs = Number(v?.startMs);
+    const ending = v?.ending;
+    if (!Number.isFinite(startMs) || startMs < 0) return null;
+    if (ending !== 'fade' && ending !== 'cold') return null;
+    const msList = (x: unknown): number[] | null =>
+      Array.isArray(x) && x.length ? x.filter((n): n is number => Number.isFinite(n)) : null;
+    return {
+      startMs: Math.round(startMs),
+      ending,
+      lufs: Number.isFinite(v?.lufs) ? v.lufs : null,
+      bpm: Number.isFinite(v?.bpm) ? v.bpm : null,
+      beats: msList(v?.beats),
+      bars: msList(v?.bars),
+    };
+  } catch {
+    return null;
+  }
 }
 
 // Parse a key_ranges_json column into TrackKeyRange[] or null. Empty/malformed → null.

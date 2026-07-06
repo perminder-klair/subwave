@@ -12,6 +12,10 @@
 export interface Analysis {
   bpm: number | null;
   key: string | null;
+  // Measured ending of the track (outro analysis): 'fade' = winds down to
+  // silence, 'cold' = ends at level. Optional — absent/null means "no outro
+  // signal" and every consumer behaves exactly as before.
+  ending?: 'fade' | 'cold' | null;
 }
 
 // --- Loudness normalisation ------------------------------------------------
@@ -191,6 +195,47 @@ export function crossSecondsFor(
   return Math.round(secs * 10) / 10;
 }
 
+// --- Ending-aware exit canvas (feature: outro analysis) ---------------------
+// Canvas for a track's OWN exit, sized by its measured ENDING. Unlike the
+// pair-sized crossSecondsFor above — which can't be applied (#749: a track's
+// liq_cross_duration governs its own end, and its successor is unknown when it
+// is annotated) — the ending is a property of the track alone, so this CAN be
+// stamped correctly at annotation time. A measured fade earns a long canvas
+// that rides the wind-down out under whatever follows; a cold end cuts tight
+// (the short cross IS the intent — stretching a hard ending smears it).
+// Returns null when the ending is unknown, so the caller leaves crossSec unset
+// and Liquidsoap keeps the operator's default — today's behaviour.
+//
+// `windDownSec` is the measured wind-down length (duration − outro.startMs);
+// a fade's canvas spans it (clamped 8..12 so the wash stays broadcast-shaped).
+// Bar-snapped to the track's own tempo like the other canvases — prefer the
+// TAIL tempo (outro.bpm) in `a` when the caller has it; outros drift.
+export function endingCrossSecondsFor(
+  a: Analysis,
+  windDownSec: number | null,
+  maxSec: number | null = null,
+): number | null {
+  const ending = a.ending;
+  if (ending !== 'fade' && ending !== 'cold') return null;
+  const ceil = typeof maxSec === 'number' && maxSec > 0 ? Math.min(maxSec, CROSS_MAX_SECONDS) : CROSS_MAX_SECONDS;
+  let secs: number;
+  if (ending === 'fade') {
+    secs = windDownSec != null && windDownSec > 0 ? windDownSec : 10;
+    secs = Math.max(8, Math.min(12, secs));
+  } else {
+    secs = 4; // tight, intentional cut — same length as a locked beat-blend
+  }
+  // Beat-grid snap (same convention as the washout/loop canvases).
+  if (a.bpm && a.bpm > 0) {
+    const barSec = (4 * 60) / a.bpm;
+    const bars = Math.max(1, Math.round(secs / barSec));
+    const snapped = bars * barSec;
+    if (snapped >= 3 && snapped <= 14) secs = snapped;
+  }
+  secs = Math.max(Math.min(3, ceil), Math.min(ceil, secs));
+  return Math.round(secs * 10) / 10;
+}
+
 // --- DJ transition effects (sweep / washout) --------------------------------
 // The DJ agent proposes `transition: sweep|washout` on a pick; these helpers
 // are how the data disposes. All pure — broadcast/queue.ts applies them.
@@ -288,6 +333,11 @@ export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend' | 'dissolve
   // leave a track, not a compatibility repair. The queue separately requires
   // the flagged track's own measured tempo (a loop needs a bar length).
   if (kind === 'loop') return true;
+  // chop gates the OUTGOING track rhythmically — over a measured fade-out the
+  // stabs are stabs of near-silence, so a fade ending vetoes it outright
+  // (feature: outro analysis). Checked before the analysed() pass-through:
+  // the ending is measured independently of bpm/key.
+  if (kind === 'chop' && cur.ending === 'fade') return false;
   if (!analysed(cur) || !analysed(next)) return true;
   const compat = mixCompat(cur, next);
   // blend (spectral handover) is the sweep's mirror: it makes COMPATIBLE
