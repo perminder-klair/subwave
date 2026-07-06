@@ -310,13 +310,18 @@ export default function FestivalsSection() {
                 No festivals defined. Add one to get started.
               </div>
             ) : (
-              <div className="grid gap-2">
+              // grid-cols-1 pins the track to minmax(0,1fr) so a long,
+              // nowrap-truncated description can't blow the column out to its
+              // max-content width and shove the pills/buttons past the card
+              // edge (issue #898). shrink-0 on the fixed controls sends all the
+              // slack to the truncating name/description column.
+              <div className="grid grid-cols-1 gap-2">
                 {festivals.map((f, i) => (
                   <div
                     key={i}
                     className="flex items-center gap-3 border border-ink bg-bg p-3"
                   >
-                    <Pill tone="ink">{monthDayLabel(f)}</Pill>
+                    <Pill tone="ink" className="shrink-0">{monthDayLabel(f)}</Pill>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[12px] font-bold tracking-[0.08em] uppercase">
                         {f.name}
@@ -325,11 +330,11 @@ export default function FestivalsSection() {
                         <div className="truncate text-[12px] text-muted">{f.description}</div>
                       ) : null}
                     </div>
-                    <Pill>{f.mood}</Pill>
+                    <Pill className="shrink-0">{f.mood}</Pill>
                     {f.windowDays ? (
-                      <Pill tone="ink">{f.windowDays}d window</Pill>
+                      <Pill tone="ink" className="shrink-0">{f.windowDays}d window</Pill>
                     ) : null}
-                    <div className="flex items-center gap-1">
+                    <div className="flex shrink-0 items-center gap-1">
                       <Btn sm onClick={() => startEdit(i)} disabled={busy}>
                         Edit
                       </Btn>
