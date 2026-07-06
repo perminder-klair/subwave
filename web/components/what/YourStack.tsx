@@ -29,7 +29,15 @@ const BRAINS = [
   'OpenAI-compatible',
 ];
 
-const VOICES = ['Piper', 'Kokoro', 'Chatterbox', 'PocketTTS', 'OpenAI', 'ElevenLabs'];
+const VOICES = [
+  'Piper',
+  'Kokoro',
+  'Chatterbox',
+  'PocketTTS',
+  'OpenAI',
+  'ElevenLabs',
+  'Any HTTP endpoint',
+];
 
 export default function YourStack() {
   return (
@@ -55,7 +63,9 @@ export default function YourStack() {
             no API key, nothing leaves the house. Prefer a hosted model, an
             aggregator with one key for every vendor, or your own
             OpenAI-compatible server (llama.cpp, vLLM, LM Studio)? The call sites
-            never name a provider, so switching is a single dropdown.
+            never name a provider, so switching is a single dropdown. A daily
+            token budget caps what a hosted model can spend; hit it, and the
+            music keeps playing without the chatter.
           </p>
           <div className="mt-4 flex flex-wrap gap-[6px]">
             {BRAINS.map((b) => (
