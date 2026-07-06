@@ -5,11 +5,11 @@
 // <stateDir>/jingles.m3u (one path per line). A sidecar <stateDir>/
 // jingles.json maps filename → { text, createdAt, builtin, source }.
 
-import { readFile, writeFile, unlink, mkdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import crypto from 'node:crypto';
 import { speak } from '../audio/tts.js';
-import { STATE_DIR } from '../config.js';
+import { STATE_DIR, SOUNDS_DIR } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import {
   transcodeAudio, hasFfmpeg, extOf, baseName, isAcceptedAudio,
@@ -21,9 +21,15 @@ const META = `${STATE_DIR}/jingles.json`;
 
 const DEFAULT_IDENT = {
   filename: 'station_ident_default.wav',
-  text: "You're listening to SUB/WAVE. Personal frequency, broadcasting from the homelab.",
+  text: "You're tuned to SUB/WAVE. The signal continues.",
   builtin: true,
 };
+
+// Repo-bundled, sound-designed version of the default ident (voice over a
+// radio-tuning/static bed). Shipped in <repo>/sounds and installed verbatim at
+// boot so every install gets the same signature stinger regardless of the
+// operator's TTS engine. Falls back to a plain TTS render if it's ever absent.
+const PREBAKED_IDENT = `${SOUNDS_DIR}/station_ident_default.wav`;
 
 async function loadMeta(): Promise<any> {
   try {
@@ -157,13 +163,36 @@ export async function remove(filename: string) {
   return { ok: true };
 }
 
-// Called from server.js startup. Generates the default station ident WAV
-// if it isn't already on disk. Idempotent — running again does nothing.
+// Called from server.js startup. Installs the default station ident if it isn't
+// already present. Prefers the repo-bundled sound-designed WAV (PREBAKED_IDENT);
+// if that's missing, falls back to a plain TTS render. Idempotent, and upgrades
+// an older TTS-rendered builtin to the bundled asset exactly once (keyed on
+// `source: 'builtin'`).
 export async function ensureDefaultIdent() {
   const filePath = `${DIR}/${DEFAULT_IDENT.filename}`;
   const meta = await loadMeta();
+  const existing = meta.items[DEFAULT_IDENT.filename];
+  const havePrebaked = existsSync(PREBAKED_IDENT);
 
-  if (existsSync(filePath) && meta.items[DEFAULT_IDENT.filename]) return;
+  // Already the bundled asset — or an existing render with no asset to upgrade to.
+  if (existsSync(filePath) && existing && (existing.source === 'builtin' || !havePrebaked)) {
+    return;
+  }
+
+  if (havePrebaked) {
+    await mkdir(DIR, { recursive: true });
+    await copyFile(PREBAKED_IDENT, filePath);
+    meta.items[DEFAULT_IDENT.filename] = {
+      text: DEFAULT_IDENT.text,
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      builtin: true,
+      source: 'builtin',
+    };
+    await saveMeta(meta);
+    await rewritePlaylist(Object.keys(meta.items));
+    console.log(`[jingles] installed default station ident from ${PREBAKED_IDENT}`);
+    return;
+  }
 
   await create(DEFAULT_IDENT.text, { builtin: true });
   console.log(`[jingles] generated default station ident → ${filePath}`);
