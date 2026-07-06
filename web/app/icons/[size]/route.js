@@ -33,8 +33,9 @@ export async function GET(_req, { params }) {
   // Standard icons fill most of the canvas; maskable shrinks the disc to
   // ~58% so it stays inside the launcher's safe zone after the mask.
   const fill = maskable ? 0.58 : 0.8;
-
-  return new ImageResponse(<DiscMark size={size} fill={fill} />, {
+  // Maskable icons need the opaque dark plate to fill the adaptive-icon safe
+  // zone; standard icons stay transparent so the disc reads as round.
+  return new ImageResponse(<DiscMark size={size} fill={fill} opaque={maskable} />, {
     width: size,
     height: size,
   });
