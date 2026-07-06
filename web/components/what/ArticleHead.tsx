@@ -17,7 +17,7 @@ export default function ArticleHead() {
 
         <div className="bs-hero-cta">
           <Link href="/setup" className="bs-tune">
-            Setup &nbsp;→
+            Setup <span aria-hidden="true">&nbsp;→</span>
           </Link>
           <a
             href="https://github.com/perminder-klair/subwave"
@@ -25,7 +25,7 @@ export default function ArticleHead() {
             rel="noreferrer"
             className="bs-tune bs-tune--ghost"
           >
-            Source &nbsp;↗
+            Source <span aria-hidden="true">&nbsp;↗</span>
           </a>
         </div>
       </div>
