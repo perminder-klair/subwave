@@ -7,9 +7,10 @@
 // node:assert-via-tsx style of scripts/picker-recency-regression.test.ts.
 
 import assert from 'node:assert/strict';
+import { z } from 'zod';
 import { generateText, APICallError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId } from '../src/llm/internal/core/pure.js';
+import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, nullableFromModel, objectFromModel, schemaHint } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
 import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
@@ -774,6 +775,128 @@ async function main() {
     assert.equal(nearestId('', ['abcdef123456789012345']), null);
     assert.equal(nearestId(undefined as any, ['abcdef123456789012345']), null);
     assert.equal(nearestId('abcdef123456789012345', []), null);
+  });
+
+  console.log('nullableFromModel (coerce the string "null", an omitted key, or a double-JSON-encoded string some providers send instead of JSON null):');
+  await test('an object schema: the string "null" coerces to real null', () => {
+    const schema = nullableFromModel(z.object({ kind: z.string() }));
+    assert.deepEqual(schema.parse('null'), null);
+  });
+  await test('an enum schema: the string "null" coerces to real null', () => {
+    const schema = nullableFromModel(z.enum(['normal', 'blend']));
+    assert.deepEqual(schema.parse('null'), null);
+  });
+  await test('genuine JSON null still passes through unchanged', () => {
+    const schema = nullableFromModel(z.object({ kind: z.string() }));
+    assert.deepEqual(schema.parse(null), null);
+  });
+  await test('a genuinely valid value still passes through unchanged', () => {
+    const objSchema = nullableFromModel(z.object({ kind: z.string() }));
+    assert.deepEqual(objSchema.parse({ kind: 'weather' }), { kind: 'weather' });
+    const enumSchema = nullableFromModel(z.enum(['normal', 'blend']));
+    assert.equal(enumSchema.parse('blend'), 'blend');
+  });
+  await test('a genuinely valid string value still passes through unchanged', () => {
+    const schema = nullableFromModel(z.string());
+    assert.equal(schema.parse('a spoken line'), 'a spoken line');
+  });
+  await test('does not widen validation beyond observed junk — other junk still rejects', () => {
+    const schema = nullableFromModel(z.enum(['normal', 'blend']));
+    assert.throws(() => schema.parse('None'));
+    assert.throws(() => schema.parse('nonexistent-transition'));
+  });
+  await test('an omitted key (undefined) coerces to null, same as an explicit null (observed: a `done` call with `segment` entirely absent)', () => {
+    const schema = z.object({
+      reason: z.string(),
+      air: z.boolean(),
+      segment: nullableFromModel(z.object({ kind: z.string(), text: z.string() })),
+    });
+    const parsed = schema.parse({ reason: 'nothing fresh to say', air: false });
+    assert.deepEqual(parsed, { reason: 'nothing fresh to say', air: false, segment: null });
+  });
+  await test('an omitted key coerces to null for a nullable string field too', () => {
+    const schema = z.object({ id: z.string(), say: nullableFromModel(z.string()) });
+    const parsed = schema.parse({ id: 'abc' });
+    assert.deepEqual(parsed, { id: 'abc', say: null });
+  });
+  await test('a nested object double-encoded as a JSON string parses through (observed: `done`\'s segment field)', () => {
+    const schema = z.object({
+      reason: z.string(),
+      air: z.boolean(),
+      segment: nullableFromModel(z.object({ kind: z.string(), text: z.string(), sfx: nullableFromModel(z.string()) })),
+    });
+    const parsed = schema.parse({
+      reason: 'x',
+      air: true,
+      segment: JSON.stringify({ kind: 'now-playing-dig', sfx: null, text: 'a real line' }),
+    });
+    assert.deepEqual(parsed.segment, { kind: 'now-playing-dig', sfx: null, text: 'a real line' });
+  });
+  await test('does NOT attempt JSON-string parsing for a nullable STRING field — a coincidental JSON-looking answer stays a plain string', () => {
+    const schema = nullableFromModel(z.string());
+    assert.equal(schema.parse('42'), '42');
+    assert.equal(schema.parse('true'), 'true');
+  });
+  await test('a string that fails to parse as JSON for an object field still rejects (not silently swallowed)', () => {
+    const schema = z.object({ segment: nullableFromModel(z.object({ kind: z.string() })) });
+    assert.throws(() => schema.parse({ segment: 'not json at all' }));
+  });
+
+  console.log('objectFromModel (the non-nullable sibling — required object field, must never throw):');
+  await test('a genuinely valid value passes through unchanged', () => {
+    const schema = objectFromModel({ kind: z.string(), text: z.string() }, { kind: '', text: '' });
+    assert.deepEqual(schema.parse({ kind: 'weather', text: 'hi' }), { kind: 'weather', text: 'hi' });
+  });
+  await test('a double-JSON-encoded string still rescues the real content', () => {
+    const schema = objectFromModel(
+      { kind: z.string(), text: z.string(), sfx: nullableFromModel(z.string()) },
+      { kind: '', text: '', sfx: null },
+    );
+    const parsed = schema.parse(JSON.stringify({ kind: 'now-playing-dig', sfx: null, text: 'a real line' }));
+    assert.deepEqual(parsed, { kind: 'now-playing-dig', sfx: null, text: 'a real line' });
+  });
+  await test('a missing key falls back to the placeholder instead of throwing', () => {
+    const schema = objectFromModel({ kind: z.string(), text: z.string() }, { kind: '', text: '' });
+    assert.deepEqual(schema.parse(undefined), { kind: '', text: '' });
+  });
+  await test('the string "null" falls back to the placeholder instead of throwing', () => {
+    const schema = objectFromModel({ kind: z.string(), text: z.string() }, { kind: '', text: '' });
+    assert.deepEqual(schema.parse('null'), { kind: '', text: '' });
+  });
+  await test('unparseable garbage falls back to the placeholder instead of throwing', () => {
+    const schema = objectFromModel({ kind: z.string(), text: z.string() }, { kind: '', text: '' });
+    assert.deepEqual(schema.parse('not json at all'), { kind: '', text: '' });
+  });
+
+  console.log('schemaHint (JSON Schema embedded in djObject\'s free-text recovery prompt):');
+  await test('renders required keys for a flat object schema', () => {
+    const schema = z.object({ id: z.string(), reason: z.string(), say: z.string().nullable() });
+    const hint = schemaHint(schema);
+    assert.equal(typeof hint, 'string');
+    const parsed = JSON.parse(hint as string);
+    assert.deepEqual(parsed.required.sort(), ['id', 'reason', 'say']);
+  });
+  await test('never throws on a schema it cannot render — returns null instead', () => {
+    // z.custom with no shape metadata is the sharpest edge toJSONSchema can hit.
+    const schema = z.custom(() => true);
+    assert.doesNotThrow(() => schemaHint(schema as any));
+  });
+  await test('strips verbose .describe() text so the recovery prompt stays lean', () => {
+    const longDescription = 'x'.repeat(500);
+    const schema = z.object({
+      id: z.string().describe('the exact id'),
+      transition: z.enum(['normal', 'blend']).nullable().describe(longDescription),
+    });
+    const hint = schemaHint(schema) as string;
+    // The structure (keys, types, required-ness) must survive...
+    const parsed = JSON.parse(hint);
+    assert.ok(parsed.properties.id);
+    assert.ok(parsed.properties.transition);
+    assert.deepEqual(parsed.required.sort(), ['id', 'transition']);
+    // ...but none of the description prose, at any nesting depth, does.
+    assert.equal(hint.includes(longDescription), false);
+    assert.equal(hint.includes('the exact id'), false);
+    assert.equal(hint.includes('"description"'), false);
   });
 
   console.log(failures === 0 ? '\nAll llm-pure tests passed.' : `\n${failures} test(s) FAILED.`);

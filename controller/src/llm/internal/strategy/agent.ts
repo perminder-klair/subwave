@@ -78,13 +78,62 @@ function gatedDiscoveryPrepareStep(discoveryToolNames: string[], toolChoice: 're
   };
 }
 
+// Shared shape for the done-only recovery agent — same harness for both the
+// first (trail-carrying) and second (clean-context) recovery attempts below;
+// only the messages they're run against differ.
+function buildRecoveryAgent(leg: any, system: string, allTools: any, temperature: number, maxOutputTokens: number, forcedChoice: 'required' | 'auto') {
+  return new ToolLoopAgent({
+    // Recovery forces done-only every step → no-think model (see above).
+    model: leg.noThinkModel ?? leg.model,
+    // Append an explicit terminal instruction at the exact point
+    // gemma-class models stall (issue #555): after a negative tool
+    // result (`available:false`) they tend to emit prose instead of
+    // obeying toolChoice:'required', and the bare done-only re-run
+    // sometimes does the same. activeTools is already pinned to
+    // done-only; this plain-language line in the recovery system prompt
+    // tells the model the ONLY valid move is the done call. Put in
+    // `instructions` (not a trailing user turn) so it can't create two
+    // consecutive user messages and trip providers that require strict
+    // role alternation (Anthropic). Harmless on the picker path.
+    instructions: `${system}\n\nYou now have everything you need. Respond ONLY by calling the \`done\` tool with your final answer — do not write a normal text message.`,
+    tools: allTools,
+    stopWhen: [stepCountIs(2), hasToolCall('done')],
+    temperature,
+    maxOutputTokens,
+    // Recovery forces done-only every step, so it has the same
+    // Anthropic/DeepSeek thinking conflict as the main run — suppress here too.
+    providerOptions: providerOptions(leg.cfg, { forceNoThink: true }),
+    toolChoice: forcedChoice,
+    prepareStep: async () => ({ activeTools: ['done'], toolChoice: forcedChoice }),
+  } as any);
+}
+
 // The withDeadline(Promise.race + abort) + withTransientRetry wrapper around a
 // single agent.generate(). The `timeout` generate option is NOT honoured by the
 // ai-sdk-ollama transport, so the wall-clock ceiling is enforced here; the abort
 // signal is forwarded so transports that DO support cancellation stop the request
-// server-side. Main run and recovery each get the full timeoutMs (worst case ~2×).
-function runDeadlined(timeoutMs: any, kind: string, label: string, agent: any, messages: any) {
-  return withDeadline(timeoutMs, `${kind} ${label}`, (signal) =>
+// server-side.
+//
+// `deadlineAt` is a SHARED absolute deadline (a Date.now()-style timestamp),
+// not a fresh duration per call — every attempt djAgent makes for one pick
+// (native run, main run, both recovery attempts) draws down the SAME overall
+// budget, computed once in djAgent below. Passing the same timeoutMs to each
+// attempt independently (the prior behaviour) let a single pick run up to
+// ~3x timeoutMs in the worst case before falling back to the caller's
+// stateless path (Copilot review, PR #923) — a slow main run now correctly
+// leaves less time for recovery instead of resetting the clock. undefined
+// means no deadline at all (unlimited).
+function runDeadlined(deadlineAt: number | undefined, kind: string, label: string, agent: any, messages: any) {
+  if (deadlineAt == null) {
+    return withTransientRetry(kind, () => agent.generate({ messages }));
+  }
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) {
+    const err: any = new Error(`${kind} ${label} — no time left on the shared deadline`);
+    err.name = 'AgentDeadlineError';
+    return Promise.reject(err);
+  }
+  return withDeadline(remaining, `${kind} ${label}`, (signal) =>
     withTransientRetry(kind, () => agent.generate({
       messages,
       ...(signal ? { abortSignal: signal } : {}),
@@ -123,6 +172,9 @@ export async function djAgent({
       // Default to the agent path; branches override before their await. A
       // failure record always attributes to the path actually attempted.
       let lastVia = 'ai-sdk:agent';
+      // One shared wall-clock ceiling for every attempt below (native run,
+      // main run, both recovery attempts) — see runDeadlined's comment.
+      const deadlineAt = timeoutMs ? Date.now() + timeoutMs : undefined;
       try {
         // No discovery tools + an Ollama model that ignores JSON mode: there is
         // no loop to run, and ToolLoopAgent + Output.object would throw
@@ -164,7 +216,7 @@ export async function djAgent({
               providerOptions: providerOptions(leg.cfg, { forceNoThink: true }),
               output: Output.object({ schema }),
             } as any);
-            const nr: any = await runDeadlined(timeoutMs, kind, 'native run', nativeAgent, messages);
+            const nr: any = await runDeadlined(deadlineAt, kind, 'native run', nativeAgent, messages);
             const nObj = nr.output;
             const nSteps = nr.steps?.length ?? 0;
             // The cross-provider failure signature is "emitted the object WITHOUT
@@ -233,8 +285,25 @@ export async function djAgent({
         // timeoutMs (when set) is a hard ceiling — a slow/looping run throws,
         // flows through the catch below, and the caller falls back to its
         // stateless path rather than blocking on a pathological model call.
-        let result: any = await runDeadlined(timeoutMs, kind, 'agent run', agent, messages);
+        let result: any = await runDeadlined(deadlineAt, kind, 'agent run', agent, messages);
         let steps = result.steps?.length ?? 0;
+
+        // What the model said INSTEAD of calling `done`, one entry per attempt
+        // that declined — surfaced on the eventual throw below (via err.text)
+        // so failureDiagnostics() in core/pure.ts picks it up into the /debug
+        // record as `responseText`, and failover.ts's logFailurePreview prints
+        // it to the container logs too. Without this, a "did not call the done
+        // tool" failure carried no evidence of what the model actually said,
+        // making it unguessable whether it declined outright, answered in
+        // prose, or something else entirely.
+        const declinedAttempts: string[] = [];
+        const noteIfDeclined = (label: string, r: any) => {
+          if (!(r.staticToolCalls || []).some((c: any) => c.toolName === 'done')
+            && typeof r.text === 'string' && r.text.trim()) {
+            declinedAttempts.push(`[${label}] ${r.text.trim()}`);
+          }
+        };
+        noteIfDeclined('main', result);
 
         // Recovery for the "agent did not call the done tool" failure mode (issue
         // #140). Local/cloud Ollama models occasionally ignore toolChoice:'required'
@@ -251,32 +320,32 @@ export async function djAgent({
           lastVia = 'ai-sdk:agent:recovery';
           const priorMessages = (result as any).response?.messages || [];
           const recoveryMessages = priorMessages.length ? [...messages, ...priorMessages] : messages;
-          const recoveryAgent = new ToolLoopAgent({
-            // Recovery forces done-only every step → no-think model (see above).
-            model: leg.noThinkModel ?? leg.model,
-            // Append an explicit terminal instruction at the exact point
-            // gemma-class models stall (issue #555): after a negative tool
-            // result (`available:false`) they tend to emit prose instead of
-            // obeying toolChoice:'required', and the bare done-only re-run
-            // sometimes does the same. activeTools is already pinned to
-            // done-only; this plain-language line in the recovery system prompt
-            // tells the model the ONLY valid move is the done call. Put in
-            // `instructions` (not a trailing user turn) so it can't create two
-            // consecutive user messages and trip providers that require strict
-            // role alternation (Anthropic). Harmless on the picker path.
-            instructions: `${system}\n\nYou now have everything you need. Respond ONLY by calling the \`done\` tool with your final answer — do not write a normal text message.`,
-            tools: allTools,
-            stopWhen: [stepCountIs(2), hasToolCall('done')],
-            temperature,
-            maxOutputTokens,
-            // Recovery forces done-only every step, so it has the same
-            // Anthropic/DeepSeek thinking conflict as the main run — suppress here too.
-            providerOptions: providerOptions(leg.cfg, { forceNoThink: true }),
-            toolChoice: forcedChoice,
-            prepareStep: async () => ({ activeTools: ['done'], toolChoice: forcedChoice }),
-          } as any);
-          result = await runDeadlined(timeoutMs, kind, 'agent recovery', recoveryAgent, recoveryMessages);
+          result = await runDeadlined(deadlineAt, kind, 'agent recovery',
+            buildRecoveryAgent(leg, system, allTools, temperature, maxOutputTokens, forcedChoice), recoveryMessages);
           steps = result.steps?.length ?? 0;
+          noteIfDeclined('recovery', result);
+
+          // Second-chance recovery: GLM (Zhipu/Z.ai, incl. the GLM Coding Plan)
+          // observed declining the forced `done` call ~1/3 of the time even under
+          // toolChoice:'required', AND tends to keep declining once it already has
+          // in the SAME conversation — direct API testing showed a fresh single-turn
+          // done-only call succeeds far more reliably than a continuation of a trail
+          // where the model already answered in prose. Retry ONCE more from a CLEAN
+          // conversation (just the original `messages`, none of the "I already
+          // declined" turns) so the model isn't anchored to its own prior refusal.
+          // Safe for the picker: `seen` (the discovered-candidate map) is a side
+          // effect of TOOL EXECUTION during the main run, not of conversation
+          // replay, so it's already populated regardless of what this attempt sees
+          // — an id this step fabricates still gets caught by the caller's
+          // nearestId/repickFromSeen salvage, same as any other unknown-id miss.
+          if (!(result.staticToolCalls || []).some((c: any) => c.toolName === 'done')) {
+            console.log(`[${kind}] recovery also stopped without calling done — retrying once more from a clean context`);
+            lastVia = 'ai-sdk:agent:recovery2';
+            result = await runDeadlined(deadlineAt, kind, 'agent recovery (clean)',
+              buildRecoveryAgent(leg, system, allTools, temperature, maxOutputTokens, forcedChoice), messages);
+            steps = result.steps?.length ?? 0;
+            noteIfDeclined('recovery-clean', result);
+          }
         }
 
         let object;
@@ -296,7 +365,15 @@ export async function djAgent({
               object = schema.parse(JSON.parse(extractJson(stripThinking(result.text || ''))));
               lastVia = `${lastVia}:text`;
             } catch {
-              throw new Error('agent did not call the done tool before stopping');
+              const err: any = new Error('agent did not call the done tool before stopping');
+              // See declinedAttempts above — picked up by failureDiagnostics()
+              // into the /debug record's responseText/toolCalls, and by
+              // failover.ts's logFailurePreview into the container log line.
+              err.text = declinedAttempts.length ? declinedAttempts.join('\n\n') : (result.text || '');
+              err.finishReason = result.finishReason;
+              err.usage = result.usage;
+              err.steps = result.steps;
+              throw err;
             }
           }
         } else if (schema) {

@@ -37,6 +37,7 @@ import { z } from 'zod';
 import { queue } from '../broadcast/queue.js';
 import * as settings from '../settings.js';
 import { defineAgent } from '../llm/agent.js';
+import { nullableFromModel, objectFromModel } from '../llm/sdk.js';
 import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase } from '../llm/dj.js';
 import { buildSegmentTools } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
@@ -107,20 +108,31 @@ function segmentSchema() {
   return z.object({
     reason: z.string().describe('one short internal sentence on why this segment (or why silent) — never shown to the listener; write this BEFORE deciding the segment'),
     air: z.boolean().describe('true to air one segment now, false to stay silent — silence is a perfectly good answer, often the best one, when the data is dull, stale, unchanged, or there is nothing fresh worth a listener\'s attention'),
-    segment: z.object({
+    // NOT .nullable(): a nullable nested object loses its `properties` in
+    // llama.cpp's peg-gemma4 tool serializer, so Gemma-4 never sees the shape
+    // and emits it as a string (issue #906). Silence rides entirely on the
+    // `air` boolean above, so a non-null segment on a silent tick is simply
+    // ignored at the consumption site (`object.air ? segment : null`).
+    // objectFromModel (in place of a plain z.object): GLM separately observed
+    // (a) omitting this key entirely on an otherwise coherent `done` call, and
+    // (b) double-JSON-encoding the whole object as a STRING — both would
+    // throw under a plain required object just as they would under
+    // .nullable(), which is indistinguishable from djAgent's perspective from
+    // "the model never called done" and burns a full recovery cascade on a
+    // call that already succeeded. Rescues the double-encoded-string case back
+    // into a real object, and falls back to an empty placeholder for anything
+    // else malformed — safe because the consumption site already treats an
+    // empty/malformed segment as silence regardless of `air` (see the check
+    // right after `const seg = object?.air ? object?.segment : null`).
+    segment: objectFromModel({
       // Kept as a free string (not a fixed enum) so operator-dropped custom
       // skills get valid kinds too. The agent is told which kinds are on offer in
       // the system prompt, and agenticTick drops any kind it wasn't offered.
       kind: z.string()
         .describe('the segment kind — MUST be one of the kinds offered in the system prompt for this tick'),
       text: z.string().describe(`the spoken line in the DJ voice — ${lengthPhrase('segment')}`),
-      sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect (null is usually right — most segments need none)'),
-      // NOT nullable: a nullable nested object loses its `properties` in
-      // llama.cpp's peg-gemma4 tool serializer, so Gemma-4 never sees the
-      // shape and emits it as a string (issue #906). Silence rides entirely on
-      // the `air` boolean above, so a non-null segment on a silent tick is
-      // simply ignored at the consumption site (`object.air ? segment : null`).
-    }).describe('the segment to air when air is true; ignored when air is false (empty strings for kind/text, null sfx when silent)'),
+      sfx: nullableFromModel(z.string()).describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect (null is usually right — most segments need none)'),
+    }, { kind: '', text: '', sfx: null }).describe('the segment to air when air is true; ignored when air is false (empty strings for kind/text, null sfx when silent)'),
   });
 }
 
@@ -129,7 +141,7 @@ function segmentSchema() {
 function forcedSchema() {
   return z.object({
     text: z.string().describe(`the spoken line in the DJ voice — ${lengthPhrase('segment')}`),
-    sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect'),
+    sfx: nullableFromModel(z.string()).describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect'),
   });
 }
 
@@ -236,6 +248,14 @@ function segmentDeadline(): number {
 export const directorAgent = defineAgent({
   kind: 'djAgentSegment',
   schema: () => segmentSchema(),
+  // Discovery (step 0) + exactly one committed done-tool attempt (step 1),
+  // same reasoning as pickerAgent.maxSteps in dj-agent.ts: a taller budget
+  // just grows an increasingly "I already declined" trail on providers that
+  // don't comply on the first forced attempt (GLM/Zhipu observed), which made
+  // things worse, not better, and was the direct cause of a run burning the
+  // FULL agentTimeoutMs internally (45002ms observed) before recovery ever got
+  // a turn. Left unset before, silently inheriting djAgent's default of 8.
+  maxSteps: 2,
   // Wall-clock ceiling, mirroring the picker (dj-agent.ts). Without it a
   // gemma-class model that ignores toolChoice can drive the done-tool recovery
   // into a multi-step stall (86s observed in issue #555) and hang the tick;

@@ -91,6 +91,11 @@ interface LlmCall {
   messages?: Array<{ role?: string; content?: unknown }>;
   toolCalls?: Array<{ name?: string; args?: unknown; result?: unknown }>;
   response?: string;
+  /** What the model said INSTEAD of the expected structured output on a
+   * failed call (e.g. "agent did not call the done tool") — one labelled
+   * block per attempt that declined. Populated by failureDiagnostics() in
+   * the controller; absent on success (see `response` instead). */
+  responseText?: string;
   steps?: number;
 }
 
@@ -1038,6 +1043,11 @@ function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
               {c.error && (
                 <CallSection label="error" tone="err" preview={oneLine(c.error)}>
                   {c.error}
+                </CallSection>
+              )}
+              {c.responseText && (
+                <CallSection label="model said instead" tone="err" preview={oneLine(c.responseText)}>
+                  {c.responseText}
                 </CallSection>
               )}
               {c.user && (
