@@ -115,7 +115,12 @@ function segmentSchema() {
         .describe('the segment kind — MUST be one of the kinds offered in the system prompt for this tick'),
       text: z.string().describe(`the spoken line in the DJ voice — ${lengthPhrase('segment')}`),
       sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect (null is usually right — most segments need none)'),
-    }).nullable().describe('the segment to air when air is true; null when air is false'),
+      // NOT nullable: a nullable nested object loses its `properties` in
+      // llama.cpp's peg-gemma4 tool serializer, so Gemma-4 never sees the
+      // shape and emits it as a string (issue #906). Silence rides entirely on
+      // the `air` boolean above, so a non-null segment on a silent tick is
+      // simply ignored at the consumption site (`object.air ? segment : null`).
+    }).describe('the segment to air when air is true; ignored when air is false (empty strings for kind/text, null sfx when silent)'),
   });
 }
 
