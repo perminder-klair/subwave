@@ -347,6 +347,8 @@ services:
       # .env.example "Optional model overrides").
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
+      - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
+      - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but an anonymous HF Hub download is rate-limited and
       # slow. Same var as tts-heavy — set HF_TOKEN=hf_... in your root .env once
       # and both sidecars pick it up.
@@ -660,6 +662,8 @@ services:
       # .env.example "Optional model overrides").
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
+      - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
+      - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but an anonymous HF Hub download is rate-limited and
       # slow. Same var as tts-heavy — set HF_TOKEN=hf_... in your root .env once
       # and both sidecars pick it up.
@@ -922,6 +926,8 @@ services:
       # .env.example "Optional model overrides").
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
+      - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
+      - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but an anonymous HF Hub download is rate-limited and
       # slow. Same var as tts-heavy — set HF_TOKEN=hf_... in your root .env once
       # and both sidecars pick it up.
@@ -1124,6 +1130,15 @@ SITE_URL=
 #                         # bpm/key, CLAP and Demucs — the real speed lever
 #                         # (cost scales linearly). Raise it if you want vocal
 #                         # ranges detected deeper into each track
+# ANALYZE_CLAP_WINDOWS=3  # how many windows the CLAP "sounds-like" embed
+#                         # averages over (1-3). 3 = start/mid/late (default,
+#                         # best vectors), 1 = leading window only (fastest,
+#                         # the pre-multi-window behaviour). CLAP cost per
+#                         # track scales linearly with this
+# ANALYZE_OUTRO_SECONDS=20 # tail window (seconds) decoded from the END of each
+#                         # complete file for outro analysis (fade-vs-cold
+#                         # ending, tail loudness/tempo — drives the
+#                         # ending-aware crossfade). Pure librosa, cheap
 #
 # Memory ceilings for the model-loading sidecars (OOM containment — keeps a
 # runaway model load from taking down the host's other services). Defaults are
