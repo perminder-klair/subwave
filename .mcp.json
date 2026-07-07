@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "subwave": {
-      "command": "node",
-      "args": ["mcp-subwave/dist/index.js"],
+      "command": "npx",
+      "args": ["tsx", "mcp-subwave/src/index.ts"],
       "env": {
         "SUBWAVE_API_URL": "http://localhost:7701"
       }

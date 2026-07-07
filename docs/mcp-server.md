@@ -6,23 +6,43 @@ the [Model Context Protocol](https://modelcontextprotocol.io).
 
 The server lives at [`mcp-subwave/`](../mcp-subwave/). For the always-on
 broadcast pipeline see [`streaming-flow.md`](./streaming-flow.md); for the
-human listener request path see [`request-flow.md`](./request-flow.md).
+human listener request path see [`request-flow.md`](./request-flow.md). For the
+whole HTTP API (and a live playground), see [`api.md`](./api.md) or the admin
+**Connect** page (`/admin/connect`).
 
 ---
 
 ## The short version
 
+There are two ways to connect — both expose the **same seventeen tools** from
+the **same source** (`controller/src/mcp/`):
+
 ```
-MCP client            subwave-mcp              Controller
-(Claude Code,   ──stdio/JSON-RPC──▶  ──HTTP──▶  (Express :7701
- Desktop, …)         17 tools                    /api behind Caddy)
+Recommended — HTTP (no clone, no local process):
+  MCP client  ──Streamable HTTP──▶  Controller  /api/mcp
+  (Claude Code / Desktop)           (Express, behind Caddy)
+
+Local alternative — stdio (runs from a repo clone via tsx):
+  MCP client  ──stdio/JSON-RPC──▶  mcp-subwave  ──HTTP──▶  Controller :7701
 ```
 
-`subwave-mcp` is a thin stdio MCP server. It owns no state and almost no logic
-of its own — each tool is a typed wrapper over one controller HTTP endpoint
-(the one exception: `subwave_request_song` polls the request receipt so the
-agent gets an outcome, not a ticket). The model gets seventeen tools; the
-controller does the real work (LLM matching, track selection, TTS, queueing).
+The tools own no state and almost no logic of their own — each is a typed
+wrapper over one controller HTTP endpoint (the one exception:
+`subwave_request_song` polls the request receipt so the agent gets an outcome,
+not a ticket). The model gets seventeen tools; the controller does the real work
+(LLM matching, track selection, TTS, queueing).
+
+**HTTP endpoint (recommended).** The controller serves MCP directly at
+`/api/mcp` (a stateless Streamable-HTTP transport). Connect with just a URL:
+
+```bash
+claude mcp add --transport http subwave https://your-station/api/mcp \
+  --header "Authorization: Basic $(printf '%s' "$ADMIN_USER:$ADMIN_PASS" | base64)"
+```
+
+Auth mirrors the REST API: read tools work unauthenticated; DJ-control tools
+need the station's admin credentials in the `Authorization` header. No clone, no
+build, no separate process.
 
 It is the agent-facing twin of the listener request drawer: where a human types
 into the browser and hits `POST /request`, an agent calls `subwave_request_song`
@@ -208,21 +228,27 @@ recover within the same turn.
 
 ## Running it
 
+**HTTP (recommended)** needs nothing installed — the controller already serves
+`/api/mcp` whenever the stack is up. Register it with the `claude mcp add
+--transport http …` command above (or the admin **Connect → MCP** tab, which
+pre-fills your station's URL). Copy-ready Claude Code and Claude Desktop
+snippets are in [`mcp-subwave/README.md`](../mcp-subwave/README.md).
+
+**Local stdio server** runs the standalone launcher straight from a clone via
+`tsx` — no build step:
+
 ```bash
-cd mcp-subwave
-npm install
-npm run build      # → dist/index.js
-npm run inspect    # build + MCP Inspector for manual testing
+npx tsx mcp-subwave/src/index.ts                     # run it
+cd mcp-subwave && npm run inspect                    # MCP Inspector for manual testing
 ```
 
-Wire it into a client by pointing at `dist/index.js` with `node` and passing
-the three env vars — see [`mcp-subwave/README.md`](../mcp-subwave/README.md)
-for ready-to-paste Claude Code and Claude Desktop snippets. Inside this repo,
-the root [`.mcp.json`](../.mcp.json) already wires it up for Claude Code —
-build once and the tools are available in any session opened here.
+Wire it into a client with `npx tsx /absolute/path/to/subwave/mcp-subwave/src/index.ts`
+plus the `SUBWAVE_API_URL` / `SUBWAVE_ADMIN_USER` / `SUBWAVE_ADMIN_PASS` env
+vars. Inside this repo, the root [`.mcp.json`](../.mcp.json) already wires it up
+for Claude Code — the tools are available in any session opened here.
 
-The controller must be running first — start the stack with the `subwave-control`
-skill or `docker compose up -d` (see [`CLAUDE.md`](../CLAUDE.md)).
+Either way the controller must be running first — start the stack with the
+`subwave-control` skill or `docker compose up -d` (see [`CLAUDE.md`](../CLAUDE.md)).
 
 ---
 
@@ -230,6 +256,9 @@ skill or `docker compose up -d` (see [`CLAUDE.md`](../CLAUDE.md)).
 
 | File | Role |
 |---|---|
-| `mcp-subwave/src/index.ts` | MCP server: registers the tools, stdio transport, request polling, error-to-result wrapper. |
-| `mcp-subwave/src/client.ts` | `SubwaveClient` — typed HTTP client, Basic auth, `SubwaveError` with actionable messages. |
-| `mcp-subwave/package.json` | `subwave-mcp` bin, build scripts, MCP SDK + Zod deps. |
+| `controller/src/mcp/tools.ts` | `registerSubwaveTools(server, client)` — the 17 tool definitions + request polling + error-to-result wrapper. The single source both transports share. |
+| `controller/src/mcp/client.ts` | `SubwaveClient` — typed HTTP client, Basic auth (or a forwarded `Authorization` header), `SubwaveError` with actionable messages. |
+| `controller/src/routes/mcp.ts` | The built-in HTTP endpoint — stateless Streamable HTTP at `/mcp`, per-request loopback client that forwards the caller's auth. |
+| `controller/src/mcp/stdio.ts` | The stdio bootstrap — connects the shared tools to a stdio transport. |
+| `mcp-subwave/src/index.ts` | Thin `tsx` launcher that imports `stdio.ts` from the clone (keeps one SDK copy). |
+| `mcp-subwave/package.json` | The standalone launcher — `tsx` dep, no build step. |

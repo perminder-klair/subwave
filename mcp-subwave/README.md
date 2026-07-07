@@ -1,13 +1,19 @@
 # subwave-mcp
 
-An [MCP](https://modelcontextprotocol.io) server that lets an agent drive the
+[MCP](https://modelcontextprotocol.io) tools that let an agent drive the
 **SUB/WAVE** personal radio station — request songs, queue exact tracks, and
 put the AI DJ (voice, segments, skills, sound effects) on-air.
 
-It wraps the SUB/WAVE controller's HTTP API as MCP tools, so any MCP client
-(Claude Code, Claude Desktop, etc.) can ask the station to play a track or
-announce an update. See [`docs/mcp-server.md`](../docs/mcp-server.md) for the
-full architecture write-up.
+**Two ways to connect, same tools:**
+
+- **HTTP (recommended)** — the controller serves MCP directly at `/api/mcp`. No
+  clone, no local process. Jump to [Wiring it into a client](#wiring-it-into-a-client).
+- **This stdio server** — a local-only launcher you run from a clone. Use it
+  when you'd rather not expose the HTTP endpoint.
+
+The tool set itself lives once in the controller (`controller/src/mcp/`); this
+package is just the stdio launcher. See [`docs/mcp-server.md`](../docs/mcp-server.md)
+for the full architecture write-up.
 
 ## Tools
 
@@ -37,9 +43,9 @@ deliberate admin-only operator override.
 
 ## Setup
 
-```bash
-npm install    # `prepare` builds dist/ automatically
-```
+No build step — the stdio launcher runs from source via `tsx`. It reaches into
+the sibling `controller/` for the shared tool code, so run it from a full clone
+with the controller's dependencies installed.
 
 ## Configuration
 
@@ -56,27 +62,54 @@ need them — if unset, those tools return an error explaining what to set.
 
 ## Wiring it into a client
 
-### Claude Code
+### HTTP endpoint (recommended)
 
-Inside this repo the root `.mcp.json` already wires the server up (build it
-once with `npm install`). For other checkouts or global use:
+No install — the controller serves it whenever the stack is up. Point any MCP
+client at `<station>/api/mcp` and pass admin creds as an `Authorization` header:
+
+```bash
+claude mcp add --transport http subwave https://your-station/api/mcp \
+  --header "Authorization: Basic $(printf '%s' "$ADMIN_USER:$ADMIN_PASS" | base64)"
+```
+
+Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "subwave": {
+      "type": "http",
+      "url": "https://your-station/api/mcp",
+      "headers": { "Authorization": "Basic <base64 of user:pass>" }
+    }
+  }
+}
+```
+
+The admin **Connect → MCP** tab pre-fills these with your station's real URL.
+
+### Local stdio server
+
+Runs from a clone via `tsx` (no build step). Inside this repo the root
+`.mcp.json` already wires it up for Claude Code. For other checkouts or global
+use:
 
 ```bash
 claude mcp add subwave \
   --env SUBWAVE_API_URL=http://localhost:7701 \
   --env SUBWAVE_ADMIN_USER=admin \
   --env SUBWAVE_ADMIN_PASS=changeme \
-  -- node /absolute/path/to/subwave/mcp-subwave/dist/index.js
+  -- npx tsx /absolute/path/to/subwave/mcp-subwave/src/index.ts
 ```
 
-### Claude Desktop (`claude_desktop_config.json`)
+Claude Desktop:
 
 ```json
 {
   "mcpServers": {
     "subwave": {
-      "command": "node",
-      "args": ["/absolute/path/to/subwave/mcp-subwave/dist/index.js"],
+      "command": "npx",
+      "args": ["tsx", "/absolute/path/to/subwave/mcp-subwave/src/index.ts"],
       "env": {
         "SUBWAVE_API_URL": "http://localhost:7701",
         "SUBWAVE_ADMIN_USER": "admin",
@@ -90,12 +123,11 @@ claude mcp add subwave \
 ## Development
 
 ```bash
-npm run watch     # recompile on change
 npm run lint      # tsc --noEmit (runs in CI)
-npm run inspect   # build + open the MCP Inspector
+npm run inspect   # MCP Inspector for manual testing (tsx, no build)
 ```
 
-The transport is stdio — keep `stdout` clean; the server logs only to `stderr`.
+The stdio transport keeps `stdout` clean; the server logs only to `stderr`.
 
 ## Notes
 
