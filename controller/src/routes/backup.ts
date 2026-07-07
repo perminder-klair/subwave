@@ -31,6 +31,7 @@ import { STATE_DIR } from '../config.js';
 import * as settings from '../settings.js';
 import * as library from '../music/library.js';
 import * as libraryDb from '../music/library-db.js';
+import { clearUserThemeCache } from '../themes.js';
 import { requireAdmin } from '../middleware/auth.js';
 
 export const router = express.Router();
@@ -183,7 +184,27 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
   let requiresRestart = false;
   let tmpDir: string | null = null;
   try {
-    // 1) Settings — back through update() so they validate, the 'set' apiKey
+    // 1) Media files + dirs — extract allow-listed entries back under STATE_DIR,
+    //    rejecting anything outside it. This MUST run before settings.update():
+    //    settings validation resolves theme.active + shows[].themeId against the
+    //    theme registry, which reads custom themes from state/themes/. Restore a
+    //    backup whose active theme is a custom one and, if the theme files aren't
+    //    on disk yet, update() throws `theme.active "<id>" is not a known theme
+    //    id` and aborts the whole restore (issue #917). Extract first, then drop
+    //    the 30s user-theme cache so update() sees the just-restored themes.
+    const touched = new Set<string>();
+    for (const entry of zip.getEntries()) {
+      if (entry.isDirectory) continue;
+      const name = entry.entryName;
+      if (name === 'manifest.json' || name === 'settings.json' || name === 'library.db') continue;
+      if (!isSafeEntry(name) || !RESTORABLE.has(topSegment(name))) continue;
+      zip.extractEntryTo(entry, STATE_DIR, true, true);
+      touched.add(topSegment(name));
+    }
+    if (touched.has('themes')) clearUserThemeCache();
+    for (const t of touched) restored.push(t);
+
+    // 2) Settings — back through update() so they validate, the 'set' apiKey
     //    sentinel keeps existing keys, and the liquidsoap_*.txt files + the
     //    schedule.json split are regenerated.
     const settingsEntry = zip.getEntry('settings.json');
@@ -199,7 +220,7 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
       restored.push('settings.json');
     }
 
-    // 2) Tag DB — extract to tmp, swap the live file, reopen.
+    // 3) Tag DB — extract to tmp, swap the live file, reopen.
     const dbEntry = zip.getEntry('library.db');
     if (dbEntry) {
       tmpDir = await mkdtemp(join(tmpdir(), 'subwave-restore-'));
@@ -209,19 +230,6 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
       await library.reload();
       restored.push('library.db');
     }
-
-    // 3) Media files + dirs — extract allow-listed entries back under
-    //    STATE_DIR, rejecting anything outside it.
-    const touched = new Set<string>();
-    for (const entry of zip.getEntries()) {
-      if (entry.isDirectory) continue;
-      const name = entry.entryName;
-      if (name === 'manifest.json' || name === 'settings.json' || name === 'library.db') continue;
-      if (!isSafeEntry(name) || !RESTORABLE.has(topSegment(name))) continue;
-      zip.extractEntryTo(entry, STATE_DIR, true, true);
-      touched.add(topSegment(name));
-    }
-    for (const t of touched) restored.push(t);
 
     return { ok: true, status: 200, restored, requiresRestart };
   } finally {
