@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.1](https://github.com/perminder-klair/subwave/compare/v0.38.0...v0.38.1) (2026-07-07)
+
+
+### Bug Fixes
+
+* **tts:** build the AIO kokoro venv on Python 3.12 so misaki 0.9.4 installs ([#909](https://github.com/perminder-klair/subwave/issues/909)) ([69c66ac](https://github.com/perminder-klair/subwave/commit/69c66ac5a9d61e2b758cbd0d4a2cd23785129f2e))
+
 ## [0.38.0](https://github.com/perminder-klair/subwave/compare/v0.37.0...v0.38.0) (2026-07-07)
 
 
