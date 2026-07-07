@@ -3,6 +3,7 @@
 // otherwise the admin-selected active persona — settings.getEffectivePersona).
 
 import * as settings from '../../../settings.js';
+import { resolveCloudModelForPersona } from '../speech/cloud-speech.js';
 
 // Paralinguistic tags Chatterbox renders as actual non-verbal sounds. Every
 // other engine (piper, kokoro, cloud) reads `[laugh]` aloud as the word
@@ -11,6 +12,19 @@ import * as settings from '../../../settings.js';
 const CHATTERBOX_TAG_HINT =
   '\n\nYou may sparingly insert non-verbal cues in square brackets: [laugh], [chuckle], [sigh], [cough]. Use them only where genuinely natural — at most one per segment, and never as filler.';
 
+// ElevenLabs v3 renders bracketed audio tags as actual expressive cues rather
+// than reading them aloud (issue #696). Gated on the RESOLVED cloud model —
+// only eleven_v3* families support this — so an ElevenLabs persona still on
+// v2 (or a persona whose provider override resolves to eleven_flash_v2_5)
+// never sees the hint. Direct mirror of CHATTERBOX_TAG_HINT above; the base
+// DJ prompt template already forbids asterisks and quotes but says nothing
+// about brackets, so no rule loosening is needed for either engine.
+const ELEVENLABS_V3_TAG_HINT = CHATTERBOX_TAG_HINT;
+
+function isElevenLabsV3(model: string): boolean {
+  return /^eleven[_-]?v3/i.test(model || '');
+}
+
 // `persona` overrides the on-air persona — used by the persona-handoff
 // generators (generateSignoff / generateHandoffGreeting) to render the sign-off
 // under the OUTGOING persona and the greeting under the incoming one, since the
@@ -18,13 +32,24 @@ const CHATTERBOX_TAG_HINT =
 // and by the guest-speaker rotation (settings.pickOnAirSpeaker) to voice a
 // standalone segment under a co-host. The roster clause tells the speaker who
 // else is in the studio when the active show has guests (empty otherwise).
-export function djSystem(persona: any = settings.getEffectivePersona()) {
+//
+// `cloudModel` optionally overrides the resolved cloud TTS model for the
+// ElevenLabs v3 tag hint. Left blank, the resolver runs against the passed
+// persona — which is what every current caller wants. Kept as an override so a
+// future caller who already resolved the model (e.g. a preview endpoint) can
+// pass it in without re-resolving, per PR #696 owner review: "thread the
+// effective model into djSystem…pass it in explicitly."
+export function djSystem(
+  persona: any = settings.getEffectivePersona(),
+  cloudModel: string = resolveCloudModelForPersona(persona),
+) {
   const s = settings.get();
   const base = settings.renderDjPrompt(persona, {
     station: s.station,
     location: s.weather?.locationName,
   }) + settings.onAirRosterClause(persona);
   if (persona?.tts?.engine === 'chatterbox') return base + CHATTERBOX_TAG_HINT;
+  if (persona?.tts?.engine === 'cloud' && isElevenLabsV3(cloudModel)) return base + ELEVENLABS_V3_TAG_HINT;
   return base;
 }
 

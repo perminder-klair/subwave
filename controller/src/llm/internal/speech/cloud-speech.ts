@@ -25,6 +25,26 @@ const CLOUD_DEFAULT_MODELS: Record<string, string> = {
   elevenlabs: 'eleven_flash_v2_5',
 };
 
+// Resolve the cloud TTS model that a given persona will actually be voiced by,
+// mirroring the exact rule speak() applies below: persona picks the provider,
+// the global tts.cloud holds the model, and a persona that overrode the
+// provider away from the global one falls back to the new provider's default
+// (openai-compatible has no default so it keeps the global model). Empty
+// string when the persona isn't on the cloud engine or the config is
+// unresolved — callers should treat that as "don't apply model-specific
+// hints". Callers pass this into djSystem() so the DJ prompt layer can gate a
+// hint on the model that actually resolves at speak() time — NOT the raw
+// global model and NOT the persona's provider alone (issue #696).
+export function resolveCloudModelForPersona(persona: any): string {
+  if (persona?.tts?.engine !== 'cloud') return '';
+  const base = cloudCfg();
+  const personaProvider = persona?.tts?.cloudProvider;
+  if (personaProvider && personaProvider !== base.provider) {
+    return CLOUD_DEFAULT_MODELS[personaProvider] || base.model || '';
+  }
+  return base.model || '';
+}
+
 // Speech-rate multiplier limits per provider. A value outside the supported
 // range makes the provider API reject the request, so we clamp before calling.
 // ElevenLabs allows 0.7–1.2; OpenAI allows 0.25–4.0.
