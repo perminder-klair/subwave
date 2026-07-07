@@ -17,9 +17,44 @@
 const THINK_TAG_RE = /<think>[\s\S]*?<\/think>\s*/gi;
 const DANGLING_THINK_RE = /^[\s\S]*?<\/think>\s*/i;
 
+// Harmony / channel reasoning format (gpt-oss, Gemma-4): the model emits its
+// deliberation in a `thought`/`analysis` channel before the answer's `final`
+// channel, e.g.
+//   <|channel|>thought<|message|>…reasoning…<|channel|>final<|message|>…answer…
+// On the openai-compatible path reasoning_format:"deepseek" routes this to
+// reasoning_content so it never reaches us — but on a build or model that still
+// leaks it into `content`, strip it here (the <think> handling above only
+// catches the Qwen/R1 tag form). Some llama.cpp builds emit the tokens without
+// the trailing pipe (`<|channel>thought`), so the pipe before `>` is optional.
+//
+// The reliable primitive is "keep only the FINAL channel's message". When no
+// final channel is present the reply is all reasoning scaffolding (the answer
+// got stuck in the thought channel), so we drop from the first channel opener
+// on — returning '' rather than speaking the deliberation aloud.
+const FINAL_CHANNEL_RE = /<\|channel\|?>\s*final\s*<\|message\|?>/gi;
+const ANY_CHANNEL_OPEN_RE = /<\|channel\|?>/i;
+const HARMONY_TOKENS_RE = /<\|(?:start|end|return|message|channel)\|?>/gi;
+
 export function stripThinking(s: any): any {
   if (!s) return s;
-  return s.replace(THINK_TAG_RE, '').replace(DANGLING_THINK_RE, '').trim();
+  let t = s.replace(THINK_TAG_RE, '').replace(DANGLING_THINK_RE, '');
+  // Keep only the text after the LAST final-channel opener, if any.
+  let lastFinalEnd = -1;
+  for (const m of t.matchAll(FINAL_CHANNEL_RE)) {
+    lastFinalEnd = (m.index ?? 0) + m[0].length;
+  }
+  if (lastFinalEnd !== -1) {
+    t = t.slice(lastFinalEnd);
+  } else {
+    // No final channel — if any channel scaffolding is present, everything from
+    // the first opener on is trapped reasoning; keep only what precedes it.
+    const open = t.search(ANY_CHANNEL_OPEN_RE);
+    if (open !== -1) t = t.slice(0, open);
+  }
+  // Sweep up any leftover harmony control tokens (a trailing <|end|>/<|return|>).
+  // These literals never appear in a real DJ script.
+  t = t.replace(HARMONY_TOKENS_RE, '');
+  return t.trim();
 }
 
 // Pull a JSON object out of a free-text reply: drop ```json fences and any

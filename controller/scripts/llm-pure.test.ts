@@ -11,7 +11,7 @@ import { generateText, APICallError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
-import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
+import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
 import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
@@ -393,6 +393,21 @@ async function main() {
     assert.equal(appliedNumCtx({ provider: 'openai', model: 'gpt-4.1-mini', numCtx: 8192 }), null);
     assert.equal(appliedNumCtx({ provider: 'locca', model: 'qwen3', numCtx: 8192 }), null);
   });
+  await test('appliedRepeatPenalty: body-injection providers only, and only when > 1.0', () => {
+    // openai-compatible + locca inject via the request body (the openai
+    // provider can't carry repeat_penalty in providerOptions).
+    assert.equal(appliedRepeatPenalty({ provider: 'openai-compatible', repeatPenalty: 1.15 }), 1.15);
+    assert.equal(appliedRepeatPenalty({ provider: 'locca', repeatPenalty: 1.25 }), 1.25);
+    // 1.0 (or below) is a no-op — never injected.
+    assert.equal(appliedRepeatPenalty({ provider: 'openai-compatible', repeatPenalty: 1.0 }), null);
+    // Ollama reads its own value via providerOptions.ollama.options — not here
+    // (no double-write into the sampling record).
+    assert.equal(appliedRepeatPenalty({ provider: 'ollama', repeatPenalty: 1.2 }), null);
+    // Cloud providers never inject.
+    assert.equal(appliedRepeatPenalty({ provider: 'openai', repeatPenalty: 1.2 }), null);
+    // Missing / junk value → null, no throw.
+    assert.equal(appliedRepeatPenalty({ provider: 'openai-compatible' }), null);
+  });
 
   await test('forcedToolChoice: only the literal "auto" downgrades; everything else is "required" (issue #570)', () => {
     // Opt-in downgrade for crash-prone forced-tool servers (newer Intel vLLM).
@@ -447,6 +462,23 @@ async function main() {
     assert.equal(stripThinking('<think>reasoning</think>hello'), 'hello');
     assert.equal(stripThinking('leftover reasoning</think>  the answer'), 'the answer');
     assert.equal(stripThinking('plain text'), 'plain text');
+  });
+  await test('stripThinking strips Gemma/harmony channel reasoning, keeps the final message', () => {
+    // thought → final: keep only the final channel's message
+    assert.equal(
+      stripThinking('<|channel|>thought<|message|>let me think…<|channel|>final<|message|>Coming up next: a classic.'),
+      'Coming up next: a classic.',
+    );
+    // token variant without the trailing pipe (<|channel>thought)
+    assert.equal(
+      stripThinking('<|channel>analysis<|message>deliberating<|channel>final<|message>Here we go.'),
+      'Here we go.',
+    );
+    // no final channel — the answer is trapped in the thought channel; strip to
+    // empty rather than speak the deliberation aloud
+    assert.equal(stripThinking('<|channel|>thought<|message|>hmm, still thinking'), '');
+    // plain text with no channel tokens is untouched
+    assert.equal(stripThinking('Just a normal DJ line.'), 'Just a normal DJ line.');
   });
   await test('extractJson pulls the object out of fences and prose', () => {
     assert.equal(extractJson('```json\n{"a":1}\n```'), '{"a":1}');

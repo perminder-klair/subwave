@@ -30,7 +30,7 @@ import { Output, stepCountIs, hasToolCall, ToolLoopAgent, tool } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
 import { stripThinking, extractJson, usageOf, flattenToolCalls, failureDiagnostics } from '../core/pure.js';
-import { needsToolCallObject, providerOptions, samplingWithNumCtx, forcedToolChoice } from '../provider/capabilities.js';
+import { needsToolCallObject, providerOptions, samplingWithLocalKnobs, forcedToolChoice } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { agentPlan } from './plan.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
@@ -134,7 +134,7 @@ export async function djAgent({
           return {
             value: { object, steps: 0, toolCalls: [] },
             via: lastVia,
-            sampling: samplingWithNumCtx(leg.cfg, { temperature }),
+            sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
             usage,
             extra: { system, messages, toolCalls: [], steps: 0, response: JSON.stringify(object, null, 2) },
           };
@@ -184,7 +184,7 @@ export async function djAgent({
               return {
                 value: { object: nObj, steps: nSteps, toolCalls },
                 via: lastVia,
-                sampling: samplingWithNumCtx(leg.cfg, { temperature }),
+                sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
                 usage: usageOf(nr),
                 extra: { system, messages, toolCalls, steps: nSteps, response: JSON.stringify(nObj, null, 2) },
               };
@@ -310,7 +310,7 @@ export async function djAgent({
         return {
           value: { object, steps, toolCalls },
           via: lastVia,
-          sampling: samplingWithNumCtx(leg.cfg, { temperature }),
+          sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
           usage: usageOf(result),
           // Full, untruncated — the agent's entire input and trail.
           extra: {

@@ -27,7 +27,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
-import { capabilitiesFor } from './capabilities.js';
+import { capabilitiesFor, appliedRepeatPenalty } from './capabilities.js';
 
 // Memoise built clients so we don't reconstruct a provider on every call.
 // Keyed by a signature that changes whenever provider/model/key changes, so a
@@ -88,6 +88,50 @@ export function noThinkFetch(url: any, init: any, baseFetch: any = fetch) {
   return baseFetch(url, init);
 }
 
+// Fetch wrapper for the openai-compatible / locca (llama.cpp / vLLM / LM Studio)
+// path. The AI SDK's openai provider has no first-class field for these knobs,
+// and it validates providerOptions against its own schema — so anything not in
+// that schema is dropped. We inject them straight into the JSON request body
+// instead (servers ignore keys they don't recognise, same bet the existing
+// chat_template_kwargs injection already makes):
+//   • repeat_penalty — llama.cpp's own default is 1.0 (OFF), so the operator's
+//     configured repetition floor is otherwise never applied and the tool-loop
+//     agent can run away repeating a token block (gist quirk #2). This is the
+//     ONLY path that carries it to the agent/object calls, which never pass
+//     repeat_penalty through providerOptions. `repeat_penalty` is llama.cpp's
+//     param name (vLLM's is `repetition_penalty`); to opt out, set
+//     llm.repeatPenalty to 1.0. We never clobber a value already on the body.
+//   • reasoning off → enable_thinking:false PLUS reasoning_format. Gemma-4's
+//     chat template pre-seeds an empty <|channel|>thought block even with
+//     enable_thinking:false, and with reasoning_format unset (defaults to none)
+//     llama.cpp routes that thought to `content`, so it leaks into the visible
+//     script and reaches TTS. reasoning_format:"deepseek" routes it to
+//     reasoning_content, which the SDK surfaces as a reasoning part, not text
+//     (gist quirk #4).
+export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch) {
+  const penalty = appliedRepeatPenalty(cfg);
+  const noThink = cfg?.reasoning !== true;
+  return (url: any, init: any) => {
+    if (init?.body && typeof init.body === 'string') {
+      try {
+        const body = JSON.parse(init.body);
+        if (penalty != null && body.repeat_penalty === undefined) {
+          body.repeat_penalty = penalty;
+        }
+        if (noThink) {
+          body.chat_template_kwargs = {
+            ...(body.chat_template_kwargs || {}),
+            enable_thinking: false,
+          };
+          if (body.reasoning_format === undefined) body.reasoning_format = 'deepseek';
+        }
+        init = { ...init, body: JSON.stringify(body) };
+      } catch { /* not JSON — leave the request untouched */ }
+    }
+    return baseFetch(url, init);
+  };
+}
+
 // Ollama server URL — from settings (admin UI), falling back to the config
 // default when the settings field is left blank.
 export function ollamaBaseUrl(cfg: any): string {
@@ -129,15 +173,13 @@ export const DEFAULT_REQUESTY_BASE_URL = 'https://router.requesty.ai/v1';
 // Build a LanguageModel for any self-hosted OpenAI-compatible server (llama.cpp,
 // vLLM, LM Studio, locca). `.chat()` pins /v1/chat/completions — these servers
 // don't implement the Responses API the default `provider(id)` would target.
-// Most accept any non-empty key, so fall back to a placeholder. Reasoning off →
-// wrap fetch to force chat_template_kwargs.enable_thinking=false.
+// Most accept any non-empty key, so fall back to a placeholder. The fetch
+// wrapper injects the body-only knobs (repeat_penalty, and — reasoning off —
+// enable_thinking:false + reasoning_format); see openAICompatibleFetch.
 function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: string) {
-  // Reasoning off → force enable_thinking=false (noThinkFetch) THEN capture;
-  // reasoning on → capture only. debugFetch is the inner transport in both
-  // cases, so what's recorded is the body exactly as sent (post no-think).
-  const fetchImpl = cfg.reasoning
-    ? debugFetch
-    : (url: any, init: any) => noThinkFetch(url, init, debugFetch);
+  // debugFetch is the inner transport, so what's recorded is the body exactly
+  // as sent (post-injection).
+  const fetchImpl = openAICompatibleFetch(cfg, debugFetch);
   const provider = createOpenAI({
     baseURL,
     apiKey: cfg.apiKey || 'unused',
