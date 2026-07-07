@@ -15,11 +15,36 @@
 // `llm.reasoning` is off (provider no-think fetch + the Ollama `think` flag);
 // we still strip any leftover tags defensively here.
 const THINK_TAG_RE = /<think>[\s\S]*?<\/think>\s*/gi;
-const DANGLING_THINK_RE = /^[\s\S]*?<\/think>\s*/i;
+const CLOSE_THINK_RE = /<\/think>/i;
+const ANY_THINK_TAG_RE = /<\/?think>/gi;
+
+// Normalise a segment for the repetition check (lowercase + collapse whitespace).
+function normSeg(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, ' ').trim();
+}
 
 export function stripThinking(s: any): any {
-  if (!s) return s;
-  return s.replace(THINK_TAG_RE, '').replace(DANGLING_THINK_RE, '').trim();
+  if (!s || typeof s !== 'string') return s;
+  // 1. Well-formed <think>…</think> blocks.
+  let t = s.replace(THINK_TAG_RE, '');
+  // 2. Stray closing tags with no opener. Two shapes reach here:
+  //    (a) a genuine reasoning leak — `reasoning</think>answer`, ONE close tag,
+  //        the answer follows it → keep the LAST segment.
+  //    (b) a runaway loop where a reasoning model (thinking not actually
+  //        suppressed by the endpoint, e.g. an Ollama :cloud GLM) emits </think>
+  //        as a separator between repeated near-identical answers until it hits
+  //        the output-token cap (live incident 2026-07-07, generateSignoff). The
+  //        tail is a truncated duplicate, so keep the FIRST complete segment.
+  if (CLOSE_THINK_RE.test(t)) {
+    const segs = t.split(/<\/think>/i).map((x) => x.trim()).filter(Boolean);
+    if (segs.length) {
+      const norm = segs.map(normSeg);
+      const hasRepeat = norm.some((v, i) => norm.indexOf(v) !== i);
+      t = segs.length >= 3 || hasRepeat ? segs[0] : segs[segs.length - 1];
+    }
+  }
+  // 3. Belt-and-suspenders — no stray <think>/</think> ever reaches TTS/booth.
+  return t.replace(ANY_THINK_TAG_RE, '').trim();
 }
 
 // Pull a JSON object out of a free-text reply: drop ```json fences and any
