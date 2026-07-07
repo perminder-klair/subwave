@@ -196,6 +196,24 @@ export async function speak(
   const isCompat = c.provider === 'openai-compatible';
   const speed = clampSpeed(config.tts.cloudSpeed * (speedScale != null ? speedScale : 1), c.provider);
 
+  // ElevenLabs voice_settings — expressive knobs the operator tunes in the
+  // Cloud TTS section of admin → Settings (issue #696). Only spread when the
+  // provider is actually elevenlabs so the openai / openai-compatible request
+  // shape stays byte-identical. The AI SDK's ElevenLabs provider exposes them
+  // as camelCase `voiceSettings.*` on `providerOptions.elevenlabs`.
+  const elevenlabsOpts = c.provider === 'elevenlabs'
+    ? {
+      elevenlabs: {
+        voiceSettings: {
+          stability: c.voiceStability,
+          style: c.voiceStyle,
+          similarityBoost: c.voiceSimilarityBoost,
+          useSpeakerBoost: c.voiceUseSpeakerBoost,
+        },
+      },
+    }
+    : null;
+
   const result = await generateSpeech({
     model: speechModel(c),
     text,
@@ -210,6 +228,7 @@ export async function speak(
     // openai-compatible: omit the param entirely and let the server choose —
     // `result.audio.format` below drives the file extension regardless.
     ...(isCompat ? {} : { outputFormat: c.provider === 'elevenlabs' ? 'mp3' : 'wav' }),
+    ...(elevenlabsOpts ? { providerOptions: elevenlabsOpts } : {}),
   });
 
   const fmt = result.audio.format || 'mp3';

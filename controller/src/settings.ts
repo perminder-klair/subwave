@@ -878,6 +878,16 @@ const DEFAULTS = {
       // (e.g. http://192.168.1.101:5000/v1). Required — and only used — when
       // provider === 'openai-compatible'.
       baseUrl: '',
+      // ElevenLabs voice_settings. Applied ONLY when provider is 'elevenlabs';
+      // ignored (and never sent) for openai / openai-compatible. All four match
+      // ElevenLabs' native ranges: stability, style, similarity_boost ∈ [0,1],
+      // use_speaker_boost is a bool. Defaults mirror ElevenLabs' UI defaults so
+      // an unconfigured install renders exactly like the SDK's own baseline
+      // (issue #696).
+      voiceStability: 0.5,
+      voiceStyle: 0,
+      voiceSimilarityBoost: 0.75,
+      voiceUseSpeakerBoost: true,
     },
     // Remote engine — a user-configured self-hosted TTS endpoint that renders
     // audio over HTTP (POST /speak → audio body, gated on a /health probe).
@@ -1629,6 +1639,25 @@ export async function load() {
           typeof stored.tts?.cloud?.baseUrl === 'string'
             ? stored.tts.cloud.baseUrl.trim()
             : DEFAULTS.tts.cloud.baseUrl,
+        // ElevenLabs voice_settings — clamped to [0,1] on load so a hand-edited
+        // settings.json can't ship an out-of-range value to the provider (which
+        // would 400 the whole speak call, silently dropping the voice).
+        voiceStability:
+          typeof stored.tts?.cloud?.voiceStability === 'number'
+            ? clamp01(stored.tts.cloud.voiceStability)
+            : DEFAULTS.tts.cloud.voiceStability,
+        voiceStyle:
+          typeof stored.tts?.cloud?.voiceStyle === 'number'
+            ? clamp01(stored.tts.cloud.voiceStyle)
+            : DEFAULTS.tts.cloud.voiceStyle,
+        voiceSimilarityBoost:
+          typeof stored.tts?.cloud?.voiceSimilarityBoost === 'number'
+            ? clamp01(stored.tts.cloud.voiceSimilarityBoost)
+            : DEFAULTS.tts.cloud.voiceSimilarityBoost,
+        voiceUseSpeakerBoost:
+          typeof stored.tts?.cloud?.voiceUseSpeakerBoost === 'boolean'
+            ? stored.tts.cloud.voiceUseSpeakerBoost
+            : DEFAULTS.tts.cloud.voiceUseSpeakerBoost,
       },
       remote: {
         url:
@@ -2752,6 +2781,27 @@ export async function update(patch) {
           throw new Error('tts.cloud.baseUrl must start with http:// or https://');
         }
         next.tts.cloud.baseUrl = v.replace(/\/+$/, ''); // strip trailing slashes
+      }
+      // ElevenLabs voice_settings — clamped, not rejected. The UI sliders can't
+      // produce out-of-range values, so a strict throw would only fire for a
+      // hand-crafted payload; clamp so the DJ never goes silent on a typo.
+      // Applied for every provider on save so switching provider later
+      // preserves the operator's tuning, but only spread into providerOptions
+      // in cloud-speech.ts when provider === 'elevenlabs' (see there).
+      if (c.voiceStability !== undefined) {
+        const n = Number(c.voiceStability);
+        next.tts.cloud.voiceStability = Number.isFinite(n) ? clamp01(n) : DEFAULTS.tts.cloud.voiceStability;
+      }
+      if (c.voiceStyle !== undefined) {
+        const n = Number(c.voiceStyle);
+        next.tts.cloud.voiceStyle = Number.isFinite(n) ? clamp01(n) : DEFAULTS.tts.cloud.voiceStyle;
+      }
+      if (c.voiceSimilarityBoost !== undefined) {
+        const n = Number(c.voiceSimilarityBoost);
+        next.tts.cloud.voiceSimilarityBoost = Number.isFinite(n) ? clamp01(n) : DEFAULTS.tts.cloud.voiceSimilarityBoost;
+      }
+      if (c.voiceUseSpeakerBoost !== undefined) {
+        next.tts.cloud.voiceUseSpeakerBoost = !!c.voiceUseSpeakerBoost;
       }
       // An OpenAI-compatible TTS server has no canonical endpoint — refuse to
       // save the provider without one. Mirrors the LLM-side check below.

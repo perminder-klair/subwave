@@ -120,6 +120,14 @@ interface CloudTtsCfg {
   model: string;
   voice: string;
   baseUrl: string;
+  // ElevenLabs voice_settings (issue #696). All four are read + saved
+  // regardless of provider so switching provider later preserves the
+  // operator's tuning, but the UI + the outbound request only surface them
+  // when provider === 'elevenlabs'.
+  voiceStability: number;
+  voiceStyle: number;
+  voiceSimilarityBoost: number;
+  voiceUseSpeakerBoost: boolean;
 }
 
 interface TtsForm {
@@ -480,6 +488,11 @@ export default function SettingsPanel() {
           model: v.tts?.cloud?.model ?? '',
           voice: v.tts?.cloud?.voice ?? '',
           baseUrl: v.tts?.cloud?.baseUrl ?? '',
+          // ElevenLabs voice_settings — defaults mirror the server's DEFAULTS.
+          voiceStability: typeof v.tts?.cloud?.voiceStability === 'number' ? v.tts.cloud.voiceStability : 0.5,
+          voiceStyle: typeof v.tts?.cloud?.voiceStyle === 'number' ? v.tts.cloud.voiceStyle : 0,
+          voiceSimilarityBoost: typeof v.tts?.cloud?.voiceSimilarityBoost === 'number' ? v.tts.cloud.voiceSimilarityBoost : 0.75,
+          voiceUseSpeakerBoost: typeof v.tts?.cloud?.voiceUseSpeakerBoost === 'boolean' ? v.tts.cloud.voiceUseSpeakerBoost : true,
         },
         remote: { url: v.tts?.remote?.url ?? '' },
         // Per-engine voice level (dB). Zero default for all 6 engine ids, then
@@ -1775,6 +1788,87 @@ function TtsSpeedField({
   );
 }
 
+// ElevenLabs voice_settings — the four expressive knobs their API takes on
+// every request. Ranges match ElevenLabs' native 0..1 (stability, style,
+// similarity_boost) plus the boolean use_speaker_boost. Rendered only when the
+// cloud provider is `elevenlabs` — other providers ignore the fields, so
+// showing them there would be misleading. Design matches TtsGainField /
+// TtsSpeedField exactly (same field class, same 360px cap, same label +
+// tabular readout row) so the block blends into the surrounding form.
+const ELEVENLABS_SLIDER_STEP = 0.01;
+
+function formatPct(v: number): string {
+  return `${Math.round(v * 100)}%`;
+}
+
+function ElevenLabsVoiceSettingsField({
+  form,
+  setForm,
+}: {
+  form: FormState;
+  setForm: FormUpdater;
+}) {
+  const c = form.tts.cloud;
+  const setCloud = (patch: Partial<CloudTtsCfg>) =>
+    setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, ...patch } } }));
+  const slider = (
+    label: string,
+    hint: ReactNode,
+    key: 'voiceStability' | 'voiceStyle' | 'voiceSimilarityBoost',
+  ) => (
+    <div className="field mt-4">
+      <div className="flex items-center justify-between gap-3">
+        <Label>{label}</Label>
+        <span className="font-mono text-[12px] text-ink tabular-nums">{formatPct(c[key])}</span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={ELEVENLABS_SLIDER_STEP}
+        value={c[key]}
+        onChange={(e: ChangeEvent<HTMLInputElement>) => setCloud({ [key]: Number(e.target.value) } as Partial<CloudTtsCfg>)}
+        aria-label={label}
+        className="mt-1.5 w-full max-w-[360px] accent-[var(--accent)]"
+      />
+      <div className="field-hint">{hint}</div>
+    </div>
+  );
+  return (
+    <>
+      {slider(
+        'Stability',
+        <>Lower is more expressive but can wander; higher is steadier but flatter. ElevenLabs default is <code>50%</code>.</>,
+        'voiceStability',
+      )}
+      {slider(
+        'Style exaggeration',
+        <>How much the reference voice’s style is amplified. Higher costs more latency and can hurt stability. ElevenLabs default is <code>0%</code>.</>,
+        'voiceStyle',
+      )}
+      {slider(
+        'Similarity boost',
+        <>How tightly the output tracks the reference voice. ElevenLabs default is <code>75%</code>.</>,
+        'voiceSimilarityBoost',
+      )}
+      <div className="field mt-4">
+        <label className="flex cursor-pointer items-center gap-2 text-[12px] leading-[1.5] text-ink">
+          <input
+            type="checkbox"
+            checked={c.voiceUseSpeakerBoost}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setCloud({ voiceUseSpeakerBoost: e.target.checked })}
+            className="accent-[var(--accent)]"
+          />
+          <span>Speaker boost</span>
+        </label>
+        <div className="field-hint">
+          Sharpens similarity to the reference voice at a small latency cost. On by default.
+        </div>
+      </div>
+    </>
+  );
+}
+
 // Prominent, self-contained "engine not installed" callout with a step-by-step
 // setup guide. Chatterbox and PocketTTS both live in the optional `tts-heavy`
 // sidecar, so the recommended path is identical; only the engine label and the
@@ -1923,6 +2017,10 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
           model: form.tts.cloud.model,
           voice: form.tts.cloud.voice,
           baseUrl: form.tts.cloud.baseUrl,
+          voiceStability: form.tts.cloud.voiceStability,
+          voiceStyle: form.tts.cloud.voiceStyle,
+          voiceSimilarityBoost: form.tts.cloud.voiceSimilarityBoost,
+          voiceUseSpeakerBoost: form.tts.cloud.voiceUseSpeakerBoost,
         },
         remote: { url: form.tts.remote.url },
         // Per-engine voice-level trim. Always sent (server clamps + drops unknown
@@ -1961,7 +2059,16 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     return { ...base, tts: { ...base.tts, defaultEngine: engine } };
   });
 
-  type SavedCloud = { provider?: string; voice?: string; model?: string; baseUrl?: string };
+  type SavedCloud = {
+    provider?: string;
+    voice?: string;
+    model?: string;
+    baseUrl?: string;
+    voiceStability?: number;
+    voiceStyle?: number;
+    voiceSimilarityBoost?: number;
+    voiceUseSpeakerBoost?: boolean;
+  };
   const savedTts: {
     defaultEngine?: string;
     kokoro?: { voice?: string; lang?: string };
@@ -2004,6 +2111,10 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     || (form.tts.cloud.model || '').trim() !== (savedCloud.model || '').trim()
     || (form.tts.cloud.voice || '').trim() !== (savedCloud.voice || '').trim()
     || (form.tts.cloud.baseUrl || '').trim() !== (savedCloud.baseUrl || '').trim()
+    || form.tts.cloud.voiceStability !== (savedCloud.voiceStability ?? 0.5)
+    || form.tts.cloud.voiceStyle !== (savedCloud.voiceStyle ?? 0)
+    || form.tts.cloud.voiceSimilarityBoost !== (savedCloud.voiceSimilarityBoost ?? 0.75)
+    || form.tts.cloud.voiceUseSpeakerBoost !== (savedCloud.voiceUseSpeakerBoost ?? true)
     || (form.tts.remote.url || '').trim() !== savedRemoteUrl
     || gainDirty
     || speedDirty;
@@ -2477,6 +2588,9 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             )}
             <TtsGainField engineId="cloud" form={form} setForm={setForm} />
             <TtsSpeedField engineId="cloud" form={form} setForm={setForm} />
+            {form.tts.cloud.provider === 'elevenlabs' && (
+              <ElevenLabsVoiceSettingsField form={form} setForm={setForm} />
+            )}
             {!isCompat && (() => {
               const kv = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
               return <KeyStatus envVar={kv} present={!!data.env?.[kv]} />;
