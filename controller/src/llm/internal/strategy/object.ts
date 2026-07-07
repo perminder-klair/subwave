@@ -16,7 +16,7 @@ import { generateText, Output } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
 import { stripThinking, extractJson, usageOf, failureDiagnostics } from '../core/pure.js';
-import { needsToolCallObject, providerOptions, samplingWithNumCtx } from '../provider/capabilities.js';
+import { needsToolCallObject, providerOptions, samplingWithLocalKnobs } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
 
@@ -87,7 +87,7 @@ export async function djObject({
           return {
             value: object,
             via: lastVia,
-            sampling: samplingWithNumCtx(l.cfg, { temperature }),
+            sampling: samplingWithLocalKnobs(l.cfg, { temperature }),
             usage,
             // Full, untruncated — the /debug surface shows the whole system prompt.
             extra: { system, user: prompt, response: JSON.stringify(object).slice(0, 500) },

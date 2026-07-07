@@ -143,6 +143,7 @@ interface LlmFallbackForm {
   model: string;
   ollamaUrl: string;
   numCtx: number;
+  repeatPenalty: number;
   baseUrl: string;
   reasoning: boolean;
 }
@@ -152,6 +153,7 @@ interface LlmForm {
   model: string;
   ollamaUrl: string;
   numCtx: number;
+  repeatPenalty: number;
   baseUrl: string;
   reasoning: boolean;
   toolChoice: string;
@@ -510,6 +512,7 @@ export default function SettingsPanel() {
         model: v.llm?.model ?? '',
         ollamaUrl: v.llm?.ollamaUrl ?? '',
         numCtx: typeof v.llm?.numCtx === 'number' ? v.llm.numCtx : 16384,
+        repeatPenalty: typeof v.llm?.repeatPenalty === 'number' ? v.llm.repeatPenalty : 1.15,
         baseUrl: v.llm?.baseUrl ?? '',
         reasoning: !!v.llm?.reasoning,
         toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
@@ -528,6 +531,7 @@ export default function SettingsPanel() {
           model: v.llm?.fallback?.model ?? '',
           ollamaUrl: v.llm?.fallback?.ollamaUrl ?? '',
           numCtx: typeof v.llm?.fallback?.numCtx === 'number' ? v.llm.fallback.numCtx : 16384,
+          repeatPenalty: typeof v.llm?.fallback?.repeatPenalty === 'number' ? v.llm.fallback.repeatPenalty : 1.15,
           baseUrl: v.llm?.fallback?.baseUrl ?? '',
           reasoning: !!v.llm?.fallback?.reasoning,
         },
@@ -2746,6 +2750,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         model: form.llm.model,
         ollamaUrl: form.llm.ollamaUrl,
         numCtx: form.llm.numCtx,
+        repeatPenalty: form.llm.repeatPenalty,
         baseUrl: form.llm.baseUrl,
         reasoning: form.llm.reasoning,
         toolChoice: form.llm.toolChoice,
@@ -2767,6 +2772,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
           model: form.llm.fallback.model,
           ollamaUrl: form.llm.fallback.ollamaUrl,
           numCtx: form.llm.fallback.numCtx,
+          repeatPenalty: form.llm.fallback.repeatPenalty,
           baseUrl: form.llm.fallback.baseUrl,
           reasoning: form.llm.fallback.reasoning,
           ...(form.llm.fallback.provider === 'openai-compatible' && compatFallbackKeyInput.trim()
@@ -2971,6 +2977,34 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 >
                   locca on GitHub ↗
                 </a>
+              </div>
+            </div>
+          )}
+
+          {(form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca') && (
+            <div className="field">
+              <Label>Repetition penalty (repeat_penalty)</Label>
+              <Input
+                type="number"
+                min={1}
+                max={2}
+                step={0.05}
+                value={form.llm.repeatPenalty}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, llm: { ...f.llm, repeatPenalty: Number(e.target.value) } }))
+                }
+                placeholder="1.15"
+                className="max-w-[200px]"
+              />
+              <div className="field-hint">
+                Repetition penalty sent to the local server (llama.cpp, vLLM, LM
+                Studio). llama.cpp&apos;s own default is <code>1.0</code> = OFF,
+                which lets the track-picker agent run away repeating a token block
+                and never finish a pick. <strong>1.15</strong> is a sane floor;
+                raise toward 1.25 if a model still loops. Set <code>1.0</code> to
+                disable (e.g. a vLLM server that rejects the{' '}
+                <code>repeat_penalty</code> field — its name there is{' '}
+                <code>repetition_penalty</code>).
               </div>
             </div>
           )}
@@ -3241,6 +3275,29 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   </div>
                   {compatFallbackKeyTest && <KeyTestResult result={compatFallbackKeyTest} />}
                 </>
+              )}
+
+              {(form.llm.fallback.provider === 'openai-compatible' || form.llm.fallback.provider === 'locca') && (
+                <div className="field">
+                  <Label>Repetition penalty (repeat_penalty)</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={2}
+                    step={0.05}
+                    value={form.llm.fallback.repeatPenalty}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, repeatPenalty: Number(e.target.value) } } }))
+                    }
+                    placeholder="1.15"
+                    className="max-w-[200px]"
+                  />
+                  <div className="field-hint">
+                    Repetition penalty for the backup local server. <strong>1.15</strong>{' '}
+                    is a sane floor (llama.cpp&apos;s own default is <code>1.0</code> =
+                    off); set <code>1.0</code> to disable.
+                  </div>
+                </div>
               )}
 
               {LLM_ENV_VARS[form.llm.fallback.provider] && (() => {

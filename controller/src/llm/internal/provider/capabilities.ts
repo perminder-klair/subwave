@@ -27,6 +27,13 @@ export interface ProviderCapabilities {
   objectStrategy: 'native' | 'tool';
   // repeat_penalty rides inside providerOptions.ollama, so only Ollama reads it.
   repeatPenaltyApplies: boolean;
+  // llama.cpp / vLLM / LM Studio (openai-compatible, locca) take sampling +
+  // thinking controls the AI SDK's openai provider has no first-class field for
+  // (repeat_penalty, reasoning_format, enable_thinking) via a request-body
+  // injection in the fetch wrapper, not providerOptions — the openai provider
+  // validates providerOptions against its own schema and drops the rest. Flags
+  // the providers openAICompatibleFetch() rewrites the body for.
+  samplingViaBody?: boolean;
   // The providerOptions fragment for this provider given the resolved model id +
   // reasoning/forceNoThink flags.
   thinkingBlock(a: ThinkingArgs): Record<string, unknown>;
@@ -66,8 +73,10 @@ const CAPS: Record<string, ProviderCapabilities> = {
   'openai-compatible': {
     objectStrategy: 'tool',
     repeatPenaltyApplies: false,
-    // Thinking suppression is done at the transport layer (noThinkFetch in the
-    // registry), not via providerOptions.
+    // repeat_penalty / reasoning_format / enable_thinking are injected into the
+    // request body at the transport layer (openAICompatibleFetch in the
+    // registry), not via providerOptions — the openai provider would drop them.
+    samplingViaBody: true,
     thinkingBlock: NONE,
   },
   // locca serves local llama.cpp GGUF models — the SAME model class as Ollama,
@@ -79,6 +88,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
   locca: {
     objectStrategy: 'tool',
     repeatPenaltyApplies: false,
+    samplingViaBody: true,
     thinkingBlock: NONE,
   },
   anthropic: {
@@ -182,10 +192,25 @@ export function forcedToolChoice(cfg: any): 'required' | 'auto' {
   return cfg?.toolChoice === 'auto' ? 'auto' : 'required';
 }
 
-// True when repeat_penalty actually reaches the model — gates the sampling log
-// so /debug doesn't claim the value was applied when the provider dropped it.
+// True when repeat_penalty actually reaches the model via providerOptions —
+// gates the sampling log so /debug doesn't claim the value was applied when the
+// provider dropped it. Ollama-only; the body-injection providers are covered by
+// appliedRepeatPenalty() instead.
 export function repeatPenaltyApplies(cfg: any): boolean {
   return capabilitiesFor(cfg?.provider).repeatPenaltyApplies;
+}
+
+// The repeat_penalty a body-injection provider (openai-compatible, locca) will
+// actually send this leg, or null when none is. llama.cpp's own default is
+// 1.0 = OFF, so without this the operator's configured floor is silently
+// dropped and the tool-loop agent can run away repeating a token block until
+// it hits the output cap, never emitting `done` (gist quirk #2). A value of
+// 1.0 (or below) is a no-op, so we skip it to keep the body clean. Reads
+// cfg.repeatPenalty (primary or fallback leg).
+export function appliedRepeatPenalty(cfg: any): number | null {
+  if (!capabilitiesFor(cfg?.provider).samplingViaBody) return null;
+  const rp = Number(cfg?.repeatPenalty);
+  return Number.isFinite(rp) && rp > 1.0 ? rp : null;
 }
 
 // The num_ctx that will actually be sent for this leg, or null when none is.
@@ -205,12 +230,19 @@ export function appliedNumCtx(cfg: any): number | null {
   return null;
 }
 
-// Add the leg's effective num_ctx to a sampling record when one was sent, so
-// /admin/debug shows the context window each call actually ran with. Mirrors how
-// repeat_penalty is conditionally recorded.
-export function samplingWithNumCtx(cfg: any, sampling: any): any {
+// Stamp a sampling record with the local-only knobs each call actually ran with,
+// so /admin/debug reflects them: Ollama's effective num_ctx, and the
+// repeat_penalty injected into the body for openai-compatible / locca (the
+// agent/object paths don't pass repeat_penalty through providerOptions, so this
+// is the only place it gets recorded for them). Ollama's providerOptions-carried
+// repeat_penalty is recorded separately at the djText call site via
+// repeatPenaltyApplies(), so appliedRepeatPenalty() returns null there — no
+// double-write.
+export function samplingWithLocalKnobs(cfg: any, sampling: any): any {
   const n = appliedNumCtx(cfg);
   if (n != null) sampling.num_ctx = n;
+  const rp = appliedRepeatPenalty(cfg);
+  if (rp != null) sampling.repeat_penalty = rp;
   return sampling;
 }
 
