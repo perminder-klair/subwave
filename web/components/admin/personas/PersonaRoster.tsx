@@ -95,7 +95,7 @@ export function PersonaRoster({
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Pill className="text-[8px]">{p.frequency}</Pill>
-                    {p.scriptLength === 'extended' && <Pill className="text-[8px]">extended</Pill>}
+                    {p.scriptLength !== 'concise' && <Pill className="text-[8px]">{p.scriptLength}</Pill>}
                     <Pill className="text-[8px]">{p.tts.engine}</Pill>
                     {p.tts.engine !== 'piper' && p.tts.voice.trim() && (
                       <Pill className="max-w-[120px] truncate text-[8px]">{p.tts.voice.trim()}</Pill>

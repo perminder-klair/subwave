@@ -484,7 +484,7 @@ export default function PersonasPanel() {
                     <div className="flex items-center gap-2">
                       <span className="text-[13px] font-extrabold">{c.displayName}</span>
                       <Pill className="text-[8px]">{c.frequency}</Pill>
-                      {c.scriptLength === 'extended' && <Pill className="text-[8px]">extended</Pill>}
+                      {c.scriptLength !== 'concise' && <Pill className="text-[8px]">{c.scriptLength}</Pill>}
                       {c.djMode && <Pill className="text-[8px]">dj mode</Pill>}
                       {c.language && <Pill className="max-w-[120px] truncate text-[8px]">{c.language}</Pill>}
                     </div>

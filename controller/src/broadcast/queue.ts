@@ -25,14 +25,18 @@ import * as liquidsoapControl from './liquidsoap-control.js';
 
 // Random gap between DJ links on auto-played tracks. The frequency setting
 // scales how chatty the DJ is:
+//   silent     → Infinity (a link is never due; the countdown never reaches 0)
 //   quiet      → uniform 8-20 tracks between links
 //   moderate   → current behaviour (1-9 85% of the time, 10-15 the other 15%)
+//   chatty     → uniform 1-5 tracks
 //   aggressive → uniform 1-3 tracks
 // A DJ-mode persona reads one rung chattier (effectiveFrequency), so it links
 // transitions far more often — a working DJ talks across most of them.
 function pickLinkInterval() {
   const f = settings.effectiveFrequency();
+  if (f === 'silent')     return Infinity;
   if (f === 'quiet')      return 8 + Math.floor(Math.random() * 13);
+  if (f === 'chatty')     return 1 + Math.floor(Math.random() * 5);
   if (f === 'aggressive') return 1 + Math.floor(Math.random() * 3);
   if (Math.random() < 0.15) return 10 + Math.floor(Math.random() * 6);
   return 1 + Math.floor(Math.random() * 9);
@@ -476,10 +480,11 @@ class Queue {
   }
 
   // How many transitions must pass between DJ-mode transition-FX, keyed off the
-  // chattiness ladder. Infinity for quiet personas → no transition FX at all.
+  // chattiness ladder. Infinity for silent/quiet personas → no transition FX.
   sfxTransitionGap(): number {
     const f = settings.effectiveFrequency();
     if (f === 'aggressive') return 4;
+    if (f === 'chatty') return 6;
     if (f === 'moderate') return 8;
     return Infinity;
   }

@@ -28,14 +28,24 @@ export function djSystem(persona: any = settings.getEffectivePersona()) {
   return base;
 }
 
-// Persona-driven verbosity. 'concise' reproduces the historical one-liner
-// segment lengths; 'extended' roughly doubles every segment so a storytelling
-// persona can stretch out. Resolved from the on-air persona, the same way
-// djSystem() resolves it — see settings.getEffectivePersona / SCRIPT_LENGTHS.
-// The `link` and `segment` phrases also feed the agent-path Zod schema
-// descriptions (dj-agent.ts pickSchema, skills/_agent.ts segment schemas), so
-// keep them readable mid-sentence — they must slot into "set this to …" prose.
+// Persona-driven verbosity, one entry per SCRIPT_LENGTHS rung. 'concise'
+// reproduces the historical one-liner segment lengths; 'one-liner' cuts every
+// segment to a single quick line; 'extended' roughly doubles; 'storyteller'
+// roughly triples for long-form monologues. Resolved from the on-air persona,
+// the same way djSystem() resolves it — see settings.getEffectivePersona /
+// SCRIPT_LENGTHS. The `link` and `segment` phrases also feed the agent-path
+// Zod schema descriptions (dj-agent.ts pickSchema, skills/_agent.ts segment
+// schemas), so keep them readable mid-sentence — they must slot into
+// "set this to …" prose.
 const LENGTH_PHRASES = {
+  'one-liner': {
+    intro:     'One punchy sentence — name it and get out of the way.',
+    link:      'one short sentence',
+    stationId: 'a station ident of just a few words',
+    hourly:    'a few words',
+    adlib:     'one short sentence',
+    segment:   'one short sentence, no more',
+  },
   concise: {
     intro:     'Keep it brief — 2 to 4 sentences.',
     link:      '1-2 sentences',
@@ -52,10 +62,19 @@ const LENGTH_PHRASES = {
     adlib:     '4-6 sentences',
     segment:   'three to five sentences — room to tell it properly',
   },
+  storyteller: {
+    intro:     'Really stretch out — 8 to 12 sentences. Build a scene, digress if it earns its place, and land it back on the track.',
+    link:      '6-9 sentences',
+    stationId: 'a 3-4 sentence station ident with some character',
+    hourly:    '3-4 sentences',
+    adlib:     '6-9 sentences',
+    segment:   'five to eight sentences — a proper piece, told at ease',
+  },
 };
 
 export function lengthMode(persona: any = settings.getEffectivePersona()) {
-  return persona?.scriptLength === 'extended' ? 'extended' : 'concise';
+  const l = persona?.scriptLength;
+  return l && Object.hasOwn(LENGTH_PHRASES, l) ? l : 'concise';
 }
 
 // The length directive for one segment kind, for the on-air (or given) persona.

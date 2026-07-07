@@ -19,13 +19,19 @@ export function shouldFire(kind, now = new Date()) {
   const f = settings.effectiveFrequency(settings.getEffectivePersona(now));
   const m = now.getMinutes();
 
+  // 'silent' never auto-fires anything — manual /dj/segment triggers bypass
+  // this gate entirely (scheduler's command runners don't call shouldFire).
+  if (f === 'silent') return false;
+
   if (kind === 'stationId') {
     if (f === 'quiet')    return m === 45;
     if (f === 'moderate') return m === 15 || m === 45;
     // Never at minute 0 — that's reserved for the hourly time check, which
     // always fires there. Letting both land on the hour stacked a station ID
     // and an hourly check back to back (and, with a between-track link, talking
-    // over each other) — issue #310. Aggressive idents at 15/30/45 instead.
+    // over each other) — issue #310. Chatty and aggressive both ident at
+    // 15/30/45 (three an hour is the ceiling); the rungs differ in link
+    // spacing, segment floors and banter instead.
     return [15, 30, 45].includes(m);
   }
 
@@ -43,7 +49,7 @@ export function shouldFire(kind, now = new Date()) {
     // land on the same minute as another wall-clock talker by construction.
     // Banter is chatty by nature: a quiet persona never auto-fires it (the
     // operator's manual /dj/segment trigger still works), moderate gets at
-    // most one an hour.
+    // most one an hour; chatty and aggressive get both slots.
     if (f === 'quiet')    return false;
     if (f === 'moderate') return m === 20;
     return m === 20 || m === 50;

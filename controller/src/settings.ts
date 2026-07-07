@@ -50,12 +50,17 @@ export const DJ_SOULS = [
 ];
 
 // Ordered ascending in chattiness — effectiveFrequency() steps up this ladder.
-export const FREQUENCIES = ['quiet', 'moderate', 'aggressive'];
+// 'silent' is absolute: the persona never talks on its own (no links, idents,
+// hourlies, banter or segments) — only manual /dj/segment triggers, listener
+// requests and programme beats still speak. 'chatty' sits between the
+// historical moderate and aggressive.
+export const FREQUENCIES = ['silent', 'quiet', 'moderate', 'chatty', 'aggressive'];
 
-// Per-persona verbosity. 'concise' is the historical one-liner behaviour;
-// 'extended' roughly doubles every spoken segment for a storytelling DJ.
-// See llm/dj.js LENGTH_PHRASES for the actual length directives.
-export const SCRIPT_LENGTHS = ['concise', 'extended'];
+// Per-persona verbosity, ascending. 'concise' is the historical default;
+// 'one-liner' cuts every segment to a single quick line, 'extended' roughly
+// doubles, 'storyteller' roughly triples for long-form monologues.
+// See llm/internal/prompts/system.ts LENGTH_PHRASES for the actual directives.
+export const SCRIPT_LENGTHS = ['one-liner', 'concise', 'extended', 'storyteller'];
 
 // Per-persona tone dials. Each is 0-10 with 5 (DIAL_NEUTRAL) the default. A
 // model can't distinguish humour=6 from 7, so rather than inject a raw "7/10"
@@ -114,6 +119,8 @@ export function personaToneDirectives(persona: any): string {
 export function effectiveFrequency(persona: any = getEffectivePersona()) {
   const base = FREQUENCIES.includes(persona?.frequency) ? persona.frequency : 'moderate';
   if (!persona?.djMode) return base;
+  // 'silent' is an explicit operator promise — DJ mode never bumps out of it.
+  if (base === 'silent') return base;
   const i = FREQUENCIES.indexOf(base);
   return FREQUENCIES[Math.min(i + 1, FREQUENCIES.length - 1)];
 }

@@ -110,9 +110,10 @@ export default function ModelsAndTokens() {
           </li>
           <li>
             <strong>Concise scripts</strong> (Admin &rarr; Personas) — each persona's
-            script length can be <em>concise</em> or <em>extended</em>. Concise keeps
-            spoken breaks to a line or two; extended roughly doubles them. Concise means
-            fewer tokens out on every segment.
+            script length runs from <em>one-liner</em> through <em>concise</em> and{' '}
+            <em>extended</em> to <em>storyteller</em>. Concise keeps spoken breaks to a
+            line or two; the longer stops double or triple them. Shorter means fewer
+            tokens out on every segment.
           </li>
           <li>
             <strong>Quiet frequency</strong> (Admin &rarr; Personas) — a persona's

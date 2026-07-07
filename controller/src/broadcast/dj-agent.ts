@@ -122,6 +122,7 @@ function introMsOf(track: any): number | null {
 function runStartProbability(): number {
   const f = settings.effectiveFrequency();
   if (f === 'aggressive') return 0.5;
+  if (f === 'chatty') return 0.4;
   if (f === 'moderate') return 0.3;
   return 0;
 }

@@ -162,9 +162,12 @@ const segmentState: any = {
 };
 
 // Minimum gap between ANY two segments, by station frequency. The cron fires
-// every 5 min; aggressive stations get no extra floor.
+// every 5 min; aggressive stations get no extra floor. Infinity for silent —
+// the auto tick never airs a segment (forced /dj/segment runs bypass this).
 function frequencyFloorMs(freq: string) {
+  if (freq === 'silent') return Infinity;
   if (freq === 'quiet') return 30 * 60 * 1000;
+  if (freq === 'chatty') return 8 * 60 * 1000;
   if (freq === 'aggressive') return 0;
   return 15 * 60 * 1000; // moderate
 }
@@ -202,11 +205,15 @@ function availableCapabilities(ctx: any, now: Date) {
 // and the buildSituation() user message. Same principle as pickSystem.
 function directorSystem(persona: any, caps: any[], freq: string, sfxCatalog: any) {
   const capList = caps.map((c: any) => `- ${c.kind}: ${c.desc}`).join('\n');
-  const tone = freq === 'quiet'
+  // 'silent' never reaches here (the frequency floor blocks the auto tick),
+  // but a forced run treats it like quiet: minimum-presence guidance.
+  const tone = freq === 'quiet' || freq === 'silent'
     ? 'This is a quiet station — silence is your default.'
     : freq === 'aggressive'
       ? 'This is a lively station — frequent presence welcome, never filler.'
-      : 'This is a measured station — speak only when there is something worth saying.';
+      : freq === 'chatty'
+        ? 'This is a talkative station — a good segment is usually welcome, but never filler.'
+        : 'This is a measured station — speak only when there is something worth saying.';
 
   return `${settings.agentPersonaPreamble(persona)}
 
@@ -251,10 +258,11 @@ function buildSituation(ctx: any, { forced = false, contextFields, recentCuriosi
   const cur = queue.current?.track;
   if (cur) lines.push(`On air now: "${cur.title}" by ${cur.artist || 'unknown'}`);
   // The default 140-char recap truncation fits a concise one-liner segment,
-  // but an 'extended' persona's 3-5-sentence segment gets cut after roughly
-  // its first sentence — a topic repeated mid-segment would be invisible to
-  // the anti-repeat instruction. Scale the cap with the persona's verbosity.
-  const recap = queue.getDjRecap({ maxChars: lengthMode() === 'extended' ? 360 : 140 });
+  // but a longer persona's 3-8-sentence segment gets cut after roughly its
+  // first sentence — a topic repeated mid-segment would be invisible to the
+  // anti-repeat instruction. Scale the cap with the persona's verbosity.
+  const RECAP_CHARS: Record<string, number> = { extended: 360, storyteller: 520 };
+  const recap = queue.getDjRecap({ maxChars: RECAP_CHARS[lengthMode()] ?? 140 });
   if (recap) {
     lines.push(`\nWhat you have already said on air recently (do NOT repeat these topics or phrasing):\n${recap}`);
   }

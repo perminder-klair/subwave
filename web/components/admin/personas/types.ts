@@ -102,8 +102,8 @@ export interface CommunityPersona {
   displayName: string;
   tagline?: string;
   soul: string;
-  frequency: 'quiet' | 'moderate' | 'aggressive';
-  scriptLength: 'concise' | 'extended';
+  frequency: 'silent' | 'quiet' | 'moderate' | 'chatty' | 'aggressive';
+  scriptLength: 'one-liner' | 'concise' | 'extended' | 'storyteller';
   djMode: boolean;
   humour?: number;
   localColour?: number;

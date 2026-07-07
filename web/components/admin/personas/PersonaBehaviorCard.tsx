@@ -2,10 +2,13 @@
 // How this persona talks: talk frequency, script length, DJ mode, and the tone
 // dials. Two columns from lg up (settings on the left, dials on the right) so
 // the knobs stay grouped instead of spreading across the full editor width.
+// Frequency and script length are stepped faders (discrete named stops with
+// real scheduling consequences), deliberately distinct from the continuous
+// rotary tone knobs.
 import type { Persona } from './types';
 import { FREQUENCIES, SCRIPT_LENGTHS, TONE_DIALS, toneBandIndex } from './constants';
 import { Card, Toggle } from '../ui';
-import { RadioOption } from './RadioOption';
+import { SteppedFader } from './SteppedFader';
 import { ToneKnob } from './ToneKnob';
 
 interface PersonaBehaviorCardProps {
@@ -20,30 +23,20 @@ export function PersonaBehaviorCard({ persona, update }: PersonaBehaviorCardProp
         {/* LEFT — frequency, script length, DJ mode */}
         <div>
           <div className="rule-label">talk frequency</div>
-          <div className="stack-mobile grid grid-cols-3 gap-2">
-            {FREQUENCIES.map(f => (
-              <RadioOption
-                key={f.id}
-                active={f.id === persona.frequency}
-                label={f.label}
-                desc={f.desc}
-                onSelect={() => update({ frequency: f.id })}
-              />
-            ))}
-          </div>
+          <SteppedFader
+            ariaLabel="Talk frequency"
+            stops={FREQUENCIES}
+            value={persona.frequency || 'moderate'}
+            onChange={id => update({ frequency: id })}
+          />
 
           <div className="rule-label">script length</div>
-          <div className="stack-mobile grid grid-cols-2 gap-2">
-            {SCRIPT_LENGTHS.map(s => (
-              <RadioOption
-                key={s.id}
-                active={s.id === (persona.scriptLength || 'concise')}
-                label={s.label}
-                desc={s.desc}
-                onSelect={() => update({ scriptLength: s.id })}
-              />
-            ))}
-          </div>
+          <SteppedFader
+            ariaLabel="Script length"
+            stops={SCRIPT_LENGTHS}
+            value={persona.scriptLength || 'concise'}
+            onChange={id => update({ scriptLength: id })}
+          />
 
           <div className="rule-label">DJ mode</div>
           <div className="grid grid-cols-[1fr_auto] items-center gap-4">

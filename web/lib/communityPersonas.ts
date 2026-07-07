@@ -18,8 +18,8 @@ export interface CommunityPersona {
   displayName: string; // the DJ's on-air name
   tagline?: string;
   soul: string; // the character prose (PERSONA.md body)
-  frequency: 'quiet' | 'moderate' | 'aggressive';
-  scriptLength: 'concise' | 'extended';
+  frequency: 'silent' | 'quiet' | 'moderate' | 'chatty' | 'aggressive';
+  scriptLength: 'one-liner' | 'concise' | 'extended' | 'storyteller';
   djMode: boolean;
   humour?: number; // tone dials 0-10; absent = neutral
   localColour?: number;

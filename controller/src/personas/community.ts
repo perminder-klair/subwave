@@ -35,8 +35,8 @@ export interface CommunityPersona {
   displayName: string;         // the DJ's on-air name (persona.name, ≤40)
   tagline?: string;            // ≤80
   soul: string;                // the character prose (PERSONA.md body, 1-1000)
-  frequency: 'quiet' | 'moderate' | 'aggressive';
-  scriptLength: 'concise' | 'extended';
+  frequency: 'silent' | 'quiet' | 'moderate' | 'chatty' | 'aggressive';
+  scriptLength: 'one-liner' | 'concise' | 'extended' | 'storyteller';
   djMode: boolean;
   humour?: number;             // tone dials 0-10; absent = neutral (5)
   localColour?: number;

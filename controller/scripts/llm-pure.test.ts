@@ -16,7 +16,8 @@ import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
 import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
 import { DEFAULT_LOCCA_EMBED_BASE_URL } from '../src/llm/internal/provider/registry.js';
-import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict, clampTtsSpeed, TTS_SPEED_DEFAULT, clampMaxOutputTokens, resolveMaxOutputTokens, MAX_OUTPUT_TOKENS_MIN, MAX_OUTPUT_TOKENS_MAX } from '../src/settings.js';
+import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict, clampTtsSpeed, TTS_SPEED_DEFAULT, clampMaxOutputTokens, resolveMaxOutputTokens, MAX_OUTPUT_TOKENS_MIN, MAX_OUTPUT_TOKENS_MAX, effectiveFrequency, SCRIPT_LENGTHS } from '../src/settings.js';
+import { lengthMode, lengthPhrase } from '../src/llm/internal/prompts/system.js';
 import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
 
 let failures = 0;
@@ -588,6 +589,52 @@ async function main() {
     assert.equal(bare.humour, DIAL_NEUTRAL);   // absent dials default to neutral
     assert.equal(bare.localColour, DIAL_NEUTRAL);
     assert.equal(bare.warmth, DIAL_NEUTRAL);
+  });
+
+  // ---- the 5-rung frequency ladder + 4-rung script-length ladder ----
+  // Every consumer (dj-gate slots, segment floors, link spacing, run
+  // probability, LENGTH_PHRASES) branches on these values; pin the ladder
+  // mechanics and the save path so a rung can't silently vanish.
+  console.log('effectiveFrequency / lengthMode (behaviour ladders):');
+  await test('djMode bumps exactly one rung, capped at aggressive', () => {
+    const p = (frequency: string, djMode = true) => ({ frequency, djMode });
+    assert.equal(effectiveFrequency(p('quiet')), 'moderate');
+    assert.equal(effectiveFrequency(p('moderate')), 'chatty');
+    assert.equal(effectiveFrequency(p('chatty')), 'aggressive');
+    assert.equal(effectiveFrequency(p('aggressive')), 'aggressive');
+    assert.equal(effectiveFrequency(p('chatty', false)), 'chatty');
+  });
+  await test('silent is absolute — djMode never bumps out of it', () => {
+    assert.equal(effectiveFrequency({ frequency: 'silent', djMode: true }), 'silent');
+    assert.equal(effectiveFrequency({ frequency: 'silent', djMode: false }), 'silent');
+  });
+  await test('unknown / missing frequency falls back to moderate', () => {
+    assert.equal(effectiveFrequency({ frequency: 'shouty' }), 'moderate');
+    assert.equal(effectiveFrequency({}), 'moderate');
+  });
+  await test('validatePersonasStrict round-trips the new rungs', () => {
+    const base = { name: 'Nova', soul: 'late-night',
+      tts: { engine: 'piper', cloudProvider: 'openai', voice: '' } };
+    const [saved] = validatePersonasStrict([{ ...base, frequency: 'silent', scriptLength: 'storyteller' }]);
+    assert.equal(saved.frequency, 'silent');
+    assert.equal(saved.scriptLength, 'storyteller');
+    assert.throws(() => validatePersonasStrict([{ ...base, frequency: 'shouty' }]), /frequency/);
+    assert.throws(() => validatePersonasStrict([{ ...base, frequency: 'quiet', scriptLength: 'epic' }]), /scriptLength/);
+  });
+  await test('lengthMode maps every rung to itself, junk to concise', () => {
+    for (const l of SCRIPT_LENGTHS) assert.equal(lengthMode({ scriptLength: l }), l);
+    assert.equal(lengthMode({ scriptLength: 'epic' }), 'concise');
+    assert.equal(lengthMode({}), 'concise');
+    // Object.hasOwn guard: a prototype key must not select a phrase table.
+    assert.equal(lengthMode({ scriptLength: 'toString' }), 'concise');
+  });
+  await test('every rung has a phrase for every segment kind', () => {
+    for (const l of SCRIPT_LENGTHS) {
+      for (const kind of ['intro', 'link', 'stationId', 'hourly', 'adlib', 'segment']) {
+        const phrase = lengthPhrase(kind, { scriptLength: l });
+        assert.ok(typeof phrase === 'string' && phrase.length > 0, `${l}/${kind} empty`);
+      }
+    }
   });
 
   // ---- clampTtsSpeed: per-engine / per-persona speech-rate multiplier ----

@@ -43,7 +43,7 @@ export interface WizardData {
     // IANA zone, auto-filled when a city is picked in the location step. '' =
     // Auto (server zone), matching the admin sentinel.
     timezone: string;
-    frequency: 'quiet' | 'moderate' | 'aggressive';
+    frequency: 'silent' | 'quiet' | 'moderate' | 'chatty' | 'aggressive';
   };
 
   // The wizard's "API keys" bucket — anything destined for state/secrets.env.
