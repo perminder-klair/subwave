@@ -260,6 +260,12 @@ export interface TrackDetail {
     vocalRanges: Section[] | null;
     pace: PaceSpan[] | null;
     keyRanges: KeyRange[] | null;
+    // Zero-shot audio moods (scored from the CLAP audio vector — sound-derived,
+    // distinct from the editorial `moods`) + the full {mood: cosine} map.
+    audioMoods: string[];
+    audioMoodScores: Record<string, number> | null;
+    // Measured ending for the SONG SHAPE tail marker. null = not analysed.
+    outro: { startMs: number; ending: 'fade' | 'cold'; lufs: number | null; bpm: number | null } | null;
   };
   textEmbedding: number[] | null;
   audioEmbedding: number[] | null;
@@ -682,6 +688,22 @@ export function buildMockDetail(track: ObsTrack): TrackDetail {
 
   const lastfmTags = [track.genre?.toLowerCase(), ...track.moods].filter(Boolean).slice(0, 4) as string[];
 
+  // Zero-shot audio moods — reuse the editorial moods with plausible cosines
+  // so the SOUNDS LIKE row shows in the demo. Outro: ~40% of tracks fade.
+  const audioMoods = track.analysed ? track.moods.slice(0, 2) : [];
+  const audioMoodScores = audioMoods.length
+    ? Object.fromEntries(audioMoods.map((m, i) => [m, Math.round((0.34 - i * 0.04 + rng() * 0.04) * 1000) / 1000]))
+    : null;
+  const fade = rng() < 0.4;
+  const outro = track.analysed
+    ? {
+        startMs: Math.round(totalMs - (fade ? 9000 : 3000) - rng() * 4000),
+        ending: (fade ? 'fade' : 'cold') as 'fade' | 'cold',
+        lufs: track.loudnessLufs != null ? Math.round((track.loudnessLufs - (fade ? 7 : 1.5)) * 10) / 10 : null,
+        bpm: track.bpm,
+      }
+    : null;
+
   return {
     track: {
       id: track.id,
@@ -711,6 +733,9 @@ export function buildMockDetail(track: ObsTrack): TrackDetail {
       vocalRanges,
       pace,
       keyRanges,
+      audioMoods,
+      audioMoodScores,
+      outro,
     },
     textEmbedding: embeddingVector(seed, 768),
     audioEmbedding: track.analysed ? embeddingVector(seed ^ 0x9e37, 512) : null,

@@ -55,7 +55,7 @@ const GUIDE = [
   {
     href: '/manual/mcp',
     label: 'Agent Access',
-    blurb: 'Let an AI agent read the station and request tracks over the MCP server.',
+    blurb: 'Let an AI agent read the station, request tracks, and drive the DJ over the MCP server.',
   },
   {
     href: '/manual/faq',

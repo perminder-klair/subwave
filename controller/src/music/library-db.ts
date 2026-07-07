@@ -110,6 +110,24 @@ export interface TrackRecord {
   beats: number[] | null;           // per-beat timestamps (ms)
   bars: number[] | null;            // downbeat (bar) timestamps (ms)
   keyRanges: TrackKeyRange[] | null; // per-region key (tonic + mode) over time
+  // Zero-shot audio moods — top mood labels from scoring the vocabulary against
+  // the track's CLAP audio vector (music/audio-moods.ts). [] until scored;
+  // sound-derived, so they complement (never replace) the LLM `moods`.
+  audioMoods: string[];
+  // Outro (tail) features — the track's measured ending (fade vs cold, tail
+  // loudness/tempo/bar grid). null → no outro signal, today's transitions.
+  outro: TrackOutro | null;
+}
+
+// The measured ending of a track — what the crossfade seam actually lands on.
+// Timestamps are absolute ms into the track.
+export interface TrackOutro {
+  startMs: number;           // where the wind-down starts
+  ending: 'fade' | 'cold';   // fades to silence vs ends at level
+  lufs: number | null;       // integrated tail loudness (BS.1770)
+  bpm: number | null;        // tail tempo (outros drift/ritard vs the lead)
+  beats: number[] | null;    // tail beat grid (ms)
+  bars: number[] | null;     // tail downbeat grid (ms)
 }
 
 // A key over a time range: tonic note (sharps) + mode.
@@ -465,6 +483,31 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     // embedded (music/embeddings.ts resolveIndexTextMode).
     runDdl(d, `ALTER TABLE embedding_meta ADD COLUMN text_mode TEXT;`);
     d.pragma('user_version = 10');
+  }
+
+  if (userVersion < 11) {
+    // Zero-shot audio moods (music/audio-moods.ts) — the mood vocabulary scored
+    // against each track's CLAP audio vector via the CLAP text tower, so tags
+    // come from how the track SOUNDS rather than what its title suggests.
+    // audio_moods holds the top mood labels as a JSON array (same shape as
+    // `moods`, so songsByMood can json_each both); audio_mood_scores_json the
+    // full {mood: cosine} map for tuning/observatory use. mood_vocab_hash on the
+    // audio meta row invalidates scores when the vocabulary/prompts change.
+    // NULL everywhere → no audio moods, today's behaviour.
+    runDdl(d, `
+      ALTER TABLE tracks ADD COLUMN audio_moods            TEXT;
+      ALTER TABLE tracks ADD COLUMN audio_mood_scores_json TEXT;
+      ALTER TABLE audio_embedding_meta ADD COLUMN mood_vocab_hash TEXT;
+    `);
+    d.pragma('user_version = 11');
+  }
+
+  if (userVersion < 12) {
+    // Outro (tail) features (JSON {startMs,ending,lufs?,bpm?,beats?,bars?}) —
+    // the outgoing track's measured ending, analysed off the END of a complete
+    // file. Nullable; NULL → no outro signal, today's transition behaviour.
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN outro_json TEXT;`);
+    d.pragma('user_version = 12');
   }
 
   // Reconcile the requested embedding dim against what physically exists.
@@ -881,6 +924,10 @@ export interface TrackAnalysisWrite {
   beats?: number[] | null;
   bars?: number[] | null;
   keyRanges?: TrackKeyRange[] | null;
+  // Outro features — null keeps an existing value (COALESCE, like vocal): a
+  // pass that couldn't compute the tail (capped download, url path) must not
+  // wipe an outro a previous complete-file pass measured.
+  outro?: TrackOutro | null;
 }
 
 // Write acoustic-analysis results for a track. Stamps ANALYSIS_VERSION so
@@ -906,6 +953,9 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         -- existing vocal_ranges_json. A non-null value (incl. "[]" for an
         -- analysed instrumental) overwrites; null keeps what's there.
         vocal_ranges_json   = COALESCE(?, vocal_ranges_json),
+        -- Same for the outro: only computable off a COMPLETE file, so a pass
+        -- that analysed a capped download passes null and keeps what's there.
+        outro_json          = COALESCE(?, outro_json),
         analysis_version    = ?
       WHERE id = ?`,
     )
@@ -922,6 +972,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       a.bars && a.bars.length ? JSON.stringify(a.bars) : null,
       a.keyRanges && a.keyRanges.length ? JSON.stringify(a.keyRanges) : null,
       a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
+      a.outro != null ? JSON.stringify(a.outro) : null,
       ANALYSIS_VERSION,
       id,
     );
@@ -949,10 +1000,12 @@ export function clearAnalysis(opts: { keepVocal?: boolean } = {}): void {
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
       analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
       structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
-      key_ranges_json = NULL,${vocalCol} analysis_version = NULL`,
+      key_ranges_json = NULL, outro_json = NULL,${vocalCol} analysis_version = NULL,
+      audio_moods = NULL, audio_mood_scores_json = NULL`,
   ).run();
   // The audio (CLAP) vectors are written in the same pass, so a --re-analyze
   // that redoes bpm/key drops them too — the next pass re-embeds from scratch.
+  // Audio moods above go with them: they're derived from those vectors.
   d.prepare('DELETE FROM track_audio_vectors').run();
 }
 
@@ -1124,6 +1177,99 @@ export function audioVectorCount(): number {
   }).n;
 }
 
+// ---------------------------------------------------------------------------
+// Zero-shot audio moods (music/audio-moods.ts) — mood labels derived by scoring
+// the vocabulary's CLAP TEXT embeddings against each track's stored audio
+// vector. Sound-derived, so they complement the LLM's metadata-guessed `moods`.
+// ---------------------------------------------------------------------------
+
+export function setTrackAudioMoods(
+  id: string,
+  moods: string[],
+  scores: Record<string, number>,
+): void {
+  requireDb()
+    .prepare(`UPDATE tracks SET audio_moods = ?, audio_mood_scores_json = ? WHERE id = ?`)
+    .run(JSON.stringify(moods), JSON.stringify(scores), id);
+}
+
+// Transactional bulk write for the scoring pass — one commit per batch instead
+// of one per track (the pass touches every vector-carrying row).
+export function setTrackAudioMoodsBulk(
+  rows: Array<{ id: string; moods: string[]; scores: Record<string, number> }>,
+): void {
+  if (rows.length === 0) return;
+  const d = requireDb();
+  const stmt = d.prepare(
+    `UPDATE tracks SET audio_moods = ?, audio_mood_scores_json = ? WHERE id = ?`,
+  );
+  d.transaction((rs: typeof rows) => {
+    for (const r of rs) stmt.run(JSON.stringify(r.moods), JSON.stringify(r.scores), r.id);
+  })(rows);
+}
+
+// Every id carrying an audio vector — the full re-score scope when the mood
+// vocabulary/prompts change. JOINed to tracks so a vector whose track row was
+// pruned is never scored.
+export function audioVectorIds(): string[] {
+  const rows = requireDb()
+    .prepare(
+      `SELECT v.id FROM track_audio_vectors v JOIN tracks t ON t.id = v.id ORDER BY v.id`,
+    )
+    .all() as Array<{ id: string }>;
+  return rows.map(r => r.id);
+}
+
+// Ids with an audio vector but no audio moods yet — the incremental scope for
+// an unchanged vocabulary (newly analysed tracks since the last scoring pass).
+export function idsNeedingAudioMoods(): string[] {
+  const rows = requireDb()
+    .prepare(
+      `SELECT v.id FROM track_audio_vectors v JOIN tracks t ON t.id = v.id
+       WHERE t.audio_moods IS NULL ORDER BY v.id`,
+    )
+    .all() as Array<{ id: string }>;
+  return rows.map(r => r.id);
+}
+
+// The full {mood: cosine} score map behind a track's audio_moods — the
+// dossier/tuning surface only (hot paths read the pre-picked audio_moods
+// labels; this column is never parsed on a playback path).
+export function getAudioMoodScores(id: string): Record<string, number> | null {
+  const row = requireDb()
+    .prepare('SELECT audio_mood_scores_json AS s FROM tracks WHERE id = ?')
+    .get(id) as { s: string | null } | undefined;
+  if (!row?.s) return null;
+  try {
+    const v = JSON.parse(row.s);
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+// The vocabulary hash the current audio_moods were scored with, or null (never
+// scored / legacy meta row). A mismatch re-scores everything.
+export function getAudioMoodVocabHash(): string | null {
+  const row = requireDb()
+    .prepare('SELECT mood_vocab_hash FROM audio_embedding_meta WHERE pk = 1')
+    .get() as { mood_vocab_hash: string | null } | undefined;
+  return row?.mood_vocab_hash ?? null;
+}
+
+export function setAudioMoodVocabHash(hash: string): void {
+  // The meta row normally exists by the time moods are scored (the analyze pass
+  // stamps it with the first vector), but seed defensively — model/dim are
+  // NOT NULL, and setAudioEmbeddingMeta's own upsert never touches the hash.
+  requireDb()
+    .prepare(
+      `INSERT INTO audio_embedding_meta (pk, model, dim, set_at, mood_vocab_hash)
+       VALUES (1, 'unknown', ?, ?, ?)
+       ON CONFLICT(pk) DO UPDATE SET mood_vocab_hash = excluded.mood_vocab_hash`,
+    )
+    .run(AUDIO_EMBEDDING_DIM, new Date().toISOString(), hash);
+}
+
 // Tracks with vocal-activity analysis done — vocal_ranges_json IS NOT NULL,
 // where a stored "[]" (analysed instrumental) counts as done. The inverse of
 // needsVocalIds, surfaced as a coverage meter (#646).
@@ -1220,13 +1366,19 @@ export function analysedIds(): string[] {
 // ---------------------------------------------------------------------------
 
 export function songsByMood(mood: string): TrackRecord[] {
+  // Match the LLM's editorial moods OR the zero-shot audio moods (scored from
+  // the track's actual sound — music/audio-moods.ts). The blend widens thin
+  // mood buckets and covers tracks the metadata-only tagger couldn't read
+  // (instrumentals, non-English titles); a track matching both appears once.
   const rows = requireDb()
     .prepare(
       `SELECT * FROM tracks
-       WHERE moods IS NOT NULL
-         AND EXISTS (SELECT 1 FROM json_each(tracks.moods) WHERE value = ?)`,
+       WHERE (moods IS NOT NULL
+              AND EXISTS (SELECT 1 FROM json_each(tracks.moods) WHERE value = ?))
+          OR (audio_moods IS NOT NULL
+              AND EXISTS (SELECT 1 FROM json_each(tracks.audio_moods) WHERE value = ?))`,
     )
-    .all(mood) as any[];
+    .all(mood, mood) as any[];
   return rows.map(rowToTrack);
 }
 
@@ -1640,7 +1792,32 @@ function rowToTrack(row: any): TrackRecord {
     beats: row.beats_json ? parseMsArray(row.beats_json) : null,
     bars: row.bars_json ? parseMsArray(row.bars_json) : null,
     keyRanges: row.key_ranges_json ? parseKeyRanges(row.key_ranges_json) : null,
+    audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
+    outro: row.outro_json ? parseOutroJson(row.outro_json) : null,
   };
+}
+
+// Parse an outro_json column into TrackOutro or null. Malformed → null.
+function parseOutroJson(s: string): TrackOutro | null {
+  try {
+    const v = JSON.parse(s);
+    const startMs = Number(v?.startMs);
+    const ending = v?.ending;
+    if (!Number.isFinite(startMs) || startMs < 0) return null;
+    if (ending !== 'fade' && ending !== 'cold') return null;
+    const msList = (x: unknown): number[] | null =>
+      Array.isArray(x) && x.length ? x.filter((n): n is number => Number.isFinite(n)) : null;
+    return {
+      startMs: Math.round(startMs),
+      ending,
+      lufs: Number.isFinite(v?.lufs) ? v.lufs : null,
+      bpm: Number.isFinite(v?.bpm) ? v.bpm : null,
+      beats: msList(v?.beats),
+      bars: msList(v?.bars),
+    };
+  } catch {
+    return null;
+  }
 }
 
 // Parse a key_ranges_json column into TrackKeyRange[] or null. Empty/malformed → null.

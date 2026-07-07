@@ -81,6 +81,7 @@ export function get(songId: string): any {
     year: t.year,
     genre: t.genre,
     moods: t.moods,
+    audioMoods: t.audioMoods,
     energy: t.energy,
     source: t.source,
     confidence: t.confidence,
@@ -104,6 +105,9 @@ export function get(songId: string): any {
     structure: t.structure,
     vocalRanges: t.vocalRanges, // [] = instrumental, null = not computed
     paceMean: paceMeanOf(t.pace),
+    // Measured ending (fade vs cold, tail loudness/tempo/grid) — feeds the
+    // queue's ending-aware exit canvas + effect gating. null = no signal.
+    outro: t.outro,
   };
 }
 
@@ -261,6 +265,10 @@ function slimTrack(r: db.TrackRecord) {
     year: r.year,
     genre: r.genre,
     moods: r.moods,
+    // Zero-shot audio moods (sound-derived; music/audio-moods.ts). [] until
+    // scored. Kept separate from the editorial `moods` so consumers can tell
+    // "the LLM read the metadata" from "the audio actually sounds like this".
+    audioMoods: r.audioMoods,
     energy: r.energy,
     // Track length (seconds) so the max-track-length cap (issue #447) can act on
     // library-sourced candidates too — keeps them symmetric with Subsonic's

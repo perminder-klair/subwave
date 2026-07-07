@@ -3141,8 +3141,10 @@ html.lite *::after {
 /* Log line */
 .admin-root .log {
     display: grid;
-    grid-template-columns: 64px 96px 1fr;
-    gap: 12px;
+    grid-template-columns: auto 1fr;
+    align-items: baseline;
+    column-gap: 8px;
+    row-gap: 2px;
     font-size: 11px;
     line-height: 1.6;
     padding: 4px 0;
@@ -3152,12 +3154,14 @@ html.lite *::after {
     color: var(--muted);
 }
 .admin-root .log .k {
+    justify-self: start;
     font-size: 9px;
     letter-spacing: 0.22em;
     text-transform: uppercase;
     font-weight: 700;
 }
 .admin-root .log .msg {
+    grid-column: 1 / -1;
     color: var(--ink);
     word-break: break-word;
 }
@@ -4546,6 +4550,12 @@ html.lite *::after {
 .observatory-root .ss-pace { fill: var(--accent); fill-opacity: 0.22; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .observatory-root .ss-sect { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ink); opacity: 0.35; }
 .observatory-root .ss-intro { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--accent); }
+/* Outro (tail) marker on the pace lane: a cold end is a flat tint to the edge,
+   a fade-out a gradient that visually fades — mirrors what the audio does. */
+.observatory-root .ss-outro { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--muted); background: color-mix(in oklab, var(--ink) 14%, transparent); pointer-events: auto; }
+.observatory-root .ss-outro-fade { background: linear-gradient(90deg, color-mix(in oklab, var(--accent) 26%, transparent), transparent); }
+.observatory-root .ss-swatch-outro { background: color-mix(in oklab, var(--ink) 30%, transparent); }
+.observatory-root .ss-swatch-outro.fade { background: linear-gradient(90deg, var(--accent), transparent); }
 .observatory-root .ss-vox { position: absolute; top: 2px; bottom: 2px; background: var(--accent); opacity: 0.8; }
 .observatory-root .ss-key { position: absolute; top: 0; bottom: 0; }
 .observatory-root .ss-note { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }

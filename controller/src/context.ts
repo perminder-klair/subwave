@@ -224,8 +224,8 @@ export function getClockContext(date = new Date()) {
 // kokoro, cloud). `register` is a coarse delivery label carried forward for
 // future style/emotion hints (cloud/chatterbox) — Stage 1 only acts on speed.
 //
-// Pure function of the existing daypart + clock so there's a single source of
-// truth and it's trivially testable. A daypart that maps to speed 1.0
+// Function of the daypart + clock + the scheduled show (if it pins an energy)
+// so there's a single source of truth. A daypart that maps to speed 1.0
 // (afternoon) yields no change at all, so a station with the default
 // afternoon profile behaves exactly as before.
 const DAYPART_ENERGY: Record<string, { speed: number; register: string }> = {
@@ -239,7 +239,22 @@ const DAYPART_ENERGY: Record<string, { speed: number; register: string }> = {
   'after-hours':   { speed: 0.92, register: 'intimate' },  // graveyard
 };
 
+// A show's pinned energy overrides the daypart profile wholesale — including
+// the late-night/commute clamps below, because a schedule slot is an explicit
+// operator call (a high-energy evening show should not speak at the 0.97
+// wind-down pace, and a 2am workout show should not be forced intimate).
+// '' (Any) keeps the autonomous daypart behaviour. Values stay inside the
+// daypart table's range so a pin never sounds outside the station's normal
+// delivery envelope.
+const SHOW_ENERGY_DELIVERY: Record<string, { speed: number; register: string }> = {
+  high:   { speed: 1.06, register: 'up' },
+  medium: { speed: 1.0,  register: 'even' },
+  low:    { speed: 0.94, register: 'intimate' },
+};
+
 export function energyForDaypart(date = new Date()) {
+  const pinned = SHOW_ENERGY_DELIVERY[resolveActiveShow(date)?.energy ?? ''];
+  if (pinned) return pinned;
   const { period } = getTimeContext(date);
   const { isLateNight, isCommute } = getClockContext(date);
   const base = DAYPART_ENERGY[period] || { speed: 1.0, register: 'even' };

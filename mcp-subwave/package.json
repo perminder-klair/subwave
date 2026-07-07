@@ -1,6 +1,6 @@
 {
   "name": "subwave-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for the SUB/WAVE personal radio station — request songs and drive the AI DJ on-air.",
   "license": "MIT",
   "type": "module",
@@ -12,13 +12,15 @@
   ],
   "scripts": {
     "build": "tsc",
+    "lint": "tsc --noEmit",
+    "prepare": "npm run build",
     "watch": "tsc --watch",
     "start": "node dist/index.js",
     "dev": "tsc && node dist/index.js",
     "inspect": "npm run build && npx @modelcontextprotocol/inspector node dist/index.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.18.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

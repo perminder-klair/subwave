@@ -290,6 +290,8 @@ services:
       # .env.example "Optional model overrides").
       - DEMUCS_MODEL=${DEMUCS_MODEL:-}
       - ANALYZE_SECONDS=${ANALYZE_SECONDS:-}
+      - ANALYZE_CLAP_WINDOWS=${ANALYZE_CLAP_WINDOWS:-}
+      - ANALYZE_OUTRO_SECONDS=${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but an anonymous HF Hub download is rate-limited and
       # slow. Same var as tts-heavy — set HF_TOKEN=hf_... in your root .env once
       # and both sidecars pick it up.

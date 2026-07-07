@@ -128,7 +128,17 @@ export function buildContextLines(
     // energy pacing in code (context.ts) — it just isn't prompt fodder anymore.
     lines.push(`Local time: ${context.clock.hhmm}${tags.length ? ' · ' + tags.join(' · ') : ''}`);
   }
-  if (on('time') && context?.time) lines.push(`Period: ${context.time.period} (${context.time.vibe})`);
+  if (on('time') && context?.time) {
+    // A show's pinned mood overrides the autonomous mood chain (context.ts),
+    // but the daypart vibe ("wind down") was still riding into every script
+    // prompt and pulling the talk against the show's brief — a high-energy
+    // evening show kept mellowing out. With a mood pinned, keep the period
+    // label (the clock is real) and stand the vibe down; the show line below
+    // carries the tone instead.
+    lines.push(context?.activeShow?.mood
+      ? `Period: ${context.time.period}`
+      : `Period: ${context.time.period} (${context.time.vibe})`);
+  }
   if (on('weather') && context?.weather && context.weather.condition && context.weather.condition !== 'unknown') {
     lines.push(`Weather in ${context.weather.location}: ${context.weather.condition}${context.weather.temp != null ? `, ${context.weather.temp}°${context.weather.tempUnit || 'C'}` : ''}`);
   }
@@ -142,7 +152,11 @@ export function buildContextLines(
     // getFullContext) keeps mid-show links and segments on today's line, not
     // just the standing brief.
     const angle = context.activeShow.episodeAngle ? ` Today's episode angle: ${context.activeShow.episodeAngle}.` : '';
-    lines.push(`On now: the show "${context.activeShow.name}"${topic}.${angle} Stay loosely on its theme.`);
+    // The pinned mood already steers the pick pool via dominantMood, but the
+    // talk prompts never saw it — say it here so the delivery follows the
+    // show's brief, not the hour's default.
+    const mood = context.activeShow.mood ? ` Its mood is ${context.activeShow.mood} — let that set the tone, not the time of day.` : '';
+    lines.push(`On now: the show "${context.activeShow.name}"${topic}.${angle}${mood} Stay loosely on its theme.`);
   }
   if (on('listeners') && context?.listeners?.count != null) {
     const n = context.listeners.count;

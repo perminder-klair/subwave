@@ -275,6 +275,17 @@ router.get('/library/observatory/track/:id', requireAdmin, async (req, res) => {
         vocalRanges: t.vocalRanges,
         pace: t.pace,
         keyRanges: t.keyRanges,
+        // Zero-shot audio moods (sound-derived, music/audio-moods.ts) + their
+        // full score map — the dossier shows them as a "SOUNDS LIKE" pill row
+        // next to the editorial MOOD row, the operator's tuning window into
+        // the prompt table and the top-K margin.
+        audioMoods: t.audioMoods,
+        audioMoodScores: db.getAudioMoodScores(id),
+        // Outro for the SONG SHAPE tail marker (fade vs cold + tail levels).
+        // beats/bars stripped like the main grid — too granular for the payload.
+        outro: t.outro
+          ? { startMs: t.outro.startMs, ending: t.outro.ending, lufs: t.outro.lufs, bpm: t.outro.bpm }
+          : null,
       },
       textEmbedding: textVec ? Array.from(textVec) : null,
       audioEmbedding: audioVec ? Array.from(audioVec) : null,

@@ -103,7 +103,6 @@ What you give up versus the native route:
 
 - the in-app **drop-a-WAV-into `state/voices/`** workflow; references live on
   your server instead, so a different persona-per-clone setup is more manual
-- **daypart speed shaping** (the `speed` field is omitted for `openai-compatible`)
 
 If you want SUB/WAVE to own the reference clips per persona, use the native
 route.
