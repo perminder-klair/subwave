@@ -107,7 +107,16 @@ export function noThinkFetch(url: any, init: any, baseFetch: any = fetch) {
 //     llama.cpp routes that thought to `content`, so it leaks into the visible
 //     script and reaches TTS. reasoning_format:"deepseek" routes it to
 //     reasoning_content, which the SDK surfaces as a reasoning part, not text
-//     (gist quirk #4).
+//     (gist quirk #4). GLM-family models (Zhipu/Z.ai — including the GLM
+//     Coding Plan's api.z.ai/api/coding/paas/v4 endpoint) ignore
+//     enable_thinking entirely and read a DIFFERENT, top-level `thinking.type`
+//     field instead, so their thinking never actually turned off via the
+//     knobs above alone — the hidden chain-of-thought burned through
+//     maxOutputTokens/step budgets before a forced tool call could land,
+//     surfacing as multi-minute calls or "agent did not call the done tool
+//     before stopping". Send it alongside the others — an unrecognised field
+//     is silently ignored by servers that don't define it, same bet as the
+//     other body-injection knobs here.
 //   • parallel_tool_calls:false on tool-bearing requests — absent, llama.cpp
 //     resolves it from the chat template's capability default, which is true
 //     for Gemma-4-family templates; the model then emits several tool calls in
@@ -144,6 +153,7 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
             enable_thinking: false,
           };
           if (body.reasoning_format === undefined) body.reasoning_format = 'deepseek';
+          if (body.thinking === undefined) body.thinking = { type: 'disabled' };
         }
         if (Array.isArray(body.tools) && body.tools.length > 0 &&
             body.parallel_tool_calls === undefined) {

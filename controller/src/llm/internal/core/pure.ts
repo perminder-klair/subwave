@@ -1,10 +1,13 @@
 // Pure, side-effect-free LLM helpers — the unit-test seam.
 //
 // Everything here is a pure function of its arguments: no imports from `ai`,
-// `settings`, `fs`, or any module with side effects. That's deliberate — these
-// are the regression-critical bits (the failover gate, the JSON salvage, the
-// usage normaliser), so they live in one importable, testable place
-// (controller/scripts/llm-pure.test.ts pins their behaviour).
+// `settings`, `fs`, or any module with side effects (zod is the one
+// exception — a schema-construction library, not an I/O one). That's
+// deliberate — these are the regression-critical bits (the failover gate,
+// the JSON salvage, the usage normaliser), so they live in one importable,
+// testable place (controller/scripts/llm-pure.test.ts pins their behaviour).
+
+import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
 // Thinking-block stripping
@@ -513,4 +516,116 @@ export function snapV3Stability(v: number): number {
     (best, r) => (Math.abs(r - n) < Math.abs(best - n) ? r : best),
     0.5,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Malformed-nullable-field rescue (GLM/Zhipu observed, incl. the GLM Coding
+// Plan)
+// ---------------------------------------------------------------------------
+//
+// GLM doesn't send a well-formed value for a nullable field it has nothing to
+// say — three distinct shapes observed on live traffic (2026-07-07), all
+// producing a `done` tool call that is fully coherent in substance (a real
+// reason, real content) but fails Zod validation on ONE field, which is
+// indistinguishable from djAgent's perspective from the model never calling
+// `done` at all — it silently misclassifies a valid call as "agent did not
+// call the done tool before stopping" and burns a full recovery cascade on a
+// call that already succeeded:
+//   1. the literal STRING "null" instead of JSON null.
+//   2. OMITTING THE KEY ENTIRELY (a `done` call with a coherent `reason`/
+//      `air:false` but no `segment` key at all — not even null). `.nullable()`
+//      accepts `null`, not `undefined` — Zod runs the field parser with
+//      `undefined` for a genuinely-missing key, same as an explicit
+//      `undefined` value, and this rejects same as case 1.
+//   3. DOUBLE-ENCODING a nested object as a JSON STRING — e.g.
+//      `segment: "{\"kind\":\"now-playing-dig\",...}"` instead of the real
+//      nested object.
+
+// Wrap a nullable field's inner schema with this to coerce all three shapes
+// before validating. Deliberately narrow — exact matches / a targeted parse
+// attempt only, no guessing at other malformed spellings that haven't been
+// observed. The JSON-string rescue (case 3) only fires for OBJECT/ARRAY inner
+// schemas: a plain nullable STRING field's own value could coincidentally look
+// like JSON (a bare number/boolean/quoted word), and re-parsing THAT would
+// corrupt a genuine string answer.
+export function nullableFromModel<T extends z.ZodTypeAny>(inner: T) {
+  const isContainer = inner instanceof z.ZodObject || inner instanceof z.ZodArray;
+  return z.preprocess((v) => {
+    if (v === 'null' || v === undefined) return null;
+    if (isContainer && typeof v === 'string') {
+      try {
+        const parsed = JSON.parse(v);
+        if (parsed && typeof parsed === 'object') return parsed;
+      } catch { /* not JSON — fall through, let normal validation reject it */ }
+    }
+    return v;
+  }, inner.nullable());
+}
+
+// The sibling for a REQUIRED (non-nullable) object field — some providers
+// (llama.cpp's peg-gemma4 tool serializer, issue #906) drop a nullable nested
+// object's `properties` entirely, so the field must stay non-nullable for
+// them. That rules out nullableFromModel's `.nullable()` wrapper, but the
+// SAME GLM double-JSON-encoding tendency (case 3 above) still needs rescuing,
+// and a missing/malformed value still needs to degrade gracefully rather than
+// throw. Attempts the JSON-string rescue, then falls back to `fallback` for
+// anything else that still doesn't validate. Only safe when the caller's
+// consumption site already treats a placeholder/empty value as "nothing to
+// do" — verify that before reusing this for a new field.
+export function objectFromModel<Shape extends z.ZodRawShape>(
+  shape: Shape,
+  fallback: z.infer<z.ZodObject<Shape>>,
+) {
+  const schema = z.object(shape);
+  return z.preprocess((v) => {
+    if (typeof v === 'string') {
+      try {
+        const parsed = JSON.parse(v);
+        if (parsed && typeof parsed === 'object') return parsed;
+      } catch { /* not JSON — fall through, let normal validation reject it */ }
+    }
+    return v;
+  }, schema).catch(fallback);
+}
+
+// Strip every `description` key from a JSON-Schema-shaped value, recursively.
+// z.toJSONSchema() carries every Zod .describe() call through verbatim —
+// several of this codebase's schemas (e.g. the picker's `transition` field)
+// have a multi-hundred-word description, since that prose is the primary
+// channel for coaching the model on the native/tool-forced paths. Embedded
+// verbatim into schemaHint's recovery prompt, that same prose would bloat the
+// retry's token count for every caller, not just the one schema that needs
+// it (Copilot review, PR #923) — and the recovery prompt only needs the
+// STRUCTURE (field names, types, required-ness, enum values) to stop the
+// model guessing at keys; the coaching prose already lives in the original
+// system/prompt text passed alongside it.
+function stripDescriptions(value: any): any {
+  if (Array.isArray(value)) return value.map(stripDescriptions);
+  if (value && typeof value === 'object') {
+    const out: any = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (k === 'description') continue;
+      out[k] = stripDescriptions(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+// Best-effort JSON Schema for a Zod object, embedded in djObject's free-text
+// recovery prompt so that retry is self-describing regardless of what the
+// caller's own system/prompt text happens to restate. Every OTHER structured-
+// output path conveys the schema to the model via a real provider channel —
+// native Output.object's response_format, or a forced tool's inputSchema — but
+// the recovery path is plain generateText with no schema attached at all, so
+// a model that doesn't already have the exact required keys memorised from
+// prose (observed: GLM omitting `reason`/`say` — issue triaged 2026-07-07)
+// has nothing to go on. Swallows conversion failures (never let a schema this
+// can't render block the retry it's meant to help).
+export function schemaHint(schema: z.ZodTypeAny): string | null {
+  try {
+    return JSON.stringify(stripDescriptions(z.toJSONSchema(schema)));
+  } catch {
+    return null;
+  }
 }
