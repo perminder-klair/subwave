@@ -8,7 +8,7 @@ import { generateText } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
 import { stripThinking, usageOf, failureDiagnostics } from '../core/pure.js';
-import { providerOptions, repeatPenaltyApplies, samplingWithNumCtx } from '../provider/capabilities.js';
+import { providerOptions, repeatPenaltyApplies, samplingWithLocalKnobs } from '../provider/capabilities.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
 
 // Hard output-token cap. A reasoning model with no cap can generate until it
@@ -55,7 +55,7 @@ export async function djText({
       // repeatPenaltyApplies() and providerOptions handling.
       const sampling: any = { temperature, top_p: topP, seed };
       if (repeatPenaltyApplies(leg.cfg)) sampling.repeat_penalty = repeatPenalty;
-      samplingWithNumCtx(leg.cfg, sampling);
+      samplingWithLocalKnobs(leg.cfg, sampling);
       return {
         value: out,
         via: 'ai-sdk',
