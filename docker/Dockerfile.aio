@@ -215,6 +215,17 @@ RUN chmod +x /usr/local/bin/subwave-supervisor
 # Shared state dir (the supervisor re-asserts perms on every boot).
 RUN mkdir -p /var/sub-wave && chmod 777 /var/sub-wave
 
+# Declare the state dir a volume so a bare `docker run` that forgets a host
+# mapping still lands state (settings, library.db, archives, model cache) in a
+# Docker-managed volume rather than the container's throwaway writable layer,
+# where a pull-and-recreate would silently wipe it (issue #902). NOTE: this is a
+# safety net, not a substitute for an explicit /var/sub-wave path mapping — the
+# Unraid CA template's required Appdata path is what actually guarantees
+# persistence across image updates (a recreate attaches a fresh anonymous volume
+# otherwise). Compose/template deployments bind-mount over this, so it's a no-op
+# there. Nothing is baked under /var/sub-wave at build time, so it shadows nothing.
+VOLUME /var/sub-wave
+
 # Re-declared for the final stage (ARGs don't cross stage boundaries) so the
 # controller process reports the same version (backup manifest) as the web
 # build above. Same source as the webbuild-stage arg.
