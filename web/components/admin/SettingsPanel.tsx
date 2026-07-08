@@ -29,12 +29,11 @@ import { AiFill } from './AiFill';
 import { LocationPicker, type GeocodeResult } from '../LocationPicker';
 import { cn } from '../../lib/cn';
 import ArchivesPanel from './ArchivesPanel';
-import WebhooksPanel from './WebhooksPanel';
 import BackupPanel from './BackupPanel';
 import FestivalsSection from './FestivalsSection';
 import {
   Radio, Palette, Cpu, Mic, Library, Search, Music, AudioLines,
-  Activity, Archive, Webhook, Save, AlertTriangle, CalendarDays,
+  Activity, Archive, Save, AlertTriangle, CalendarDays,
 } from 'lucide-react';
 
 const SECTIONS = [
@@ -49,7 +48,6 @@ const SECTIONS = [
   { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers', icon: AudioLines },
   { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz', icon: Activity },
   { id: 'archives', label: 'Archives', hint: 'hourly recordings', icon: Archive },
-  { id: 'webhooks', label: 'Webhooks', hint: 'outbound events', icon: Webhook },
   { id: 'backup',   label: 'Backup', hint: 'export · restore', icon: Save },
   { id: 'danger',   label: 'Danger zone', hint: 'broadcast control', icon: AlertTriangle },
 ] as const;
@@ -447,9 +445,10 @@ export default function SettingsPanel() {
     } catch { /* non-fatal */ }
   };
 
-  // Deep-link: /admin/settings?section=webhooks opens that rail directly. The
-  // old standalone /admin/{archives,webhooks,backup} routes redirect here, so
-  // existing bookmarks keep working after the move into Settings.
+  // Deep-link: /admin/settings?section=archives opens that rail directly. The
+  // old standalone /admin/{archives,backup} routes redirect here, so existing
+  // bookmarks keep working after the move into Settings. (Webhooks moved on to
+  // its own tab under /admin/connect?tab=webhooks.)
   useEffect(() => {
     const s = new URLSearchParams(window.location.search).get('section');
     if (s && SECTIONS.some(x => x.id === s)) setActiveSection(s as SectionId);
@@ -1012,7 +1011,6 @@ export default function SettingsPanel() {
             )}
           </>
         )}
-        {activeSection === 'webhooks' && <WebhooksPanel />}
         {activeSection === 'festivals' && <FestivalsSection />}
         {activeSection === 'backup' && <BackupPanel />}
         {activeSection === 'danger' && (

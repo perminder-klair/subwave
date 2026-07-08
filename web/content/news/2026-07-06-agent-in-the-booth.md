@@ -14,13 +14,14 @@ The MCP server (`mcp-subwave/` in the repo) is how an AI agent like Claude talks
 
 ## How to use it
 
-Build it once:
+The station now serves MCP over HTTP, so there's nothing to install — point your client at `<your-station>/api/mcp` and pass your admin credentials as an `Authorization` header:
 
 ```
-cd mcp-subwave && npm install
+claude mcp add --transport http subwave https://your-station/api/mcp \
+  --header "Authorization: Basic $(printf '%s' "$ADMIN_USER:$ADMIN_PASS" | base64)"
 ```
 
-Then point your MCP client at `dist/index.js`, with `SUBWAVE_API_URL` and, for the booth tools, your admin credentials. Claude Desktop and Claude Code both work. Inside the repo, Claude Code picks the server up automatically from the root `.mcp.json`. For the alert trick, call `subwave_dj_announce` with `mode: raw` so nothing gets paraphrased, and `sfx: airhorn`.
+The admin **Connect → MCP** tab hands you that command with your station's URL already filled in. Claude Desktop and Claude Code both work, and there's still a local stdio server if you'd rather not expose the endpoint. For the alert trick, call `subwave_dj_announce` with `mode: raw` so nothing gets paraphrased, and `sfx: airhorn`.
 
 ## Why it helps
 

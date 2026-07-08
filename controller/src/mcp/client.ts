@@ -1,8 +1,13 @@
 /**
- * HTTP client for the SUB/WAVE controller API.
+ * HTTP client for the SUB/WAVE controller API — the shared implementation
+ * behind both MCP transports:
+ *   - the controller's built-in HTTP MCP endpoint (routes/mcp.ts), which points
+ *     this client at the controller's own port (loopback) and forwards the
+ *     caller's Authorization header, and
+ *   - the standalone stdio server (mcp-subwave/src/index.ts), which points it at
+ *     SUBWAVE_API_URL with admin creds from its own environment.
  *
- * The controller is a local Express service (default :7701 in dev, or behind
- * the Caddy edge at :7700/api in prod). Three endpoint classes matter here:
+ * Three endpoint classes matter here:
  *   - public, read-only:        GET /health, /now-playing, /state, /schedule,
  *                               /session, /request/:id
  *   - public, rate-limited:     POST /request (202 receipt + background resolve)
@@ -10,7 +15,7 @@
  *
  * Every failure is turned into a SubwaveError carrying a message written for
  * the agent — it says what went wrong AND what to do about it, so the model
- * can recover (wait out a cooldown, fix an env var) instead of guessing.
+ * can recover (wait out a cooldown, supply credentials) instead of guessing.
  */
 
 /** A failure the agent should be able to read and act on directly. */
@@ -31,6 +36,18 @@ export interface SubwaveConfig {
   adminUser?: string;
   /** Admin Basic-auth password — only needed for the DJ control endpoints. */
   adminPass?: string;
+  /**
+   * Pre-formed Authorization header to forward verbatim on admin calls, used
+   * by the controller's HTTP MCP mount to pass the caller's credentials
+   * straight through. Takes precedence over adminUser/adminPass when set.
+   */
+  forwardAuth?: string;
+  /**
+   * Original caller IP to forward as X-Forwarded-For, used by the controller's
+   * HTTP MCP mount so per-IP rate limiting (POST /request) keys on the real
+   * caller instead of collapsing every MCP user into the loopback address.
+   */
+  forwardIp?: string;
 }
 
 /** POST /request hands back a receipt; the booth resolves in the background. */
@@ -92,11 +109,12 @@ export class SubwaveClient {
   constructor(private readonly config: SubwaveConfig) {}
 
   private get hasAdminCreds(): boolean {
-    return Boolean(this.config.adminUser && this.config.adminPass);
+    return Boolean(this.config.forwardAuth || (this.config.adminUser && this.config.adminPass));
   }
 
   private authHeader(): Record<string, string> {
-    if (!this.hasAdminCreds) return {};
+    if (this.config.forwardAuth) return { authorization: this.config.forwardAuth };
+    if (!(this.config.adminUser && this.config.adminPass)) return {};
     const raw = `${this.config.adminUser}:${this.config.adminPass}`;
     return { authorization: `Basic ${Buffer.from(raw).toString("base64")}` };
   }
@@ -117,6 +135,7 @@ export class SubwaveClient {
         signal: controller.signal,
         headers: {
           ...(init.body !== undefined ? { "content-type": "application/json" } : {}),
+          ...(this.config.forwardIp ? { "x-forwarded-for": this.config.forwardIp } : {}),
           ...(init.admin ? this.authHeader() : {}),
         },
         body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
@@ -125,8 +144,7 @@ export class SubwaveClient {
       const reason = err instanceof Error ? err.message : String(err);
       throw new SubwaveError(
         `Could not reach the SUB/WAVE controller at ${url} (${reason}). ` +
-          `Check that the stack is running and that SUBWAVE_API_URL points at it ` +
-          `(dev default http://localhost:7701, prod http://localhost:7700/api).`,
+          `Check that the stack is running and reachable.`,
       );
     } finally {
       clearTimeout(timer);
@@ -161,10 +179,11 @@ export class SubwaveClient {
       throw new SubwaveError(
         `The controller rejected admin credentials for ${path}. ` +
           (this.hasAdminCreds
-            ? `The SUBWAVE_ADMIN_USER / SUBWAVE_ADMIN_PASS given to this MCP server don't match ` +
-              `ADMIN_USER / ADMIN_PASS in the controller's .env.`
-            : `This endpoint needs admin auth. Set SUBWAVE_ADMIN_USER and SUBWAVE_ADMIN_PASS ` +
-              `in this MCP server's environment to the controller's ADMIN_USER / ADMIN_PASS.`),
+            ? `The admin credentials provided to this MCP connection don't match the ` +
+              `station's ADMIN_USER / ADMIN_PASS.`
+            : `This is an admin-only tool. Provide the station's admin credentials to this ` +
+              `MCP connection (an Authorization header for the HTTP endpoint, or ` +
+              `SUBWAVE_ADMIN_USER / SUBWAVE_ADMIN_PASS for the stdio server).`),
       );
     }
 

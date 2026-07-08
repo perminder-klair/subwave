@@ -21,6 +21,7 @@ import {
   Smartphone,
   Users,
   Headphones,
+  Plug,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -70,6 +71,7 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'System',
     items: [
       { href: '/admin/stats', id: 'stats', label: 'Stats', icon: BarChart3 },
+      { href: '/admin/connect', id: 'connect', label: 'Connect', icon: Plug },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
     ],
