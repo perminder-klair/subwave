@@ -590,6 +590,13 @@ const PLAYLISTS_PER_SHOW = 10;
 const EXCLUDED_PLAYLISTS_PER_SHOW = 10;
 const SKILLS_PER_PERSONA_LIMIT = 20;
 const WEBHOOKS_LIMIT = 16;
+// Prompt-template library (djPrompts). Text bounds match the historical
+// single-djPrompt rule — keep them in lockstep with PROMPT_MIN/PROMPT_MAX in
+// web/components/admin/personas/constants.ts.
+const DJ_PROMPT_LIMIT = 20;
+const DJ_PROMPT_NAME_MAX = 60;
+const DJ_PROMPT_TEXT_MIN = 50;
+const DJ_PROMPT_TEXT_MAX = 4000;
 
 // A show can anchor to one or more Navidrome playlists: the playlist union
 // becomes the show's candidate pool. Stored as Subsonic playlist ids; deduped,
@@ -870,7 +877,14 @@ const DEFAULTS = {
   // so the line shows the classic ♪/◇ marker until an operator opts in.
   ui: { boothBuddy: false },
   // Global DJ prompt template. '' means "use DEFAULT_DJ_PROMPT_TEMPLATE".
+  // Always the RESOLVED text of the active djPrompts entry — kept so
+  // renderDjPrompt() (and an older controller sharing the same settings.json)
+  // never has to chase the library.
   djPrompt: '',
+  // Saved prompt-template library + which entry is active ('' = built-in
+  // default). Switching templates just moves activeDjPromptId.
+  djPrompts: [],
+  activeDjPromptId: '',
   // The persona roster. One persona is "active" at a time (activePersonaId);
   // a scheduled show can override which persona is on-air for its hour.
   personas: SEED_PERSONAS,
@@ -1352,6 +1366,31 @@ function normalizePersonaArray(raw: any) {
   return out.length ? out : null;
 }
 
+// Lenient load-time path for the prompt-template library: drop entries that
+// can't render (bad text) rather than failing the whole settings load. A
+// missing/duplicate name degrades to "Prompt N" instead of dropping the entry —
+// the text is the part the operator can't afford to lose.
+function normalizeDjPrompts(raw: any) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: any[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const text = typeof item.text === 'string' ? item.text.trim() : '';
+    if (text.length < DJ_PROMPT_TEXT_MIN || text.length > DJ_PROMPT_TEXT_MAX) continue;
+    if (!text.includes('{name}')) continue;
+    let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('dp_');
+    if (seen.has(id)) id = mintId('dp_');
+    seen.add(id);
+    const name =
+      (typeof item.name === 'string' ? item.name.trim().slice(0, DJ_PROMPT_NAME_MAX) : '') ||
+      `Prompt ${out.length + 1}`;
+    out.push({ id, name, text });
+    if (out.length >= DJ_PROMPT_LIMIT) break;
+  }
+  return out;
+}
+
 function normalizeShows(raw: any, personaIds: string[]) {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
@@ -1506,6 +1545,23 @@ export async function load() {
         : '';
   if (djPrompt.trim() === DEFAULT_DJ_PROMPT_TEMPLATE.trim()) djPrompt = '';
 
+  // Prompt-template library. A pre-library settings.json (single custom
+  // djPrompt, no djPrompts array) migrates that custom text into a lone
+  // library entry so the operator finds their prompt where the UI now lives.
+  let djPrompts = normalizeDjPrompts(stored.djPrompts);
+  let activeDjPromptId =
+    typeof stored.activeDjPromptId === 'string' ? stored.activeDjPromptId : '';
+  if (!djPrompts.length && djPrompt.trim()) {
+    djPrompts = [{ id: mintId('dp_'), name: 'Custom prompt', text: djPrompt.trim() }];
+    activeDjPromptId = djPrompts[0].id;
+  }
+  // Dangling active id (hand-edited file) falls back to the built-in default.
+  if (activeDjPromptId && !djPrompts.some(p => p.id === activeDjPromptId)) {
+    activeDjPromptId = '';
+  }
+  // djPrompt is always the resolved active text — see DEFAULTS.
+  djPrompt = djPrompts.find(p => p.id === activeDjPromptId)?.text ?? '';
+
   const shows = normalizeShows(stored.shows, personaIds);
   const schedule = normalizeSchedule(
     stored.schedule,
@@ -1584,6 +1640,8 @@ export async function load() {
           : DEFAULTS.weather.units,
     },
     djPrompt,
+    djPrompts,
+    activeDjPromptId,
     station:
       typeof stored.station === 'string' && stored.station.trim()
         ? stored.station.trim().slice(0, 80)
@@ -2091,6 +2149,36 @@ function validateTtsBlock(raw, where) {
     }
   }
   return { engine: t.engine, cloudProvider: t.cloudProvider, voice, gainDb: clampTtsGain(t.gainDb), speed: clampTtsSpeed(t.speed) };
+}
+
+// Strict update-time path for the prompt-template library — any bad entry
+// rejects the whole patch so the operator sees the error instead of silently
+// losing a prompt.
+export function validateDjPromptsStrict(raw) {
+  if (!Array.isArray(raw) || raw.length > DJ_PROMPT_LIMIT) {
+    throw new Error(`djPrompts must be an array of 0-${DJ_PROMPT_LIMIT} entries`);
+  }
+  const seen = new Set();
+  return raw.map((item, i) => {
+    if (!item || typeof item !== 'object') throw new Error(`djPrompts[${i}] must be an object`);
+    const name = String(item.name ?? '').trim();
+    if (name.length < 1 || name.length > DJ_PROMPT_NAME_MAX) {
+      throw new Error(`djPrompts[${i}].name must be 1-${DJ_PROMPT_NAME_MAX} chars`);
+    }
+    const text = String(item.text ?? '').trim();
+    if (text.length < DJ_PROMPT_TEXT_MIN || text.length > DJ_PROMPT_TEXT_MAX) {
+      throw new Error(
+        `djPrompts[${i}].text must be ${DJ_PROMPT_TEXT_MIN}-${DJ_PROMPT_TEXT_MAX} chars`,
+      );
+    }
+    if (!text.includes('{name}')) {
+      throw new Error(`djPrompts[${i}].text must contain the {name} placeholder`);
+    }
+    let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('dp_');
+    if (seen.has(id)) id = mintId('dp_');
+    seen.add(id);
+    return { id, name, text };
+  });
 }
 
 export function validatePersonasStrict(raw) {
@@ -2692,19 +2780,56 @@ export async function update(patch) {
   if ('festivals' in patch) {
     next.festivals = validateFestivalsStrict(patch.festivals);
   }
+  // Prompt-template library. `djPrompts` replaces the whole library;
+  // `activeDjPromptId` switches which entry renders ('' = built-in default).
+  // The legacy single-field `djPrompt` (onboarding wizard, older clients)
+  // still works by mapping onto the library: '' selects the default, custom
+  // text reuses the entry with identical text or appends a "Custom prompt".
+  if ('djPrompts' in patch) {
+    next.djPrompts = validateDjPromptsStrict(patch.djPrompts);
+  }
+  if ('activeDjPromptId' in patch) {
+    next.activeDjPromptId = String(patch.activeDjPromptId ?? '').trim();
+  }
   if ('djPrompt' in patch) {
     const v = String(patch.djPrompt ?? '').trim();
     if (v === '') {
-      next.djPrompt = '';
+      next.activeDjPromptId = '';
     } else {
-      if (v.length < 50 || v.length > 4000) {
-        throw new Error('djPrompt must be empty (use the default) or 50-4000 chars');
+      if (v.length < DJ_PROMPT_TEXT_MIN || v.length > DJ_PROMPT_TEXT_MAX) {
+        throw new Error(
+          `djPrompt must be empty (use the default) or ${DJ_PROMPT_TEXT_MIN}-${DJ_PROMPT_TEXT_MAX} chars`,
+        );
       }
       if (!v.includes('{name}')) {
         throw new Error('djPrompt must contain the {name} placeholder');
       }
-      next.djPrompt = v;
+      let entry = next.djPrompts.find((p: any) => p.text === v);
+      if (!entry) {
+        if (next.djPrompts.length >= DJ_PROMPT_LIMIT) {
+          throw new Error(`the prompt library is full (${DJ_PROMPT_LIMIT} entries)`);
+        }
+        entry = { id: mintId('dp_'), name: 'Custom prompt', text: v };
+        next.djPrompts.push(entry);
+      }
+      next.activeDjPromptId = entry.id;
     }
+  }
+  if ('djPrompts' in patch || 'activeDjPromptId' in patch || 'djPrompt' in patch) {
+    if (
+      next.activeDjPromptId &&
+      !next.djPrompts.some((p: any) => p.id === next.activeDjPromptId)
+    ) {
+      if ('activeDjPromptId' in patch || 'djPrompt' in patch) {
+        throw new Error('activeDjPromptId must be "" or the id of a djPrompts entry');
+      }
+      // A library-only patch removed the entry that was active — fall back to
+      // the built-in default rather than failing the save.
+      next.activeDjPromptId = '';
+    }
+    // djPrompt stays the resolved active text — the single field readers use.
+    next.djPrompt =
+      next.djPrompts.find((p: any) => p.id === next.activeDjPromptId)?.text ?? '';
   }
   if ('personas' in patch) {
     next.personas = validatePersonasStrict(patch.personas);

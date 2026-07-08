@@ -40,11 +40,21 @@ export interface Persona {
   skills: string[];
 }
 
+// One saved system-prompt template in the library. Mirrors the controller's
+// djPrompts entries (settings.ts:validateDjPromptsStrict).
+export interface DjPromptPreset {
+  id: string;
+  name: string;
+  text: string;
+}
+
 export interface FormState {
   personas: Persona[];
   activePersonaId: string;
-  useCustomPrompt: boolean;
-  systemPrompt: string;
+  // The system-prompt template library + which entry is active. '' selects
+  // the built-in default template.
+  djPrompts: DjPromptPreset[];
+  activeDjPromptId: string;
 }
 
 export interface SkillCatalogEntry {
@@ -71,6 +81,8 @@ export interface SettingsResponse {
     personas?: Array<Partial<Persona> & { avatar?: string }>;
     activePersonaId?: string;
     djPrompt?: string;
+    djPrompts?: Array<Partial<DjPromptPreset>>;
+    activeDjPromptId?: string;
     tts?: { defaultEngine?: string };
   };
   defaults?: { djPrompt?: string };
