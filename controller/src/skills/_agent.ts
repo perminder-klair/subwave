@@ -37,7 +37,7 @@ import { z } from 'zod';
 import { queue } from '../broadcast/queue.js';
 import * as settings from '../settings.js';
 import { defineAgent } from '../llm/agent.js';
-import { nullableFromModel, objectFromModel } from '../llm/sdk.js';
+import { modelTolerant } from '../llm/sdk.js';
 import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase } from '../llm/dj.js';
 import { buildSegmentTools } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
@@ -105,7 +105,7 @@ function unionContextFields(caps: any[]): string[] {
 // `null` or prose instead (see isBareNullSilent / isSilentFailure below);
 // `air: false` gives them an unambiguous silence token to reach for.
 function segmentSchema() {
-  return z.object({
+  return modelTolerant(z.object({
     reason: z.string().describe('one short internal sentence on why this segment (or why silent) — never shown to the listener; write this BEFORE deciding the segment'),
     air: z.boolean().describe('true to air one segment now, false to stay silent — silence is a perfectly good answer, often the best one, when the data is dull, stale, unchanged, or there is nothing fresh worth a listener\'s attention'),
     // NOT .nullable(): a nullable nested object loses its `properties` in
@@ -113,36 +113,46 @@ function segmentSchema() {
     // and emits it as a string (issue #906). Silence rides entirely on the
     // `air` boolean above, so a non-null segment on a silent tick is simply
     // ignored at the consumption site (`object.air ? segment : null`).
-    // objectFromModel (in place of a plain z.object): GLM separately observed
-    // (a) omitting this key entirely on an otherwise coherent `done` call, and
-    // (b) double-JSON-encoding the whole object as a STRING — both would
-    // throw under a plain required object just as they would under
-    // .nullable(), which is indistinguishable from djAgent's perspective from
-    // "the model never called done" and burns a full recovery cascade on a
-    // call that already succeeded. Rescues the double-encoded-string case back
-    // into a real object, and falls back to an empty placeholder for anything
-    // else malformed — safe because the consumption site already treats an
-    // empty/malformed segment as silence regardless of `air` (see the check
-    // right after `const seg = object?.air ? object?.segment : null`).
-    segment: objectFromModel({
+    segment: z.object({
       // Kept as a free string (not a fixed enum) so operator-dropped custom
       // skills get valid kinds too. The agent is told which kinds are on offer in
       // the system prompt, and agenticTick drops any kind it wasn't offered.
       kind: z.string()
         .describe('the segment kind — MUST be one of the kinds offered in the system prompt for this tick'),
       text: z.string().describe(`the spoken line in the DJ voice — ${lengthPhrase('segment')}`),
-      sfx: nullableFromModel(z.string()).describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect (null is usually right — most segments need none)'),
-    }, { kind: '', text: '', sfx: null }).describe('the segment to air when air is true; ignored when air is false (empty strings for kind/text, null sfx when silent)'),
+      sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect (null is usually right — most segments need none)'),
+    }).describe('the segment to air when air is true; ignored when air is false (empty strings for kind/text, null sfx when silent)'),
+  }), {
+    // GLM separately observed (a) omitting `segment` entirely on an otherwise
+    // coherent `done` call, and (b) double-JSON-encoding it as a STRING —
+    // both would throw under a plain required object, which is
+    // indistinguishable from djAgent's perspective from "the model never
+    // called done" and burns a full recovery cascade on a call that already
+    // succeeded. modelTolerant rescues the double-encoded string back into a
+    // real object (recursing so `sfx` gets its nullable repair too); this
+    // fallback covers whatever still doesn't validate — safe because the
+    // consumption site already treats an empty/malformed segment as silence
+    // regardless of `air` (see the check right after
+    // `const seg = object?.air ? object?.segment : null`).
+    objectFallbacks: { segment: { kind: '', text: '', sfx: null } },
+    // Content-bearing discards are logged so /debug triage can tell "we threw
+    // a written segment away" apart from "the model chose silence" — an
+    // absent/null segment (the common GLM silence shape) stays quiet.
+    onDiscard: (field, value) => {
+      let preview = '';
+      try { preview = JSON.stringify(value).slice(0, 200); } catch { preview = String(value).slice(0, 200); }
+      console.warn(`[djAgentSegment] discarding malformed ${field} from model output: ${preview}`);
+    },
   });
 }
 
 // Operator-override schema: the segment is mandatory, the kind is already
 // known, so the agent only returns the spoken line.
 function forcedSchema() {
-  return z.object({
+  return modelTolerant(z.object({
     text: z.string().describe(`the spoken line in the DJ voice — ${lengthPhrase('segment')}`),
-    sfx: nullableFromModel(z.string()).describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect'),
-  });
+    sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect'),
+  }));
 }
 
 // The optional sound-effects block appended to the agent's system prompt.

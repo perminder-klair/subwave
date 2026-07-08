@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { z } from 'zod';
 import { generateText, APICallError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { stripThinking, truncationError, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, snapV3Stability, nullableFromModel, objectFromModel, schemaHint } from '../src/llm/internal/core/pure.js';
+import { stripThinking, truncationError, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, snapV3Stability, modelTolerant, schemaHint } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
 import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
@@ -936,95 +936,109 @@ async function main() {
     assert.equal(snapV3Stability(undefined as any), 0.5);
   });
 
-  console.log('nullableFromModel (coerce the string "null", an omitted key, or a double-JSON-encoded string some providers send instead of JSON null):');
-  await test('an object schema: the string "null" coerces to real null', () => {
-    const schema = nullableFromModel(z.object({ kind: z.string() }));
-    assert.deepEqual(schema.parse('null'), null);
+  // Miniature twins of the real agent schemas (PICK_SCHEMA / segmentSchema)
+  // — same field shapes, same wrapper placement — so these tests pin the
+  // mechanism the live schemas rely on without importing modules that carry
+  // side effects (dj-agent.ts pulls in settings/queue).
+  const pickLike = () => modelTolerant(z.object({
+    id: z.string().describe('the exact id'),
+    reason: z.string(),
+    say: z.string().nullable().describe('spoken line or null'),
+    transition: z.enum(['normal', 'blend']).nullable().describe('transition'),
+  }));
+  const SEGMENT_FALLBACK = { kind: '', text: '', sfx: null };
+  const segmentLike = (onDiscard?: (field: string, value: unknown) => void) => modelTolerant(z.object({
+    reason: z.string(),
+    air: z.boolean(),
+    segment: z.object({
+      kind: z.string(),
+      text: z.string(),
+      sfx: z.string().nullable(),
+    }),
+  }), { objectFallbacks: { segment: { ...SEGMENT_FALLBACK } }, onDiscard });
+
+  console.log('modelTolerant / coerceModelPayload (object-level rescue of GLM\'s malformed shapes — the string "null", an omitted key, a double-JSON-encoded object):');
+  await test('the string "null" coerces to real null for nullable string and enum fields', () => {
+    const parsed: any = pickLike().parse({ id: 'a', reason: 'r', say: 'null', transition: 'null' });
+    assert.equal(parsed.say, null);
+    assert.equal(parsed.transition, null);
   });
-  await test('an enum schema: the string "null" coerces to real null', () => {
-    const schema = nullableFromModel(z.enum(['normal', 'blend']));
-    assert.deepEqual(schema.parse('null'), null);
+  await test('an omitted nullable key coerces to null (observed: `done` with `say`/`transition` entirely absent)', () => {
+    const parsed: any = pickLike().parse({ id: 'a', reason: 'r' });
+    assert.deepEqual(parsed, { id: 'a', reason: 'r', say: null, transition: null });
   });
-  await test('genuine JSON null still passes through unchanged', () => {
-    const schema = nullableFromModel(z.object({ kind: z.string() }));
-    assert.deepEqual(schema.parse(null), null);
-  });
-  await test('a genuinely valid value still passes through unchanged', () => {
-    const objSchema = nullableFromModel(z.object({ kind: z.string() }));
-    assert.deepEqual(objSchema.parse({ kind: 'weather' }), { kind: 'weather' });
-    const enumSchema = nullableFromModel(z.enum(['normal', 'blend']));
-    assert.equal(enumSchema.parse('blend'), 'blend');
-  });
-  await test('a genuinely valid string value still passes through unchanged', () => {
-    const schema = nullableFromModel(z.string());
-    assert.equal(schema.parse('a spoken line'), 'a spoken line');
+  await test('genuine JSON null and genuinely valid values pass through unchanged', () => {
+    const parsed: any = pickLike().parse({ id: 'a', reason: 'r', say: 'a spoken line', transition: null });
+    assert.equal(parsed.say, 'a spoken line');
+    assert.equal(parsed.transition, null);
+    assert.equal((pickLike().parse({ id: 'a', reason: 'r', say: null, transition: 'blend' }) as any).transition, 'blend');
   });
   await test('does not widen validation beyond observed junk — other junk still rejects', () => {
-    const schema = nullableFromModel(z.enum(['normal', 'blend']));
-    assert.throws(() => schema.parse('None'));
-    assert.throws(() => schema.parse('nonexistent-transition'));
+    assert.throws(() => pickLike().parse({ id: 'a', reason: 'r', say: null, transition: 'None' }));
+    assert.throws(() => pickLike().parse({ id: 'a', reason: 'r', say: null, transition: 'nonexistent-transition' }));
   });
-  await test('an omitted key (undefined) coerces to null, same as an explicit null (observed: a `done` call with `segment` entirely absent)', () => {
-    const schema = z.object({
-      reason: z.string(),
-      air: z.boolean(),
-      segment: nullableFromModel(z.object({ kind: z.string(), text: z.string() })),
-    });
-    const parsed = schema.parse({ reason: 'nothing fresh to say', air: false });
-    assert.deepEqual(parsed, { reason: 'nothing fresh to say', air: false, segment: null });
+  await test('a REQUIRED (non-nullable) string field is untouched — an omitted `id`/`reason` still rejects', () => {
+    assert.throws(() => pickLike().parse({ say: null, transition: null }));
   });
-  await test('an omitted key coerces to null for a nullable string field too', () => {
-    const schema = z.object({ id: z.string(), say: nullableFromModel(z.string()) });
-    const parsed = schema.parse({ id: 'abc' });
-    assert.deepEqual(parsed, { id: 'abc', say: null });
+  await test('does NOT JSON-parse a nullable STRING field — a coincidental JSON-looking answer stays a plain string', () => {
+    const parsed: any = pickLike().parse({ id: 'a', reason: 'r', say: '42', transition: null });
+    assert.equal(parsed.say, '42');
+    assert.equal((pickLike().parse({ id: 'a', reason: 'r', say: 'true', transition: null }) as any).say, 'true');
   });
-  await test('a nested object double-encoded as a JSON string parses through (observed: `done`\'s segment field)', () => {
-    const schema = z.object({
-      reason: z.string(),
-      air: z.boolean(),
-      segment: nullableFromModel(z.object({ kind: z.string(), text: z.string(), sfx: nullableFromModel(z.string()) })),
-    });
-    const parsed = schema.parse({
+  await test('a nested object double-encoded as a JSON string parses through, recursing so its own nullable fields are repaired too', () => {
+    const parsed: any = segmentLike().parse({
       reason: 'x',
       air: true,
-      segment: JSON.stringify({ kind: 'now-playing-dig', sfx: null, text: 'a real line' }),
+      segment: JSON.stringify({ kind: 'now-playing-dig', sfx: 'null', text: 'a real line' }),
     });
     assert.deepEqual(parsed.segment, { kind: 'now-playing-dig', sfx: null, text: 'a real line' });
   });
-  await test('does NOT attempt JSON-string parsing for a nullable STRING field — a coincidental JSON-looking answer stays a plain string', () => {
-    const schema = nullableFromModel(z.string());
-    assert.equal(schema.parse('42'), '42');
-    assert.equal(schema.parse('true'), 'true');
+
+  console.log('modelTolerant objectFallbacks (required object field, must never throw) + onDiscard:');
+  await test('a genuinely valid segment passes through unchanged', () => {
+    const parsed: any = segmentLike().parse({ reason: 'r', air: true, segment: { kind: 'weather', text: 'hi', sfx: null } });
+    assert.deepEqual(parsed.segment, { kind: 'weather', text: 'hi', sfx: null });
   });
-  await test('a string that fails to parse as JSON for an object field still rejects (not silently swallowed)', () => {
-    const schema = z.object({ segment: nullableFromModel(z.object({ kind: z.string() })) });
-    assert.throws(() => schema.parse({ segment: 'not json at all' }));
+  await test('a missing segment key falls back to the placeholder instead of throwing — and does NOT report a discard (the model said nothing)', () => {
+    const discards: any[] = [];
+    const parsed: any = segmentLike((f, v) => discards.push([f, v])).parse({ reason: 'nothing fresh to say', air: false });
+    assert.deepEqual(parsed.segment, SEGMENT_FALLBACK);
+    assert.deepEqual(discards, []);
+  });
+  await test('the string "null" falls back to the placeholder, no discard reported', () => {
+    const discards: any[] = [];
+    const parsed: any = segmentLike((f, v) => discards.push([f, v])).parse({ reason: 'r', air: false, segment: 'null' });
+    assert.deepEqual(parsed.segment, SEGMENT_FALLBACK);
+    assert.deepEqual(discards, []);
+  });
+  await test('unparseable garbage falls back to the placeholder AND reports the discard (content was thrown away)', () => {
+    const discards: any[] = [];
+    const parsed: any = segmentLike((f, v) => discards.push([f, v])).parse({ reason: 'r', air: true, segment: 'not json at all' });
+    assert.deepEqual(parsed.segment, SEGMENT_FALLBACK);
+    assert.deepEqual(discards, [['segment', 'not json at all']]);
+  });
+  await test('a partially-valid segment (one bad field) falls back and reports the discard', () => {
+    const discards: any[] = [];
+    const parsed: any = segmentLike((f, v) => discards.push([f, v])).parse({ reason: 'r', air: true, segment: { kind: 'weather', text: 42, sfx: null } });
+    assert.deepEqual(parsed.segment, SEGMENT_FALLBACK);
+    assert.equal(discards.length, 1);
   });
 
-  console.log('objectFromModel (the non-nullable sibling — required object field, must never throw):');
-  await test('a genuinely valid value passes through unchanged', () => {
-    const schema = objectFromModel({ kind: z.string(), text: z.string() }, { kind: '', text: '' });
-    assert.deepEqual(schema.parse({ kind: 'weather', text: 'hi' }), { kind: 'weather', text: 'hi' });
+  console.log('modelTolerant wire schema (the regression that motivated object-level placement — AI SDK renders tool inputSchemas with io:\'input\', where a per-field preprocess silently drops the field from `required`):');
+  await test('every field stays in `required` under io:\'input\' — identical to the plain object schema', () => {
+    const rendered: any = z.toJSONSchema(pickLike(), { target: 'draft-7', io: 'input' });
+    assert.deepEqual(rendered.required.sort(), ['id', 'reason', 'say', 'transition']);
+    // Nullable-ness and enum values survive too — the model still sees the contract.
+    assert.deepEqual(rendered.properties.say.anyOf.map((b: any) => b.type).sort(), ['null', 'string']);
+    assert.deepEqual(rendered.properties.transition.anyOf[0].enum, ['normal', 'blend']);
+    // Field descriptions still travel (they are the model's primary coaching channel).
+    assert.equal(rendered.properties.id.description, 'the exact id');
   });
-  await test('a double-JSON-encoded string still rescues the real content', () => {
-    const schema = objectFromModel(
-      { kind: z.string(), text: z.string(), sfx: nullableFromModel(z.string()) },
-      { kind: '', text: '', sfx: null },
-    );
-    const parsed = schema.parse(JSON.stringify({ kind: 'now-playing-dig', sfx: null, text: 'a real line' }));
-    assert.deepEqual(parsed, { kind: 'now-playing-dig', sfx: null, text: 'a real line' });
-  });
-  await test('a missing key falls back to the placeholder instead of throwing', () => {
-    const schema = objectFromModel({ kind: z.string(), text: z.string() }, { kind: '', text: '' });
-    assert.deepEqual(schema.parse(undefined), { kind: '', text: '' });
-  });
-  await test('the string "null" falls back to the placeholder instead of throwing', () => {
-    const schema = objectFromModel({ kind: z.string(), text: z.string() }, { kind: '', text: '' });
-    assert.deepEqual(schema.parse('null'), { kind: '', text: '' });
-  });
-  await test('unparseable garbage falls back to the placeholder instead of throwing', () => {
-    const schema = objectFromModel({ kind: z.string(), text: z.string() }, { kind: '', text: '' });
-    assert.deepEqual(schema.parse('not json at all'), { kind: '', text: '' });
+  await test('objectFallbacks does not leak a visible "default" into the schema (a field-level .catch() would)', () => {
+    const rendered: any = z.toJSONSchema(segmentLike(), { target: 'draft-7', io: 'input' });
+    assert.deepEqual(rendered.required.sort(), ['air', 'reason', 'segment']);
+    assert.equal(JSON.stringify(rendered).includes('"default"'), false);
+    assert.deepEqual(rendered.properties.segment.required.sort(), ['kind', 'sfx', 'text']);
   });
 
   console.log('schemaHint (JSON Schema embedded in djObject\'s free-text recovery prompt):');

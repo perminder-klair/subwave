@@ -396,7 +396,11 @@ export function failureDiagnostics(err: any): any {
     out.causeMessage = err.cause.message;
   }
   // The agent loop's partial steps before the final-output failure — same
-  // shape as the success-path toolCalls flatten.
+  // shape as the success-path toolCalls flatten, but with oversized string
+  // results truncated: these entries live in the 120-entry /debug ring buffer
+  // for the process lifetime, and a discovery tool's result (a full candidate
+  // list) can run to tens of KB per step. The head is what triage needs.
+  const clip = (v: any) => (typeof v === 'string' && v.length > 2000 ? `${v.slice(0, 2000)}… [truncated ${v.length - 2000} chars]` : v);
   const steps = err?.response?.steps || err?.steps;
   if (Array.isArray(steps) && steps.length) {
     out.toolCalls = steps.flatMap((s: any) => {
@@ -404,7 +408,7 @@ export function failureDiagnostics(err: any): any {
       return (s.toolCalls || []).map((c: any, i: number) => ({
         name: c.toolName,
         args: c.input ?? c.args ?? null,
-        result: results[i]?.output ?? results[i]?.result ?? null,
+        result: clip(results[i]?.output ?? results[i]?.result ?? null),
       }));
     });
     out.steps = steps.length;
@@ -541,51 +545,99 @@ export function snapV3Stability(v: number): number {
 //      `segment: "{\"kind\":\"now-playing-dig\",...}"` instead of the real
 //      nested object.
 
-// Wrap a nullable field's inner schema with this to coerce all three shapes
-// before validating. Deliberately narrow — exact matches / a targeted parse
-// attempt only, no guessing at other malformed spellings that haven't been
-// observed. The JSON-string rescue (case 3) only fires for OBJECT/ARRAY inner
-// schemas: a plain nullable STRING field's own value could coincidentally look
-// like JSON (a bare number/boolean/quoted word), and re-parsing THAT would
-// corrupt a genuine string answer.
-export function nullableFromModel<T extends z.ZodTypeAny>(inner: T) {
-  const isContainer = inner instanceof z.ZodObject || inner instanceof z.ZodArray;
-  return z.preprocess((v) => {
-    if (v === 'null' || v === undefined) return null;
-    if (isContainer && typeof v === 'string') {
+// The coercion is applied at the OBJECT level (one z.preprocess wrapping the
+// whole payload schema), never per-field. That placement is load-bearing: the
+// AI SDK renders tool inputSchemas with z.toJSONSchema(…, { io: 'input' })
+// (zod4Schema in @ai-sdk/provider-utils), and a per-field z.preprocess pipe
+// accepts `undefined` on its input side — so wrapping a field DROPS IT FROM
+// THE PARENT'S `required` ARRAY in the schema every provider sees, silently
+// inviting well-behaved models to omit `say`/`transition`/`segment` (fewer
+// spoken links, dropped segments) to fix a malformation only GLM exhibits. A
+// top-level preprocess renders with the full `required` array intact (pinned
+// in llm-pure.test.ts), so the wire schema is byte-identical to the plain
+// object's.
+
+// Schema-driven payload repair: walks `schema.shape` and coerces each
+// observed malformed shape on the raw value BEFORE validation —
+//   - a nullable field sent as the STRING "null", or omitted → real null
+//   - an object/array field double-encoded as a JSON STRING → parsed, then
+//     recursed into (so a nested nullable like segment.sfx is repaired too)
+// Deliberately narrow — exact matches / a targeted parse attempt only, no
+// guessing at other malformed spellings that haven't been observed. The
+// JSON-string rescue only fires for OBJECT/ARRAY fields: a plain string
+// field's genuine value could coincidentally look like JSON (a bare
+// number/boolean/quoted word), and re-parsing THAT would corrupt it.
+export function coerceModelPayload(raw: unknown, schema: z.ZodObject<any>): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const out: any = { ...raw };
+  for (const [key, field] of Object.entries(schema.shape) as [string, z.ZodTypeAny][]) {
+    let v = out[key];
+    if ((v === 'null' || v === undefined) && field.safeParse(null).success) {
+      out[key] = null;
+      continue;
+    }
+    if (v === undefined) continue; // missing non-nullable key — modelTolerant's fallbacks handle it
+    // See through Nullable/Optional wrappers to the core type (.describe()
+    // returns the same class, so it needs no unwrapping).
+    let core: any = field;
+    while (core instanceof z.ZodNullable || core instanceof z.ZodOptional) core = core.unwrap();
+    if ((core instanceof z.ZodObject || core instanceof z.ZodArray) && typeof v === 'string') {
       try {
         const parsed = JSON.parse(v);
-        if (parsed && typeof parsed === 'object') return parsed;
-      } catch { /* not JSON — fall through, let normal validation reject it */ }
+        if (parsed && typeof parsed === 'object') v = parsed;
+      } catch { /* not JSON — leave it, let normal validation reject it */ }
     }
-    return v;
-  }, inner.nullable());
+    if (core instanceof z.ZodObject && v && typeof v === 'object' && !Array.isArray(v)) {
+      v = coerceModelPayload(v, core);
+    }
+    out[key] = v;
+  }
+  return out;
 }
 
-// The sibling for a REQUIRED (non-nullable) object field — some providers
-// (llama.cpp's peg-gemma4 tool serializer, issue #906) drop a nullable nested
-// object's `properties` entirely, so the field must stay non-nullable for
-// them. That rules out nullableFromModel's `.nullable()` wrapper, but the
-// SAME GLM double-JSON-encoding tendency (case 3 above) still needs rescuing,
-// and a missing/malformed value still needs to degrade gracefully rather than
-// throw. Attempts the JSON-string rescue, then falls back to `fallback` for
-// anything else that still doesn't validate. Only safe when the caller's
-// consumption site already treats a placeholder/empty value as "nothing to
-// do" — verify that before reusing this for a new field.
-export function objectFromModel<Shape extends z.ZodRawShape>(
-  shape: Shape,
-  fallback: z.infer<z.ZodObject<Shape>>,
+// The schema wrapper call sites use: the plain object schema stays the single
+// source of the wire contract (tool inputSchema / response_format), and this
+// preprocess repairs GLM's malformed shapes just before validation — on every
+// parse path (done-tool args, text salvage, djObject recovery) since the
+// preprocess rides the schema itself.
+//
+// `objectFallbacks` handles a REQUIRED (non-nullable) object field — some
+// providers (llama.cpp's peg-gemma4 tool serializer, issue #906) drop a
+// nullable nested object's `properties` entirely, so a field like `segment`
+// must stay non-nullable for them, yet a missing/malformed value still needs
+// to degrade gracefully rather than throw (the whole point: a coherent `done`
+// call must not be misclassified as "never called done"). After coercion,
+// any listed field that still fails its own validation is replaced by its
+// fallback. Only safe when the caller's consumption site already treats the
+// placeholder as "nothing to do" — verify that before adding a field here.
+// A field-level .catch() is NOT equivalent: it renders a visible `"default"`
+// into the JSON schema and drops the field from `required` (same io:'input'
+// trap as above).
+//
+// `onDiscard` fires when a fallback replaces a value that HAD content (not
+// undefined/null/"null") — real model output is being thrown away, and the
+// operator should be able to tell that apart from the model choosing silence.
+// Callers pass a logger; this module stays side-effect-free.
+export function modelTolerant<T extends z.ZodObject<any>>(
+  schema: T,
+  opts?: {
+    objectFallbacks?: Record<string, unknown>;
+    onDiscard?: (field: string, value: unknown) => void;
+  },
 ) {
-  const schema = z.object(shape);
-  return z.preprocess((v) => {
-    if (typeof v === 'string') {
-      try {
-        const parsed = JSON.parse(v);
-        if (parsed && typeof parsed === 'object') return parsed;
-      } catch { /* not JSON — fall through, let normal validation reject it */ }
+  return z.preprocess((raw) => {
+    const coerced: any = coerceModelPayload(raw, schema);
+    if (opts?.objectFallbacks && coerced && typeof coerced === 'object' && !Array.isArray(coerced)) {
+      for (const [key, fallback] of Object.entries(opts.objectFallbacks)) {
+        const fieldSchema: z.ZodTypeAny | undefined = (schema.shape as any)[key];
+        if (!fieldSchema || fieldSchema.safeParse(coerced[key]).success) continue;
+        const v = coerced[key];
+        if (opts.onDiscard && v !== undefined && v !== null && v !== 'null') opts.onDiscard(key, v);
+        coerced[key] = fallback;
+      }
     }
-    return v;
-  }, schema).catch(fallback);
+    return coerced;
+  }, schema);
 }
 
 // Strip every `description` key from a JSON-Schema-shaped value, recursively.
