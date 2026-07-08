@@ -2,7 +2,8 @@
 // Used by the autonomous scheduler to pick mood-appropriate tracks.
 
 import { config } from './config.js';
-import { resolveActiveShow } from './settings.js';
+import { resolveActiveShow, get as getSettings } from './settings.js';
+import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
 import { zonedParts, zonedISODate } from './time.js';
 
@@ -22,32 +23,24 @@ export function getTimeContext(date = new Date()) {
   return { period: 'after-hours', mood: 'reflective', vibe: 'after hours', show: 'graveyard' };
 }
 
-// Festival calendar — general / cross-cultural defaults. Edit to taste; the
-// DJ leans into `mood` around these dates. Fixed-date only; lunar holidays
-// (Easter, Eid, Lunar New Year) shift year-to-year and would need a
-// per-year lookup.
-const FESTIVALS = [
-  { month: 1, day: 1, name: "New Year's Day", mood: 'celebratory' },
-  { month: 2, day: 14, name: "Valentine's Day", mood: 'romantic' },
-  { month: 3, day: 17, name: "St. Patrick's Day", mood: 'celebratory' },
-  { month: 4, day: 13, name: 'Vaisakhi', mood: 'festival', windowDays: 1 },
-  { month: 5, day: 1, name: 'May Day', mood: 'festival' },
-  { month: 6, day: 21, name: 'Summer Solstice', mood: 'celebratory' },
-  { month: 10, day: 31, name: 'Halloween', mood: 'festival' },
-  { month: 11, day: 1, name: 'Diwali', mood: 'festival', windowDays: 3 },
-  { month: 11, day: 5, name: 'Bonfire Night', mood: 'festival' },
-  { month: 12, day: 21, name: 'Winter Solstice', mood: 'reflective' },
-  { month: 12, day: 25, name: 'Christmas', mood: 'celebratory', windowDays: 1 },
-  { month: 12, day: 26, name: 'Boxing Day', mood: 'celebratory' },
-  { month: 12, day: 31, name: "New Year's Eve", mood: 'celebratory' },
-];
+// Festival calendar — read from persisted settings so the operator can
+// add/edit/remove entries from the admin UI. settings.load() seeds
+// FESTIVAL_DEFAULTS when the key is absent; an emptied list stays empty
+// (the operator turned the calendar off), so no fallback here.
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function getFestivalContext(date = new Date()) {
-  const { month: m, day: d } = zonedParts(date);
-  for (const f of FESTIVALS) {
+  const { year: y, month: m, day: d } = zonedParts(date);
+  const today = Date.UTC(y, m - 1, d);
+  for (const f of getSettings().festivals ?? []) {
     const window = f.windowDays || 0;
-    if (f.month === m && Math.abs(f.day - d) <= window) {
-      return { name: f.name, mood: f.mood };
+    // Compare real dates so the window spans month and year boundaries
+    // (New Year's Day with windowDays 3 is active from Dec 29). Adjacent
+    // years cover a window reaching across Dec 31 / Jan 1.
+    for (const yy of [y - 1, y, y + 1]) {
+      if (Math.abs(Date.UTC(yy, f.month - 1, f.day) - today) <= window * DAY_MS) {
+        return { name: f.name, mood: f.mood, description: f.description || '' };
+      }
     }
   }
   return null;
@@ -231,8 +224,8 @@ export function getClockContext(date = new Date()) {
 // kokoro, cloud). `register` is a coarse delivery label carried forward for
 // future style/emotion hints (cloud/chatterbox) — Stage 1 only acts on speed.
 //
-// Pure function of the existing daypart + clock so there's a single source of
-// truth and it's trivially testable. A daypart that maps to speed 1.0
+// Function of the daypart + clock + the scheduled show (if it pins an energy)
+// so there's a single source of truth. A daypart that maps to speed 1.0
 // (afternoon) yields no change at all, so a station with the default
 // afternoon profile behaves exactly as before.
 const DAYPART_ENERGY: Record<string, { speed: number; register: string }> = {
@@ -246,7 +239,22 @@ const DAYPART_ENERGY: Record<string, { speed: number; register: string }> = {
   'after-hours':   { speed: 0.92, register: 'intimate' },  // graveyard
 };
 
+// A show's pinned energy overrides the daypart profile wholesale — including
+// the late-night/commute clamps below, because a schedule slot is an explicit
+// operator call (a high-energy evening show should not speak at the 0.97
+// wind-down pace, and a 2am workout show should not be forced intimate).
+// '' (Any) keeps the autonomous daypart behaviour. Values stay inside the
+// daypart table's range so a pin never sounds outside the station's normal
+// delivery envelope.
+const SHOW_ENERGY_DELIVERY: Record<string, { speed: number; register: string }> = {
+  high:   { speed: 1.06, register: 'up' },
+  medium: { speed: 1.0,  register: 'even' },
+  low:    { speed: 0.94, register: 'intimate' },
+};
+
 export function energyForDaypart(date = new Date()) {
+  const pinned = SHOW_ENERGY_DELIVERY[resolveActiveShow(date)?.energy ?? ''];
+  if (pinned) return pinned;
   const { period } = getTimeContext(date);
   const { isLateNight, isCommute } = getClockContext(date);
   const base = DAYPART_ENERGY[period] || { speed: 1.0, register: 'even' };
@@ -282,7 +290,18 @@ export async function getFullContext(at?: Date) {
 
   // A scheduled show for this hour, if any. Its mood wins everything below —
   // an empty hour leaves the station running autonomously.
-  const activeShow = resolveActiveShow(now);
+  const activeShow: any = resolveActiveShow(now);
+
+  // Programme shows: ride today's episode angle on the show context so every
+  // prompt built from it (links, picker brief, segments) breathes the same
+  // episode. Only once the session has actually rolled into this show — a
+  // lingering previous session's plan must not leak across the boundary.
+  if (activeShow?.programme) {
+    const sess = session.getSession();
+    if (sess?.key === `show:${activeShow.id}` && sess.programme?.plan?.angle) {
+      activeShow.episodeAngle = String(sess.programme.plan.angle);
+    }
+  }
 
   // Show > festival > weather > time, in that order of priority for mood.
   const dominantMood = activeShow?.mood || festival?.mood || weather.mood || time.mood;

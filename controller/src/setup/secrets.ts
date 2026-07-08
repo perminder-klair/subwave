@@ -8,8 +8,9 @@
 // pair of surrounding quotes.
 
 import { existsSync } from 'node:fs';
-import { chmod, readFile, writeFile } from 'node:fs/promises';
+import { chmod, readFile } from 'node:fs/promises';
 import { STATE_DIR } from '../config.js';
+import { writeFileAtomic } from '../util/atomic-file.js';
 
 const PATH = `${STATE_DIR}/secrets.env`;
 
@@ -111,7 +112,9 @@ export async function saveSecrets(patch: Record<string, string>): Promise<void> 
     ...Object.entries(current).map(([k, v]) => `${k}=${envEscape(v)}`),
     '',
   ].join('\n');
-  await writeFile(PATH, body);
+  // Atomic replace, created 0600 — the temp file never exists with looser
+  // permissions, and a crash mid-write can't truncate existing secrets.
+  await writeFileAtomic(PATH, body, { mode: 0o600 });
   await chmod(PATH, 0o600);
   // Only now — after the file is safely on disk — mutate the live process env,
   // so any subsequent AI SDK call sees the new key without a restart. Doing this

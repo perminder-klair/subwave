@@ -186,6 +186,11 @@ services:
       - NODE_ENV=production
       - SUBWAVE_HOMEPAGE=${SUBWAVE_HOMEPAGE:-player}
       - SITE_URL=${SITE_URL:-}
+      # Google Analytics Measurement ID at RUNTIME (web/lib/ga.ts). Plumbs the
+      # operator's NEXT_PUBLIC_GA_ID from .env into a runtime var, so analytics
+      # turn on with a `web` recreate — no image rebuild. The build-arg still
+      # bakes it for images built with a value.
+      - GA_ID=${NEXT_PUBLIC_GA_ID:-}
       # Server-side base URL for generateMetadata on the force-dynamic homepage
       # to read the live station name from the controller. Internal compose
       # network name — not exposed to the browser (which uses /api via Caddy).
@@ -290,6 +295,8 @@ services:
       # .env.example "Optional model overrides").
       - DEMUCS_MODEL=${DEMUCS_MODEL:-}
       - ANALYZE_SECONDS=${ANALYZE_SECONDS:-}
+      - ANALYZE_CLAP_WINDOWS=${ANALYZE_CLAP_WINDOWS:-}
+      - ANALYZE_OUTRO_SECONDS=${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but an anonymous HF Hub download is rate-limited and
       # slow. Same var as tts-heavy — set HF_TOKEN=hf_... in your root .env once
       # and both sidecars pick it up.

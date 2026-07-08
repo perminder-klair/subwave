@@ -81,6 +81,7 @@ export function get(songId: string): any {
     year: t.year,
     genre: t.genre,
     moods: t.moods,
+    audioMoods: t.audioMoods,
     energy: t.energy,
     source: t.source,
     confidence: t.confidence,
@@ -104,6 +105,29 @@ export function get(songId: string): any {
     structure: t.structure,
     vocalRanges: t.vocalRanges, // [] = instrumental, null = not computed
     paceMean: paceMeanOf(t.pace),
+    // Measured ending (fade vs cold, tail loudness/tempo/grid) — feeds the
+    // queue's ending-aware exit canvas + effect gating. null = no signal.
+    outro: t.outro,
+  };
+}
+
+// A usable tempo measurement, or null. Navidrome emits an ID3-derived `bpm: 0`
+// on files with no tempo tag, so a non-positive bpm means "unknown", never a
+// measurement (#862).
+export function realBpm(v: any): number | null {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+}
+
+// Resolve {bpm, key} for a track: the analyzer's numbers from the library DB
+// first, then whatever the track object itself carries (a Subsonic candidate's
+// bpm is the file's ID3 tag). Single source of truth for the pick/transition
+// paths — per-caller "carries analysis?" guards let Navidrome's bpm 0 skip the
+// DB lookup and mask the analyzed value (#862).
+export function bpmKeyFor(track: any): { bpm: number | null; key: string | null } {
+  const rec = track?.id ? get(track.id) : null;
+  return {
+    bpm: realBpm(rec?.bpm) ?? realBpm(track?.bpm),
+    key: rec?.musicalKey ?? track?.musicalKey ?? null,
   };
 }
 
@@ -223,6 +247,13 @@ export function paceMeanOf(pace: Array<{ value: number }> | null | undefined): n
     : null;
 }
 
+// Structural-part count over the opening (arrangement complexity), or null
+// when un-analysed. Shared by both pick payloads (pool + agent) so `sections`
+// means the same thing on either path.
+export function sectionCount(t: { structure?: any[] | null } | null | undefined): number | null {
+  return Array.isArray(t?.structure) && t.structure.length ? t.structure.length : null;
+}
+
 // plus the two tagger axes. Matches what songsByMood returns above; pulled
 // out so the new embedding-similar helpers can share the same projection.
 function slimTrack(r: db.TrackRecord) {
@@ -234,6 +265,10 @@ function slimTrack(r: db.TrackRecord) {
     year: r.year,
     genre: r.genre,
     moods: r.moods,
+    // Zero-shot audio moods (sound-derived; music/audio-moods.ts). [] until
+    // scored. Kept separate from the editorial `moods` so consumers can tell
+    // "the LLM read the metadata" from "the audio actually sounds like this".
+    audioMoods: r.audioMoods,
     energy: r.energy,
     // Track length (seconds) so the max-track-length cap (issue #447) can act on
     // library-sourced candidates too — keeps them symmetric with Subsonic's

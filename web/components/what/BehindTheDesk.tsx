@@ -12,13 +12,13 @@ const PANELS = [
     eyebrow: 'PERSONAS',
     title: 'The voices on the station.',
     body:
-      'Up to twelve DJ identities: name, soul, tagline, talk frequency, voice, and which skills each one may use. One persona is on air at a time; a show can hand it the hour.',
+      'Up to twenty-four DJ identities: name, soul, tagline, talk frequency, voice, and which skills each one may use. One persona hosts at a time; a show can hand it the hour and bring guests into the booth. Or install a ready-made host from the community catalog.',
   },
   {
     eyebrow: 'SKILLS',
     title: 'What the DJ does between tracks.',
     body:
-      'Each skill is an autonomous segment: a weather check, a news headline, a dig on the song playing, an oddly-specific fact. Toggle each one on, assign it to a persona, or run any one now as an operator override.',
+      'Each skill is an autonomous segment: a weather check, a news headline, a dig on the song playing, an oddly-specific fact. Toggle each one on, assign it to a persona, or run any one now. Write your own in the built-in editor, or install one from the community exchange.',
     fig: {
       src: '/screenshots/admin-skills.webp',
       label: 'Admin — Skills',
@@ -30,7 +30,7 @@ const PANELS = [
     eyebrow: 'SHOWS',
     title: 'A weekly schedule you paint.',
     body:
-      'A 24×7 grid you brush shows onto. Each show carries a persona, a music mood, and a topic brief: genres, eras, the host’s tone. Autonomous hours fill whatever you leave blank.',
+      'A 24×7 grid you brush shows onto. Each show carries a persona, a music mood, and a topic brief: genres, eras, the host’s tone. Or anchor it to a Navidrome playlist and let the DJ pick from that. Autonomous hours fill whatever you leave blank.',
     fig: {
       src: '/screenshots/admin-shows.webp',
       label: 'Admin — Weekly Schedule',
@@ -48,7 +48,7 @@ const PANELS = [
     eyebrow: 'DEBUG & STATS',
     title: 'Health and diagnostics.',
     body:
-      'Debug and Stats show health, Liquidsoap logs, LLM call history, and usage at a glance. Settings (TTS, LLM, mixer, jingles) and a danger zone that starts, stops, and restarts the broadcast.',
+      'Debug and Stats show health, Liquidsoap logs, LLM call history, and usage at a glance. DJ Doc runs a full station check-up and has your own LLM review the findings. Settings (TTS, LLM, mixer, jingles) and a danger zone that starts, stops, and restarts the broadcast.',
   },
 ];
 
@@ -59,14 +59,15 @@ export default function BehindTheDesk() {
       <h2>Behind the desk.</h2>
       <p className="text-muted">
         Everything a listener hears is shaped from one place: a gated admin
-        console with eight panels. This is where the operator actually runs the
-        station.
+        console. This is where the operator actually runs the station.
       </p>
 
       <Figure
         src="/screenshots/admin-dash.webp"
         alt="Admin — Dash"
         label="Admin — Dash"
+        width={2360}
+        height={1640}
         caption="The Dash panel: live status, the queue, the booth log, and manual voice control."
       />
 
@@ -87,6 +88,8 @@ export default function BehindTheDesk() {
                   alt={p.fig.label}
                   label={p.fig.label}
                   caption={p.fig.caption}
+                  width={2360}
+                  height={1640}
                 />
               </div>
             )}
@@ -99,12 +102,16 @@ export default function BehindTheDesk() {
           src="/screenshots/admin-library.webp"
           alt="Admin — Library"
           label="Admin — Library"
+          width={2360}
+          height={1640}
           caption="Library: search by text, mood, and energy, queue any track, and run the mood tagger."
         />
         <Figure
           src="/screenshots/admin-debug.webp"
           alt="Admin — Debug"
           label="Admin — Debug"
+          width={2360}
+          height={1640}
           caption="Debug: a health strip, Liquidsoap logs, and recent LLM calls, refreshed live."
         />
       </div>

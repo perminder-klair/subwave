@@ -26,6 +26,14 @@ tts-heavy sidecar's analyzer venv, or in a standalone offline venv on the
 operator's machine. Audio is fetched from the Subsonic stream URL (auth baked
 into the query string) to a temp file, then only the first ANALYZE_SECONDS are
 decoded — enough for tempo/key and the intro estimate, a fraction of the bytes.
+(The CLAP embedding additionally decodes a mid-song and a late window from the
+same file — see embed_windows — so the vector reflects the whole track, not
+just its intro.)
+
+The embedder also answers text requests ({"texts": [...]}) with CLAP
+text-tower embeddings in the SAME 512-d space, which is what makes
+natural-language "sounds like ..." search and zero-shot mood scoring against
+the stored audio vectors possible.
 """
 
 import importlib.util
@@ -58,6 +66,20 @@ EMBED_ENABLED = os.environ.get("ANALYZE_AUDIO_EMBEDDING", "").strip().lower() in
 )
 CLAP_SR = 48000
 CLAP_EMBED_DIM = 512
+# How many windows the CLAP embed averages over (clamped 1..3): 3 = start/mid/
+# late (default), 2 = start/mid, 1 = the pre-multi-window leading-window-only
+# behaviour. CLAP cost per track scales linearly — this is the speed lever for
+# the embedding pass (ANALYZE_SECONDS scales everything else too).
+CLAP_WINDOWS = int(os.environ.get("ANALYZE_CLAP_WINDOWS", "").strip() or "3")
+
+# --- Outro analysis ---------------------------------------------------------
+# Tail window (seconds) decoded from the END of the file for the outro
+# features (wind-down start, fade-vs-cold ending, tail loudness/tempo/bars).
+# Only runs when the local file is COMPLETE — a byte-capped download's tail is
+# the middle of the song, so the caller passes a completeness flag and an
+# unknown/short tail simply omits the field (consumers treat absence as "no
+# outro signal, behave as today").
+OUTRO_SECONDS = float(os.environ.get("ANALYZE_OUTRO_SECONDS", "").strip() or "20")
 
 # --- Vocal-activity ranges (optional, opt-in) ------------------------------
 # Off unless ANALYZE_VOCAL_ACTIVITY is truthy. Runs Demucs source separation to
@@ -249,6 +271,7 @@ class ClapEmbedder:
         self.session = None   # onnx
         self.input_name = None
         self.model = None     # transformers
+        self.text_model = None  # lazy text tower for onnx mode
 
     def load(self):
         from transformers import ClapProcessor
@@ -328,6 +351,188 @@ class ClapEmbedder:
         if norm > 0:
             vec = vec / norm
         return [float(x) for x in vec]
+
+    def _resolve_text_model(self):
+        """The CLAP text tower. In transformers mode it's the loaded ClapModel;
+        in onnx mode the on-disk export is the AUDIO encoder only, so the text
+        tower is lazily loaded via ClapTextModelWithProjection (torch required
+        — a lean venv without torch raises here and the caller degrades)."""
+        if self.mode == "transformers":
+            return self.model
+        if self.text_model is None:
+            from transformers import ClapTextModelWithProjection
+
+            hf_id = os.environ.get("CLAP_MODEL", "").strip() or "laion/clap-htsat-unfused"
+            feat_id = os.environ.get("CLAP_FEATURE_MODEL", "").strip() or hf_id
+            m = ClapTextModelWithProjection.from_pretrained(feat_id)
+            m.eval()
+            self.text_model = m
+            log(f"CLAP text tower loaded: {feat_id}")
+        return self.text_model
+
+    def embed_texts(self, texts):
+        """CLAP text-tower embeddings — 512-d, L2-normalised, in the SAME space
+        as the audio vectors (CLAP is trained contrastively on audio–text
+        pairs), so cosine against stored audio vectors is meaningful. Powers
+        natural-language "sounds like ..." search and zero-shot mood scoring."""
+        import numpy as np
+        import torch
+
+        model = self._resolve_text_model()
+        inputs = self.processor(text=list(texts), return_tensors="pt", padding=True)
+        with torch.no_grad():
+            emb = model.get_text_features(**inputs) if hasattr(model, "get_text_features") \
+                else model(**inputs)
+        # transformers ≤4.x returns the projected tensor directly; 5.x wraps it
+        # (text_embeds on the projection model, pooler_output on ClapModel).
+        if hasattr(emb, "text_embeds"):
+            emb = emb.text_embeds
+        elif hasattr(emb, "pooler_output"):
+            emb = emb.pooler_output
+        arr = np.asarray(emb.cpu().numpy(), dtype=np.float64)
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+        if arr.shape[1] != CLAP_EMBED_DIM:
+            raise RuntimeError(
+                f"unexpected CLAP text embedding dim {arr.shape[1]} (want {CLAP_EMBED_DIM})"
+            )
+        out = []
+        for row in arr:
+            n = float(np.linalg.norm(row))
+            out.append([float(x) for x in (row / n if n > 0 else row)])
+        return out
+
+
+def clap_window_offsets(duration_s, window_s, max_windows=None):
+    """Start offsets (seconds) of the CLAP embed windows. Short tracks keep the
+    single leading window; longer tracks add a mid-song window, and genuinely
+    long ones a late (~80%) window, so the vector reflects the whole track.
+    `max_windows` (default CLAP_WINDOWS / ANALYZE_CLAP_WINDOWS, clamped 1..3)
+    caps the count — 1 restores the old leading-window-only behaviour."""
+    n = CLAP_WINDOWS if max_windows is None else max_windows
+    n = max(1, min(3, n))
+    if n == 1 or not duration_s or duration_s <= window_s * 1.5:
+        return [0.0]
+    span = duration_s - window_s
+    offsets = [0.0, span * 0.5]
+    if n >= 3 and duration_s >= window_s * 3.0:
+        offsets.append(span * 0.8)
+    return offsets
+
+
+def embed_windows(embedder, path, librosa, duration_s):
+    """CLAP embedding averaged over up to three windows spread across the track
+    (start / middle / late), mean + L2-renormalised. A single leading window
+    misrepresents any track whose intro doesn't sound like the song (a quiet
+    build-up embeds as ambient); averaging windows fixes that with the same
+    model, dim and storage schema. The local file may be byte-capped
+    (fetch_audio / the controller's downloadCapped truncate), so its real
+    decodable length can be shorter than the header duration — a non-leading
+    window that decodes to under ~5s is skipped, and the worst case degrades to
+    exactly the old leading-window behaviour. `duration_s` is the caller's
+    header-duration probe (0.0 = unknown → leading window only)."""
+    import numpy as np
+
+    vecs = []
+    for offset in clap_window_offsets(duration_s, ANALYZE_SECONDS):
+        try:
+            y48, _sr48 = librosa.load(
+                path, sr=CLAP_SR, mono=True, offset=offset, duration=ANALYZE_SECONDS
+            )
+        except Exception as e:  # noqa: BLE001 — a bad window never kills the embed
+            log(f"CLAP window decode at {offset:.0f}s failed: {e}")
+            continue
+        if y48 is None or len(y48) == 0:
+            continue
+        if offset > 0 and len(y48) < CLAP_SR * 5:
+            continue  # truncated tail of a byte-capped download
+        vecs.append(np.asarray(embedder.embed(y48, CLAP_SR), dtype=np.float64))
+    if not vecs:
+        return None
+    mean = np.mean(vecs, axis=0)
+    norm = float(np.linalg.norm(mean))
+    if norm > 0:
+        mean = mean / norm
+    return [float(x) for x in mean]
+
+
+def analyze_outro(path, librosa, duration_s):
+    """Tail features for the crossfade seam — the outgoing track's ending is
+    what actually decides whether a transition lands. Decodes the last
+    OUTRO_SECONDS and returns
+      {startMs, ending: 'fade'|'cold', lufs?, bpm?, beats?, bars?}
+    with all timestamps ABSOLUTE (offset by the tail's position), or None when
+    the track is too short / the tail decodes short (a truncated file's "tail"
+    is mid-song audio — never emit features measured off the wrong region).
+    Pure librosa (+ optional pyloudnorm), so this runs on the LEAN tier too."""
+    import numpy as np
+
+    if not duration_s or duration_s <= OUTRO_SECONDS + 1.0:
+        return None  # too short to have a distinct outro
+    offset = max(0.0, duration_s - OUTRO_SECONDS)
+    y, sr = librosa.load(path, sr=ANALYZE_SR, mono=True, offset=offset)
+    # Validation backstop for an unknown completeness: a truncated file either
+    # errors here or decodes well short of the requested tail — skip it.
+    if y is None or len(y) < ANALYZE_SR * OUTRO_SECONDS * 0.6:
+        return None
+
+    hop = 512
+    rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=hop)[0]
+    if rms.size == 0:
+        return None
+    loud = float(np.percentile(rms, 95))
+    if loud <= 0:
+        return None
+    times = librosa.frames_to_time(np.arange(rms.size), sr=sr, hop_length=hop)
+
+    # Wind-down start: the LAST time the tail sits at full level (≥60% of its
+    # own loud reference) — everything after it is the ending. A tail that
+    # holds level to the end winds down at the very end (cold).
+    thr_hi = 0.6 * loud
+    last_loud = None
+    for i in range(rms.size - 1, -1, -1):
+        if rms[i] >= thr_hi:
+            last_loud = i
+            break
+    wind_start_s = offset if last_loud is None else offset + float(times[last_loud])
+    wind_span_s = max(0.0, duration_s - wind_start_s)
+
+    # Ending type: a fade lands near-silent (final ~1.5s well below the tail's
+    # loud level) after a real decline (≥3s wind-down); everything else — a hit,
+    # a ring-out, a hard stop — reads as cold for transition purposes.
+    tail_frames = max(1, int(1.5 * sr / hop))
+    end_level = float(np.mean(rms[-tail_frames:]))
+    ending = "fade" if (end_level < 0.15 * loud and wind_span_s >= 3.0) else "cold"
+
+    # Tail loudness — comparable to the track's loudness_lufs, so consumers can
+    # judge how hot the material under the next intro will actually be.
+    lufs, _peak = measure_loudness(y, sr)
+
+    # Tail tempo + grid (absolute ms) — the truer anchor for bar-aligning the
+    # exit than the leading window's tempo (outros drift/ritard).
+    bpm_t = None
+    beats_ms = []
+    bars_ms = []
+    try:
+        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+        t = float(np.atleast_1d(tempo)[0])
+        bpm_t = round(t, 1) if 30 <= t <= 300 else None
+        bt = librosa.frames_to_time(beat_frames, sr=sr)
+        beats_ms = [int(round((offset + float(x)) * 1000.0)) for x in bt]
+        bars_ms = beats_ms[::4]
+    except Exception as e:  # noqa: BLE001 — the grid is garnish, never a gate
+        log(f"outro beat grid failed: {e}")
+
+    out = {"startMs": int(round(wind_start_s * 1000.0)), "ending": ending}
+    if lufs is not None:
+        out["lufs"] = lufs
+    if bpm_t is not None:
+        out["bpm"] = bpm_t
+    if beats_ms:
+        out["beats"] = beats_ms
+    if bars_ms:
+        out["bars"] = bars_ms
+    return out
 
 
 # Lazily loaded, at most once. None means "no embeddings this run" — either
@@ -487,6 +692,9 @@ def get_vocal_detector(force=False):
 
 
 def fetch_audio(url):
+    """Download (capped) to a temp file. Returns (path, complete) — `complete`
+    is False when the byte cap truncated the download, which vetoes outro
+    analysis (the file's "tail" would be mid-song audio)."""
     suffix = ".audio"
     fd, path = tempfile.mkstemp(suffix=suffix, prefix="swanalyze_")
     os.close(fd)
@@ -504,7 +712,7 @@ def fetch_audio(url):
             read += len(chunk)
             if read >= max_bytes:
                 break
-    return path
+    return path, read < max_bytes
 
 
 def measure_loudness(y, sr):
@@ -535,37 +743,55 @@ def measure_loudness(y, sr):
         return None, None
 
 
-def analyze(librosa, url=None, path=None, embed=None, vocal=None):
+def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None):
     import numpy as np
 
     # A controller-provided path is pre-fetched onto the shared volume and
     # owned by the caller; only files fetch_audio downloads here are ours to
     # remove. Keeps the url path behaviour identical for back-compat.
+    # `complete` says whether `path` holds the WHOLE file (the controller's
+    # downloadCapped knows; our own fetch_audio determines it for url requests).
+    # None = unknown (old caller) → outro analysis still runs, relying on its
+    # decode-length validation; False = definitively truncated → skipped.
     owned = path is None
     if owned:
-        path = fetch_audio(url)
+        path, complete = fetch_audio(url)
     audio_embedding = None
     vocal_ranges = None
+    outro = None
     try:
+        # One header-duration probe shared by the CLAP windows and the outro
+        # tail (both need to know where the file ends). 0.0 = unknown.
+        try:
+            duration_s = float(librosa.get_duration(path=path))
+        except Exception as e:  # noqa: BLE001 — degrade to leading-window/no-outro
+            log(f"duration probe failed ({e})")
+            duration_s = 0.0
+
         y, sr = librosa.load(path, sr=ANALYZE_SR, mono=True, duration=ANALYZE_SECONDS)
-        # CLAP wants 48 kHz mono — decode a second copy at that rate from the
-        # SAME file (still present here, before the finally removes owned temps).
-        # A model/feature failure on one track never fails the whole analyze:
-        # we log and emit bpm/key without the embedding.
+        # CLAP wants 48 kHz mono — decode fresh copies at that rate from the
+        # SAME file (still present here, before the finally removes owned
+        # temps), windowed across the track (see embed_windows). A model/
+        # feature failure on one track never fails the whole analyze: we log
+        # and emit bpm/key without the embedding.
         # Per-request `embed` wins over the env default in the ON direction
         # only: True forces a (lazy) CLAP load, None/absent keeps the env-driven
         # behaviour. False is never sent by the controller today.
         embedder = None if embed is False else get_embedder(force=embed is True)
         if embedder is not None:
             try:
-                y48, _sr48 = librosa.load(
-                    path, sr=CLAP_SR, mono=True, duration=ANALYZE_SECONDS
-                )
-                if y48 is not None and len(y48) > 0:
-                    audio_embedding = embedder.embed(y48, CLAP_SR)
+                audio_embedding = embed_windows(embedder, path, librosa, duration_s)
             except Exception as e:  # noqa: BLE001 — embedding is best-effort
                 log(f"audio embedding failed: {e}")
                 audio_embedding = None
+        # Outro (tail) features — only meaningful off a complete file; a
+        # byte-capped download's "tail" is mid-song. Best-effort like the rest.
+        if complete is not False:
+            try:
+                outro = analyze_outro(path, librosa, duration_s)
+            except Exception as e:  # noqa: BLE001 — outro is best-effort
+                log(f"outro analysis failed: {e}")
+                outro = None
         # Vocal activity — Demucs wants 44.1 kHz stereo; decode a third copy from
         # the same file. Gated like CLAP (per-request `vocal` forces the load).
         # Best-effort: a failure leaves vocal_ranges None (field omitted). A
@@ -670,6 +896,10 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None):
     # Per-region key ranges (omit when none produced).
     if key_ranges:
         result["key_ranges"] = key_ranges
+    # Outro (tail) features — omit when not computed (short/truncated file,
+    # decode failure), so consumers treat absence as "no outro signal".
+    if outro is not None:
+        result["outro"] = outro
     # Vocal-activity ranges. Emit even when empty ([] = analysed instrumental);
     # omit only when detection didn't run (None), so the controller can tell
     # "no vocals" from "not computed".
@@ -720,6 +950,11 @@ def main():
         _vocal_detector is not None
         or all(importlib.util.find_spec(m) is not None for m in ("torch", "demucs"))
     )
+    # Text-tower probe: unlike onnx-mode audio (which runs without torch), the
+    # text tower always needs torch + transformers, in both backend modes.
+    text_capable = (not _embed_failed) and all(
+        importlib.util.find_spec(m) is not None for m in ("torch", "transformers")
+    )
 
     log("ready")
     emit({
@@ -727,6 +962,7 @@ def main():
         "ready": True,
         "audio_embedding_capable": audio_capable,
         "vocal_activity_capable": vocal_capable,
+        "text_embedding_capable": text_capable,
     })
 
     for line in sys.stdin:
@@ -739,6 +975,28 @@ def main():
             emit({"id": None, "ok": False, "error": f"bad json: {e}"})
             continue
         rid = req.get("id")
+        # Text-embedding request — {"texts": ["...", ...]} instead of url/path.
+        # An explicit text request force-loads CLAP like embed:true does (the
+        # caller asked for the shared audio-text space; env default irrelevant).
+        texts = req.get("texts")
+        if texts is not None:
+            if (
+                not isinstance(texts, list)
+                or not texts
+                or len(texts) > 64
+                or not all(isinstance(t, str) and t.strip() for t in texts)
+            ):
+                emit({"id": rid, "ok": False, "error": "texts must be 1-64 non-empty strings"})
+                continue
+            embedder = get_embedder(force=True)
+            if embedder is None:
+                emit({"id": rid, "ok": False, "error": "CLAP unavailable (load failed or libs absent)"})
+                continue
+            try:
+                emit({"id": rid, "ok": True, "text_embeddings": embedder.embed_texts(texts)})
+            except Exception as e:  # noqa: BLE001 — one bad request never kills the worker
+                emit({"id": rid, "ok": False, "error": str(e)})
+            continue
         url = req.get("url")
         path = req.get("path")
         if not url and not path:
@@ -750,6 +1008,7 @@ def main():
             result = analyze(
                 librosa, url=url, path=path,
                 embed=req.get("embed"), vocal=req.get("vocal"),
+                complete=req.get("complete"),
             )
             emit({"id": rid, "ok": True, **result})
         except Exception as e:

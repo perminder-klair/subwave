@@ -243,6 +243,12 @@ async def health():
         "analyze_vocal_capable": (
             analyzer_worker.ready_meta.get("vocal_activity_capable") if analyzer_worker.ready else None
         ),
+        # Whether the worker can embed TEXT through the CLAP text tower (same
+        # 512-d space as the audio vectors) — powers "sounds like ..." search
+        # and zero-shot mood scoring. Needs torch, so lean images report false.
+        "analyze_text_capable": (
+            analyzer_worker.ready_meta.get("text_embedding_capable") if analyzer_worker.ready else None
+        ),
     }
 
 
@@ -259,6 +265,10 @@ class AnalyzeRequest(BaseModel):
     embed: bool | None = None
     # Same, for Demucs vocal-activity ranges (ANALYZE_VOCAL_ACTIVITY default).
     vocal: bool | None = None
+    # Whether `path` holds the COMPLETE file (the controller's capped prefetch
+    # knows). False vetoes outro analysis — a truncated file's "tail" is
+    # mid-song audio. None = unknown; the worker's decode-length check guards.
+    complete: bool | None = None
 
 
 @app.post("/analyze")
@@ -273,6 +283,8 @@ async def analyze(req: AnalyzeRequest):
         payload["embed"] = req.embed
     if req.vocal is not None:
         payload["vocal"] = req.vocal
+    if req.complete is not None:
+        payload["complete"] = req.complete
     msg = await analyzer_worker.request(payload)
     if not msg.get("ok"):
         raise HTTPException(500, msg.get("error") or "analyze failed")
@@ -288,7 +300,7 @@ async def analyze(req: AnalyzeRequest):
     # them to null.
     for k in (
         "loudness_lufs", "peak_db", "sections", "vocal_ranges",
-        "pace_curve", "beats", "bars", "key_ranges",
+        "pace_curve", "beats", "bars", "key_ranges", "outro",
     ):
         if k in msg:
             out[k] = msg[k]
@@ -297,3 +309,25 @@ async def analyze(req: AnalyzeRequest):
     if "audio_embedding" in msg:
         out["audio_embedding"] = msg["audio_embedding"]
     return out
+
+
+class EmbedTextRequest(BaseModel):
+    # 1-64 non-empty strings (the worker enforces the same envelope). One
+    # request = one worker round-trip, so mood-vocabulary batches go in a
+    # single call.
+    texts: list[str]
+
+
+@app.post("/embed-text")
+async def embed_text(req: EmbedTextRequest):
+    """CLAP text-tower embeddings — 512-d vectors in the SAME space as the
+    audio vectors, so the controller can cosine them against stored track
+    embeddings (natural-language "sounds like ..." search, zero-shot mood
+    scoring). 500s cleanly on a lean build (no torch); the controller's client
+    treats any failure as "text embedding unavailable"."""
+    if not req.texts:
+        raise HTTPException(400, "missing 'texts'")
+    msg = await analyzer_worker.request({"id": "1", "texts": req.texts})
+    if not msg.get("ok"):
+        raise HTTPException(500, msg.get("error") or "embed-text failed")
+    return {"ok": True, "embeddings": msg.get("text_embeddings") or []}

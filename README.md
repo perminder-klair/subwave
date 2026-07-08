@@ -52,16 +52,18 @@ https://github.com/user-attachments/assets/fac7b723-c54f-438d-8440-bad1e0471e85
 - **One shared Icecast stream.** Every listener hears the same broadcast at the same time.
 - **AI DJ that picks and talks.** Curates tracks, writes intros, and reads station idents, the time, and the weather.
 - **Plain-language requests.** "Play something more upbeat" or "anything by Radiohead" works.
-- **Your own music library.** Pulls from Navidrome over the Subsonic API, or from a plain folder of files on the box — pick the source in the admin UI. No external catalogue.
-- **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy.
-- **Six TTS engines.** Piper and Kokoro in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) and a Remote engine (any self-hosted HTTP endpoint, audio over the wire) round it out. Pick a different engine per kind of speech.
-- **Multiple DJ personas.** Up to 10 souls in rotation, each with its own voice and writing style.
-- **Dual-codec broadcast.** MP3 128 kbps for Sonos, hardware radios, and cars; Ogg-Opus 96 kbps for modern browsers. The web player picks automatically.
+- **Your own music library.** Pulls from Navidrome over the Subsonic API, a Plex server, or a plain folder of files on the box — pick the source in the admin UI. No external catalogue.
+- **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Requesty, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy. A daily token budget can cap hosted-model spend; past the cap the music keeps playing without the chatter.
+- **Six TTS engines.** Piper and Kokoro (multilingual) in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) and a Remote engine (any self-hosted HTTP endpoint, audio over the wire) round it out. Pick a different engine per kind of speech.
+- **Multiple DJ personas.** Up to 24 in the roster, each with its own voice and writing style. A show can seat up to three guest co-hosts who trade scripted banter with the host, and ready-made personas install from the [community catalog](https://www.getsubwave.com/personas).
+- **Multi-format broadcast.** MP3 always served (configurable bitrate) for Sonos, hardware radios, and cars; optional Opus, AAC, and lossless FLAC mounts, each toggleable from the admin UI. The web player picks automatically.
 - **Native apps and PWA.** Native iOS (on the App Store) and Android (on Google Play) players — background audio, lock-screen / CarPlay / Android Auto controls, multi-station — plus an installable PWA on phone and desktop.
-- **Scheduled shows.** A 24×7 grid; each slot has its own persona, mood, and skills.
-- **Pluggable skills.** The DJ's between-track segments — weather, news, traffic, and your own — are skills. The built-ins are scaffolded as editable files under `state/skills/<kind>/` on first boot, so you can rewrite a brief or change the news feed (BBC → your own RSS) right from the admin console — no code, no redeploy. Add your own by dropping a `SKILL.md` (plus optional data-fetching code) into `state/skills/`, hitting Rescan, and enabling it. See [`docs/custom-skills.md`](docs/custom-skills.md).
+- **Scheduled shows.** A 24×7 grid; each slot has its own persona, mood, and skills, or anchors to a Navidrome playlist.
+- **Pluggable skills.** The DJ's between-track segments — weather, news, traffic, and your own — are skills. The built-ins are scaffolded as editable files under `state/skills/<kind>/` on first boot, so you can rewrite a brief or change the news feed (BBC → your own RSS) right from the admin console — no code, no redeploy. Add your own by dropping a `SKILL.md` (plus optional data-fetching code) into `state/skills/`, hitting Rescan, and enabling it — or write one in the admin UI's built-in editor, or install one other operators shared on the [community exchange](https://www.getsubwave.com/skills). See [`docs/custom-skills.md`](docs/custom-skills.md).
 - **Mood-aware rotation.** Time of day, weather, and festival days bias what gets played and how the DJ talks.
 - **Hourly archives.** Every hour saved as MP3 for later replay.
+- **Scrobbling.** Every spin can report to Last.fm and ListenBrainz, including self-hosted ListenBrainz instances.
+- **DJ Doc.** A built-in station check-up: runs diagnostics across the stack, then has your configured LLM review the findings.
 - **Crossfade + voice ducking.** Tracks blend smoothly; the music ducks under DJ speech and lifts back up.
 - **Admin console.** Live status, queue, booth log, personas, shows, skills, stats, and a debug view of recent LLM calls.
 - **Library Observatory.** A full-screen, data-art map of every tagged track at `/observatory` — placed by genre, lit by energy, with a full dossier per track (BPM, key, mood, embedding fingerprints, and nearest-in-vector-space neighbours). Scales from a few hundred to tens of thousands of tracks.
@@ -312,11 +314,13 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 - **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
 - **[`docs/unraid.md`](docs/unraid.md):** running on Unraid — one-click from Community Applications, or the Compose Manager Plus stack.
 - **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the opt-in `tts-heavy` voices and the default-on acoustic `analyzer` service — what each does and how to toggle them.
+- **[`docs/navidrome-libraries.md`](docs/navidrome-libraries.md):** keeping audiobooks / seasonal collections off air with a dedicated, library-scoped Navidrome user.
 - **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
   non-obvious constraints behind each subsystem.
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.
 - **[`SECURITY.md`](SECURITY.md):** reporting security issues.
 - **[`mcp-subwave/README.md`](mcp-subwave/README.md):** the MCP server.
+- **[`docs/api.md`](docs/api.md):** the HTTP API, the in-app **Connect** explorer + playground, OpenAPI export, and Home Assistant / Music Assistant recipes.
 
 ## Music licensing
 

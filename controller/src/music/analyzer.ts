@@ -78,6 +78,21 @@ export interface AnalysisResult {
   // treats null as "no audio vector this pass", so a backend without CLAP is
   // byte-for-byte today's behaviour.
   audioEmbedding: number[] | null;
+  // Outro (tail) features — measured off the END of a COMPLETE file. null when
+  // not computed (truncated download, short track, decode failure); consumers
+  // treat null as "no outro signal, behave as today".
+  outro: OutroInfo | null;
+}
+
+// The outgoing track's measured ending — what actually decides whether a
+// transition lands. Timestamps are absolute ms into the track.
+export interface OutroInfo {
+  startMs: number;             // where the wind-down starts
+  ending: 'fade' | 'cold';     // fades to silence vs ends at level
+  lufs: number | null;         // integrated loudness of the tail (BS.1770)
+  bpm: number | null;          // tail tempo (outros drift/ritard vs the lead)
+  beats: number[] | null;      // tail beat grid, absolute ms
+  bars: number[] | null;       // tail downbeat (bar) grid, absolute ms
 }
 
 // Coerce a worker numeric field to a finite number or null. The worker omits
@@ -152,6 +167,23 @@ function parsePaceCurve(v: unknown): PaceSpan[] | null {
     out.push({ startMs, endMs, value });
   }
   return out.length ? out : null;
+}
+
+// Coerce the worker's outro object to a clean OutroInfo or null. The worker
+// omits it entirely when not computed; startMs + a valid ending are the
+// required core, everything else is optional garnish.
+function parseOutro(v: unknown): OutroInfo | null {
+  const startMs = parseFinite((v as any)?.startMs);
+  const ending = (v as any)?.ending;
+  if (startMs == null || startMs < 0 || (ending !== 'fade' && ending !== 'cold')) return null;
+  return {
+    startMs: Math.round(startMs),
+    ending,
+    lufs: parseFinite((v as any)?.lufs),
+    bpm: parseFinite((v as any)?.bpm),
+    beats: parseMsList((v as any)?.beats),
+    bars: parseMsList((v as any)?.bars),
+  };
 }
 
 // Coerce the worker's audio_embedding field to a clean number[] or null. The
@@ -246,6 +278,10 @@ export interface AnalyzeRequestOpts {
   // Force a (lazy) Demucs load for vocal-activity ranges even when the backend's
   // ANALYZE_VOCAL_ACTIVITY env is off — the admin/backfill path, mirroring embed.
   vocal?: boolean;
+  // Whether the handed-over `path` holds the COMPLETE file (downloadCapped
+  // knows). false vetoes outro analysis — a truncated file's "tail" is
+  // mid-song audio. Omitted on the url path: the backend's own fetch decides.
+  complete?: boolean;
 }
 
 // Write a request to the local stdio worker and resolve its response. The
@@ -273,6 +309,7 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
           bars: parseMsList(msg.bars),
           keyRanges: parseKeyRanges(msg.key_ranges),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
+          outro: parseOutro(msg.outro),
         }),
       reject,
       timer,
@@ -300,6 +337,8 @@ async function analyzeViaLocalPath(path: string, opts: AnalyzeRequestOpts = {}):
 let _sidecarAudioCapable: boolean | null = null;
 // Same, for vocal-activity (Demucs) support — null until probed/absent field.
 let _sidecarVocalCapable: boolean | null = null;
+// Same, for the CLAP TEXT tower (embed-text) — null until probed/absent field.
+let _sidecarTextCapable: boolean | null = null;
 // The candidate base URL that last reported the 'analyze' engine — the one
 // sidecarRequest POSTs to. Set by sidecarReachable; '' until a probe succeeds.
 let _sidecarBase = '';
@@ -318,12 +357,14 @@ async function probeSidecar(url: string): Promise<boolean> {
       engines?: string[];
       analyze_audio_capable?: boolean | null;
       analyze_vocal_capable?: boolean | null;
+      analyze_text_capable?: boolean | null;
     };
     const reachable = !!body.ok && Array.isArray(body.engines) && body.engines.includes('analyze');
     if (reachable) {
       _sidecarBase = url;
       _sidecarAudioCapable = typeof body.analyze_audio_capable === 'boolean' ? body.analyze_audio_capable : null;
       _sidecarVocalCapable = typeof body.analyze_vocal_capable === 'boolean' ? body.analyze_vocal_capable : null;
+      _sidecarTextCapable = typeof body.analyze_text_capable === 'boolean' ? body.analyze_text_capable : null;
     }
     return reachable;
   } catch {
@@ -370,6 +411,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
       bars: parseMsList(resBody.bars),
       keyRanges: parseKeyRanges(resBody.key_ranges),
       audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
+      outro: parseOutro(resBody.outro),
     };
   } finally {
     clearTimeout(t);
@@ -432,6 +474,90 @@ export async function refreshCapabilities(): Promise<void> {
   if ((await resolveBackend()) === 'sidecar') await sidecarReachable();
 }
 
+// Whether the active backend can embed TEXT through the CLAP text tower (same
+// semantics as audioEmbeddingAvailable: null = unknown/local, false = sidecar
+// definitively can't — lean build or pre-text-tower image).
+export function textEmbeddingAvailable(): boolean | null {
+  return _backend === 'sidecar' ? _sidecarTextCapable : null;
+}
+
+// Coerce a worker text_embeddings payload to clean number[][] or null: one
+// finite-valued vector per input text, all the same length. Anything less is
+// treated as "no text embedding this pass" — callers degrade, never throw.
+function parseVectors(v: unknown, expected: number): number[][] | null {
+  if (!Array.isArray(v) || v.length !== expected) return null;
+  const out: number[][] = [];
+  for (const row of v) {
+    const vec = parseAudioEmbedding(row);
+    if (!vec || (out.length && vec.length !== out[0].length)) return null;
+    out.push(vec);
+  }
+  return out;
+}
+
+// Write a {texts} request to the local stdio worker and resolve its vectors.
+function localEmbedTexts(texts: string[], timeoutMs: number): Promise<number[][] | null> {
+  const id = `a${++reqSeq}`;
+  return new Promise<number[][] | null>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error('embed-text request timed out'));
+    }, timeoutMs);
+    pending.set(id, {
+      resolve: (msg: any) => resolve(parseVectors(msg.text_embeddings, texts.length)),
+      reject,
+      timer,
+    });
+    proc?.stdin.write(JSON.stringify({ id, texts }) + '\n');
+  });
+}
+
+// Embed a batch of texts through the CLAP TEXT tower — 512-d L2-normalised
+// vectors in the SAME space as the stored track audio vectors, so cosine
+// against them is meaningful (CLAP is contrastive audio–text). Used for
+// natural-language "sounds like ..." search and zero-shot mood scoring.
+// Returns null whenever the capability is absent (no backend, lean build, old
+// sidecar without /embed-text, worker without torch) — callers degrade to
+// their non-text behaviour, never throw. `timeoutMs` lets interactive callers
+// (a picker tool mid-pick) use a shorter deadline than a bulk pass.
+export async function embedTexts(
+  texts: string[],
+  opts: { timeoutMs?: number } = {},
+): Promise<number[][] | null> {
+  if (texts.length === 0) return [];
+  const timeoutMs = opts.timeoutMs ?? config.analyzer.requestTimeoutMs;
+  const backend = await resolveBackend();
+  if (!backend) return null;
+  if (backend === 'sidecar') {
+    if (_sidecarTextCapable === false) return null;
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${_sidecarBase}/embed-text`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texts }),
+        signal: ac.signal,
+      });
+      // 404 = pre-text-tower sidecar, 500 = lean build (no torch) — both mean
+      // "no text embeddings", not an error worth surfacing per call.
+      if (!res.ok) return null;
+      const body = (await res.json()) as any;
+      return body?.ok ? parseVectors(body.embeddings, texts.length) : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+  try {
+    if (!ready) await startWorker();
+    return await localEmbedTexts(texts, timeoutMs);
+  } catch {
+    return null;
+  }
+}
+
 // Analyse one track by id. Throws on failure — the caller (analyze pass) logs
 // and moves on, leaving the row NULL so it's retried on the next run. This is
 // the URL path: the backend fetches the audio itself. Kept as the fallback
@@ -476,18 +602,23 @@ function subsonicErrorMessage(body: string): string {
 }
 
 // Download a track's audio to a capped temp file on the shared state volume
-// and return the absolute path. The controller does this AHEAD of the
+// and return {path, complete}. The controller does this AHEAD of the
 // backend's compute so network fetch (controller) overlaps DSP (backend) —
 // the path is valid in both containers because the shared dir mounts at the
-// same location. Caps bytes + applies the analyzer request timeout. Throws
-// on any error; the caller falls back to the url path for that one track.
-export async function downloadCapped(songId: string): Promise<string> {
+// same location. Caps bytes + applies the analyzer request timeout; `complete`
+// is false when the cap truncated the file (vetoes outro analysis — the
+// file's "tail" would be mid-song audio). Throws on any error; the caller
+// falls back to the url path for that one track.
+export async function downloadCapped(
+  songId: string,
+): Promise<{ path: string; complete: boolean }> {
   const ref = await source.getAnalyzableRef(songId);
   if (!ref) throw new Error(`no analyzable audio for ${songId}`);
   // Already local (local-folder source): hand back the library path as-is. This
   // is the source's own file — callers pass it to analyzePath, which never
   // deletes it (only genuine temp downloads under ANALYZE_TMP_DIR are cleaned).
-  if ('path' in ref) return ref.path;
+  // A local file is the whole file, so it's always complete.
+  if ('path' in ref) return { path: ref.path, complete: true };
   mkdirSync(ANALYZE_TMP_DIR, { recursive: true });
   const dest = `${ANALYZE_TMP_DIR}/${encodeURIComponent(songId)}.audio`;
   const url = ref.url;
@@ -542,7 +673,10 @@ export async function downloadCapped(songId: string): Promise<string> {
         );
       }
     }
-    return dest;
+    // A read that hit the cap stopped early — the tail is missing. (A file of
+    // exactly cap bytes is flagged incomplete too; erring that way only skips
+    // outro analysis, never mis-measures it.)
+    return { path: dest, complete: read < ANALYZE_MAX_BYTES };
   } finally {
     clearTimeout(t);
   }

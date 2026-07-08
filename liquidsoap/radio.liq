@@ -20,7 +20,7 @@ settings.server.telnet.port := 1234
 
 jingle_ratio = ref(30)
 crossfade_duration = ref(10.0)
-archive_enabled = ref(true)
+archive_enabled = ref(false)
 archive_bitrate = ref(128)
 opus_enabled = ref(false)
 opus_bitrate = ref(96)
@@ -30,8 +30,9 @@ aac_bitrate = ref(192)
 stream_bitrate = ref(192)
 station_name = ref("SUB/WAVE")
 
-# DJ transition effects (filter sweep + echo washout + reverb dissolve) — see dj_transition
-# below. Both effects are built PER-BRANCH inside the transition callback, on
+# DJ transition effects (filter sweep + echo washout + reverb dissolve + beat
+# chop + exit loop) — see dj_transition
+# below. The effects are built PER-BRANCH inside the transition callback, on
 # the OUTGOING track's source only: idle playout never passes through an
 # effect operator at all, and the incoming track always lands clean and dry —
 # the way a DJ's filter/echo ride the channel that's leaving. The envelopes
@@ -285,10 +286,20 @@ def dj_transition(a, b) =
   # listener request jumping the queue. The controller stamps liq_washout_delay
   # (tempo-synced, dotted-eighth of the track's BPM) alongside the flag.
   washing = a.metadata["liq_washout"] == "true"
+  # Exit loop rides the ENDING track's own annotation, exactly like the
+  # washout — `a` IS the flagged track, its canvas and bar length were
+  # stamped on it when it was queued. Washout wins when both ride one track
+  # (it may carry the length-cap auto-arm; the queue avoids stacking them,
+  # this is belt-and-braces).
+  looping = a.metadata["liq_loop"] == "true" and not washing
   # Sweep rides the INCOMING pick's annotation ("sweep into my pick") but the
   # filter is applied to the OUTGOING branch: the track we're leaving sinks
   # under a closing lowpass while the pick rises clean underneath.
-  sweeping = b.metadata["liq_sweep"] == "true"
+  # All three entry-side effects (sweep/dissolve/chop, flagged on the incoming
+  # pick) yield to a loop already riding the outgoing track's exit: the loop
+  # IS the transition, and garnishing it (filtering/washing/gating a loop)
+  # chokes the gesture. The queue strips these upstream; enforced here too.
+  sweeping = b.metadata["liq_sweep"] == "true" and not looping
   # Dissolve (reverb wash) rides the INCOMING pick like the sweep — "dissolve
   # the current track under my pick" — and is likewise applied to the OUTGOING
   # branch: the track we're leaving loses its transients and pulse to a
@@ -298,7 +309,18 @@ def dj_transition(a, b) =
   # Precedence: a washout on the outgoing track's own annotation also shapes
   # this exit (echo tail vs ambient wash are mutually exclusive gestures) —
   # the washout wins because it may carry the length-cap auto-arm.
-  dissolving = b.metadata["liq_dissolve"] == "true" and not washing
+  dissolving = b.metadata["liq_dissolve"] == "true" and not washing and not looping
+  # Chop (crossfader cut) rides the INCOMING pick like the sweep/dissolve —
+  # "cut the current track out on the beat under my pick" — and is likewise
+  # applied to the OUTGOING branch: the track we're leaving is gated
+  # rhythmically at full level, stabs thinning and sparsening while the pick
+  # rises clean through the gaps. The PERCUSSIVE way across a clash (sweep =
+  # dramatic, dissolve = smooth); the controller only arms it between CLASHING
+  # tracks (mix.effectAllowedFor) and stamps liq_chop_period (one beat of the
+  # OUTGOING track's BPM) alongside the flag. Same washout precedence as the
+  # dissolve: an echo tail and a beat gate fight over the same exit, and the
+  # washout may carry the length-cap auto-arm.
+  chopping = b.metadata["liq_chop"] == "true" and not washing and not looping
   # Washout drops the dry signal early (exp fade) so the tail reads as a
   # dissolve. An early drop sums BELOW unity mid-cross — a dip, which is the
   # effect; the +6 dB doubling hazard is only for fades that hold full level
@@ -312,6 +334,18 @@ def dj_transition(a, b) =
       # heard choking a still-loud track — with the default fade the track was
       # already quiet by the time the cutoff got dramatic and the sweep felt
       # powerless (found on-air).
+      fade.out(duration=d, type="log", initial_metadata=a.metadata, a.source)
+    elsif chopping then
+      # Same reasoning as the sweep: the GATE does the removal, not the fader.
+      # A log fade keeps the stabs hot deep into the window — a DJ cutting the
+      # crossfader cuts at full level; the gate envelope (duty shrink + beat
+      # sparsening + master exit) is what takes the track out.
+      fade.out(duration=d, type="log", initial_metadata=a.metadata, a.source)
+    elsif looping then
+      # The dry only plays through the capture pass (one bar) before the hard
+      # gate cuts it — a log fade keeps that bar essentially at full level, so
+      # the loop is seeded hot (a linear fade would seed it a couple of dB
+      # down and every repeat inherits the loss).
       fade.out(duration=d, type="log", initial_metadata=a.metadata, a.source)
     else
       fade.out(duration=d, initial_metadata=a.metadata, a.source)
@@ -406,7 +440,7 @@ def dj_transition(a, b) =
   # swapping — the club "EQ mixing" technique for seamless long blends. The
   # controller only arms it between COMPATIBLE tracks (mix.effectAllowedFor).
   # At e=0 the HPF sits at 30 Hz ≈ transparent, so the engage is seamless.
-  blending = b.metadata["liq_blend"] == "true"
+  blending = b.metadata["liq_blend"] == "true" and not looping
   a_source =
     if blending then
       log("DJ blend: spectral handover into the next track (d=#{d}s)")
@@ -617,6 +651,202 @@ def dj_transition(a, b) =
                  filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet, washed))
       # Dry (faded) + wash: the track walks out through its own ambience.
       add(normalize=false, [a_source, amplify(diss_gain, washed)])
+    else
+      a_source
+    end
+  # CHOP ENVELOPE — the crossfader cut: rhythmic amplitude gating of the
+  # outgoing track, opening AT each beat start (the downbeat transient
+  # survives) and closing for the rest of the beat. Pure `amplify` driven by a
+  # pure function of the branch's own source.elapsed() — the same proven
+  # closure pattern as sweep_gain/wash_gain, no new operator class, so no
+  # fx-render-test re-probe needed. The gesture runs on its own compressed
+  # clock dd = min(d, 10 s): a cut is a cut — stretched over a long operator
+  # crossfade it read as slow pumping (heard on-air, #861), so the envelope
+  # finishes in ≤10 s and leaves the rest of the buffer to the incoming ramp.
+  # Four envelopes compose per frame:
+  #   rate    — the gate ACCELERATES like a DJ transform cut: one cut per beat
+  #             through 40% of dd, eighths to 72%, sixteenth stutter into the
+  #             throw. p/2 and p/4 divide p, so every original beat start is
+  #             still a gate-open and the downbeat transient survives; a zone
+  #             switch mid-gate costs one irregular gap, inaudible at speed.
+  #   duty    — how much of each gate stays open: 1.0 (transparent engage) →
+  #             0.55 by 15% of dd → 0.30 by 72% (stabs tighten).
+  #   floor   — gain UNDER the closed gate: 0.45 → 0 over the first 25% of dd:
+  #             the first holes read as beat-synced pumping just long enough
+  #             to establish the move, then harden into true cuts (full
+  #             silence between the very first stabs read as dropouts).
+  #   (the old every-other-beat sparsen is gone — the stutter accelerando IS
+  #   the exit now; isolated late stabs read as slowing down, the wrong
+  #   direction for a cut.)
+  # Gate edges are ~12 ms smoothsteps (square edges click); a wet ramp over
+  # the first 8% of dd makes the engage bit-transparent (at e=0 gain is
+  # exactly 1 — any instant dip against the pre-cross signal is a step); a
+  # master release kills the stutter by 0.92·dd so the branch is silent long
+  # before the transition source truncates at d (amplify vanishes at the
+  # boundary like every branch operator).
+  a_source =
+    if chopping then
+      p = float_of_string(default=0.5, b.metadata["liq_chop_period"])
+      p = if p <= 0.05 then 0.5 else p end
+      dd = if d > 10. then 10. else d end
+      log("DJ chop: cutting the outgoing track on the beat (p=#{p}s, dd=#{dd}s, d=#{d}s)")
+      chop_src = a_source
+      def chop_gain() =
+        e = source.elapsed(chop_src)
+        e = if e < 0. then 0. else e end
+        # Accelerating clock: quarters → eighths → sixteenth stutter.
+        pp =
+          if e < 0.40 * dd then p
+          elsif e < 0.72 * dd then 0.5 * p
+          else 0.25 * p
+          end
+        beat = int_of_float(e / pp)
+        ph = e / pp - float_of_int(beat)         # 0..1 within the gate
+        t1 = 0.15 * dd
+        t2 = 0.72 * dd
+        duty =
+          if e < t1 then
+            x = e / t1
+            1.0 - (3.0 * x * x - 2.0 * x * x * x) * 0.45
+          elsif e < t2 then
+            x = (e - t1) / (t2 - t1)
+            0.55 - (3.0 * x * x - 2.0 * x * x * x) * 0.25
+          else
+            0.30
+          end
+        f_end = 0.25 * dd
+        floor_g =
+          if e >= f_end then 0.0
+          else
+            x = e / f_end
+            0.45 * (1.0 - (3.0 * x * x - 2.0 * x * x * x))
+          end
+        eps = 0.012 / pp                         # ~12 ms edges, in phase units
+        shape =
+          if ph < eps then
+            x = ph / eps
+            3.0 * x * x - 2.0 * x * x * x
+          elsif ph < duty then 1.0
+          elsif ph < duty + eps then
+            x = (ph - duty) / eps
+            1.0 - (3.0 * x * x - 2.0 * x * x * x)
+          else 0.0
+          end
+        g_gate = floor_g + (1.0 - floor_g) * shape
+        # Engage ramp: gain 1.0 at e=0, gate fully in by 8% of the gesture.
+        t_eng = 0.08 * dd
+        wet =
+          if e >= t_eng then 1.0
+          else
+            x = e / t_eng
+            3.0 * x * x - 2.0 * x * x * x
+          end
+        g = 1.0 - wet * (1.0 - g_gate)
+        # Master release: silent from 0.92·dd — the throw. The rest of the
+        # buffer belongs to the incoming ramp.
+        master =
+          if e < 0.82 * dd then 1.0
+          elsif e < 0.92 * dd then
+            x = (e - 0.82 * dd) / (0.10 * dd)
+            1.0 - (3.0 * x * x - 2.0 * x * x * x)
+          else 0.0
+          end
+        g * master
+      end
+      amplify(chop_gain, a_source)
+    else
+      a_source
+    end
+  # LOOP ENVELOPE — the exit loop ("loop out"): the last bar of the OUTGOING
+  # track is caught in a loop as the dry is hard-cut, riding in tempo under
+  # the incoming pick, then filtered down and released.
+  #
+  # HOW THE LOOP IS BUILT — measured comb facts first (burst-probed on the
+  # real v2.4.5 image; see the combprobe history in PR #863): this build's
+  # `comb` is a ONE-SHOT feed-forward echo, NOT a recirculating feedback
+  # comb — a single burst in yields exactly one delayed copy, then silence,
+  # whatever the feedback value (getter or constant). So no single comb can
+  # loop. Instead: a CASCADE OF DOUBLING DELAYS. K combs at bar, 2·bar,
+  # 4·bar, 8·bar convolve to taps at EVERY multiple 0..(2^K−1) of bar (the
+  # binary counter), so a one-bar capture tiles gaplessly — each bar-slot
+  # holds exactly one copy, no overlap, no pileup, and the repetition
+  # terminates by construction (nothing recirculates, so it cannot ring past
+  # its last tap or run away). At feedback=0.0 the tap set measures FLAT at
+  # a fixed −6 dB regardless of stage count (probed at 2, 3 and 4 stages) —
+  # one constant ×2 makeup restores unity. Stages 4·bar / 8·bar are built
+  # only when their delay < d: a tap at ≥ d is never heard, and 2^K·bar ≥ d
+  # then guarantees repeats reach the end of every canvas.
+  #
+  # The gesture: unity through the CAPTURE PASS (the first bar), then a hard
+  # 12 ms gate cut — the CUT is what reads as "caught in a loop" (the
+  # washout's exp fade is what reads as echo). Known compromise, accepted:
+  # the analyzer gives tempo, not beat PHASE — the loop starts where the
+  # cross fires, not on a downbeat, so it lands as a tape-loop, not a
+  # gridded serato loop, and the splice may tick once per pass. The tick
+  # repeats in tempo (reads as vinyl) and the ride-out lowpass softens it.
+  a_source =
+    if looping then
+      bar = float_of_string(default=2.0, a.metadata["liq_loop_bar"])
+      bar = if bar <= 0.2 then 2.0 else bar end
+      log("DJ loop: catching the last bar of the outgoing track (bar=#{bar}s, d=#{d}s)")
+      loop_src = a_source
+      # Dry gate: unity through the capture pass, then the hard cut.
+      # Everything heard after is the cascade re-emitting that one bar.
+      def loop_dry() =
+        e = source.elapsed(loop_src)
+        e = if e < 0. then 0. else e end
+        edge = 0.012
+        if e < bar - edge then 1.0
+        elsif e < bar then
+          x = (e - (bar - edge)) / edge
+          1.0 - (3.0 * x * x - 2.0 * x * x * x)
+        else 0.0 end
+      end
+      # Ride-out darkening — a DJ filters the loop down as the new track takes
+      # over: the cutoff closes 9 kHz → 2.5 kHz (log space) over the back half.
+      # Wet stays 0 through the capture pass (an RC at 9 kHz is not
+      # transparent — the sweep's on-air lesson; the still-audible dry passes
+      # through this chain too) and ramps in only after the cut.
+      def loop_cut() =
+        e = source.elapsed(loop_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.45 * d
+        t_to   = 0.90 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        s = 3.0 * x * x - 2.0 * x * x * x
+        9000.0 * pow(2500.0 / 9000.0, s)
+      end
+      def loop_wet() =
+        e = source.elapsed(loop_src)
+        e = if e < 0. then 0. else e end
+        t_on = bar + 0.15 * d
+        x = if e >= t_on then 1.0 elsif e <= bar then 0.0 else (e - bar) / (0.15 * d) end
+        3.0 * x * x - 2.0 * x * x * x
+      end
+      # Master release — the ONLY level release (a feed-forward cascade has
+      # no feedback to ramp down): the loop rides flat, then fades out under
+      # the incoming from 0.80·d, silent from 0.92·d — before the branch
+      # truncates at d.
+      def loop_master() =
+        e = source.elapsed(loop_src)
+        e = if e < 0. then 0. else e end
+        if e < 0.80 * d then 1.0
+        elsif e < 0.92 * d then
+          x = (e - 0.80 * d) / (0.12 * d)
+          1.0 - (3.0 * x * x - 2.0 * x * x * x)
+        else 0.0 end
+      end
+      gated  = amplify(loop_dry, a_source)
+      looped = comb(delay=bar, feedback=0.0, gated)
+      looped = comb(delay=2.0 * bar, feedback=0.0, looped)
+      looped = if 4.0 * bar < d then comb(delay=4.0 * bar, feedback=0.0, looped) else looped end
+      looped = if 8.0 * bar < d then comb(delay=8.0 * bar, feedback=0.0, looped) else looped end
+      # The cascade measures a fixed −6 dB whatever the stage count (see the
+      # header comment) — one constant makeup restores the loop to unity.
+      looped = amplify(2.0, looped)
+      looped = filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet,
+                 filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet, looped))
+      amplify(loop_master, looped)
     else
       a_source
     end
@@ -1103,7 +1333,11 @@ def on_meta(m) =
       filename = filename,
       timestamp = ts
     })
-    file.write(data=payload, "/var/sub-wave/now-playing.json")
+    # atomic=true (temp file + rename) — the controller re-reads this file
+    # every 1.5s and per /now-playing request, and its reader treats ANY parse
+    # failure as null; an in-place truncate-then-write here made it possible to
+    # observe a half-written JSON and blank the now-playing data for a tick.
+    file.write(data=payload, atomic=true, "/var/sub-wave/now-playing.json")
     # Push the same metadata onto the Icecast stream so the ICY title
     # tracks the current song instead of lagging a transition behind.
     radio.insert_metadata([
@@ -1365,6 +1599,13 @@ def stream_down() =
     fn = stream_shutdown()
     fn()
     stream_on := false
+    # Off air — drop now-playing.json so the UI stops advertising the last
+    # track that played. on_meta rewrites it as soon as we're back on air and
+    # the next track's metadata fires; the controller reads a missing file as
+    # "nothing playing".
+    if file.exists("/var/sub-wave/now-playing.json") then
+      file.remove("/var/sub-wave/now-playing.json")
+    end
   end
 end
 

@@ -81,3 +81,19 @@ router.get('/sfx/:name/audio', requireAdmin, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Fire an effect on-air now — the automation-facing trigger (MCP, webhooks,
+// an external alerting agent). Manual trigger, so it ignores the
+// settings.sfx.enabled autonomy toggle like every explicit operator press.
+router.post('/sfx/:name/play', requireAdmin, async (req, res) => {
+  try {
+    if (!(await sfx.getPath(req.params.name))) {
+      const names = (await sfx.list()).map(e => e.name).join(', ');
+      return res.status(404).json({ error: `unknown sound effect: ${req.params.name}${names ? `. Available: ${names}` : ''}` });
+    }
+    await queue.playSfx(req.params.name);
+    res.json({ ok: true, name: req.params.name });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});

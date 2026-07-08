@@ -15,8 +15,8 @@
 import { generateText, Output } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
-import { stripThinking, extractJson, usageOf, failureDiagnostics } from '../core/pure.js';
-import { needsToolCallObject, providerOptions, samplingWithNumCtx } from '../provider/capabilities.js';
+import { stripThinking, extractJson, usageOf, failureDiagnostics, schemaHint } from '../core/pure.js';
+import { needsToolCallObject, providerOptions, samplingWithLocalKnobs } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
 
@@ -72,22 +72,45 @@ export async function djObject({
             usage = usageOf(result);
           } else {
             lastVia = 'ai-sdk:recovery';
+            // Self-describing retry: the native/tool attempt above conveys the
+            // schema to the model via a real provider channel (response_format
+            // or a forced tool's inputSchema) — this plain generateText call has
+            // neither, so without restating the shape here the model is guessing
+            // required keys from whatever the caller's own prose happens to
+            // mention (observed: GLM dropping `reason`/`say` entirely — see
+            // schemaHint's comment). Also route through the no-think model +
+            // forced suppression, same as every other structured-output leg
+            // (objectViaToolCall, djAgent's done-tool path) — this was the one
+            // branch still using the operator's raw reasoning-on model instance.
+            const hint = schemaHint(schema);
             const result = await withTransientRetry(kind, () => generateText({
-              model: l.model,
+              model: l.noThinkModel ?? l.model,
               system,
-              prompt: `${prompt}\n\nRespond with a single JSON object only — no prose, no markdown fences.`,
+              prompt: `${prompt}\n\nRespond with a single JSON object only — no prose, no markdown fences.`
+                + (hint ? ` It MUST validate against this JSON Schema — every required key must be present:\n${hint}` : ''),
               temperature,
               maxOutputTokens,
-              providerOptions: providerOptions(l.cfg),
+              providerOptions: providerOptions(l.cfg, { forceNoThink: true }),
               ...(signal ? { abortSignal: signal } : {}),
             }), signal);
-            object = schema.parse(JSON.parse(extractJson(stripThinking(result.text))));
+            try {
+              object = schema.parse(JSON.parse(extractJson(stripThinking(result.text))));
+            } catch (parseErr: any) {
+              // Surface the raw output on a shape/parse miss, mirroring the
+              // done-tool agent's diagnostics — without this a recovery-path
+              // failure carried no evidence of what the model actually
+              // produced, only the Zod/JSON error.
+              parseErr.text = result.text || '';
+              parseErr.finishReason = result.finishReason;
+              parseErr.usage = result.usage;
+              throw parseErr;
+            }
             usage = usageOf(result);
           }
           return {
             value: object,
             via: lastVia,
-            sampling: samplingWithNumCtx(l.cfg, { temperature }),
+            sampling: samplingWithLocalKnobs(l.cfg, { temperature }),
             usage,
             // Full, untruncated — the /debug surface shows the whole system prompt.
             extra: { system, user: prompt, response: JSON.stringify(object).slice(0, 500) },

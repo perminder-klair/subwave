@@ -224,7 +224,10 @@ export const config = {
     // queue.history is capped at 50 (~3h) and only lives in-memory, which is
     // why we keep a separate, longer-lived store.
     recentPlaysFile: `${STATE_DIR}/recent-plays.json`,
-    recentPlaysMax: 300,
+    // Rolling 24h play log cap. With a 3-min max-track cap the station can burn
+    // ~550 plays/day, so 300 entries barely spanned the 12h anti-repeat window
+    // (issue #874); 600 keeps the full window populated at that churn.
+    recentPlaysMax: 600,
     // Count-based hard no-repeat guard: the picker (both pool and agent paths)
     // never re-airs any of the last N DISTINCT plays. Unlike the time-window
     // guard (recencyWindowsForLibrary) this is non-relaxable — it survives the

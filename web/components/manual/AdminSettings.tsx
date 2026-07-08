@@ -79,14 +79,13 @@ export default function AdminSettings() {
         <p className="bs-eyebrow">SETTINGS</p>
         <h2>The engine room.</h2>
         <p>
-          The Settings page collects the lower-level controls, in five panels:
+          The Settings page collects the lower-level controls as a stack of panels down
+          the left rail. The ones you'll reach for most:
         </p>
         <ul className="bs-list">
           <li>
-            <strong>TTS voice</strong> — which text-to-speech engine and voice the DJ
-            speaks with, optionally a different one per kind of segment. The engines
-            (local and cloud) are covered in{' '}
-            <Link href="/manual/dj" className="bs-link">How the DJ Works</Link>.
+            <strong>Station</strong> — the name, locale, timezone, and the weather
+            location the DJ reads from.
           </li>
           <li>
             <strong>LLM provider</strong> — which model writes the DJ's words and picks
@@ -94,26 +93,51 @@ export default function AdminSettings() {
             <Link href="/manual/llm" className="bs-link">Models &amp; Tokens</Link>.
           </li>
           <li>
-            <strong>Mixer</strong> — crossfade length, how often a jingle plays between
-            tracks, and the station's weather location.
+            <strong>TTS voice</strong> — which text-to-speech engine and voice the DJ
+            speaks with, optionally a different one per kind of segment. The engines
+            (local and cloud) are covered in{' '}
+            <Link href="/manual/dj" className="bs-link">How the DJ Works</Link>.
+          </li>
+          <li>
+            <strong>Library tagger</strong> — the embedding provider and mood-propagation
+            settings behind the mood tags, plus where you kick off a tagging run.
+          </li>
+          <li>
+            <strong>Web search</strong> — the live-facts backend the skills draw on
+            (DuckDuckGo, Tavily, or a self-hosted SearXNG).
           </li>
           <li>
             <strong>Jingles</strong> — the short pre-rendered idents the station rotates
-            between music tracks. Render them through the configured voice, or import your
-            own mp3/wav; new files are picked up automatically.
+            between music tracks, and how often one plays. Render them through the
+            configured voice, or import your own mp3/wav; new files are picked up
+            automatically.
           </li>
           <li>
             <strong>Sound FX</strong> — the library of stingers the DJ can drop into a
             spoken break. Generate one from a text prompt, or import your own audio file
             (no ElevenLabs key needed). Toggle the whole library on or off.
           </li>
+          <li>
+            <strong>Theme &amp; Festivals</strong> — the station-wide colour palette, and
+            the festival calendar that nudges the DJ's mood on the day.
+          </li>
+          <li>
+            <strong>Scrobbling, Archives, Webhooks &amp; Backup</strong> — scrobble plays
+            to Last.fm / ListenBrainz, record the broadcast to hourly files, fire outbound
+            webhooks on station events, and export or restore the whole station's config.
+          </li>
+          <li>
+            <strong>Danger zone</strong> — the broadcast controls that bite: crossfade
+            length, max track length, loudness levelling, the optional Opus / FLAC / AAC
+            stream mounts, and the buttons that stop the stream or restart the mixer.
+          </li>
         </ul>
         <div className="bs-callout">
           <div className="bs-eyebrow">MIX CHANGES NEED A MIXER RESTART</div>
           <p>
             Crossfade and jingle-ratio changes are read by the audio mixer only at
-            startup. The settings page can trigger that restart for you: the stream drops
-            for a few seconds and comes back with the new values applied.
+            startup. The <strong>Danger zone</strong> can trigger that restart for you: the
+            stream drops for a few seconds and comes back with the new values applied.
           </p>
         </div>
       </section>

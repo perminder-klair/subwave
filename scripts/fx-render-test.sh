@@ -15,7 +15,7 @@
 #       crash was with iir_filter/HPF; these two operators were unproven
 #       either way.) Renders dry vs fx and compares md5 so a silent no-op
 #       (like `echo`) can't pass. Decides per-branch (A) vs global-bus (B).
-#   scripts/fx-render-test.sh render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve]
+#   scripts/fx-render-test.sh render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop]
 #       Phase 1 — render the a→b transition with the production envelope
 #       logic (mirrored from radio.liq) and print an RMS-over-time table.
 #       Default renders every variant.
@@ -140,11 +140,13 @@ render() {
 settings.log.stdout := true
 settings.log.level := 3
 
-mode = environment.get("MODE")   # dry | sweep | washout | both | blend | dissolve
+mode = environment.get("MODE")   # dry | sweep | washout | both | blend | dissolve | chop | loop
 sweep_on   = mode == "sweep"   or mode == "both"
 washout_on = mode == "washout" or mode == "both"
 blend_on   = mode == "blend"
 dissolve_on = mode == "dissolve"
+chop_on    = mode == "chop"
+loop_on    = mode == "loop"
 
 q = request.queue(id="q")
 q.push(request.create("/work/ra.wav"))
@@ -156,7 +158,7 @@ def t(a, b) =
   a_src =
     if washout_on then
       fade.out(duration=d, type="exp", a.source)
-    elsif sweep_on then
+    elsif sweep_on or chop_on or loop_on then
       fade.out(duration=d, type="log", a.source)
     else
       fade.out(duration=d, a.source)
@@ -341,6 +343,129 @@ def t(a, b) =
                  filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet, washed))
       add(normalize=false, [a_src, amplify(diss_gain, washed)])
     else a_src end
+  # CHOP — keep in lockstep with radio.liq's chop block: compressed clock
+  # dd=min(d,10), accelerating gate (beat → eighths → sixteenth stutter),
+  # duty shrink, floor decay, 12 ms smoothstep edges, engage ramp, master
+  # release. Fixed p=0.5 here (the harness has no BPM).
+  a_src =
+    if chop_on then
+      p = 0.5
+      dd = if d > 10. then 10. else d end
+      chop_src = a_src
+      def chop_gain() =
+        e = source.elapsed(chop_src)
+        e = if e < 0. then 0. else e end
+        pp =
+          if e < 0.40 * dd then p
+          elsif e < 0.72 * dd then 0.5 * p
+          else 0.25 * p
+          end
+        beat = int_of_float(e / pp)
+        ph = e / pp - float_of_int(beat)
+        t1 = 0.15 * dd
+        t2 = 0.72 * dd
+        duty =
+          if e < t1 then
+            x = e / t1
+            1.0 - (3.0 * x * x - 2.0 * x * x * x) * 0.45
+          elsif e < t2 then
+            x = (e - t1) / (t2 - t1)
+            0.55 - (3.0 * x * x - 2.0 * x * x * x) * 0.25
+          else
+            0.30
+          end
+        f_end = 0.25 * dd
+        floor_g =
+          if e >= f_end then 0.0
+          else
+            x = e / f_end
+            0.45 * (1.0 - (3.0 * x * x - 2.0 * x * x * x))
+          end
+        eps = 0.012 / pp
+        shape =
+          if ph < eps then
+            x = ph / eps
+            3.0 * x * x - 2.0 * x * x * x
+          elsif ph < duty then 1.0
+          elsif ph < duty + eps then
+            x = (ph - duty) / eps
+            1.0 - (3.0 * x * x - 2.0 * x * x * x)
+          else 0.0
+          end
+        g_gate = floor_g + (1.0 - floor_g) * shape
+        t_eng = 0.08 * dd
+        wet =
+          if e >= t_eng then 1.0
+          else
+            x = e / t_eng
+            3.0 * x * x - 2.0 * x * x * x
+          end
+        g = 1.0 - wet * (1.0 - g_gate)
+        master =
+          if e < 0.82 * dd then 1.0
+          elsif e < 0.92 * dd then
+            x = (e - 0.82 * dd) / (0.10 * dd)
+            1.0 - (3.0 * x * x - 2.0 * x * x * x)
+          else 0.0
+          end
+        g * master
+      end
+      amplify(chop_gain, a_src)
+    else a_src end
+  # LOOP — keep in lockstep with radio.liq's loop block: comb here is a
+  # ONE-SHOT feed-forward echo (measured), so the loop is a cascade of
+  # doubling delays (taps at every bar multiple, flat at −6 dB → ×2 makeup),
+  # hard dry gate after the capture pass, ride-out darkening lowpass, master
+  # release. Fixed bar=2.0 here (no BPM stamp).
+  a_src =
+    if loop_on then
+      bar = 2.0
+      loop_src = a_src
+      def loop_dry() =
+        e = source.elapsed(loop_src)
+        e = if e < 0. then 0. else e end
+        edge = 0.012
+        if e < bar - edge then 1.0
+        elsif e < bar then
+          x = (e - (bar - edge)) / edge
+          1.0 - (3.0 * x * x - 2.0 * x * x * x)
+        else 0.0 end
+      end
+      def loop_cut() =
+        e = source.elapsed(loop_src)
+        e = if e < 0. then 0. else e end
+        t_from = 0.45 * d
+        t_to   = 0.90 * d
+        x = if e <= t_from then 0.0 elsif e >= t_to then 1.0 else (e - t_from) / (t_to - t_from) end
+        s = 3.0 * x * x - 2.0 * x * x * x
+        9000.0 * pow(2500.0 / 9000.0, s)
+      end
+      def loop_wet() =
+        e = source.elapsed(loop_src)
+        e = if e < 0. then 0. else e end
+        t_on = bar + 0.15 * d
+        x = if e >= t_on then 1.0 elsif e <= bar then 0.0 else (e - bar) / (0.15 * d) end
+        3.0 * x * x - 2.0 * x * x * x
+      end
+      def loop_master() =
+        e = source.elapsed(loop_src)
+        e = if e < 0. then 0. else e end
+        if e < 0.80 * d then 1.0
+        elsif e < 0.92 * d then
+          x = (e - 0.80 * d) / (0.12 * d)
+          1.0 - (3.0 * x * x - 2.0 * x * x * x)
+        else 0.0 end
+      end
+      gated  = amplify(loop_dry, a_src)
+      looped = comb(delay=bar, feedback=0.0, gated)
+      looped = comb(delay=2.0 * bar, feedback=0.0, looped)
+      looped = if 4.0 * bar < d then comb(delay=4.0 * bar, feedback=0.0, looped) else looped end
+      looped = if 8.0 * bar < d then comb(delay=8.0 * bar, feedback=0.0, looped) else looped end
+      looped = amplify(2.0, looped)
+      looped = filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet,
+                 filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet, looped))
+      amplify(loop_master, looped)
+    else a_src end
   b_src = fade.in(duration=d, b.source)
   b_src =
     if blend_on then
@@ -408,7 +533,7 @@ LIQ
 
   local modes
   case "$mode" in
-    all) modes="dry sweep washout both blend dissolve" ;;
+    all) modes="dry sweep washout both blend dissolve chop loop" ;;
     *)   modes="$mode" ;;
   esac
   for m in $modes; do
@@ -455,5 +580,5 @@ case "${1:-}" in
   probe)  probe ;;
   render) shift; render "$@" ;;
   xdur)   xdur ;;
-  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|all] | xdur"; exit 2 ;;
+  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | xdur"; exit 2 ;;
 esac

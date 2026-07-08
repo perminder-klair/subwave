@@ -105,10 +105,21 @@ RUN mkdir -p /opt/piper/voices && \
       https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx.json
 
 # --- Kokoro (optional second TTS, more natural) ----------------------------
-RUN python3 -m venv /opt/kokoro/venv && \
-    /opt/kokoro/venv/bin/pip install --no-cache-dir --upgrade pip && \
-    /opt/kokoro/venv/bin/pip install --no-cache-dir \
-      kokoro-onnx==0.4.9 soundfile==0.12.1
+# kokoro_worker.py imports misaki unconditionally, and kokoro-onnx 0.5.0 pairs
+# with misaki 0.9.4 (the controller image's validated combo). But misaki 0.9.4
+# requires Python <3.13, while this base (liquidsoap/Debian trixie) ships 3.13 —
+# so, unlike the controller (bookworm/py3.11), the system python3 can't build
+# the kokoro venv (misaki 0.9.4 has no 3.13 wheel and pip resolves nothing).
+# Provision a standalone CPython 3.12 via uv for THIS venv only; the analyzer
+# venv below stays on the system python3. The final import mirrors the worker's
+# import block, so a broken combo fails the build instead of silently falling
+# back to Piper at runtime.
+COPY --from=ghcr.io/astral-sh/uv:0.11.27 /uv /usr/local/bin/uv
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
+RUN uv venv --python 3.12 /opt/kokoro/venv && \
+    uv pip install --python /opt/kokoro/venv/bin/python --no-cache \
+      kokoro-onnx==0.5.0 soundfile==0.12.1 misaki==0.9.4 && \
+    /opt/kokoro/venv/bin/python -c "import kokoro_onnx, misaki; from misaki import espeak"
 RUN mkdir -p /opt/kokoro/models && \
     wget -q ${WGET_RETRY} -O /opt/kokoro/models/kokoro-v1.0.onnx \
       https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx && \

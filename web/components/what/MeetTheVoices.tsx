@@ -16,7 +16,7 @@ const HABITS = [
   {
     label: 'CHANGES WITH THE HOUR',
     body:
-      'A scheduled show can hand the hour to a different persona, each with its own name, personality, voice, and how often it speaks. The 3am host is not the 8am host.',
+      'A scheduled show can hand the hour to a different persona, signed off live on air, and seat up to three guest co-hosts who trade banter with the host. The 3am host is not the 8am host.',
   },
 ];
 
@@ -34,7 +34,9 @@ export default function MeetTheVoices() {
         src="/screenshots/admin-personas.webp"
         alt="Admin — Personas"
         label="Admin — Personas"
-        caption="The persona roster: up to twelve DJ identities, each with its own voice and habits."
+        width={2360}
+        height={1640}
+        caption="The persona roster: up to twenty-four DJ identities, each with its own voice and habits."
       />
 
       <div className="bs-dj-cards mt-4">

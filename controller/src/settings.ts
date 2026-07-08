@@ -7,6 +7,7 @@ import { readFile, writeFile, unlink, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { STATE_DIR, config } from './config.js';
+import { writeFileAtomic } from './util/atomic-file.js';
 import { DEFAULT_THEME_ID, isValidThemeId, listThemes } from './themes.js';
 import { isValidTimezone, setStationTimezone, zonedParts } from './time.js';
 
@@ -49,12 +50,17 @@ export const DJ_SOULS = [
 ];
 
 // Ordered ascending in chattiness — effectiveFrequency() steps up this ladder.
-export const FREQUENCIES = ['quiet', 'moderate', 'aggressive'];
+// 'silent' is absolute: the persona never talks on its own (no links, idents,
+// hourlies, banter or segments) — only manual /dj/segment triggers, listener
+// requests and programme beats still speak. 'chatty' sits between the
+// historical moderate and aggressive.
+export const FREQUENCIES = ['silent', 'quiet', 'moderate', 'chatty', 'aggressive'];
 
-// Per-persona verbosity. 'concise' is the historical one-liner behaviour;
-// 'extended' roughly doubles every spoken segment for a storytelling DJ.
-// See llm/dj.js LENGTH_PHRASES for the actual length directives.
-export const SCRIPT_LENGTHS = ['concise', 'extended'];
+// Per-persona verbosity, ascending. 'concise' is the historical default;
+// 'one-liner' cuts every segment to a single quick line, 'extended' roughly
+// doubles, 'storyteller' roughly triples for long-form monologues.
+// See llm/internal/prompts/system.ts LENGTH_PHRASES for the actual directives.
+export const SCRIPT_LENGTHS = ['one-liner', 'concise', 'extended', 'storyteller'];
 
 // Per-persona tone dials. Each is 0-10 with 5 (DIAL_NEUTRAL) the default. A
 // model can't distinguish humour=6 from 7, so rather than inject a raw "7/10"
@@ -113,6 +119,8 @@ export function personaToneDirectives(persona: any): string {
 export function effectiveFrequency(persona: any = getEffectivePersona()) {
   const base = FREQUENCIES.includes(persona?.frequency) ? persona.frequency : 'moderate';
   if (!persona?.djMode) return base;
+  // 'silent' is an explicit operator promise — DJ mode never bumps out of it.
+  if (base === 'silent') return base;
   const i = FREQUENCIES.indexOf(base);
   return FREQUENCIES[Math.min(i + 1, FREQUENCIES.length - 1)];
 }
@@ -268,6 +276,16 @@ function clampNumCtx(raw: any, def: number): number {
   return Math.min(131072, Math.max(2048, Math.floor(raw)));
 }
 
+// repeat_penalty for local openai-compatible / locca servers. Clamped to
+// [1.0, 2.0]: 1.0 is OFF (a no-op, never injected), and >2.0 mangles output.
+// Non-numeric/NaN falls back to `def`. See appliedRepeatPenalty() in
+// capabilities.ts — Ollama reads its own value via providerOptions and ignores
+// this field.
+function clampRepeatPenalty(raw: any, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  return Math.min(2.0, Math.max(1.0, raw));
+}
+
 // Coerce a stored agent-deadline value (ms). Clamped to [5s, 180s] and floored
 // to an integer; non-numeric/NaN falls back to `def`. The lower bound keeps a
 // fat-fingered save from making every agent pick fail instantly; the upper
@@ -372,6 +390,9 @@ function applyLlmLegPatch(target: any, patch: any, label: string): void {
   if (l.numCtx !== undefined) {
     target.numCtx = clampNumCtx(Number(l.numCtx), target.numCtx);
   }
+  if (l.repeatPenalty !== undefined) {
+    target.repeatPenalty = clampRepeatPenalty(Number(l.repeatPenalty), target.repeatPenalty);
+  }
   // Forced-tool tool_choice: 'required' (default) or 'auto'. Only those two are
   // legal; anything else is a config error. See forcedToolChoice() / issue #570.
   if (l.toolChoice !== undefined) {
@@ -472,6 +493,24 @@ export const SHOW_MOODS = [
 // tagger's per-track energy classes and the `tracksByMood` agent-tool filter.
 export const SHOW_ENERGY = ['low', 'medium', 'high'];
 
+// Default festival calendar — the seeded set the admin UI shows on first boot.
+// After the operator edits the list, persisted festivals replace these.
+export const FESTIVAL_DEFAULTS = [
+  { month: 1, day: 1, name: "New Year's Day", mood: 'celebratory' },
+  { month: 2, day: 14, name: "Valentine's Day", mood: 'romantic' },
+  { month: 3, day: 17, name: "St. Patrick's Day", mood: 'celebratory' },
+  { month: 4, day: 13, name: 'Vaisakhi', mood: 'festival', windowDays: 1 },
+  { month: 5, day: 1, name: 'May Day', mood: 'festival' },
+  { month: 6, day: 21, name: 'Summer Solstice', mood: 'celebratory' },
+  { month: 10, day: 31, name: 'Halloween', mood: 'festival' },
+  { month: 11, day: 1, name: 'Diwali', mood: 'festival', windowDays: 3 },
+  { month: 11, day: 5, name: 'Bonfire Night', mood: 'festival' },
+  { month: 12, day: 21, name: 'Winter Solstice', mood: 'reflective' },
+  { month: 12, day: 25, name: 'Christmas', mood: 'celebratory', windowDays: 1 },
+  { month: 12, day: 26, name: 'Boxing Day', mood: 'celebratory' },
+  { month: 12, day: 31, name: "New Year's Eve", mood: 'celebratory' },
+];
+
 // All 54 official Kokoro voices from kokoro-onnx v1.0. The UI filters by
 // language prefix and formats display names from the code (bm_george → "George (M)").
 // Any voice matching KOKORO_VOICE_RE passes validation.
@@ -550,8 +589,14 @@ export const AVATAR_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'] as const;
 // source of truth for which slugs exist; settings only checks the shape.
 const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
 
-const PERSONA_LIMIT = 24;
+// Exported for the community-persona install route (routes/personas.ts), which
+// gives a friendly 409 before settings.update() would throw on an oversize roster.
+export const PERSONA_LIMIT = 48;
 const SHOWS_LIMIT = 64;
+// Guest co-hosts per show. Small on purpose: each guest is a full persona the
+// speaker rotation can hand a segment to, and past ~3 the host stops sounding
+// like the host.
+const GUESTS_PER_SHOW = 3;
 const PLAYLISTS_PER_SHOW = 10;
 const EXCLUDED_PLAYLISTS_PER_SHOW = 10;
 const SKILLS_PER_PERSONA_LIMIT = 20;
@@ -562,6 +607,24 @@ const WEBHOOKS_LIMIT = 16;
 // trimmed, capped. Never validated against the live Navidrome here (offline
 // validation, same as `genre` free-text) — an id that no longer exists simply
 // contributes nothing at pick time (never-starve). Empty = no anchor.
+// A show's guest co-hosts: persona ids other than the host, resolved against
+// the live persona list. Order preserved (it's the operator's billing order);
+// dupes, the host itself, and dangling ids are dropped.
+function coerceGuestPersonaIds(raw: any, hostId: string, personaIds: string[]): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const id = v.trim();
+    if (!id || id === hostId || seen.has(id) || !personaIds.includes(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= GUESTS_PER_SHOW) break;
+  }
+  return out;
+}
+
 function coercePlaylistIds(raw: any): string[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
@@ -611,6 +674,20 @@ function clamp01(n: number): number {
   if (n < 0) return 0;
   if (n > 1) return 1;
   return n;
+}
+
+// True when the four ElevenLabs voice_settings knobs (issue #696) all sit at
+// their shipped defaults, i.e. the operator never tuned them. cloud-speech uses
+// this to OMIT the voice_settings block in that case so ElevenLabs defers to the
+// voice's own VoiceLab-saved settings, instead of forcing these literals onto
+// every call (issue #915 review). Compared against DEFAULTS so there's a single
+// source of truth for the default values.
+export function cloudVoiceSettingsAreDefault(c: any): boolean {
+  const d = DEFAULTS.tts.cloud;
+  return c?.voiceStability === d.voiceStability
+    && c?.voiceStyle === d.voiceStyle
+    && c?.voiceSimilarityBoost === d.voiceSimilarityBoost
+    && c?.voiceUseSpeakerBoost === d.voiceUseSpeakerBoost;
 }
 
 // Coerce a stored/per-show max-track-length to a clean integer SECOND count.
@@ -741,12 +818,15 @@ const DEFAULTS = {
   // i.e. opt back out of the station cap for a long-form show). Listener
   // requests bypass the cap entirely — an explicit ask always plays.
   maxTrackSeconds: 0,
-  // Hourly archive output. Enabled by default to preserve existing behaviour.
-  // The second MP3 encoder is the largest constant CPU cost in the broadcast
-  // container — operators who don't use the archives can switch this off to
-  // reclaim that headroom (issue #137). Dropping the bitrate (e.g. 128 → 64
-  // mono in a future change) also helps for operators who want the tape.
-  archive: { enabled: true, bitrate: 128 },
+  // Hourly archive output. Off by default — the second MP3 encoder is the
+  // largest constant CPU cost in the broadcast container, and most operators
+  // don't use the archives, so they opt in via admin → Settings rather than
+  // paying for the tape by default (issue #137). Dropping the bitrate (e.g.
+  // 128 → 64 mono in a future change) also helps for operators who want it.
+  // retentionDays: hourly recordings older than this many days are deleted by
+  // the scheduler's hourly cleanup. 0 = keep forever — the default, because a
+  // retention default would silently delete archives operators already have.
+  archive: { enabled: false, bitrate: 128, retentionDays: 0 },
   // Secondary Ogg-Opus broadcast mount (/stream.opus). Off by default — only
   // Blink (Chrome/Edge) clients ever select it (web/hooks/usePlayer.ts keeps
   // Safari/iOS/Firefox on MP3), and it adds a continuous Opus encoder + a
@@ -791,6 +871,10 @@ const DEFAULTS = {
   // ${STATE_DIR}/themes/. Stored as id only; the actual token map lives with
   // the theme registry so it stays in sync with the file on disk.
   theme: { active: DEFAULT_THEME_ID },
+  // Festival calendar — mood-forming dates the DJ leans into. Persisted here
+  // so operators can add/edit/remove entries from the admin UI. Fall back to
+  // FESTIVAL_DEFAULTS when empty/absent.
+  festivals: FESTIVAL_DEFAULTS,
   // Listener-player UI toggles — purely presentational, station-wide. The web
   // player reads these via GET /state (alongside the theme) and applies them
   // live; no restart. `boothBuddy` gates the DJ-line mascot — OFF by default,
@@ -839,6 +923,16 @@ const DEFAULTS = {
       // (e.g. http://192.168.1.101:5000/v1). Required — and only used — when
       // provider === 'openai-compatible'.
       baseUrl: '',
+      // ElevenLabs voice_settings. Applied ONLY when provider is 'elevenlabs';
+      // ignored (and never sent) for openai / openai-compatible. All four match
+      // ElevenLabs' native ranges: stability, style, similarity_boost ∈ [0,1],
+      // use_speaker_boost is a bool. Defaults mirror ElevenLabs' UI defaults so
+      // an unconfigured install renders exactly like the SDK's own baseline
+      // (issue #696).
+      voiceStability: 0.5,
+      voiceStyle: 0,
+      voiceSimilarityBoost: 0.75,
+      voiceUseSpeakerBoost: true,
     },
     // Remote engine — a user-configured self-hosted TTS endpoint that renders
     // audio over HTTP (POST /speak → audio body, gated on a /health probe).
@@ -909,6 +1003,15 @@ const DEFAULTS = {
     // if you run those. Ignored for `:cloud` models and every other provider
     // (they manage their own context). 0 → don't send num_ctx (Ollama default).
     numCtx: 16384,
+    // Repetition penalty for local openai-compatible / locca servers (llama.cpp,
+    // vLLM, LM Studio). llama.cpp's own default is 1.0 = OFF, which lets the
+    // tool-loop picker run away repeating a token block until it hits the output
+    // cap and never calls `done`. 1.15 is a sane floor; raise toward 1.25 if a
+    // model still loops, or set 1.0 to disable (e.g. a vLLM server that rejects
+    // the `repeat_penalty` body field). Injected into the request body — the AI
+    // SDK's openai provider has no field for it. Ignored by every other provider
+    // (Ollama reads its own value via providerOptions).
+    repeatPenalty: 1.15,
     // When on, the session DJ agent drives track-picking, links and listener
     // requests as a tool-loop over the session chat history (broadcast/
     // dj-agent.js). When off, the stateless pool picker runs instead — still
@@ -997,6 +1100,7 @@ const DEFAULTS = {
       reasoning: false,
       toolChoice: 'required',
       numCtx: 16384,
+      repeatPenalty: 1.15,
     },
   },
   // Embedding-propagated library tagger (music/tag-library.ts).
@@ -1098,8 +1202,15 @@ const DEFAULTS = {
   },
   // Outbound webhooks. Each entry POSTs station events (see broadcast/
   // webhooks.ts for the event list) to `url` with a fire-and-forget HTTP
-  // call. Empty by default — operators add hooks via the admin UI.
+  // call. `track.play` can be listener-gated via webhooksPolicy (off by
+  // default — see broadcast/queue.ts). Empty by default — operators add hooks
+  // via the admin UI.
   webhooks: [] as any[],
+  webhooksPolicy: {
+    // When true, track.play POSTs only when listener count > 0 (fail-closed on
+    // null/unknown/non-finite, like scrobble). Default false = always send.
+    trackPlayListenerGated: false,
+  },
   // Station-wide scrobbling. Each backend is independent; both are paste-only
   // (no OAuth) and both are gated on listener count > 0 at scrobble time (a
   // null/unknown count is treated as zero — fail closed, see broadcast/
@@ -1311,11 +1422,29 @@ function normalizeShows(raw: any, personaIds: string[]) {
     // Optional Navidrome playlist blocklist — tracks from these playlists are
     // excluded from the candidate pool. Empty = no exclusions.
     const excludedPlaylistIds = coerceExcludedPlaylistIds(item.excludedPlaylistIds);
+    // Optional guest co-hosts. Lenient path: dangling persona ids (persona
+    // deleted under our feet) and the host itself are silently dropped so the
+    // show survives with whatever roster is still real.
+    const guestPersonaIds = coerceGuestPersonaIds(item.guestPersonaIds, item.personaId, personaIds);
+    // Scripted banter breaks (multi-voice exchanges). Only meaningful with
+    // guests — stored as given, checked against the live roster at air time.
+    const banter = item.banter === true;
+    // Programme mode: the show airs as a produced episode (intro → feature →
+    // outro arc — broadcast/programme.ts). segmentSkill optionally pins the
+    // feature beat to one segment capability kind; free text, resolved against
+    // the live skill catalog at air time (a stale kind degrades to the
+    // producer's choice, same tolerance as playlistIds).
+    const programme = item.programme === true;
+    const segmentSkill = typeof item.segmentSkill === 'string' ? item.segmentSkill.trim().slice(0, 64) : '';
     out.push({
       id,
       name,
       topic: typeof item.topic === 'string' ? item.topic.trim().slice(0, 1000) : '',
       personaId: item.personaId,
+      guestPersonaIds,
+      banter,
+      programme,
+      segmentSkill,
       mood,
       themeId,
       genre,
@@ -1415,6 +1544,10 @@ export async function load() {
           ? stored.archive.enabled
           : DEFAULTS.archive.enabled,
       bitrate: archiveBitrate,
+      retentionDays:
+        Number.isInteger(stored.archive?.retentionDays) && stored.archive.retentionDays >= 0
+          ? stored.archive.retentionDays
+          : DEFAULTS.archive.retentionDays,
     },
     stream: {
       opusEnabled:
@@ -1492,6 +1625,10 @@ export async function load() {
           ? stored.theme.active.trim()
           : DEFAULTS.theme.active,
     },
+    // Festivals loaded from settings.json. Seeded from FESTIVAL_DEFAULTS only
+    // when the key is absent/invalid — a persisted empty array means the
+    // operator deleted every entry and must stay empty (calendar off).
+    festivals: Array.isArray(stored.festivals) ? stored.festivals : FESTIVAL_DEFAULTS,
     ui: {
       boothBuddy:
         typeof stored.ui?.boothBuddy === 'boolean'
@@ -1563,6 +1700,25 @@ export async function load() {
           typeof stored.tts?.cloud?.baseUrl === 'string'
             ? stored.tts.cloud.baseUrl.trim()
             : DEFAULTS.tts.cloud.baseUrl,
+        // ElevenLabs voice_settings — clamped to [0,1] on load so a hand-edited
+        // settings.json can't ship an out-of-range value to the provider (which
+        // would 400 the whole speak call, silently dropping the voice).
+        voiceStability:
+          typeof stored.tts?.cloud?.voiceStability === 'number'
+            ? clamp01(stored.tts.cloud.voiceStability)
+            : DEFAULTS.tts.cloud.voiceStability,
+        voiceStyle:
+          typeof stored.tts?.cloud?.voiceStyle === 'number'
+            ? clamp01(stored.tts.cloud.voiceStyle)
+            : DEFAULTS.tts.cloud.voiceStyle,
+        voiceSimilarityBoost:
+          typeof stored.tts?.cloud?.voiceSimilarityBoost === 'number'
+            ? clamp01(stored.tts.cloud.voiceSimilarityBoost)
+            : DEFAULTS.tts.cloud.voiceSimilarityBoost,
+        voiceUseSpeakerBoost:
+          typeof stored.tts?.cloud?.voiceUseSpeakerBoost === 'boolean'
+            ? stored.tts.cloud.voiceUseSpeakerBoost
+            : DEFAULTS.tts.cloud.voiceUseSpeakerBoost,
       },
       remote: {
         url:
@@ -1750,6 +1906,12 @@ export async function load() {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
     },
     webhooks: normalizeWebhooks(stored.webhooks),
+    webhooksPolicy: {
+      trackPlayListenerGated:
+        typeof stored.webhooksPolicy?.trackPlayListenerGated === 'boolean'
+          ? stored.webhooksPolicy.trackPlayListenerGated
+          : DEFAULTS.webhooksPolicy.trackPlayListenerGated,
+    },
     scrobble: {
       lastfm: {
         enabled:
@@ -2177,10 +2339,39 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
       }
       excludedPlaylistIds = coerceExcludedPlaylistIds(item.excludedPlaylistIds);
     }
+    // Optional guest co-hosts. Strict path: unknown personas and a guest that
+    // duplicates the host are operator mistakes worth surfacing, not dropping.
+    let guestPersonaIds: string[] = [];
+    if (item.guestPersonaIds !== undefined && item.guestPersonaIds !== null) {
+      if (!Array.isArray(item.guestPersonaIds)) {
+        throw new Error(`shows[${i}].guestPersonaIds must be an array of persona ids`);
+      }
+      if (item.guestPersonaIds.length > GUESTS_PER_SHOW) {
+        throw new Error(`shows[${i}].guestPersonaIds must have at most ${GUESTS_PER_SHOW} entries`);
+      }
+      for (const v of item.guestPersonaIds) {
+        if (typeof v !== 'string' || !personaIds.includes(v)) {
+          throw new Error(`shows[${i}].guestPersonaIds must reference existing personas`);
+        }
+        if (v === item.personaId) {
+          throw new Error(`shows[${i}].guestPersonaIds must not include the show's host persona`);
+        }
+      }
+      guestPersonaIds = coerceGuestPersonaIds(item.guestPersonaIds, item.personaId, personaIds);
+    }
+    // Banter without guests is inert, not an error — the tick re-checks the
+    // live roster anyway, so a stale true can't air a one-person "exchange".
+    const banter = item.banter === true;
+    // Programme mode + optional feature-beat capability pin. The kind is
+    // shape-checked only — resolved against the live skill catalog at air time,
+    // so a stale/misspelled kind degrades instead of blocking a settings save.
+    const programme = item.programme === true;
+    const segmentSkill = String(item.segmentSkill ?? '').trim();
+    if (segmentSkill.length > 64) throw new Error(`shows[${i}].segmentSkill must be 0-64 chars`);
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
+    return { id, name, topic, personaId: item.personaId, guestPersonaIds, banter, programme, segmentSkill, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
   });
 }
 
@@ -2260,6 +2451,41 @@ function validateWebhooksStrict(raw: any, existing: any[] = []) {
   });
 }
 
+const FESTIVALS_LIMIT = 50;
+
+function validateFestivalsStrict(raw) {
+  if (!Array.isArray(raw)) throw new Error('festivals must be an array');
+  if (raw.length > FESTIVALS_LIMIT) {
+    throw new Error(`festivals must be at most ${FESTIVALS_LIMIT} entries`);
+  }
+  return raw.map((item, i) => {
+    if (!item || typeof item !== 'object') throw new Error(`festivals[${i}] must be an object`);
+    const name = String(item.name ?? '').trim();
+    if (name.length < 1 || name.length > 80) throw new Error(`festivals[${i}].name must be 1-80 chars`);
+    const month = Number(item.month);
+    if (!Number.isInteger(month) || month < 1 || month > 12) {
+      throw new Error(`festivals[${i}].month must be an integer 1-12`);
+    }
+    const day = Number(item.day);
+    // Feb allows 29 — in common years a leap-day festival fires Mar 1
+    // (Date.UTC rolls the date over in getFestivalContext).
+    const daysInMonth = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+    if (!Number.isInteger(day) || day < 1 || day > daysInMonth) {
+      throw new Error(`festivals[${i}].day must be an integer 1-${daysInMonth} for month ${month}`);
+    }
+    const mood = String(item.mood ?? '').trim();
+    if (!SHOW_MOODS.includes(mood)) {
+      throw new Error(`festivals[${i}].mood must be one of: ${SHOW_MOODS.join(', ')}`);
+    }
+    const description = typeof item.description === 'string' ? item.description.trim().slice(0, 200) : '';
+    const windowDays = Number(item.windowDays ?? 0);
+    if (!Number.isInteger(windowDays) || windowDays < 0 || windowDays > 14) {
+      throw new Error(`festivals[${i}].windowDays must be an integer 0-14`);
+    }
+    return { month, day, name, mood, description, windowDays };
+  });
+}
+
 // Validate + persist. Returns { saved, requiresRestart } so the UI can react.
 export async function update(patch) {
   const cur = await load();
@@ -2335,6 +2561,15 @@ export async function update(patch) {
         next.archive.bitrate = v;
         restart = true;
       }
+    }
+    if (a.retentionDays !== undefined) {
+      const v = parseInt(a.retentionDays, 10);
+      if (!Number.isInteger(v) || v < 0 || v > 3650) {
+        throw new Error('archive.retentionDays must be 0 (keep forever) or 1–3650 days');
+      }
+      // Enforced controller-side (scheduler cleanup), no Liquidsoap file or
+      // restart involved.
+      next.archive.retentionDays = v;
     }
   }
   if ('stream' in patch) {
@@ -2476,6 +2711,9 @@ export async function update(patch) {
       next.theme.active = v;
     }
   }
+  if ('festivals' in patch) {
+    next.festivals = validateFestivalsStrict(patch.festivals);
+  }
   if ('djPrompt' in patch) {
     const v = String(patch.djPrompt ?? '').trim();
     if (v === '') {
@@ -2609,6 +2847,27 @@ export async function update(patch) {
           throw new Error('tts.cloud.baseUrl must start with http:// or https://');
         }
         next.tts.cloud.baseUrl = v.replace(/\/+$/, ''); // strip trailing slashes
+      }
+      // ElevenLabs voice_settings — clamped, not rejected. The UI sliders can't
+      // produce out-of-range values, so a strict throw would only fire for a
+      // hand-crafted payload; clamp so the DJ never goes silent on a typo.
+      // Applied for every provider on save so switching provider later
+      // preserves the operator's tuning, but only spread into providerOptions
+      // in cloud-speech.ts when provider === 'elevenlabs' (see there).
+      if (c.voiceStability !== undefined) {
+        const n = Number(c.voiceStability);
+        next.tts.cloud.voiceStability = Number.isFinite(n) ? clamp01(n) : DEFAULTS.tts.cloud.voiceStability;
+      }
+      if (c.voiceStyle !== undefined) {
+        const n = Number(c.voiceStyle);
+        next.tts.cloud.voiceStyle = Number.isFinite(n) ? clamp01(n) : DEFAULTS.tts.cloud.voiceStyle;
+      }
+      if (c.voiceSimilarityBoost !== undefined) {
+        const n = Number(c.voiceSimilarityBoost);
+        next.tts.cloud.voiceSimilarityBoost = Number.isFinite(n) ? clamp01(n) : DEFAULTS.tts.cloud.voiceSimilarityBoost;
+      }
+      if (c.voiceUseSpeakerBoost !== undefined) {
+        next.tts.cloud.voiceUseSpeakerBoost = !!c.voiceUseSpeakerBoost;
       }
       // An OpenAI-compatible TTS server has no canonical endpoint — refuse to
       // save the provider without one. Mirrors the LLM-side check below.
@@ -2899,6 +3158,12 @@ export async function update(patch) {
   if ('webhooks' in patch) {
     next.webhooks = validateWebhooksStrict(patch.webhooks, next.webhooks || []);
   }
+  if ('webhooksPolicy' in patch) {
+    const wp = patch.webhooksPolicy || {};
+    if (wp.trackPlayListenerGated !== undefined) {
+      next.webhooksPolicy.trackPlayListenerGated = !!wp.trackPlayListenerGated;
+    }
+  }
   if ('scrobble' in patch) {
     const sb = patch.scrobble || {};
     if (sb.lastfm !== undefined) {
@@ -2948,6 +3213,11 @@ export async function update(patch) {
   {
     const personaIds = next.personas.map(p => p.id);
     next.shows = next.shows.filter(s => personaIds.includes(s.personaId));
+    // A deleted persona also vanishes from every guest roster (the show itself
+    // survives — losing a guest is not losing the show).
+    for (const s of next.shows) {
+      s.guestPersonaIds = coerceGuestPersonaIds(s.guestPersonaIds, s.personaId, personaIds);
+    }
     const showIds = next.shows.map(s => s.id);
     for (let d = 0; d < 7; d++) {
       for (let h = 0; h < 24; h++) {
@@ -2988,8 +3258,10 @@ export async function update(patch) {
   // resolveActiveShow / getEffectivePersona / the integrity sweep all
   // continue to work against one merged view.
   const { shows: _shows, schedule: _schedule, ...settingsPersist } = next;
-  await writeFile(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2));
-  await writeFile(
+  // Atomic replace — a crash mid-write must not take the operator's whole
+  // config (or show schedule) with it.
+  await writeFileAtomic(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2));
+  await writeFileAtomic(
     SCHEDULE_PATH,
     JSON.stringify({ shows: next.shows, schedule: next.schedule }, null, 2),
   );
@@ -3050,6 +3322,18 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     persona: persona
       ? { id: persona.id, name: persona.name, avatar: persona.avatar || '' }
       : null,
+    // Guest co-hosts, resolved to live personas (a guest deleted after the
+    // show was saved simply vanishes from the roster). Empty = solo show.
+    guests: (Array.isArray(show.guestPersonaIds) ? show.guestPersonaIds : [])
+      .map(gid => s.personas?.find(p => p.id === gid))
+      .filter(Boolean)
+      .map(p => ({ id: p.id, name: p.name, avatar: p.avatar || '' })),
+    // Scripted multi-voice banter breaks — only fires when guests exist.
+    banter: show.banter === true,
+    // Programme mode: produced episode arc (broadcast/programme.ts). The
+    // optional segmentSkill pins the feature beat to one capability kind.
+    programme: show.programme === true,
+    segmentSkill: typeof show.segmentSkill === 'string' ? show.segmentSkill : '',
   };
 }
 
@@ -3063,6 +3347,38 @@ export function getEffectivePersona(date: Date = new Date()) {
     if (p) return p;
   }
   return getActivePersona();
+}
+
+// Everyone in the studio right now: the effective persona as host, plus the
+// active show's guest co-hosts (full persona objects — the speaker rotation
+// needs their tts config, not just names). Outside a show, or on a show with
+// no guests, `guests` is empty and the roster degenerates to today's solo DJ.
+export function getOnAirRoster(date: Date = new Date()) {
+  const s: any = get();
+  const host = getEffectivePersona(date);
+  const show: any = resolveActiveShow(date, s);
+  const guests = (show?.guests || [])
+    .map((g: any) => s.personas?.find((p: any) => p.id === g.id))
+    .filter((p: any) => p && p.id !== host?.id);
+  return { host, guests, show };
+}
+
+// How much of the mic the host keeps when guests are in the studio. The rest
+// is split evenly across the guests, so one guest speaks ~2 segments in 5 and
+// the host stays unmistakably the host.
+const HOST_MIC_SHARE = 0.6;
+
+// The persona who speaks the NEXT standalone segment (station ID, hourly
+// check, weather/news/etc.). Weighted random: host most of the time, a guest
+// otherwise. Solo shows and off-show hours always return the effective
+// persona, so every existing call site is behaviour-identical until a show
+// actually lists guests. Track picks and their tied links stay with the host —
+// the pick agent reads the session from the host's perspective.
+export function pickOnAirSpeaker(date: Date = new Date()) {
+  const { host, guests } = getOnAirRoster(date);
+  if (!guests.length || !host) return host;
+  if (Math.random() < HOST_MIC_SHARE) return host;
+  return guests[Math.floor(Math.random() * guests.length)];
 }
 
 // The persona's on-air language as a blunt system-prompt directive. Empty
@@ -3138,7 +3454,32 @@ export function agentPersonaPreamble(persona) {
   const name = persona?.name || 'the DJ';
   const soul = persona?.soul || '';
   const station = cache?.station || DEFAULTS.station;
-  return `You are ${name}, the on-air DJ for ${station}, a personal internet radio station. ${soul}${languageDirective(persona)}`;
+  return `You are ${name}, the on-air DJ for ${station}, a personal internet radio station. ${soul}${languageDirective(persona)}${onAirRosterClause(persona)}`;
+}
+
+// When the active show has guest co-hosts, tell the speaking persona who else
+// is in the studio — from ITS OWN seat (host vs guest). Empty when the show is
+// solo, off-show, or the speaker isn't part of the current roster (so a
+// handoff rendered for the PREVIOUS show's outgoing persona never inherits the
+// new show's cast). Appended to both prompt paths — renderDjPrompt via
+// djSystem, and agentPersonaPreamble for the pick/segment agents. The "never
+// invent quotes" rule matters: only genuinely aired turns reach the session
+// history, so any other words attributed to a co-host would be fabricated.
+export function onAirRosterClause(persona: any, date: Date = new Date()): string {
+  if (!persona?.id) return '';
+  const { host, guests, show } = getOnAirRoster(date);
+  if (!guests.length || !host) return '';
+  const showName = show?.name ? ` on "${show.name}"` : '';
+  if (persona.id === host.id) {
+    const names = guests.map((g: any) => g.name).join(' and ');
+    return `\n\nYou are hosting${showName} with ${names} in the studio as your co-host${guests.length > 1 ? 's' : ''}. They take some of the talk breaks. When it fits, refer to them naturally — react to something they said on air, tee them up, share the room — but never invent quotes or opinions for them; only riff on what they actually said.`;
+  }
+  if (guests.some((g: any) => g.id === persona.id)) {
+    const others = guests.filter((g: any) => g.id !== persona.id).map((g: any) => g.name);
+    const othersClause = others.length ? ` ${others.join(' and ')} ${others.length > 1 ? 'are' : 'is'} also in the studio.` : '';
+    return `\n\nYou are a guest co-host${showName}; ${host.name} is the host and carries the show.${othersClause} Speak as yourself, in your own voice — you're a visitor with a seat at the desk, not the station's main DJ. React to the host and the music naturally, but never invent quotes or opinions for the others; only riff on what they actually said.`;
+  }
+  return '';
 }
 
 // Liquidsoap reads tiny text files instead of JSON.

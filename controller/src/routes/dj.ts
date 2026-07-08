@@ -12,8 +12,9 @@ import * as dj from '../llm/dj.js';
 import * as source from '../music/source.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { runStationId, runHourlyCheck, runLink, refreshAutoPlaylist } from '../broadcast/scheduler.js';
+import { runStationId, runHourlyCheck, runLink, runBanter, runProgrammeIntro, runProgrammeFeature, runProgrammeOutro, refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
+import * as sfxLib from '../broadcast/sfx.js';
 import { loadSkills, parseFrontmatter, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
 import { writeSkillFile, msToCooldownStr, resetBuiltinSkill } from '../skills/scaffold.js';
 import { mapPool } from '../util/async-pool.js';
@@ -556,9 +557,12 @@ router.delete('/dj/skills/:slug', requireAdmin, async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // POST /dj/say — manual voice DJ
-// Body: { text, kind?: 'dj-speak'|'link', mode?: 'raw'|'styled' }
+// Body: { text, kind?: 'dj-speak'|'link', mode?: 'raw'|'styled', sfx?: string }
 //   raw    → the DJ speaks `text` verbatim
 //   styled → `text` is an instruction; the LLM writes it in persona, then speaks
+//   sfx    → a library effect aired under the opening words (attention stinger
+//            for e.g. emergency announcements). Manual trigger — ignores the
+//            settings.sfx.enabled autonomy toggle like every operator press.
 // ---------------------------------------------------------------------------
 router.post('/dj/say', requireAdmin, async (req, res) => {
   const text = (typeof req.body?.text === 'string' ? req.body.text : '').trim().slice(0, SAY_TEXT_MAX);
@@ -566,6 +570,14 @@ router.post('/dj/say', requireAdmin, async (req, res) => {
 
   const kind = SAY_KINDS.includes(req.body?.kind) ? req.body.kind : 'dj-speak';
   const mode = req.body?.mode === 'styled' ? 'styled' : 'raw';
+
+  // Validate the effect name up front so a typo is a 400 naming the catalogue,
+  // not a silent no-op inside playSfx after the voice is already rendered.
+  const sfxName = (typeof req.body?.sfx === 'string' ? req.body.sfx : '').trim();
+  if (sfxName && !(await sfxLib.getPath(sfxName))) {
+    const names = (await sfxLib.list()).map(e => e.name).join(', ');
+    return res.status(400).json({ error: `unknown sound effect: ${sfxName}${names ? `. Available: ${names}` : ''}` });
+  }
 
   try {
     let spoken = text;
@@ -578,7 +590,8 @@ router.post('/dj/say', requireAdmin, async (req, res) => {
       });
     }
     await queue.announce(spoken, kind);
-    res.json({ ok: true, mode, kind, spoken });
+    if (sfxName) void queue.playSfx(sfxName, { underVoice: true });
+    res.json({ ok: true, mode, kind, spoken, sfx: sfxName || null });
   } catch (err) {
     queue.log('error', `/dj/say failed: ${err.message}`);
     res.status(500).json({ error: err.message });
@@ -587,12 +600,23 @@ router.post('/dj/say', requireAdmin, async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // POST /dj/segment — fire a voice segment on demand
-// Body: { type: 'station-id' | 'hourly' | 'link' }
+// Body: { type: 'station-id' | 'hourly' | 'link' | 'banter'
+//         | 'programme-intro' | 'programme-feature' | 'programme-outro' }
 // ---------------------------------------------------------------------------
 const SEGMENTS = {
   'station-id': runStationId,
   hourly: runHourlyCheck,
   link: runLink,
+  // Multi-voice guest exchange. Needs a show with guests on air (the runner
+  // throws a clear error otherwise); ignores the show's banter toggle — an
+  // explicit operator press always fires.
+  banter: runBanter,
+  // Programme episode beats. Need a programme show on air (the runners throw
+  // a clear error otherwise); like every manual trigger they bypass the
+  // listener/budget gates and the beat-already-aired flags.
+  'programme-intro': runProgrammeIntro,
+  'programme-feature': runProgrammeFeature,
+  'programme-outro': runProgrammeOutro,
 };
 
 router.post('/dj/segment', requireAdmin, async (req, res) => {

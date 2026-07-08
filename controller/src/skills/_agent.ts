@@ -37,6 +37,7 @@ import { z } from 'zod';
 import { queue } from '../broadcast/queue.js';
 import * as settings from '../settings.js';
 import { defineAgent } from '../llm/agent.js';
+import { modelTolerant } from '../llm/sdk.js';
 import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase } from '../llm/dj.js';
 import { buildSegmentTools } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
@@ -104,9 +105,14 @@ function unionContextFields(caps: any[]): string[] {
 // `null` or prose instead (see isBareNullSilent / isSilentFailure below);
 // `air: false` gives them an unambiguous silence token to reach for.
 function segmentSchema() {
-  return z.object({
+  return modelTolerant(z.object({
     reason: z.string().describe('one short internal sentence on why this segment (or why silent) — never shown to the listener; write this BEFORE deciding the segment'),
     air: z.boolean().describe('true to air one segment now, false to stay silent — silence is a perfectly good answer, often the best one, when the data is dull, stale, unchanged, or there is nothing fresh worth a listener\'s attention'),
+    // NOT .nullable(): a nullable nested object loses its `properties` in
+    // llama.cpp's peg-gemma4 tool serializer, so Gemma-4 never sees the shape
+    // and emits it as a string (issue #906). Silence rides entirely on the
+    // `air` boolean above, so a non-null segment on a silent tick is simply
+    // ignored at the consumption site (`object.air ? segment : null`).
     segment: z.object({
       // Kept as a free string (not a fixed enum) so operator-dropped custom
       // skills get valid kinds too. The agent is told which kinds are on offer in
@@ -115,17 +121,38 @@ function segmentSchema() {
         .describe('the segment kind — MUST be one of the kinds offered in the system prompt for this tick'),
       text: z.string().describe(`the spoken line in the DJ voice — ${lengthPhrase('segment')}`),
       sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect (null is usually right — most segments need none)'),
-    }).nullable().describe('the segment to air when air is true; null when air is false'),
+    }).describe('the segment to air when air is true; ignored when air is false (empty strings for kind/text, null sfx when silent)'),
+  }), {
+    // GLM separately observed (a) omitting `segment` entirely on an otherwise
+    // coherent `done` call, and (b) double-JSON-encoding it as a STRING —
+    // both would throw under a plain required object, which is
+    // indistinguishable from djAgent's perspective from "the model never
+    // called done" and burns a full recovery cascade on a call that already
+    // succeeded. modelTolerant rescues the double-encoded string back into a
+    // real object (recursing so `sfx` gets its nullable repair too); this
+    // fallback covers whatever still doesn't validate — safe because the
+    // consumption site already treats an empty/malformed segment as silence
+    // regardless of `air` (see the check right after
+    // `const seg = object?.air ? object?.segment : null`).
+    objectFallbacks: { segment: { kind: '', text: '', sfx: null } },
+    // Content-bearing discards are logged so /debug triage can tell "we threw
+    // a written segment away" apart from "the model chose silence" — an
+    // absent/null segment (the common GLM silence shape) stays quiet.
+    onDiscard: (field, value) => {
+      let preview = '';
+      try { preview = JSON.stringify(value).slice(0, 200); } catch { preview = String(value).slice(0, 200); }
+      console.warn(`[djAgentSegment] discarding malformed ${field} from model output: ${preview}`);
+    },
   });
 }
 
 // Operator-override schema: the segment is mandatory, the kind is already
 // known, so the agent only returns the spoken line.
 function forcedSchema() {
-  return z.object({
+  return modelTolerant(z.object({
     text: z.string().describe(`the spoken line in the DJ voice — ${lengthPhrase('segment')}`),
     sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect'),
-  });
+  }));
 }
 
 // The optional sound-effects block appended to the agent's system prompt.
@@ -157,9 +184,12 @@ const segmentState: any = {
 };
 
 // Minimum gap between ANY two segments, by station frequency. The cron fires
-// every 5 min; aggressive stations get no extra floor.
+// every 5 min; aggressive stations get no extra floor. Infinity for silent —
+// the auto tick never airs a segment (forced /dj/segment runs bypass this).
 function frequencyFloorMs(freq: string) {
+  if (freq === 'silent') return Infinity;
   if (freq === 'quiet') return 30 * 60 * 1000;
+  if (freq === 'chatty') return 8 * 60 * 1000;
   if (freq === 'aggressive') return 0;
   return 15 * 60 * 1000; // moderate
 }
@@ -197,11 +227,15 @@ function availableCapabilities(ctx: any, now: Date) {
 // and the buildSituation() user message. Same principle as pickSystem.
 function directorSystem(persona: any, caps: any[], freq: string, sfxCatalog: any) {
   const capList = caps.map((c: any) => `- ${c.kind}: ${c.desc}`).join('\n');
-  const tone = freq === 'quiet'
+  // 'silent' never reaches here (the frequency floor blocks the auto tick),
+  // but a forced run treats it like quiet: minimum-presence guidance.
+  const tone = freq === 'quiet' || freq === 'silent'
     ? 'This is a quiet station — silence is your default.'
     : freq === 'aggressive'
       ? 'This is a lively station — frequent presence welcome, never filler.'
-      : 'This is a measured station — speak only when there is something worth saying.';
+      : freq === 'chatty'
+        ? 'This is a talkative station — a good segment is usually welcome, but never filler.'
+        : 'This is a measured station — speak only when there is something worth saying.';
 
   return `${settings.agentPersonaPreamble(persona)}
 
@@ -224,6 +258,14 @@ function segmentDeadline(): number {
 export const directorAgent = defineAgent({
   kind: 'djAgentSegment',
   schema: () => segmentSchema(),
+  // Discovery (step 0) + exactly one committed done-tool attempt (step 1),
+  // same reasoning as pickerAgent.maxSteps in dj-agent.ts: a taller budget
+  // just grows an increasingly "I already declined" trail on providers that
+  // don't comply on the first forced attempt (GLM/Zhipu observed), which made
+  // things worse, not better, and was the direct cause of a run burning the
+  // FULL agentTimeoutMs internally (45002ms observed) before recovery ever got
+  // a turn. Left unset before, silently inheriting djAgent's default of 8.
+  maxSteps: 2,
   // Wall-clock ceiling, mirroring the picker (dj-agent.ts). Without it a
   // gemma-class model that ignores toolChoice can drive the done-tool recovery
   // into a multi-step stall (86s observed in issue #555) and hang the tick;
@@ -246,10 +288,11 @@ function buildSituation(ctx: any, { forced = false, contextFields, recentCuriosi
   const cur = queue.current?.track;
   if (cur) lines.push(`On air now: "${cur.title}" by ${cur.artist || 'unknown'}`);
   // The default 140-char recap truncation fits a concise one-liner segment,
-  // but an 'extended' persona's 3-5-sentence segment gets cut after roughly
-  // its first sentence — a topic repeated mid-segment would be invisible to
-  // the anti-repeat instruction. Scale the cap with the persona's verbosity.
-  const recap = queue.getDjRecap({ maxChars: lengthMode() === 'extended' ? 360 : 140 });
+  // but a longer persona's 3-8-sentence segment gets cut after roughly its
+  // first sentence — a topic repeated mid-segment would be invisible to the
+  // anti-repeat instruction. Scale the cap with the persona's verbosity.
+  const RECAP_CHARS: Record<string, number> = { extended: 360, storyteller: 520 };
+  const recap = queue.getDjRecap({ maxChars: RECAP_CHARS[lengthMode()] ?? 140 });
   if (recap) {
     lines.push(`\nWhat you have already said on air recently (do NOT repeat these topics or phrasing):\n${recap}`);
   }
@@ -273,7 +316,12 @@ export async function agenticTick(ctx) {
   if (tickBusy) return;
 
   const now = new Date();
+  // Cadence and capability gating stay keyed to the HOST persona (stable per
+  // show); only the VOICE rotates. A guest co-host may speak this tick's
+  // segment, but which segments are on offer and how often the station talks
+  // never depends on who happened to win the mic.
   const persona = settings.getEffectivePersona(now);
+  const speaker = settings.pickOnAirSpeaker(now);
   // DJ-mode personas read one rung chattier, lowering the floor so more
   // between-track segments (weather, curiosity, deep cuts) get through.
   const freq = settings.effectiveFrequency(persona);
@@ -288,7 +336,7 @@ export async function agenticTick(ctx) {
   // director outright under a 15-minute moderate floor.
   const lastSpoke = Math.max(
     segmentState.lastAnySegment,
-    queue.getLastVoiceAt(['station-id', 'hourly-check', 'handoff']),
+    queue.getLastVoiceAt(['station-id', 'hourly-check', 'handoff', 'banter']),
   );
   if (now.getTime() - lastSpoke < frequencyFloorMs(freq)) return;
 
@@ -311,7 +359,7 @@ export async function agenticTick(ctx) {
     const recentCuriosity = caps.some(c => c.kind === 'curiosity') ? recentAiredCuriosity() : undefined;
     const { object } = await directorAgent.run({
       messages: [{ role: 'user', content: buildSituation(ctx, { contextFields: unionContextFields(caps), recentCuriosity }) }],
-      persona, caps, freq, sfxCatalog,
+      persona: speaker, caps, freq, sfxCatalog,
       ctx, segmentState,
     });
 
@@ -336,8 +384,12 @@ export async function agenticTick(ctx) {
       segmentState.lastWeatherCondition = ctx.weather.condition;
     }
 
-    // queue.announce appends the segment turn into the live session.
-    await queue.announce(seg.text.trim(), seg.kind);
+    // queue.announce appends the segment turn into the live session. The
+    // speaker's id rides in meta so session.windowMessages names a guest's
+    // turn as theirs rather than the host's own words.
+    await queue.announce(seg.text.trim(), seg.kind, {
+      persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name },
+    });
 
     // Record what actually aired so the durable ledger can keep both the tool
     // and the fallback path from repeating it after a restart (issue #577).
@@ -435,9 +487,13 @@ export const forcedDirectorAgent = defineAgent({
 
 // Operator override — fire one capability on demand, bypassing cooldowns, the
 // frequency floor, persona ownership and the enable toggle. Backs POST
-// /dj/skill. `which` is a kind or skill slug (kept identical). Returns the
-// spoken text; throws on an unknown/unready capability or empty output.
-export async function runCapability(which, ctx) {
+// /dj/skill, and the programme feature beat (broadcast/programme.ts), which
+// passes `brief` (the episode plan's feature topic, appended to the situation
+// so the segment is built AROUND it) and `persona` (the rotated on-air
+// speaker — voice, prompt seat, and session attribution move together, same
+// rule as every other rotated segment). Returns the spoken text; throws on an
+// unknown/unready capability or empty output.
+export async function runCapability(which, ctx, { brief = null, persona = null }: any = {}) {
   const cap = allCapabilities().find(c => c.kind === which || c.skill === which);
   if (!cap) throw new Error(`unknown skill: ${which}`);
   if (cap.ready && !cap.ready()) {
@@ -452,13 +508,15 @@ export async function runCapability(which, ctx) {
     throw new Error(`skill "${cap.skill}" is not ready${hint}`);
   }
 
-  const persona = settings.getEffectivePersona(new Date());
+  const speaker = persona || settings.getEffectivePersona(new Date());
   // Empty catalogue when SFX are disabled — the agent is never offered effects.
   const sfxCatalog = settings.get().sfx?.enabled === false ? [] : await sfx.catalog();
   const recentCuriosity = cap.kind === 'curiosity' ? recentAiredCuriosity() : undefined;
+  const situation = buildSituation(ctx, { forced: true, contextFields: effectiveContextFields(cap), recentCuriosity })
+    + (brief ? `\n\n${brief}` : '');
   const { object } = await forcedDirectorAgent.run({
-    messages: [{ role: 'user', content: buildSituation(ctx, { forced: true, contextFields: effectiveContextFields(cap), recentCuriosity }) }],
-    persona, cap, sfxCatalog,
+    messages: [{ role: 'user', content: situation }],
+    persona: speaker, cap, sfxCatalog,
     ctx, segmentState,
   });
 
@@ -473,7 +531,11 @@ export async function runCapability(which, ctx) {
     segmentState.lastWeatherCondition = ctx.weather.condition;
   }
 
-  await queue.announce(text, cap.kind);
+  // A rotated speaker rides through announce so the voice and the session
+  // attribution agree (windowMessages names foreign speakers by meta id).
+  await queue.announce(text, cap.kind, persona
+    ? { persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name } }
+    : {});
 
   // Record an operator-fired curiosity line in the durable ledger too, so a
   // later autonomous tick doesn't repeat it (issue #577).

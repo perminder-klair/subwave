@@ -26,6 +26,7 @@ import { router as debugRoutes } from './routes/debug.js';
 import { router as statsRoutes } from './routes/stats.js';
 import { router as djRoutes } from './routes/dj.js';
 import { router as libraryRoutes } from './routes/library.js';
+import { router as playlistsRoutes } from './routes/playlists.js';
 import { router as onboardingRoutes } from './routes/onboarding.js';
 import { router as archivesRoutes } from './routes/archives.js';
 import { router as listenersRoutes } from './routes/listeners.js';
@@ -37,6 +38,8 @@ import { router as audienceRoutes } from './routes/audience.js';
 import { router as systemRoutes } from './routes/system.js';
 import { router as generateRoutes } from './routes/generate.js';
 import { router as doctorRoutes } from './routes/doctor.js';
+import { router as connectRoutes } from './routes/connect.js';
+import { router as mcpRoutes } from './routes/mcp.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
 import { loadSetupConfig } from './setup/config.js';
 import { getSetupStatus } from './setup/firstRun.js';
@@ -89,6 +92,7 @@ app.use(debugRoutes);
 app.use(statsRoutes);
 app.use(djRoutes);
 app.use(libraryRoutes);
+app.use(playlistsRoutes);
 app.use(onboardingRoutes);
 app.use(archivesRoutes);
 app.use(listenersRoutes);
@@ -100,6 +104,8 @@ app.use(audienceRoutes);
 app.use(systemRoutes);
 app.use(generateRoutes);
 app.use(doctorRoutes);
+app.use(connectRoutes);
+app.use(mcpRoutes);
 
 // (manual skip is not implemented in this build — Liquidsoap controls pacing)
 

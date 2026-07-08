@@ -91,6 +91,11 @@ interface LlmCall {
   messages?: Array<{ role?: string; content?: unknown }>;
   toolCalls?: Array<{ name?: string; args?: unknown; result?: unknown }>;
   response?: string;
+  /** What the model said INSTEAD of the expected structured output on a
+   * failed call (e.g. "agent did not call the done tool") — one labelled
+   * block per attempt that declined. Populated by failureDiagnostics() in
+   * the controller; absent on success (see `response` instead). */
+  responseText?: string;
   steps?: number;
 }
 
@@ -536,11 +541,9 @@ function SessionChat({ session }: { session: DebugSession }) {
         <div
           key={i}
           className={cn(
-            // 178px fits the widest role·kind label, 'segment·album-anniversary'
-            // (~170px at text-[9px]/tracking-[0.12em]/uppercase) + breathing room.
-            // Each row is its own grid, so a fixed width is needed to keep the
-            // kind column aligned across rows — bump it if a longer kind is added.
-            'grid grid-cols-[auto_178px_1fr] items-baseline gap-2 py-0.5 text-[12px]',
+            // Time + role·kind share the first line; text wraps to a full-width
+            // second row below them.
+            'grid grid-cols-[auto_1fr] items-baseline gap-x-2 gap-y-0.5 py-0.5 text-[12px]',
             i < msgs.length - 1 && 'border-b border-dashed border-separator-strong',
           )}
         >
@@ -559,7 +562,7 @@ function SessionChat({ session }: { session: DebugSession }) {
           >
             {m.role}{m.kind ? `·${m.kind}` : ''}
           </span>
-          <span className="break-words whitespace-pre-wrap">{m.text}</span>
+          <span className="col-span-2 break-words whitespace-pre-wrap">{m.text}</span>
         </div>
       ))}
     </div>
@@ -1040,6 +1043,11 @@ function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
               {c.error && (
                 <CallSection label="error" tone="err" preview={oneLine(c.error)}>
                   {c.error}
+                </CallSection>
+              )}
+              {c.responseText && (
+                <CallSection label="model said instead" tone="err" preview={oneLine(c.responseText)}>
+                  {c.responseText}
                 </CallSection>
               )}
               {c.user && (

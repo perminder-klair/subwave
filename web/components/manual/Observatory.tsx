@@ -65,7 +65,7 @@ export default function Observatory() {
         <p className="bs-eyebrow">LARGE LIBRARIES</p>
         <h2>From a few hundred to tens of thousands.</h2>
         <p>
-          The map draws up to <strong>10,000</strong> tracks by default and can be dialled to 50,000 with the{' '}
+          The map draws up to <strong>25,000</strong> tracks by default and can be dialled to 100,000 with the{' '}
           <strong>MAP SIZE</strong> control in the rail. Beyond the cap it shows a stratified sample spread
           evenly across genres, so the shape stays honest rather than over-weighting whichever genres sort
           first; a header badge tells you when you are seeing a sample.

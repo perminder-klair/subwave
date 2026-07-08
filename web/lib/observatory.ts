@@ -31,8 +31,10 @@ interface BulkResponse {
 // Loads the tagged library (up to `max` nodes), lays it out by genre cluster,
 // and falls back to a seeded mock when the library is empty (fresh install) so
 // the view is never blank. `enabled` gates the fetch on admin auth being ready.
-// Changing `max` (the MAP SIZE control) refetches with a higher/lower cap.
-export function useObservatory(adminFetch: AdminFetch, enabled: boolean, max: number): ObservatoryResult {
+// Changing `max` (the MAP SIZE control) refetches with a higher/lower cap;
+// `max: null` sends no cap so the server's own default (OBSERVATORY_MAX)
+// applies — the response's `max` reports what was used.
+export function useObservatory(adminFetch: AdminFetch, enabled: boolean, max: number | null): ObservatoryResult {
   const [data, setData] = useState<LibraryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +46,9 @@ export function useObservatory(adminFetch: AdminFetch, enabled: boolean, max: nu
       setLoading(true);
       setError(null);
       try {
-        const res = await adminFetch(`/library/observatory?max=${encodeURIComponent(max)}`);
+        const res = await adminFetch(
+          max == null ? '/library/observatory' : `/library/observatory?max=${encodeURIComponent(max)}`,
+        );
         if (!res.ok) throw new Error(`controller error (${res.status})`);
         const body = (await res.json()) as BulkResponse;
         if (cancelled) return;
@@ -60,6 +64,7 @@ export function useObservatory(adminFetch: AdminFetch, enabled: boolean, max: nu
             moodVocab: body.moodVocab || [],
             truncated: !!body.truncated,
             sampled: !!body.sampled,
+            max: body.max ?? null,
             hardMax: body.hardMax ?? 50000,
             mock: false,
           });

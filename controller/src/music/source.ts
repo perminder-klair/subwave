@@ -337,6 +337,12 @@ export function getAnnotatedUri(song: Song, opts: { maxDurationSec?: number | nu
   // with their predecessor across the cross — dj_transition reads liq_blend on
   // the INCOMING track, like the sweep.
   if (song.blend) fields.push('liq_blend="true"');
+  // DJ chop (crossfader cut): rides the INCOMING pick like the sweep —
+  // radio.liq reads `liq_chop` off `b` and gates the OUTGOING branch on the
+  // beat. The gate period is one beat of the OUTGOING track (the queue stamps
+  // it here because the predecessor's own annotation is already sent).
+  if (song.chop) fields.push('liq_chop="true"');
+  if (song.chopPeriod != null) fields.push(`liq_chop_period="${escAnnotate(song.chopPeriod)}"`);
   // Hard track-length cap (issue #447 / max-track-length). When the caller passes
   // a positive cap, stamp `liq_cue_out` so radio.liq's `cue_cut` stops the track
   // at that second offset — a real ceiling that fires no matter how the track

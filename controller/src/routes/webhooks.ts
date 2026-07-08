@@ -2,7 +2,9 @@
 // in broadcast/webhooks.ts and reads its config from settings on each fire.
 //
 // Event payloads emitted by the fan-out:
-//   track.play       { event, t, title, artist, album?, source, requestedBy? }
+//   track.play       { event, t, title, artist, album?, source, requestedBy?, listeners? }
+//                    (when webhooksPolicy.trackPlayListenerGated is on, only POSTs
+//                     when listener count > 0 — fail-closed; `listeners` included)
 //   dj.say           { event, t, text, kind }      // kind is the original `announce` kind
 //   dj.link          { event, t, text }
 //   request.received { event, t, requestedBy, text }   // text is the listener's raw ask
@@ -19,7 +21,12 @@ router.get('/webhooks', requireAdmin, async (req, res) => {
   try {
     await settings.load();
     const s = settings.getRedacted();
-    res.json({ events: WEBHOOK_EVENTS, webhooks: s.webhooks || [] });
+    const policy = settings.get().webhooksPolicy || {};
+    res.json({
+      events: WEBHOOK_EVENTS,
+      webhooks: s.webhooks || [],
+      trackPlayListenerGated: !!policy.trackPlayListenerGated,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -28,9 +35,23 @@ router.get('/webhooks', requireAdmin, async (req, res) => {
 router.post('/webhooks', requireAdmin, async (req, res) => {
   // The UI sends the whole list back. settings.update() validates the array
   // strictly and replaces it atomically — same pattern as personas/shows.
+  // Both fields are optional so the gate toggle can save on its own without
+  // re-submitting (and re-validating) the hook list, and vice versa.
   try {
-    const r = await settings.update({ webhooks: req.body?.webhooks });
-    res.json({ webhooks: settings.getRedacted().webhooks, requiresRestart: r.requiresRestart });
+    const patch: Record<string, unknown> = {};
+    if (req.body?.webhooks !== undefined) {
+      patch.webhooks = req.body.webhooks;
+    }
+    if (req.body?.trackPlayListenerGated !== undefined) {
+      patch.webhooksPolicy = { trackPlayListenerGated: !!req.body.trackPlayListenerGated };
+    }
+    const r = await settings.update(patch);
+    const policy = settings.get().webhooksPolicy || {};
+    res.json({
+      webhooks: settings.getRedacted().webhooks,
+      trackPlayListenerGated: !!policy.trackPlayListenerGated,
+      requiresRestart: r.requiresRestart,
+    });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }

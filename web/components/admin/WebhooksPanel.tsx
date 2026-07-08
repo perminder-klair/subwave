@@ -23,6 +23,7 @@ interface Webhook {
 interface WebhooksResponse {
   events: string[];
   webhooks: Webhook[];
+  trackPlayListenerGated?: boolean;
 }
 
 function clientMintId() {
@@ -61,7 +62,7 @@ interface PayloadDoc {
 const PAYLOADS: PayloadDoc[] = [
   {
     event: 'track.play',
-    blurb: 'A track started. `source` is "auto" (the playlist), "ai" (picker agent) or "request"; `artist`/`album`/`requestedBy` may be null.',
+    blurb: 'A track started. By default always delivered; enable “Gate track.play on listeners” below to skip when nobody is tuned in (fail-closed on unknown count). `source` is "auto" (the playlist), "ai" (picker agent) or "request"; `artist`/`album`/`requestedBy` may be null; `listeners` is included when the gate is on.',
     json: `{
   "event": "track.play",
   "t": "2026-06-02T19:04:12.880Z",
@@ -69,7 +70,8 @@ const PAYLOADS: PayloadDoc[] = [
   "artist": "Massive Attack",
   "album": "Mezzanine",
   "source": "auto",
-  "requestedBy": null
+  "requestedBy": null,
+  "listeners": 1
 }`,
   },
   {
@@ -214,6 +216,7 @@ export default function WebhooksPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [events, setEvents] = useState<string[] | null>(null);
   const [hooks, setHooks] = useState<Webhook[] | null>(null);
+  const [trackPlayListenerGated, setTrackPlayListenerGated] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -228,6 +231,7 @@ export default function WebhooksPanel() {
         if (cancelled) return;
         setEvents(j.events);
         setHooks(j.webhooks || []);
+        setTrackPlayListenerGated(!!j.trackPlayListenerGated);
       } catch (e) {
         if (cancelled) return;
         setErr(errorMessage(e));
@@ -248,6 +252,32 @@ export default function WebhooksPanel() {
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setHooks(j.webhooks || []);
       notify.ok('Webhooks saved.');
+    } catch (e) {
+      notify.err(`Save failed: ${errorMessage(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // The gate persists on its own the moment it's flipped (like the skills
+  // toggles) — it must not ride the hooks Save button, which an invalid
+  // draft row would disable. Doesn't touch `hooks`, so unsaved row edits
+  // survive a toggle.
+  const saveGate = async (next: boolean) => {
+    setBusy(true);
+    try {
+      const r = await adminFetch('/webhooks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trackPlayListenerGated: next }),
+      });
+      const j = (await r.json().catch(() => ({}))) as {
+        trackPlayListenerGated?: boolean;
+        error?: string;
+      };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      setTrackPlayListenerGated(!!j.trackPlayListenerGated);
+      notify.ok(`track.play listener gate ${j.trackPlayListenerGated ? 'on' : 'off'}.`);
     } catch (e) {
       notify.err(`Save failed: ${errorMessage(e)}`);
     } finally {
@@ -315,6 +345,24 @@ export default function WebhooksPanel() {
           >{busy ? 'Saving…' : 'Save'}</Btn>
         </div>
       </section>
+
+      <Card
+        title="track.play delivery"
+        right={
+          <Toggle
+            on={trackPlayListenerGated}
+            onClick={() => saveGate(!trackPlayListenerGated)}
+            disabled={busy}
+          />
+        }
+      >
+        <div className="text-[12px] leading-[1.6] text-muted">
+          Gate <code>track.play</code> on listener count (off by default). When on, hooks only
+          receive the event when at least one listener is tuned in — unknown or zero count is
+          skipped silently, matching scrobble. The payload includes <code>listeners</code> when
+          fired. Applies immediately — no Save needed.
+        </div>
+      </Card>
 
       {hooks.length === 0 && (
         <Card title="No webhooks yet">

@@ -11,6 +11,7 @@ import * as chatterbox from './chatterbox.js';
 import * as pocketTts from './pocketTts.js';
 import * as remoteTts from './remoteTts.js';
 import * as cloud from '../llm/speech.js';
+import { stripThinking } from '../llm/sdk.js';
 import * as settings from '../settings.js';
 import { recordTts } from '../stats.js';
 import { energyForDaypart } from '../context.js';
@@ -165,8 +166,15 @@ async function speakWith(engine: string, text: string, opts: any, personaTts: an
   }
   if (engine === 'cloud') {
     // Persona picks provider + voice; the shared tts.cloud holds key + model.
-    const cloudOverride = (personaTts && personaTts.engine === 'cloud')
+    // `opts.cloudVoiceSettings` (preview-only, from synthesizeSample) rides the
+    // same override so "Play sample" auditions UNSAVED ElevenLabs voice_settings
+    // sliders — cloud-speech spreads the override over the saved tts.cloud, so
+    // the live path (which never sets it) keeps reading saved values.
+    const personaOverride = (personaTts && personaTts.engine === 'cloud')
       ? { provider: personaTts.cloudProvider, voice: personaTts.voice }
+      : null;
+    const cloudOverride = (personaOverride || opts.cloudVoiceSettings)
+      ? { ...(personaOverride || {}), ...(opts.cloudVoiceSettings || {}) }
       : null;
     return cloud.speak(text, { ...opts, cloudOverride });
   }
@@ -207,25 +215,51 @@ const PREVIEW_TEXT_MAX = 200;
 const DEFAULT_PREVIEW_TEXT = "You're listening to SUB/WAVE. This is a voice preview.";
 
 export async function synthesizeSample(
-  { engine, voice = '', cloudProvider = 'openai', speed, lang, text }: {
+  { engine, voice = '', cloudProvider = 'openai', speed, lang, text, voiceSettings }: {
     engine: string;
     voice?: string;
     cloudProvider?: string;
     speed?: number;
     lang?: string;
     text?: string;
+    // Unsaved ElevenLabs voice_settings sliders to audition (issue #696) —
+    // same field names as settings.tts.cloud so they merge straight into the
+    // cloudOverride in speakWith(). Sanitized here, like `speed`.
+    voiceSettings?: {
+      voiceStability?: number;
+      voiceStyle?: number;
+      voiceSimilarityBoost?: number;
+      voiceUseSpeakerBoost?: boolean;
+    };
   },
 ): Promise<string> {
   if (!ENGINES.includes(engine)) throw new Error(`Unknown engine: ${engine}`);
   const raw = (typeof text === 'string' && text.trim()) ? text.trim() : DEFAULT_PREVIEW_TEXT;
   const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX));
   const scale = settings.clampTtsSpeed(speed);
+  // Clamp the audition voice_settings to ElevenLabs' [0,1] the same way
+  // settings.update() does for the saved values, so a hand-crafted preview
+  // request can't 400 the provider call.
+  const clamp01 = (n: unknown) =>
+    typeof n === 'number' && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : undefined;
+  let cloudVoiceSettings: Record<string, number | boolean> | undefined;
+  if (engine === 'cloud' && voiceSettings) {
+    cloudVoiceSettings = {};
+    for (const key of ['voiceStability', 'voiceStyle', 'voiceSimilarityBoost'] as const) {
+      const v = clamp01(voiceSettings[key]);
+      if (v !== undefined) cloudVoiceSettings[key] = v;
+    }
+    if (typeof voiceSettings.voiceUseSpeakerBoost === 'boolean') {
+      cloudVoiceSettings.voiceUseSpeakerBoost = voiceSettings.voiceUseSpeakerBoost;
+    }
+    if (Object.keys(cloudVoiceSettings).length === 0) cloudVoiceSettings = undefined;
+  }
   // Synthetic persona so speakWith() picks up the requested voice/provider
   // exactly (its per-engine branches key off personaTts.engine === <engine>).
   const personaTts = { engine, voice, cloudProvider };
   // No outPath → each engine self-generates a WAV path under config.piper.outDir
   // (reaped by cleanupOldVoices) and returns it.
-  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '', lang }, personaTts);
+  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '', lang, cloudVoiceSettings }, personaTts);
 }
 
 // Public entry point. Tries the configured engine; on failure, falls back to
@@ -238,7 +272,14 @@ export async function speak(
   text: string,
   { kind = 'default', outPath, speedScale, persona }: { kind?: string; outPath?: string; speedScale?: number; persona?: any } = {},
 ) {
-  const speakText = normalizeForSpeech(text);
+  // Belt-and-suspenders scrub of any leaked reasoning at the single point every
+  // booth-bound string converges (follow-up to #949). The free-text generators
+  // already stripThinking their output, but a reasoning model that leaks a
+  // <think>/harmony token INTO a structured say/intro field (djObject/djAgent
+  // native path) reaches TTS unscrubbed otherwise. No-op on clean text — those
+  // literals never appear in a real script — so every non-LLM caller (jingles,
+  // idents, request intros) is unaffected.
+  const speakText = normalizeForSpeech(stripThinking(text));
   // `persona` overrides the clock-driven effective persona so the persona-handoff
   // mic-pass can voice the outgoing DJ (engine, voice, language, soul, speed)
   // after the hour has flipped. Absent → getEffectivePersona(), i.e. today.

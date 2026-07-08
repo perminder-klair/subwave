@@ -25,7 +25,7 @@ export const PICKER_CRITERIA = `Selection criteria, in order:
 // import from broadcast/.
 export function effectsGuidance(): string {
   if (!settings.effectsActive()) return '';
-  return `\n\nTRANSITION EFFECTS ("transition") — part of your craft, not a gimmick: a working DJ fires one every few songs when the moment earns it. Actively look for the moment on every pick; when you spot one, flag it — the station validates your choice against the audio analysis and skips ones that don't land. The PACING is entirely yours: there is no rate limit, so be the taste — an effect hits hardest coming out of a stretch of clean blends, so let a few ordinary transitions breathe between them. VARY THEM: they are equals in your kit, and if your recent picks leaned on one, reach for another.\n- "washout": your pick dissolves into a pulsing, tempo-synced echo tail as it ENDS, ringing out into whatever follows. Fire it whenever your pick is the natural END of something: the last track of a run of similar songs, a song with a big or atmospheric ending, anything dreamy/hazy/anthemic, or when the NEXT stretch will change direction. In a normal set several tracks qualify — this is your workhorse exit move, not a rarity.\n- "sweep": the track playing before your pick sinks under a slowly closing filter across the blend while your pick rises clean underneath. Use it on a genuine gear-change — a clear jump in energy, tempo, or mood (it only fires when the tracks measurably clash).\n- "blend": spectral handover — across a long crossfade the outgoing track hands its bass, then its mids, to your pick, keeping only its highs to the end, while your pick arrives lows-first underneath. The two feel like ONE continuous piece of music. Reserve it for the EXCEPTIONAL pair, not the merely similar — your picks already flow, and the plain crossfade handles an ordinary same-lane transition on its own. Flag blend only when the two tracks are properly locked (near-identical tempo, harmonically close key) — roughly one pick in five, or it stops meaning anything (it only fires when the tracks measurably fit).\n- "dissolve": the track playing before your pick melts into a diffuse, beatless ambient wash while your pick rises clean through it — the reverb throw. The SMOOTH way across a clash where the sweep is the dramatic way: choose it when the tempo or mood jump should be hidden rather than announced (into a talk break's aftermath, easing between worlds late at night). Like the sweep it only fires when the tracks measurably clash.\nUse "normal" or null only when nothing above applies.`;
+  return `\n\nTRANSITION EFFECTS ("transition") — part of your craft, not a gimmick: a working DJ fires one every few songs when the moment earns it. Actively look for the moment on every pick; when you spot one, flag it — the station validates your choice against the audio analysis and skips ones that don't land. The PACING is entirely yours: there is no rate limit, so be the taste — an effect hits hardest coming out of a stretch of clean blends, so let a few ordinary transitions breathe between them. VARY THEM: they are equals in your kit, and if your recent picks leaned on one, reach for another.\n- "washout": your pick dissolves into a pulsing, tempo-synced echo tail as it ENDS, ringing out into whatever follows. Fire it whenever your pick is the natural END of something: the last track of a run of similar songs, a song with a big or atmospheric ending, anything dreamy/hazy/anthemic, or when the NEXT stretch will change direction. In a normal set several tracks qualify — this is your workhorse exit move, not a rarity.\n- "sweep": the track playing before your pick sinks under a slowly closing filter across the blend while your pick rises clean underneath. Use it on a genuine gear-change — a clear jump in energy, tempo, or mood (it only fires when the tracks measurably clash).\n- "blend": spectral handover — across a long crossfade the outgoing track hands its bass, then its mids, to your pick, keeping only its highs to the end, while your pick arrives lows-first underneath. The two feel like ONE continuous piece of music. Reserve it for the EXCEPTIONAL pair, not the merely similar — your picks already flow, and the plain crossfade handles an ordinary same-lane transition on its own. Flag blend only when the two tracks are properly locked (near-identical tempo, harmonically close key) — roughly one pick in five, or it stops meaning anything (it only fires when the tracks measurably fit).\n- "dissolve": the track playing before your pick melts into a diffuse, beatless ambient wash while your pick rises clean through it — the reverb throw. The SMOOTH way across a clash where the sweep is the dramatic way: choose it when the tempo or mood jump should be hidden rather than announced (into a talk break's aftermath, easing between worlds late at night). Like the sweep it only fires when the tracks measurably clash.\n- "chop": the track playing before your pick is CUT rhythmically on its own beat — the crossfader cut: full-level stabs on the beat, thinning and sparsening out while your pick rises clean through the gaps. The PERCUSSIVE way across a clash: choose it to jump the energy UP off a beat-driven, percussive track (a takeover moment, kicking a set up a gear) — never out of anything ambient or beatless, where there is no beat to cut on. Like the sweep it only fires when the tracks measurably clash.\n- "loop": your pick\'s last bar is caught in a tempo-synced loop as it ENDS — the exit loop: the song is cut on the beat and its final bar repeats hypnotically under the next track before it filters away. Choose it to leave a groove-driven track with intent: a great riff, a locked drum pattern, the close of a rhythmic run. It needs the track\'s measured tempo (the station drops it on un-analysed tracks), and it reads best off percussive material — never out of something ambient.\nUse "normal" or null only when nothing above applies.`;
 }
 
 export type ShowMusic = { name: string; topic: string; mood?: string; genre?: string; fromYear?: number | null; toYear?: number | null; energy?: string; filtersStrict?: boolean };
@@ -125,22 +125,15 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
     candidates,
   }, null, 2);
 
-  // Constrain the pick to the actual candidate ids. On a local model (llama.cpp
-  // via openai-compatible / locca) this becomes a grammar so the model can only
-  // emit a real id — closing the "agent returned unknown id" hole. On providers
-  // that don't enforce the schema at decode time, Zod still rejects an invalid
-  // id, so the caller's fallback fires instead of a bogus track. Empty pool →
-  // plain string (z.enum needs ≥1 literal); pickViaPool never calls with [].
-  const candidateIds = [
-    ...new Set(
-      (candidates || [])
-        .map((c: any) => c?.id)
-        .filter((id: any): id is string => typeof id === 'string' && id.length > 0),
-    ),
-  ];
-  const idSchema = candidateIds.length
-    ? z.enum(candidateIds as [string, ...string[]]).describe('the exact id of one candidate')
-    : z.string().describe('the exact id of one candidate');
+  // The id is a plain string, NOT z.enum(candidateIds), deliberately (#939):
+  // the tool-strategy providers this path was meant to protect (llama.cpp via
+  // openai-compatible / locca, ollama) deliver the schema as forced-tool
+  // ARGUMENTS, which llama.cpp does not grammar-constrain — so the enum never
+  // reached the decoder, and its only effect was a hard Zod reject on the 2-3
+  // char id corruptions small local models produce, killing the pick before
+  // pickViaPool's nearestId repair could run. Validation lives at the call
+  // site instead: exact match → near-miss repair → first-candidate fallback.
+  const idSchema = z.string().describe('the exact id of one candidate');
 
   // Transition effects on the pool path too: the queue's applyMixTransition
   // validates/strips whatever any pick strategy asks for, so a DJ-mode persona
@@ -161,8 +154,8 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
       id: idSchema,
       reason: z.string().describe('one short sentence on why this one'),
       ...(fxActive ? {
-        transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve']).nullable()
-          .describe('transition treatment for this pick — "blend" only when the pair is exceptionally locked (near-identical tempo, close key; a plain crossfade already handles ordinary same-lane picks), "sweep" for a genuine gear-change, "washout" to ring this pick out as it ends, "dissolve" to melt the previous track into ambience under this pick; "normal" or null for a plain crossfade. The TRANSITION EFFECTS guidance above explains each.'),
+        transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop']).nullable()
+          .describe('transition treatment for this pick — "blend" only when the pair is exceptionally locked (near-identical tempo, close key; a plain crossfade already handles ordinary same-lane picks), "sweep" for a genuine gear-change, "washout" to ring this pick out as it ends, "dissolve" to melt the previous track into ambience under this pick, "chop" to cut the previous track out on the beat for an energy jump, "loop" to catch this pick\'s last bar in a repeating loop as it ends; "normal" or null for a plain crossfade. The TRANSITION EFFECTS guidance above explains each.'),
       } : {}),
     }),
     temperature: 0.5,

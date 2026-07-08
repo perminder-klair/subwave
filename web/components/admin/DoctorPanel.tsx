@@ -4,7 +4,7 @@
 // one-click fix where a safe action exists, asks the buddy (the LLM) to review
 // the report in plain English, and copies the whole thing as GitHub-ready
 // Markdown. Mirrors DashPanel's adminFetch + act() pattern; primitives from ./ui.
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
 import { Card, Btn, Pill } from './ui';
@@ -40,6 +40,9 @@ interface ReviewPriority {
   severity: 'low' | 'med' | 'high';
   why: string;
   suggestedFix: string;
+  // DJ Doc may tag a priority with a one-click fix; we only render the button
+  // when that fix id actually appears in the current report's findings.
+  fixId?: FixId | null;
 }
 interface DoctorReview {
   available: boolean;
@@ -76,6 +79,27 @@ const HQ_ISSUES_NEW = 'https://github.com/perminder-klair/subwave/issues/new';
 // back to the clipboard when the report is too big to prefill safely.
 const HQ_URL_LIMIT = 7000;
 
+function tallyCounts(sections: DoctorSection[]): DoctorReport['counts'] {
+  const c = { ok: 0, warn: 0, fail: 0, skip: 0 };
+  for (const s of sections) for (const f of s.findings) c[f.status]++;
+  return c;
+}
+
+// Parse one SSE frame ("event: …\ndata: …") into its event name + JSON payload.
+function parseSseFrame(frame: string): { event: string | null; data: any } {
+  let event: string | null = null;
+  const dataLines: string[] = [];
+  for (const line of frame.split('\n')) {
+    if (line.startsWith('event:')) event = line.slice(6).trim();
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''));
+  }
+  let data: any = null;
+  if (dataLines.length) {
+    try { data = JSON.parse(dataLines.join('\n')); } catch { /* keep null */ }
+  }
+  return { event, data };
+}
+
 export default function DoctorPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [report, setReport] = useState<DoctorReport | null>(null);
@@ -84,8 +108,63 @@ export default function DoctorPanel() {
   const [reviewing, setReviewing] = useState(false);
   const [busyFix, setBusyFix] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // True until the mount hydration from /doctor/last resolves — suppresses the
+  // intro hero flashing before a cached report loads in.
+  const [hydrating, setHydrating] = useState(true);
 
   const ready = hydrated && !needsAuth;
+
+  // Hydrate from the last cached run so navigating back to DJ Doc (or a nightly
+  // auto-run) shows the previous report immediately instead of a blank slate.
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    if (!ready || hydratedRef.current) return;
+    hydratedRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await adminFetch('/doctor/last');
+        const j = (await r.json().catch(() => null)) as
+          | { report?: DoctorReport | null; review?: DoctorReview | null }
+          | null;
+        if (!cancelled && j?.report) {
+          setReport(j.report);
+          if (j.review) setReview(j.review);
+        }
+      } catch {
+        /* no cached run — the intro hero shows instead */
+      } finally {
+        if (!cancelled) setHydrating(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, adminFetch]);
+
+  // Fix actions present in the current report, keyed by id — the source of truth
+  // for both the finding buttons' labels and whether a review priority may show
+  // its own one-click fix button (a fixId not in this map is never surfaced).
+  const fixById = useMemo(() => {
+    const m = new Map<FixId, FixAction>();
+    report?.sections.forEach((s) =>
+      s.findings.forEach((f) => {
+        if (f.fix && !m.has(f.fix.id)) m.set(f.fix.id, f.fix);
+      }),
+    );
+    return m;
+  }, [report]);
+
+  // One-shot batch run — the fallback when SSE streaming isn't available.
+  const runBatch = async (): Promise<DoctorReport | null> => {
+    const r = await adminFetch('/doctor');
+    const j = (await r.json().catch(() => null)) as DoctorReport | { error?: string } | null;
+    if (!r.ok || !j || !('sections' in j)) {
+      throw new Error((j as { error?: string })?.error || `failed (${r.status})`);
+    }
+    setReport(j);
+    return j;
+  };
 
   const run = async (): Promise<DoctorReport | null> => {
     setRunning(true);
@@ -93,16 +172,45 @@ export default function DoctorPanel() {
     // A fresh run invalidates the previous review (it described the old report).
     setReview(null);
     try {
-      const r = await adminFetch('/doctor');
-      const j = (await r.json().catch(() => null)) as DoctorReport | { error?: string } | null;
-      if (!r.ok || !j || !('sections' in j)) {
-        throw new Error((j as { error?: string })?.error || `failed (${r.status})`);
+      // Stream sections as each check finishes so findings paint progressively.
+      const r = await adminFetch('/doctor/stream', { headers: { Accept: 'text/event-stream' } });
+      if (!r.ok || !r.body) throw new Error(`stream unavailable (${r.status})`);
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      const sections: DoctorSection[] = [];
+      let final: DoctorReport | null = null;
+      // Empty shell first so the intro hero yields to the progressive report.
+      setReport({ t: new Date().toISOString(), sections: [], counts: tallyCounts([]) });
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buf.indexOf('\n\n')) !== -1) {
+          const { event, data } = parseSseFrame(buf.slice(0, idx));
+          buf = buf.slice(idx + 2);
+          if (event === 'section' && data) {
+            sections.push(data as DoctorSection);
+            setReport({ t: new Date().toISOString(), sections: [...sections], counts: tallyCounts(sections) });
+          } else if (event === 'done' && data) {
+            final = data as DoctorReport;
+            setReport(final);
+          } else if (event === 'error') {
+            throw new Error((data as { error?: string })?.error || 'doctor failed');
+          }
+        }
       }
-      setReport(j);
-      return j;
-    } catch (e) {
-      setErr(errorMessage(e));
-      return null;
+      return final ?? (sections.length ? { t: new Date().toISOString(), sections, counts: tallyCounts(sections) } : null);
+    } catch {
+      // Streaming failed (proxy, older controller, aborted body) — fall back to
+      // the single-shot endpoint so the check still works.
+      try {
+        return await runBatch();
+      } catch (e2) {
+        setErr(errorMessage(e2));
+        return null;
+      }
     } finally {
       setRunning(false);
     }
@@ -208,7 +316,7 @@ export default function DoctorPanel() {
           The booth's-open pitch is the primary content; "Let's go" runs the
           full assessment AND his review together. Stays up through the first
           run so the CTA can show progress. */}
-      {ready && !report && (
+      {ready && !hydrating && !report && (
         <Card title="DJ Doc" sub="booth's open">
           <div className="flex items-start gap-4">
             <BoothBuddy mood="curious" size={52} />
@@ -358,23 +466,39 @@ export default function DoctorPanel() {
                 <p className="text-[15px] leading-[1.65]">{review.summary}</p>
                 {review.priorities && review.priorities.length > 0 && (
                   <ul className="mt-4 flex flex-col gap-3">
-                    {review.priorities.map((p, i) => (
-                      <li key={i} className="border-l-2 border-[color:var(--separator-strong)] pl-3">
-                        <div className="flex items-center gap-2">
-                          <Pill
-                            tone={p.severity === 'high' ? 'accent' : 'ink'}
-                            className={p.severity === 'high' ? 'border-[var(--accent)] bg-[var(--accent)] text-white' : undefined}
-                          >
-                            {p.severity}
-                          </Pill>
-                          <span className="text-[14px] font-bold">{p.title}</span>
-                        </div>
-                        <p className="mt-1 text-[13px] leading-[1.55] text-muted">{p.why}</p>
-                        <p className="mt-1 text-[13px] leading-[1.55]">
-                          <span className="font-bold">Fix:</span> {p.suggestedFix}
-                        </p>
-                      </li>
-                    ))}
+                    {review.priorities.map((p, i) => {
+                      // Only offer the one-click button when DJ Doc's tagged fix
+                      // actually exists in this report's findings.
+                      const fix = p.fixId ? fixById.get(p.fixId) : undefined;
+                      return (
+                        <li key={i} className="border-l-2 border-[color:var(--separator-strong)] pl-3">
+                          <div className="flex items-center gap-2">
+                            <Pill
+                              tone={p.severity === 'low' ? 'ink' : 'accent'}
+                              className={
+                                p.severity === 'high'
+                                  ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
+                                  : undefined
+                              }
+                            >
+                              {p.severity}
+                            </Pill>
+                            <span className="text-[14px] font-bold">{p.title}</span>
+                          </div>
+                          <p className="mt-1 text-[13px] leading-[1.55] text-muted">{p.why}</p>
+                          <p className="mt-1 text-[13px] leading-[1.55]">
+                            <span className="font-bold">Fix:</span> {p.suggestedFix}
+                          </p>
+                          {fix && (
+                            <div className="mt-2">
+                              <Btn sm onClick={() => runFix(fix)} disabled={busyFix === fix.id}>
+                                {busyFix === fix.id ? '…' : fix.label}
+                              </Btn>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
@@ -393,7 +517,7 @@ export default function DoctorPanel() {
         <Card key={sec.name} className="mt-6" title={sec.name}>
           <ul className="flex flex-col divide-y divide-[color:var(--separator-strong)]">
             {sec.findings.map((f, i) => (
-              <li key={i} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2.5 first:pt-0 last:pb-0">
+              <li key={`${sec.name}-${f.label}-${i}`} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2.5 first:pt-0 last:pb-0">
                 <StatusPill status={f.status} />
                 <span className="text-[14px] font-bold">{f.label}</span>
                 {f.detail && <span className="font-mono text-[12px] text-muted">{f.detail}</span>}

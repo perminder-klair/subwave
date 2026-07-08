@@ -28,7 +28,11 @@ function buildUrl(endpoint, params = {}) {
   url.searchParams.set('c', config.navidrome.clientName);
   url.searchParams.set('f', 'json');
   for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+    if (v === undefined || v === null) continue;
+    // Subsonic repeats some params (songId, songIdToAdd, songIndexToRemove) —
+    // arrays append one query param per element.
+    if (Array.isArray(v)) for (const item of v) url.searchParams.append(k, String(item));
+    else url.searchParams.set(k, String(v));
   }
   return url.toString();
 }
@@ -363,6 +367,62 @@ export async function getPlaylist(id) {
   return rejectArchive(r.playlist?.entry || []);
 }
 
+// ---------------------------------------------------------------------------
+// Playlist mutations (admin library UI). Song-id lists ride the query string,
+// so they are chunked to keep URLs well under length limits.
+// ---------------------------------------------------------------------------
+const PLAYLIST_CHUNK = 100;
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+// Creates a playlist and returns it. Extra ids beyond the first chunk are
+// appended via updatePlaylist; playlists are made public so the operator's
+// own Navidrome login sees them, not just the SUB/WAVE service account.
+export async function createPlaylist(name: string, songIds: string[] = []) {
+  const [first = [], ...rest] = chunk(songIds, PLAYLIST_CHUNK);
+  const r = await call('createPlaylist', { name, songId: first });
+  const playlist = r.playlist;
+  if (playlist?.id) {
+    for (const ids of rest) {
+      await call('updatePlaylist', { playlistId: playlist.id, songIdToAdd: ids });
+    }
+    await call('updatePlaylist', { playlistId: playlist.id, public: true });
+  }
+  return playlist;
+}
+
+// Appends songs to an existing playlist. Returns how many ids were sent.
+export async function addToPlaylist(playlistId: string, songIds: string[]) {
+  for (const ids of chunk(songIds, PLAYLIST_CHUNK)) {
+    await call('updatePlaylist', { playlistId, songIdToAdd: ids });
+  }
+  return songIds.length;
+}
+
+// Removes entries by position (Subsonic removes by index, not song id).
+export async function removeFromPlaylist(playlistId: string, indexes: number[]) {
+  await call('updatePlaylist', { playlistId, songIndexToRemove: indexes });
+}
+
+// Rename / visibility. Undefined fields are dropped by buildUrl, so callers
+// can patch a single attribute without touching the rest.
+export async function updatePlaylistMeta(
+  playlistId: string,
+  meta: { name?: string; comment?: string; public?: boolean },
+) {
+  await call('updatePlaylist', {
+    playlistId, name: meta.name, comment: meta.comment, public: meta.public,
+  });
+}
+
+export async function deletePlaylist(id: string) {
+  await call('deletePlaylist', { id });
+}
+
 // Authenticated cover-art URL for a given Subsonic song id. Returns the
 // `getCoverArt` REST endpoint with auth params baked in; bytes are JPEG (or
 // PNG/WebP depending on what Subsonic resampled). The controller proxies
@@ -422,6 +482,7 @@ export async function getCoverArt(id: string, size = 512): Promise<CoverArt | nu
 export async function getAnalyzableRef(songId: string): Promise<AnalyzableRef | null> {
   return { url: getRawStreamUrl(songId) };
 }
+
 
 // The Navidrome/Subsonic music source. Functions stay module-level (internal
 // call structure untouched); this object is just the interface handle the

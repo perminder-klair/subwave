@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import type { ComponentType, ReactNode } from 'react';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import {
@@ -21,6 +21,7 @@ import {
   Smartphone,
   Users,
   Headphones,
+  Plug,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -70,6 +71,7 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'System',
     items: [
       { href: '/admin/stats', id: 'stats', label: 'Stats', icon: BarChart3 },
+      { href: '/admin/connect', id: 'connect', label: 'Connect', icon: Plug },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
     ],
@@ -254,6 +256,58 @@ export default function AdminShell({ children }: AdminShellProps) {
   );
 }
 
+interface DoctorSummary {
+  counts: { ok: number; warn: number; fail: number; skip: number } | null;
+  overall: 'healthy' | 'attention' | 'critical' | null;
+}
+
+// Small health badge on the header's DJ Doc link — the count of failing/warning
+// findings from the last cached assessment (manual run or nightly auto-run), so
+// a degraded station surfaces without the operator opening the panel. Silent
+// when healthy or when no run has been cached yet.
+function DoctorBadge() {
+  const { adminFetch } = useAdminAuth();
+  const [summary, setSummary] = useState<DoctorSummary | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await adminFetch('/doctor/summary');
+        const j = (await r.json().catch(() => null)) as DoctorSummary | null;
+        if (!cancelled) setSummary(j);
+      } catch {
+        /* header badge is best-effort */
+      }
+    };
+    load();
+    const timer = setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [adminFetch]);
+
+  const counts = summary?.counts;
+  if (!counts) return null;
+  const n = counts.fail || counts.warn;
+  if (!n) return null;
+  const critical = counts.fail > 0;
+  return (
+    <span
+      className={`inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] leading-none font-bold ${
+        critical
+          ? 'bg-[var(--accent)] text-white'
+          : 'border border-[var(--accent)] text-[var(--accent)]'
+      }`}
+      title={`${counts.fail} fail · ${counts.warn} warn`}
+      aria-label={`Station health: ${counts.fail} failing, ${counts.warn} warnings`}
+    >
+      {n}
+    </span>
+  );
+}
+
 interface ShellHeaderProps {
   pathname: string | null;
   signedIn: boolean;
@@ -335,6 +389,7 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
           >
             <BoothBuddy mood="onair" size={16} />
             <span className="caption">DJ Doc</span>
+            <DoctorBadge />
           </Link>
           <ThemeSwitcher variant="admin" />
           <Link

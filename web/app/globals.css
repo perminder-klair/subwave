@@ -1213,6 +1213,151 @@ html.lite *::after {
     text-transform: uppercase;
 }
 
+/* Off-register ink plate behind the nameplate — the vermilion plate printed a
+   hair off-register, the way cheap newsprint presses actually drifted. Em
+   offsets so the drift scales with the clamp()ed wordmark. Hovering the
+   nameplate pulls the plate into perfect register — the press operator's
+   micro-adjust — and reduced-motion readers get the settled plate outright. */
+.bs-wordmark-plate {
+    text-shadow: 0.032em 0.026em 0 color-mix(in oklab, var(--accent) 42%, transparent);
+    transition: text-shadow 280ms ease;
+}
+.bs-wordmark-plate:hover {
+    text-shadow: 0 0 0 color-mix(in oklab, var(--accent) 42%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+    .bs-wordmark-plate,
+    .bs-wordmark-plate:hover {
+        text-shadow: none;
+        transition: none;
+    }
+}
+
+/* Slash → disc morph — hovering the nameplate spins the slash away and the
+   station's disc mark (the .bs-dj-glyph / .player-mark vocabulary) drops
+   into the gap already turning. The slash glyph keeps its box (opacity only)
+   so the nameplate never reflows; the disc is absolutely centred over it and
+   em-sized, so the morph scales with the clamp()ed wordmark. The face spins
+   on its own inner element — the outer element owns the scale/fade
+   transition, so the two transforms never fight. */
+.bs-wordmark-slash {
+    position: relative;
+    display: inline-block;
+    /* Hover eases SUB and WAVE apart a touch so the disc gets clear air —
+       symmetric padding keeps the mark optically centred while it spreads. */
+    transition: padding 420ms cubic-bezier(0.34, 1.3, 0.4, 1);
+}
+.bs-wordmark-plate:hover .bs-wordmark-slash {
+    padding: 0 0.09em;
+}
+.bs-wordmark-slash-glyph {
+    display: inline-block;
+    transition:
+        opacity 300ms ease,
+        transform 380ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.bs-wordmark-plate:hover .bs-wordmark-slash-glyph {
+    opacity: 0;
+    transform: rotate(114deg) scale(0.5);
+}
+.bs-wordmark-disc {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0.56em;
+    height: 0.56em;
+    /* -0.28em centres the box; +0.006em drops it onto the caps' optical
+       centre (baseline minus half the measured cap-ink height). */
+    margin: -0.274em 0 0 -0.28em;
+    transform: scale(0.3);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+        opacity 300ms ease,
+        transform 420ms cubic-bezier(0.34, 1.3, 0.4, 1);
+}
+.bs-wordmark-plate:hover .bs-wordmark-disc {
+    opacity: 1;
+    transform: scale(1);
+}
+.bs-wordmark-disc-face {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    border: 1px solid var(--ink);
+    background: repeating-conic-gradient(
+        from 0deg,
+        var(--ink) 0deg 9deg,
+        transparent 9deg 18deg
+    );
+    position: relative;
+    /* Always turning (it's invisible at rest), so the disc arrives mid-spin
+       instead of starting from a standstill. */
+    animation: bs-dj-spin 4s linear infinite;
+}
+.bs-wordmark-disc-face::after {
+    content: "";
+    position: absolute;
+    inset: 33%;
+    background: var(--accent);
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px var(--bg);
+}
+@media (prefers-reduced-motion: reduce) {
+    /* No morph for reduced-motion readers — the slash simply stays put. */
+    .bs-wordmark-disc {
+        display: none;
+    }
+    .bs-wordmark-slash,
+    .bs-wordmark-plate:hover .bs-wordmark-slash {
+        transition: none;
+        padding: 0;
+    }
+    .bs-wordmark-slash-glyph,
+    .bs-wordmark-plate:hover .bs-wordmark-slash-glyph {
+        transition: none;
+        opacity: 1;
+        transform: none;
+    }
+}
+
+/* Motto rule — the line under the nameplate carries the paper's motto (the
+   system's one load-bearing promise) between full-width hairlines, flanked
+   by the ✦ used in the footer's press credit. Replaces the plain .bs-rule
+   in the masthead, so it must keep reading as a rule at a glance. */
+.bs-masthead-motto {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--accent);
+    font-size: 9px;
+}
+.bs-masthead-motto::before,
+.bs-masthead-motto::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--ink);
+}
+.bs-masthead-motto-text {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+@media (max-width: 560px) {
+    .bs-masthead-motto {
+        gap: 8px;
+    }
+    .bs-masthead-motto-text {
+        font-size: 8px;
+        letter-spacing: 0.14em;
+    }
+}
+
 /* Eyebrow — vermilion small-caps section label, sits above each section. */
 .bs-eyebrow {
     font-size: 10px;
@@ -2996,8 +3141,10 @@ html.lite *::after {
 /* Log line */
 .admin-root .log {
     display: grid;
-    grid-template-columns: 64px 96px 1fr;
-    gap: 12px;
+    grid-template-columns: auto 1fr;
+    align-items: baseline;
+    column-gap: 8px;
+    row-gap: 2px;
     font-size: 11px;
     line-height: 1.6;
     padding: 4px 0;
@@ -3007,12 +3154,14 @@ html.lite *::after {
     color: var(--muted);
 }
 .admin-root .log .k {
+    justify-self: start;
     font-size: 9px;
     letter-spacing: 0.22em;
     text-transform: uppercase;
     font-weight: 700;
 }
 .admin-root .log .msg {
+    grid-column: 1 / -1;
     color: var(--ink);
     word-break: break-word;
 }
@@ -3532,7 +3681,8 @@ html.lite *::after {
 .admin-root .lib-colhead,
 .admin-root .lib-row {
     display: grid;
-    grid-template-columns: 44px minmax(0, 1.5fr) minmax(0, 1.3fr) 1fr auto;
+    /* leading 16px column: the row-selection checkbox (add-to-playlist flow) */
+    grid-template-columns: 16px 44px minmax(0, 1.5fr) minmax(0, 1.3fr) 1fr auto;
     gap: 14px; align-items: center;
 }
 .admin-root .lib-colhead { padding: 9px 16px; border-bottom: 1px solid var(--ink); }
@@ -3574,7 +3724,7 @@ html.lite *::after {
 
 @media (max-width: 860px) {
     .admin-root .lib-row,
-    .admin-root .lib-colhead { grid-template-columns: 40px 1fr auto; gap: 12px; }
+    .admin-root .lib-colhead { grid-template-columns: 16px 40px 1fr auto; gap: 12px; }
     .admin-root .lib-row .lib-tags,
     .admin-root .lib-row .lib-album,
     .admin-root .lib-colhead .h-tags,
@@ -4069,6 +4219,79 @@ html.lite *::after {
     min-width: 0;
 }
 
+/* Community-skill card — same newspaper-run column as the station grid, but a
+   text-first entry: title + cadence, the DJ brief, context tags, credit line.
+   Reuses .bs-stations-grid for layout. */
+.bs-skill-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 20px;
+    border-top: 1px solid var(--separator-strong);
+    min-width: 0;
+}
+.bs-skill-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+}
+.bs-skill-name {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: clamp(19px, 2vw, 24px);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    line-height: 1.05;
+}
+.bs-skill-cadence {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.bs-skill-brief {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--muted);
+}
+.bs-skill-tags {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.bs-skill-tag {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border: 1px solid var(--separator-strong);
+    padding: 3px 7px;
+}
+.bs-skill-credit {
+    margin: 2px 0 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.bs-skill-credit-link {
+    font-weight: 700;
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-thickness: 1.5px;
+    text-underline-offset: 2px;
+}
+
 /* Live strip — ON AIR + current track, or Offline / Checking. */
 .bs-station-live {
     display: flex;
@@ -4328,6 +4551,12 @@ html.lite *::after {
 .observatory-root .ss-pace { fill: var(--accent); fill-opacity: 0.22; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .observatory-root .ss-sect { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ink); opacity: 0.35; }
 .observatory-root .ss-intro { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--accent); }
+/* Outro (tail) marker on the pace lane: a cold end is a flat tint to the edge,
+   a fade-out a gradient that visually fades — mirrors what the audio does. */
+.observatory-root .ss-outro { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--muted); background: color-mix(in oklab, var(--ink) 14%, transparent); pointer-events: auto; }
+.observatory-root .ss-outro-fade { background: linear-gradient(90deg, color-mix(in oklab, var(--accent) 26%, transparent), transparent); }
+.observatory-root .ss-swatch-outro { background: color-mix(in oklab, var(--ink) 30%, transparent); }
+.observatory-root .ss-swatch-outro.fade { background: linear-gradient(90deg, var(--accent), transparent); }
 .observatory-root .ss-vox { position: absolute; top: 2px; bottom: 2px; background: var(--accent); opacity: 0.8; }
 .observatory-root .ss-key { position: absolute; top: 0; bottom: 0; }
 .observatory-root .ss-note { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }

@@ -68,9 +68,10 @@ export default function HowTheDjWorks() {
         </p>
         <p>
           How chatty the station is depends on a <strong>frequency</strong> setting the
-          operator chooses: <em>quiet</em>, <em>moderate</em>, or <em>aggressive</em>. A
-          quiet station checks the time every couple of hours and drops the occasional
-          ID; an aggressive one gives you full idents and weather updates through the hour.
+          operator chooses, on a ladder from <em>silent</em> up to <em>aggressive</em>. A
+          silent DJ only speaks when asked; a quiet station checks the time every couple
+          of hours and drops the occasional ID; an aggressive one gives you full idents
+          and weather updates through the hour.
         </p>
       </section>
 

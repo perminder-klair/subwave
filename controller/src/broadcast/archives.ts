@@ -88,6 +88,43 @@ export function openStream(abs: string) {
   return createReadStream(abs);
 }
 
+// Retention sweep — delete whole day directories older than `days`. 0 (the
+// default setting) means keep forever, and callers gate on that before calling.
+// Day-granular on purpose: comparing the YYYY-MM-DD directory name against a
+// cutoff date can never touch the file Liquidsoap currently holds open (today's
+// dir is always inside any positive retention window). `.ndignore` and anything
+// else at the root is untouched, same as clearAll below.
+export async function pruneOlderThan(days: number): Promise<{ removed: number; bytes: number }> {
+  if (!Number.isFinite(days) || days <= 0) return { removed: 0, bytes: 0 };
+  if (!existsSync(ARCHIVE_ROOT)) return { removed: 0, bytes: 0 };
+  const cutoff = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+  let dayDirs: string[] = [];
+  try {
+    dayDirs = (await readdir(ARCHIVE_ROOT)).filter(d => DATE_RE.test(d) && d < cutoff);
+  } catch {
+    return { removed: 0, bytes: 0 };
+  }
+
+  let removed = 0;
+  let bytes = 0;
+  for (const date of dayDirs) {
+    const dir = join(ARCHIVE_ROOT, date);
+    try {
+      for (const f of await readdir(dir)) {
+        if (!HOUR_RE.test(f)) continue;
+        try {
+          const st = await stat(join(dir, f));
+          if (st.isFile()) { removed += 1; bytes += st.size; }
+        } catch {}
+      }
+    } catch {}
+    try {
+      await rm(dir, { recursive: true, force: true });
+    } catch {}
+  }
+  return { removed, bytes };
+}
+
 // Delete every hourly recording under the archive root. Only YYYY-MM-DD day
 // directories are removed — anything else in the tree (notably the `.ndignore`
 // the broadcast entrypoint drops here to keep these mixdowns out of a

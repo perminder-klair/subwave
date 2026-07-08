@@ -225,6 +225,11 @@ services:
       # share-card tags render per-request. Define SITE_URL once in .env and
       # both build-arg and runtime env pick it up.
       - SITE_URL=\${SITE_URL:-}
+      # Google Analytics Measurement ID at RUNTIME (web/lib/ga.ts). Plumbs the
+      # operator's NEXT_PUBLIC_GA_ID from .env into a runtime var, so analytics
+      # turn on with a \`web\` recreate — no image rebuild. The build-arg above
+      # still bakes it for images built with a value.
+      - GA_ID=\${NEXT_PUBLIC_GA_ID:-}
       # Server-side base URL for generateMetadata on the force-dynamic homepage
       # to read the live station name from the controller. Internal compose
       # network name — not exposed to the browser (which uses /api via Caddy).
@@ -347,6 +352,8 @@ services:
       # .env.example "Optional model overrides").
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
+      - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
+      - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but an anonymous HF Hub download is rate-limited and
       # slow. Same var as tts-heavy — set HF_TOKEN=hf_... in your root .env once
       # and both sidecars pick it up.
@@ -556,6 +563,11 @@ services:
       - NODE_ENV=production
       - SUBWAVE_HOMEPAGE=\${SUBWAVE_HOMEPAGE:-player}
       - SITE_URL=\${SITE_URL:-}
+      # Google Analytics Measurement ID at RUNTIME (web/lib/ga.ts). Plumbs the
+      # operator's NEXT_PUBLIC_GA_ID from .env into a runtime var, so analytics
+      # turn on with a \`web\` recreate — no image rebuild. The build-arg still
+      # bakes it for images built with a value.
+      - GA_ID=\${NEXT_PUBLIC_GA_ID:-}
       # Server-side base URL for generateMetadata on the force-dynamic homepage
       # to read the live station name from the controller. Internal compose
       # network name — not exposed to the browser (which uses /api via Caddy).
@@ -660,6 +672,8 @@ services:
       # .env.example "Optional model overrides").
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
+      - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
+      - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but an anonymous HF Hub download is rate-limited and
       # slow. Same var as tts-heavy — set HF_TOKEN=hf_... in your root .env once
       # and both sidecars pick it up.
@@ -922,6 +936,8 @@ services:
       # .env.example "Optional model overrides").
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
+      - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
+      - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but an anonymous HF Hub download is rate-limited and
       # slow. Same var as tts-heavy — set HF_TOKEN=hf_... in your root .env once
       # and both sidecars pick it up.
@@ -1024,7 +1040,9 @@ SITE_URL=
 
 # Web
 # SUBWAVE_HOMEPAGE=player          # or 'landing' for the marketing host
-# NEXT_PUBLIC_GA_ID=
+# NEXT_PUBLIC_GA_ID=               # Google Analytics ID. Applied at RUNTIME
+#                                  # (recreate \`web\`, no rebuild) as well as at
+#                                  # build time. Unset → no analytics.
 
 # Pin the whole stack to a specific published image tag. Every subwave-* image
 # ref resolves \${SUBWAVE_VERSION:-latest}, so unset/removed follows :latest.
@@ -1061,6 +1079,21 @@ SITE_URL=
 # NAVIDROME_USER=
 # NAVIDROME_PASS=
 # MUSIC_LIBRARY_PATH=
+# Local-folder music source (Admin → Settings → Music source → Local folder).
+# Root scanned for audio files. The default (state/music) is already bind-mounted
+# into the controller, broadcast AND analyzer at /var/sub-wave/music, so it needs
+# NO compose changes — just drop files there. Override ONLY if you also bind-mount
+# that path into all three containers at the SAME location (mismatched paths →
+# Liquidsoap can't open the files → silent dead air).
+# MUSIC_DIR=/var/sub-wave/music
+# Plex music source (Admin → Settings → Music source → Plex). Static server URL +
+# X-Plex-Token auth. The URL must be reachable from BOTH the controller and the
+# broadcast container (Liquidsoap fetches the files over curl). PLEX_LIBRARY pins
+# the music library section id (numeric, from /library/sections); blank → the
+# first \`artist\`-type section is auto-discovered.
+# PLEX_URL=http://host.docker.internal:32400
+# PLEX_TOKEN=
+# PLEX_LIBRARY=
 # TTS_SPEED=0.85
 # AUTO_QUEUE_REFRESH_MINUTES=60
 # Convenience only — seeds the News skill's feed on first boot. After that the
@@ -1124,6 +1157,15 @@ SITE_URL=
 #                         # bpm/key, CLAP and Demucs — the real speed lever
 #                         # (cost scales linearly). Raise it if you want vocal
 #                         # ranges detected deeper into each track
+# ANALYZE_CLAP_WINDOWS=3  # how many windows the CLAP "sounds-like" embed
+#                         # averages over (1-3). 3 = start/mid/late (default,
+#                         # best vectors), 1 = leading window only (fastest,
+#                         # the pre-multi-window behaviour). CLAP cost per
+#                         # track scales linearly with this
+# ANALYZE_OUTRO_SECONDS=20 # tail window (seconds) decoded from the END of each
+#                         # complete file for outro analysis (fade-vs-cold
+#                         # ending, tail loudness/tempo — drives the
+#                         # ending-aware crossfade). Pure librosa, cheap
 #
 # Memory ceilings for the model-loading sidecars (OOM containment — keeps a
 # runaway model load from taking down the host's other services). Defaults are
@@ -1139,4 +1181,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version`).
-export const CLI_VERSION = `0.35.0`; // x-release-please-version
+export const CLI_VERSION = `0.38.1`; // x-release-please-version

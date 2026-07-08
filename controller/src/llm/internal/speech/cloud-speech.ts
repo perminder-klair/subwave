@@ -13,6 +13,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
+import { isElevenLabsV3, snapV3Stability } from '../core/pure.js';
 
 // Default TTS model per cloud provider. A model id is provider-specific — an
 // OpenAI id like "gpt-4o-mini-tts" is invalid against ElevenLabs and vice
@@ -24,6 +25,53 @@ const CLOUD_DEFAULT_MODELS: Record<string, string> = {
   openai: 'gpt-4o-mini-tts',
   elevenlabs: 'eleven_flash_v2_5',
 };
+
+// Pure resolution rule for the cloud TTS model a persona will be voiced by,
+// mirroring speak() below plus resolveEngine() in audio/tts.ts: the persona
+// owns the engine when set, otherwise the station defaultEngine speaks; a
+// persona that overrode the provider away from the global one falls back to
+// the new provider's default (openai-compatible has no default so it keeps
+// the global model); a persona voiced by the DEFAULT cloud engine carries no
+// provider override (speakWith only builds cloudOverride for an explicit
+// persona engine === 'cloud'). An unrecognised persona engine string fails
+// closed to '' — resolveEngine would route it to the defaultEngine, but a
+// missing hint is harmless while a wrong one is spoken aloud. Empty string =
+// not voiced by cloud / unresolved — callers treat that as "don't apply
+// model-specific hints". Kept pure and unit-pinned in scripts/llm-pure.test.ts
+// so the "mirror of speak()" claim is testable rather than comment-enforced.
+export function resolveCloudModel(
+  personaTts: { engine?: string; cloudProvider?: string } | null | undefined,
+  cfg: { defaultEngine?: string; provider?: string; model?: string },
+): string {
+  const explicit = personaTts?.engine === 'cloud';
+  if (!explicit && (personaTts?.engine || cfg.defaultEngine !== 'cloud')) return '';
+  const personaProvider = explicit ? personaTts?.cloudProvider : '';
+  if (personaProvider && personaProvider !== cfg.provider) {
+    return CLOUD_DEFAULT_MODELS[personaProvider] || cfg.model || '';
+  }
+  return cfg.model || '';
+}
+
+// The model `persona` actually resolves to at speak() time, or '' when the
+// persona won't be voiced by a usable cloud engine — NOT the raw global model
+// and NOT the persona's provider alone (issue #696). On top of the pure rule
+// above this mirrors resolveEngine()'s key check: an enabled-but-unconfigured
+// cloud engine silently reroutes to a local engine that reads brackets aloud
+// as words, so report no model — and therefore no hint — in that case too.
+// Callers pass this into djSystem() so the DJ prompt layer can gate a hint on
+// what will actually speak.
+export function resolveCloudModelForPersona(persona: any): string {
+  const t: any = settings.get().tts || {};
+  const model = resolveCloudModel(persona?.tts, {
+    defaultEngine: t.defaultEngine,
+    provider: t.cloud?.provider,
+    model: t.cloud?.model,
+  });
+  if (!model) return '';
+  const explicit = persona?.tts?.engine === 'cloud';
+  if (!isConfigured(explicit ? persona?.tts?.cloudProvider || null : null)) return '';
+  return model;
+}
 
 // Speech-rate multiplier limits per provider. A value outside the supported
 // range makes the provider API reject the request, so we clamp before calling.
@@ -71,9 +119,8 @@ function isoCodeFor(name: string): string | null {
 // a pronunciation directive so a non-English script isn't read with English
 // phonetics (issue #558). ElevenLabs has no free-text field — it honours only an
 // ISO `language` code, so the soul can't ride there. openai-compatible servers
-// vary on which fields they accept (the same reason `speed` is skipped for
-// them), so they get no hint. No soul and no language → {} so the bare default
-// path stays byte-identical.
+// vary on which fields they accept, so they get no hint. No soul and no
+// language → {} so the bare default path stays byte-identical.
 function deliveryHint(
   { language, soul }: { language?: string; soul?: string },
   provider: string,
@@ -188,12 +235,40 @@ export async function speak(
   // Speech rate — the per-call speedScale (daypart energy) composes on top of
   // CLOUD_TTS_SPEED / TTS_SPEED, then clamped to the provider's range. Only
   // sent when it differs from default so default stations are unaffected and
-  // providers that ignore the field never see it. Skipped for openai-compatible
-  // — local engines vary on whether they accept `speed`.
+  // providers that ignore the field never see it. openai-compatible servers
+  // get it too (issue: the admin speed slider was silently inert for them):
+  // the common self-hosted /v1/audio/speech servers (Kokoro-FastAPI,
+  // openedai-speech, Chatterbox shims) honour `speed`, the rest ignore the
+  // extra field, and the non-unity guard keeps untouched stations sending
+  // exactly the request they always did.
   const isCompat = c.provider === 'openai-compatible';
-  const speed = isCompat
-    ? 1.0
-    : clampSpeed(config.tts.cloudSpeed * (speedScale != null ? speedScale : 1), c.provider);
+  const speed = clampSpeed(config.tts.cloudSpeed * (speedScale != null ? speedScale : 1), c.provider);
+
+  // ElevenLabs voice_settings — expressive knobs the operator tunes in the
+  // Cloud TTS section of admin → Settings (issue #696). Only spread when the
+  // provider is actually elevenlabs so the openai / openai-compatible request
+  // shape stays byte-identical. The AI SDK's ElevenLabs provider exposes them
+  // as camelCase `voiceSettings.*` on `providerOptions.elevenlabs`.
+  //
+  // Omit the block entirely while the knobs sit at their shipped defaults
+  // (issue #915 review): sending explicit values overrides whatever per-voice
+  // settings the operator saved in ElevenLabs VoiceLab, so an untouched station
+  // must defer to the voice's own settings the way it did before #696. Once any
+  // knob is tuned we send the full set (the API takes voice_settings
+  // all-or-nothing) — with `stability` snapped to eleven_v3's discrete
+  // {0,0.5,1} so a tuned slider can't 400 the call into a Piper fallback.
+  const elevenlabsOpts = c.provider === 'elevenlabs' && !settings.cloudVoiceSettingsAreDefault(c)
+    ? {
+      elevenlabs: {
+        voiceSettings: {
+          stability: isElevenLabsV3(c.model) ? snapV3Stability(c.voiceStability) : c.voiceStability,
+          style: c.voiceStyle,
+          similarityBoost: c.voiceSimilarityBoost,
+          useSpeakerBoost: c.voiceUseSpeakerBoost,
+        },
+      },
+    }
+    : null;
 
   const result = await generateSpeech({
     model: speechModel(c),
@@ -209,6 +284,7 @@ export async function speak(
     // openai-compatible: omit the param entirely and let the server choose —
     // `result.audio.format` below drives the file extension regardless.
     ...(isCompat ? {} : { outputFormat: c.provider === 'elevenlabs' ? 'mp3' : 'wav' }),
+    ...(elevenlabsOpts ? { providerOptions: elevenlabsOpts } : {}),
   });
 
   const fmt = result.audio.format || 'mp3';

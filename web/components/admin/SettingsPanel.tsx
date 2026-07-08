@@ -31,16 +31,17 @@ import { AiFill } from './AiFill';
 import { LocationPicker, type GeocodeResult } from '../LocationPicker';
 import { cn } from '../../lib/cn';
 import ArchivesPanel from './ArchivesPanel';
-import WebhooksPanel from './WebhooksPanel';
 import BackupPanel from './BackupPanel';
+import FestivalsSection from './FestivalsSection';
 import {
   Radio, Palette, Cpu, Mic, Library, Search, Music, AudioLines,
-  Activity, Archive, Webhook, Save, AlertTriangle, Disc3, RefreshCw,
+  Activity, Archive, Save, AlertTriangle, CalendarDays, Disc3, RefreshCw,
 } from 'lucide-react';
 
 const SECTIONS = [
   { id: 'station',  label: 'Station', hint: 'name · location · locale', icon: Radio },
   { id: 'theme',    label: 'Theme', hint: 'station-wide palette', icon: Palette },
+  { id: 'festivals', label: 'Festivals', hint: 'calendar · mood', icon: CalendarDays },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing', icon: Cpu },
   { id: 'music',    label: 'Music source', hint: 'library backend', icon: Disc3 },
   { id: 'tts',      label: 'TTS voice', hint: 'default engine', icon: Mic },
@@ -50,7 +51,6 @@ const SECTIONS = [
   { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers', icon: AudioLines },
   { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz', icon: Activity },
   { id: 'archives', label: 'Archives', hint: 'hourly recordings', icon: Archive },
-  { id: 'webhooks', label: 'Webhooks', hint: 'outbound events', icon: Webhook },
   { id: 'backup',   label: 'Backup', hint: 'export · restore', icon: Save },
   { id: 'danger',   label: 'Danger zone', hint: 'broadcast control', icon: AlertTriangle },
 ] as const;
@@ -121,7 +121,25 @@ interface CloudTtsCfg {
   model: string;
   voice: string;
   baseUrl: string;
+  // ElevenLabs voice_settings (issue #696). All four are read + saved
+  // regardless of provider so switching provider later preserves the
+  // operator's tuning, but the UI + the outbound request only surface them
+  // when provider === 'elevenlabs'.
+  voiceStability: number;
+  voiceStyle: number;
+  voiceSimilarityBoost: number;
+  voiceUseSpeakerBoost: boolean;
 }
+
+// ElevenLabs voice_settings defaults — the single client-side copy, read by
+// both form hydration and the dirty-check. Must mirror DEFAULTS.tts.cloud in
+// controller/src/settings.ts (which itself mirrors ElevenLabs' own baseline).
+const ELEVENLABS_VS_DEFAULTS = {
+  voiceStability: 0.5,
+  voiceStyle: 0,
+  voiceSimilarityBoost: 0.75,
+  voiceUseSpeakerBoost: true,
+} as const;
 
 interface TtsForm {
   defaultEngine: string;
@@ -144,6 +162,7 @@ interface LlmFallbackForm {
   model: string;
   ollamaUrl: string;
   numCtx: number;
+  repeatPenalty: number;
   baseUrl: string;
   reasoning: boolean;
 }
@@ -153,6 +172,7 @@ interface LlmForm {
   model: string;
   ollamaUrl: string;
   numCtx: number;
+  repeatPenalty: number;
   baseUrl: string;
   reasoning: boolean;
   toolChoice: string;
@@ -218,6 +238,7 @@ interface ScrobbleForm {
 interface ArchiveForm {
   enabled: boolean;
   bitrate: string;
+  retentionDays: string;
 }
 
 interface StreamForm {
@@ -291,7 +312,7 @@ interface SettingsData {
     crossfadeDuration?: number;
     maxTrackSeconds?: number;
     minTrackSeconds?: number;
-    archive?: { enabled?: boolean; bitrate?: number };
+    archive?: { enabled?: boolean; bitrate?: number; retentionDays?: number };
     stream?: {
       opusEnabled?: boolean;
       opusBitrate?: number;
@@ -441,9 +462,10 @@ export default function SettingsPanel() {
     } catch { /* non-fatal */ }
   };
 
-  // Deep-link: /admin/settings?section=webhooks opens that rail directly. The
-  // old standalone /admin/{archives,webhooks,backup} routes redirect here, so
-  // existing bookmarks keep working after the move into Settings.
+  // Deep-link: /admin/settings?section=archives opens that rail directly. The
+  // old standalone /admin/{archives,backup} routes redirect here, so existing
+  // bookmarks keep working after the move into Settings. (Webhooks moved on to
+  // its own tab under /admin/connect?tab=webhooks.)
   useEffect(() => {
     const s = new URLSearchParams(window.location.search).get('section');
     if (s && SECTIONS.some(x => x.id === s)) setActiveSection(s as SectionId);
@@ -457,8 +479,9 @@ export default function SettingsPanel() {
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
       maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
       archive: {
-        enabled: v.archive?.enabled ?? true,
+        enabled: v.archive?.enabled ?? false,
         bitrate: String(v.archive?.bitrate ?? 128),
+        retentionDays: String(v.archive?.retentionDays ?? 0),
       },
       stream: {
         opusEnabled: v.stream?.opusEnabled ?? true,
@@ -493,6 +516,10 @@ export default function SettingsPanel() {
           model: v.tts?.cloud?.model ?? '',
           voice: v.tts?.cloud?.voice ?? '',
           baseUrl: v.tts?.cloud?.baseUrl ?? '',
+          voiceStability: typeof v.tts?.cloud?.voiceStability === 'number' ? v.tts.cloud.voiceStability : ELEVENLABS_VS_DEFAULTS.voiceStability,
+          voiceStyle: typeof v.tts?.cloud?.voiceStyle === 'number' ? v.tts.cloud.voiceStyle : ELEVENLABS_VS_DEFAULTS.voiceStyle,
+          voiceSimilarityBoost: typeof v.tts?.cloud?.voiceSimilarityBoost === 'number' ? v.tts.cloud.voiceSimilarityBoost : ELEVENLABS_VS_DEFAULTS.voiceSimilarityBoost,
+          voiceUseSpeakerBoost: typeof v.tts?.cloud?.voiceUseSpeakerBoost === 'boolean' ? v.tts.cloud.voiceUseSpeakerBoost : ELEVENLABS_VS_DEFAULTS.voiceUseSpeakerBoost,
         },
         remote: { url: v.tts?.remote?.url ?? '' },
         // Per-engine voice level (dB). Zero default for all 6 engine ids, then
@@ -526,6 +553,7 @@ export default function SettingsPanel() {
         model: v.llm?.model ?? '',
         ollamaUrl: v.llm?.ollamaUrl ?? '',
         numCtx: typeof v.llm?.numCtx === 'number' ? v.llm.numCtx : 16384,
+        repeatPenalty: typeof v.llm?.repeatPenalty === 'number' ? v.llm.repeatPenalty : 1.15,
         baseUrl: v.llm?.baseUrl ?? '',
         reasoning: !!v.llm?.reasoning,
         toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
@@ -544,6 +572,7 @@ export default function SettingsPanel() {
           model: v.llm?.fallback?.model ?? '',
           ollamaUrl: v.llm?.fallback?.ollamaUrl ?? '',
           numCtx: typeof v.llm?.fallback?.numCtx === 'number' ? v.llm.fallback.numCtx : 16384,
+          repeatPenalty: typeof v.llm?.fallback?.repeatPenalty === 'number' ? v.llm.fallback.repeatPenalty : 1.15,
           baseUrl: v.llm?.fallback?.baseUrl ?? '',
           reasoning: !!v.llm?.fallback?.reasoning,
         },
@@ -688,21 +717,54 @@ export default function SettingsPanel() {
 
   // Multipart upload — adminFetch leaves Content-Type unset so the browser
   // sets the multipart boundary itself. The controller transcodes + levels.
-  const uploadJingle = async (file: File, label: string): Promise<boolean> => {
-    if (busy) return false;
+  // Files upload one request at a time (not one multipart batch) so a big
+  // import doesn't hold 40+ files in memory at once server-side and a single
+  // bad file doesn't sink the rest. `label` only applies when importing a
+  // single file — each file in a batch defaults to its own filename. An
+  // abort via `signal` cancels the in-flight request too; the file it
+  // interrupted counts as skipped, not failed.
+  const uploadJingle = async (
+    files: File[],
+    label: string,
+    opts: { onProgress?: (done: number, total: number) => void; signal?: AbortSignal } = {},
+  ): Promise<JingleImportResult | null> => {
+    if (busy || !files.length) return null;
+    const { onProgress, signal } = opts;
     setBusy(true);
+    const total = files.length;
+    let ok = 0;
+    let aborted = false;
+    const failures: JingleImportFailure[] = [];
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      if (label.trim()) fd.append('label', label.trim());
-      const r = await adminFetch('/jingles/upload', { method: 'POST', body: fd });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      await refresh();
-      notify.ok('jingle imported');
-      return true;
-    } catch (e) { notify.err(`Jingle import failed: ${errorMessage(e)}`); return false; }
-    finally { setBusy(false); }
+      for (const [i, file] of files.entries()) {
+        if (signal?.aborted) { aborted = true; break; }
+        try {
+          const fd = new FormData();
+          fd.append('file', file);
+          if (total === 1 && label.trim()) fd.append('label', label.trim());
+          const r = await adminFetch('/jingles/upload', { method: 'POST', body: fd, signal });
+          const j = (await r.json().catch(() => ({}))) as { error?: string };
+          if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+          ok++;
+        } catch (e) {
+          if (signal?.aborted) { aborted = true; break; }
+          failures.push({ name: file.name, reason: errorMessage(e) });
+        }
+        onProgress?.(i + 1, total);
+      }
+      if (ok) await refresh();
+      if (aborted) {
+        notify.info(`Import stopped — ${ok}/${total} imported`);
+      } else if (total === 1) {
+        if (ok) notify.ok('jingle imported');
+        else notify.err(`Jingle import failed: ${failures[0]?.reason}`);
+      } else if (failures.length === 0) {
+        notify.ok(`${ok} jingles imported`);
+      } else {
+        notify.err(`${ok}/${total} jingles imported · ${failures.length} failed`);
+      }
+      return { ok, total, failures, aborted };
+    } finally { setBusy(false); }
   };
 
   const createSfx = async (): Promise<boolean> => {
@@ -964,12 +1026,51 @@ export default function SettingsPanel() {
                       original default.
                     </div>
                   </div>
+
+                  <div className="field">
+                    <Label>Keep recordings for</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="mono-num w-28"
+                        type="number"
+                        min={0}
+                        max={3650}
+                        step={1}
+                        value={form.archive.retentionDays}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f =>
+                            f
+                              ? { ...f, archive: { ...f.archive, retentionDays: e.target.value } }
+                              : f,
+                          )
+                        }
+                      />
+                      <span className="text-[12px] text-muted">days</span>
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({
+                            archive: { retentionDays: parseInt(form.archive.retentionDays, 10) },
+                          })
+                        }
+                        disabled={busy}
+                      >
+                        Save retention
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      0 = keep forever (the default). With a window set, the hourly cleanup
+                      deletes whole days of recordings once they age past it — at 128 kbps the
+                      archive grows ~1.4 GB per day, so an unbounded archive eventually fills
+                      the disk. Applies live, no restart.
+                    </div>
+                  </div>
                 </div>
               </Card>
             )}
           </>
         )}
-        {activeSection === 'webhooks' && <WebhooksPanel />}
+        {activeSection === 'festivals' && <FestivalsSection />}
         {activeSection === 'backup' && <BackupPanel />}
         {activeSection === 'danger' && (
           <>
@@ -1757,6 +1858,87 @@ function TtsSpeedField({
   );
 }
 
+// ElevenLabs voice_settings — the four expressive knobs their API takes on
+// every request. Ranges match ElevenLabs' native 0..1 (stability, style,
+// similarity_boost) plus the boolean use_speaker_boost. Rendered only when the
+// cloud provider is `elevenlabs` — other providers ignore the fields, so
+// showing them there would be misleading. Design matches TtsGainField /
+// TtsSpeedField exactly (same field class, same 360px cap, same label +
+// tabular readout row) so the block blends into the surrounding form.
+const ELEVENLABS_SLIDER_STEP = 0.01;
+
+function formatPct(v: number): string {
+  return `${Math.round(v * 100)}%`;
+}
+
+function ElevenLabsVoiceSettingsField({
+  form,
+  setForm,
+}: {
+  form: FormState;
+  setForm: FormUpdater;
+}) {
+  const c = form.tts.cloud;
+  const setCloud = (patch: Partial<CloudTtsCfg>) =>
+    setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, ...patch } } }));
+  const slider = (
+    label: string,
+    hint: ReactNode,
+    key: 'voiceStability' | 'voiceStyle' | 'voiceSimilarityBoost',
+  ) => (
+    <div className="field mt-4">
+      <div className="flex items-center justify-between gap-3">
+        <Label>{label}</Label>
+        <span className="font-mono text-[12px] text-ink tabular-nums">{formatPct(c[key])}</span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={ELEVENLABS_SLIDER_STEP}
+        value={c[key]}
+        onChange={(e: ChangeEvent<HTMLInputElement>) => setCloud({ [key]: Number(e.target.value) } as Partial<CloudTtsCfg>)}
+        aria-label={label}
+        className="mt-1.5 w-full max-w-[360px] accent-[var(--accent)]"
+      />
+      <div className="field-hint">{hint}</div>
+    </div>
+  );
+  return (
+    <>
+      {slider(
+        'Stability',
+        <>Lower is more expressive but can wander; higher is steadier but flatter. ElevenLabs default is <code>50%</code>. Note: the <code>eleven_v3</code> model only accepts 0%, 50% or 100% — other values are rounded to the nearest.</>,
+        'voiceStability',
+      )}
+      {slider(
+        'Style exaggeration',
+        <>How much the reference voice’s style is amplified. Higher costs more latency and can hurt stability. ElevenLabs default is <code>0%</code>.</>,
+        'voiceStyle',
+      )}
+      {slider(
+        'Similarity boost',
+        <>How tightly the output tracks the reference voice. ElevenLabs default is <code>75%</code>.</>,
+        'voiceSimilarityBoost',
+      )}
+      <div className="field mt-4">
+        <label className="flex cursor-pointer items-center gap-2 text-[12px] leading-[1.5] text-ink">
+          <input
+            type="checkbox"
+            checked={c.voiceUseSpeakerBoost}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setCloud({ voiceUseSpeakerBoost: e.target.checked })}
+            className="accent-[var(--accent)]"
+          />
+          <span>Speaker boost</span>
+        </label>
+        <div className="field-hint">
+          Sharpens similarity to the reference voice at a small latency cost. On by default.
+        </div>
+      </div>
+    </>
+  );
+}
+
 // Prominent, self-contained "engine not installed" callout with a step-by-step
 // setup guide. Chatterbox and PocketTTS both live in the optional `tts-heavy`
 // sidecar, so the recommended path is identical; only the engine label and the
@@ -1905,6 +2087,10 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
           model: form.tts.cloud.model,
           voice: form.tts.cloud.voice,
           baseUrl: form.tts.cloud.baseUrl,
+          voiceStability: form.tts.cloud.voiceStability,
+          voiceStyle: form.tts.cloud.voiceStyle,
+          voiceSimilarityBoost: form.tts.cloud.voiceSimilarityBoost,
+          voiceUseSpeakerBoost: form.tts.cloud.voiceUseSpeakerBoost,
         },
         remote: { url: form.tts.remote.url },
         // Per-engine voice-level trim. Always sent (server clamps + drops unknown
@@ -1943,7 +2129,16 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     return { ...base, tts: { ...base.tts, defaultEngine: engine } };
   });
 
-  type SavedCloud = { provider?: string; voice?: string; model?: string; baseUrl?: string };
+  type SavedCloud = {
+    provider?: string;
+    voice?: string;
+    model?: string;
+    baseUrl?: string;
+    voiceStability?: number;
+    voiceStyle?: number;
+    voiceSimilarityBoost?: number;
+    voiceUseSpeakerBoost?: boolean;
+  };
   const savedTts: {
     defaultEngine?: string;
     kokoro?: { voice?: string; lang?: string };
@@ -1986,6 +2181,10 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     || (form.tts.cloud.model || '').trim() !== (savedCloud.model || '').trim()
     || (form.tts.cloud.voice || '').trim() !== (savedCloud.voice || '').trim()
     || (form.tts.cloud.baseUrl || '').trim() !== (savedCloud.baseUrl || '').trim()
+    || form.tts.cloud.voiceStability !== (savedCloud.voiceStability ?? ELEVENLABS_VS_DEFAULTS.voiceStability)
+    || form.tts.cloud.voiceStyle !== (savedCloud.voiceStyle ?? ELEVENLABS_VS_DEFAULTS.voiceStyle)
+    || form.tts.cloud.voiceSimilarityBoost !== (savedCloud.voiceSimilarityBoost ?? ELEVENLABS_VS_DEFAULTS.voiceSimilarityBoost)
+    || form.tts.cloud.voiceUseSpeakerBoost !== (savedCloud.voiceUseSpeakerBoost ?? ELEVENLABS_VS_DEFAULTS.voiceUseSpeakerBoost)
     || (form.tts.remote.url || '').trim() !== savedRemoteUrl
     || gainDirty
     || speedDirty;
@@ -2459,6 +2658,9 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             )}
             <TtsGainField engineId="cloud" form={form} setForm={setForm} />
             <TtsSpeedField engineId="cloud" form={form} setForm={setForm} />
+            {form.tts.cloud.provider === 'elevenlabs' && (
+              <ElevenLabsVoiceSettingsField form={form} setForm={setForm} />
+            )}
             {!isCompat && (() => {
               const kv = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
               return <KeyStatus envVar={kv} present={!!data.env?.[kv]} />;
@@ -2522,6 +2724,16 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   cloudProvider={form.tts.cloud.provider}
                   speed={form.tts.speed?.[e] ?? 1}
                   lang={form.kokoroLang || undefined}
+                  // Unsaved ElevenLabs sliders ride along so "Play sample"
+                  // auditions the current knob positions, not the last save.
+                  voiceSettings={e === 'cloud' && form.tts.cloud.provider === 'elevenlabs'
+                    ? {
+                      voiceStability: form.tts.cloud.voiceStability,
+                      voiceStyle: form.tts.cloud.voiceStyle,
+                      voiceSimilarityBoost: form.tts.cloud.voiceSimilarityBoost,
+                      voiceUseSpeakerBoost: form.tts.cloud.voiceUseSpeakerBoost,
+                    }
+                    : undefined}
                   adminFetch={adminFetch}
                 />
                 <div className="field-hint">
@@ -2845,6 +3057,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         model: form.llm.model,
         ollamaUrl: form.llm.ollamaUrl,
         numCtx: form.llm.numCtx,
+        repeatPenalty: form.llm.repeatPenalty,
         baseUrl: form.llm.baseUrl,
         reasoning: form.llm.reasoning,
         toolChoice: form.llm.toolChoice,
@@ -2866,6 +3079,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
           model: form.llm.fallback.model,
           ollamaUrl: form.llm.fallback.ollamaUrl,
           numCtx: form.llm.fallback.numCtx,
+          repeatPenalty: form.llm.fallback.repeatPenalty,
           baseUrl: form.llm.fallback.baseUrl,
           reasoning: form.llm.fallback.reasoning,
           ...(form.llm.fallback.provider === 'openai-compatible' && compatFallbackKeyInput.trim()
@@ -3070,6 +3284,34 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                 >
                   locca on GitHub ↗
                 </a>
+              </div>
+            </div>
+          )}
+
+          {(form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca') && (
+            <div className="field">
+              <Label>Repetition penalty (repeat_penalty)</Label>
+              <Input
+                type="number"
+                min={1}
+                max={2}
+                step={0.05}
+                value={form.llm.repeatPenalty}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, llm: { ...f.llm, repeatPenalty: Number(e.target.value) } }))
+                }
+                placeholder="1.15"
+                className="max-w-[200px]"
+              />
+              <div className="field-hint">
+                Repetition penalty sent to the local server (llama.cpp, vLLM, LM
+                Studio). llama.cpp&apos;s own default is <code>1.0</code> = OFF,
+                which lets the track-picker agent run away repeating a token block
+                and never finish a pick. <strong>1.15</strong> is a sane floor;
+                raise toward 1.25 if a model still loops. Set <code>1.0</code> to
+                disable (e.g. a vLLM server that rejects the{' '}
+                <code>repeat_penalty</code> field — its name there is{' '}
+                <code>repetition_penalty</code>).
               </div>
             </div>
           )}
@@ -3340,6 +3582,29 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   </div>
                   {compatFallbackKeyTest && <KeyTestResult result={compatFallbackKeyTest} />}
                 </>
+              )}
+
+              {(form.llm.fallback.provider === 'openai-compatible' || form.llm.fallback.provider === 'locca') && (
+                <div className="field">
+                  <Label>Repetition penalty (repeat_penalty)</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={2}
+                    step={0.05}
+                    value={form.llm.fallback.repeatPenalty}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, repeatPenalty: Number(e.target.value) } } }))
+                    }
+                    placeholder="1.15"
+                    className="max-w-[200px]"
+                  />
+                  <div className="field-hint">
+                    Repetition penalty for the backup local server. <strong>1.15</strong>{' '}
+                    is a sane floor (llama.cpp&apos;s own default is <code>1.0</code> =
+                    off); set <code>1.0</code> to disable.
+                  </div>
+                </div>
               )}
 
               {LLM_ENV_VARS[form.llm.fallback.provider] && (() => {
@@ -5406,11 +5671,18 @@ function PreviewButton({ path, adminFetch, label = 'Play' }: PreviewButtonProps)
 
 /* ── Jingles ─────────────────────────────────────────────────────────── */
 
+type JingleImportFailure = { name: string; reason: string };
+type JingleImportResult = { ok: number; total: number; failures: JingleImportFailure[]; aborted: boolean };
+
 interface JinglesSectionProps extends SectionProps {
   jingleText: string;
   setJingleText: (s: string) => void;
   createJingle: () => Promise<boolean>;
-  uploadJingle: (file: File, label: string) => Promise<boolean>;
+  uploadJingle: (
+    files: File[],
+    label: string,
+    opts?: { onProgress?: (done: number, total: number) => void; signal?: AbortSignal },
+  ) => Promise<JingleImportResult | null>;
   onDelete: (filename: string | null) => void;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
@@ -5422,16 +5694,35 @@ function JinglesSection({
   const ratioDirty = form.jingleRatio !== String(data.values?.jingleRatio);
   const jingles = data.jingles || [];
   const [modal, setModal] = useState<null | 'create' | 'import'>(null);
-  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importFiles, setImportFiles] = useState<File[]>([]);
   const [importLabel, setImportLabel] = useState('');
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
+  const [importFailures, setImportFailures] = useState<JingleImportFailure[]>([]);
   const importRef = useRef<HTMLInputElement>(null);
+  const importAbort = useRef<AbortController | null>(null);
+  const closeImport = () => { setModal(null); setImportFailures([]); };
   const doImport = async () => {
-    if (!importFile) return;
-    const ok = await uploadJingle(importFile, importLabel);
-    if (ok) {
-      setImportFile(null);
+    if (!importFiles.length) return;
+    const ac = new AbortController();
+    importAbort.current = ac;
+    setImportFailures([]);
+    setImportProgress({ done: 0, total: importFiles.length });
+    const res = await uploadJingle(importFiles, importLabel, {
+      onProgress: (done, total) => setImportProgress({ done, total }),
+      signal: ac.signal,
+    });
+    importAbort.current = null;
+    setImportProgress(null);
+    if (!res) return;
+    // The selection always clears so a retry can't re-upload files that
+    // already made it in; failures stay listed so the operator can re-pick
+    // just those.
+    setImportFiles([]);
+    if (importRef.current) importRef.current.value = '';
+    if (res.failures.length || res.aborted) {
+      setImportFailures(res.failures);
+    } else {
       setImportLabel('');
-      if (importRef.current) importRef.current.value = '';
       setModal(null);
     }
   };
@@ -5566,46 +5857,78 @@ function JinglesSection({
 
       <Modal
         open={modal === 'import'}
-        onOpenChange={(o) => { if (!o) setModal(null); }}
-        title="Import jingle"
-        sub="bring your own mp3 / wav"
+        onOpenChange={(o) => { if (!o && !importProgress) closeImport(); }}
+        title="Import jingles"
+        sub="bring your own mp3 / wav — select one or many"
         footer={
           <>
-            <Btn onClick={() => setModal(null)}>Cancel</Btn>
-            <Btn tone="accent" onClick={doImport} disabled={busy || !importFile}>
-              {busy ? 'Importing…' : 'Import jingle'}
+            {importProgress ? (
+              <Btn onClick={() => importAbort.current?.abort()}>Stop</Btn>
+            ) : (
+              <Btn onClick={closeImport}>Cancel</Btn>
+            )}
+            <Btn tone="accent" onClick={doImport} disabled={busy || !importFiles.length}>
+              {importProgress
+                ? `Importing ${importProgress.done}/${importProgress.total}…`
+                : importFiles.length > 1
+                  ? `Import ${importFiles.length} files`
+                  : 'Import jingle'}
             </Btn>
           </>
         }
       >
         <div className="field">
-          <Label>Audio file</Label>
+          <Label>Audio files</Label>
           <input
             ref={importRef}
             type="file"
+            multiple
             accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFile(e.target.files?.[0] ?? null)}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => {
+              const list = Array.from(e.target.files ?? []);
+              setImportFiles(list);
+              setImportFailures([]);
+              if (list.length > 1) setImportLabel('');
+            }}
             className="hidden"
           />
           <div className="flex flex-wrap items-center gap-2.5">
             <Btn tone="solid" onClick={() => importRef.current?.click()} disabled={busy}>
-              {importFile ? 'Change file…' : 'Choose audio file…'}
+              {importFiles.length ? 'Change files…' : 'Choose audio files…'}
             </Btn>
-            {importFile && (
-              <span className="text-[12px] text-ink">{importFile.name}</span>
+            {importFiles.length === 1 && (
+              <span className="text-[12px] text-ink">{importFiles[0]?.name}</span>
+            )}
+            {importFiles.length > 1 && (
+              <span className="text-[12px] text-ink">{importFiles.length} files selected</span>
             )}
           </div>
           <div className="field-hint">
-            mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB · converted and level-matched on import
+            mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB each · converted and level-matched on import.
+            Selecting multiple files uploads them one at a time and keeps going past any single failure.
           </div>
+          {importProgress && (
+            <div className="field-hint">Uploading {importProgress.done}/{importProgress.total}…</div>
+          )}
+          {importFailures.length > 0 && (
+            <div className="mt-2 text-[12px] text-[var(--danger)]">
+              <div>{importFailures.length} file{importFailures.length === 1 ? '' : 's'} failed — re-select to retry:</div>
+              <ul className="m-0 list-none p-0">
+                {importFailures.map((f, i) => (
+                  <li key={`${f.name}-${i}`} className="truncate">{f.name} — {f.reason}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
         <div className="field mt-3.5">
           <Label>Label (optional)</Label>
           <Input
             value={importLabel}
             maxLength={200}
+            disabled={importFiles.length > 1}
             onChange={(e: ChangeEvent<HTMLInputElement>) => setImportLabel(e.target.value)}
-            placeholder="shown in the list, defaults to the file name"
+            placeholder={importFiles.length > 1 ? 'defaults to each file name' : 'shown in the list, defaults to the file name'}
           />
         </div>
       </Modal>

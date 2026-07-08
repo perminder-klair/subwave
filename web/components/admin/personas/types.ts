@@ -92,3 +92,24 @@ export interface SettingsResponse {
   };
   env?: Record<string, unknown>;
 }
+
+// One entry in the shipped community persona catalog (GET /personas/community).
+// Mirrors the controller's CommunityPersona (personas/community.ts). The
+// catalog is station-agnostic — "already in the roster" is computed client-side
+// by name match, since the panel holds the roster anyway.
+export interface CommunityPersona {
+  slug: string;
+  displayName: string;
+  tagline?: string;
+  soul: string;
+  frequency: 'silent' | 'quiet' | 'moderate' | 'chatty' | 'aggressive';
+  scriptLength: 'one-liner' | 'concise' | 'extended' | 'storyteller';
+  djMode: boolean;
+  humour?: number;
+  localColour?: number;
+  warmth?: number;
+  language?: string;
+  submittedBy?: string;  // GitHub login of the contributor who submitted it
+  dateAdded?: string;    // ISO date (YYYY-MM-DD) it first entered the catalog
+  dateModified?: string; // ISO date (YYYY-MM-DD) of the last catalog change
+}

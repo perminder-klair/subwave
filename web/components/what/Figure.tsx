@@ -9,6 +9,9 @@ interface FigureProps {
   caption?: string;
   label?: string;
   ratio?: '16 / 10' | '9 / 16';
+  /** Intrinsic pixel size of `src` — reserves the box before load (no CLS). */
+  width?: number;
+  height?: number;
 }
 
 // Screenshot slot for the /what feature story. While `src` is empty it renders
@@ -18,7 +21,15 @@ interface FigureProps {
 // Mount-driven stagger: image fades first, caption fades + rises 180 ms
 // behind. Mimics reading order. No scroll trigger — everything settles as the
 // page loads.
-export default function Figure({ src, alt, caption, label, ratio = '16 / 10' }: FigureProps) {
+export default function Figure({
+  src,
+  alt,
+  caption,
+  label,
+  ratio = '16 / 10',
+  width,
+  height,
+}: FigureProps) {
   const aspectClass = ratio === '9 / 16' ? 'aspect-[9/16]' : 'aspect-[16/10]';
   return (
     <figure className="m-0 flex flex-col gap-2">
@@ -26,6 +37,10 @@ export default function Figure({ src, alt, caption, label, ratio = '16 / 10' }: 
         <m.img
           src={src}
           alt={alt || caption || label || ''}
+          width={width}
+          height={height}
+          loading="lazy"
+          decoding="async"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.28, ease: [0.2, 0.7, 0.2, 1] }}

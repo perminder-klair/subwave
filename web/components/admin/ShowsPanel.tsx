@@ -33,12 +33,14 @@ import { V3AlertDialog } from '../ui/alert-dialog';
 import { EditorDialog } from '../ui/editor-dialog';
 import { AiFill } from './AiFill';
 import GenreSuggest from './GenreSuggest';
-import { PersonaPicker, ThemePicker } from './ShowPickers';
+import { PersonaPicker, GuestPersonaPicker, ThemePicker } from './ShowPickers';
 import { cn } from '../../lib/cn';
 
 const NAME_MAX = 60;
 const TOPIC_MAX = 1000;
 const SHOWS_MAX = 64;
+// Mirrors the controller's GUESTS_PER_SHOW cap (settings.ts).
+const GUESTS_MAX = 3;
 
 // Storage keys are 0=Sun..6=Sat (JS getDay); display Mon-first.
 const DAYS = [
@@ -65,6 +67,14 @@ interface Show {
   name: string;
   topic: string;
   personaId: string;
+  /** Guest co-host persona ids (max 3, host excluded). While the show is on
+   *  air the speaker rotation hands some standalone talk breaks (station IDs,
+   *  hourly checks, weather/news segments) to a guest, in their own voice.
+   *  Empty = solo show, exactly today's behaviour. */
+  guestPersonaIds: string[];
+  /** Scripted banter breaks: short multi-voice exchanges between the host and
+   *  guests, aired up to twice an hour. Only meaningful with guests set. */
+  banter: boolean;
   /** '' = Any — the show pins no mood; the autonomous mood (festival >
    *  weather > time of day) applies while it's on air. */
   mood: string;
@@ -100,6 +110,14 @@ interface Show {
   /** Navidrome playlist blocklist — tracks from these playlists are excluded
    *  from the candidate pool regardless of other filters. Empty = no exclusions. */
   excludedPlaylistIds: string[];
+  /** Programme mode: the show airs as a produced episode — intro at the top,
+   *  a planned feature segment mid-hour, a sign-off in the final minutes —
+   *  all driven by the topic brief via a per-episode producer plan. */
+  programme: boolean;
+  /** Optional: pin the feature segment to one skill (e.g. news for a morning
+   *  roundup). Empty = the producer picks per episode. Only used with
+   *  programme on. */
+  segmentSkill: string;
 }
 
 // Decade presets for the era dropdown → fromYear/toYear. 'any' clears the window.
@@ -134,6 +152,15 @@ interface ThemeOption {
   mode?: string;
   description?: string;
   tokens?: Record<string, string>;
+}
+
+/** One entry of the /dj/skills catalogue — the programme feature-segment pin
+ *  only needs the kind + a label; disabled skills are filtered on fetch. */
+interface SkillOption {
+  kind: string;
+  label?: string;
+  name?: string;
+  enabled?: boolean;
 }
 
 interface Persona {
@@ -285,6 +312,7 @@ export default function ShowsPanel() {
   // Theme list for the per-show override dropdown. Public endpoint, no auth
   // needed — same source the player ThemeBootstrap reads.
   const [themes, setThemes] = useState<ThemeOption[]>([]);
+  const [skills, setSkills] = useState<SkillOption[]>([]);
   const [activeThemeId, setActiveThemeId] = useState('');
   // Library genres for the show genre autocomplete. Admin-gated endpoint, so it
   // runs after sign-in; failures are silent (the field still accepts free text).
@@ -379,6 +407,8 @@ export default function ShowsPanel() {
           name: s.name ?? '',
           topic: s.topic ?? '',
           personaId: s.personaId ?? '',
+          guestPersonaIds: Array.isArray(s.guestPersonaIds) ? s.guestPersonaIds : [],
+          banter: s.banter ?? false,
           mood: s.mood ?? '',
           themeId: s.themeId ?? '',
           genre: s.genre ?? '',
@@ -390,6 +420,8 @@ export default function ShowsPanel() {
           playlistIds: Array.isArray(s.playlistIds) ? s.playlistIds : [],
           playlistStrict: s.playlistStrict ?? false,
           excludedPlaylistIds: Array.isArray(s.excludedPlaylistIds) ? s.excludedPlaylistIds : [],
+          programme: s.programme ?? false,
+          segmentSkill: s.segmentSkill ?? '',
         }));
         setForm({ shows, schedule: week });
         // Arm the first valid show as the brush so the grid is paintable at once.
@@ -397,6 +429,23 @@ export default function ShowsPanel() {
         if (firstValid) setBrush(b => b ?? firstValid.id);
       }
     })();
+  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch the skill catalogue once for the programme feature-segment pin.
+  // Admin endpoint, so it waits for sign-in. Failures are silent: the picker
+  // just shows "Producer's choice" with no pin options.
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await adminFetch('/dj/skills');
+        if (!r.ok || cancelled) return;
+        const j = (await r.json()) as { skills?: SkillOption[] };
+        if (Array.isArray(j.skills)) setSkills(j.skills.filter(s => s.enabled !== false));
+      } catch {}
+    })();
+    return () => { cancelled = true; };
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch the theme list once for the per-show override dropdown. Public
@@ -481,10 +530,11 @@ export default function ShowsPanel() {
         ...f,
         shows: [...f.shows, {
           id, name: '', topic: '',
-          personaId: personas[0]?.id || '', mood: '',
+          personaId: personas[0]?.id || '', guestPersonaIds: [], banter: false, mood: '',
           themeId: '', genre: '', fromYear: null, toYear: null, energy: '',
           filtersStrict: false, maxTrackSeconds: null,
           playlistIds: [], playlistStrict: false, excludedPlaylistIds: [],
+          programme: false, segmentSkill: '',
         }],
       };
     });
@@ -671,7 +721,13 @@ export default function ShowsPanel() {
         body: JSON.stringify({
           shows: form.shows.map(s => ({
             id: s.id, name: s.name.trim(), topic: s.topic.trim(),
-            personaId: s.personaId, mood: s.mood,
+            personaId: s.personaId,
+            // Belt-and-suspenders: the host can be switched after guests were
+            // picked, and the server rejects a guest that duplicates the host.
+            guestPersonaIds: (s.guestPersonaIds || []).filter(id => id !== s.personaId),
+            // Banter only means something with guests in the studio.
+            banter: (s.guestPersonaIds?.length ?? 0) > 0 && s.banter,
+            mood: s.mood,
             themeId: s.themeId || '',
             genre: s.genre.trim(), fromYear: s.fromYear, toYear: s.toYear, energy: s.energy || '',
             // Strict only means something with at least one music filter set.
@@ -681,6 +737,9 @@ export default function ShowsPanel() {
             // Strict only means something with at least one playlist pinned.
             playlistStrict: (s.playlistIds?.length ?? 0) > 0 && s.playlistStrict,
             excludedPlaylistIds: s.excludedPlaylistIds || [],
+            programme: s.programme ?? false,
+            // A skill pin only means something in programme mode.
+            segmentSkill: s.programme ? (s.segmentSkill || '') : '',
           })),
           schedule: form.schedule,
         }),
@@ -914,7 +973,12 @@ export default function ShowsPanel() {
             index={i}
             ok={ok}
             hrs={hrs}
-            personaLabel={personaName(s.personaId)}
+            personaLabel={
+              personaName(s.personaId)
+              + ((s.guestPersonaIds?.length ?? 0) > 0
+                ? ` · with ${s.guestPersonaIds.map(personaName).join(' & ')}`
+                : '')
+            }
             onEdit={() => focusShow(i)}
           />
         );
@@ -929,6 +993,7 @@ export default function ShowsPanel() {
           personas={personas}
           moods={moods}
           themes={themes}
+          skills={skills}
           activeThemeId={activeThemeId}
           genres={genres}
           playlists={playlists}
@@ -999,6 +1064,7 @@ interface ShowEditorProps {
   personas: Persona[];
   moods: string[];
   themes: ThemeOption[];
+  skills: SkillOption[];
   activeThemeId: string;
   genres: string[];
   playlists: { id: string; name: string; songCount: number | null }[];
@@ -1018,7 +1084,7 @@ interface ShowEditorProps {
 }
 
 function ShowEditor({
-  show, editorRef, personas, moods, themes, activeThemeId, genres, playlists, apiBase,
+  show, editorRef, personas, moods, themes, skills, activeThemeId, genres, playlists, apiBase,
   adminFetch, minTrackSeconds, allShowsOk, canSave, busy, isNew,
   update, onSave, onClose, onRemove,
 }: ShowEditorProps) {
@@ -1088,9 +1154,99 @@ function ShowEditor({
             <PersonaPicker
               personas={personas}
               value={show.personaId}
-              onChange={id => update({ personaId: id })}
+              onChange={id => update({
+                personaId: id,
+                // The new host can't also sit in the guest chairs.
+                guestPersonaIds: (show.guestPersonaIds || []).filter(g => g !== id),
+              })}
               apiBase={apiBase}
             />
+          </Field>
+
+          {personas.length > 1 && (
+            <Field>
+              <Label>guest co-hosts</Label>
+              <GuestPersonaPicker
+                personas={personas.filter(p => p.id !== show.personaId)}
+                value={show.guestPersonaIds || []}
+                onChange={ids => update({ guestPersonaIds: ids })}
+                apiBase={apiBase}
+                max={GUESTS_MAX}
+              />
+              <span className="field-hint">
+                Optional, up to {GUESTS_MAX}. While this show is on air, guests
+                take some of the talk breaks — station IDs, time checks,
+                weather/news segments — in their own voice. The host still
+                drives the music and the track intros.
+              </span>
+
+              <div className="mt-1 flex items-start gap-3">
+                <div className="pt-0.5">
+                  <Toggle
+                    on={show.banter && (show.guestPersonaIds?.length ?? 0) > 0}
+                    disabled={(show.guestPersonaIds?.length ?? 0) === 0}
+                    onClick={() => update({ banter: !show.banter })}
+                  />
+                </div>
+                <div className="grid gap-0.5">
+                  <Label className={(show.guestPersonaIds?.length ?? 0) === 0 ? 'opacity-40' : undefined}>
+                    Banter breaks
+                  </Label>
+                  <span className="field-hint">
+                    Short scripted exchanges between the host and guests — a few
+                    lines of real back-and-forth, each voice rendered
+                    separately — up to twice an hour depending on the
+                    persona&apos;s talk frequency. Needs at least one guest.
+                  </span>
+                </div>
+              </div>
+            </Field>
+          )}
+
+          <Field>
+            <div className="flex items-start gap-3">
+              <div className="pt-0.5">
+                <Toggle
+                  on={show.programme}
+                  onClick={() => update({ programme: !show.programme })}
+                />
+              </div>
+              <div className="grid gap-0.5">
+                <Label>Programme (produced episode)</Label>
+                <span className="field-hint">
+                  The DJ produces each airing as a coherent episode from the
+                  topic brief: an intro at the top of the show, a planned
+                  feature segment mid-hour, and a sign-off in the closing
+                  minutes — with a fresh angle every episode.
+                </span>
+              </div>
+            </div>
+            {show.programme && (
+              <div className="mt-2 grid gap-1">
+                <Label>feature segment skill</Label>
+                <Select
+                  value={show.segmentSkill || ANY_SENTINEL}
+                  onValueChange={val => update({ segmentSkill: val === ANY_SENTINEL ? '' : val })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value={ANY_SENTINEL}>Producer&apos;s choice</SelectItem>
+                      {skills.map(s => (
+                        <SelectItem key={s.kind} value={s.kind}>{s.label || s.name || s.kind}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <span className="field-hint">
+                  Optional. Pin the mid-hour feature to one skill — e.g. news
+                  for a morning roundup. Producer&apos;s choice lets each
+                  episode&apos;s plan decide.
+                </span>
+              </div>
+            )}
           </Field>
 
           <Field>

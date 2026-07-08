@@ -306,7 +306,20 @@ export default function ConstellationCanvas({
     [],
   );
 
-  // ---- hit testing (linear scan; ~n distance checks, fine at 50k) ----
+  // ---- hit testing (uniform spatial grid; a mousemove checks only the cells
+  // under the pick tolerance instead of every node — a linear scan was fine at
+  // 50k but every pointer move pays it, and the cap now reaches 100k) ----
+  const PICK_CELL = 32; // user-space units; tolerance is ≤ ~36 at min zoom
+  const pickGrid = useMemo(() => {
+    const g = new Map<string, number[]>();
+    lib.tracks.forEach((t, i) => {
+      const k = `${Math.floor(t.x / PICK_CELL)}|${Math.floor(t.y / PICK_CELL)}`;
+      const bucket = g.get(k);
+      if (bucket) bucket.push(i);
+      else g.set(k, [i]);
+    });
+    return g;
+  }, [lib]);
   const pick = useCallback(
     (clientX: number, clientY: number): ObsTrack | null => {
       const r = wrapRef.current!.getBoundingClientRect();
@@ -318,19 +331,29 @@ export default function ConstellationCanvas({
       let best: ObsTrack | null = null;
       let bd = tolUser * tolUser;
       const tracks = lib.tracks;
-      for (let i = 0; i < tracks.length; i++) {
-        const t = tracks[i]!;
-        const dx = t.x - ux;
-        const dy = t.y - uy;
-        const d = dx * dx + dy * dy;
-        if (d < bd) {
-          bd = d;
-          best = t;
+      const gx0 = Math.floor((ux - tolUser) / PICK_CELL);
+      const gx1 = Math.floor((ux + tolUser) / PICK_CELL);
+      const gy0 = Math.floor((uy - tolUser) / PICK_CELL);
+      const gy1 = Math.floor((uy + tolUser) / PICK_CELL);
+      for (let gx = gx0; gx <= gx1; gx++) {
+        for (let gy = gy0; gy <= gy1; gy++) {
+          const cell = pickGrid.get(`${gx}|${gy}`);
+          if (!cell) continue;
+          for (const i of cell) {
+            const t = tracks[i]!;
+            const dx = t.x - ux;
+            const dy = t.y - uy;
+            const d = dx * dx + dy * dy;
+            if (d < bd) {
+              bd = d;
+              best = t;
+            }
+          }
         }
       }
       return best;
     },
-    [lib],
+    [lib, pickGrid],
   );
 
   // ---- pan + zoom ----

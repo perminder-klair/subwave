@@ -259,6 +259,13 @@ then opens a one-file PR adding `controller/src/skills/community/<slug>/SKILL.md
 operator through the normal update path. A skill that carries a `tool.mjs` can't
 be shared this way; use a zip.
 
+The workflow also stamps **provenance** into the frontmatter it writes:
+`submittedBy` (the GitHub login that filed the issue), `dateAdded` (when it first
+entered the catalog), and `dateModified` (each time the PR is refreshed).
+`dateAdded` is preserved across issue edits — only `dateModified` moves — so an
+approved skill keeps its original credit line. The Community modal shows this
+under each entry ("by @who · added … · updated …").
+
 ### Zip export / import
 
 For a direct operator-to-operator handoff, the skill edit sheet has **↓ Export**

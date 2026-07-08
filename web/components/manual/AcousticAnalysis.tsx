@@ -42,8 +42,9 @@ export default function AcousticAnalysis() {
         <p className="bs-eyebrow">THE HEAVY TIER</p>
         <h2>&ldquo;Sounds-like&rdquo; &amp; vocal detection are opt-in.</h2>
         <p>
-          Two richer dimensions need a heavier model stack (CPU PyTorch, ~1.5&nbsp;GB
-          each), so they are <strong>not</strong> in the default analyzer:
+          Two richer dimensions need a heavier model stack (CPU PyTorch — roughly
+          +0.8&nbsp;GB of image over the lean default), so they are <strong>not</strong> in
+          the default analyzer:
         </p>
         <ul className="bs-list">
           <li>

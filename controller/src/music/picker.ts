@@ -9,6 +9,8 @@
 import * as source from './source.js';
 import * as library from './library.js';
 import * as dj from '../llm/dj.js';
+import { nearestId } from '../llm/sdk.js';
+import { logEvent } from '../observability/events.js';
 import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
@@ -66,14 +68,11 @@ function shuffle<T>(arr: T[]): T[] {
 // keeps its random position). An entirely un-analysed library therefore ranks
 // exactly as a plain shuffle — today's behaviour.
 
-// Pull bpm/musical_key for a candidate, from the candidate itself (library
-// sources carry it via slimTrack) or a library lookup (Subsonic sources).
+// Pull bpm/musical_key for a candidate — library.bpmKeyFor prefers the
+// analyzer's numbers over the candidate's own fields (a Subsonic candidate's
+// bpm is Navidrome's ID3-derived value, 0 on un-tagged files; #862).
 function analysisFor(t: any): { bpm: number | null; key: string | null } {
-  if (t && (t.bpm != null || t.musicalKey != null)) {
-    return { bpm: t.bpm ?? null, key: t.musicalKey ?? null };
-  }
-  const rec = t?.id ? library.get(t.id) : null;
-  return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
+  return library.bpmKeyFor(t);
 }
 
 // bpmCompat / keyCompat now live in ./mix.js (single source of truth, shared
@@ -574,6 +573,13 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
         : null,
       candidates: candidates.map(c => {
         const a = analysisFor(c);
+        // Join editorial tags + perceptual analysis from the library store when
+        // the candidate doesn't carry them: Subsonic-sourced candidates (similar,
+        // recent, frequent, starred…) are raw Navidrome children with none of
+        // these fields, so without this join half the pool competed blind on the
+        // criteria PICKER_CRITERIA asks the model to weigh (#862). Same join
+        // summariseRecent below already does.
+        const rec = c.id ? library.get(c.id) : null;
         return {
           id: c.id,
           title: c.title,
@@ -581,8 +587,8 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           album: c.album || null,
           year: c.year || null,
           genre: c.genre || null,
-          moods: c.moods || [],
-          energy: c.energy || null,
+          moods: (Array.isArray(c.moods) && c.moods.length ? c.moods : rec?.moods) || [],
+          energy: c.energy || rec?.energy || null,
           // Measured acoustic facts — omitted (undefined) when un-analysed so
           // the LLM only sees them when they're real.
           bpm: a.bpm ?? undefined,
@@ -590,11 +596,11 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           // Perceptual energy 0..1 (mean pace), decoupled from BPM — lets the
           // pick reason about build/release arcs, not just tempo. Omitted when
           // un-analysed.
-          pace: c.paceMean ?? undefined,
+          pace: c.paceMean ?? rec?.paceMean ?? undefined,
           // Structural-part count over the opening (arrangement complexity).
           // Mirrors the agent picker's `sections` (llm/tools.ts slim) so the
           // shared PICKER_CRITERIA holds for both pick strategies.
-          sections: Array.isArray(c.structure) && c.structure.length ? c.structure.length : undefined,
+          sections: library.sectionCount(c) ?? library.sectionCount(rec) ?? undefined,
           source: c._source || null,
           // Cosine similarity to the current track for the KNN sources
           // (embedding-similar / audio-similar). Omitted for the other sources,
@@ -620,7 +626,19 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     };
   }
 
-  const chosen = candidates.find(c => c.id === pickRaw?.id);
+  let chosen = candidates.find(c => c.id === pickRaw?.id);
+  // Near-miss repair, same as the agent path (#939): small local models can't
+  // reproduce a 22-char nanoid verbatim, so an id 1-3 edits from a real
+  // candidate is that candidate mistranscribed, not a different pick. Free —
+  // no model call — and only runs when the exact match above already missed.
+  if (!chosen && pickRaw?.id) {
+    const fixed = nearestId(pickRaw.id, candidates.map(c => c.id).filter(Boolean));
+    if (fixed) {
+      logEvent('pick.repaired', { agent: 'pool', from: pickRaw.id, to: fixed });
+      queue.log('picker', `pool pick id "${pickRaw.id}" repaired to near-miss match "${fixed}"`);
+      chosen = candidates.find(c => c.id === fixed);
+    }
+  }
   if (!chosen) {
     queue.log(
       'error',

@@ -27,7 +27,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
-import { capabilitiesFor } from './capabilities.js';
+import { capabilitiesFor, appliedRepeatPenalty } from './capabilities.js';
 
 // Memoise built clients so we don't reconstruct a provider on every call.
 // Keyed by a signature that changes whenever provider/model/key changes, so a
@@ -88,6 +88,84 @@ export function noThinkFetch(url: any, init: any, baseFetch: any = fetch) {
   return baseFetch(url, init);
 }
 
+// Fetch wrapper for the openai-compatible / locca (llama.cpp / vLLM / LM Studio)
+// path. The AI SDK's openai provider has no first-class field for these knobs,
+// and it validates providerOptions against its own schema — so anything not in
+// that schema is dropped. We inject them straight into the JSON request body
+// instead (servers ignore keys they don't recognise, same bet the existing
+// chat_template_kwargs injection already makes):
+//   • repeat_penalty — llama.cpp's own default is 1.0 (OFF), so the operator's
+//     configured repetition floor is otherwise never applied and the tool-loop
+//     agent can run away repeating a token block (gist quirk #2). This is the
+//     ONLY path that carries it to the agent/object calls, which never pass
+//     repeat_penalty through providerOptions. `repeat_penalty` is llama.cpp's
+//     param name (vLLM's is `repetition_penalty`); to opt out, set
+//     llm.repeatPenalty to 1.0. We never clobber a value already on the body.
+//   • reasoning off → enable_thinking:false PLUS reasoning_format. Gemma-4's
+//     chat template pre-seeds an empty <|channel|>thought block even with
+//     enable_thinking:false, and with reasoning_format unset (defaults to none)
+//     llama.cpp routes that thought to `content`, so it leaks into the visible
+//     script and reaches TTS. reasoning_format:"deepseek" routes it to
+//     reasoning_content, which the SDK surfaces as a reasoning part, not text
+//     (gist quirk #4). GLM-family models (Zhipu/Z.ai — including the GLM
+//     Coding Plan's api.z.ai/api/coding/paas/v4 endpoint) ignore
+//     enable_thinking entirely and read a DIFFERENT, top-level `thinking.type`
+//     field instead, so their thinking never actually turned off via the
+//     knobs above alone — the hidden chain-of-thought burned through
+//     maxOutputTokens/step budgets before a forced tool call could land,
+//     surfacing as multi-minute calls or "agent did not call the done tool
+//     before stopping". Send it alongside the others — an unrecognised field
+//     is silently ignored by servers that don't define it, same bet as the
+//     other body-injection knobs here.
+//   • parallel_tool_calls:false on tool-bearing requests — absent, llama.cpp
+//     resolves it from the chat template's capability default, which is true
+//     for Gemma-4-family templates; the model then emits several tool calls in
+//     one turn and the peg-gemma4 parser 500s on call #2, failing the whole
+//     pick/segment attempt (issue #940). The agent design is one call per step
+//     (gated discovery, COMMIT_AFTER_STEPS=1), so forcing max one call matches
+//     intent everywhere. Only sent when tools are present — strict servers
+//     reject the field on tool-less requests.
+//
+// `forceNoThink` suppresses thinking on THIS instance even when the operator
+// left reasoning on: the forced-tool structured-output legs (picker done-tool,
+// objectViaToolCall) run no-think so a reasoning model doesn't burn its whole
+// output budget thinking and then truncate mid-<think> (→ NoObjectGeneratedError
+// on every pick) or fail to emit the forced tool. Unlike Anthropic/DeepSeek
+// (per-call providerOptions) and OpenRouter (construction-time reasoning), the
+// only no-think lever these self-hosted servers have is this body injection, so
+// forceNoThink has to be honoured HERE — a distinct no-think model instance is
+// built for the picker legs (see languageModel's bodyNoThink). Without it a
+// reasoning-on locca/openai-compatible model failed schema validation on picks
+// and looped </think> at handoffs (the free-text signoff path, issue #914).
+export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoThink = false) {
+  const penalty = appliedRepeatPenalty(cfg);
+  const noThink = forceNoThink || cfg?.reasoning !== true;
+  return (url: any, init: any) => {
+    if (init?.body && typeof init.body === 'string') {
+      try {
+        const body = JSON.parse(init.body);
+        if (penalty != null && body.repeat_penalty === undefined) {
+          body.repeat_penalty = penalty;
+        }
+        if (noThink) {
+          body.chat_template_kwargs = {
+            ...(body.chat_template_kwargs || {}),
+            enable_thinking: false,
+          };
+          if (body.reasoning_format === undefined) body.reasoning_format = 'deepseek';
+          if (body.thinking === undefined) body.thinking = { type: 'disabled' };
+        }
+        if (Array.isArray(body.tools) && body.tools.length > 0 &&
+            body.parallel_tool_calls === undefined) {
+          body.parallel_tool_calls = false;
+        }
+        init = { ...init, body: JSON.stringify(body) };
+      } catch { /* not JSON — leave the request untouched */ }
+    }
+    return baseFetch(url, init);
+  };
+}
+
 // Ollama server URL — from settings (admin UI), falling back to the config
 // default when the settings field is left blank.
 export function ollamaBaseUrl(cfg: any): string {
@@ -129,15 +207,14 @@ export const DEFAULT_REQUESTY_BASE_URL = 'https://router.requesty.ai/v1';
 // Build a LanguageModel for any self-hosted OpenAI-compatible server (llama.cpp,
 // vLLM, LM Studio, locca). `.chat()` pins /v1/chat/completions — these servers
 // don't implement the Responses API the default `provider(id)` would target.
-// Most accept any non-empty key, so fall back to a placeholder. Reasoning off →
-// wrap fetch to force chat_template_kwargs.enable_thinking=false.
-function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: string) {
-  // Reasoning off → force enable_thinking=false (noThinkFetch) THEN capture;
-  // reasoning on → capture only. debugFetch is the inner transport in both
-  // cases, so what's recorded is the body exactly as sent (post no-think).
-  const fetchImpl = cfg.reasoning
-    ? debugFetch
-    : (url: any, init: any) => noThinkFetch(url, init, debugFetch);
+// Most accept any non-empty key, so fall back to a placeholder. The fetch
+// wrapper injects the body-only knobs (repeat_penalty, and — reasoning off —
+// enable_thinking:false + reasoning_format); see openAICompatibleFetch.
+function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: string, forceNoThink = false) {
+  // debugFetch is the inner transport, so what's recorded is the body exactly
+  // as sent (post-injection). forceNoThink builds the picker's no-think variant
+  // (see languageModel) — thinking suppressed even with operator reasoning on.
+  const fetchImpl = openAICompatibleFetch(cfg, debugFetch, forceNoThink);
   const provider = createOpenAI({
     baseURL,
     apiKey: cfg.apiKey || 'unused',
@@ -165,13 +242,18 @@ export function resolveModelId(cfg: any): string {
 export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolean } = {}) {
   const id = resolveModelId(cfg);
   const baseUrlSig = cfg.provider === 'locca' ? loccaBaseUrl(cfg) : (cfg.baseUrl || '');
-  // Construction-time no-think: only providers whose reasoning is set at build
-  // time (OpenRouter) need a distinct reasoning-disabled instance for forced-tool
-  // legs; everyone else suppresses per-call via providerOptions, so the same
-  // cached model serves both. Keyed into the sig so the two variants don't collide.
-  const constructionNoThink = opts.forceNoThink === true
-    && capabilitiesFor(cfg.provider).reasoningConstructionOnly === true;
-  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${constructionNoThink ? 'nt1' : 'nt0'}`;
+  // Construction-time no-think: two provider families can't suppress thinking
+  // per-call, so a forced-tool leg needs its own reasoning-disabled INSTANCE.
+  //   - OpenRouter (reasoningConstructionOnly): reasoning is fixed at model build.
+  //   - openai-compatible / locca (samplingViaBody): no-think rides the request
+  //     BODY via openAICompatibleFetch, bound at construction — so the picker's
+  //     no-think variant must be a separate instance whose wrapper forces it.
+  // Everyone else suppresses per-call via providerOptions, so the same cached
+  // model serves both. Keyed into the sig so the variants don't collide.
+  const caps = capabilitiesFor(cfg.provider);
+  const constructionNoThink = opts.forceNoThink === true && caps.reasoningConstructionOnly === true;
+  const bodyNoThink = opts.forceNoThink === true && caps.samplingViaBody === true;
+  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;
@@ -189,14 +271,14 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       break;
     }
     case 'openai-compatible': {
-      model = openAICompatibleModel(cfg, id, cfg.baseUrl, 'openai-compatible');
+      model = openAICompatibleModel(cfg, id, cfg.baseUrl, 'openai-compatible', bodyNoThink);
       break;
     }
     case 'locca': {
       // First-class locca: an openai-compatible llama.cpp server with a sane
       // default base URL (host.docker.internal:8080) so the operator doesn't
       // hand-type a URL. Same transport as openai-compatible, incl. no-think.
-      model = openAICompatibleModel(cfg, id, loccaBaseUrl(cfg), 'locca');
+      model = openAICompatibleModel(cfg, id, loccaBaseUrl(cfg), 'locca', bodyNoThink);
       break;
     }
     case 'google': {
