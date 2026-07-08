@@ -700,42 +700,50 @@ export default function SettingsPanel() {
   // Files upload one request at a time (not one multipart batch) so a big
   // import doesn't hold 40+ files in memory at once server-side and a single
   // bad file doesn't sink the rest. `label` only applies when importing a
-  // single file — each file in a batch defaults to its own filename.
+  // single file — each file in a batch defaults to its own filename. An
+  // abort via `signal` cancels the in-flight request too; the file it
+  // interrupted counts as skipped, not failed.
   const uploadJingle = async (
     files: File[],
     label: string,
-    onProgress?: (done: number, total: number) => void,
-  ): Promise<boolean> => {
-    if (busy || !files.length) return false;
+    opts: { onProgress?: (done: number, total: number) => void; signal?: AbortSignal } = {},
+  ): Promise<JingleImportResult | null> => {
+    if (busy || !files.length) return null;
+    const { onProgress, signal } = opts;
     setBusy(true);
     const total = files.length;
     let ok = 0;
-    const failures: string[] = [];
+    let aborted = false;
+    const failures: JingleImportFailure[] = [];
     try {
       for (const [i, file] of files.entries()) {
+        if (signal?.aborted) { aborted = true; break; }
         try {
           const fd = new FormData();
           fd.append('file', file);
           if (total === 1 && label.trim()) fd.append('label', label.trim());
-          const r = await adminFetch('/jingles/upload', { method: 'POST', body: fd });
+          const r = await adminFetch('/jingles/upload', { method: 'POST', body: fd, signal });
           const j = (await r.json().catch(() => ({}))) as { error?: string };
           if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
           ok++;
         } catch (e) {
-          failures.push(`${file.name}: ${errorMessage(e)}`);
+          if (signal?.aborted) { aborted = true; break; }
+          failures.push({ name: file.name, reason: errorMessage(e) });
         }
         onProgress?.(i + 1, total);
       }
-      await refresh();
-      if (total === 1) {
+      if (ok) await refresh();
+      if (aborted) {
+        notify.info(`Import stopped — ${ok}/${total} imported`);
+      } else if (total === 1) {
         if (ok) notify.ok('jingle imported');
-        else notify.err(`Jingle import failed: ${failures[0]}`);
+        else notify.err(`Jingle import failed: ${failures[0]?.reason}`);
       } else if (failures.length === 0) {
         notify.ok(`${ok} jingles imported`);
       } else {
         notify.err(`${ok}/${total} jingles imported · ${failures.length} failed`);
       }
-      return ok > 0;
+      return { ok, total, failures, aborted };
     } finally { setBusy(false); }
   };
 
@@ -5520,6 +5528,9 @@ function PreviewButton({ path, adminFetch, label = 'Play' }: PreviewButtonProps)
 
 /* ── Jingles ─────────────────────────────────────────────────────────── */
 
+type JingleImportFailure = { name: string; reason: string };
+type JingleImportResult = { ok: number; total: number; failures: JingleImportFailure[]; aborted: boolean };
+
 interface JinglesSectionProps extends SectionProps {
   jingleText: string;
   setJingleText: (s: string) => void;
@@ -5527,8 +5538,8 @@ interface JinglesSectionProps extends SectionProps {
   uploadJingle: (
     files: File[],
     label: string,
-    onProgress?: (done: number, total: number) => void,
-  ) => Promise<boolean>;
+    opts?: { onProgress?: (done: number, total: number) => void; signal?: AbortSignal },
+  ) => Promise<JingleImportResult | null>;
   onDelete: (filename: string | null) => void;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
@@ -5543,16 +5554,32 @@ function JinglesSection({
   const [importFiles, setImportFiles] = useState<File[]>([]);
   const [importLabel, setImportLabel] = useState('');
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
+  const [importFailures, setImportFailures] = useState<JingleImportFailure[]>([]);
   const importRef = useRef<HTMLInputElement>(null);
+  const importAbort = useRef<AbortController | null>(null);
+  const closeImport = () => { setModal(null); setImportFailures([]); };
   const doImport = async () => {
     if (!importFiles.length) return;
+    const ac = new AbortController();
+    importAbort.current = ac;
+    setImportFailures([]);
     setImportProgress({ done: 0, total: importFiles.length });
-    const ok = await uploadJingle(importFiles, importLabel, (done, total) => setImportProgress({ done, total }));
+    const res = await uploadJingle(importFiles, importLabel, {
+      onProgress: (done, total) => setImportProgress({ done, total }),
+      signal: ac.signal,
+    });
+    importAbort.current = null;
     setImportProgress(null);
-    if (ok) {
-      setImportFiles([]);
+    if (!res) return;
+    // The selection always clears so a retry can't re-upload files that
+    // already made it in; failures stay listed so the operator can re-pick
+    // just those.
+    setImportFiles([]);
+    if (importRef.current) importRef.current.value = '';
+    if (res.failures.length || res.aborted) {
+      setImportFailures(res.failures);
+    } else {
       setImportLabel('');
-      if (importRef.current) importRef.current.value = '';
       setModal(null);
     }
   };
@@ -5687,12 +5714,16 @@ function JinglesSection({
 
       <Modal
         open={modal === 'import'}
-        onOpenChange={(o) => { if (!o) setModal(null); }}
+        onOpenChange={(o) => { if (!o && !importProgress) closeImport(); }}
         title="Import jingles"
         sub="bring your own mp3 / wav — select one or many"
         footer={
           <>
-            <Btn onClick={() => setModal(null)}>Cancel</Btn>
+            {importProgress ? (
+              <Btn onClick={() => importAbort.current?.abort()}>Stop</Btn>
+            ) : (
+              <Btn onClick={closeImport}>Cancel</Btn>
+            )}
             <Btn tone="accent" onClick={doImport} disabled={busy || !importFiles.length}>
               {importProgress
                 ? `Importing ${importProgress.done}/${importProgress.total}…`
@@ -5710,7 +5741,12 @@ function JinglesSection({
             type="file"
             multiple
             accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFiles(Array.from(e.target.files ?? []))}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => {
+              const list = Array.from(e.target.files ?? []);
+              setImportFiles(list);
+              setImportFailures([]);
+              if (list.length > 1) setImportLabel('');
+            }}
             className="hidden"
           />
           <div className="flex flex-wrap items-center gap-2.5">
@@ -5730,6 +5766,16 @@ function JinglesSection({
           </div>
           {importProgress && (
             <div className="field-hint">Uploading {importProgress.done}/{importProgress.total}…</div>
+          )}
+          {importFailures.length > 0 && (
+            <div className="mt-2 text-[12px] text-[var(--danger)]">
+              <div>{importFailures.length} file{importFailures.length === 1 ? '' : 's'} failed — re-select to retry:</div>
+              <ul className="m-0 list-none p-0">
+                {importFailures.map((f, i) => (
+                  <li key={`${f.name}-${i}`} className="truncate">{f.name} — {f.reason}</li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
         <div className="field mt-3.5">
