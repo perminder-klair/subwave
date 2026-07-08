@@ -3681,7 +3681,8 @@ html.lite *::after {
 .admin-root .lib-colhead,
 .admin-root .lib-row {
     display: grid;
-    grid-template-columns: 44px minmax(0, 1.5fr) minmax(0, 1.3fr) 1fr auto;
+    /* leading 16px column: the row-selection checkbox (add-to-playlist flow) */
+    grid-template-columns: 16px 44px minmax(0, 1.5fr) minmax(0, 1.3fr) 1fr auto;
     gap: 14px; align-items: center;
 }
 .admin-root .lib-colhead { padding: 9px 16px; border-bottom: 1px solid var(--ink); }
@@ -3723,7 +3724,7 @@ html.lite *::after {
 
 @media (max-width: 860px) {
     .admin-root .lib-row,
-    .admin-root .lib-colhead { grid-template-columns: 40px 1fr auto; gap: 12px; }
+    .admin-root .lib-colhead { grid-template-columns: 16px 40px 1fr auto; gap: 12px; }
     .admin-root .lib-row .lib-tags,
     .admin-root .lib-row .lib-album,
     .admin-root .lib-colhead .h-tags,

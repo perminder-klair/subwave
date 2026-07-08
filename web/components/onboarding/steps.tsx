@@ -107,7 +107,10 @@ export function NavidromeStep({ w }: { w: WizardController }) {
             }
           />
         </Field>
-        <Field label="Username">
+        <Field
+          label="Username"
+          hint="tip: a dedicated Navidrome user that can only access the libraries you want on air keeps audiobooks and seasonal collections off the stream"
+        >
           <TextInput
             value={w.data.navidrome.user}
             autoComplete="username"

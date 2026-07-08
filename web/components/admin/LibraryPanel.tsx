@@ -21,7 +21,7 @@
 import type { ChangeEvent, FormEvent, ReactNode } from 'react';
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Search, RotateCcw, Sparkles, RefreshCw, ListPlus, X, Pencil,
+  Search, RotateCcw, Sparkles, RefreshCw, ListPlus, ListMusic, X, Pencil,
 } from 'lucide-react';
 import { useAdminAuth, ADMIN_API_URL } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
@@ -35,6 +35,8 @@ import { Card, Btn, Eyebrow, Pill, Seg } from './ui';
 import { cn } from '../../lib/cn';
 import TaggingPanel, { num } from './LibraryTaggingPanel';
 import type { Coverage, TaggerState, LibraryStatsLite, Batch, BudgetMode, RescanOpts, TagSteps } from './LibraryTaggingPanel';
+import LibraryPlaylistsTab from './LibraryPlaylistsTab';
+import type { PlaylistSummary } from './LibraryPlaylistsTab';
 
 // ---------------------------------------------------------------------------
 // types
@@ -87,7 +89,7 @@ interface SettingsResponse {
   budget?: { mode: BudgetMode };
 }
 
-type Tab = 'recent' | 'browse' | 'search' | 'untagged';
+type Tab = 'recent' | 'browse' | 'search' | 'untagged' | 'playlists';
 type Sort = 'artist' | 'title' | 'year' | 'taggedAt' | 'bpm' | 'loudness' | 'pace';
 type Energy = 'any' | 'low' | 'medium' | 'high';
 type Vocal = 'any' | 'instrumental' | 'vocal';
@@ -188,6 +190,13 @@ export default function LibraryPanel() {
   // recent state
   const [recent, setRecent] = useState<Track[] | null>(null);
   const [recentLoading, setRecentLoading] = useState(false);
+
+  // playlist state — row selection (any track tab) + the Navidrome playlist
+  // list shared by the add-to-playlist bar and the Playlists tab.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [playlists, setPlaylists] = useState<PlaylistSummary[] | null>(null);
+  const [playlistsLoading, setPlaylistsLoading] = useState(false);
+  const [plBusy, setPlBusy] = useState(false);
 
   // -----------------------------------------------------------------------
   // polling — coverage (60 s) + tagger status (3 s while running, 10 s idle)
@@ -386,6 +395,89 @@ export default function LibraryPanel() {
     if (tab !== 'recent' || !ready) return;
     if (recent === null) loadRecent();
   }, [tab, ready, recent, loadRecent]);
+
+  // -----------------------------------------------------------------------
+  // playlists — list fetch, row selection, add-to-playlist
+  // -----------------------------------------------------------------------
+  const loadPlaylists = useCallback(async () => {
+    if (!ready) return;
+    setPlaylistsLoading(true);
+    try {
+      const r = await adminFetch('/playlists');
+      const j = await r.json().catch(() => ({})) as { playlists?: PlaylistSummary[]; error?: string };
+      if (!r.ok) throw new Error(j.error || `playlists failed (${r.status})`);
+      setPlaylists(j.playlists || []);
+    } catch (err) {
+      notify.err(errorMessage(err));
+      setPlaylists([]);
+    } finally {
+      setPlaylistsLoading(false);
+    }
+  }, [adminFetch, ready]);
+
+  // Selection is per-view: switching tabs drops it (ids from another tab would
+  // be invisible, and "Add 12" with 9 off-screen rows is a foot-gun).
+  useEffect(() => { setSelected(new Set()); }, [tab]);
+
+  useEffect(() => {
+    if (tab === 'playlists' && ready) loadPlaylists();
+  }, [tab, ready, loadPlaylists]);
+
+  // The add-bar's dropdown needs the playlist list the first time a selection
+  // appears on a track tab — fetch lazily, once.
+  useEffect(() => {
+    if (selected.size > 0 && playlists === null && ready) loadPlaylists();
+  }, [selected.size, playlists, ready, loadPlaylists]);
+
+  const toggleSelect = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAllRows = (rows: Track[]) => {
+    setSelected(prev => {
+      const all = rows.length > 0 && rows.every(r => prev.has(r.id));
+      const next = new Set(prev);
+      if (all) rows.forEach(r => next.delete(r.id));
+      else rows.forEach(r => next.add(r.id));
+      return next;
+    });
+  };
+
+  const addSelectedToPlaylist = async (target: { playlistId?: string; name?: string }) => {
+    const songIds = Array.from(selected);
+    if (songIds.length === 0) return;
+    setPlBusy(true);
+    try {
+      const r = target.playlistId
+        ? await adminFetch(`/playlists/${encodeURIComponent(target.playlistId)}/tracks`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ songIds }),
+          })
+        : await adminFetch('/playlists', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: target.name, songIds }),
+          });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `add to playlist failed (${r.status})`);
+      const plName = target.name
+        || playlists?.find(p => p.id === target.playlistId)?.name
+        || 'playlist';
+      notify.ok(`added ${songIds.length} track${songIds.length === 1 ? '' : 's'} to “${plName}”`);
+      setSelected(new Set());
+      loadPlaylists();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setPlBusy(false);
+    }
+  };
 
   // -----------------------------------------------------------------------
   // row actions
@@ -779,6 +871,7 @@ export default function LibraryPanel() {
     browse: coverage?.tagged ?? libStats?.total ?? null,
     untagged: remaining,
     recent: recent?.length ?? null,
+    playlists: playlists?.length ?? null,
   };
 
   const tableRows: Track[] =
@@ -887,7 +980,28 @@ export default function LibraryPanel() {
         </Card>
       )}
 
+      {/* add-to-playlist bar — appears when rows are selected on a track tab */}
+      {tab !== 'playlists' && selected.size > 0 && (
+        <AddToPlaylistBar
+          count={selected.size}
+          playlists={playlists}
+          busy={plBusy}
+          onAdd={addSelectedToPlaylist}
+          onClear={() => setSelected(new Set())}
+        />
+      )}
+
+      {tab === 'playlists' && (
+        <LibraryPlaylistsTab
+          playlists={playlists}
+          loading={playlistsLoading}
+          onRefresh={loadPlaylists}
+          adminFetch={adminFetch}
+        />
+      )}
+
       {/* track list */}
+      {tab !== 'playlists' && (
       <Card
         title={
           tab === 'browse' ? 'Tracks' :
@@ -930,8 +1044,12 @@ export default function LibraryPanel() {
           onEdit={onEditTrack}
           onSaveManual={saveManualTag}
           onCancelEdit={() => setEditingId(null)}
+          selected={selected}
+          onToggleSelect={toggleSelect}
+          onToggleAll={toggleAllRows}
         />
       </Card>
+      )}
 
       {tab === 'browse' && browse && browse.total > PAGE_SIZE && (
         <div className="flex items-center justify-between text-[11px] text-muted">
@@ -963,13 +1081,14 @@ export default function LibraryPanel() {
 function Tabs({ tab, setTab, counts }: {
   tab: Tab;
   setTab: (t: Tab) => void;
-  counts: { browse: number | null; untagged: number | null; recent: number | null };
+  counts: { browse: number | null; untagged: number | null; recent: number | null; playlists: number | null };
 }) {
   const items: { id: Tab; name: string; hint: string; badge: number | null }[] = [
     { id: 'recent', name: 'Recently added', hint: 'newest first', badge: counts.recent },
     { id: 'browse', name: 'Browse', hint: 'tagged index', badge: counts.browse },
     { id: 'search', name: 'Search', hint: 'navidrome', badge: null },
     { id: 'untagged', name: 'Untagged', hint: 'needs tags', badge: counts.untagged },
+    { id: 'playlists', name: 'Playlists', hint: 'navidrome', badge: counts.playlists },
   ];
   return (
     <div className="lib-tabs">
@@ -1171,6 +1290,9 @@ interface TrackTableProps {
   onEdit: (t: Track) => void;
   onSaveManual: (t: Track, moods: string[], energy: string | null, applyToAlbum: boolean) => void;
   onCancelEdit: () => void;
+  selected: Set<string>;
+  onToggleSelect: (id: string) => void;
+  onToggleAll: (rows: Track[]) => void;
 }
 
 function TrackTable(p: TrackTableProps) {
@@ -1188,9 +1310,19 @@ function TrackTable(p: TrackTableProps) {
     );
   }
 
+  const allSelected = p.rows.length > 0 && p.rows.every(t => p.selected.has(t.id));
+
   return (
     <div>
       <div className="lib-colhead">
+        <span>
+          <input
+            type="checkbox"
+            checked={allSelected}
+            onChange={() => p.onToggleAll(p.rows)}
+            aria-label={allSelected ? 'deselect all tracks' : 'select all tracks'}
+          />
+        </span>
         <span />
         <span>title</span>
         <span className="h-tags">mood · energy</span>
@@ -1203,6 +1335,12 @@ function TrackTable(p: TrackTableProps) {
         return (
           <Fragment key={t.id}>
           <div className={cn('lib-row', p.flashId === t.id && 'flash')}>
+            <input
+              type="checkbox"
+              checked={p.selected.has(t.id)}
+              onChange={() => p.onToggleSelect(t.id)}
+              aria-label={`select ${t.title || 'track'}`}
+            />
             <Thumb track={t} />
             <div className="min-w-0">
               <div className="lib-title">{t.title || '—'}</div>
@@ -1347,5 +1485,62 @@ function ManualTagEditor(props: {
         <Btn sm onClick={props.onCancel} disabled={busy}>Cancel</Btn>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AddToPlaylistBar — shown while rows are selected on any track tab. Adds the
+// selection to an existing Navidrome playlist or creates a new one; both go
+// through the controller's /playlists routes (Subsonic createPlaylist /
+// updatePlaylist under the hood).
+// ---------------------------------------------------------------------------
+function AddToPlaylistBar({ count, playlists, busy, onAdd, onClear }: {
+  count: number;
+  playlists: PlaylistSummary[] | null;
+  busy: boolean;
+  onAdd: (target: { playlistId?: string; name?: string }) => void;
+  onClear: () => void;
+}) {
+  const [target, setTarget] = useState<string>('__new');
+  const [name, setName] = useState('');
+  const creating = target === '__new';
+  const canAdd = creating ? !!name.trim() : true;
+
+  return (
+    <Card bodyClass="!py-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-[12px] font-bold text-ink">
+          {count} track{count === 1 ? '' : 's'} selected
+        </span>
+        <Select value={target} onValueChange={setTarget}>
+          <SelectTrigger className="min-w-[180px]"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__new">New playlist…</SelectItem>
+            {(playlists || []).map(p => (
+              <SelectItem key={p.id} value={p.id}>
+                {p.name} · {p.songCount}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {creating && (
+          <Input
+            placeholder="playlist name"
+            className="w-48"
+            value={name}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setName(e.target.value)}
+          />
+        )}
+        <Btn
+          sm
+          tone="accent"
+          disabled={busy || !canAdd}
+          onClick={() => onAdd(creating ? { name: name.trim() } : { playlistId: target })}
+        >
+          <ListMusic size={12} /> {busy ? 'Adding…' : creating ? 'Create playlist' : 'Add to playlist'}
+        </Btn>
+        <Btn sm onClick={onClear} disabled={busy}>Clear selection</Btn>
+      </div>
+    </Card>
   );
 }
