@@ -125,22 +125,15 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
     candidates,
   }, null, 2);
 
-  // Constrain the pick to the actual candidate ids. On a local model (llama.cpp
-  // via openai-compatible / locca) this becomes a grammar so the model can only
-  // emit a real id — closing the "agent returned unknown id" hole. On providers
-  // that don't enforce the schema at decode time, Zod still rejects an invalid
-  // id, so the caller's fallback fires instead of a bogus track. Empty pool →
-  // plain string (z.enum needs ≥1 literal); pickViaPool never calls with [].
-  const candidateIds = [
-    ...new Set(
-      (candidates || [])
-        .map((c: any) => c?.id)
-        .filter((id: any): id is string => typeof id === 'string' && id.length > 0),
-    ),
-  ];
-  const idSchema = candidateIds.length
-    ? z.enum(candidateIds as [string, ...string[]]).describe('the exact id of one candidate')
-    : z.string().describe('the exact id of one candidate');
+  // The id is a plain string, NOT z.enum(candidateIds), deliberately (#939):
+  // the tool-strategy providers this path was meant to protect (llama.cpp via
+  // openai-compatible / locca, ollama) deliver the schema as forced-tool
+  // ARGUMENTS, which llama.cpp does not grammar-constrain — so the enum never
+  // reached the decoder, and its only effect was a hard Zod reject on the 2-3
+  // char id corruptions small local models produce, killing the pick before
+  // pickViaPool's nearestId repair could run. Validation lives at the call
+  // site instead: exact match → near-miss repair → first-candidate fallback.
+  const idSchema = z.string().describe('the exact id of one candidate');
 
   // Transition effects on the pool path too: the queue's applyMixTransition
   // validates/strips whatever any pick strategy asks for, so a DJ-mode persona

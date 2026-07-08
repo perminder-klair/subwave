@@ -550,10 +550,10 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   // The agent returned an id that isn't in the candidate set it was shown.
   // Two-stage salvage before giving up on the run (both observed live):
   //   1. Near-miss repair — the model transcribed a REAL id imperfectly
-  //      (glm-5.1 dropped the final character of a 22-char nanoid it had
-  //      picked from its own tool results). nearestId only accepts a single
-  //      unambiguous prefix / edit-distance-1 match, so this can't misfire
-  //      onto a different track. Free — no model call.
+  //      (glm-5.1 dropped the final character of a 22-char nanoid; small
+  //      local models corrupt 2-3 chars at a time, #939). nearestId only
+  //      accepts an unambiguous prefix / clear-winner edit-distance match,
+  //      so this can't misfire onto a different track. Free — no model call.
   //   2. Corrective re-pick — the model fabricated an id outright (gpt-5-mini
   //      after an empty tool result) while its `seen` map held real
   //      candidates. One djObject call constrained to those ids (grammar-
@@ -894,9 +894,10 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     });
 
     let song = object?.id ? extras.seen.get(object.id) : null;
-    // Near-miss repair, same as the pick path: a single unambiguous prefix /
-    // edit-distance-1 match against the run's own candidates rescues an id the
-    // model transcribed imperfectly. No re-pick stage here — a request that
+    // Near-miss repair, same as the pick path: an unambiguous prefix /
+    // clear-winner edit-distance match against the run's own candidates
+    // rescues an id the model transcribed imperfectly (#939). No re-pick
+    // stage here — a request that
     // can't resolve should fall to the caller's stateless matcher cascade,
     // which understands the listener's actual text.
     if (!song && object?.id && extras.seen.size) {
