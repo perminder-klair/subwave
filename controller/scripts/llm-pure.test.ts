@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { generateText, APICallError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { stripThinking, truncationError, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId } from '../src/llm/internal/core/pure.js';
+import { stripThinking, truncationError, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, snapV3Stability } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
 import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
@@ -20,7 +20,6 @@ import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStr
 import { lengthMode, lengthPhrase } from '../src/llm/internal/prompts/system.js';
 import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
 import { resolveCloudModel } from '../src/llm/internal/speech/cloud-speech.js';
-import { isElevenLabsV3 } from '../src/llm/internal/prompts/system.js';
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -915,6 +914,25 @@ async function main() {
     assert.equal(isElevenLabsV3('eleven_ttv_v3'), false);
     assert.equal(isElevenLabsV3('gpt-4o-mini-tts'), false);
     assert.equal(isElevenLabsV3(''), false);
+  });
+
+  console.log('snapV3Stability (eleven_v3 discrete-stability guard):');
+  await test('leaves the three allowed rungs untouched', () => {
+    assert.equal(snapV3Stability(0), 0);
+    assert.equal(snapV3Stability(0.5), 0.5);
+    assert.equal(snapV3Stability(1), 1);
+  });
+  await test('snaps arbitrary values to the nearest rung, ties to 0.5', () => {
+    assert.equal(snapV3Stability(0.1), 0);
+    assert.equal(snapV3Stability(0.3), 0.5);
+    assert.equal(snapV3Stability(0.42), 0.5);
+    assert.equal(snapV3Stability(0.9), 1);
+    assert.equal(snapV3Stability(0.25), 0.5); // equidistant 0/0.5 -> 0.5
+    assert.equal(snapV3Stability(0.75), 0.5); // equidistant 0.5/1 -> 0.5
+  });
+  await test('non-finite falls back to the Natural default', () => {
+    assert.equal(snapV3Stability(NaN), 0.5);
+    assert.equal(snapV3Stability(undefined as any), 0.5);
   });
 
   console.log(failures === 0 ? '\nAll llm-pure tests passed.' : `\n${failures} test(s) FAILED.`);

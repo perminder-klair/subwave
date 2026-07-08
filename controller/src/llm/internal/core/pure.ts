@@ -487,3 +487,30 @@ export function nearestId(id: string, candidateIds: Iterable<string>): string | 
   if (!best || bestDist > cap) return null;
   return secondDist - bestDist >= NEAREST_ID_MARGIN ? best : null;
 }
+
+// ---------------------------------------------------------------------------
+// ElevenLabs model-family helpers
+// ---------------------------------------------------------------------------
+
+// True for ElevenLabs' eleven_v3* family (v3, v3_preview, …). v3 renders
+// bracketed audio tags ([laughs]/[sighs]) as expressive cues and — unlike the
+// v2 families — accepts only a discrete `stability` (see snapV3Stability). Lives
+// here (not the prompt layer) so both djSystem's tag hint and cloud-speech's
+// stability snap share one rule without a prompts→speech import cycle. Pure +
+// unit-pinned in scripts/llm-pure.test.ts.
+export function isElevenLabsV3(model: string): boolean {
+  return /^eleven[_-]?v3/i.test(model || '');
+}
+
+// eleven_v3 only accepts stability ∈ {0, 0.5, 1}; any other value 400s the
+// request, dropping the segment to a local engine that reads v3 audio tags
+// aloud as words (issue #915 review). Snap an arbitrary [0,1] slider value to
+// the nearest allowed rung — ties round to 0.5 (v3's "Natural" default).
+export function snapV3Stability(v: number): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0.5;
+  return [0.5, 0, 1].reduce(
+    (best, r) => (Math.abs(r - n) < Math.abs(best - n) ? r : best),
+    0.5,
+  );
+}

@@ -665,6 +665,20 @@ function clamp01(n: number): number {
   return n;
 }
 
+// True when the four ElevenLabs voice_settings knobs (issue #696) all sit at
+// their shipped defaults, i.e. the operator never tuned them. cloud-speech uses
+// this to OMIT the voice_settings block in that case so ElevenLabs defers to the
+// voice's own VoiceLab-saved settings, instead of forcing these literals onto
+// every call (issue #915 review). Compared against DEFAULTS so there's a single
+// source of truth for the default values.
+export function cloudVoiceSettingsAreDefault(c: any): boolean {
+  const d = DEFAULTS.tts.cloud;
+  return c?.voiceStability === d.voiceStability
+    && c?.voiceStyle === d.voiceStyle
+    && c?.voiceSimilarityBoost === d.voiceSimilarityBoost
+    && c?.voiceUseSpeakerBoost === d.voiceUseSpeakerBoost;
+}
+
 // Coerce a stored/per-show max-track-length to a clean integer SECOND count.
 // `allowNull` distinguishes the two callers: the station default has no "unset"
 // state (missing → 0 = off), whereas a per-show value uses null to mean "inherit

@@ -4,6 +4,7 @@
 
 import * as settings from '../../../settings.js';
 import { resolveCloudModelForPersona } from '../speech/cloud-speech.js';
+import { isElevenLabsV3 } from '../core/pure.js';
 
 // Paralinguistic tags Chatterbox renders as actual non-verbal sounds. Every
 // other engine (piper, kokoro, cloud) reads `[laugh]` aloud as the word
@@ -24,11 +25,6 @@ const CHATTERBOX_TAG_HINT =
 // is needed for either engine.
 const ELEVENLABS_V3_TAG_HINT =
   '\n\nYou may sparingly insert non-verbal audio cues in square brackets: [laughs], [sighs], [whispers], [excited]. Use them only where genuinely natural — at most one per segment, and never as filler.';
-
-// Exported for scripts/llm-pure.test.ts.
-export function isElevenLabsV3(model: string): boolean {
-  return /^eleven[_-]?v3/i.test(model || '');
-}
 
 // `persona` overrides the on-air persona — used by the persona-handoff
 // generators (generateSignoff / generateHandoffGreeting) to render the sign-off

@@ -13,6 +13,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
+import { isElevenLabsV3, snapV3Stability } from '../core/pure.js';
 
 // Default TTS model per cloud provider. A model id is provider-specific — an
 // OpenAI id like "gpt-4o-mini-tts" is invalid against ElevenLabs and vice
@@ -248,11 +249,19 @@ export async function speak(
   // provider is actually elevenlabs so the openai / openai-compatible request
   // shape stays byte-identical. The AI SDK's ElevenLabs provider exposes them
   // as camelCase `voiceSettings.*` on `providerOptions.elevenlabs`.
-  const elevenlabsOpts = c.provider === 'elevenlabs'
+  //
+  // Omit the block entirely while the knobs sit at their shipped defaults
+  // (issue #915 review): sending explicit values overrides whatever per-voice
+  // settings the operator saved in ElevenLabs VoiceLab, so an untouched station
+  // must defer to the voice's own settings the way it did before #696. Once any
+  // knob is tuned we send the full set (the API takes voice_settings
+  // all-or-nothing) — with `stability` snapped to eleven_v3's discrete
+  // {0,0.5,1} so a tuned slider can't 400 the call into a Piper fallback.
+  const elevenlabsOpts = c.provider === 'elevenlabs' && !settings.cloudVoiceSettingsAreDefault(c)
     ? {
       elevenlabs: {
         voiceSettings: {
-          stability: c.voiceStability,
+          stability: isElevenLabsV3(c.model) ? snapV3Stability(c.voiceStability) : c.voiceStability,
           style: c.voiceStyle,
           similarityBoost: c.voiceSimilarityBoost,
           useSpeakerBoost: c.voiceUseSpeakerBoost,

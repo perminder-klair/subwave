@@ -1849,7 +1849,7 @@ function ElevenLabsVoiceSettingsField({
     <>
       {slider(
         'Stability',
-        <>Lower is more expressive but can wander; higher is steadier but flatter. ElevenLabs default is <code>50%</code>. Note: the <code>eleven_v3</code> model only accepts 0%, 50% or 100% — other values fail on that model.</>,
+        <>Lower is more expressive but can wander; higher is steadier but flatter. ElevenLabs default is <code>50%</code>. Note: the <code>eleven_v3</code> model only accepts 0%, 50% or 100% — other values are rounded to the nearest.</>,
         'voiceStability',
       )}
       {slider(
