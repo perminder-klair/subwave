@@ -22,7 +22,7 @@ import * as journey from '../music/journey.js';
 import * as dj from '../llm/dj.js';
 import { energyForDaypart } from '../context.js';
 import { defineAgent } from '../llm/agent.js';
-import { djObject, nearestId, nullableFromModel } from '../llm/sdk.js';
+import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
 import { buildPickerTools } from '../llm/tools.js';
 import { recordPick } from '../llm/log.js';
 import * as budget from './dj-budget.js';
@@ -163,18 +163,19 @@ export function runActive(): boolean {
   return !!(runState && runState.remaining > 0);
 }
 
+// Plain .nullable() fields, deliberately — GLM's malformed spellings of
+// "nothing" (the string "null", an omitted key, a double-JSON-encoded object)
+// are repaired by the modelTolerant wrapper in pickSchema() below, at the
+// OBJECT level. Do not wrap individual fields in a preprocess: a per-field
+// pipe drops that field from the tool inputSchema's `required` array (the AI
+// SDK renders Zod with io:'input'), which invites every provider to omit it —
+// see modelTolerant's comment in core/pure.ts.
 export const PICK_SCHEMA = z.object({
   id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
   reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just note what makes THIS pick a fresh step (new artist, a shift in energy/era/texture), not a vibe label you would recycle pick after pick (e.g. "new artist, lifts the energy", never a repeated "mellow reflective step")'),
-  // nullableFromModel: a nullable field the model can also just OMIT
-  // entirely, or double-encode as a JSON string, when there's nothing to say
-  // — see the comment on nullableFromModel itself (core/pure.ts).
-  say: nullableFromModel(z.string()).describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). Never state a clock time unless the event message tells you when the link airs — then use exactly that time. When the event says stay silent, set this to null'),
+  say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). Never state a clock time unless the event message tells you when the link airs — then use exactly that time. When the event says stay silent, set this to null'),
   // Transition effects (only honoured when the system prompt offers them — persona djMode, see settings.effectsActive).
-  // nullableFromModel: GLM observed sending the STRING "null" for a nullable
-  // enum field, which satisfies neither the enum nor the null branch of a
-  // plain .nullable() and fails validation outright — coerce it.
-  transition: nullableFromModel(z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop'])).describe('transition treatment for this pick: "blend" — spectral handover: your pick and the track before it trade the spectrum in complementary bands across a long crossfade so they feel like ONE continuous piece; reserve it for an exceptionally locked pair (near-identical tempo, close key) — a plain crossfade already handles an ordinary same-lane pick, so this should be an occasional call, not your default. "sweep" — the track playing before your pick sinks under a slowly closing filter while your pick rises clean; choose it for a real gear-change (big jump in energy, tempo, or mood). "washout" — THIS pick dissolves into a pulsing echo tail as it ENDS, ringing out into whatever follows; choose it to close a chapter (end of a themed run, before a talk break, or out of a dreamy track). "dissolve" — the track playing before your pick melts into a diffuse ambient wash as your pick rises clean through it; the SMOOTH way across a clash (sweep is the dramatic way) — choose it for a tempo/mood mismatch you want to hide rather than announce. "chop" — the track playing before your pick is cut rhythmically on its own beat, stabs thinning out as your pick rises through the gaps; the PERCUSSIVE way across a clash — choose it to jump energy UP on a beat-driven track (a drop, a takeover moment), never out of something ambient. "loop" — THIS pick\'s last bar is caught in a tempo-synced loop as it ENDS, repeating hypnotically under the next track before it cuts away; choose it to leave a groove-driven track with intent — a great riff, a locked drum pattern, the end of a rhythmic run (it needs the track\'s measured tempo; the station drops it otherwise). "normal" or null for a plain crossfade'),
+  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop']).nullable().describe('transition treatment for this pick: "blend" — spectral handover: your pick and the track before it trade the spectrum in complementary bands across a long crossfade so they feel like ONE continuous piece; reserve it for an exceptionally locked pair (near-identical tempo, close key) — a plain crossfade already handles an ordinary same-lane pick, so this should be an occasional call, not your default. "sweep" — the track playing before your pick sinks under a slowly closing filter while your pick rises clean; choose it for a real gear-change (big jump in energy, tempo, or mood). "washout" — THIS pick dissolves into a pulsing echo tail as it ENDS, ringing out into whatever follows; choose it to close a chapter (end of a themed run, before a talk break, or out of a dreamy track). "dissolve" — the track playing before your pick melts into a diffuse ambient wash as your pick rises clean through it; the SMOOTH way across a clash (sweep is the dramatic way) — choose it for a tempo/mood mismatch you want to hide rather than announce. "chop" — the track playing before your pick is cut rhythmically on its own beat, stabs thinning out as your pick rises through the gaps; the PERCUSSIVE way across a clash — choose it to jump energy UP on a beat-driven track (a drop, a takeover moment), never out of something ambient. "loop" — THIS pick\'s last bar is caught in a tempo-synced loop as it ENDS, repeating hypnotically under the next track before it cuts away; choose it to leave a groove-driven track with intent — a great riff, a locked drum pattern, the end of a rhythmic run (it needs the track\'s measured tempo; the station drops it otherwise). "normal" or null for a plain crossfade'),
 });
 
 // Same shape, transition coaching stripped. Zod field descriptions travel to
@@ -184,7 +185,7 @@ export const PICK_SCHEMA = z.object({
 // the LLM log showed effects that could never air. The enum stays identical
 // (validation must not depend on persona state); only the description flips.
 export const PICK_SCHEMA_NO_FX = PICK_SCHEMA.extend({
-  transition: nullableFromModel(z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop'])).describe('always set to null — transition effects are not available for this persona'),
+  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop']).nullable().describe('always set to null — transition effects are not available for this persona'),
 });
 
 // The live pick schema, resolved per run: the transition coaching follows the
@@ -193,11 +194,22 @@ export const PICK_SCHEMA_NO_FX = PICK_SCHEMA.extend({
 // persona stretched to 4-6 sentence links on the pool path (generateLink gets
 // lengthPhrase in its prompt) but snapped back to the consts' hard-coded "one
 // or two sentences" whenever the default-on agent picker was doing the talking.
-export function pickSchema() {
+// The plain (un-wrapped) object — for callers that still need to .extend()
+// (repickFromSeen pins `id` to the run's own candidate set). Extend THIS,
+// then re-wrap with modelTolerant; a ZodPreprocess pipe has no .extend.
+function pickSchemaBase() {
   const base = settings.effectsActive() ? PICK_SCHEMA : PICK_SCHEMA_NO_FX;
   return base.extend({
-    say: nullableFromModel(z.string()).describe(`when the latest event message says to write a spoken link, set this to ${dj.lengthPhrase('link')} of natural speech in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). Never state a clock time unless the event message tells you when the link airs — then use exactly that time. When the event says stay silent, set this to null`),
+    say: z.string().nullable().describe(`when the latest event message says to write a spoken link, set this to ${dj.lengthPhrase('link')} of natural speech in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). Never state a clock time unless the event message tells you when the link airs — then use exactly that time. When the event says stay silent, set this to null`),
   });
+}
+
+export function pickSchema() {
+  // modelTolerant repairs GLM's malformed nullable spellings ("null"-the-
+  // string, an omitted key) at the object level, on every parse path (done-
+  // tool args, text salvage) — the wire schema stays identical to the plain
+  // object's, all fields still required. See core/pure.ts.
+  return modelTolerant(pickSchemaBase());
 }
 
 // Resolved per run, like pickSchema: the intro length follows the on-air
@@ -488,9 +500,9 @@ async function enqueuePick(
 async function repickFromSeen({ seen, badId, wantLink }: { seen: Map<string, any>; badId: string | null; wantLink: boolean }) {
   const ids = [...seen.keys()];
   if (ids.length === 0) return null;
-  const schema = pickSchema().extend({
+  const schema = modelTolerant(pickSchemaBase().extend({
     id: z.enum(ids as [string, ...string[]]).describe('the exact id of one candidate'),
-  });
+  }));
   try {
     return await djObject({
       system: pickSystem(),
