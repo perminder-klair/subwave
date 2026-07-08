@@ -582,6 +582,17 @@ export async function removeFromPlaylist(playlistId: string, indexes: number[]) 
   await call('updatePlaylist', { playlistId, songIndexToRemove: indexes });
 }
 
+// Rename / visibility. Undefined fields are dropped by buildUrl, so callers
+// can patch a single attribute without touching the rest.
+export async function updatePlaylistMeta(
+  playlistId: string,
+  meta: { name?: string; comment?: string; public?: boolean },
+) {
+  await call('updatePlaylist', {
+    playlistId, name: meta.name, comment: meta.comment, public: meta.public,
+  });
+}
+
 export async function deletePlaylist(id: string) {
   await call('deletePlaylist', { id });
 }

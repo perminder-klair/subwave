@@ -81,6 +81,23 @@ router.post('/playlists/:id/tracks', requireAdmin, async (req, res) => {
   }
 });
 
+// PATCH /playlists/:id — { name?, public? } → rename / visibility.
+router.patch('/playlists/:id', requireAdmin, async (req, res) => {
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : undefined;
+  const isPublic = typeof req.body?.public === 'boolean' ? req.body.public : undefined;
+  if (name === undefined && isPublic === undefined) {
+    return res.status(400).json({ error: 'nothing to update — send name and/or public' });
+  }
+  if (name !== undefined && !name) return res.status(400).json({ error: 'name cannot be empty' });
+  try {
+    await subsonic.updatePlaylistMeta(req.params.id, { name, public: isPublic });
+    res.json({ ok: true });
+  } catch (err: any) {
+    queue.log('error', `playlist update failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE /playlists/:id/tracks — { indexes } → remove by position.
 router.delete('/playlists/:id/tracks', requireAdmin, async (req, res) => {
   const indexes = Array.isArray(req.body?.indexes)

@@ -6,9 +6,11 @@
 // by POSITION (Subsonic's updatePlaylist semantics), so every mutation
 // refetches the entry list before the next removal can be issued.
 
+import type { ChangeEvent } from 'react';
 import { useCallback, useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, RefreshCw, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { notify, errorMessage } from '../../lib/notify';
+import { Input } from '../ui/input';
 import { Card, Btn } from './ui';
 import { cn } from '../../lib/cn';
 
@@ -79,6 +81,13 @@ export default function LibraryPlaylistsTab({
   const [entries, setEntries] = useState<PlaylistEntry[] | null>(null);
   const [entriesLoading, setEntriesLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  // create-empty-playlist row (header "New playlist" button toggles it)
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState('');
+  // inline per-playlist editor — name + visibility
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editPublic, setEditPublic] = useState(true);
 
   const loadEntries = useCallback(async (id: string) => {
     setEntriesLoading(true);
@@ -122,6 +131,58 @@ export default function LibraryPlaylistsTab({
     }
   };
 
+  const createPlaylist = async () => {
+    const name = newName.trim();
+    if (!name) return;
+    setBusy(true);
+    try {
+      const r = await adminFetch('/playlists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, songIds: [] }),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `create failed (${r.status})`);
+      notify.ok(`created “${name}” — select tracks in any tab to fill it`);
+      setCreating(false);
+      setNewName('');
+      onRefresh();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startEdit = (pl: PlaylistSummary) => {
+    if (editId === pl.id) { setEditId(null); return; }
+    setEditId(pl.id);
+    setEditName(pl.name);
+    setEditPublic(pl.public);
+  };
+
+  const saveEdit = async (pl: PlaylistSummary) => {
+    const name = editName.trim();
+    if (!name) return;
+    setBusy(true);
+    try {
+      const r = await adminFetch(`/playlists/${encodeURIComponent(pl.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, public: editPublic }),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `update failed (${r.status})`);
+      notify.ok(`updated “${name}”`);
+      setEditId(null);
+      onRefresh();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const deletePlaylist = async (pl: PlaylistSummary) => {
     setBusy(true);
     try {
@@ -145,12 +206,33 @@ export default function LibraryPlaylistsTab({
       title="Playlists"
       sub={playlists ? `${rows.length} playlist${rows.length === 1 ? '' : 's'} in Navidrome` : ''}
       right={
-        <Btn sm onClick={onRefresh} disabled={loading}>
-          <RefreshCw size={11} /> {loading ? 'Loading…' : 'Refresh'}
-        </Btn>
+        <span className="flex items-center gap-1.5">
+          <Btn sm tone="accent" onClick={() => setCreating(c => !c)} disabled={busy}>
+            <Plus size={11} /> New playlist
+          </Btn>
+          <Btn sm onClick={onRefresh} disabled={loading}>
+            <RefreshCw size={11} /> {loading ? 'Loading…' : 'Refresh'}
+          </Btn>
+        </span>
       }
       bodyClass="!p-0"
     >
+      {creating && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-dashed border-separator-strong bg-[var(--ink-softer)] px-4 py-3">
+          <Input
+            placeholder="playlist name"
+            className="w-56"
+            value={newName}
+            autoFocus
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setNewName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') createPlaylist(); }}
+          />
+          <Btn sm tone="accent" onClick={createPlaylist} disabled={busy || !newName.trim()}>
+            {busy ? 'Creating…' : 'Create'}
+          </Btn>
+          <Btn sm onClick={() => { setCreating(false); setNewName(''); }} disabled={busy}>Cancel</Btn>
+        </div>
+      )}
       {loading && rows.length === 0 && (
         <div className="px-4 py-8 text-center text-[12px] text-muted italic">loading…</div>
       )}
@@ -179,6 +261,15 @@ export default function LibraryPlaylistsTab({
                   {!pl.public ? ' · private' : ''}
                 </span>
               </button>
+              <Btn
+                sm
+                tone={editId === pl.id ? 'accent' : undefined}
+                onClick={() => startEdit(pl)}
+                disabled={busy}
+                title="Rename / visibility"
+              >
+                {editId === pl.id ? <X size={11} /> : <Pencil size={11} />}
+              </Btn>
               <ConfirmBtn
                 label={<><Trash2 size={11} /> Delete</>}
                 confirmLabel="Really delete?"
@@ -186,6 +277,30 @@ export default function LibraryPlaylistsTab({
                 onConfirm={() => deletePlaylist(pl)}
               />
             </div>
+            {editId === pl.id && (
+              <div className="flex flex-wrap items-center gap-3 border-t border-dashed border-separator-strong bg-[var(--ink-softer)] px-4 py-3">
+                <Input
+                  className="w-56"
+                  value={editName}
+                  autoFocus
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setEditName(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') saveEdit(pl); }}
+                />
+                <label className="flex items-center gap-2 text-[12px] text-ink">
+                  <input
+                    type="checkbox"
+                    checked={editPublic}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setEditPublic(e.target.checked)}
+                    disabled={busy}
+                  />
+                  public — visible to other Navidrome users
+                </label>
+                <Btn sm tone="accent" onClick={() => saveEdit(pl)} disabled={busy || !editName.trim()}>
+                  {busy ? 'Saving…' : 'Save'}
+                </Btn>
+                <Btn sm onClick={() => setEditId(null)} disabled={busy}>Cancel</Btn>
+              </div>
+            )}
             {open && (
               <div className="border-t border-dashed border-separator-strong bg-[var(--ink-softer)]">
                 {entriesLoading && (
