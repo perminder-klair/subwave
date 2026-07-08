@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { generateText, APICallError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { stripThinking, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId } from '../src/llm/internal/core/pure.js';
+import { stripThinking, truncationError, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
 import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
@@ -531,6 +531,28 @@ async function main() {
     assert.equal(stripThinking('<|channel|>thought<|message|>hmm, still thinking'), '');
     // plain text with no channel tokens is untouched
     assert.equal(stripThinking('Just a normal DJ line.'), 'Just a normal DJ line.');
+  });
+  await test('truncationError fails a token-capped reply, passes a finished one', () => {
+    // Issue #947: a 'length' finish means the model ran to the output cap —
+    // for DJ free text that's always a runaway, never a usable script.
+    assert.equal(truncationError({ finishReason: 'stop', text: 'Coming up next.' }), null);
+    assert.equal(truncationError({ finishReason: 'unknown', text: 'x' }), null);
+    assert.equal(truncationError({}), null);
+    const err = truncationError({ finishReason: 'length', text: 'We need to output spoken words only…', usage: { outputTokens: 4000 } });
+    assert.ok(err instanceof Error);
+    // Raw text/usage ride on the error so failureDiagnostics + the console
+    // preview still show WHY the call failed.
+    assert.equal(err.text, 'We need to output spoken words only…');
+    assert.equal(err.finishReason, 'length');
+    assert.deepEqual(err.usage, { outputTokens: 4000 });
+    // The error must not look like a network status to any classifier — it
+    // should propagate straight to the caller's skip-segment path, never
+    // burning same-leg retries or silently failing over to the backup model.
+    assert.equal(isTransient(err), false);
+    assert.equal(isUnreachable(err), false);
+    assert.equal(isQuotaOrAuthError(err), false);
+    assert.equal(isUpstreamOverloaded(err), false);
+    assert.equal(isRateLimited(err), false);
   });
   await test('extractJson pulls the object out of fences and prose', () => {
     assert.equal(extractJson('```json\n{"a":1}\n```'), '{"a":1}');

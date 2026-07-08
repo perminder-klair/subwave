@@ -89,6 +89,24 @@ export function stripThinking(s: any): any {
   return t.replace(ANY_THINK_TAG_RE, '').replace(HARMONY_TOKENS_RE, '').trim();
 }
 
+// A 'length' finish means the reply was cut at the output-token cap — for DJ
+// free text that's always a runaway reasoning generation, never a usable
+// script (issue #947: the truncated deliberation carried no closing marker for
+// stripThinking to catch and aired verbatim). Returns the Error the caller
+// should throw — with the raw text/usage attached so failureDiagnostics and
+// the console preview still show WHY — or null when the reply finished
+// normally. The message deliberately carries no digits so no transient/
+// failover classifier mistakes it for a network status (pinned in
+// llm-pure.test.ts). Pure so the guard itself is unit-testable.
+export function truncationError(result: { finishReason?: string; text?: string; usage?: any }): any | null {
+  if (result?.finishReason !== 'length') return null;
+  const err: any = new Error('reply truncated at the output-token cap — refusing to air a runaway generation');
+  err.text = result.text;
+  err.finishReason = 'length';
+  err.usage = result.usage;
+  return err;
+}
+
 // Pull a JSON object out of a free-text reply: drop ```json fences and any
 // prose around it, then take the outermost { … }. Used by djObject's recovery
 // path when native structured output fails to parse.
