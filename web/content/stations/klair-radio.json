@@ -1,0 +1,13 @@
+{
+  "name": "Klair Radio",
+  "url": "https://radio.klair.co",
+  "operator": "@perminder-klair",
+  "location": "Birmingham, United Kingdom",
+  "country": "United Kingdom",
+  "lat": 52.4862,
+  "lon": -1.8904,
+  "genre": "punjabi",
+  "description": "Punjabi all day — an AI DJ picking the tracks and talking between them.",
+  "featured": false,
+  "submitted": "2026-07-08"
+}
