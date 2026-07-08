@@ -503,6 +503,18 @@ async function main() {
     // A verbatim two-way repeat (no third segment) is still a loop, not a leak.
     assert.equal(stripThinking('same line here</think>same line here'), 'same line here');
   });
+  await test('stripThinking drops an unterminated <think> block (token-cap truncation)', () => {
+    // Issue #947: a reasoning model looped inside its <think> block until the
+    // output-token cap cut it off, so the closing </think> never arrived. The
+    // whole body is trapped reasoning — drop it rather than speak it aloud.
+    assert.equal(
+      stripThinking('<think>We need to output spoken words only. Must not use articles. Also no his. Also no her. Also'),
+      '',
+    );
+    // Anything before the opener is real answer text — keep it (mirrors the
+    // harmony no-final-channel rule below).
+    assert.equal(stripThinking('Here we go. <think>wait, should I mention the'), 'Here we go.');
+  });
   await test('stripThinking strips Gemma/harmony channel reasoning, keeps the final message', () => {
     // thought → final: keep only the final channel's message
     assert.equal(

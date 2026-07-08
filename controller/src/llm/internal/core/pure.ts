@@ -61,7 +61,15 @@ export function stripThinking(s: any): any {
       t = segs.length >= 3 || hasRepeat ? segs[0] : segs[segs.length - 1];
     }
   }
-  // 3. Harmony / channel reasoning — keep only the text after the LAST
+  // 3. Unterminated <think> opener — the output-token cap cut the model off
+  //    mid-thought, so the closing tag never arrived (issue #947: a handoff
+  //    greeting aired ~4000 tokens of looping deliberation, and rule 4 alone
+  //    would strip just the tag and keep the body). Everything from the opener
+  //    on is trapped reasoning; keep only what precedes it (the <think>-tag
+  //    twin of the harmony no-final-channel rule below).
+  const openThink = t.search(/<think>/i);
+  if (openThink !== -1) t = t.slice(0, openThink);
+  // 4. Harmony / channel reasoning — keep only the text after the LAST
   //    final-channel opener, if any.
   let lastFinalEnd = -1;
   for (const m of t.matchAll(FINAL_CHANNEL_RE)) {
@@ -75,7 +83,7 @@ export function stripThinking(s: any): any {
     const open = t.search(ANY_CHANNEL_OPEN_RE);
     if (open !== -1) t = t.slice(0, open);
   }
-  // 4. Belt-and-suspenders — no stray <think>/</think> tag or leftover harmony
+  // 5. Belt-and-suspenders — no stray <think>/</think> tag or leftover harmony
   //    control token ever reaches TTS/booth. These literals never appear in a
   //    real DJ script.
   return t.replace(ANY_THINK_TAG_RE, '').replace(HARMONY_TOKENS_RE, '').trim();

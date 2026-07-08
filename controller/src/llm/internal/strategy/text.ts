@@ -50,6 +50,22 @@ export async function djText({
         providerOptions: providerOptions(leg.cfg, { repeatPenalty }),
         ...(signal ? { abortSignal: signal } : {}),
       }), signal);
+      // A free-text DJ script that hit the output-token cap is never a usable
+      // reply — real scripts run ~150 tokens against the 4000-token backstop,
+      // so 'length' means a reasoning model ran away mid-thought (issue #947:
+      // the truncated deliberation carried no closing marker for stripThinking
+      // to catch and aired verbatim, tying up the TTS GPU for minutes). Fail
+      // the call instead — announce-path callers catch and skip the segment,
+      // so the station stays on air, just without this talk break. The message
+      // deliberately carries no digits so no transient/failover classifier
+      // mistakes it for a network status.
+      if (result.finishReason === 'length') {
+        const err: any = new Error('reply truncated at the output-token cap — refusing to air a runaway generation');
+        err.text = result.text;
+        err.finishReason = result.finishReason;
+        err.usage = result.usage;
+        throw err;
+      }
       const out = stripThinking(result.text);
       // Only record sampling knobs that actually reached the model — see
       // repeatPenaltyApplies() and providerOptions handling.
