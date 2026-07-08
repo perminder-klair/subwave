@@ -15,7 +15,7 @@ import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumC
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
 import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
-import { DEFAULT_LOCCA_EMBED_BASE_URL } from '../src/llm/internal/provider/registry.js';
+import { DEFAULT_LOCCA_EMBED_BASE_URL, openAICompatibleFetch } from '../src/llm/internal/provider/registry.js';
 import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict, clampTtsSpeed, TTS_SPEED_DEFAULT, clampMaxOutputTokens, resolveMaxOutputTokens, MAX_OUTPUT_TOKENS_MIN, MAX_OUTPUT_TOKENS_MAX, effectiveFrequency, SCRIPT_LENGTHS } from '../src/settings.js';
 import { lengthMode, lengthPhrase } from '../src/llm/internal/prompts/system.js';
 import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
@@ -408,6 +408,29 @@ async function main() {
     assert.equal(appliedRepeatPenalty({ provider: 'openai', repeatPenalty: 1.2 }), null);
     // Missing / junk value → null, no throw.
     assert.equal(appliedRepeatPenalty({ provider: 'openai-compatible' }), null);
+  });
+
+  console.log('openAICompatibleFetch (body no-think injection for self-hosted llama.cpp/locca):');
+  await test('reasoning ON + forceNoThink OFF: thinking left ON (free-text DJ path keeps reasoning)', async () => {
+    let sent: any = null;
+    const impl = openAICompatibleFetch({ provider: 'locca', reasoning: true }, async (_u: any, init: any) => { sent = JSON.parse(init.body); return {} as any; }, false);
+    await impl('http://x/v1/chat/completions', { method: 'POST', body: JSON.stringify({ model: 'm', messages: [] }) });
+    assert.equal(sent.chat_template_kwargs?.enable_thinking, undefined);
+    assert.equal(sent.reasoning_format, undefined);
+  });
+  await test('reasoning ON + forceNoThink ON: thinking SUPPRESSED (the picker legs — issue: schema-fail-on-picks)', async () => {
+    let sent: any = null;
+    const impl = openAICompatibleFetch({ provider: 'locca', reasoning: true }, async (_u: any, init: any) => { sent = JSON.parse(init.body); return {} as any; }, true);
+    await impl('http://x/v1/chat/completions', { method: 'POST', body: JSON.stringify({ model: 'm', messages: [] }) });
+    assert.equal(sent.chat_template_kwargs.enable_thinking, false);
+    assert.equal(sent.reasoning_format, 'deepseek');
+  });
+  await test('reasoning OFF: thinking suppressed regardless of forceNoThink (existing behaviour preserved)', async () => {
+    let sent: any = null;
+    const impl = openAICompatibleFetch({ provider: 'openai-compatible', reasoning: false }, async (_u: any, init: any) => { sent = JSON.parse(init.body); return {} as any; }, false);
+    await impl('http://x/v1/chat/completions', { method: 'POST', body: JSON.stringify({ model: 'm', messages: [] }) });
+    assert.equal(sent.chat_template_kwargs.enable_thinking, false);
+    assert.equal(sent.reasoning_format, 'deepseek');
   });
 
   await test('forcedToolChoice: only the literal "auto" downgrades; everything else is "required" (issue #570)', () => {

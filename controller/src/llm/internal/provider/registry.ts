@@ -108,9 +108,21 @@ export function noThinkFetch(url: any, init: any, baseFetch: any = fetch) {
 //     script and reaches TTS. reasoning_format:"deepseek" routes it to
 //     reasoning_content, which the SDK surfaces as a reasoning part, not text
 //     (gist quirk #4).
-export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch) {
+//
+// `forceNoThink` suppresses thinking on THIS instance even when the operator
+// left reasoning on: the forced-tool structured-output legs (picker done-tool,
+// objectViaToolCall) run no-think so a reasoning model doesn't burn its whole
+// output budget thinking and then truncate mid-<think> (→ NoObjectGeneratedError
+// on every pick) or fail to emit the forced tool. Unlike Anthropic/DeepSeek
+// (per-call providerOptions) and OpenRouter (construction-time reasoning), the
+// only no-think lever these self-hosted servers have is this body injection, so
+// forceNoThink has to be honoured HERE — a distinct no-think model instance is
+// built for the picker legs (see languageModel's bodyNoThink). Without it a
+// reasoning-on locca/openai-compatible model failed schema validation on picks
+// and looped </think> at handoffs (the free-text signoff path, issue #914).
+export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoThink = false) {
   const penalty = appliedRepeatPenalty(cfg);
-  const noThink = cfg?.reasoning !== true;
+  const noThink = forceNoThink || cfg?.reasoning !== true;
   return (url: any, init: any) => {
     if (init?.body && typeof init.body === 'string') {
       try {
@@ -176,10 +188,11 @@ export const DEFAULT_REQUESTY_BASE_URL = 'https://router.requesty.ai/v1';
 // Most accept any non-empty key, so fall back to a placeholder. The fetch
 // wrapper injects the body-only knobs (repeat_penalty, and — reasoning off —
 // enable_thinking:false + reasoning_format); see openAICompatibleFetch.
-function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: string) {
+function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: string, forceNoThink = false) {
   // debugFetch is the inner transport, so what's recorded is the body exactly
-  // as sent (post-injection).
-  const fetchImpl = openAICompatibleFetch(cfg, debugFetch);
+  // as sent (post-injection). forceNoThink builds the picker's no-think variant
+  // (see languageModel) — thinking suppressed even with operator reasoning on.
+  const fetchImpl = openAICompatibleFetch(cfg, debugFetch, forceNoThink);
   const provider = createOpenAI({
     baseURL,
     apiKey: cfg.apiKey || 'unused',
@@ -207,13 +220,18 @@ export function resolveModelId(cfg: any): string {
 export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolean } = {}) {
   const id = resolveModelId(cfg);
   const baseUrlSig = cfg.provider === 'locca' ? loccaBaseUrl(cfg) : (cfg.baseUrl || '');
-  // Construction-time no-think: only providers whose reasoning is set at build
-  // time (OpenRouter) need a distinct reasoning-disabled instance for forced-tool
-  // legs; everyone else suppresses per-call via providerOptions, so the same
-  // cached model serves both. Keyed into the sig so the two variants don't collide.
-  const constructionNoThink = opts.forceNoThink === true
-    && capabilitiesFor(cfg.provider).reasoningConstructionOnly === true;
-  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${constructionNoThink ? 'nt1' : 'nt0'}`;
+  // Construction-time no-think: two provider families can't suppress thinking
+  // per-call, so a forced-tool leg needs its own reasoning-disabled INSTANCE.
+  //   - OpenRouter (reasoningConstructionOnly): reasoning is fixed at model build.
+  //   - openai-compatible / locca (samplingViaBody): no-think rides the request
+  //     BODY via openAICompatibleFetch, bound at construction — so the picker's
+  //     no-think variant must be a separate instance whose wrapper forces it.
+  // Everyone else suppresses per-call via providerOptions, so the same cached
+  // model serves both. Keyed into the sig so the variants don't collide.
+  const caps = capabilitiesFor(cfg.provider);
+  const constructionNoThink = opts.forceNoThink === true && caps.reasoningConstructionOnly === true;
+  const bodyNoThink = opts.forceNoThink === true && caps.samplingViaBody === true;
+  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;
@@ -231,14 +249,14 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       break;
     }
     case 'openai-compatible': {
-      model = openAICompatibleModel(cfg, id, cfg.baseUrl, 'openai-compatible');
+      model = openAICompatibleModel(cfg, id, cfg.baseUrl, 'openai-compatible', bodyNoThink);
       break;
     }
     case 'locca': {
       // First-class locca: an openai-compatible llama.cpp server with a sane
       // default base URL (host.docker.internal:8080) so the operator doesn't
       // hand-type a URL. Same transport as openai-compatible, incl. no-think.
-      model = openAICompatibleModel(cfg, id, loccaBaseUrl(cfg), 'locca');
+      model = openAICompatibleModel(cfg, id, loccaBaseUrl(cfg), 'locca', bodyNoThink);
       break;
     }
     case 'google': {
