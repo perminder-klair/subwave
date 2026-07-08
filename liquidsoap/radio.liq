@@ -20,7 +20,7 @@ settings.server.telnet.port := 1234
 
 jingle_ratio = ref(30)
 crossfade_duration = ref(10.0)
-archive_enabled = ref(true)
+archive_enabled = ref(false)
 archive_bitrate = ref(128)
 opus_enabled = ref(false)
 opus_bitrate = ref(96)
