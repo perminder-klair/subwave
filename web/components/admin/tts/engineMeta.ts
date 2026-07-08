@@ -32,14 +32,23 @@ export interface EngineStatus {
   tone: EngineStatusTone;
 }
 
-// Pure: derive an engine's status badge from the controller's availability map
-// (SettingsResponse.tts.available — piper/kokoro/chatterbox/pocket-tts/cloud
-// booleans). A missing/undefined flag means "not yet known / assumed up", so we
-// only flag a hard `=== false`. `warn` reads as the recoverable-problem tone
-// (sidecar down, no cloud key); `ok` is the quiet ready state.
+// The controller's availability map (SettingsResponse.tts.available). Most keys
+// are per-engine booleans, but a couple carry richer values — hence the mixed
+// value type. `heavyEnabled` is the tts-heavy sidecar's configured engine list
+// (TTS_HEAVY_ENGINES): a string[] when the sidecar is reachable and reports it,
+// null when it's unreachable / not in use.
+export interface EngineAvailability {
+  heavyEnabled?: string[] | null;
+  [engine: string]: boolean | string[] | null | Record<string, boolean> | undefined;
+}
+
+// Pure: derive an engine's status badge from the controller's availability map.
+// A missing/undefined flag means "not yet known / assumed up", so we only flag
+// a hard `=== false`. `warn` reads as the recoverable-problem tone (sidecar
+// down, engine disabled, no cloud key); `ok` is the quiet ready state.
 export function engineStatus(
   id: string,
-  available: Record<string, boolean> | undefined,
+  available: EngineAvailability | undefined,
 ): EngineStatus {
   const a = available || {};
   switch (id) {
@@ -50,10 +59,18 @@ export function engineStatus(
         ? { label: 'unavailable', tone: 'warn' }
         : { label: 'ready', tone: 'ok' };
     case 'chatterbox':
-    case 'pocket-tts':
-      return a[id] === false
-        ? { label: 'sidecar off', tone: 'warn' }
-        : { label: 'ready', tone: 'ok' };
+    case 'pocket-tts': {
+      if (a[id] !== false) return { label: 'ready', tone: 'ok' };
+      // Engine isn't ready. Use the sidecar's configured engine list to say
+      // *why*: deliberately disabled vs still loading vs whole sidecar down.
+      const enabled = Array.isArray(a.heavyEnabled) ? a.heavyEnabled : null;
+      if (enabled) {
+        return enabled.includes(id)
+          ? { label: 'starting…', tone: 'warn' } // enabled, weights still loading
+          : { label: 'engine off', tone: 'warn' }; // disabled via TTS_HEAVY_ENGINES
+      }
+      return { label: 'sidecar off', tone: 'warn' };
+    }
     case 'cloud':
       return a.cloud === false
         ? { label: 'no key', tone: 'warn' }

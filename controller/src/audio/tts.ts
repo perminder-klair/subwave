@@ -9,6 +9,7 @@ import * as kokoro from './kokoro.js';
 import { applyEdgeFades } from './wav-edges.js';
 import * as chatterbox from './chatterbox.js';
 import * as pocketTts from './pocketTts.js';
+import { heavyEnabledEngines } from './ttsHeavyClient.js';
 import * as remoteTts from './remoteTts.js';
 import * as cloud from '../llm/speech.js';
 import { stripThinking } from '../llm/sdk.js';
@@ -391,6 +392,11 @@ export function availableEngines() {
     kokoro: kokoro.isAvailable(),
     chatterbox: chatterbox.isAvailable(),
     'pocket-tts': pocketTts.isAvailable(),
+    // The tts-heavy sidecar's configured engines (TTS_HEAVY_ENGINES): a
+    // string[] when reachable and reporting it, null otherwise. Lets the admin
+    // badge separate "engine off" (sidecar up, engine disabled) from "sidecar
+    // off" (whole sidecar down). See engineMeta.engineStatus.
+    heavyEnabled: heavyEnabledEngines(),
     // Whether PocketTTS can clone voices (gated weights present). null = not
     // yet known. The admin UI uses this to warn that a cloned .wav voice will
     // silently revert to a built-in when cloning is unavailable (issue #238).
