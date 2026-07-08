@@ -454,9 +454,9 @@ export const TTS_CLOUD_PROVIDERS = ['openai', 'elevenlabs', 'openai-compatible']
 export const SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'searxng'] as const;
 
 // Canonical mood vocabulary. Shared by the library tagger (music/tag-library.js
-// imports this as MOOD_VOCAB) and the Shows scheduler — a show's `mood`
-// overrides the autonomous dominantMood, so a non-empty value must come from
-// this list. Empty string means "Any": the show pins no mood and the
+// imports this as MOOD_VOCAB) and the Shows scheduler — a show's `moods` (lead
+// entry) override the autonomous dominantMood, so every entry must come from
+// this list. An empty list means "Any": the show pins no mood and the
 // autonomous chain (festival > weather > time) applies while it's on air.
 export const SHOW_MOODS = [
   'energetic',
@@ -588,6 +588,10 @@ const SHOWS_LIMIT = 64;
 const GUESTS_PER_SHOW = 3;
 const PLAYLISTS_PER_SHOW = 10;
 const EXCLUDED_PLAYLISTS_PER_SHOW = 10;
+// Values per multi-select music filter (moods / genres / eras). Within one
+// attribute the values OR together at pick time; across attributes they AND —
+// so past a handful the filter stops meaning anything.
+const SHOW_FILTER_VALUES_MAX = 6;
 const SKILLS_PER_PERSONA_LIMIT = 20;
 const WEBHOOKS_LIMIT = 16;
 
@@ -627,6 +631,80 @@ function coercePlaylistIds(raw: any): string[] {
     if (out.length >= PLAYLISTS_PER_SHOW) break;
   }
   return out;
+}
+
+// ── Multi-value music filters (#929) ────────────────────────────────────────
+// A show's Genre Lean / Mood / Energy / Era each hold a LIST of values: OR
+// within the attribute, AND across attributes, every value weighted equally.
+// Legacy singular fields (`mood`, `genre`, `energy`, `fromYear`/`toYear`) are
+// migrated to one-element lists on load — same pattern as dj.soul → dj.souls.
+// The lenient coercers below serve normalizeShows (load path); the strict
+// validator has its own throwing checks that reuse the same shapes.
+
+// One era window { fromYear, toYear } — at least one bound set; both-null
+// entries are meaningless and dropped. Multiple windows let a show span
+// non-adjacent decades ("90s + 2010s") — inexpressible as a single range.
+export type EraWindow = { fromYear: number | null; toYear: number | null };
+
+function coerceEraWindow(raw: any): EraWindow | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const fromYear = Number.isFinite(raw.fromYear) ? Math.trunc(raw.fromYear) : null;
+  const toYear = Number.isFinite(raw.toYear) ? Math.trunc(raw.toYear) : null;
+  if (fromYear == null && toYear == null) return null;
+  if (fromYear != null && toYear != null && fromYear > toYear) return null;
+  return { fromYear, toYear };
+}
+
+// Plural-first: `item[plural]` wins when it's an array; otherwise the legacy
+// singular value (if any) becomes a one-element list. Dedup + cap.
+function coerceShowList<T>(
+  item: any,
+  plural: string,
+  singular: string,
+  coerceOne: (v: any) => T | null,
+  keyOf: (v: T) => string,
+): T[] {
+  const raw = Array.isArray(item?.[plural]) ? item[plural] : [item?.[singular]];
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const v of raw) {
+    const one = coerceOne(v);
+    if (one == null) continue;
+    const k = keyOf(one);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(one);
+    if (out.length >= SHOW_FILTER_VALUES_MAX) break;
+  }
+  return out;
+}
+
+function coerceShowMoods(item: any): string[] {
+  return coerceShowList(item, 'moods', 'mood',
+    (v) => (typeof v === 'string' && SHOW_MOODS.includes(v) ? v : null),
+    (v) => v);
+}
+
+function coerceShowGenres(item: any): string[] {
+  return coerceShowList(item, 'genres', 'genre',
+    (v) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 64) : null),
+    (v) => v.toLowerCase());
+}
+
+function coerceShowEnergies(item: any): string[] {
+  return coerceShowList(item, 'energies', 'energy',
+    (v) => (typeof v === 'string' && SHOW_ENERGY.includes(v) ? v : null),
+    (v) => v);
+}
+
+function coerceShowEras(item: any): EraWindow[] {
+  // Legacy singular is a pair of top-level keys, not one value — synthesize
+  // the window before handing off to the shared list coercer.
+  const raw = Array.isArray(item?.eras)
+    ? item.eras
+    : [{ fromYear: item?.fromYear, toYear: item?.toYear }];
+  return coerceShowList({ eras: raw }, 'eras', 'era', coerceEraWindow,
+    (e) => `${e.fromYear ?? ''}:${e.toYear ?? ''}`);
 }
 
 // A show can exclude tracks from one or more Navidrome playlists: any track
@@ -1347,9 +1425,11 @@ function normalizeShows(raw: any, personaIds: string[]) {
     const name = typeof item.name === 'string' ? item.name.trim().slice(0, 60) : '';
     if (!name) continue;
     if (!personaIds.includes(item.personaId)) continue; // drop dangling owner
-    // Empty mood = "Any" (the autonomous mood applies on air). An unknown mood
-    // string is coerced to Any rather than dropping the whole show on the floor.
-    const mood = SHOW_MOODS.includes(item.mood) ? item.mood : '';
+    // Empty moods = "Any" (the autonomous mood applies on air). Unknown mood
+    // strings are dropped rather than failing the whole show. Multi-value
+    // (#929): plural arrays are canonical; legacy singular fields migrate to
+    // one-element lists here (coerceShow* handle both shapes).
+    const moods = coerceShowMoods(item);
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
@@ -1362,15 +1442,15 @@ function normalizeShows(raw: any, personaIds: string[]) {
       typeof item.themeId === 'string' && item.themeId.trim()
         ? item.themeId.trim().slice(0, 64)
         : '';
-    // Optional music-steering filters (soft lean, applied at pick time). Genre
-    // is stored as free text and resolved fuzzily against the live library when
-    // a pick is made (mirrors the listener-request path) — never validated
-    // against Subsonic here. fromYear/toYear are a decade window. energy is one
-    // of the tagger's three bands. All default to "no constraint".
-    const genre = typeof item.genre === 'string' ? item.genre.trim().slice(0, 64) : '';
-    const fromYear = Number.isFinite(item.fromYear) ? Math.trunc(item.fromYear) : null;
-    const toYear = Number.isFinite(item.toYear) ? Math.trunc(item.toYear) : null;
-    const energy = SHOW_ENERGY.includes(item.energy) ? item.energy : '';
+    // Optional music-steering filters (soft lean, applied at pick time). Each
+    // is a LIST — OR within the attribute, AND across attributes (#929).
+    // Genres are free text resolved fuzzily against the live library when a
+    // pick is made (mirrors the listener-request path) — never validated
+    // against Subsonic here. Eras are decade/year windows. Energies come from
+    // the tagger's three bands. All default to "no constraint" (empty list).
+    const genres = coerceShowGenres(item);
+    const eras = coerceShowEras(item);
+    const energies = coerceShowEnergies(item);
     // Opt-in: hard-filter the pick pool to EVERY set music filter (mood, genre,
     // era, energy) instead of the default soft leans. Only meaningful when at
     // least one filter is set; defaults OFF. The legacy genre-only `genreStrict`
@@ -1414,12 +1494,11 @@ function normalizeShows(raw: any, personaIds: string[]) {
       banter,
       programme,
       segmentSkill,
-      mood,
+      moods,
       themeId,
-      genre,
-      fromYear,
-      toYear,
-      energy,
+      genres,
+      eras,
+      energies,
       filtersStrict,
       maxTrackSeconds,
       playlistIds,
@@ -2203,13 +2282,23 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     if (!personaIds.includes(item.personaId)) {
       throw new Error(`shows[${i}].personaId must reference an existing persona`);
     }
-    // Empty/missing mood means "Any": the show pins no mood and the autonomous
+    // Empty/missing moods means "Any": the show pins no mood and the autonomous
     // dominantMood chain (festival > weather > time) applies while it's on air.
-    // A non-empty mood must come from the canonical vocabulary.
-    const mood = item.mood == null || item.mood === '' ? '' : String(item.mood);
-    if (mood && !SHOW_MOODS.includes(mood)) {
-      throw new Error(`shows[${i}].mood must be empty (any) or one of: ${SHOW_MOODS.join(', ')}`);
+    // Multi-value (#929): the plural array is canonical; a legacy singular
+    // `mood` from an older client still validates and becomes a one-element
+    // list. Every entry must come from the canonical vocabulary.
+    const rawMoods = Array.isArray(item.moods)
+      ? item.moods
+      : item.mood == null || item.mood === '' ? [] : [item.mood];
+    if (rawMoods.length > SHOW_FILTER_VALUES_MAX) {
+      throw new Error(`shows[${i}].moods must have at most ${SHOW_FILTER_VALUES_MAX} entries`);
     }
+    for (const m of rawMoods) {
+      if (typeof m !== 'string' || !SHOW_MOODS.includes(m)) {
+        throw new Error(`shows[${i}].moods entries must be one of: ${SHOW_MOODS.join(', ')}`);
+      }
+    }
+    const moods = coerceShowMoods({ moods: rawMoods });
     // Optional per-show theme override. Empty/missing means "fall back to the
     // station default while this show is on air". The allow-set is built once
     // by update() so we stay sync here.
@@ -2221,15 +2310,30 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
       }
       themeId = v;
     }
-    // Optional music-steering filters — all default to "no constraint". Genre
-    // is free text resolved fuzzily at pick time, so it isn't checked against
-    // the live library here.
-    const genre = String(item.genre ?? '').trim();
-    if (genre.length > 64) throw new Error(`shows[${i}].genre must be 0-64 chars`);
-    const energy = item.energy == null || item.energy === '' ? '' : String(item.energy);
-    if (energy && !SHOW_ENERGY.includes(energy)) {
-      throw new Error(`shows[${i}].energy must be one of: ${SHOW_ENERGY.join(', ')}`);
+    // Optional music-steering filters — all default to "no constraint" and all
+    // multi-value lists (#929, legacy singular fields still accepted). Genres
+    // are free text resolved fuzzily at pick time, so they aren't checked
+    // against the live library here.
+    const rawGenres = Array.isArray(item.genres)
+      ? item.genres
+      : item.genre == null || String(item.genre).trim() === '' ? [] : [item.genre];
+    if (rawGenres.length > SHOW_FILTER_VALUES_MAX) {
+      throw new Error(`shows[${i}].genres must have at most ${SHOW_FILTER_VALUES_MAX} entries`);
     }
+    for (const g of rawGenres) {
+      if (typeof g !== 'string') throw new Error(`shows[${i}].genres entries must be strings`);
+      if (g.trim().length > 64) throw new Error(`shows[${i}].genres entries must be 0-64 chars`);
+    }
+    const genres = coerceShowGenres({ genres: rawGenres });
+    const rawEnergies = Array.isArray(item.energies)
+      ? item.energies
+      : item.energy == null || item.energy === '' ? [] : [item.energy];
+    for (const e of rawEnergies) {
+      if (typeof e !== 'string' || !SHOW_ENERGY.includes(e)) {
+        throw new Error(`shows[${i}].energies entries must be one of: ${SHOW_ENERGY.join(', ')}`);
+      }
+    }
+    const energies = coerceShowEnergies({ energies: rawEnergies });
     // Opt-in hard filter across every set music constraint — mood, genre, era,
     // energy (vs the default soft leans). Boolean, defaults OFF. The legacy
     // genre-only `genreStrict` is deliberately NOT carried over (see the load
@@ -2244,10 +2348,27 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
       }
       return n;
     };
-    const fromYear = parseYear(item.fromYear, 'fromYear');
-    const toYear = parseYear(item.toYear, 'toYear');
-    if (fromYear != null && toYear != null && fromYear > toYear) {
-      throw new Error(`shows[${i}].fromYear must be <= toYear`);
+    // Era windows: `eras` is a list of { fromYear, toYear } windows (#929);
+    // legacy top-level fromYear/toYear still validate as a one-window list.
+    // Each window needs at least one bound; both-null entries are dropped.
+    const rawEras = Array.isArray(item.eras)
+      ? item.eras
+      : item.fromYear == null && item.toYear == null ? [] : [{ fromYear: item.fromYear, toYear: item.toYear }];
+    if (rawEras.length > SHOW_FILTER_VALUES_MAX) {
+      throw new Error(`shows[${i}].eras must have at most ${SHOW_FILTER_VALUES_MAX} entries`);
+    }
+    const eras: EraWindow[] = [];
+    for (const [j, w] of rawEras.entries()) {
+      if (!w || typeof w !== 'object') throw new Error(`shows[${i}].eras[${j}] must be an object`);
+      const fromYear = parseYear((w as any).fromYear, `eras[${j}].fromYear`);
+      const toYear = parseYear((w as any).toYear, `eras[${j}].toYear`);
+      if (fromYear == null && toYear == null) continue;
+      if (fromYear != null && toYear != null && fromYear > toYear) {
+        throw new Error(`shows[${i}].eras[${j}].fromYear must be <= toYear`);
+      }
+      if (!eras.some(e => e.fromYear === fromYear && e.toYear === toYear)) {
+        eras.push({ fromYear, toYear });
+      }
     }
     // Per-show track-length override (seconds): null = inherit station default,
     // 0 = unlimited, >0 = own cap. Empty/missing → inherit. A legacy minutes
@@ -2335,7 +2456,7 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, guestPersonaIds, banter, programme, segmentSkill, mood, themeId, genre, fromYear, toYear, energy, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
+    return { id, name, topic, personaId: item.personaId, guestPersonaIds, banter, programme, segmentSkill, moods, themeId, genres, eras, energies, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
   });
 }
 
@@ -3251,13 +3372,15 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     id: show.id,
     name: show.name,
     topic: show.topic,
-    mood: show.mood,
-    // Optional music-steering filters (soft lean). Surfaced for the picker and
-    // DJ agent; empty string / null means "no constraint".
-    genre: typeof show.genre === 'string' ? show.genre : '',
-    fromYear: Number.isFinite(show.fromYear) ? show.fromYear : null,
-    toYear: Number.isFinite(show.toYear) ? show.toYear : null,
-    energy: typeof show.energy === 'string' ? show.energy : '',
+    // Optional music-steering filters (soft lean), each a multi-value list
+    // (#929): OR within the attribute, AND across attributes. Surfaced for the
+    // picker and DJ agent; empty list means "no constraint". The stored shows
+    // are already migrated to plural arrays by normalizeShows, but re-coerce
+    // here so a stale in-memory shape can never leak singular fields out.
+    moods: coerceShowMoods(show),
+    genres: coerceShowGenres(show),
+    eras: coerceShowEras(show),
+    energies: coerceShowEnergies(show),
     // When true, every set music filter (mood, genre, era, energy) is a hard
     // filter on the pick pool instead of a soft lean; off-filter tracks only
     // survive as a never-starve fallback. Defaults off.

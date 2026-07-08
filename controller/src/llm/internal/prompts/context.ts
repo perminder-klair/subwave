@@ -135,7 +135,7 @@ export function buildContextLines(
     // evening show kept mellowing out. With a mood pinned, keep the period
     // label (the clock is real) and stand the vibe down; the show line below
     // carries the tone instead.
-    lines.push(context?.activeShow?.mood
+    lines.push(context?.activeShow?.moods?.length
       ? `Period: ${context.time.period}`
       : `Period: ${context.time.period} (${context.time.vibe})`);
   }
@@ -152,10 +152,13 @@ export function buildContextLines(
     // getFullContext) keeps mid-show links and segments on today's line, not
     // just the standing brief.
     const angle = context.activeShow.episodeAngle ? ` Today's episode angle: ${context.activeShow.episodeAngle}.` : '';
-    // The pinned mood already steers the pick pool via dominantMood, but the
-    // talk prompts never saw it — say it here so the delivery follows the
+    // The pinned moods already steer the pick pool via dominantMood, but the
+    // talk prompts never saw them — say them here so the delivery follows the
     // show's brief, not the hour's default.
-    const mood = context.activeShow.mood ? ` Its mood is ${context.activeShow.mood} — let that set the tone, not the time of day.` : '';
+    const showMoods: string[] = context.activeShow.moods ?? [];
+    const mood = showMoods.length
+      ? ` Its mood is ${showMoods.join(' / ')} — let that set the tone, not the time of day.`
+      : '';
     lines.push(`On now: the show "${context.activeShow.name}"${topic}.${angle}${mood} Stay loosely on its theme.`);
   }
   if (on('listeners') && context?.listeners?.count != null) {

@@ -11,7 +11,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { normGenre, genreMatches, inYearRange, preferEnergy, preferEnergyStrict, preferMood } from '../music/show-filter.js';
+import { normGenre, genreMatches, inYearRange, preferEnergy, preferEnergyStrict, preferMood, hasEraBound, eraSpan } from '../music/show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
@@ -87,16 +87,16 @@ async function refreshAutoPlaylistInner() {
   // should stay on-brand exactly as the picker does — so we steer the pool by the
   // active show's genre / era / energy, mirroring music/picker.ts (issue #629).
   const show: any = settings.resolveActiveShow();
-  const showGenre: string = show?.genre || '';
-  const fromYear: number | null = show?.fromYear ?? null;
-  const toYear: number | null = show?.toYear ?? null;
-  const showEnergy: string = show?.energy || '';
+  // Multi-value lists (#929): OR within an attribute, AND across attributes.
+  const showGenres: string[] = show?.genres ?? [];
+  const eras = (show?.eras ?? []) as { fromYear: number | null; toYear: number | null }[];
+  const showEnergies: string[] = show?.energies ?? [];
   // A genre or a year window narrows the pool; energy alone only soft-leans
   // (mirrors picker.hasMusicFilter). Strict (show.filtersStrict) opts EVERY set
   // filter — mood, genre, era, energy — into a hard filter on the pool.
-  const narrow = !!(show && (showGenre || fromYear != null || toYear != null));
-  const showMood: string = show?.mood || '';
-  const strict = !!(show?.filtersStrict && (showGenre || showMood || showEnergy || fromYear != null || toYear != null));
+  const narrow = !!(show && (showGenres.length || hasEraBound(eras)));
+  const showMoods: string[] = show?.moods ?? [];
+  const strict = !!(show?.filtersStrict && (showGenres.length || showMoods.length || showEnergies.length || hasEraBound(eras)));
 
   // Show playlist anchor: resolve the union once. The fallback must honour it
   // too, so the LLM-free coast (LLM down, budget-hard, zero listeners) still
@@ -108,30 +108,33 @@ async function refreshAutoPlaylistInner() {
   const strictPlaylist = hasPlaylist && !!show?.playlistStrict;
   const excludedIds = show ? await resolveExcludedPlaylistIds(show) : null;
 
-  // Resolve the show's free-text genre to the library's exact tag once, up front.
-  // A resolution failure / absent genre leaves genreName null, which disables the
+  // Resolve the show's free-text genres to the library's exact tags once, up
+  // front. Entries that fail to resolve drop out; NONE resolving disables the
   // strict hard-filter and the genre-targeted fetches — the documented degrade
   // path (a misspelled / library-absent genre falls back to the normal pool).
-  let genreName: string | null = null;
-  if (showGenre) {
-    try { genreName = await subsonic.resolveGenreName(showGenre); } catch {}
+  const genreNames: string[] = [];
+  for (const g of showGenres) {
+    try {
+      const resolved = await subsonic.resolveGenreName(g);
+      if (resolved) genreNames.push(resolved);
+    } catch {}
   }
-  const strictGenreNorm = strict && genreName ? normGenre(genreName) : null;
+  const strictGenreNorms = strict ? genreNames.map(normGenre).filter(Boolean) : [];
   // Strict: hard-drop off-genre / off-era tracks from every discovery source
   // (even if that empties the source) — the auto playlist airs in full with no
   // LLM gatekeeper, so never-starve off-target filler would actually play. The
   // dedicated genre source + genre/era-targeted random carry the pool; an
-  // unresolved genre disables the genre drop (genreName null → no filter).
+  // unresolved genre list disables the genre drop (no resolved names → no filter).
   // Mood and energy enforce with per-source never-starve instead (preferMood /
   // preferEnergyStrict): they depend on the tagger/analyzer having run, and an
   // un-tagged library hard-dropping everything would empty the dead-air
   // fallback entirely. Soft mode is a no-op here.
   const enforce = (items: any[]) => {
     let out = items;
-    if (strictGenreNorm) out = out.filter((t: any) => genreMatches(t, strictGenreNorm));
-    if (strict && (fromYear != null || toYear != null)) out = inYearRange(out, { fromYear, toYear });
-    if (strict && showMood) out = preferMood(out, showMood);
-    if (strict && showEnergy) out = preferEnergyStrict(out, showEnergy);
+    if (strictGenreNorms.length) out = out.filter((t: any) => genreMatches(t, strictGenreNorms));
+    if (strict && hasEraBound(eras)) out = inYearRange(out, eras);
+    if (strict && showMoods.length) out = preferMood(out, showMoods);
+    if (strict && showEnergies.length) out = preferEnergyStrict(out, showEnergies);
     return out;
   };
   // Shrink the off-genre / off-playlist sources so the dedicated show source
@@ -168,21 +171,33 @@ async function refreshAutoPlaylistInner() {
   // the (shrunk) discovery sources add variety.
   if (narrow) {
     try {
+      // getRandomSongs takes ONE genre + ONE contiguous range natively, so
+      // multiple values (#929) call per genre against the eras' coarse
+      // envelope (eraSpan); the genre-tagged sets post-filter to the exact
+      // window union (inYearRange).
+      const span = eraSpan(eras);
       const collected: any[] = [];
-      collected.push(...await subsonic.getRandomSongs({
-        size: strict ? 60 : 40,
-        genre: genreName || undefined,
-        fromYear: fromYear ?? undefined,
-        toYear: toYear ?? undefined,
-      }));
-      if (genreName) {
-        const g = await subsonic.getSongsByGenre(genreName, { count: strict ? 100 : 60 });
-        const ranged = inYearRange(g, { fromYear, toYear });
-        collected.push(...(ranged.length ? ranged : g));
+      const randomSize = strict ? 60 : 40;
+      const genreSetSize = strict ? 100 : 60;
+      for (const genreName of genreNames.length ? genreNames : [undefined]) {
+        collected.push(...await subsonic.getRandomSongs({
+          size: Math.ceil(randomSize / Math.max(1, genreNames.length)),
+          genre: genreName,
+          fromYear: span.fromYear ?? undefined,
+          toYear: span.toYear ?? undefined,
+        }));
+        if (genreName) {
+          const g = await subsonic.getSongsByGenre(genreName, { count: Math.ceil(genreSetSize / genreNames.length) });
+          const ranged = inYearRange(g, eras);
+          collected.push(...(ranged.length ? ranged : g));
+        }
       }
+      // The random fetch used the coarse era envelope — tighten to the exact
+      // union (never-starve to the envelope set when the union comes up empty).
+      const exact = hasEraBound(eras) ? inYearRange(collected, eras) : collected;
       // Genre/era are server-side native here; enforce() adds the strict
       // mood/energy filters on top (no-op in soft mode).
-      const leaned = enforce(preferEnergy(collected, showEnergy));
+      const leaned = enforce(preferEnergy(exact.length ? exact : collected, showEnergies));
       take('show-genre', shuffle(leaned), strict ? SHOW_GENRE_STRICT_WEIGHT : SHOW_GENRE_WEIGHT);
     } catch (err) {
       queue.log('error', `Show-genre fetch failed: ${err.message}`);
@@ -197,19 +212,32 @@ async function refreshAutoPlaylistInner() {
     take('show-playlist', shuffle(playlistPool!.tracks), strictPlaylist ? SHOW_PLAYLIST_STRICT_WEIGHT : SHOW_PLAYLIST_WEIGHT);
   }
 
-  // 1. Mood-tagged from the LLM-built library (only if tagger has run).
-  if (mood) {
-    take('mood', enforce(shuffle(preferEnergy(library.songsByMood(mood), showEnergy))), nz(MOOD_WEIGHT));
+  // 1. Mood-tagged from the LLM-built library (only if tagger has run). A
+  // multi-mood show pools ALL its moods equally (#929); autonomous hours keep
+  // the single dominantMood. Dedup by id across the unioned mood sets.
+  const poolMoods = showMoods.length ? showMoods : (mood ? [mood] : []);
+  if (poolMoods.length) {
+    const seenMoodIds = new Set<string>();
+    const moodPool: any[] = [];
+    for (const m of poolMoods) {
+      for (const t of library.songsByMood(m)) {
+        if (t?.id && seenMoodIds.has(t.id)) continue;
+        if (t?.id) seenMoodIds.add(t.id);
+        moodPool.push(t);
+      }
+    }
+    take('mood', enforce(shuffle(preferEnergy(moodPool, showEnergies))), nz(MOOD_WEIGHT));
   }
 
   // 2. Navidrome playlists whose name matches the mood — operator's hand curation.
   // Skipped when the show already pins its own playlist(s) (0b): mood-substring
   // matching would otherwise leak other shows' same-mood playlists into the
   // fallback pool (#642). Autonomous hours (no pinned playlists) keep it.
-  if (mood && !hasPlaylist) {
+  if (poolMoods.length && !hasPlaylist) {
     try {
       const playlists = await subsonic.getPlaylists();
-      const matched = playlists.filter((p: any) => p.name?.toLowerCase().includes(mood.toLowerCase()));
+      const matched = playlists.filter((p: any) =>
+        poolMoods.some(m => p.name?.toLowerCase().includes(m.toLowerCase())));
       const tracks: any[] = [];
       for (const pl of matched.slice(0, 2)) {
         try {
@@ -256,9 +284,24 @@ async function refreshAutoPlaylistInner() {
   // strict end-filter below would drop it anyway).
   if (pool.length < TARGET_POOL && !strictPlaylist) {
     try {
-      const random = narrow
-        ? await subsonic.getRandomSongs({ size: TARGET_POOL, genre: genreName || undefined, fromYear: fromYear ?? undefined, toYear: toYear ?? undefined })
-        : await subsonic.getRandomSongs({ size: TARGET_POOL });
+      let random: any[];
+      if (narrow) {
+        // Same per-genre split + coarse era envelope as the dedicated source.
+        const span = eraSpan(eras);
+        random = [];
+        for (const genreName of genreNames.length ? genreNames : [undefined]) {
+          random.push(...await subsonic.getRandomSongs({
+            size: Math.ceil(TARGET_POOL / Math.max(1, genreNames.length)),
+            genre: genreName,
+            fromYear: span.fromYear ?? undefined,
+            toYear: span.toYear ?? undefined,
+          }));
+        }
+        const exact = hasEraBound(eras) ? inYearRange(random, eras) : random;
+        random = exact.length ? exact : random;
+      } else {
+        random = await subsonic.getRandomSongs({ size: TARGET_POOL });
+      }
       take('random', shuffle(random), TARGET_POOL);
     } catch (err) {
       queue.log('error', `Random fetch failed: ${err.message}`);
@@ -312,10 +355,10 @@ async function refreshAutoPlaylistInner() {
   // Make the show-scoping visible to the operator (acceptance criteria #629):
   // a misspelled / absent strict genre that silently degraded, and a strict show
   // whose genre is too thin to fill the pool, are both worth surfacing.
-  if (strict && !genreName) {
-    queue.log('scheduler', `Auto-playlist: strict genre "${showGenre}" not found in library — fallback left unfiltered`);
-  } else if (strict && genreName && pool.length < TARGET_POOL) {
-    queue.log('scheduler', `Auto-playlist: only ${pool.length} in-genre tracks for ${genreName} — looping a short genre-pure fallback`);
+  if (strict && showGenres.length && !genreNames.length) {
+    queue.log('scheduler', `Auto-playlist: strict genre(s) "${showGenres.join(', ')}" not found in library — fallback left unfiltered`);
+  } else if (strict && genreNames.length && pool.length < TARGET_POOL) {
+    queue.log('scheduler', `Auto-playlist: only ${pool.length} in-genre tracks for ${genreNames.join(', ')} — looping a short genre-pure fallback`);
   }
   if (strictPlaylist && pool.length < TARGET_POOL) {
     queue.log('scheduler', `Auto-playlist: only ${pool.length} in-playlist tracks — looping a short playlist-pure fallback`);
@@ -324,11 +367,15 @@ async function refreshAutoPlaylistInner() {
   const playlistTag = hasPlaylist
     ? (playlistPool!.names.length ? playlistPool!.names.join('/') : `${show.playlistIds.length} playlist(s)`)
     : '';
+  const eraTag = eras
+    .filter(e => e.fromYear != null || e.toYear != null)
+    .map(e => `${e.fromYear ?? ''}-${e.toYear ?? ''}`)
+    .join(',');
   const showInfo = show
     ? `, show=${show.name}${strict ? ' filters=strict' : ''}` +
-      (showGenre ? ` genre=${genreName || showGenre}` : '') +
-      (fromYear != null || toYear != null ? ` year=${fromYear ?? ''}-${toYear ?? ''}` : '') +
-      (showEnergy ? ` energy=${showEnergy}` : '') +
+      (showGenres.length ? ` genre=${(genreNames.length ? genreNames : showGenres).join(',')}` : '') +
+      (eraTag ? ` year=${eraTag}` : '') +
+      (showEnergies.length ? ` energy=${showEnergies.join(',')}` : '') +
       (hasPlaylist ? ` playlist=${playlistTag} (${strictPlaylist ? 'strict' : 'soft'})` : '')
     : '';
   queue.log('scheduler',

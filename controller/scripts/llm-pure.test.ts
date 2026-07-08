@@ -705,14 +705,14 @@ async function main() {
     assert.equal(showMusicLean(null), '');
     assert.equal(showMusicLean(undefined), '');
   });
-  await test('soft genre-only show is byte-for-byte the legacy line', () => {
-    assert.equal(showMusicLean({ name: 'x', topic: 'y', genre: 'Jazz' }), SOFT_GENRE_LINE);
+  await test('soft single-genre show is byte-for-byte the legacy line', () => {
+    assert.equal(showMusicLean({ name: 'x', topic: 'y', genres: ['Jazz'] }), SOFT_GENRE_LINE);
   });
   await test('filtersStrict=false leaves the soft path unchanged', () => {
-    assert.equal(showMusicLean({ name: 'x', topic: 'y', genre: 'Jazz', filtersStrict: false }), SOFT_GENRE_LINE);
+    assert.equal(showMusicLean({ name: 'x', topic: 'y', genres: ['Jazz'], filtersStrict: false }), SOFT_GENRE_LINE);
   });
   await test('strict filters are a hard rule, not a soft lean', () => {
-    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Hip-Hop', filtersStrict: true });
+    const out = showMusicLean({ name: 'x', topic: 'y', genres: ['Hip-Hop'], filtersStrict: true });
     assert.match(out, /music filters are STRICT/);                  // the unified strict lock (#766)
     assert.match(out, /Hip-Hop tracks/);                            // genre carried into the lock
     assert.match(out, /Keep your talk inside them too/);            // stay-in-filter instruction
@@ -721,25 +721,38 @@ async function main() {
     assert.doesNotMatch(out, /Music steer/);     // no soft line when strict is on
   });
   await test('strict carries the never-starve escape hatch', () => {
-    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Metal', filtersStrict: true });
+    const out = showMusicLean({ name: 'x', topic: 'y', genres: ['Metal'], filtersStrict: true });
     assert.match(out, /never leave dead air/i);   // can stray only to avoid dead air
   });
   await test('strict needs a filter — filtersStrict alone is inert', () => {
     assert.equal(showMusicLean({ name: 'x', topic: 'y', filtersStrict: true }), '');
     // energy alone still bites: the unified toggle locks any pinned filter, not just genre
-    const out = showMusicLean({ name: 'x', topic: 'y', energy: 'high', filtersStrict: true });
+    const out = showMusicLean({ name: 'x', topic: 'y', energies: ['high'], filtersStrict: true });
     assert.match(out, /music filters are STRICT/);
     assert.match(out, /high-energy tracks/);
     assert.doesNotMatch(out, /Music steer/);   // strict, so no soft line
   });
   await test('strict locks genre, era and energy together (unified toggle)', () => {
-    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Soul', filtersStrict: true, fromYear: 1970, toYear: 1979, energy: 'medium' });
+    const out = showMusicLean({ name: 'x', topic: 'y', genres: ['Soul'], filtersStrict: true, eras: [{ fromYear: 1970, toYear: 1979 }], energies: ['medium'] });
     assert.match(out, /music filters are STRICT/);   // unified strict lock (#766)
     assert.match(out, /Soul tracks/);
     assert.match(out, /the 1970–1979 era/);
     assert.match(out, /medium-energy tracks/);
     assert.doesNotMatch(out, /Music steer/);       // era/energy are strict too — no soft line
     assert.doesNotMatch(out, /lean toward Soul/);  // genre is part of the hard lock
+  });
+  await test('multi-value filters render every entry, any-of (#929)', () => {
+    const soft = showMusicLean({ name: 'x', topic: 'y', genres: ['Hard Rock', 'Metal'], eras: [{ fromYear: 1990, toYear: 1999 }, { fromYear: 2010, toYear: 2019 }], energies: ['high', 'medium'] });
+    assert.match(soft, /lean toward Hard Rock \/ Metal/);
+    assert.match(soft, /1990–1999 or 2010–2019/);        // non-adjacent windows both named
+    assert.match(soft, /favour high \/ medium-energy tracks/);
+    const strictOut = showMusicLean({ name: 'x', topic: 'y', genres: ['Hard Rock', 'Metal'], moods: ['energetic', 'driving'], filtersStrict: true });
+    assert.match(strictOut, /Hard Rock \/ Metal tracks/);
+    assert.match(strictOut, /the energetic \/ driving moods/);
+  });
+  await test('open-ended era windows read as prose', () => {
+    const out = showMusicLean({ name: 'x', topic: 'y', eras: [{ fromYear: null, toYear: 2009 }] });
+    assert.match(out, /prefer tracks from up to 2009/);  // "nothing after the 2000s"
   });
 
   // ---- clampMaxOutputTokens / resolveMaxOutputTokens (per-call cap, #712) ----

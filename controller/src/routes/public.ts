@@ -350,7 +350,10 @@ router.get('/schedule', async (req, res) => {
       id: show.id,
       name: show.name,
       topic: show.topic,
-      mood: show.mood,
+      // Multi-value moods (#929). `mood` stays as the lead entry for older
+      // clients (the native app reads this endpoint) — derived, never stored.
+      moods: Array.isArray(show.moods) ? show.moods : [],
+      mood: Array.isArray(show.moods) && show.moods.length ? show.moods[0] : '',
       personaId: show.personaId,
     }));
     res.json({

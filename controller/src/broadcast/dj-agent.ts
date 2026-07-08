@@ -28,6 +28,7 @@ import { recordPick } from '../llm/log.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { recencyWindowsForLibrary, effectiveNoRepeatWindow } from '../music/recency.js';
+import { hasEraBound } from '../music/show-filter.js';
 import { djCallsAllowed } from './listeners.js';
 
 // --- Feature 4: DJ-mode mini-runs ------------------------------------------
@@ -351,12 +352,12 @@ export const pickerAgent = defineAgent({
     // (issue #447), so no length cap is passed here.
     const activeShow = settings.resolveActiveShow(showAt ?? undefined);
     const strict = !!(activeShow?.filtersStrict);
-    const genreLock = strict && activeShow?.genre ? activeShow.genre : null;
-    const eraLock = strict && (activeShow?.fromYear != null || activeShow?.toYear != null)
-      ? { fromYear: activeShow.fromYear, toYear: activeShow.toYear }
-      : null;
-    const moodLock = strict && activeShow?.mood ? activeShow.mood : null;
-    const energyLock = strict && activeShow?.energy ? activeShow.energy : null;
+    // Each lock is an any-of list (#929): a candidate passes when it matches
+    // ANY entry; the locks AND together across attributes.
+    const genreLock = strict && activeShow?.genres?.length ? activeShow.genres : null;
+    const eraLock = strict && hasEraBound(activeShow?.eras) ? activeShow.eras : null;
+    const moodLock = strict && activeShow?.moods?.length ? activeShow.moods : null;
+    const energyLock = strict && activeShow?.energies?.length ? activeShow.energies : null;
     // playlistLock / playlistTracks are pre-resolved by pickViaAgent (the
     // Navidrome fetch is async; buildTools is sync) and threaded through run().
     const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock, moodLock, energyLock, playlistLock, playlistTracks, excludedIds });
