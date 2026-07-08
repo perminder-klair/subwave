@@ -139,6 +139,16 @@ to Piper. The old `docker build --build-arg WITH_CHATTERBOX=1` path still
 works if you already have a custom-built controller image — see
 `docker/Dockerfile.controller`.
 
+**Run just one engine.** Both engines load by default, but each costs RAM and a
+first-boot weight download. If you only use one, name it in `.env` and the other
+never loads:
+
+```ini
+TTS_HEAVY_ENGINES=pocket-tts       # PocketTTS only (no Chatterbox)
+# TTS_HEAVY_ENGINES=chatterbox     # Chatterbox only
+# TTS_HEAVY_ENGINES=chatterbox,pocket-tts   # default — both
+```
+
 Acoustic analysis (tempo/key/loudness) does **not** need the heavy TTS sidecar —
 it runs in its own `subwave-analyzer` service, which **starts by default**
 alongside the controller and web. The default image is **lean and multi-arch**
