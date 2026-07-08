@@ -445,7 +445,7 @@ export default function SettingsPanel() {
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
       maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
       archive: {
-        enabled: v.archive?.enabled ?? true,
+        enabled: v.archive?.enabled ?? false,
         bitrate: String(v.archive?.bitrate ?? 128),
         retentionDays: String(v.archive?.retentionDays ?? 0),
       },

@@ -793,15 +793,15 @@ const DEFAULTS = {
   // i.e. opt back out of the station cap for a long-form show). Listener
   // requests bypass the cap entirely — an explicit ask always plays.
   maxTrackSeconds: 0,
-  // Hourly archive output. Enabled by default to preserve existing behaviour.
-  // The second MP3 encoder is the largest constant CPU cost in the broadcast
-  // container — operators who don't use the archives can switch this off to
-  // reclaim that headroom (issue #137). Dropping the bitrate (e.g. 128 → 64
-  // mono in a future change) also helps for operators who want the tape.
+  // Hourly archive output. Off by default — the second MP3 encoder is the
+  // largest constant CPU cost in the broadcast container, and most operators
+  // don't use the archives, so they opt in via admin → Settings rather than
+  // paying for the tape by default (issue #137). Dropping the bitrate (e.g.
+  // 128 → 64 mono in a future change) also helps for operators who want it.
   // retentionDays: hourly recordings older than this many days are deleted by
   // the scheduler's hourly cleanup. 0 = keep forever — the default, because a
   // retention default would silently delete archives operators already have.
-  archive: { enabled: true, bitrate: 128, retentionDays: 0 },
+  archive: { enabled: false, bitrate: 128, retentionDays: 0 },
   // Secondary Ogg-Opus broadcast mount (/stream.opus). Off by default — only
   // Blink (Chrome/Edge) clients ever select it (web/hooks/usePlayer.ts keeps
   // Safari/iOS/Firefox on MP3), and it adds a continuous Opus encoder + a
