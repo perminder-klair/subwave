@@ -1,10 +1,11 @@
 'use client';
 
-/* Admin Connect page — the API discovery surface. Three tabs:
+/* Admin Connect page — the API discovery surface. Four tabs:
    - Endpoints: the curated HTTP API, each with an inline playground.
    - MCP: the subwave-mcp tool set + copy-ready client setup.
    - Integrations: stream URLs, now-playing feeds, and Home Assistant /
      Music Assistant recipes.
+   - Webhooks: outbound event POSTs (the push direction).
 
    All of it renders from GET /connect/catalog (controller/src/routes/connect.ts),
    which carries the manifest plus the live station origin + per-mount enabled

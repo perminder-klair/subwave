@@ -54,9 +54,9 @@ router.get('/connect/catalog', requireAdmin, (req, res) => {
     // `${apiBase}${mcpHttpPath}` — the MCP tab builds the connect command from
     // it so clients need no clone or local process.
     mcpHttpPath: '/mcp',
+    // Per-mount live enabled state; the web player only ever upgrades to Opus,
+    // FLAC/AAC are for external players — the Integrations tab labels them so.
     streamMounts: mountsWithState(),
-    // The web player only ever upgrades to Opus; FLAC/AAC are for external
-    // players. Surfaced so the Integrations tab can label them accurately.
     openapiPath: '/connect/openapi.json',
   });
 });

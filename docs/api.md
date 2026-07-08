@@ -6,7 +6,7 @@ The easiest way to discover and try all of it is the built-in **Connect** page.
 
 ## Connect (admin → Connect)
 
-Sign into the admin panel and open **Connect** (`/admin/connect`). It has three
+Sign into the admin panel and open **Connect** (`/admin/connect`). It has four
 tabs:
 
 - **Endpoints** — the curated integration subset of the HTTP API, grouped and

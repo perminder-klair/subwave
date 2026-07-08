@@ -11,8 +11,11 @@
 // Style matches scripts/llm-pure.test.ts (node:assert via tsx, count failures).
 
 import assert from 'node:assert/strict';
-import { ENDPOINTS } from '../src/connect/catalog.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { ENDPOINTS, MCP_TOOLS } from '../src/connect/catalog.js';
 import { toOpenApi } from '../src/connect/openapi.js';
+import { registerSubwaveTools } from '../src/mcp/tools.js';
+import type { SubwaveClient } from '../src/mcp/client.js';
 
 // Every route module that carries a documented endpoint. Import them and merge
 // their router stacks into one "METHOD path" set of real routes.
@@ -79,11 +82,27 @@ async function main() {
     assert.equal(health.security, undefined, '/health is public');
   });
 
+  // MCP_TOOLS is a hand-maintained mirror of the tools registerSubwaveTools
+  // actually registers; assert the two sets match exactly. A stub server
+  // captures names — no transport, no client calls.
+  console.log('\nMCP tool catalog ↔ registered tools:');
+  await test('MCP_TOOLS mirrors registerSubwaveTools exactly', () => {
+    const registered: string[] = [];
+    const stub = { registerTool: (name: string) => { registered.push(name); } } as unknown as McpServer;
+    registerSubwaveTools(stub, {} as SubwaveClient);
+    const documented = MCP_TOOLS.map(t => t.name);
+    assert.deepEqual(
+      [...registered].sort(),
+      [...documented].sort(),
+      'catalog MCP_TOOLS and registerSubwaveTools disagree',
+    );
+  });
+
   if (failures) {
     console.error(`\n✗ ${failures} check(s) failed`);
     process.exit(1);
   }
-  console.log(`\n✓ all checks passed (${ENDPOINTS.length} endpoints)`);
+  console.log(`\n✓ all checks passed (${ENDPOINTS.length} endpoints, ${MCP_TOOLS.length} MCP tools)`);
 }
 
 void main();

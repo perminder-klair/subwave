@@ -42,6 +42,12 @@ export interface SubwaveConfig {
    * straight through. Takes precedence over adminUser/adminPass when set.
    */
   forwardAuth?: string;
+  /**
+   * Original caller IP to forward as X-Forwarded-For, used by the controller's
+   * HTTP MCP mount so per-IP rate limiting (POST /request) keys on the real
+   * caller instead of collapsing every MCP user into the loopback address.
+   */
+  forwardIp?: string;
 }
 
 /** POST /request hands back a receipt; the booth resolves in the background. */
@@ -129,6 +135,7 @@ export class SubwaveClient {
         signal: controller.signal,
         headers: {
           ...(init.body !== undefined ? { "content-type": "application/json" } : {}),
+          ...(this.config.forwardIp ? { "x-forwarded-for": this.config.forwardIp } : {}),
           ...(init.admin ? this.authHeader() : {}),
         },
         body: init.body !== undefined ? JSON.stringify(init.body) : undefined,

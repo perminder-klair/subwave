@@ -39,10 +39,17 @@ async function run(
 }
 
 // Song requests resolve in the booth in the background (LLM match + TTS
-// intro); the receipt is polled until it lands. The budget covers a slow
-// homelab LLM leg; past it the tool hands back the id for a later status call.
+// intro); the receipt is polled until it lands. The default budget covers a
+// slow homelab LLM leg; past it the tool hands back the id for a later status
+// call. The HTTP transport passes a shorter budget (see routes/mcp.ts) so an
+// unauthenticated POST can't hold a connection open for the full 45s.
 const REQUEST_POLL_MS = 2_000;
-const REQUEST_POLL_BUDGET_MS = 45_000;
+const DEFAULT_REQUEST_POLL_BUDGET_MS = 45_000;
+
+export interface RegisterToolsOptions {
+  /** Max time subwave_request_song blocks polling for an outcome. */
+  requestPollBudgetMs?: number;
+}
 
 /** Shared output shape for the request tools — mirrors GET /request/:id. */
 const REQUEST_OUTPUT = {
@@ -75,7 +82,13 @@ function summarizeRequest(requestId: string, status: RequestStatus): string {
 }
 
 /** Register the full SUB/WAVE tool set on an McpServer. */
-export function registerSubwaveTools(server: McpServer, client: SubwaveClient): void {
+export function registerSubwaveTools(
+  server: McpServer,
+  client: SubwaveClient,
+  options: RegisterToolsOptions = {},
+): void {
+  const pollBudgetMs = options.requestPollBudgetMs ?? DEFAULT_REQUEST_POLL_BUDGET_MS;
+  const pollBudgetLabel = `~${Math.round(pollBudgetMs / 1000)}s`;
   // -------------------------------------------------------------------------
   // subwave_health — is the station up?
   // -------------------------------------------------------------------------
@@ -201,7 +214,8 @@ export function registerSubwaveTools(server: McpServer, client: SubwaveClient): 
         "calm for a rainy evening\"), or a follow-on like \"more like this\". The DJ " +
         "matches it against the library, writes a spoken intro, and queues the track — " +
         "it does NOT interrupt the current song. The controller resolves requests in " +
-        "the background; this tool waits (up to ~45s) for the outcome and reports it. " +
+        `the background; this tool waits (up to ${pollBudgetLabel}) for the outcome and reports it ` +
+        "(if still pending after that, poll subwave_request_status with the returned id). " +
         "Public endpoint, rate-limited to 1 request per 20s and 8 per hour; requests " +
         "pause when nobody is listening. For an exact, non-LLM pick use " +
         "subwave_search_library + subwave_queue_track instead.",
@@ -227,7 +241,7 @@ export function registerSubwaveTools(server: McpServer, client: SubwaveClient): 
       run(async () => {
         const receipt = await client.requestSong(request, requester);
         let status: RequestStatus = { status: receipt.status || "pending" };
-        const deadline = Date.now() + REQUEST_POLL_BUDGET_MS;
+        const deadline = Date.now() + pollBudgetMs;
         while (status.status === "pending" && Date.now() < deadline) {
           await sleep(REQUEST_POLL_MS);
           status = await client.requestStatus(receipt.requestId);

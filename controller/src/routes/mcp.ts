@@ -22,6 +22,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { config } from '../config.js';
 import { SubwaveClient } from '../mcp/client.js';
 import { registerSubwaveTools } from '../mcp/tools.js';
+import { clientIp } from '../middleware/ratelimit.js';
 import { queue } from '../broadcast/queue.js';
 
 export const router = express.Router();
@@ -38,16 +39,25 @@ function rpcError(res: express.Response, code: number, message: string) {
   res.status(500).json({ jsonrpc: '2.0', error: { code, message }, id: null });
 }
 
+// subwave_request_song blocks while it polls for the outcome. Over stdio the
+// full 45s budget is fine (one local caller); here every anonymous POST holds
+// an HTTP connection for the duration, so keep it short — the tool hands back
+// the requestId and the agent re-polls with subwave_request_status.
+const HTTP_REQUEST_POLL_BUDGET_MS = 15_000;
+
 router.post('/mcp', async (req, res) => {
   const client = new SubwaveClient({
     baseUrl: LOOPBACK_BASE,
     // Forward the caller's credentials verbatim so admin tools are gated
     // exactly as the REST endpoints they wrap.
     forwardAuth: typeof req.headers.authorization === 'string' ? req.headers.authorization : undefined,
+    // Forward the caller's IP so POST /request's per-IP rate limit keys on the
+    // real caller — without this every MCP user shares one loopback bucket.
+    forwardIp: clientIp(req),
   });
 
   const server = new McpServer({ name: 'subwave-mcp', version: process.env.SUBWAVE_VERSION || 'latest' });
-  registerSubwaveTools(server, client);
+  registerSubwaveTools(server, client, { requestPollBudgetMs: HTTP_REQUEST_POLL_BUDGET_MS });
 
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless — a fresh server per request
