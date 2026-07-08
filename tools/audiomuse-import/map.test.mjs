@@ -69,6 +69,22 @@ test('topGenre picks the highest-scoring genre-like tag', () => {
   assert.equal(topGenre({}), null);
 });
 
+test('topGenre honours the confidence cutoff', () => {
+  // A near-zero genre tag must not win off noise once a cutoff is applied.
+  assert.equal(topGenre({ metal: 0.02, rock: 0.9 }, 0.4), 'rock');
+  assert.equal(topGenre({ metal: 0.02 }, 0.4), null);
+  // The higher-confidence genre still wins even when both clear the cutoff.
+  assert.equal(topGenre({ rock: 0.5, jazz: 0.9 }, 0.4), 'jazz');
+});
+
+test('mapTrack applies moodCutoff to genre too', () => {
+  // metal below the default 0.4 cutoff → excluded from BOTH moods and genre.
+  const m = mapTrack({ mood_vector: 'metal:0.05,rock:0.8', other_features: '' });
+  assert.equal(m.genre, 'rock');
+  const noisy = mapTrack({ mood_vector: 'metal:0.05', other_features: '' });
+  assert.equal(noisy.genre, null);
+});
+
 test('mood map only carries genuine mood signal, not genre', () => {
   assert.equal(AUDIOMUSE_MOOD_MAP['rock'], undefined);
   assert.equal(AUDIOMUSE_MOOD_MAP['aggressive'], 'energetic');

@@ -95,11 +95,15 @@ const GENRE_TAGS = new Set([
 ]);
 
 // Highest-scoring genre-like tag from a parsed mood_vector, or null. Returns the
-// original-cased label as AudioMuse spelled it.
-export function topGenre(moodScores) {
+// original-cased label as AudioMuse spelled it. `cutoff` gates confidence the
+// same way moods are gated, so a near-zero tag ("metal:0.02") can't become a
+// track's genre off noise (#934 review); default 0 keeps standalone callers
+// unfiltered.
+export function topGenre(moodScores, cutoff = 0) {
   let best = null;
   let bestScore = -Infinity;
   for (const [label, score] of Object.entries(moodScores)) {
+    if (score < cutoff) continue;
     if (GENRE_TAGS.has(label.toLowerCase()) && score > bestScore) {
       best = label;
       bestScore = score;
@@ -133,6 +137,6 @@ export function mapTrack(row, { moodCutoff = 0.4 } = {}) {
     musicalKey: keyToCamelot(row.key, row.scale),
     energy: energyToBucket(row.energy),
     moods,
-    genre: topGenre(moodScores),
+    genre: topGenre(moodScores, moodCutoff),
   };
 }

@@ -44,7 +44,13 @@ function parseArgs(argv) {
     else if (a === '--library-db') args.libraryDb = next();
     else if (a === '--concurrency') args.concurrency = Math.max(1, Number(next()) || 8);
     else if (a === '--limit') args.limit = Number(next()) || undefined;
-    else if (a === '--mood-cutoff') args.moodCutoff = Number(next());
+    else if (a === '--mood-cutoff') {
+      // Guard NaN/out-of-range the way --concurrency/--limit already do — an
+      // unparseable value must not silently disable mood filtering (score < NaN
+      // is always false, so every tag would pass). #934 review.
+      const mc = Number(next());
+      args.moodCutoff = Number.isFinite(mc) ? Math.min(1, Math.max(0, mc)) : 0.4;
+    }
     else if (a === '--dry-run') args.dryRun = true;
     else if (a === '--overwrite') args.overwrite = true;
     else if (a === '-h' || a === '--help') args.help = true;
@@ -68,7 +74,7 @@ Options:
   --overwrite             Overwrite existing bpm/moods/key/energy (default:
                           fill only empty fields, never clobber SUB/WAVE's own).
   --dry-run               Map and report, write nothing.
-  --concurrency <n>       Parallel page fetches (default 8).
+  --concurrency <n>       Reserved; paging is currently sequential.
   --mood-cutoff <0..1>    Min tag score to count a mood (default 0.4).
   --limit <n>             Stop after N AudioMuse tracks (testing).
   -h, --help              This help.
@@ -86,7 +92,27 @@ async function* iterateAudioMuseTracks(baseUrl, { limit } = {}) {
     if (!res.ok) {
       throw new Error(`GET ${url} -> ${res.status} ${res.statusText}`);
     }
-    const body = await res.json();
+    // A proxy/login page can answer 200 with HTML, and a wrong-endpoint 200 can
+    // return JSON with no `tracks` array — parse defensively so either is a clear
+    // message, not a raw SyntaxError or a silent zero-track "success". #934 review.
+    let body;
+    try {
+      body = await res.json();
+    } catch {
+      throw new Error(
+        `GET ${url} returned ${res.status} but the body was not JSON — is ${root} ` +
+          `an AudioMuse API? (a proxy or login page can answer 200 with HTML.)`,
+      );
+    }
+    if (!body || !Array.isArray(body.tracks)) {
+      const shape = body && typeof body === 'object'
+        ? `keys: ${Object.keys(body).join(', ') || 'none'}`
+        : `type: ${typeof body}`;
+      throw new Error(
+        `GET ${url} returned JSON with no "tracks" array (${shape}). ` +
+          `Check the AudioMuse URL and that /api/sync is available.`,
+      );
+    }
     if (!providerChecked) {
       providerChecked = true;
       if (body.provider_type && body.provider_type.toLowerCase() !== 'navidrome') {
@@ -97,7 +123,7 @@ async function* iterateAudioMuseTracks(baseUrl, { limit } = {}) {
         );
       }
     }
-    const tracks = body.tracks || [];
+    const tracks = body.tracks;
     for (const t of tracks) {
       if (limit && seen >= limit) return;
       seen++;
@@ -159,12 +185,18 @@ function makeWriter(db) {
       params.musicalKey = mapped.musicalKey;
     }
     if (wantMoods && moodsJson) {
-      sets.push('moods = @moods', 'energy = @energy', "source = 'manual'",
+      sets.push('moods = @moods', "source = 'manual'",
         'tagger_version = @taggerVersion', 'tagged_at = @now');
       params.moods = moodsJson;
-      params.energy = mapped.energy;
       params.taggerVersion = TAGGER_VERSION;
       params.now = now;
+      // Energy rides with the mood write, but only when AudioMuse actually gave
+      // one — the existence SELECT doesn't read energy, so writing a null mapped
+      // energy here would clobber an energy SUB/WAVE already computed. #934 review.
+      if (mapped.energy != null) {
+        sets.push('energy = @energy');
+        params.energy = mapped.energy;
+      }
     }
     // Genre only fills a truly empty genre.
     if (mapped.genre != null) {
