@@ -16,12 +16,17 @@ const CHATTERBOX_TAG_HINT =
 // than reading them aloud (issue #696). Gated on the RESOLVED cloud model —
 // only eleven_v3* families support this — so an ElevenLabs persona still on
 // v2 (or a persona whose provider override resolves to eleven_flash_v2_5)
-// never sees the hint. Direct mirror of CHATTERBOX_TAG_HINT above; the base
-// DJ prompt template already forbids asterisks and quotes but says nothing
-// about brackets, so no rule loosening is needed for either engine.
-const ELEVENLABS_V3_TAG_HINT = CHATTERBOX_TAG_HINT;
+// never sees the hint. Same structure as CHATTERBOX_TAG_HINT above but a
+// separate constant with v3's own verb-form tag vocabulary (per the
+// ElevenLabs prompting guide), so a tweak to one engine's cue list can't
+// silently retune the other. The base DJ prompt template already forbids
+// asterisks and quotes but says nothing about brackets, so no rule loosening
+// is needed for either engine.
+const ELEVENLABS_V3_TAG_HINT =
+  '\n\nYou may sparingly insert non-verbal audio cues in square brackets: [laughs], [sighs], [whispers], [excited]. Use them only where genuinely natural — at most one per segment, and never as filler.';
 
-function isElevenLabsV3(model: string): boolean {
+// Exported for scripts/llm-pure.test.ts.
+export function isElevenLabsV3(model: string): boolean {
   return /^eleven[_-]?v3/i.test(model || '');
 }
 
@@ -49,7 +54,11 @@ export function djSystem(
     location: s.weather?.locationName,
   }) + settings.onAirRosterClause(persona);
   if (persona?.tts?.engine === 'chatterbox') return base + CHATTERBOX_TAG_HINT;
-  if (persona?.tts?.engine === 'cloud' && isElevenLabsV3(cloudModel)) return base + ELEVENLABS_V3_TAG_HINT;
+  // cloudModel is non-empty only when the persona actually resolves to a
+  // configured cloud engine — including via the station defaultEngine when
+  // the persona sets no engine of its own, which a persona-engine check here
+  // would miss (see resolveCloudModelForPersona).
+  if (isElevenLabsV3(cloudModel)) return base + ELEVENLABS_V3_TAG_HINT;
   return base;
 }
 

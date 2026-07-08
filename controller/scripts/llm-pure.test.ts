@@ -18,6 +18,8 @@ import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
 import { DEFAULT_LOCCA_EMBED_BASE_URL } from '../src/llm/internal/provider/registry.js';
 import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict, clampTtsSpeed, TTS_SPEED_DEFAULT, clampMaxOutputTokens, resolveMaxOutputTokens, MAX_OUTPUT_TOKENS_MIN, MAX_OUTPUT_TOKENS_MAX } from '../src/settings.js';
 import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
+import { resolveCloudModel } from '../src/llm/internal/speech/cloud-speech.js';
+import { isElevenLabsV3 } from '../src/llm/internal/prompts/system.js';
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -681,6 +683,72 @@ async function main() {
     assert.equal(nearestId('', ['abcdef123456789012345']), null);
     assert.equal(nearestId(undefined as any, ['abcdef123456789012345']), null);
     assert.equal(nearestId('abcdef123456789012345', []), null);
+  });
+
+  // ---- resolveCloudModel: cloud TTS model resolution for the v3 tag hint ----
+  // Pins the "mirror of speak() + resolveEngine()" claim (issue #696): the
+  // model djSystem gates the ElevenLabs v3 hint on must be the one the persona
+  // is actually voiced by at speak() time.
+  console.log('resolveCloudModel (ElevenLabs v3 hint gating, issue #696):');
+  const cloudCfg = { defaultEngine: 'piper', provider: 'elevenlabs', model: 'eleven_v3' };
+  await test('explicit cloud persona with no provider override → global model', () => {
+    assert.equal(resolveCloudModel({ engine: 'cloud' }, cloudCfg), 'eleven_v3');
+  });
+  await test('provider override away from global → new provider default, NOT the global model', () => {
+    // Persona on ElevenLabs while the global cloud provider is OpenAI is
+    // voiced by eleven_flash_v2_5 — gating on the provider alone would hint a
+    // v2 voice that reads the brackets aloud.
+    assert.equal(
+      resolveCloudModel({ engine: 'cloud', cloudProvider: 'elevenlabs' }, { defaultEngine: 'piper', provider: 'openai', model: 'gpt-4o-mini-tts' }),
+      'eleven_flash_v2_5',
+    );
+  });
+  await test('provider override matching the global provider → global model', () => {
+    assert.equal(resolveCloudModel({ engine: 'cloud', cloudProvider: 'elevenlabs' }, cloudCfg), 'eleven_v3');
+  });
+  await test('override to openai-compatible (no per-provider default) keeps the global model', () => {
+    assert.equal(
+      resolveCloudModel({ engine: 'cloud', cloudProvider: 'openai-compatible' }, cloudCfg),
+      'eleven_v3',
+    );
+  });
+  await test('persona with no engine rides the station defaultEngine: cloud', () => {
+    // The common setup: global defaultEngine cloud + untouched personas — a
+    // persona-engine check would miss this and the hint would never fire.
+    assert.equal(
+      resolveCloudModel({}, { defaultEngine: 'cloud', provider: 'elevenlabs', model: 'eleven_v3' }),
+      'eleven_v3',
+    );
+    assert.equal(
+      resolveCloudModel(null, { defaultEngine: 'cloud', provider: 'elevenlabs', model: 'eleven_v3' }),
+      'eleven_v3',
+    );
+  });
+  await test('persona on a local engine → no model, regardless of defaultEngine', () => {
+    assert.equal(resolveCloudModel({ engine: 'piper' }, { defaultEngine: 'cloud', provider: 'elevenlabs', model: 'eleven_v3' }), '');
+    assert.equal(resolveCloudModel({ engine: 'chatterbox' }, { defaultEngine: 'cloud', provider: 'elevenlabs', model: 'eleven_v3' }), '');
+  });
+  await test('no engine anywhere near cloud → no model', () => {
+    assert.equal(resolveCloudModel({}, cloudCfg), '');
+    assert.equal(resolveCloudModel({ engine: '' }, cloudCfg), '');
+  });
+  await test('unknown persona engine string fails closed (no hint beats a spoken bracket)', () => {
+    assert.equal(resolveCloudModel({ engine: 'bogus' }, { defaultEngine: 'cloud', provider: 'elevenlabs', model: 'eleven_v3' }), '');
+  });
+
+  console.log('isElevenLabsV3 (model-family gate):');
+  await test('matches the v3 family, case- and separator-insensitive', () => {
+    assert.equal(isElevenLabsV3('eleven_v3'), true);
+    assert.equal(isElevenLabsV3('ELEVEN_V3'), true);
+    assert.equal(isElevenLabsV3('eleven-v3'), true);
+    assert.equal(isElevenLabsV3('eleven_v3_preview'), true);
+  });
+  await test('rejects v2 families, non-TTS v3 ids, and junk', () => {
+    assert.equal(isElevenLabsV3('eleven_flash_v2_5'), false);
+    assert.equal(isElevenLabsV3('eleven_multilingual_v2'), false);
+    assert.equal(isElevenLabsV3('eleven_ttv_v3'), false);
+    assert.equal(isElevenLabsV3('gpt-4o-mini-tts'), false);
+    assert.equal(isElevenLabsV3(''), false);
   });
 
   console.log(failures === 0 ? '\nAll llm-pure tests passed.' : `\n${failures} test(s) FAILED.`);
