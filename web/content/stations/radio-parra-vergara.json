@@ -6,6 +6,8 @@
   "country": "Chile",
   "lat": -35.8864413,
   "lon": -71.482107,
+  "genre": "General",
+  "description": "Música en General",
   "featured": false,
   "submitted": "2026-07-08"
 }
