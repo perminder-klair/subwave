@@ -787,6 +787,22 @@ async function main() {
     const seen = ['2igTN1Xw3uJBY9CjdKzZGl', 'H8G6Y1gPsSsMNJwflWbstW'];
     assert.equal(nearestId('3bKpTnYlqR8vD4sXe2aJ0m', seen), null);
   });
+  // The #939 echo-test corruptions, verbatim: small local models corrupt 2-3
+  // chars of a 22-char nanoid (confusable swaps, injected spaces, adjacent
+  // transpositions) — each must resolve back to the id the model meant.
+  await test('repairs a char swap + injected space (#939, distance 2)', () => {
+    const seen = ['923tdZ9Hd7Zw7XNgGGL1DR', 'H8G6Y1gPsSsMNJwflWbstW', '2igTN1Xw3uJBY9CjdKzZGl'];
+    assert.equal(nearestId('923tdZ9HdT7Zw7XNgGG L1DR', seen), '923tdZ9Hd7Zw7XNgGGL1DR');
+  });
+  await test('repairs a space + transposition (#939, distance 3)', () => {
+    const seen = ['w328pyatiNZn9HbMghVPH2', 'H8G6Y1gPsSsMNJwflWbstW', '2igTN1Xw3uJBY9CjdKzZGl'];
+    assert.equal(nearestId('w328pyat iNZn9HbMghVHP2', seen), 'w328pyatiNZn9HbMghVPH2');
+  });
+  await test('refuses when the runner-up is not clearly farther (margin)', () => {
+    // Best is 2 edits away but the runner-up is only 3 — too close to call.
+    const seen = ['AAAAAAAAAAAAAAAAAAAAxx', 'AAAAAAAAAAAAAAAAAAAyyy'];
+    assert.equal(nearestId('AAAAAAAAAAAAAAAAAAAAAA', seen), null);
+  });
   await test('rejects an ambiguous match (two candidates equally close)', () => {
     // Both differ from the query by one trailing character — no safe winner.
     const seen = ['AAAAAAAAAAAAAAAAAAAAAx', 'AAAAAAAAAAAAAAAAAAAAAy'];

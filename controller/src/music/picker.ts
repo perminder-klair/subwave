@@ -9,6 +9,8 @@
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as dj from '../llm/dj.js';
+import { nearestId } from '../llm/sdk.js';
+import { logEvent } from '../observability/events.js';
 import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
@@ -624,7 +626,19 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     };
   }
 
-  const chosen = candidates.find(c => c.id === pickRaw?.id);
+  let chosen = candidates.find(c => c.id === pickRaw?.id);
+  // Near-miss repair, same as the agent path (#939): small local models can't
+  // reproduce a 22-char nanoid verbatim, so an id 1-3 edits from a real
+  // candidate is that candidate mistranscribed, not a different pick. Free —
+  // no model call — and only runs when the exact match above already missed.
+  if (!chosen && pickRaw?.id) {
+    const fixed = nearestId(pickRaw.id, candidates.map(c => c.id).filter(Boolean));
+    if (fixed) {
+      logEvent('pick.repaired', { agent: 'pool', from: pickRaw.id, to: fixed });
+      queue.log('picker', `pool pick id "${pickRaw.id}" repaired to near-miss match "${fixed}"`);
+      chosen = candidates.find(c => c.id === fixed);
+    }
+  }
   if (!chosen) {
     queue.log(
       'error',

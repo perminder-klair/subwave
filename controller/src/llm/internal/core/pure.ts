@@ -387,10 +387,10 @@ export function failureDiagnostics(err: any): any {
 // Near-miss id resolution
 // ---------------------------------------------------------------------------
 
-// Levenshtein distance capped at 2 — we only ever care about distance ≤ 1, so
-// bail as soon as a row's minimum exceeds the cap instead of filling the table.
-function editDistanceAtMost2(a: string, b: string): number {
-  if (Math.abs(a.length - b.length) > 2) return 3;
+// Levenshtein distance capped at `cap` — bail as soon as a row's minimum
+// exceeds the cap instead of filling the table; returns cap+1 for "farther".
+function boundedLevenshtein(a: string, b: string, cap: number): number {
+  if (Math.abs(a.length - b.length) > cap) return cap + 1;
   let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
   for (let i = 1; i <= a.length; i++) {
     const cur = [i];
@@ -399,24 +399,35 @@ function editDistanceAtMost2(a: string, b: string): number {
       cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
       if (cur[j] < rowMin) rowMin = cur[j];
     }
-    if (rowMin > 2) return 3;
+    if (rowMin > cap) return cap + 1;
     prev = cur;
   }
   return prev[b.length];
 }
 
+// The runner-up must be at least this many edits farther than the best match
+// for the best to be accepted. On random 22-char nanoids the id the model
+// meant sits ~1-3 edits away while every OTHER candidate sits ~18+, so a real
+// near-miss clears this margin trivially and a genuine tie refuses.
+const NEAREST_ID_MARGIN = 4;
+
 // Resolve a model-returned id that isn't in the candidate set to the candidate
-// it almost certainly meant, or null when no single safe match exists. Covers
-// the observed transcription slips (glm-5.1 dropped the final character of an
-// id it had genuinely picked from its own tool results — a 22-char nanoid
-// returned as 21) without ever guessing between two plausible candidates:
+// it almost certainly meant, or null when no single safe match exists. Small
+// local models can't reproduce a high-entropy 22-char nanoid verbatim (#939 —
+// swapped confusables, injected spaces, 2-3 edits at a time; glm-5.1 dropped a
+// final char), so this is best-match-with-a-margin rather than a fixed tiny
+// threshold:
 //   1. prefix — one string is a prefix of the other, ≥ 12 chars shared and ≤ 3
 //      chars difference (nanoid-style ids make a 12-char prefix collision
 //      astronomically unlikely; 12 also keeps short ids from matching wildly).
-//   2. edit distance ≤ 1 — a single dropped/added/substituted character.
-// Both passes require EXACTLY one candidate to match — any ambiguity → null,
-// the caller falls back to its re-pick / stateless path rather than airing a
-// coin-flip.
+//      Requires EXACTLY one candidate to match.
+//   2. distance — score every candidate with a bounded Levenshtein; accept the
+//      closest only when it's within a length-scaled cap (5 for 22-char ids,
+//      tighter for short ones) AND clearly closer than the runner-up
+//      (NEAREST_ID_MARGIN). Any ambiguity → null, the caller falls back to its
+//      re-pick / stateless path rather than airing a coin-flip.
+// Only ever consulted AFTER an exact-id lookup misses, so models that return
+// clean ids never touch this path.
 export function nearestId(id: string, candidateIds: Iterable<string>): string | null {
   if (!id || typeof id !== 'string') return null;
   const ids = [...candidateIds];
@@ -427,6 +438,26 @@ export function nearestId(id: string, candidateIds: Iterable<string>): string | 
     && (c.startsWith(id) || id.startsWith(c)));
   if (prefix.length === 1) return prefix[0];
   if (prefix.length > 1) return null;
-  const near = ids.filter((c) => c !== id && editDistanceAtMost2(c, id) <= 1);
-  return near.length === 1 ? near[0] : null;
+  // Accept cap scales with the returned id's length so a short string can't
+  // fuzzy-match half the set; 22-char nanoids get the full cap of 5.
+  const cap = Math.min(5, Math.max(1, Math.floor(id.length / 4)));
+  // Distances only matter up to cap + margin: anything past that bound can
+  // affect neither the accept test nor the margin test.
+  const bound = cap + NEAREST_ID_MARGIN;
+  let best: string | null = null;
+  let bestDist = bound + 1;
+  let secondDist = bound + 1;
+  for (const c of ids) {
+    if (c === id) continue;
+    const d = boundedLevenshtein(c, id, bound);
+    if (d < bestDist) {
+      secondDist = bestDist;
+      bestDist = d;
+      best = c;
+    } else if (d < secondDist) {
+      secondDist = d;
+    }
+  }
+  if (!best || bestDist > cap) return null;
+  return secondDist - bestDist >= NEAREST_ID_MARGIN ? best : null;
 }
