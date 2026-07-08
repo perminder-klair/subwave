@@ -225,6 +225,11 @@ services:
       # share-card tags render per-request. Define SITE_URL once in .env and
       # both build-arg and runtime env pick it up.
       - SITE_URL=\${SITE_URL:-}
+      # Google Analytics Measurement ID at RUNTIME (web/lib/ga.ts). Plumbs the
+      # operator's NEXT_PUBLIC_GA_ID from .env into a runtime var, so analytics
+      # turn on with a \`web\` recreate — no image rebuild. The build-arg above
+      # still bakes it for images built with a value.
+      - GA_ID=\${NEXT_PUBLIC_GA_ID:-}
       # Server-side base URL for generateMetadata on the force-dynamic homepage
       # to read the live station name from the controller. Internal compose
       # network name — not exposed to the browser (which uses /api via Caddy).
@@ -558,6 +563,11 @@ services:
       - NODE_ENV=production
       - SUBWAVE_HOMEPAGE=\${SUBWAVE_HOMEPAGE:-player}
       - SITE_URL=\${SITE_URL:-}
+      # Google Analytics Measurement ID at RUNTIME (web/lib/ga.ts). Plumbs the
+      # operator's NEXT_PUBLIC_GA_ID from .env into a runtime var, so analytics
+      # turn on with a \`web\` recreate — no image rebuild. The build-arg still
+      # bakes it for images built with a value.
+      - GA_ID=\${NEXT_PUBLIC_GA_ID:-}
       # Server-side base URL for generateMetadata on the force-dynamic homepage
       # to read the live station name from the controller. Internal compose
       # network name — not exposed to the browser (which uses /api via Caddy).
@@ -1030,7 +1040,9 @@ SITE_URL=
 
 # Web
 # SUBWAVE_HOMEPAGE=player          # or 'landing' for the marketing host
-# NEXT_PUBLIC_GA_ID=
+# NEXT_PUBLIC_GA_ID=               # Google Analytics ID. Applied at RUNTIME
+#                                  # (recreate \`web\`, no rebuild) as well as at
+#                                  # build time. Unset → no analytics.
 
 # Pin the whole stack to a specific published image tag. Every subwave-* image
 # ref resolves \${SUBWAVE_VERSION:-latest}, so unset/removed follows :latest.
