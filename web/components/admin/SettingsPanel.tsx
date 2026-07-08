@@ -697,21 +697,46 @@ export default function SettingsPanel() {
 
   // Multipart upload — adminFetch leaves Content-Type unset so the browser
   // sets the multipart boundary itself. The controller transcodes + levels.
-  const uploadJingle = async (file: File, label: string): Promise<boolean> => {
-    if (busy) return false;
+  // Files upload one request at a time (not one multipart batch) so a big
+  // import doesn't hold 40+ files in memory at once server-side and a single
+  // bad file doesn't sink the rest. `label` only applies when importing a
+  // single file — each file in a batch defaults to its own filename.
+  const uploadJingle = async (
+    files: File[],
+    label: string,
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<boolean> => {
+    if (busy || !files.length) return false;
     setBusy(true);
+    const total = files.length;
+    let ok = 0;
+    const failures: string[] = [];
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      if (label.trim()) fd.append('label', label.trim());
-      const r = await adminFetch('/jingles/upload', { method: 'POST', body: fd });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      for (const [i, file] of files.entries()) {
+        try {
+          const fd = new FormData();
+          fd.append('file', file);
+          if (total === 1 && label.trim()) fd.append('label', label.trim());
+          const r = await adminFetch('/jingles/upload', { method: 'POST', body: fd });
+          const j = (await r.json().catch(() => ({}))) as { error?: string };
+          if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+          ok++;
+        } catch (e) {
+          failures.push(`${file.name}: ${errorMessage(e)}`);
+        }
+        onProgress?.(i + 1, total);
+      }
       await refresh();
-      notify.ok('jingle imported');
-      return true;
-    } catch (e) { notify.err(`Jingle import failed: ${errorMessage(e)}`); return false; }
-    finally { setBusy(false); }
+      if (total === 1) {
+        if (ok) notify.ok('jingle imported');
+        else notify.err(`Jingle import failed: ${failures[0]}`);
+      } else if (failures.length === 0) {
+        notify.ok(`${ok} jingles imported`);
+      } else {
+        notify.err(`${ok}/${total} jingles imported · ${failures.length} failed`);
+      }
+      return ok > 0;
+    } finally { setBusy(false); }
   };
 
   const createSfx = async (): Promise<boolean> => {
@@ -5499,7 +5524,11 @@ interface JinglesSectionProps extends SectionProps {
   jingleText: string;
   setJingleText: (s: string) => void;
   createJingle: () => Promise<boolean>;
-  uploadJingle: (file: File, label: string) => Promise<boolean>;
+  uploadJingle: (
+    files: File[],
+    label: string,
+    onProgress?: (done: number, total: number) => void,
+  ) => Promise<boolean>;
   onDelete: (filename: string | null) => void;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
@@ -5511,14 +5540,17 @@ function JinglesSection({
   const ratioDirty = form.jingleRatio !== String(data.values?.jingleRatio);
   const jingles = data.jingles || [];
   const [modal, setModal] = useState<null | 'create' | 'import'>(null);
-  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importFiles, setImportFiles] = useState<File[]>([]);
   const [importLabel, setImportLabel] = useState('');
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const doImport = async () => {
-    if (!importFile) return;
-    const ok = await uploadJingle(importFile, importLabel);
+    if (!importFiles.length) return;
+    setImportProgress({ done: 0, total: importFiles.length });
+    const ok = await uploadJingle(importFiles, importLabel, (done, total) => setImportProgress({ done, total }));
+    setImportProgress(null);
     if (ok) {
-      setImportFile(null);
+      setImportFiles([]);
       setImportLabel('');
       if (importRef.current) importRef.current.value = '';
       setModal(null);
@@ -5656,45 +5688,58 @@ function JinglesSection({
       <Modal
         open={modal === 'import'}
         onOpenChange={(o) => { if (!o) setModal(null); }}
-        title="Import jingle"
-        sub="bring your own mp3 / wav"
+        title="Import jingles"
+        sub="bring your own mp3 / wav — select one or many"
         footer={
           <>
             <Btn onClick={() => setModal(null)}>Cancel</Btn>
-            <Btn tone="accent" onClick={doImport} disabled={busy || !importFile}>
-              {busy ? 'Importing…' : 'Import jingle'}
+            <Btn tone="accent" onClick={doImport} disabled={busy || !importFiles.length}>
+              {importProgress
+                ? `Importing ${importProgress.done}/${importProgress.total}…`
+                : importFiles.length > 1
+                  ? `Import ${importFiles.length} files`
+                  : 'Import jingle'}
             </Btn>
           </>
         }
       >
         <div className="field">
-          <Label>Audio file</Label>
+          <Label>Audio files</Label>
           <input
             ref={importRef}
             type="file"
+            multiple
             accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFile(e.target.files?.[0] ?? null)}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFiles(Array.from(e.target.files ?? []))}
             className="hidden"
           />
           <div className="flex flex-wrap items-center gap-2.5">
             <Btn tone="solid" onClick={() => importRef.current?.click()} disabled={busy}>
-              {importFile ? 'Change file…' : 'Choose audio file…'}
+              {importFiles.length ? 'Change files…' : 'Choose audio files…'}
             </Btn>
-            {importFile && (
-              <span className="text-[12px] text-ink">{importFile.name}</span>
+            {importFiles.length === 1 && (
+              <span className="text-[12px] text-ink">{importFiles[0]?.name}</span>
+            )}
+            {importFiles.length > 1 && (
+              <span className="text-[12px] text-ink">{importFiles.length} files selected</span>
             )}
           </div>
           <div className="field-hint">
-            mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB · converted and level-matched on import
+            mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB each · converted and level-matched on import.
+            Selecting multiple files uploads them one at a time and keeps going past any single failure.
           </div>
+          {importProgress && (
+            <div className="field-hint">Uploading {importProgress.done}/{importProgress.total}…</div>
+          )}
         </div>
         <div className="field mt-3.5">
           <Label>Label (optional)</Label>
           <Input
             value={importLabel}
             maxLength={200}
+            disabled={importFiles.length > 1}
             onChange={(e: ChangeEvent<HTMLInputElement>) => setImportLabel(e.target.value)}
-            placeholder="shown in the list, defaults to the file name"
+            placeholder={importFiles.length > 1 ? 'defaults to each file name' : 'shown in the list, defaults to the file name'}
           />
         </div>
       </Modal>
