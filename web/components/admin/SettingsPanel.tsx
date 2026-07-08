@@ -130,6 +130,16 @@ interface CloudTtsCfg {
   voiceUseSpeakerBoost: boolean;
 }
 
+// ElevenLabs voice_settings defaults — the single client-side copy, read by
+// both form hydration and the dirty-check. Must mirror DEFAULTS.tts.cloud in
+// controller/src/settings.ts (which itself mirrors ElevenLabs' own baseline).
+const ELEVENLABS_VS_DEFAULTS = {
+  voiceStability: 0.5,
+  voiceStyle: 0,
+  voiceSimilarityBoost: 0.75,
+  voiceUseSpeakerBoost: true,
+} as const;
+
 interface TtsForm {
   defaultEngine: string;
   kokoro: { voice: string };
@@ -488,11 +498,10 @@ export default function SettingsPanel() {
           model: v.tts?.cloud?.model ?? '',
           voice: v.tts?.cloud?.voice ?? '',
           baseUrl: v.tts?.cloud?.baseUrl ?? '',
-          // ElevenLabs voice_settings — defaults mirror the server's DEFAULTS.
-          voiceStability: typeof v.tts?.cloud?.voiceStability === 'number' ? v.tts.cloud.voiceStability : 0.5,
-          voiceStyle: typeof v.tts?.cloud?.voiceStyle === 'number' ? v.tts.cloud.voiceStyle : 0,
-          voiceSimilarityBoost: typeof v.tts?.cloud?.voiceSimilarityBoost === 'number' ? v.tts.cloud.voiceSimilarityBoost : 0.75,
-          voiceUseSpeakerBoost: typeof v.tts?.cloud?.voiceUseSpeakerBoost === 'boolean' ? v.tts.cloud.voiceUseSpeakerBoost : true,
+          voiceStability: typeof v.tts?.cloud?.voiceStability === 'number' ? v.tts.cloud.voiceStability : ELEVENLABS_VS_DEFAULTS.voiceStability,
+          voiceStyle: typeof v.tts?.cloud?.voiceStyle === 'number' ? v.tts.cloud.voiceStyle : ELEVENLABS_VS_DEFAULTS.voiceStyle,
+          voiceSimilarityBoost: typeof v.tts?.cloud?.voiceSimilarityBoost === 'number' ? v.tts.cloud.voiceSimilarityBoost : ELEVENLABS_VS_DEFAULTS.voiceSimilarityBoost,
+          voiceUseSpeakerBoost: typeof v.tts?.cloud?.voiceUseSpeakerBoost === 'boolean' ? v.tts.cloud.voiceUseSpeakerBoost : ELEVENLABS_VS_DEFAULTS.voiceUseSpeakerBoost,
         },
         remote: { url: v.tts?.remote?.url ?? '' },
         // Per-engine voice level (dB). Zero default for all 6 engine ids, then
@@ -1838,7 +1847,7 @@ function ElevenLabsVoiceSettingsField({
     <>
       {slider(
         'Stability',
-        <>Lower is more expressive but can wander; higher is steadier but flatter. ElevenLabs default is <code>50%</code>.</>,
+        <>Lower is more expressive but can wander; higher is steadier but flatter. ElevenLabs default is <code>50%</code>. Note: the <code>eleven_v3</code> model only accepts 0%, 50% or 100% — other values fail on that model.</>,
         'voiceStability',
       )}
       {slider(
@@ -2111,10 +2120,10 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     || (form.tts.cloud.model || '').trim() !== (savedCloud.model || '').trim()
     || (form.tts.cloud.voice || '').trim() !== (savedCloud.voice || '').trim()
     || (form.tts.cloud.baseUrl || '').trim() !== (savedCloud.baseUrl || '').trim()
-    || form.tts.cloud.voiceStability !== (savedCloud.voiceStability ?? 0.5)
-    || form.tts.cloud.voiceStyle !== (savedCloud.voiceStyle ?? 0)
-    || form.tts.cloud.voiceSimilarityBoost !== (savedCloud.voiceSimilarityBoost ?? 0.75)
-    || form.tts.cloud.voiceUseSpeakerBoost !== (savedCloud.voiceUseSpeakerBoost ?? true)
+    || form.tts.cloud.voiceStability !== (savedCloud.voiceStability ?? ELEVENLABS_VS_DEFAULTS.voiceStability)
+    || form.tts.cloud.voiceStyle !== (savedCloud.voiceStyle ?? ELEVENLABS_VS_DEFAULTS.voiceStyle)
+    || form.tts.cloud.voiceSimilarityBoost !== (savedCloud.voiceSimilarityBoost ?? ELEVENLABS_VS_DEFAULTS.voiceSimilarityBoost)
+    || form.tts.cloud.voiceUseSpeakerBoost !== (savedCloud.voiceUseSpeakerBoost ?? ELEVENLABS_VS_DEFAULTS.voiceUseSpeakerBoost)
     || (form.tts.remote.url || '').trim() !== savedRemoteUrl
     || gainDirty
     || speedDirty;
@@ -2654,6 +2663,16 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
                   cloudProvider={form.tts.cloud.provider}
                   speed={form.tts.speed?.[e] ?? 1}
                   lang={form.kokoroLang || undefined}
+                  // Unsaved ElevenLabs sliders ride along so "Play sample"
+                  // auditions the current knob positions, not the last save.
+                  voiceSettings={e === 'cloud' && form.tts.cloud.provider === 'elevenlabs'
+                    ? {
+                      voiceStability: form.tts.cloud.voiceStability,
+                      voiceStyle: form.tts.cloud.voiceStyle,
+                      voiceSimilarityBoost: form.tts.cloud.voiceSimilarityBoost,
+                      voiceUseSpeakerBoost: form.tts.cloud.voiceUseSpeakerBoost,
+                    }
+                    : undefined}
                   adminFetch={adminFetch}
                 />
                 <div className="field-hint">

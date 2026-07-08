@@ -429,7 +429,10 @@ router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
 // POST /settings/tts/preview — synthesize a short sample in an EXPLICIT engine +
 // voice (not the on-air persona) so the admin "Play sample" button can audition
 // a voice/speed before saving. Body: { engine, voice?, cloudProvider?, speed?,
-// lang?, text? }. On success streams the rendered WAV (audio/wav). On a synth
+// lang?, text?, voiceSettings? } — voiceSettings carries UNSAVED ElevenLabs
+// slider values (issue #696) so the operator can tune the expressive knobs by
+// ear before saving; synthesizeSample clamps them like settings.update() does.
+// On success streams the rendered WAV (audio/wav). On a synth
 // failure — e.g. the tts-heavy sidecar is down or no cloud key — returns 422
 // with { ok, message } instead of silently falling back to Piper, so the
 // operator sees why. The temp WAV is unlinked once sent.
@@ -449,6 +452,9 @@ router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
       speed: typeof body.speed === 'number' ? body.speed : undefined,
       lang: typeof body.lang === 'string' ? body.lang : undefined,
       text: typeof body.text === 'string' ? body.text : undefined,
+      voiceSettings: (body.voiceSettings && typeof body.voiceSettings === 'object')
+        ? body.voiceSettings
+        : undefined,
     });
     const buf = await readFile(filePath);
     // Local engines render WAV; cloud (ElevenLabs) renders MP3. Set the type
