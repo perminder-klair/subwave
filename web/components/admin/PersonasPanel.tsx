@@ -23,7 +23,7 @@ import {
   voiceForSave, cloudIssue,
 } from './personas/helpers';
 import { PersonaHero } from './personas/PersonaHero';
-import { SystemPromptCard } from './personas/SystemPromptCard';
+import { SystemPromptModal } from './personas/SystemPromptModal';
 import { PersonaRoster } from './personas/PersonaRoster';
 import { PersonaEditor } from './personas/PersonaEditor';
 
@@ -40,7 +40,7 @@ export default function PersonasPanel() {
   const [editorOpen, setEditorOpen] = useState(false);
   // id of a freshly-added persona — the AI-draft field shows only while creating.
   const [creatingId, setCreatingId] = useState<string | null>(null);
-  // toggles the system-prompt editor card
+  // whether the system-prompt library modal is open
   const [showPrompt, setShowPrompt] = useState(false);
   // Bumped on every avatar mutation. Appended as ?v=… so the admin <img>
   // refetches even though the public endpoint caches for an hour — the cache
@@ -463,31 +463,30 @@ export default function PersonasPanel() {
         onAirCloudIssue={onAirCloudIssue}
       />
 
-      {showPrompt && (
-        <SystemPromptCard
-          presets={form.djPrompts}
-          activeId={form.activeDjPromptId}
-          defaultPrompt={data?.defaults?.djPrompt || ''}
-          busy={busy}
-          canSave={canSave}
-          allPersonasOk={allPersonasOk}
-          promptsOk={promptsOk}
-          onSetActive={(id) => setForm(f => f ? ({ ...f, activeDjPromptId: id }) : f)}
-          onAddPreset={addPromptPreset}
-          onPatchPreset={patchPromptPreset}
-          onRemovePreset={removePromptPreset}
-          onSave={() => { save(); }}
-          onDiscard={() => { load(); }}
-        />
-      )}
+      <SystemPromptModal
+        open={showPrompt}
+        onOpenChange={setShowPrompt}
+        presets={form.djPrompts}
+        activeId={form.activeDjPromptId}
+        defaultPrompt={data?.defaults?.djPrompt || ''}
+        busy={busy}
+        canSave={canSave}
+        allPersonasOk={allPersonasOk}
+        promptsOk={promptsOk}
+        onSetActive={(id) => setForm(f => f ? ({ ...f, activeDjPromptId: id }) : f)}
+        onAddPreset={addPromptPreset}
+        onPatchPreset={patchPromptPreset}
+        onRemovePreset={removePromptPreset}
+        onSave={async () => { if (await save()) setShowPrompt(false); }}
+        onDiscard={() => { load(); setShowPrompt(false); }}
+      />
 
       <PersonaRoster
         personas={form.personas}
         activePersonaId={form.activePersonaId}
         onAirPersonaId={onAirPersonaId}
         avatarTick={avatarTick}
-        showPrompt={showPrompt}
-        onTogglePrompt={() => setShowPrompt(s => !s)}
+        onOpenPrompt={() => setShowPrompt(true)}
         onAdd={addPersona}
         onSelect={(i) => { setCreatingId(null); setFocusIdx(i); setEditorOpen(true); }}
         communityCount={community?.length ?? null}

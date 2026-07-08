@@ -1,10 +1,13 @@
 'use client';
-// The global system-prompt library — saved templates shared by every persona,
-// one active at a time ('' = the built-in default). Rows switch/manage the
-// templates; the actual text is edited in a modal. Toggled from the roster.
+// The global system-prompt library, in a modal — saved templates shared by
+// every persona, one active at a time ('' = the built-in default). Opened from
+// the roster's "System prompt" button. One modal, two views: the library list
+// (switch / manage templates, save bar in the footer) and an editor view for a
+// single template (Back returns to the list). Form data lives in the container;
+// this component only holds which view is showing.
 import type { ChangeEvent, ReactNode } from 'react';
-import { useState } from 'react';
-import { Card, Btn, Pill } from '../ui';
+import { useEffect, useState } from 'react';
+import { Btn, Pill } from '../ui';
 import { Input } from '../../ui/input';
 import { Textarea } from '../../ui/textarea';
 import { Modal } from '../../ui/modal';
@@ -14,7 +17,9 @@ import type { DjPromptPreset } from './types';
 import { promptPresetValid, clientMintId } from './helpers';
 import { PROMPT_MIN, PROMPT_MAX, PROMPT_NAME_MAX, PROMPT_PRESET_MAX } from './constants';
 
-interface SystemPromptCardProps {
+interface SystemPromptModalProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   presets: DjPromptPreset[];
   activeId: string;        // '' = built-in default
   defaultPrompt: string;   // the built-in template text
@@ -34,15 +39,20 @@ interface SystemPromptCardProps {
   onDiscard: () => void;
 }
 
-export function SystemPromptCard({
+export function SystemPromptModal({
+  open, onOpenChange,
   presets, activeId, defaultPrompt, busy, canSave, allPersonasOk, promptsOk,
   onSetActive, onAddPreset, onPatchPreset, onRemovePreset, onSave, onDiscard,
-}: SystemPromptCardProps) {
-  // Which template the modal shows: 'default' is the read-only built-in view,
-  // otherwise a preset id. null = modal closed. Local to the card — the form
-  // data itself lives in the container.
+}: SystemPromptModalProps) {
+  // Which view the modal shows: null = the library list, 'default' = the
+  // read-only built-in template, otherwise a preset id being edited.
   const [editing, setEditing] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  // Re-opening always lands on the library list, never a stale editor.
+  useEffect(() => {
+    if (!open) { setEditing(null); setConfirmDeleteId(null); }
+  }, [open]);
 
   const addPreset = () => {
     if (presets.length >= PROMPT_PRESET_MAX) return;
@@ -108,99 +118,105 @@ export function SystemPromptCard({
     </div>
   );
 
-  return (
-    <Card title="System prompt" sub="template library — shared by every persona">
-      <p className="mb-3 max-w-[70ch] text-[12px] leading-[1.6] text-muted">
-        One template is wrapped around every DJ generation, shared by all personas.
-        Keep several saved and switch which one is in use. Placeholders:{' '}
-        <code>{'{name}'}</code> · <code>{'{soul}'}</code> · <code>{'{station}'}</code> ·{' '}
-        <code>{'{location}'}</code> · <code>{'{language}'}</code>. Most stations stay on the built-in default.
-      </p>
-
-      <div className="grid gap-2">
-        {row({
-          key: 'default',
-          name: 'Built-in default',
-          meta: 'ships with SUB/WAVE · read-only',
-          isActive: activeId === '',
-          onUse: () => onSetActive(''),
-          actions: <Btn sm onClick={() => setEditing('default')}>View</Btn>,
-        })}
-        {presets.map(p =>
-          row({
-            key: p.id,
-            name: p.name.trim() || '(unnamed)',
-            meta: `${p.text.trim().length} chars`,
-            isActive: activeId === p.id,
-            invalid: !promptPresetValid(p),
-            onUse: () => onSetActive(p.id),
-            actions: (
-              <>
-                <Btn sm onClick={() => setEditing(p.id)}>Edit</Btn>
-                <Btn sm onClick={() => setConfirmDeleteId(p.id)} disabled={busy}>Delete</Btn>
-              </>
-            ),
-          }),
+  // ── footer per view ──────────────────────────────────────────────────────
+  const libraryFooter = (
+    <>
+      <span
+        className={cn(
+          'size-1.5 flex-none rounded-full',
+          canSave ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
         )}
-      </div>
-
-      <div className="mt-3">
-        <Btn
-          onClick={addPreset}
-          disabled={busy || presets.length >= PROMPT_PRESET_MAX}
-          title={presets.length >= PROMPT_PRESET_MAX ? `The library is full (${PROMPT_PRESET_MAX} templates)` : undefined}
-        >
-          New prompt
-        </Btn>
-      </div>
-
-      {/* Save bar. Lives on the card itself because the persona editor — the
-          only other place this form can be saved from — is a modal that's
-          closed while you're editing the prompt (issue #724). */}
-      <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-ink pt-3">
-        <span
-          className={cn(
-            'size-1.5 flex-none rounded-full',
-            canSave ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
-          )}
-        />
-        <span className="text-[11px] text-muted">
-          {!canSave && !promptsOk
-            ? <span className="text-[var(--danger)]">fix the incomplete prompt template</span>
-            : !canSave && !allPersonasOk
-              ? <span className="text-[var(--danger)]">a persona in the roster is incomplete — fix it before saving</span>
-              : 'changes apply on the next spoken line · no mixer restart'}
+      />
+      <span className="mr-auto text-[11px] text-muted">
+        {!canSave && !promptsOk
+          ? <span className="text-[var(--danger)]">fix the incomplete prompt template</span>
+          : !canSave && !allPersonasOk
+            ? <span className="text-[var(--danger)]">a persona in the roster is incomplete — fix it before saving</span>
+            : 'changes apply on the next spoken line · no mixer restart'}
+      </span>
+      <Btn onClick={onDiscard} disabled={busy}>Discard</Btn>
+      <Btn tone="accent" onClick={onSave} disabled={busy || !canSave}>
+        {busy ? 'Saving…' : 'Save system prompt'}
+      </Btn>
+    </>
+  );
+  const editorFooter = (
+    <>
+      {editingPreset && (
+        <span className={cn('caption mr-auto', editingTextOk && editingNameOk ? 'text-muted' : 'text-[var(--danger)]')}>
+          {editingText.length}/{PROMPT_MAX} chars
+          {!editingNameOk && ' · name required'}
+          {!editingText.includes('{name}') && ' · missing {name}'}
+          {editingText.length > 0 && editingText.length < PROMPT_MIN && ` · min ${PROMPT_MIN}`}
         </span>
-        <span className="ml-auto flex items-center gap-3">
-          <Btn onClick={onDiscard} disabled={busy}>Discard</Btn>
-          <Btn tone="accent" onClick={onSave} disabled={busy || !canSave}>
-            {busy ? 'Saving…' : 'Save system prompt'}
-          </Btn>
-        </span>
-      </div>
+      )}
+      <Btn onClick={() => setEditing(null)}>Back to library</Btn>
+    </>
+  );
 
-      {/* ── TEMPLATE EDITOR MODAL ─────────────────────────────────────────── */}
+  return (
+    <>
       <Modal
-        open={editing !== null}
-        onOpenChange={(o) => { if (!o) setEditing(null); }}
-        title={editing === 'default' ? 'built-in default' : 'edit prompt'}
-        sub={editing === 'default' ? 'read-only — New prompt starts from this text' : editingPreset?.name.trim() || undefined}
-        width={720}
-        footer={
-          <>
-            {editingPreset && (
-              <span className={cn('caption mr-auto', editingTextOk && editingNameOk ? 'text-muted' : 'text-[var(--danger)]')}>
-                {editingText.length}/{PROMPT_MAX} chars
-                {!editingNameOk && ' · name required'}
-                {!editingText.includes('{name}') && ' · missing {name}'}
-                {editingText.length > 0 && editingText.length < PROMPT_MIN && ` · min ${PROMPT_MIN}`}
-              </span>
-            )}
-            <Btn onClick={() => setEditing(null)}>Done</Btn>
-          </>
+        open={open}
+        onOpenChange={onOpenChange}
+        title={
+          editing === null ? 'system prompt'
+            : editing === 'default' ? 'built-in default'
+              : 'edit prompt'
         }
+        sub={
+          editing === null ? 'template library — shared by every persona'
+            : editing === 'default' ? 'read-only — New prompt starts from this text'
+              : editingPreset?.name.trim() || undefined
+        }
+        width={720}
+        footer={editing === null ? libraryFooter : editorFooter}
       >
-        {editing === 'default' ? (
+        {editing === null ? (
+          <>
+            <p className="mb-3 max-w-[70ch] text-[12px] leading-[1.6] text-muted">
+              One template is wrapped around every DJ generation, shared by all personas.
+              Keep several saved and switch which one is in use. Placeholders:{' '}
+              <code>{'{name}'}</code> · <code>{'{soul}'}</code> · <code>{'{station}'}</code> ·{' '}
+              <code>{'{location}'}</code> · <code>{'{language}'}</code>. Most stations stay on the built-in default.
+            </p>
+            <div className="grid gap-2">
+              {row({
+                key: 'default',
+                name: 'Built-in default',
+                meta: 'ships with SUB/WAVE · read-only',
+                isActive: activeId === '',
+                onUse: () => onSetActive(''),
+                actions: <Btn sm onClick={() => setEditing('default')}>View</Btn>,
+              })}
+              {presets.map(p =>
+                row({
+                  key: p.id,
+                  name: p.name.trim() || '(unnamed)',
+                  meta: `${p.text.trim().length} chars`,
+                  isActive: activeId === p.id,
+                  invalid: !promptPresetValid(p),
+                  onUse: () => onSetActive(p.id),
+                  actions: (
+                    <>
+                      <Btn sm onClick={() => setEditing(p.id)}>Edit</Btn>
+                      <Btn sm onClick={() => setConfirmDeleteId(p.id)} disabled={busy}>Delete</Btn>
+                    </>
+                  ),
+                }),
+              )}
+            </div>
+            <div className="mt-3">
+              <Btn
+                onClick={addPreset}
+                disabled={busy || presets.length >= PROMPT_PRESET_MAX}
+                title={presets.length >= PROMPT_PRESET_MAX ? `The library is full (${PROMPT_PRESET_MAX} templates)` : undefined}
+              >
+                New prompt
+              </Btn>
+            </div>
+          </>
+        ) : editing === 'default' ? (
           <pre className="term max-h-[420px]">{defaultPrompt || '(default unavailable)'}</pre>
         ) : editingPreset ? (
           <div className="grid gap-3">
@@ -251,6 +267,6 @@ export function SystemPromptCard({
           setConfirmDeleteId(null);
         }}
       />
-    </Card>
+    </>
   );
 }
