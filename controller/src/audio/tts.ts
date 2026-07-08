@@ -11,6 +11,7 @@ import * as chatterbox from './chatterbox.js';
 import * as pocketTts from './pocketTts.js';
 import * as remoteTts from './remoteTts.js';
 import * as cloud from '../llm/speech.js';
+import { stripThinking } from '../llm/sdk.js';
 import * as settings from '../settings.js';
 import { recordTts } from '../stats.js';
 import { energyForDaypart } from '../context.js';
@@ -271,7 +272,14 @@ export async function speak(
   text: string,
   { kind = 'default', outPath, speedScale, persona }: { kind?: string; outPath?: string; speedScale?: number; persona?: any } = {},
 ) {
-  const speakText = normalizeForSpeech(text);
+  // Belt-and-suspenders scrub of any leaked reasoning at the single point every
+  // booth-bound string converges (follow-up to #949). The free-text generators
+  // already stripThinking their output, but a reasoning model that leaks a
+  // <think>/harmony token INTO a structured say/intro field (djObject/djAgent
+  // native path) reaches TTS unscrubbed otherwise. No-op on clean text — those
+  // literals never appear in a real script — so every non-LLM caller (jingles,
+  // idents, request intros) is unaffected.
+  const speakText = normalizeForSpeech(stripThinking(text));
   // `persona` overrides the clock-driven effective persona so the persona-handoff
   // mic-pass can voice the outgoing DJ (engine, voice, language, soul, speed)
   // after the hour has flipped. Absent → getEffectivePersona(), i.e. today.
