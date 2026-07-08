@@ -686,7 +686,15 @@ function coerceShowMoods(item: any): string[] {
 }
 
 function coerceShowGenres(item: any): string[] {
-  return coerceShowList(item, 'genres', 'genre',
+  // Legacy singular `genre` was one free-text field and operators crammed
+  // multiple genres into it comma-separated ("funk, soul, jazz-funk") — which
+  // never resolved against the library as one tag. Split it on migration so
+  // each becomes a real, individually-resolvable entry. Plural-array entries
+  // are taken as-is (the UI adds them one at a time).
+  const raw = Array.isArray(item?.genres)
+    ? item.genres
+    : typeof item?.genre === 'string' ? item.genre.split(',') : [];
+  return coerceShowList({ genres: raw }, 'genres', 'genre',
     (v) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 64) : null),
     (v) => v.toLowerCase());
 }
@@ -2314,10 +2322,14 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     // multi-value lists (#929, legacy singular fields still accepted). Genres
     // are free text resolved fuzzily at pick time, so they aren't checked
     // against the live library here.
+    // Legacy singular `genre` splits on commas — same rule as the load-path
+    // migration (operators crammed "funk, soul" into the one field).
     const rawGenres = Array.isArray(item.genres)
       ? item.genres
-      : item.genre == null || String(item.genre).trim() === '' ? [] : [item.genre];
-    if (rawGenres.length > SHOW_FILTER_VALUES_MAX) {
+      : item.genre == null || String(item.genre).trim() === '' ? [] : String(item.genre).split(',');
+    // Cap-check only the explicit plural form; a legacy comma-crammed string
+    // is silently capped by the coercer instead of failing an old client.
+    if (Array.isArray(item.genres) && item.genres.length > SHOW_FILTER_VALUES_MAX) {
       throw new Error(`shows[${i}].genres must have at most ${SHOW_FILTER_VALUES_MAX} entries`);
     }
     for (const g of rawGenres) {
