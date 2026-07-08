@@ -108,6 +108,14 @@ export function noThinkFetch(url: any, init: any, baseFetch: any = fetch) {
 //     script and reaches TTS. reasoning_format:"deepseek" routes it to
 //     reasoning_content, which the SDK surfaces as a reasoning part, not text
 //     (gist quirk #4).
+//   • parallel_tool_calls:false on tool-bearing requests — absent, llama.cpp
+//     resolves it from the chat template's capability default, which is true
+//     for Gemma-4-family templates; the model then emits several tool calls in
+//     one turn and the peg-gemma4 parser 500s on call #2, failing the whole
+//     pick/segment attempt (issue #940). The agent design is one call per step
+//     (gated discovery, COMMIT_AFTER_STEPS=1), so forcing max one call matches
+//     intent everywhere. Only sent when tools are present — strict servers
+//     reject the field on tool-less requests.
 export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch) {
   const penalty = appliedRepeatPenalty(cfg);
   const noThink = cfg?.reasoning !== true;
@@ -124,6 +132,10 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch) {
             enable_thinking: false,
           };
           if (body.reasoning_format === undefined) body.reasoning_format = 'deepseek';
+        }
+        if (Array.isArray(body.tools) && body.tools.length > 0 &&
+            body.parallel_tool_calls === undefined) {
+          body.parallel_tool_calls = false;
         }
         init = { ...init, body: JSON.stringify(body) };
       } catch { /* not JSON — leave the request untouched */ }
