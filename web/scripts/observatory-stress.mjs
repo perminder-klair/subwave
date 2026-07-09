@@ -34,6 +34,7 @@
    ============================================================================ */
 
 import { createRequire } from 'node:module';
+import { createServer } from 'node:http';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -192,7 +193,30 @@ const settleLatency = (page) =>
       }),
   );
 
+// The bulk payload is served over REAL HTTP from a side server and reached via
+// a redirect, not inlined into route.fulfill: a fulfilled body rides the CDP
+// protocol base64-encoded, and at 400k tracks (~150 MB JSON → ~200 MB message)
+// that kills the tab outright. The redirect turns the request cross-origin, so
+// the browser strips the Authorization header and plain CORS headers suffice.
+const PAYLOAD_PORT = 7798;
+let currentPayload = '';
+function startPayloadServer() {
+  const srv = createServer((req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Timing-Allow-Origin', '*');
+    if (req.method === 'OPTIONS') return res.end();
+    res.setHeader('Content-Type', 'application/json');
+    res.end(currentPayload);
+  });
+  return new Promise((resolve, reject) => {
+    srv.on('error', reject);
+    srv.listen(PAYLOAD_PORT, () => resolve(srv));
+  });
+}
+
 async function runSize(browser, n, payload) {
+  currentPayload = payload;
   const context = await browser.newContext({
     viewport: { width: 1920, height: 1080 },
     deviceScaleFactor: DPR,
@@ -202,13 +226,14 @@ async function runSize(browser, n, payload) {
   // Whole backend mocked at the network layer; kill external requests.
   await context.route('**/*', async (route) => {
     const url = route.request().url();
+    if (url.startsWith(`http://localhost:${PAYLOAD_PORT}/`)) return route.continue();
     if (!url.startsWith(BASE) && !url.startsWith('data:')) return route.abort();
     if (/\/api\/library\/observatory\/track\//.test(url)) {
       const id = decodeURIComponent(url.split('/track/')[1].split('?')[0]);
       return route.fulfill({ contentType: 'application/json', body: detailPayload(id) });
     }
     if (/\/api\/library\/observatory(\?|$)/.test(url)) {
-      return route.fulfill({ contentType: 'application/json', body: payload });
+      return route.fulfill({ status: 307, headers: { location: `http://localhost:${PAYLOAD_PORT}/observatory.json` } });
     }
     if (/\/api\//.test(url)) return route.fulfill({ contentType: 'application/json', body: '{}' });
     return route.continue();
@@ -219,6 +244,7 @@ async function runSize(browser, n, payload) {
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  page.on('crash', () => errors.push('PAGE CRASHED (renderer OOM or GPU loss)'));
 
   // ---- load ------------------------------------------------------------------
   const t0 = Date.now();
@@ -231,7 +257,9 @@ async function runSize(browser, n, payload) {
   r.loadTotalMs = Date.now() - t0;
   // split out network/parse/layout using the page's own resource timing
   r.phases = await page.evaluate(() => {
-    const e = performance.getEntriesByType('resource').find((x) => x.name.includes('/api/library/observatory'));
+    const e = performance
+      .getEntriesByType('resource')
+      .find((x) => x.name.includes('/api/library/observatory') || x.name.includes('observatory.json'));
     return e ? { fetchMs: e.responseEnd - e.startTime, sinceResponseMs: performance.now() - e.responseEnd } : null;
   });
   await page.waitForSelector('.cmap-galaxy canvas', { timeout: 30_000 });
@@ -364,6 +392,7 @@ async function main() {
     headless: true,
     args: ['--enable-gpu', '--ignore-gpu-blocklist', '--enable-precise-memory-info'],
   });
+  const payloadSrv = await startPayloadServer();
 
   const results = [];
   for (const n of SIZES) {
@@ -376,6 +405,7 @@ async function main() {
   }
 
   await browser.close();
+  payloadSrv.close();
   if (OUT) {
     writeFileSync(OUT, JSON.stringify(results, null, 2));
     console.log(`\nwrote ${OUT}`);

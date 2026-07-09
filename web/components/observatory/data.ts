@@ -458,10 +458,30 @@ export function sourceStyle(source: string | null): SourceStyle {
 }
 
 // ---------------------------------------------------------------------------
-// Synapse links — 1 nearest same-genre neighbour per node, found via a uniform
-// spatial grid (O(n)) instead of the O(n²) scan the SVG layer uses. Returns
-// index pairs into `tracks`. Used by the canvas renderer, where n can be large.
+// Synapse links — 1 nearby same-genre neighbour per node (the nearest within a
+// bounded probe), found via a uniform spatial grid so the whole pass stays
+// O(n) at ANY density. Returns index pairs into `tracks`. Feeds the galaxy's
+// filament LineSegments, where n can be very large.
 // ---------------------------------------------------------------------------
+// Per-track distance-check budget across the 9-cell probe. The grid keeps the
+// scan LOCAL, but not SMALL: when a genre packs thousands of tracks into one
+// cluster the probe degenerates toward O(n·clusterSize) — measured ~18 s of
+// main-thread stall at 400k sound-mapped tracks and ~65 s at 400k on the
+// genre-cluster layout. The links are cosmetic (a hair-thin line to A nearby
+// same-genre node), so past the budget we keep the nearest seen so far:
+// candidates share the track's own ≤64-unit cell neighbourhood, and "nearest
+// of 96 local candidates" is indistinguishable from the true nearest at any
+// density where the budget even engages. Sparse cells never hit it, so small
+// and mid-size libraries link exactly as before.
+const LINK_SCAN_BUDGET = 96;
+// 3×3 probe offsets, own cell first (see the budget note inside the loop).
+const PROBE_ORDER: [number, number][] = [
+  [0, 0],
+  [-1, -1], [-1, 0], [-1, 1],
+  [0, -1], [0, 1],
+  [1, -1], [1, 0], [1, 1],
+];
+
 export function buildSynapseLinks(tracks: ObsTrack[]): [number, number][] {
   const CELL = 64; // ~ the gaussian cluster spread in layoutTracks
   const grid = new Map<string, number[]>();
@@ -482,20 +502,25 @@ export function buildSynapseLinks(tracks: ObsTrack[]): [number, number][] {
     const gy = Math.floor(t.y / CELL);
     let best = -1;
     let bd = Infinity;
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        const cell = grid.get(`${g}|${gx + dx}|${gy + dy}`);
-        if (!cell) continue;
-        for (const j of cell) {
-          if (j === i) continue;
-          const ddx = t.x - tracks[j]!.x;
-          const ddy = t.y - tracks[j]!.y;
-          const d = ddx * ddx + ddy * ddy;
-          if (d < bd) {
-            bd = d;
-            best = j;
-          }
+    let budget = LINK_SCAN_BUDGET;
+    // Own cell first, ring after: when the budget engages the candidates must
+    // come from the track's immediate neighbourhood, or every link in a dense
+    // cluster spans a whole cell diagonal (measured p95 8u → 76u when the
+    // probe started at the corner cell). Own-cell-first also keeps picks
+    // mutual, so the a<b dedup below still collapses most pairs.
+    probe: for (const [dx, dy] of PROBE_ORDER) {
+      const cell = grid.get(`${g}|${gx + dx}|${gy + dy}`);
+      if (!cell) continue;
+      for (const j of cell) {
+        if (j === i) continue;
+        const ddx = t.x - tracks[j]!.x;
+        const ddy = t.y - tracks[j]!.y;
+        const d = ddx * ddx + ddy * ddy;
+        if (d < bd) {
+          bd = d;
+          best = j;
         }
+        if (--budget <= 0) break probe;
       }
     }
     if (best >= 0) {

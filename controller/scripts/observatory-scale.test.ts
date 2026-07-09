@@ -48,6 +48,7 @@ import {
 const N = Math.max(1000, Number(process.env.OBS_SCALE_N) || 200_000);
 const AUDIO_N = Math.min(N, 50_000); // audio vectors are 2 KB each — cap the seed, extrapolate
 const AUDIO_DIM = 512;
+const CELL_DIAG = 64 * Math.SQRT2; // buildSynapseLinks grid cell diagonal
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -359,21 +360,35 @@ async function main() {
     assert.ok(ms < 20_000, `layout under 20 s (took ${ms.toFixed(0)} ms)`);
   });
 
+  let genreLaid: ReturnType<typeof layoutTracks> | null = null;
   await test(`layoutTracks(${N.toLocaleString()}) — genre-cluster fallback (0% mapped)`, () => {
     const stripped = rawTracks.map((t) => ({ ...t, mapX: null, mapY: null }));
     const { out, ms } = timed('layout (genre clusters)', () => layoutTracks(stripped));
+    genreLaid = out;
     assert.equal(out.tracks.length, N);
     assert.ok(!out.soundMap);
     assert.ok(ms < 20_000, `layout under 20 s (took ${ms.toFixed(0)} ms)`);
   });
 
   await test(`buildSynapseLinks(${N.toLocaleString()}) — spatial-grid nearest neighbour`, () => {
-    const { out, ms } = timed('synapse links', () => buildSynapseLinks(soundLaid!.tracks));
+    const { out, ms } = timed('synapse links (sound map)', () => buildSynapseLinks(soundLaid!.tracks));
     assert.ok(out.length > 0 && out.length <= N, `sane link count (got ${out.length.toLocaleString()})`);
     for (const [a, b] of out.slice(0, 2_000)) {
       assert.ok(a >= 0 && b < N && a < b, 'ordered in-range index pairs');
     }
-    assert.ok(ms < 20_000, `links under 20 s (took ${ms.toFixed(0)} ms)`);
+    assert.ok(ms < 10_000, `links under 10 s (took ${ms.toFixed(0)} ms)`);
+    // Worst case for the scan budget: the genre-cluster layout packs whole
+    // genres into single grid cells (the unbudgeted probe measured ~65 s at
+    // 400k here). Links must stay LOCAL too — the budget must not produce
+    // cluster-spanning filaments.
+    const worst = timed('synapse links (genre clusters, dense worst case)', () =>
+      buildSynapseLinks(genreLaid!.tracks),
+    );
+    assert.ok(worst.ms < 10_000, `dense links under 10 s (took ${worst.ms.toFixed(0)} ms)`);
+    const gt = genreLaid!.tracks;
+    const lens = worst.out.map(([a, b]) => Math.hypot(gt[a]!.x - gt[b]!.x, gt[a]!.y - gt[b]!.y)).sort((x, y) => x - y);
+    const p95 = lens[Math.floor(lens.length * 0.95)]!;
+    assert.ok(p95 < CELL_DIAG, `links stay within a cell neighbourhood (p95 ${p95.toFixed(1)}u)`);
   });
 
   db.close();
