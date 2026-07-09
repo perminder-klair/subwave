@@ -142,8 +142,6 @@ const OBSERVATORY_HARD_MAX = Math.max(OBSERVATORY_DEFAULT_MAX, Number(process.en
 router.get('/library/observatory', requireAdmin, async (req, res) => {
   try {
     await library.load();
-    const stats = library.stats();
-    const total = stats.total;
     const requested = Number(req.query.max);
     const max = Math.min(
       OBSERVATORY_HARD_MAX,
@@ -155,6 +153,8 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
     // skip the (multi-MB at high caps) body AND the row scan that builds it.
     // The projection-running flag rides in the token too — it flips without a
     // DB write, and a 304 must not hide "job in flight" from the UI.
+    // Checked BEFORE stats(): computeStats() is itself a multi-second scan on
+    // a very large library, and a revalidation hit must not pay for it.
     const etag = `W/"obs-${db.changeToken()}-${max}-${mapProjection.projectionStatus().running ? 1 : 0}"`;
     res.set('ETag', etag);
     res.set('Cache-Control', 'private, no-cache');
@@ -163,6 +163,8 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
       return res.status(304).end();
     }
 
+    const stats = library.stats();
+    const total = stats.total;
     const sampled = total > max;
     const all = sampled ? db.allTaggedSampled(max, total) : db.allTagged();
     const truncated = sampled;
@@ -187,9 +189,10 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
         // Cheap acoustic scalars for the Observatory's colour-by + aggregate
         // panels. The full curves/ranges stay on the per-track dossier endpoint.
         loudnessLufs: t.loudnessLufs,
-        paceMean: library.paceMeanOf(t.pace),
-        // Tri-state: 'vocal' | 'instrumental' | null (not analysed for vocals).
-        vocal: t.vocalRanges == null ? null : t.vocalRanges.length ? 'vocal' : 'instrumental',
+        // paceMean + tri-state vocal are computed in the lean bulk read
+        // (rowToObservatory) — the fat acoustic blobs never leave SQLite.
+        paceMean: t.paceMean,
+        vocal: t.vocal,
         // Sound-map coordinates (UMAP of the CLAP vector, [0,1] per axis).
         // null → the client falls back to its genre-cluster layout.
         mapX: t.mapX,
