@@ -54,10 +54,29 @@ interface DebugTtsSpoken {
   requested?: string;
 }
 
+/** One entry from the controller's TTS call ring (stats.ts ttsCalls) — every
+ * speak() outcome since boot, newest first, incl. silent engine fallbacks. */
+interface TtsCall {
+  ok?: boolean;
+  kind?: string;
+  engine?: string;
+  requested?: string;
+  fellBack?: boolean;
+  ms?: number;
+  chars?: number;
+  t?: string;
+  error?: string;
+  /** Spoken text, capped at ~240 chars by the controller. */
+  text?: string;
+  /** Voicing persona name; null for global kinds (jingle/default). */
+  persona?: string | null;
+}
+
 interface DebugTts {
   spoken?: DebugTtsSpoken;
   jingle?: { engine?: string };
   effectivePersona?: { name?: string };
+  recentCalls?: TtsCall[];
   error?: string;
 }
 
@@ -361,7 +380,10 @@ export default function DebugPanel() {
 
           {/* ── TTS ROUTING ────────────────────────────── */}
           {data.tts && !data.tts.error && (
-            <Card title="TTS routing" sub="who voices the next spoken segment">
+            <Card
+              title="TTS routing"
+              sub={`who voices the next spoken segment · ${data.tts.recentCalls?.length ?? 0} recent calls`}
+            >
               <TtsRouting tts={data.tts} />
             </Card>
           )}
@@ -521,6 +543,83 @@ function TtsRouting({ tts }: { tts: DebugTts }) {
           out of <strong>{s.engine}</strong> instead. Fix it in Settings → TTS voice.
         </V3Alert>
       )}
+      <TtsCallList calls={tts.recentCalls || []} />
+    </div>
+  );
+}
+
+// Per-call TTS log — the raw speak() ring from the controller, rendered with
+// the same expandable-row pattern as the LLM / Subsonic call lists. A row in
+// danger tone means the call failed outright; an "↳ from <engine>" note means
+// the segment still aired but not through the engine the persona asked for.
+function TtsCallList({ calls }: { calls: TtsCall[] }) {
+  const [filter, setFilter] = useState('all');
+  const kinds = Array.from(new Set(calls.map(c => c.kind).filter(Boolean) as string[]));
+  const shown = filter === 'all' ? calls : calls.filter(c => c.kind === filter);
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex flex-wrap items-center gap-1">
+        <span className="caption mr-1">recent calls</span>
+        <FilterChip active={filter === 'all'} onClick={() => setFilter('all')}>
+          all {calls.length}
+        </FilterChip>
+        {kinds.map(k => (
+          <FilterChip key={k} active={filter === k} onClick={() => setFilter(k)}>
+            {k} {calls.filter(c => c.kind === k).length}
+          </FilterChip>
+        ))}
+      </div>
+      <div className="grid max-h-[420px] gap-1.5 overflow-y-auto">
+        {shown.length === 0 && (
+          <span className="field-hint italic">
+            {calls.length === 0 ? 'no spoken segments yet' : 'no calls match this filter'}
+          </span>
+        )}
+        {shown.map((c, i) => (
+          <details key={i} className="border border-separator-strong">
+            <summary className="grid cursor-pointer grid-cols-[auto_auto_1fr_auto_auto] items-center gap-2.5 px-2.5 py-2">
+              <span className={cn('font-bold', c.ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
+                {c.ok ? '✓' : '✗'}
+              </span>
+              <span className="text-[12px] font-bold">{c.kind}</span>
+              <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                <Pill
+                  tone={c.fellBack ? undefined : 'accent'}
+                  className={c.fellBack ? 'border-[var(--danger)] text-[var(--danger)]' : undefined}
+                >
+                  {c.engine}
+                </Pill>
+                {c.fellBack && (
+                  <span className="caption flex-none text-[var(--danger)]">↳ from {c.requested}</span>
+                )}
+                <span className="min-w-0 overflow-hidden text-[11px] text-ellipsis whitespace-nowrap text-muted">
+                  {oneLine(c.text)}
+                </span>
+              </span>
+              <span className="mono-num text-[11px] text-muted">{c.ms}ms</span>
+              <span className="mono-num text-[10px] text-muted">
+                {c.t ? new Date(c.t).toLocaleTimeString('en-GB', { hour12: false }) : '—'}
+              </span>
+            </summary>
+            <div className="grid gap-1 px-2.5 pt-1 pb-2.5">
+              <div className="caption text-[9px]">
+                {c.persona ? `${c.persona} · ` : ''}{c.chars ?? 0} chars
+                {c.fellBack ? ` · requested ${c.requested}, spoke via ${c.engine}` : ''}
+              </div>
+              {c.error && (
+                <CallSection label="error" tone="err" preview={oneLine(c.error)}>
+                  {c.error}
+                </CallSection>
+              )}
+              {c.text && (
+                <CallSection label="spoken text" preview={oneLine(c.text)}>
+                  {c.text}
+                </CallSection>
+              )}
+            </div>
+          </details>
+        ))}
+      </div>
     </div>
   );
 }
