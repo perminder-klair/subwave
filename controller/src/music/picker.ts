@@ -68,8 +68,9 @@ function shuffle<T>(arr: T[]): T[] {
 
 // Pull bpm/musical_key for a candidate — library.bpmKeyFor prefers the
 // analyzer's numbers over the candidate's own fields (a Subsonic candidate's
-// bpm is Navidrome's ID3-derived value, 0 on un-tagged files; #862).
-function analysisFor(t: any): { bpm: number | null; key: string | null } {
+// bpm is Navidrome's ID3-derived value, 0 on un-tagged files; #862). Also
+// carries the boundary keys (keyStart/keyEnd, feature: key ranges).
+function analysisFor(t: any): { bpm: number | null; key: string | null; keyStart?: string | null; keyEnd?: string | null } {
   return library.bpmKeyFor(t);
 }
 
@@ -78,13 +79,16 @@ function analysisFor(t: any): { bpm: number | null; key: string | null } {
 
 // Order the pool by a random base nudged up for tempo/harmonic compatibility
 // with the current track. Random stays dominant so the pool keeps its variety
-// and a NULL-analysis pool is indistinguishable from shuffle().
-function softRankByCompat(pool: any[], current: { bpm: number | null; key: string | null }): any[] {
+// and a NULL-analysis pool is indistinguishable from shuffle(). Key compares
+// the pair the transition actually meets — the anchor's ENDING key against
+// each candidate's OPENING key (feature: key ranges) — falling back to the
+// dominant keys (a mini-run rankTarget carries only a dominant key).
+function softRankByCompat(pool: any[], current: { bpm: number | null; key: string | null; keyEnd?: string | null }): any[] {
   if (current.bpm == null && current.key == null) return shuffle(pool);
   return pool
     .map((t: any) => {
       const a = analysisFor(t);
-      const bonus = 0.4 * bpmCompat(current.bpm, a.bpm) + 0.3 * keyCompat(current.key, a.key);
+      const bonus = 0.4 * bpmCompat(current.bpm, a.bpm) + 0.3 * keyCompat(current.keyEnd ?? current.key, a.keyStart ?? a.key);
       return { t, score: Math.random() + bonus };
     })
     .sort((x, y) => y.score - x.score)

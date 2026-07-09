@@ -449,10 +449,21 @@ class Queue {
     // record. Feeds the ending-aware exit canvas + the chop-over-fade veto.
     const outro = track.outro ?? rec?.outro ?? null;
     const ending = outro?.ending === 'fade' || outro?.ending === 'cold' ? outro.ending : null;
-    if (track.bpm != null || track.musicalKey != null) {
-      return { bpm: track.bpm ?? null, key: track.musicalKey ?? null, ending };
-    }
-    return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null, ending };
+    const base = (track.bpm != null || track.musicalKey != null)
+      ? { bpm: track.bpm ?? null, key: track.musicalKey ?? null }
+      : { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
+    // Boundary keys (feature: key ranges) — what mixCompat actually compares
+    // across a seam: this track's opening key when it's the incoming side, its
+    // ending key when it's the outgoing one. Fall back to the dominant key.
+    const keyRanges = track.keyRanges ?? rec?.keyRanges ?? null;
+    const durSec = Number(track.duration) || rec?.durationSec || 0;
+    const durMs = durSec > 0 ? durSec * 1000 : null;
+    return {
+      ...base,
+      keyStart: mix.openingKeyFrom(keyRanges, base.key),
+      keyEnd: mix.endingKeyFrom(keyRanges, durMs, base.key),
+      ending,
+    };
   }
 
   // Resolve a track's integrated loudness + measured peak (track object first,
@@ -612,11 +623,15 @@ class Queue {
         const windDownSec = durSec > 0 && Number.isFinite(outro.startMs)
           ? Math.max(0, durSec - outro.startMs / 1000)
           : null;
+        // Body loudness for the tail-drop shaping — same resolution ladder as
+        // applyLoudnessGain (track object first, else the library row).
+        let bodyLufs = item.track.loudnessLufs;
+        if (bodyLufs == null && item.track.id) bodyLufs = library.get(item.track.id)?.loudnessLufs ?? null;
         // Bar-snap to the TAIL tempo when measured — outros drift/ritard.
         const exitSecs = mix.endingCrossSecondsFor(
           { bpm: outro.bpm ?? next.bpm, key: next.key, ending: outro.ending },
           windDownSec,
-          maxSec,
+          { maxSec, tailLufs: outro.lufs ?? null, bodyLufs },
         );
         if (exitSecs != null) {
           item.track.crossSec = exitSecs;
