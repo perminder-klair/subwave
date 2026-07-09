@@ -26,16 +26,12 @@ export function setupPlayer(): Promise<void> {
       // but missing from the lib's PlayerOptions type — extend it locally.
       const options: PlayerOptions & { iosCategoryPolicy?: 'longFormAudio' } = {
         autoHandleInterruptions: true,
-        // Forward buffer (iOS: preferredForwardBufferDuration). The default
-        // (0 = system decides) keeps a razor-thin cushion on a live stream —
-        // fine on the built-in speaker, but AirPlay needs a real timing
-        // cushion and collapsed the route ~6s after a HomePod handoff when
-        // the cushion drained (instrumented trail: route reverts FIRST, then
-        // the player errors). Sized to the Icecast connect burst (~4s at
-        // 128kbps) so it fills INSTANTLY: 12s proved unfillable at 1× on a
-        // live stream — AVPlayer waited forever in silence (rate 0,
-        // automaticallyWaitsToMinimizeStalling never satisfied).
-        minBuffer: 4,
+        // Do NOT set minBuffer here. Any non-zero preferredForwardBufferDuration
+        // on this infinite live stream silences AVPlayer entirely — its
+        // "safe to play" heuristic never satisfies on a duration-∞ item no
+        // matter how much data is buffered (4s behaved identically to 12s,
+        // with the station's ~11s Icecast burst fully available). Verified on
+        // device via the route-change/event trail, 2026-07-09.
         // The long-form-audio route-sharing policy (what Apple Music/Podcasts
         // use): iOS remembers the listener's chosen AirPlay device for this
         // app and keeps routing to it through audio-session churn. Without
