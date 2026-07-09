@@ -45,3 +45,22 @@ Local via Ollama dominates; several operators are actively migrating off OpenAI 
 ## Takeaway
 
 The community's model recommendation is converging on **Qwen3.5:9B as the small-local floor**, and the consistent failure mode is the **big structured/agent calls** — agent picking and programme plans — not the free-text script calls. Bench and trim those first.
+
+## Bench validation — 2026-07-09
+
+Controlled `llm-bench` runs (full matrix, 3 iterations/cell, post prompt-diet branch)
+against the claims above. Reports in `controller/scripts/llm-bench/reports/`.
+
+| Community claim | Bench verdict |
+| --- | --- |
+| Qwen3.5-9B "could handle agent picking with only one timeout" | **Mostly confirmed** (via OpenRouter): pool cells 100% at 0.6–3.5s; agent short-context 100%, long-context 67% with 2 timeouts. Agent mode is borderline — livable because the pool fallback catches every miss, which matches what operators experience. Characteristic quirks: over-long request acks (9×), occasional stage directions. |
+| Gemma4:31b-cloud "regularly throws done-tool errors" | **Refuted on the current build**: 94/96 via the exact `ollama` cloud routing, ALL agent cells 100% at 1–4s. The reports likely predate the done-tool recovery fixes and the pick prompt diet. Best model tested — its one weak cell is the 3-hour programme plan (picked unoffered feature kinds 2/3 runs). |
+| "Gemma is still a no" (12b local) | **Not testable here** — no OpenRouter listing, bench host can't run it locally. Community evidence stands. The MoE sibling `gemma-4-26b-a4b-it` is being benched as the testable middle option. |
+| GPT-4/5 Mini as the cloud reference worth paying for | **Weaker than assumed**: 91/96 — it ignores the VARIETY criterion under same-artist pressure (0% on that cell, worse than gemma-cloud) and picked the wrong track on 2/3 exact-title requests. The quality gap driving the cost isn't there on this workload. |
+| deepseek-v4-flash routing tale (0/4 direct vs 4/4 OpenRouter) | Third routing (`ollama` cloud): **82/96, mid-tier** — clean pool picks/segments but 2 hallucinated track ids (the dangerous failure), 4 stage directions, weak agent long-context (33%) and programme plans (0–33%). Fine as a fallback leg, not a primary. |
+| "Agent picking is too heavy for local models" | **Needs nuance**: too heavy for ~9B models on the native path; gemma-31b-cloud on Ollama's forced-tool path is 100% across agent cells. Small-model operators get the pool-mode path (segments included) instead. |
+| "Failures cluster in big structured/agent calls, not scripts" | **Confirmed across every model**: misses concentrate in `djAgentRequest`, agent long-context, and multi-hour programme plans; the free-text script kinds are near-perfect everywhere. |
+
+Bench-backed recommendation as of this snapshot: **`ollama:gemma4:31b-cloud` primary (agent
+mode viable again)**, local fallback leg per credits; **qwen3.5-9b in pool mode** as the
+small floor; deepseek-v4-flash as a fallback leg only.
