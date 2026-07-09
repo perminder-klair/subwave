@@ -591,7 +591,8 @@ function TtsCallList({ calls }: { calls: TtsCall[] }) {
           </FilterChip>
         ))}
       </div>
-      <div className="grid max-h-[420px] gap-1.5 overflow-y-auto">
+      <ScrollArea className="max-h-[420px]">
+        <div className="grid gap-1.5">
         {shown.length === 0 && (
           <span className="field-hint italic">
             {calls.length === 0 ? 'no spoken segments yet' : 'no calls match this filter'}
@@ -641,7 +642,8 @@ function TtsCallList({ calls }: { calls: TtsCall[] }) {
             </div>
           </details>
         ))}
-      </div>
+        </div>
+      </ScrollArea>
     </div>
   );
 }
