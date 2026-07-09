@@ -6,11 +6,13 @@ Native iOS + Android player for [SUB/WAVE](../README.md) — built with Expo + r
 
 - **Expo SDK 56** (RN 0.85, React 19, New Architecture) · **expo-router** (file-based)
 - **react-native-track-player** — background audio + lock-screen / CarPlay controls (Android Auto is intentionally not declared — Google Play rejected it under the Auto content policy, #477)
+- **react-native-google-cast** — Google Cast sender (Chromecast / Nest / Android TV). The Cast device fetches the stream itself; the phone becomes a remote (`src/hooks/useCast.ts` merges cast state over the local player). Uses the Default Media Receiver, so no receiver registration. Basic-auth stations can't cast (the `Authorization` header can't ride along) — the button hides for them.
+- **AirPlay** (iOS) — a local Expo module (`modules/airplay-route-picker`) wraps `AVRoutePickerView`; routing itself is system-level, the button just makes it discoverable in-app.
 - **NativeWind 4** (Tailwind for RN) — reuses the web's class names + the 7 theme tokens
 - **@shopify/react-native-skia** — the 120-bar waveform · sheets are core `<Modal>` (`src/components/ui/Sheet.tsx`)
 - **react-native-image-colors** — cover-art ambient wash · **lucide-react-native** — icons
 
-Native modules (track-player, skia, image-colors) ship native code, so **Expo Go won't work** — you must build a dev client.
+Native modules (track-player, google-cast, skia, image-colors) ship native code, so **Expo Go won't work** — you must build a dev client.
 
 ## Develop
 

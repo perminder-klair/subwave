@@ -31,6 +31,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Sheet } from '@/components/ui/Sheet';
 import { useStation } from '@/config/StationContext';
+import { useCast } from '@/hooks/useCast';
 import { useConnectivity } from '@/hooks/useConnectivity';
 import { useCoverColors } from '@/hooks/useCoverColors';
 import { useNowPlayingInfo } from '@/hooks/useNowPlayingInfo';
@@ -176,11 +177,7 @@ export default function PlayerScreen() {
   const { colors, mode } = useTheme();
 
   const { isConnected } = useConnectivity();
-  const { tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = usePlayer(
-    api,
-    1,
-    isConnected,
-  );
+  const localPlayer = usePlayer(api, 1, isConnected);
 
   const {
     nowPlaying,
@@ -196,11 +193,30 @@ export default function PlayerScreen() {
     progress,
     timezone,
     locale,
-    // While tuned in, keep a slow background poll alive so the lock screen
-    // (useNowPlayingInfo) tracks the broadcast; idle + backgrounded polls
-    // nothing at all.
-  } = useStationFeed(api, { backgroundPoll: tunedIn });
+    // While tuned in LOCALLY, keep a slow background poll alive so the lock
+    // screen (useNowPlayingInfo) tracks the broadcast; idle + backgrounded
+    // polls nothing at all. While casting there's no local audio session, so
+    // the OS suspends us in the background anyway — no point polling.
+  } = useStationFeed(api, { backgroundPoll: localPlayer.tunedIn });
   const boothFeed = session.messages;
+
+  const stationName = typeof dj?.station === 'string' ? dj.station : undefined;
+  const djName = typeof dj?.name === 'string' ? dj.name : undefined;
+
+  const coverSrc = useMemo(
+    () => (api && nowPlaying?.subsonic_id ? api.cover(nowPlaying.subsonic_id) : null),
+    [api, nowPlaying?.subsonic_id],
+  );
+
+  // Google Cast, merged over the local player: with no session this is
+  // localPlayer untouched; while connected, tune/stop/volume/status re-target
+  // the Cast device and local playback stays torn down (see useCast).
+  const { player, cast } = useCast(api, localPlayer, {
+    stationName,
+    djName,
+    artworkUrl: coverSrc,
+  });
+  const { tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = player;
 
   const offline = streamOnline === false;
   const signal = useSignal({ api, tunedIn, status, offline });
@@ -230,17 +246,12 @@ export default function PlayerScreen() {
   const listenerCount =
     listeners == null ? null : typeof listeners === 'number' ? listeners : listeners.current ?? null;
 
-  const stationName = typeof dj?.station === 'string' ? dj.station : undefined;
-  const djName = typeof dj?.name === 'string' ? dj.name : undefined;
-
-  const coverSrc = useMemo(
-    () => (api && nowPlaying?.subsonic_id ? api.cover(nowPlaying.subsonic_id) : null),
-    [api, nowPlaying?.subsonic_id],
-  );
   const coverColors = useCoverColors(coverSrc);
 
-  // Push lock-screen / CarPlay metadata from the feed.
-  useNowPlayingInfo({ api, tunedIn, nowPlaying, boothFeed, activeShow });
+  // Push lock-screen / CarPlay metadata from the feed — keyed on LOCAL
+  // playback: while casting nothing plays through RNTP, so there's no media
+  // session to decorate (the Cast device shows its own metadata).
+  useNowPlayingInfo({ api, tunedIn: localPlayer.tunedIn, nowPlaying, boothFeed, activeShow });
 
   // Tear down playback if the station drops off air mid-listen. `offline` is
   // debounced upstream (useStationFeed needs OFFLINE_CONFIRM_POLLS consecutive
@@ -441,6 +452,7 @@ export default function PlayerScreen() {
             onOpenThemes={() => setThemesOpen(true)}
             onOpenSleep={() => setSleepOpen(true)}
             sleepActive={sleep.active}
+            castAvailable={cast.available}
           />
           <ConnectionBanner
             isConnected={isConnected}
@@ -476,6 +488,7 @@ export default function PlayerScreen() {
             latencyMs={signal.latencyMs}
             signalQuality={signal.quality}
             listeners={listenerCount}
+            castingTo={cast.deviceName}
           />
         </View>
       </SafeAreaView>

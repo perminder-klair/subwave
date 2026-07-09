@@ -7,7 +7,9 @@ import { router } from 'expo-router';
 import { MoonStar, Palette } from 'lucide-react-native';
 import { useMemo } from 'react';
 import { Pressable, Text, View } from 'react-native';
+import { CastButton } from 'react-native-google-cast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AirplayButton from '../../modules/airplay-route-picker';
 import DiscMark from '@/components/DiscMark';
 import { buildTagline } from '@/lib/tagline';
 import type { ActiveShow, StationContext } from '@/lib/types';
@@ -23,6 +25,9 @@ export interface TopBarProps {
   onOpenSleep: () => void;
   /** Accent-tints the moon while a sleep timer is armed. */
   sleepActive: boolean;
+  /** Render the Google Cast button — false for stations that can't cast
+   *  (basic-auth streams) and devices without the Cast framework. */
+  castAvailable: boolean;
 }
 
 export default function TopBar({
@@ -34,6 +39,7 @@ export default function TopBar({
   onOpenThemes,
   onOpenSleep,
   sleepActive,
+  castAvailable,
 }: TopBarProps) {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
@@ -72,7 +78,18 @@ export default function TopBar({
             </Text>
           ) : null}
         </Pressable>
-        <View className="flex-row items-center" style={{ gap: 18, paddingLeft: 12 }}>
+        <View className="flex-row items-center" style={{ gap: 14, paddingLeft: 12 }}>
+          {/* Output routing: AirPlay (iOS, renders nothing on Android) and
+              Google Cast. Both are the platform-native pickers — tapping opens
+              the system route/device dialog. */}
+          <AirplayButton
+            tint={colors.muted}
+            activeTint={colors.accent}
+            style={{ width: 20, height: 20 }}
+          />
+          {castAvailable ? (
+            <CastButton style={{ width: 20, height: 20, tintColor: colors.muted }} />
+          ) : null}
           <Pressable
             onPress={onOpenSleep}
             hitSlop={10}
