@@ -50,7 +50,6 @@ import type {
 } from '@/lib/types';
 import { useTheme } from '@/theme/ThemeContext';
 import CenterStage from './CenterStage';
-import ConnectionBanner from './ConnectionBanner';
 import FreqBand, { type BandStop } from './FreqBand';
 import PagePanel from './PagePanel';
 import TopBar from './TopBar';
@@ -460,12 +459,11 @@ export default function PlayerScreen() {
             onOpenPanel={() => setActiveSheet('panel')}
             panelActive={sleep.active || cast.connected}
           />
-          <ConnectionBanner
-            isConnected={isConnected}
-            streamOnline={streamOnline}
-            tunedIn={tunedIn}
-            status={status}
-          />
+          {/* No connection banner here — the transport deck already carries
+              connection state (power-ring spinner while connecting, the
+              Signal · Offline/Acquiring label, and the disabled power on
+              off-air), so a bar popping in and out of the masthead was
+              redundant motion. */}
           <FreqBand
             pages={PAGES}
             active={active}
