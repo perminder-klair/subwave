@@ -138,7 +138,7 @@ export default function CenterStage({
           <Text className="font-display text-ink" style={{ fontSize: 26, lineHeight: 30 }}>
             {nowPlaying?.title}
           </Text>
-          <Text className="font-body-medium mt-3" style={{ fontSize: 15, color: colors.muted }}>
+          <Text className="font-body-medium mt-1" style={{ fontSize: 15, color: colors.muted }}>
             <Text style={{ color: colors.ink }}>{nowPlaying?.artist || 'Unknown artist'}</Text>
             {nowPlaying?.album ? `  ·  ${nowPlaying.album}` : ''}
             {nowPlaying?.year ? `  ·  ${nowPlaying.year}` : ''}
