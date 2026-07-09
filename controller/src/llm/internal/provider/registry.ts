@@ -27,7 +27,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
-import { capabilitiesFor, appliedRepeatPenalty } from './capabilities.js';
+import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx } from './capabilities.js';
 
 // Memoise built clients so we don't reconstruct a provider on every call.
 // Keyed by a signature that changes whenever provider/model/key changes, so a
@@ -253,7 +253,7 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
   const caps = capabilitiesFor(cfg.provider);
   const constructionNoThink = opts.forceNoThink === true && caps.reasoningConstructionOnly === true;
   const bodyNoThink = opts.forceNoThink === true && caps.samplingViaBody === true;
-  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}`;
+  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;
@@ -357,7 +357,28 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       // correctly — no `.chat(id)` override required. `baseURL` is the bare
       // Ollama host (no `/api` suffix); the package appends the path itself.
       const provider = createOllama({ baseURL: ollamaBaseUrl(cfg), fetch: debugFetch });
-      model = provider(id);
+      // v4 of the package reads `think` and Ollama `options` from MODEL
+      // CONSTRUCTION settings — its per-call providerOptions schema accepts
+      // only headers/structuredOutputs, so the old providerOptions.ollama
+      // block (capabilities thinkingBlock) was silently dropped and thinking
+      // suppression never reached the wire (caught by llm-bench's
+      // thinking-leak forensics on glm-5.2:cloud: 24 leaked cells with
+      // reasoning off).
+      //   - reasoning off → think:false. Safe on non-thinking models
+      //     (verified: Ollama 0.30 accepts it as a no-op).
+      //   - reasoning on → OMIT think: thinking models think by default,
+      //     and an explicit think:true 400s on non-thinking models
+      //     ("does not support thinking") — a combo operators can configure.
+      //   - num_ctx rides settings.options (same dead-channel casualty; the
+      //     sig includes it so an admin numCtx change rebuilds the instance).
+      // Per-call repeat_penalty has no v4 channel and is currently inert on
+      // this route — tracked as a follow-up; it needs per-call instances or
+      // an upstream option, not a construction setting.
+      const ollamaSettings: any = {};
+      if (cfg.reasoning !== true) ollamaSettings.think = false;
+      const numCtx = appliedNumCtx(cfg);
+      if (numCtx != null) ollamaSettings.options = { num_ctx: numCtx };
+      model = Object.keys(ollamaSettings).length ? provider(id, ollamaSettings) : provider(id);
       break;
     }
   }
