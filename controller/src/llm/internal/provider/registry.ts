@@ -308,8 +308,18 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       // includes both the reasoning flag and the no-think flag, so each variant is
       // built once.
       const suppressReasoning = cfg.reasoning !== true || constructionNoThink;
+      // effort:'minimal' is NOT a real off-switch for the enable_thinking
+      // model families (Qwen, GLM) — their only native knob is the boolean,
+      // and OpenRouter only maps `enabled:false` onto it. Observed live on
+      // qwen/qwen3.5-9b with minimal set: free-text calls thought through the
+      // FULL 4000-token output cap and returned zero visible text (31-101s,
+      // empty reply, truncation guard refused to air it). Those families
+      // don't mandate reasoning, so `enabled:false` can't 400 the way
+      // gpt-5/o-series does — which is the whole reason minimal stays the
+      // default for everyone else.
+      const enableThinkingFamily = /(^|\/)(qwen|glm)/i.test(id);
       model = suppressReasoning
-        ? provider(id, { extraBody: { reasoning: { effort: 'minimal' } } })
+        ? provider(id, { extraBody: { reasoning: enableThinkingFamily ? { enabled: false } : { effort: 'minimal' } } })
         : provider(id);
       break;
     }
