@@ -25,8 +25,15 @@ export function setupPlayer(): Promise<void> {
       // iosCategoryPolicy is read by the native module (SessionCategories.swift)
       // but missing from the lib's PlayerOptions type — extend it locally.
       const options: PlayerOptions & { iosCategoryPolicy?: 'longFormAudio' } = {
-        // A live stream needs a small buffer; keep defaults otherwise.
         autoHandleInterruptions: true,
+        // Forward buffer (iOS: preferredForwardBufferDuration). The default
+        // (0 = system decides) keeps a razor-thin cushion on a live stream —
+        // fine on the built-in speaker, but AirPlay needs a real timing
+        // cushion and collapsed the route ~6s after a HomePod handoff when
+        // the cushion drained (instrumented trail: route reverts FIRST, then
+        // the player errors). Icecast keeps the buffer fed; the cost is a few
+        // extra seconds behind the live edge, which a shared radio absorbs.
+        minBuffer: 12,
         // The long-form-audio route-sharing policy (what Apple Music/Podcasts
         // use): iOS remembers the listener's chosen AirPlay device for this
         // app and keeps routing to it through audio-session churn. Without
