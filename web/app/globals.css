@@ -699,6 +699,41 @@ body::after {
     transform: scale(1);
 }
 
+/* Artwork placeholder — the station disc mark at cover scale (the .player-mark
+   vocabulary), shown when the track has no artwork, the image failed to load,
+   or the stage is off air. It sits UNDER the art img inside .v3-cover-glitch,
+   so the slot never collapses and the text column never jumps (CenterStage). */
+.v3-cover-placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+.v3-cover-placeholder::before {
+    content: "";
+    width: 52%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    border: 1px solid var(--muted);
+    background: repeating-conic-gradient(
+        from 0deg,
+        var(--muted) 0deg 9deg,
+        transparent 9deg 18deg
+    );
+    opacity: 0.55;
+}
+.v3-cover-placeholder::after {
+    content: "";
+    position: absolute;
+    width: 17%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 1px var(--bg);
+}
+
 @keyframes cover-glitch-r {
     0%,
     100% {
@@ -796,6 +831,12 @@ body::after {
     .v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-scan {
         opacity: 0;
     }
+    /* The ripple rings behind the artwork are pure decoration, and a frozen
+       ring stack reads as broken — hide them outright. */
+    .sw-ripple-circle {
+        animation: none !important;
+        opacity: 0 !important;
+    }
     /* Ambient wash still tints, but snaps in instead of cross-fading. */
     .v3-cover-ambient {
         transition: none;
@@ -820,6 +861,11 @@ html.lite *::after {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
     animation: none !important;
+}
+/* The animation kill above would leave the artwork ripple as a static ring
+   stack for its 3s burst — hide the rings, matching reduced-motion. */
+html.lite .sw-ripple-circle {
+    opacity: 0 !important;
 }
 
 /* Player title — Fraunces display serif (see the type-roles block up top).

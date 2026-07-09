@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, m } from 'motion/react';
+import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import { selectThinkingTurn, turnClass, turnText } from '@/lib/sessionFeed';
 import BoothBuddy, { type BuddyMood } from './BoothBuddy';
+import { useLiteMode } from '@/hooks/useLiteMode';
 import type { SessionTurn } from '@/lib/types';
 
 // Shows only the DJ's "thinking" — the latest thing said on-air ("voice") or
@@ -66,12 +67,14 @@ function thinkingText(turn: SessionTurn): string {
 }
 
 // Stagger cap: total enter time stays under ~600 ms regardless of line length.
-// Each child animates ~120 ms; for a 12-char line the previous default of
-// 42 ms/char gives ~12*0.042+0.12 ≈ 0.62 s. For longer lines we squeeze the
-// stagger so the last char still arrives by ~0.6 s.
-function staggerFor(length: number): number {
-  if (length <= 0) return 0;
-  return Math.min(0.042, 0.5 / length);
+// The type-on is word-by-word, not per character — visually near-identical
+// under the blur ramp at a fraction of the animated element count (a long
+// "extended" script used to mount hundreds of motion spans). Each word
+// animates ~120 ms; a 6-word line at the 80 ms default lands ~0.6 s, and
+// longer lines squeeze the stagger so the last word still arrives by then.
+function staggerFor(count: number): number {
+  if (count <= 0) return 0;
+  return Math.min(0.08, 0.5 / count);
 }
 
 const cursorChar = '▍';
@@ -110,12 +113,21 @@ export default function DjThinkingLine({ feed, enabled, currentTrackId = null, b
   // cover the buddy, so you'd never see the reaction).
   const buddyRef = useRef<HTMLSpanElement>(null);
 
+  // Skip the type-on stagger under OS reduced-motion and in lite mode.
+  // MotionConfig reducedMotion="user" only drops transform animations (this
+  // one is opacity+blur), and html.lite's CSS `animation: none` can't reach
+  // these JS-driven tweens — so both need an explicit gate here.
+  const reduced = useReducedMotion();
+  const { lite } = useLiteMode();
+  const instant = !!reduced || lite;
+
   if (!enabled || !latest) return null;
 
   const full = thinkingText(latest);
   const cls = turnClass(latest);
   const turnId = `${latest.t}`;
-  const stagger = staggerFor(full.length);
+  const words = full.match(/\S+\s*/g) ?? [];
+  const stagger = staggerFor(words.length);
 
   const open = () => onOpenBooth?.();
 
@@ -137,7 +149,9 @@ export default function DjThinkingLine({ feed, enabled, currentTrackId = null, b
         }
       }}
       title="Open booth feed"
-      className="v3-focus mt-[22px] mb-[10px] flex w-full max-w-[82%] cursor-pointer items-start gap-2 font-mono text-[14px] leading-[1.6] text-muted sm:text-[15px]"
+      // Full width on phones — the stage column is already narrow there; the
+      // 82% cap is a desktop line-length nicety.
+      className="v3-focus mt-[22px] mb-[10px] flex w-full max-w-full cursor-pointer items-start gap-2 font-mono text-[14px] leading-[1.6] text-muted sm:max-w-[82%] sm:text-[15px]"
     >
       {/* The Booth Sprite leads the line; tap it to poke it (hit-test in
           onClick above). When the operator turns the mascot off, fall back to
@@ -162,29 +176,31 @@ export default function DjThinkingLine({ feed, enabled, currentTrackId = null, b
             key={turnId}
             variants={{
               hidden:  { opacity: 0 },
-              visible: { opacity: 1, transition: { staggerChildren: stagger } },
+              visible: { opacity: 1, transition: { staggerChildren: instant ? 0 : stagger } },
               exit:    { opacity: 0, transition: { duration: 0.12 } },
             }}
             initial="hidden"
             animate="visible"
             exit="exit"
-            aria-label={full}
+            aria-label={instant ? undefined : full}
           >
-            {Array.from(full).map((char, i) => (
-              <m.span
-                key={i}
-                variants={{
-                  hidden:  { opacity: 0, filter: 'blur(2px)' },
-                  visible: { opacity: 1, filter: 'blur(0px)', transition: { duration: 0.12 } },
-                }}
-                aria-hidden="true"
-                // Preserve whitespace but allow soft wrapping at spaces — `pre`
-                // would suppress every wrap opportunity and overflow the column.
-                style={{ whiteSpace: 'pre-wrap' }}
-              >
-                {char}
-              </m.span>
-            ))}
+            {instant
+              ? full
+              : words.map((word, i) => (
+                  <m.span
+                    key={i}
+                    variants={{
+                      hidden:  { opacity: 0, filter: 'blur(2px)' },
+                      visible: { opacity: 1, filter: 'blur(0px)', transition: { duration: 0.12 } },
+                    }}
+                    aria-hidden="true"
+                    // Preserve whitespace but allow soft wrapping at spaces — `pre`
+                    // would suppress every wrap opportunity and overflow the column.
+                    style={{ whiteSpace: 'pre-wrap' }}
+                  >
+                    {word}
+                  </m.span>
+                ))}
           </m.span>
         </AnimatePresence>
         <span className="v3-blink ml-px text-vermilion" aria-hidden="true">{cursorChar}</span>
