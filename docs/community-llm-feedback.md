@@ -84,3 +84,23 @@ size (falls for the same-artist trap; picks unoffered feature kinds on 3-hour pl
 **multi-hour programme plan is the hardest call in the system** — the only kind that dented
 every model tested. Reasoning axis note: all rows above measured reasoning **off**; the
 `--reasoning both` axis + thinking-leak forensics landed after these runs.
+
+### Second batch (same day, with thinking-leak forensics live)
+
+| Model / routing | Score | Verdict |
+| --- | --- | --- |
+| `google:gemini-3.5-flash` | **95/96** | New overall leader; agent 18/18 at 1–2 s. |
+| `google:gemini-3.1-flash-lite` | 94/96 | The value pick — 31B-class score, agent 18/18, 0.7 s picks. |
+| `openrouter:openai/gpt-4o-mini` | 90/96 | Agent-capable; misses are editorial. |
+| `ollama:glm-5.2:cloud` | 86/96¹ | Pool-mode; agent borderline (15/18). |
+| `openrouter:anthropic/claude-haiku-4.5` | 82/96² | Agent-capable (18/18); wordy — over-length lines are most misses. |
+
+¹ ² Both scores are POST-FIX. The forensics caught **three thinking-suppression bugs in our
+own plumbing** the same day they landed: `effort:'minimal'` is a no-op for Qwen via
+OpenRouter (station-observed), the whole `providerOptions.ollama` block has been dropped
+since the ai-sdk-ollama v4 swap (glm measured 66/96 against that bug), and OpenRouter maps
+any effort onto an Anthropic thinking *budget* — the suppression value was ENABLING thinking
+on haiku (first run measured 15/96). Suppression is now `enabled:false` everywhere except
+the reasoning-mandatory OpenAI/R1 families, Ollama gets construction-time `think:false`
+(+ the admin `num_ctx` setting works again — it was also silently dead), and both fixes are
+wire-verified.

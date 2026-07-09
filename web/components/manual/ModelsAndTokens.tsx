@@ -70,13 +70,17 @@ export default function ModelsAndTokens() {
         <LlmBenchTable />
         <p>
           Reading it for a recommendation: pick an <strong>agent-capable</strong> row if you
-          want the full conversational picker (Gemma 4 31B on Ollama cloud is the best free
-          option; MiniMax M2.7 the alternative); pick any healthy <strong>pool-mode</strong>{' '}
-          row for a lean station (<strong>Qwen3.5 9B</strong> is the small floor, and a local{' '}
+          want the full conversational picker — <strong>Gemini 3.5 Flash</strong> leads the
+          table outright, its <strong>Flash-Lite</strong> sibling matches the 31B class at the
+          fastest picks benched, and <strong>Gemma 4 31B on Ollama cloud</strong> remains the
+          best keyless option. Pick any healthy <strong>pool-mode</strong> row for a lean
+          station (<strong>Qwen3.5 9B</strong> is the small floor, and a local{' '}
           <strong>Gemma 4 12B</strong> — <code>locca serve gemma4</code> — does the same job
           keylessly on your own box). Remember the route in the second line of each model
           cell is part of the result — the same model through a different provider can score
-          differently.
+          differently, and two of the scores above changed by 20+ points once bugs in{' '}
+          <em>our own</em> thinking-suppression plumbing were found and fixed. The bench
+          checks that too, now.
         </p>
         <p>
           Two patterns worth knowing whatever you run: the Gemma family at every size shares
