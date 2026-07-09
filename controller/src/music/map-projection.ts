@@ -63,13 +63,23 @@ export async function runProjection(log: (line: string) => void = console.log): 
   }
   const raw = umap.getEmbedding();
 
-  // Robust per-axis normalise to [0,1]: clamp to the 1st–99th percentile span.
+  // Robust per-axis normalise to [0,1]: the 1st–99th percentile span maps to
+  // [PAD, 1-PAD] and each tail spreads linearly into its PAD band. A hard
+  // clamp instead would pile every outlier onto the exact same coordinate — a
+  // visible straight wall of stars along the map edge.
+  const PAD = 0.02;
   const norm = (axis: 0 | 1): ((v: number) => number) => {
     const sorted = raw.map((p) => p[axis]!).sort((a, b) => a - b);
+    const min = sorted[0]!;
+    const max = sorted[sorted.length - 1]!;
     const lo = sorted[Math.floor(sorted.length * 0.01)]!;
     const hi = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.99))]!;
     const span = hi - lo || 1;
-    return (v) => Math.max(0, Math.min(1, (v - lo) / span));
+    return (v) => {
+      if (v < lo) return lo === min ? PAD : (PAD * (v - min)) / (lo - min);
+      if (v > hi) return hi === max ? 1 - PAD : 1 - PAD + (PAD * (v - hi)) / (max - hi);
+      return PAD + (1 - 2 * PAD) * ((v - lo) / span);
+    };
   };
   const nx = norm(0);
   const ny = norm(1);

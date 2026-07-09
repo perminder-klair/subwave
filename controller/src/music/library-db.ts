@@ -1226,8 +1226,13 @@ export function allAudioVectors(): { id: string; vector: Float32Array }[] {
 
 export function setMapCoordsBulk(coords: { id: string; x: number; y: number }[]): void {
   const d = requireDb();
+  const clear = d.prepare('UPDATE tracks SET map_x = NULL, map_y = NULL WHERE map_x IS NOT NULL');
   const stmt = d.prepare('UPDATE tracks SET map_x = ?, map_y = ? WHERE id = ?');
+  // Clear-then-set in one transaction so coords always reflect exactly the
+  // last projection — a track whose audio vector was since deleted can't keep
+  // a stale position on the map.
   const tx = d.transaction((list: { id: string; x: number; y: number }[]) => {
+    clear.run();
     for (const c of list) stmt.run(c.x, c.y, c.id);
   });
   tx(coords);

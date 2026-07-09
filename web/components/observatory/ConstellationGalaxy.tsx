@@ -232,7 +232,6 @@ export default function ConstellationGalaxy({
   sizeRef.current = size;
 
   const [dragging, setDragging] = useState(false);
-  const draggingRef = useRef(false);
   const drag = useRef<{ sx: number; sy: number; tx: number; ty: number } | null>(null);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const pinch = useRef<{ d0: number; k0: number; ux: number; uy: number } | null>(null);
@@ -464,7 +463,10 @@ export default function ConstellationGalaxy({
         g.starMat.uniforms.uElapsed!.value = el;
         g.nebulaMat.uniforms.uElapsed!.value = el;
         g.linkMat.opacity = (filteringRef.current ? 0.1 : 0.22) * Math.min(1, e / ENTRANCE_TOTAL);
-        renderNow();
+        // respect the offscreen gate — an idle below-the-fold embed shouldn't
+        // burn ~1.1s of bloom frames; the IO handler repaints on reveal
+        if (visibleRef.current) renderNow();
+        else staleWhileHidden.current = true;
         entranceRaf.current = done ? null : requestAnimationFrame(loop);
       };
       entranceRaf.current = requestAnimationFrame(loop);
@@ -724,7 +726,6 @@ export default function ConstellationGalaxy({
     } else {
       const v = viewRef.current;
       drag.current = { sx: e.clientX, sy: e.clientY, tx: v.tx, ty: v.ty };
-      draggingRef.current = true;
       setDragging(true);
     }
   };
@@ -780,7 +781,6 @@ export default function ConstellationGalaxy({
       if (pending.current) setView(pending.current);
       pending.current = null;
       drag.current = null;
-      draggingRef.current = false;
       setDragging(false);
     }
   };
