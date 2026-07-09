@@ -180,9 +180,17 @@ async function main() {
             // plenty precise.
             const outTokens = (recentCalls[0] as any)?.usage?.output;
             if (newCalls === 1 && typeof outTokens === 'number') {
-              const visibleEst = Math.ceil((base.response?.length ?? 0) / 4);
+              // JSON tokenizes denser than prose (~3 chars/token vs ~4 — ids
+              // and punctuation), and the first heuristic's 300-token floor
+              // flagged marginal 305-376 gaps on structured glm calls as
+              // leaks. Real thinking runs 1000+ hidden tokens; the floor sits
+              // at 500 with the denser JSON estimate so estimation error
+              // can't cross it.
+              const text = base.response ?? '';
+              const perTok = /^\s*[[{]/.test(text) ? 3 : 4;
+              const visibleEst = Math.ceil(text.length / perTok);
               base.hiddenTokens = Math.max(0, outTokens - visibleEst);
-              if (!reasoning && base.hiddenTokens > Math.max(300, visibleEst * 2)) {
+              if (!reasoning && base.hiddenTokens > Math.max(500, visibleEst * 2)) {
                 // Suppression asked for, thinking happened anyway — the exact
                 // bug class the Qwen/OpenRouter effort-minimal no-op was.
                 base.violations.push('thinking-leak');
