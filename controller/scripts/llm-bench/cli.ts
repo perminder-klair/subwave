@@ -16,6 +16,9 @@
 //                 or exact kind names; default all
 //   --modes       pool,agent (default both). 'any' kinds always run once.
 //   --iterations  runs per scenario (default 3)
+//   --reasoning   on | off | both — the thinking toggle as a matrix axis;
+//                 'both' runs every model twice, labelled [r:on]/[r:off].
+//                 Default: the live settings value (keeps old reports comparable).
 //   --out         JSON report path (default scripts/llm-bench/reports/<ts>.json)
 //
 // API keys resolve exactly as live (state/secrets.env / settings / env);
@@ -98,12 +101,23 @@ async function main() {
   // resolve off-container — same problem OLLAMA_URL solves for Ollama.
   if (process.env.LLM_BASE_URL) s.llm.baseUrl = process.env.LLM_BASE_URL;
 
+  // Reasoning as a matrix axis. Default: whatever the live settings say (the
+  // historical behaviour, and what keeps old reports comparable). 'both'
+  // doubles the matrix — each model runs once per variant, labelled
+  // "<spec> [r:on|r:off]" so the summary table shows them side by side.
+  const reasoningArg = (args.reasoning || '').toLowerCase();
+  if (reasoningArg && !['on', 'off', 'both'].includes(reasoningArg)) usage(`bad --reasoning "${args.reasoning}"`);
+  const reasoningVariants: boolean[] = reasoningArg === 'both'
+    ? [false, true]
+    : reasoningArg ? [reasoningArg === 'on'] : [s.llm?.reasoning === true];
+  const labelReasoning = reasoningArg === 'both';
+
   const reporter = new Reporter(outPath, {
     models: models.map(m => m.spec),
     modes: [...modes],
     kinds: specs.map(k => k.kind),
     iterations,
-    reasoning: s.llm?.reasoning ?? null,
+    reasoning: reasoningArg || (s.llm?.reasoning ?? null),
   });
   process.on('SIGINT', () => {
     reporter.flush();
@@ -115,9 +129,12 @@ async function main() {
   console.log(`\nllm-bench: ${models.length} model(s) × ${specs.length} kind(s) (${totalCells} scenario cells) × ${iterations} iteration(s)\n`);
 
   for (const m of models) {
+    for (const reasoning of reasoningVariants) {
     s.llm.provider = m.provider;
     s.llm.model = m.model;
-    console.log(`━━ ${m.spec}`);
+    s.llm.reasoning = reasoning;
+    const label = labelReasoning ? `${m.spec} [r:${reasoning ? 'on' : 'off'}]` : m.spec;
+    console.log(`━━ ${label}`);
     let consecutiveUnreachable = 0;
     let skipRest = false;
 
@@ -125,7 +142,7 @@ async function main() {
       for (const scenario of spec.scenarios) {
         for (let i = 1; i <= iterations; i++) {
           const base: RunRecord = {
-            model: m.spec, kind: spec.kind, group: spec.group, mode: spec.mode,
+            model: label, kind: spec.kind, group: spec.group, mode: spec.mode,
             scenario: scenario.name, iteration: i, outcome: 'skipped', violations: [], ms: 0,
           };
           if (skipRest) {
@@ -162,6 +179,7 @@ async function main() {
             + (base.bucket ? `  (${base.bucket}: ${base.error})` : ''));
         }
       }
+    }
     }
   }
 
