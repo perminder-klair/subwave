@@ -774,6 +774,7 @@ export interface TrackLite {
   moods: string[];
   energy: string | null;
   year: number | null;
+  durationSec: number | null;
 }
 
 // Lean read for the /now-playing hot path (polled every ~5s by every listener).
@@ -785,7 +786,7 @@ export interface TrackLite {
 // concurrent HTTP response, making the whole UI sluggish (#723).
 export function getTrackLite(id: string): TrackLite | null {
   const row = requireDb()
-    .prepare(`SELECT genre, bpm, musical_key, moods, energy, year FROM tracks WHERE id = ?`)
+    .prepare(`SELECT genre, bpm, musical_key, moods, energy, year, duration_sec FROM tracks WHERE id = ?`)
     .get(id) as any;
   if (!row) return null;
   return {
@@ -795,6 +796,7 @@ export function getTrackLite(id: string): TrackLite | null {
     moods: row.moods ? safeParseArray(row.moods) : [],
     energy: row.energy ?? null,
     year: row.year ?? null,
+    durationSec: row.duration_sec ?? null,
   };
 }
 
