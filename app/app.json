@@ -18,6 +18,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.getsubwave.app",
+      "appleTeamId": "BU9RD766GN",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSLocalNetworkUsageDescription": "SUB/WAVE uses the local network to find Google Cast speakers and TVs on your Wi-Fi so you can send the station to them.",

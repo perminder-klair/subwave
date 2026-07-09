@@ -56,6 +56,7 @@ import PagePanel from './PagePanel';
 import TopBar from './TopBar';
 import TransportBar from './TransportBar';
 import Waveform from './Waveform';
+import BackPanelDrawer from './drawers/BackPanelDrawer';
 import BoothDrawer from './drawers/BoothDrawer';
 import RequestDrawer from './drawers/RequestDrawer';
 import ScheduleDrawer from './drawers/ScheduleDrawer';
@@ -174,7 +175,7 @@ const RequestPage = memo(function RequestPage({
 
 export default function PlayerScreen() {
   const { api } = useStation();
-  const { colors, mode } = useTheme();
+  const { colors, mode, themes, activeId } = useTheme();
 
   const { isConnected } = useConnectivity();
   const localPlayer = usePlayer(api, 1, isConnected);
@@ -322,8 +323,15 @@ export default function PlayerScreen() {
   const openTimeline = useCallback(() => goToPage(TIMELINE_INDEX), [goToPage]);
   const goHome = useCallback(() => goToPage(HOME_INDEX), [goToPage]);
 
-  const [themesOpen, setThemesOpen] = useState(false);
-  const [sleepOpen, setSleepOpen] = useState(false);
+  // One bottom sheet, content switched by the active drawer (the Sheet
+  // component's intended pattern): the masthead's single button opens the
+  // "back panel"; its TIMER/FASCIA rows swap content in place — no
+  // modal-dismissal race between stacked sheets.
+  const [activeSheet, setActiveSheet] = useState<'panel' | 'sleep' | 'themes' | null>(null);
+  const themeName = useMemo(
+    () => themes.find((t) => t.id === activeId)?.name ?? null,
+    [themes, activeId],
+  );
 
   // Footprints of the two frosted overlays (masthead/dial header at the top,
   // transport bar at the bottom). The pager fills the full height behind both,
@@ -449,10 +457,8 @@ export default function PlayerScreen() {
             stationName={stationName}
             djName={djName}
             activeShow={activeShow}
-            onOpenThemes={() => setThemesOpen(true)}
-            onOpenSleep={() => setSleepOpen(true)}
-            sleepActive={sleep.active}
-            castAvailable={cast.available}
+            onOpenPanel={() => setActiveSheet('panel')}
+            panelActive={sleep.active || cast.connected}
           />
           <ConnectionBanner
             isConnected={isConnected}
@@ -493,12 +499,23 @@ export default function PlayerScreen() {
         </View>
       </SafeAreaView>
 
-      <Sheet open={themesOpen} onClose={() => setThemesOpen(false)} title="Theme">
-        {themesOpen ? <ThemesDrawer /> : null}
-      </Sheet>
-
-      <Sheet open={sleepOpen} onClose={() => setSleepOpen(false)} title="Sleep timer">
-        {sleepOpen ? (
+      <Sheet
+        open={activeSheet !== null}
+        onClose={() => setActiveSheet(null)}
+        title={activeSheet === 'panel' ? 'Back panel' : activeSheet === 'sleep' ? 'Sleep timer' : 'Theme'}
+      >
+        {activeSheet === 'panel' ? (
+          <BackPanelDrawer
+            castAvailable={cast.available}
+            castingTo={cast.deviceName}
+            sleepActive={sleep.active}
+            sleepRemainingSec={sleep.remainingSec}
+            themeName={themeName}
+            onOpenSleep={() => setActiveSheet('sleep')}
+            onOpenThemes={() => setActiveSheet('themes')}
+          />
+        ) : null}
+        {activeSheet === 'sleep' ? (
           <SleepDrawer
             active={sleep.active}
             armedMinutes={sleep.armedMinutes}
@@ -507,6 +524,7 @@ export default function PlayerScreen() {
             onCancel={sleep.cancel}
           />
         ) : null}
+        {activeSheet === 'themes' ? <ThemesDrawer /> : null}
       </Sheet>
     </View>
   );
