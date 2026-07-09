@@ -117,6 +117,12 @@ export interface TrackRecord {
   // Outro (tail) features — the track's measured ending (fade vs cold, tail
   // loudness/tempo/bar grid). null → no outro signal, today's transitions.
   outro: TrackOutro | null;
+  // Sound-map coordinates — a 2D UMAP projection of the CLAP audio vector,
+  // normalised to [0,1] per axis (music/map-projection.ts). The Observatory
+  // places nodes by these when present, so tracks that SOUND alike sit close.
+  // null → not projected (no audio vector, or the projection hasn't run).
+  mapX: number | null;
+  mapY: number | null;
 }
 
 // The measured ending of a track — what the crossfade seam actually lands on.
@@ -508,6 +514,26 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     // file. Nullable; NULL → no outro signal, today's transition behaviour.
     runDdl(d, `ALTER TABLE tracks ADD COLUMN outro_json TEXT;`);
     d.pragma('user_version = 12');
+  }
+
+  if (userVersion < 13) {
+    // Sound-map coordinates (music/map-projection.ts) — 2D UMAP of the CLAP
+    // audio vectors, normalised to [0,1] per axis. Nullable; NULL → the
+    // Observatory falls back to its genre-cluster layout for that track.
+    // map_projection_meta records provenance (algo/space/row count/timestamp)
+    // so staleness is a cheap count comparison, not a vector diff.
+    runDdl(d, `
+      ALTER TABLE tracks ADD COLUMN map_x REAL;
+      ALTER TABLE tracks ADD COLUMN map_y REAL;
+      CREATE TABLE IF NOT EXISTS map_projection_meta (
+        pk      INTEGER PRIMARY KEY CHECK (pk = 1),
+        algo    TEXT NOT NULL,
+        space   TEXT NOT NULL,
+        count   INTEGER NOT NULL,
+        set_at  TEXT NOT NULL
+      );
+    `);
+    d.pragma('user_version = 13');
   }
 
   // Reconcile the requested embedding dim against what physically exists.
@@ -1177,6 +1203,59 @@ export function audioVectorCount(): number {
   }).n;
 }
 
+// Every stored CLAP vector in one pass — the sound-map projection's input.
+// Each entry is a copy (not a view into the DB page), safe to hold across
+// further DB work. ~18MB at 9k×512, well within a one-shot job's budget.
+export function allAudioVectors(): { id: string; vector: Float32Array }[] {
+  const rows = requireDb()
+    .prepare('SELECT id, embedding FROM track_audio_vectors')
+    .all() as { id: string; embedding: Buffer }[];
+  return rows.map((r) => ({
+    id: r.id,
+    vector: new Float32Array(
+      r.embedding.buffer,
+      r.embedding.byteOffset,
+      Math.floor(r.embedding.byteLength / 4),
+    ).slice(),
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Sound-map projection coordinates (music/map-projection.ts)
+// ---------------------------------------------------------------------------
+
+export function setMapCoordsBulk(coords: { id: string; x: number; y: number }[]): void {
+  const d = requireDb();
+  const stmt = d.prepare('UPDATE tracks SET map_x = ?, map_y = ? WHERE id = ?');
+  const tx = d.transaction((list: { id: string; x: number; y: number }[]) => {
+    for (const c of list) stmt.run(c.x, c.y, c.id);
+  });
+  tx(coords);
+}
+
+export function mapCoordsCount(): number {
+  return (requireDb().prepare('SELECT COUNT(*) AS n FROM tracks WHERE map_x IS NOT NULL').get() as {
+    n: number;
+  }).n;
+}
+
+export function getMapProjectionMeta(): { algo: string; space: string; count: number; setAt: string } | null {
+  const row = requireDb()
+    .prepare('SELECT algo, space, count, set_at FROM map_projection_meta WHERE pk = 1')
+    .get() as { algo: string; space: string; count: number; set_at: string } | undefined;
+  return row ? { algo: row.algo, space: row.space, count: row.count, setAt: row.set_at } : null;
+}
+
+export function setMapProjectionMeta(algo: string, space: string, count: number): void {
+  requireDb()
+    .prepare(
+      `INSERT INTO map_projection_meta (pk, algo, space, count, set_at) VALUES (1, ?, ?, ?, ?)
+       ON CONFLICT(pk) DO UPDATE SET algo = excluded.algo, space = excluded.space,
+         count = excluded.count, set_at = excluded.set_at`,
+    )
+    .run(algo, space, count, new Date().toISOString());
+}
+
 // ---------------------------------------------------------------------------
 // Zero-shot audio moods (music/audio-moods.ts) — mood labels derived by scoring
 // the vocabulary's CLAP TEXT embeddings against each track's stored audio
@@ -1794,6 +1873,8 @@ function rowToTrack(row: any): TrackRecord {
     keyRanges: row.key_ranges_json ? parseKeyRanges(row.key_ranges_json) : null,
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     outro: row.outro_json ? parseOutroJson(row.outro_json) : null,
+    mapX: row.map_x ?? null,
+    mapY: row.map_y ?? null,
   };
 }
 

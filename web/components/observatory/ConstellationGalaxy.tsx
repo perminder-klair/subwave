@@ -804,13 +804,21 @@ export default function ConstellationGalaxy({
     });
 
   const transform = `translate(${view.tx} ${view.ty}) scale(${view.k})`;
-  const genreLabels = useMemo(
-    () =>
-      lib.genres
-        .filter((g) => g !== '—' && lib.centers[g])
-        .map((g) => ({ g, c: lib.centers[g]! })),
-    [lib],
-  );
+  // Constellation names, greedily decluttered: lib.genres is most-populous
+  // first, so when two centroids crowd each other (common on the sound map,
+  // where 80+ genre centroids can share the dense core) the bigger scene wins.
+  const genreLabels = useMemo(() => {
+    const kept: { g: string; c: { x: number; y: number } }[] = [];
+    for (const g of lib.genres) {
+      if (g === '—') continue;
+      const c = lib.centers[g];
+      if (!c) continue;
+      if (kept.some((k) => Math.hypot(k.c.x - c.x, k.c.y - c.y) < 70)) continue;
+      kept.push({ g, c });
+      if (kept.length >= 36) break;
+    }
+    return kept;
+  }, [lib]);
 
   if (failed) {
     return (

@@ -17,6 +17,7 @@ import { promptVocabHash } from '../music/embeddings.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
 import { tagger, taggerView, startAnalyzer, startReconcile } from '../broadcast/tagger.js';
+import * as mapProjection from '../music/map-projection.js';
 
 export const router = express.Router();
 
@@ -152,7 +153,9 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
     // Revalidation: the payload is a pure function of library rows + max, so a
     // token that changes on any library write is a sound ETag. Matching lets us
     // skip the (multi-MB at high caps) body AND the row scan that builds it.
-    const etag = `W/"obs-${db.changeToken()}-${max}"`;
+    // The projection-running flag rides in the token too — it flips without a
+    // DB write, and a 304 must not hide "job in flight" from the UI.
+    const etag = `W/"obs-${db.changeToken()}-${max}-${mapProjection.projectionStatus().running ? 1 : 0}"`;
     res.set('ETag', etag);
     res.set('Cache-Control', 'private, no-cache');
     const inm = req.headers['if-none-match'];
@@ -187,6 +190,10 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
         paceMean: library.paceMeanOf(t.pace),
         // Tri-state: 'vocal' | 'instrumental' | null (not analysed for vocals).
         vocal: t.vocalRanges == null ? null : t.vocalRanges.length ? 'vocal' : 'instrumental',
+        // Sound-map coordinates (UMAP of the CLAP vector, [0,1] per axis).
+        // null → the client falls back to its genre-cluster layout.
+        mapX: t.mapX,
+        mapY: t.mapY,
       }));
     res.json({
       tracks,
@@ -195,6 +202,9 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
       max,
       defaultMax: OBSERVATORY_DEFAULT_MAX,
       hardMax: OBSERVATORY_HARD_MAX,
+      // Sound-map provenance — lets the UI say whether nodes sit by sound
+      // (projection done) or by genre (fallback), and show job progress.
+      mapProjection: mapProjection.projectionStatus(),
       moodVocab: settings.SHOW_MOODS,
       stats: {
         total: stats.total,
@@ -291,6 +301,22 @@ router.get('/library/observatory/track/:id', requireAdmin, async (req, res) => {
       audioEmbedding: audioVec ? Array.from(audioVec) : null,
       mixNext,
     });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /library/observatory/project — force a sound-map projection pass now
+// (the boot hook only fires when the map is stale). Spawns the standalone
+// UMAP child; 409 when one is already running. Minutes-long at library scale —
+// the client polls the bulk endpoint's `mapProjection` status for completion.
+// ---------------------------------------------------------------------------
+router.post('/library/observatory/project', requireAdmin, async (_req, res) => {
+  try {
+    await library.load();
+    const started = mapProjection.startProjection();
+    res.status(started ? 202 : 409).json({ started, status: mapProjection.projectionStatus() });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

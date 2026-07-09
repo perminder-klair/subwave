@@ -36,6 +36,7 @@
     "pino-pretty": "^11.3.0",
     "sqlite-vec": "^0.1.9",
     "tsx": "^4.19.2",
+    "umap-js": "^1.4.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

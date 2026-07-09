@@ -345,7 +345,9 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
                   ))}
                 </select>
               </div>
-              <div className="ad-muted t-caption">GALAXY RENDERER · WEBGL</div>
+              <div className="ad-muted t-caption">
+                GALAXY RENDERER · {lib?.soundMap ? 'PLACED BY SOUND' : 'PLACED BY GENRE'}
+              </div>
             </div>
           )}
 
