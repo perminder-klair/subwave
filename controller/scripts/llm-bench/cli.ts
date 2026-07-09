@@ -93,6 +93,10 @@ async function main() {
   await settings.load();
   const s: any = settings.get();
   if (process.env.OLLAMA_URL) s.llm.ollamaUrl = process.env.OLLAMA_URL;
+  // locca / openai-compatible targets from the host: their persisted/default
+  // base URLs use Docker-internal names (host.docker.internal) that don't
+  // resolve off-container — same problem OLLAMA_URL solves for Ollama.
+  if (process.env.LLM_BASE_URL) s.llm.baseUrl = process.env.LLM_BASE_URL;
 
   const reporter = new Reporter(outPath, {
     models: models.map(m => m.spec),
