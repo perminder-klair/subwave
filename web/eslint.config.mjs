@@ -79,6 +79,10 @@ export default defineConfig([
             // (.admin-root .hs-*), ported from a Claude Design prototype.
             // Bespoke gauge/bar/lamp CSS in app/globals.css.
             '^hs-',
+            // .seg-* — the /admin/dash DJ-segment cart-machine fire pads
+            // (.admin-root .seg-*). Bespoke LED/sweep CSS in app/globals.css.
+            '^seg-',
+            '^is-firing$',
             // admin-scoped descendant classes from globals.css
             '^eyebrow$',
             '^caption$',
