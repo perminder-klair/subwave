@@ -4,7 +4,7 @@
 // TopBar for a phone-width single column.
 
 import { router } from 'expo-router';
-import { MoonStar, Palette } from 'lucide-react-native';
+import { SlidersHorizontal } from 'lucide-react-native';
 import { useMemo } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,10 +19,11 @@ export interface TopBarProps {
   stationName?: string;
   djName?: string;
   activeShow: ActiveShow | null;
-  onOpenThemes: () => void;
-  onOpenSleep: () => void;
-  /** Accent-tints the moon while a sleep timer is armed. */
-  sleepActive: boolean;
+  /** Open the back-panel sheet (outputs, sleep timer, theme). */
+  onOpenPanel: () => void;
+  /** Something's live behind the panel (sleep armed / casting) — show the
+   *  accent dot so state never hides inside the sheet. */
+  panelActive: boolean;
 }
 
 export default function TopBar({
@@ -31,9 +32,8 @@ export default function TopBar({
   stationName,
   djName,
   activeShow,
-  onOpenThemes,
-  onOpenSleep,
-  sleepActive,
+  onOpenPanel,
+  panelActive,
 }: TopBarProps) {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
@@ -72,18 +72,33 @@ export default function TopBar({
             </Text>
           ) : null}
         </Pressable>
-        <View className="flex-row items-center" style={{ gap: 18, paddingLeft: 12 }}>
+        <View className="flex-row items-center" style={{ paddingLeft: 12 }}>
+          {/* One button for everything off-fascia — outputs (AirPlay/Cast),
+              sleep timer, theme all live on the "back panel" sheet. The dot
+              surfaces live state (timer armed / casting) at a glance. */}
           <Pressable
-            onPress={onOpenSleep}
+            onPress={onOpenPanel}
             hitSlop={10}
             accessibilityRole="button"
-            accessibilityLabel={sleepActive ? 'Sleep timer (armed)' : 'Sleep timer'}
-            accessibilityState={{ selected: sleepActive }}
+            accessibilityLabel={panelActive ? 'Back panel (active)' : 'Back panel'}
+            accessibilityState={{ selected: panelActive }}
           >
-            <MoonStar size={18} color={sleepActive ? colors.accent : colors.muted} />
-          </Pressable>
-          <Pressable onPress={onOpenThemes} hitSlop={10} accessibilityRole="button" accessibilityLabel="Theme">
-            <Palette size={18} color={colors.muted} />
+            <View>
+              <SlidersHorizontal size={18} color={panelActive ? colors.accent : colors.muted} />
+              {panelActive ? (
+                <View
+                  style={{
+                    position: 'absolute',
+                    top: -2,
+                    right: -4,
+                    width: 5,
+                    height: 5,
+                    borderRadius: 2.5,
+                    backgroundColor: colors.accent,
+                  }}
+                />
+              ) : null}
+            </View>
           </Pressable>
         </View>
       </View>

@@ -52,6 +52,17 @@ which makes two source edits:
   `getsubwave.com` station, which is live. Onboarding pre-fills it.
 - **Base URL is fully runtime** — there are no hardcoded station URLs in source.
   All API/stream URLs come from `StationContext` → `createApi(baseUrl)`.
+- **Cast + AirPlay need physical hardware.** Neither Google Cast discovery nor
+  the AirPlay picker works in a simulator/emulator — test with a real phone and
+  a Chromecast/Nest (or HomePod/Apple TV) on the **same Wi-Fi**. On iOS the
+  first tap of the cast button triggers the Local Network permission prompt
+  (deny = no devices found, ever — reset via Settings → Privacy → Local
+  Network). Cast hands playback OFF the phone: while a session is connected,
+  RNTP is torn down and the phone is a remote — expect no lock-screen media
+  controls, and the deck's Signal cell reads `Cast · <device>`.
+  `react-native-google-cast` runs under the New Architecture in **compat
+  (interop) mode** (v5 will be native); if a Cast API breaks after an RN/Expo
+  upgrade, check the library's v5 status before patching.
 
 ---
 

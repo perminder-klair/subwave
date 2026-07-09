@@ -31,6 +31,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Sheet } from '@/components/ui/Sheet';
 import { useStation } from '@/config/StationContext';
+import { useCast } from '@/hooks/useCast';
 import { useConnectivity } from '@/hooks/useConnectivity';
 import { useCoverColors } from '@/hooks/useCoverColors';
 import { useNowPlayingInfo } from '@/hooks/useNowPlayingInfo';
@@ -49,12 +50,12 @@ import type {
 } from '@/lib/types';
 import { useTheme } from '@/theme/ThemeContext';
 import CenterStage from './CenterStage';
-import ConnectionBanner from './ConnectionBanner';
 import FreqBand, { type BandStop } from './FreqBand';
 import PagePanel from './PagePanel';
 import TopBar from './TopBar';
 import TransportBar from './TransportBar';
 import Waveform from './Waveform';
+import BackPanelDrawer from './drawers/BackPanelDrawer';
 import BoothDrawer from './drawers/BoothDrawer';
 import RequestDrawer from './drawers/RequestDrawer';
 import ScheduleDrawer from './drawers/ScheduleDrawer';
@@ -173,14 +174,10 @@ const RequestPage = memo(function RequestPage({
 
 export default function PlayerScreen() {
   const { api } = useStation();
-  const { colors, mode } = useTheme();
+  const { colors, mode, themes, activeId } = useTheme();
 
   const { isConnected } = useConnectivity();
-  const { tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = usePlayer(
-    api,
-    1,
-    isConnected,
-  );
+  const localPlayer = usePlayer(api, 1, isConnected);
 
   const {
     nowPlaying,
@@ -196,11 +193,30 @@ export default function PlayerScreen() {
     progress,
     timezone,
     locale,
-    // While tuned in, keep a slow background poll alive so the lock screen
-    // (useNowPlayingInfo) tracks the broadcast; idle + backgrounded polls
-    // nothing at all.
-  } = useStationFeed(api, { backgroundPoll: tunedIn });
+    // While tuned in LOCALLY, keep a slow background poll alive so the lock
+    // screen (useNowPlayingInfo) tracks the broadcast; idle + backgrounded
+    // polls nothing at all. While casting there's no local audio session, so
+    // the OS suspends us in the background anyway — no point polling.
+  } = useStationFeed(api, { backgroundPoll: localPlayer.tunedIn });
   const boothFeed = session.messages;
+
+  const stationName = typeof dj?.station === 'string' ? dj.station : undefined;
+  const djName = typeof dj?.name === 'string' ? dj.name : undefined;
+
+  const coverSrc = useMemo(
+    () => (api && nowPlaying?.subsonic_id ? api.cover(nowPlaying.subsonic_id) : null),
+    [api, nowPlaying?.subsonic_id],
+  );
+
+  // Google Cast, merged over the local player: with no session this is
+  // localPlayer untouched; while connected, tune/stop/volume/status re-target
+  // the Cast device and local playback stays torn down (see useCast).
+  const { player, cast } = useCast(api, localPlayer, {
+    stationName,
+    djName,
+    artworkUrl: coverSrc,
+  });
+  const { tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = player;
 
   const offline = streamOnline === false;
   const signal = useSignal({ api, tunedIn, status, offline });
@@ -230,17 +246,12 @@ export default function PlayerScreen() {
   const listenerCount =
     listeners == null ? null : typeof listeners === 'number' ? listeners : listeners.current ?? null;
 
-  const stationName = typeof dj?.station === 'string' ? dj.station : undefined;
-  const djName = typeof dj?.name === 'string' ? dj.name : undefined;
-
-  const coverSrc = useMemo(
-    () => (api && nowPlaying?.subsonic_id ? api.cover(nowPlaying.subsonic_id) : null),
-    [api, nowPlaying?.subsonic_id],
-  );
   const coverColors = useCoverColors(coverSrc);
 
-  // Push lock-screen / CarPlay metadata from the feed.
-  useNowPlayingInfo({ api, tunedIn, nowPlaying, boothFeed, activeShow });
+  // Push lock-screen / CarPlay metadata from the feed — keyed on LOCAL
+  // playback: while casting nothing plays through RNTP, so there's no media
+  // session to decorate (the Cast device shows its own metadata).
+  useNowPlayingInfo({ api, tunedIn: localPlayer.tunedIn, nowPlaying, boothFeed, activeShow });
 
   // Tear down playback if the station drops off air mid-listen. `offline` is
   // debounced upstream (useStationFeed needs OFFLINE_CONFIRM_POLLS consecutive
@@ -311,8 +322,15 @@ export default function PlayerScreen() {
   const openTimeline = useCallback(() => goToPage(TIMELINE_INDEX), [goToPage]);
   const goHome = useCallback(() => goToPage(HOME_INDEX), [goToPage]);
 
-  const [themesOpen, setThemesOpen] = useState(false);
-  const [sleepOpen, setSleepOpen] = useState(false);
+  // One bottom sheet, content switched by the active drawer (the Sheet
+  // component's intended pattern): the masthead's single button opens the
+  // "back panel"; its TIMER/FASCIA rows swap content in place — no
+  // modal-dismissal race between stacked sheets.
+  const [activeSheet, setActiveSheet] = useState<'panel' | 'sleep' | 'themes' | null>(null);
+  const themeName = useMemo(
+    () => themes.find((t) => t.id === activeId)?.name ?? null,
+    [themes, activeId],
+  );
 
   // Footprints of the two frosted overlays (masthead/dial header at the top,
   // transport bar at the bottom). The pager fills the full height behind both,
@@ -438,16 +456,14 @@ export default function PlayerScreen() {
             stationName={stationName}
             djName={djName}
             activeShow={activeShow}
-            onOpenThemes={() => setThemesOpen(true)}
-            onOpenSleep={() => setSleepOpen(true)}
-            sleepActive={sleep.active}
+            onOpenPanel={() => setActiveSheet('panel')}
+            panelActive={sleep.active || cast.connected}
           />
-          <ConnectionBanner
-            isConnected={isConnected}
-            streamOnline={streamOnline}
-            tunedIn={tunedIn}
-            status={status}
-          />
+          {/* No connection banner here — the transport deck already carries
+              connection state (power-ring spinner while connecting, the
+              Signal · Offline/Acquiring label, and the disabled power on
+              off-air), so a bar popping in and out of the masthead was
+              redundant motion. */}
           <FreqBand
             pages={PAGES}
             active={active}
@@ -476,16 +492,28 @@ export default function PlayerScreen() {
             latencyMs={signal.latencyMs}
             signalQuality={signal.quality}
             listeners={listenerCount}
+            castingTo={cast.deviceName}
           />
         </View>
       </SafeAreaView>
 
-      <Sheet open={themesOpen} onClose={() => setThemesOpen(false)} title="Theme">
-        {themesOpen ? <ThemesDrawer /> : null}
-      </Sheet>
-
-      <Sheet open={sleepOpen} onClose={() => setSleepOpen(false)} title="Sleep timer">
-        {sleepOpen ? (
+      <Sheet
+        open={activeSheet !== null}
+        onClose={() => setActiveSheet(null)}
+        title={activeSheet === 'panel' ? 'Back panel' : activeSheet === 'sleep' ? 'Sleep timer' : 'Theme'}
+      >
+        {activeSheet === 'panel' ? (
+          <BackPanelDrawer
+            castAvailable={cast.available}
+            castingTo={cast.deviceName}
+            sleepActive={sleep.active}
+            sleepRemainingSec={sleep.remainingSec}
+            themeName={themeName}
+            onOpenSleep={() => setActiveSheet('sleep')}
+            onOpenThemes={() => setActiveSheet('themes')}
+          />
+        ) : null}
+        {activeSheet === 'sleep' ? (
           <SleepDrawer
             active={sleep.active}
             armedMinutes={sleep.armedMinutes}
@@ -494,6 +522,7 @@ export default function PlayerScreen() {
             onCancel={sleep.cancel}
           />
         ) : null}
+        {activeSheet === 'themes' ? <ThemesDrawer /> : null}
       </Sheet>
     </View>
   );
