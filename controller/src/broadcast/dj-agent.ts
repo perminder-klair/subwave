@@ -22,11 +22,12 @@ import * as journey from '../music/journey.js';
 import * as dj from '../llm/dj.js';
 import { energyForDaypart } from '../context.js';
 import { defineAgent } from '../llm/agent.js';
-import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
+import { djObject, nearestId, modelTolerant, stripThinking } from '../llm/sdk.js';
 import { buildPickerTools } from '../llm/tools.js';
 import { recordPick } from '../llm/log.js';
 import * as budget from './dj-budget.js';
 import { speechPaceScale } from '../audio/tts.js';
+import { normalizeForSpeech } from '../audio/speech-text.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { recencyWindowsForLibrary, effectiveNoRepeatWindow } from '../music/recency.js';
 import { hasEraBound } from '../music/show-filter.js';
@@ -442,6 +443,25 @@ function trackFields(song) {
   };
 }
 
+// Talk-within-the-intro budget (#962), applied to a between-track link in DJ
+// mode: trim to the pick's measured intro runway so the DJ lands before the
+// vocals — sentence/clause-complete or dropped (null), never a fragment.
+// Enforced on the SPOKEN form of the line: tts.speak() later runs
+// normalizeForSpeech(stripThinking(...)), which can EXPAND display symbols
+// into extra words ("$5 million" → "5 million dollars"), so counting the raw
+// text under-budgets the line that actually airs. The normalized text is what
+// gets aired/queued — speak()'s own normalize pass is a no-op on it.
+// speechPaceScale('link') maps the word ceiling to the rate the line will be
+// spoken at (engine × persona × daypart). Returns the text unchanged when not
+// in DJ mode; enforceIntroBudget itself no-ops on an un-analysed pick.
+function trimLinkToIntro(text: string | null | undefined, song: any): string | null {
+  const raw = (text || '').trim();
+  if (!raw) return null;
+  if (!settings.getEffectivePersona()?.djMode) return raw;
+  const spoken = normalizeForSpeech(stripThinking(raw));
+  return dj.enforceIntroBudget(spoken, introMsOf(song), speechPaceScale('link')) || null;
+}
+
 // `link`, when present, is the between-track line to speak as this pick starts
 // playing. It's attached to the queued item so the queue airs it at the
 // transition INTO this track (queue.airIntro), not over whatever is currently
@@ -460,6 +480,12 @@ async function enqueuePick(
   linkPrev: any = null,
   { sweep = false, washout = false, blend = false, dissolve = false, chop = false, loop = false }: { sweep?: boolean; washout?: boolean; blend?: boolean; dissolve?: boolean; chop?: boolean; loop?: boolean } = {},
 ): Promise<number> {
+  // Single chokepoint for the intro budget: every pick path (agent, pool, any
+  // future producer) funnels its link through here, so enforcement can't be
+  // skipped by a new caller. Idempotent — callers that already trimmed (the
+  // agent path does, to record the aired text in its session turn) pass
+  // through unchanged.
+  const introLink = trimLinkToIntro(link, song);
   const track: any = trackFields(song);
   // Flag the transition effects on this pick (DJ mode only). getAnnotatedUri
   // stamps liq_sweep / liq_washout / liq_dissolve / liq_chop; radio.liq ramps
@@ -477,7 +503,7 @@ async function enqueuePick(
     track,
     requestedBy: null,
     intent: reason || 'ai pick',
-    introScript: link,
+    introScript: introLink,
     introKind: 'link',
     aiPicked: true,
     linkPrev,
@@ -620,16 +646,11 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   }
 
   const rawSay = typeof object.say === 'string' ? object.say.trim() : '';
-  // Talk-within-the-intro (feature 3a): in DJ mode, trim the link to the
-  // pick's measured intro runway so the DJ lands before the vocals instead of
-  // talking over them — sentence/clause-complete or dropped, never an
-  // ellipsis fragment (#962). speechPaceScale('link') maps the word ceiling
-  // to the rate the line will actually be spoken at (engine × persona ×
-  // daypart). No-op when the pick is un-analysed or not in DJ mode.
-  const djMode = !!settings.getEffectivePersona()?.djMode;
-  const say = (djMode && rawSay)
-    ? dj.enforceIntroBudget(rawSay, introMsOf(song), speechPaceScale('link'))
-    : rawSay;
+  // Talk-within-the-intro (feature 3a): enqueuePick re-applies this trim at
+  // the chokepoint (idempotent); it runs here too so the session turn below
+  // records the line as it will actually air — trimmed, and dropped links as
+  // null, never a line the listeners didn't hear.
+  const say = trimLinkToIntro(rawSay, song) || '';
   // Transition effects on this pick (persona djMode via settings.effectsActive),
   // independent of whether a link airs.
   const link = (wantLink && say) ? say : null;
@@ -697,14 +718,8 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
       queue.log('error', `DJ link failed: ${err.message}`);
     }
   }
-  // Talk-within-the-intro applies to the pool path too (#962 follow-up): the
-  // generateLink prompt carries the advisory budget phrase, but enforcement
-  // previously only ran on the agent path, so a pool link could still talk
-  // over the vocals — and would have aired an ellipsis fragment if trimmed.
-  // Same DJ-mode gate and pace scale as the agent path; '' → no spoken intro.
-  if (link && settings.getEffectivePersona()?.djMode) {
-    link = dj.enforceIntroBudget(link, introMsOf(result.song), speechPaceScale('link')) || null;
-  }
+  // Talk-within-the-intro rides enqueuePick's trimLinkToIntro chokepoint —
+  // the pool link needs no enforcement of its own here (#962 follow-up).
   // Transition effects ride the pool path too (pickNextTrack only offers the
   // field when settings.effectsActive()), so a DJ-mode persona keeps its craft
   // while picks run through this fallback. Re-check effectsActive at enqueue

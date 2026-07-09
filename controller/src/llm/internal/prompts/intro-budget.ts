@@ -60,15 +60,27 @@ export function enforceIntroBudget(text: string, introMs: number | null | undefi
   const capped = words.slice(0, maxWords).join(' ');
   // Last index of a boundary character that ends a word (followed by space or
   // end-of-string) — so a decimal ("3.5") or a thousands comma ("1,200")
-  // never counts as a cut point.
-  const lastBoundary = (re: RegExp): number => {
+  // never counts as a cut point. `skip` vetoes individual matches.
+  const lastBoundary = (re: RegExp, skip?: (m: RegExpExecArray) => boolean): number => {
     let at = -1;
-    for (let m = re.exec(capped); m; m = re.exec(capped)) at = m.index;
+    for (let m = re.exec(capped); m; m = re.exec(capped)) {
+      if (!skip || !skip(m)) at = m.index;
+    }
     return at;
   };
+  // A period after an abbreviation or a lone initial ("Dr.", "St.", "feat.",
+  // "E. Street") is not a sentence end — without this veto the cut lands right
+  // after it and the DJ airs "Dr." alone, the exact fragment this cascade
+  // exists to prevent. Vetoing too eagerly is safe (the line falls through to
+  // the clause/drop steps); accepting wrongly is not. Applies to '.' only —
+  // '!' and '?' never end abbreviations.
+  const ABBREV_BEFORE_STOP = /(?:^|\s)(?:[A-Za-z]|Dr|Mr|Mrs|Ms|St|Jr|Sr|Prof|Rev|Sgt|Capt|Lt|Gen|Col|Mt|No|vs|feat|ft)$/i;
   // Prefer the last complete sentence, however short — a one-word "Nice."
   // sounds intentional; a fragment never does.
-  const lastStop = lastBoundary(/[.!?](?=\s|$)/g);
+  const lastStop = lastBoundary(
+    /[.!?](?=\s|$)/g,
+    (m) => m[0] === '.' && ABBREV_BEFORE_STOP.test(capped.slice(0, m.index)),
+  );
   if (lastStop > 0) return capped.slice(0, lastStop + 1).trim();
   // No full sentence fits — keep the longest clause if it carries enough of
   // the line to stand alone, closed with a period.

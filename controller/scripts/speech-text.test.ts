@@ -51,6 +51,30 @@ async function main() {
   await test('$ inside a name is untouched (Ke$ha)', () => {
     assert.equal(normalizeForSpeech('Ke$ha on deck'), 'Ke$ha on deck');
   });
+  await test('compact magnitude suffixes expand ($100k, $5M, $2bn)', () => {
+    assert.equal(normalizeForSpeech('won $100k on the show'), 'won 100 thousand dollars on the show');
+    assert.equal(normalizeForSpeech('sold for $5M last year'), 'sold for 5 million dollars last year');
+    assert.equal(normalizeForSpeech('a $2bn valuation'), 'a 2 billion dollars valuation');
+  });
+  await test('already-spoken "dollars" is not doubled', () => {
+    assert.equal(normalizeForSpeech('sold for $5 million dollars'), 'sold for 5 million dollars');
+    assert.equal(normalizeForSpeech('$5 dollars at the door'), '5 dollars at the door');
+  });
+  await test('magnitude words match whole words only ($5 millionaire)', () => {
+    assert.equal(normalizeForSpeech('a $5 millionaire lifestyle'), 'a 5 dollars millionaire lifestyle');
+  });
+  await test('an unknown glued suffix leaves the amount alone ($100x)', () => {
+    assert.equal(normalizeForSpeech('the $100x return'), 'the $100x return');
+  });
+  await test('HTML entities decode before the & rule', () => {
+    assert.equal(normalizeForSpeech('Florence &amp; the Machine'), 'Florence and the Machine');
+    assert.equal(normalizeForSpeech('it&#39;s a classic'), "it's a classic");
+    assert.equal(normalizeForSpeech('she said &quot;play it&quot;'), 'she said "play it"');
+  });
+  await test('undecoded entity shapes are not mangled into "and"', () => {
+    assert.equal(normalizeForSpeech('4 &lt; 5'), '4 &lt; 5');
+    assert.equal(normalizeForSpeech('Tom & Jerry; a classic duo'), 'Tom and Jerry; a classic duo');
+  });
   await test('speed units expand after a number', () => {
     assert.equal(normalizeForSpeech('35 mph winds'), '35 miles per hour winds');
     assert.equal(normalizeForSpeech('gusts to 56 km/h'), 'gusts to 56 kilometers per hour');

@@ -619,6 +619,13 @@ async function main() {
     // A decimal point is not a sentence boundary.
     const decimal = enforceIntroBudget('Running at 3.5 minutes this one just keeps going and going and going without a stop', 4000);
     assert.equal(decimal, '');
+    // An abbreviation period is not a sentence end — the DJ never airs "Dr."
+    // alone; the cut falls through to the clause/drop steps instead.
+    assert.equal(enforceIntroBudget('Dr. Dre eases us in with a slow-building intro that takes its sweet time before the beat', 4000), '');
+    assert.equal(enforceIntroBudget('Here is a smooth cut feat. a guest who drifts in over a long patient intro tonight', 4000), '');
+    // …but a real stop later in the same line still wins, abbreviation and all.
+    const abbrev = enforceIntroBudget('St. Vincent is here. Now a very long ramble that goes on and on forever', 4000);
+    assert.equal(abbrev, 'St. Vincent is here.');
   });
   await test('enforceIntroBudget word ceiling scales with speech pace', () => {
     const line = 'One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty.';
