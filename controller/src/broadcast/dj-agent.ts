@@ -176,7 +176,10 @@ export const PICK_SCHEMA = z.object({
   reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just note what makes THIS pick a fresh step (new artist, a shift in energy/era/texture), not a vibe label you would recycle pick after pick (e.g. "new artist, lifts the energy", never a repeated "mellow reflective step")'),
   say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). Never state a clock time unless the event message tells you when the link airs — then use exactly that time. When the event says stay silent, set this to null'),
   // Transition effects (only honoured when the system prompt offers them — persona djMode, see settings.effectsActive).
-  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop']).nullable().describe('transition treatment for this pick: "blend" — spectral handover: your pick and the track before it trade the spectrum in complementary bands across a long crossfade so they feel like ONE continuous piece; reserve it for an exceptionally locked pair (near-identical tempo, close key) — a plain crossfade already handles an ordinary same-lane pick, so this should be an occasional call, not your default. "sweep" — the track playing before your pick sinks under a slowly closing filter while your pick rises clean; choose it for a real gear-change (big jump in energy, tempo, or mood). "washout" — THIS pick dissolves into a pulsing echo tail as it ENDS, ringing out into whatever follows; choose it to close a chapter (end of a themed run, before a talk break, or out of a dreamy track). "dissolve" — the track playing before your pick melts into a diffuse ambient wash as your pick rises clean through it; the SMOOTH way across a clash (sweep is the dramatic way) — choose it for a tempo/mood mismatch you want to hide rather than announce. "chop" — the track playing before your pick is cut rhythmically on its own beat, stabs thinning out as your pick rises through the gaps; the PERCUSSIVE way across a clash — choose it to jump energy UP on a beat-driven track (a drop, a takeover moment), never out of something ambient. "loop" — THIS pick\'s last bar is caught in a tempo-synced loop as it ENDS, repeating hypnotically under the next track before it cuts away; choose it to leave a groove-driven track with intent — a great riff, a locked drum pattern, the end of a rhythmic run (it needs the track\'s measured tempo; the station drops it otherwise). "normal" or null for a plain crossfade'),
+  // One-line pointer only: the full coaching is dj.effectsGuidance() in the
+  // system prompt. This description used to repeat all of it, so every agent
+  // pick carried the effects text TWICE (~500 wasted tokens per call).
+  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop']).nullable().describe('transition treatment per the TRANSITION EFFECTS guidance: "washout"/"loop" end THIS pick (loop needs measured tempo), "sweep"/"dissolve"/"chop" carry the previous track across a clash (chop only out of beat-driven material), "blend" only for an exceptionally locked pair; "normal" or null for a plain crossfade'),
 });
 
 // Same shape, transition coaching stripped. Zod field descriptions travel to
@@ -218,7 +221,9 @@ export function pickSchema() {
 // lengthPhrase('intro') in its prompt, so without this overlay an 'extended'
 // storytelling persona kept its long intros on the cascade path but snapped
 // back to an unspecified length whenever the agent handled the request.
-function requestSchema() {
+// Exported for scripts/llm-bench (same precedent as pickSystem/pickSchema for
+// picker-test.mjs) — live callers stay on requestAgent.
+export function requestSchema() {
   return z.object({
     id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
     ack: z.string().describe('short on-air acknowledgement of the listener, in character — max 20 words; no "thank you for listening" or self-intros'),
@@ -291,7 +296,8 @@ ${dj.PICKER_CRITERIA}
 Finding candidates: prefer tools backed by the local library — searchLibrary, songsByGenre, tracksByMood, tracksByEnergy, randomSongs, and the audio/embedding similarity tools. similarSongs and topSongsByArtist use external data and often return little, so try them second. If a tool returns nothing, switch tools rather than retrying. If a tool returns only a few tracks (fewer than ~4), make one more discovery call with a different tool before choosing, so you pick from a real range rather than whatever the first call happened to surface.${dj.effectsGuidance()}${settings.agentLanguageReminder(persona, 'the "say" link')}`;
 }
 
-function requestSystem() {
+// Exported for scripts/llm-bench, like requestSchema above.
+export function requestSystem() {
   const persona = settings.getEffectivePersona();
   return `${settings.agentPersonaPreamble(persona)}
 
@@ -832,16 +838,22 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null }: { w
     const effectClause = settings.effectsActive()
       ? ` Set "transition" by what THIS moment needs — "washout" to dissolve out as it ends, "loop" to catch this pick's last bar in a repeating loop as it ends, "sweep" for a gear-change entry, "dissolve" to melt a clash into ambience, "chop" to cut a beat-driven track out on the beat for an energy jump, "blend" ONLY for an exceptionally locked pair (a plain crossfade already handles ordinary same-lane picks), "normal" for a plain hand-off. Vary your craft: never the same transition three picks running, and if your last pick used an effect, lean "normal" now unless the moment clearly calls again.${historyNote}`
       : '';
+    // The turn is split in two: `text` is the factual event (what the booth
+    // log on /admin/dash shows the operator), `meta.promptSuffix` carries the
+    // model-facing coaching clauses (transition nudge, clock rule, run/journey
+    // steering). windowMessages() re-joins them for the agent, so the model
+    // sees the same message as before — the operator just stops reading
+    // prompt engineering in the booth log.
     const eventText = `Now playing "${current?.title}" by ${current?.artist}`
       + (current?.id ? ` [id: ${current.id}]` : '')
       + (previous ? ` (after "${previous.title}" by ${previous.artist})` : '')
       + '. Pick the track to play next.'
-      + linkClause
-      + clockClause
-      + effectClause
-      + runClause
-      + journeyClause;
-    session.appendTurn({ role: 'event', kind: 'pick', text: eventText });
+      + linkClause;
+    const promptSuffix = `${clockClause}${effectClause}${runClause}${journeyClause}`;
+    session.appendTurn({
+      role: 'event', kind: 'pick', text: eventText,
+      meta: promptSuffix ? { promptSuffix } : {},
+    });
 
     // `!cheap`: in the soft budget tier we skip the multi-step agent tool-loop
     // and go straight to the one-call pool picker below to stretch the budget.
