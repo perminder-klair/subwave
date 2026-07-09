@@ -9,8 +9,37 @@ import AVKit
 import ExpoModulesCore
 
 public final class AirplayRoutePickerModule: Module {
+  private var routeObserver: NSObjectProtocol?
+
   public func definition() -> ModuleDefinition {
     Name("AirplayRoutePicker")
+
+    // Audio-route changes (AirPlay pick, headphones, speaker fallback) as a JS
+    // event: `reason` is AVAudioSession.RouteChangeReason's raw value, and
+    // `outputs` the current route, e.g. "AirPlay:HomePod". Used by usePlayer
+    // for route-aware reconnect behaviour and diagnostics.
+    Events("onAudioRouteChange")
+
+    OnStartObserving {
+      self.routeObserver = NotificationCenter.default.addObserver(
+        forName: AVAudioSession.routeChangeNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] note in
+        let reason = (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) ?? 0
+        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+          .map { "\($0.portType.rawValue):\($0.portName)" }
+          .joined(separator: ",")
+        self?.sendEvent("onAudioRouteChange", ["reason": reason, "outputs": outputs])
+      }
+    }
+
+    OnStopObserving {
+      if let observer = self.routeObserver {
+        NotificationCenter.default.removeObserver(observer)
+        self.routeObserver = nil
+      }
+    }
 
     View(AirplayRoutePickerView.self) {
       Prop("tint") { (view: AirplayRoutePickerView, color: UIColor?) in

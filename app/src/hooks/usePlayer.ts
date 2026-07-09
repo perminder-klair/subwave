@@ -11,9 +11,16 @@ import TrackPlayer, {
   State,
   useTrackPlayerEvents,
 } from 'react-native-track-player';
+import { addAudioRouteChangeListener } from '../../modules/airplay-route-picker';
 import { getLastLiveMeta, loadAndPlay, setupPlayer, teardown } from '@/audio/player';
 import type { StationApi } from '@/lib/api';
 import { loadVolumePref, saveVolumePref } from '@/lib/volume';
+
+// Dev-build diagnostics for the audio pipeline (route handoffs, watchdog
+// reloads). No-op in Release.
+function plog(msg: string) {
+  if (__DEV__) console.log(`[player ${new Date().toISOString().slice(11, 23)}] ${msg}`);
+}
 
 export type PlayerStatus = 'idle' | 'connecting' | 'playing';
 
@@ -59,6 +66,17 @@ export function usePlayer(
   useEffect(() => { apiRef.current = api; }, [api]);
 
   useEffect(() => { setupPlayer().catch(() => {}); }, []);
+
+  // Log iOS audio-route changes in dev builds — the forensic trail for
+  // AirPlay handoff issues (which reason code fires, what the route becomes,
+  // and how that interleaves with our reconnects).
+  useEffect(() => {
+    if (!__DEV__) return;
+    const sub = addAudioRouteChangeListener((e) => {
+      plog(`route change reason=${e.reason} outputs=${e.outputs}`);
+    });
+    return () => sub?.remove();
+  }, []);
 
   // Apply volume to the player engine whenever it changes.
   useEffect(() => {
@@ -113,6 +131,7 @@ export function usePlayer(
     clearWatchdog();
     const a = apiRef.current;
     if (!tunedInRef.current || !a) return;
+    plog('reconnect → loadAndPlay');
     setStatus('connecting');
     try {
       await loadAndPlay({ url: a.streamUrl(), headers: a.streamHeaders() });
@@ -144,6 +163,11 @@ export function usePlayer(
   useTrackPlayerEvents(
     [Event.PlaybackState, Event.PlaybackError, Event.RemotePause, Event.RemoteStop],
     (event) => {
+      plog(
+        `event ${event.type}${'state' in event ? ` state=${String(event.state)}` : ''}${
+          'message' in event ? ` msg=${String((event as { message?: string }).message)}` : ''
+        }`,
+      );
       if (event.type === Event.RemotePause || event.type === Event.RemoteStop) {
         // Listener-initiated, from the OS — a tune-out, not a failure. The ref
         // flips synchronously so the trailing Stopped event (which can land
