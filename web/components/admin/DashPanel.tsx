@@ -3,11 +3,11 @@
 // DJ command center — /admin/dash. Lets the operator step into the autonomous
 // booth: speak custom text on-air, fire any voice segment on demand,
 // flip the autonomous toggles, and watch live on-air status + the booth log.
-import type { ChangeEvent, MouseEvent, ReactNode } from 'react';
+import type { ChangeEvent, ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
-import { turnClass, turnKey, turnText } from '../../lib/sessionFeed';
+import { eventTurnSummary, turnClass, turnKey, turnText } from '../../lib/sessionFeed';
 import { fmtClock } from '../../lib/format';
 import type { SessionTurn } from '../../lib/types';
 import type {
@@ -23,6 +23,8 @@ import { V3AlertDialog } from '../ui/alert-dialog';
 import { V3Alert } from '../ui/alert';
 import { Textarea } from '../ui/textarea';
 import { Card, Btn, Pill, Seg, Toggle } from './ui';
+import { ScrollArea, ScrollBar } from '../ui/scroll-area';
+import { AudioLines, Clock3, MessagesSquare, RadioTower, type LucideIcon } from 'lucide-react';
 import StationHeader, { type HealthMetrics } from './StationHeader';
 import { cn } from '../../lib/cn';
 
@@ -36,14 +38,15 @@ const SAY_MODES = [
 ];
 
 type SegmentType = 'station-id' | 'hourly' | 'link' | 'banter';
-const SEGMENTS: { type: SegmentType; label: string }[] = [
-  { type: 'station-id', label: 'Station ID' },
-  { type: 'hourly', label: 'Time check' },
-  { type: 'link', label: 'Track link' },
+const SEGMENTS: { type: SegmentType; label: string; icon: LucideIcon }[] = [
+  { type: 'station-id', label: 'Station ID', icon: RadioTower },
+  { type: 'hourly', label: 'Time check', icon: Clock3 },
+  { type: 'link', label: 'Track link', icon: AudioLines },
 ];
 // Only offered while a show with guest co-hosts is on air — a one-person
 // "exchange" is a 400 from the controller anyway.
-const BANTER_SEGMENT: { type: SegmentType; label: string } = { type: 'banter', label: 'Banter' };
+const BANTER_SEGMENT: { type: SegmentType; label: string; icon: LucideIcon } =
+  { type: 'banter', label: 'Banter', icon: MessagesSquare };
 
 interface QueueState {
   upcoming?: QueueEntry[];
@@ -343,7 +346,9 @@ export default function DashPanel() {
   }, [hydrated, needsAuth, adminFetch]);
 
   useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = 0;
+    // Radix ScrollArea scrolls on its viewport, not the root element.
+    const vp = logRef.current?.querySelector('[data-radix-scroll-area-viewport]');
+    if (vp) vp.scrollTop = 0;
   }, [status?.sessionMessages?.length]);
 
   // Generic POST helper — drives the busy state; result goes to the toast.
@@ -482,23 +487,32 @@ export default function DashPanel() {
           <Card
             title="Booth log"
             sub={`${booth.length} session turns${tz ? ` · times in ${tz}` : ''}`}
-            right={<Pill>session · live</Pill>}
-            className="flex flex-col"
+            className="flex min-h-0 flex-col"
             bodyClass="flex flex-1 flex-col min-h-0"
           >
             {booth.length === 0 ? (
               <div className="text-muted italic">no session turns yet</div>
             ) : (
-              <div ref={logRef} className="max-h-[420px] min-h-[220px] flex-1 overflow-y-auto">
-                {booth.map((turn, i) => (
-                  <div key={turnKey(turn, i)} className={`log ${classTone(turnClass(turn))}`}>
-                    <span className="t">
-                      {fmtClock(turn.t, tz, locale)}
-                    </span>
-                    <span className="k">[{turn.kind}]</span>
-                    <span className="msg">{turnText(turn)}</span>
-                  </div>
-                ))}
+              <div ref={logRef} className="relative min-h-[220px] flex-1">
+                {/* The absolute-inset wrapper keeps the log's content out of
+                    the card's intrinsic height, so the card tracks the right
+                    column instead of growing to fit every session turn. It
+                    must be a separate div: Radix's ScrollArea root pins
+                    position:relative via inline style, so `absolute` on the
+                    ScrollArea itself silently loses. */}
+                <div className="absolute inset-0">
+                  <ScrollArea className="h-full">
+                    {booth.map((turn, i) => (
+                      <div key={turnKey(turn, i)} className={`log ${classTone(turnClass(turn))}`}>
+                        <span className="t">
+                          {fmtClock(turn.t, tz, locale)}
+                        </span>
+                        <span className="k">[{turn.kind}]</span>
+                        <BoothTurnText turn={turn} />
+                      </div>
+                    ))}
+                  </ScrollArea>
+                </div>
               </div>
             )}
           </Card>
@@ -546,6 +560,7 @@ export default function DashPanel() {
                   <SegmentButton
                     key={s.type}
                     label={s.label}
+                    icon={s.icon}
                     busyHere={busy === k}
                     anyBusy={!!busy}
                     onFire={() => act(k, '/dj/segment', { type: s.type }, s.label)}
@@ -616,7 +631,7 @@ export default function DashPanel() {
         ) : conns.connections.length === 0 ? (
           <div className="text-muted italic">nobody listening right now</div>
         ) : (
-          <div className="overflow-x-auto">
+          <ScrollArea>
             <table className="w-full text-[12px]">
               <thead>
                 <tr className="text-left text-[9px] tracking-[0.2em] text-muted uppercase">
@@ -660,7 +675,8 @@ export default function DashPanel() {
                 ))}
               </tbody>
             </table>
-          </div>
+            <ScrollBar orientation="horizontal" />
+          </ScrollArea>
         )}
       </Card>
 
@@ -720,42 +736,28 @@ function SortableTh({
   );
 }
 
-import { useDynamicStyle } from '../../hooks/useDynamicStyle';
-
 interface SegmentButtonProps {
   label: string;
+  icon: LucideIcon;
   busyHere: boolean;
   anyBusy: boolean;
   onFire: () => void;
 }
 
-function SegmentButton({ label, busyHere, anyBusy, onFire }: SegmentButtonProps) {
-  const onEnter = (e: MouseEvent<HTMLButtonElement>) => {
-    if (!anyBusy)
-      e.currentTarget.style.background = 'color-mix(in oklab, var(--accent) 18%, transparent)';
-  };
-  const onLeave = (e: MouseEvent<HTMLButtonElement>) => {
-    e.currentTarget.style.background = 'color-mix(in oklab, var(--accent) 8%, transparent)';
-  };
-  const ref = useRef<HTMLButtonElement>(null);
-  useDynamicStyle(ref, {
-    background: 'color-mix(in oklab, var(--accent) 8%, transparent)',
-    cursor: anyBusy ? 'not-allowed' : 'pointer',
-    opacity: anyBusy ? '0.4' : '1',
-  });
+// A studio cart-machine pad — all visual states live in .seg-pad (globals.css):
+// hover arms the LED, .is-firing blinks it and sweeps the base while on air.
+function SegmentButton({ label, icon: Icon, busyHere, anyBusy, onFire }: SegmentButtonProps) {
   return (
     <button
-      ref={ref}
+      type="button"
       disabled={anyBusy}
       onClick={onFire}
-      onMouseEnter={onEnter}
-      onMouseLeave={onLeave}
-      className="flex flex-col gap-1 border border-[var(--accent)] px-2.5 py-3 text-left font-[inherit] text-ink transition-[background] duration-[120ms] ease-out"
+      className={cn('seg-pad', busyHere && 'is-firing')}
     >
-      <span className="text-[11px] font-bold tracking-[0.18em] uppercase">{label}</span>
-      <span className="caption text-[9px] font-bold text-vermilion">
-        {busyHere ? 'firing…' : 'fire ▸'}
-      </span>
+      <span className="seg-led" aria-hidden />
+      <Icon className="seg-glyph" strokeWidth={1.5} aria-hidden />
+      <span className="seg-label">{label}</span>
+      <span className="seg-cta">{busyHere ? 'on air' : 'fire'}</span>
     </button>
   );
 }
@@ -788,6 +790,13 @@ function classTone(cls: string): string {
     default:
       return 'muted';
   }
+}
+
+// One booth-log message. Long `event` turns (the pick prompt posted to the DJ
+// agent — link/clock/transition coaching) render as a one-line summary; the
+// raw prompt never shows here (it's in the session JSON if ever needed).
+function BoothTurnText({ turn }: { turn: SessionTurn }) {
+  return <span className="msg">{eventTurnSummary(turn) ?? turnText(turn)}</span>;
 }
 
 // Collapse whitespace + truncate, for the one-line request preview in a summary.
@@ -827,11 +836,13 @@ function RequestsCard({
       ) : requests.length === 0 ? (
         <div className="text-muted italic">no requests yet</div>
       ) : (
-        <div className="grid max-h-[520px] gap-1.5 overflow-y-auto">
-          {requests.map((r, i) => (
-            <RequestRow key={`${r.t ?? ''}:${i}`} r={r} tz={tz} locale={locale} />
-          ))}
-        </div>
+        <ScrollArea className="max-h-[520px]">
+          <div className="grid gap-1.5">
+            {requests.map((r, i) => (
+              <RequestRow key={`${r.t ?? ''}:${i}`} r={r} tz={tz} locale={locale} />
+            ))}
+          </div>
+        </ScrollArea>
       )}
     </Card>
   );
