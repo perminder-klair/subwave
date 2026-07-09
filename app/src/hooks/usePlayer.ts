@@ -11,7 +11,7 @@ import TrackPlayer, {
   State,
   useTrackPlayerEvents,
 } from 'react-native-track-player';
-import { loadAndPlay, setupPlayer, teardown } from '@/audio/player';
+import { getLastLiveMeta, loadAndPlay, setupPlayer, teardown } from '@/audio/player';
 import type { StationApi } from '@/lib/api';
 import { loadVolumePref, saveVolumePref } from '@/lib/volume';
 
@@ -135,30 +135,58 @@ export function usePlayer(
   useEffect(() => { armWatchdogRef.current = armWatchdog; }, [armWatchdog]);
 
   // Drive `status` from RNTP playback state + reconnect on error/stall.
-  useTrackPlayerEvents([Event.PlaybackState, Event.PlaybackError], (event) => {
-    if (event.type === Event.PlaybackError) {
-      if (tunedInRef.current) {
-        setStatus('connecting');
-        armWatchdog(nextRetryDelay());
+  //
+  // RemotePause/RemoteStop are handled HERE, not just in service.ts: on live
+  // radio a lock-screen/notification pause means "tune out", but the Stopped/
+  // Ended state it produces is indistinguishable from a stream failure — so
+  // without this, the watchdog "recovered" the stream 500ms after the user
+  // paused from the notification and the radio would not stay stopped.
+  useTrackPlayerEvents(
+    [Event.PlaybackState, Event.PlaybackError, Event.RemotePause, Event.RemoteStop],
+    (event) => {
+      if (event.type === Event.RemotePause || event.type === Event.RemoteStop) {
+        // Listener-initiated, from the OS — a tune-out, not a failure. The ref
+        // flips synchronously so the trailing Stopped event (which can land
+        // before the re-render) can't re-arm the watchdog.
+        clearWatchdog();
+        retryCount.current = 0;
+        tunedInRef.current = false;
+        setTunedIn(false);
+        setStatus('idle');
+        return;
       }
-      return;
-    }
-    // PlaybackState
-    const state = event.state;
-    if (state === State.Playing) {
-      clearWatchdog();
-      retryCount.current = 0;
-      setStatus('playing');
-    } else if (state === State.Buffering || state === State.Loading) {
-      setStatus((s) => (s === 'playing' ? 'connecting' : s));
-      armWatchdog(WATCHDOG_MS);
-    } else if (state === State.Error) {
-      if (tunedInRef.current) armWatchdog(nextRetryDelay());
-    } else if (state === State.Ended || state === State.Stopped) {
-      // A live stream shouldn't "end" — if it does while tuned in, reconnect.
-      if (tunedInRef.current) armWatchdog(nextRetryDelay());
-    }
-  });
+      if (event.type === Event.PlaybackError) {
+        if (tunedInRef.current) {
+          setStatus('connecting');
+          armWatchdog(nextRetryDelay());
+        }
+        return;
+      }
+      // PlaybackState
+      const state = event.state;
+      if (state === State.Playing) {
+        clearWatchdog();
+        retryCount.current = 0;
+        setStatus('playing');
+        // A lock-screen Play after a remote tune-out resumes via service.ts
+        // without touching this hook — re-adopt so the UI matches the audio.
+        // getLastLiveMeta() is null after an in-app stop (teardown), which
+        // keeps a stale in-flight Playing event from resurrecting tunedIn.
+        if (!tunedInRef.current && getLastLiveMeta()) {
+          tunedInRef.current = true;
+          setTunedIn(true);
+        }
+      } else if (state === State.Buffering || state === State.Loading) {
+        setStatus((s) => (s === 'playing' ? 'connecting' : s));
+        armWatchdog(WATCHDOG_MS);
+      } else if (state === State.Error) {
+        if (tunedInRef.current) armWatchdog(nextRetryDelay());
+      } else if (state === State.Ended || state === State.Stopped) {
+        // A live stream shouldn't "end" — if it does while tuned in, reconnect.
+        if (tunedInRef.current) armWatchdog(nextRetryDelay());
+      }
+    },
+  );
 
   // Proactive reconnect: when the device link returns (false → true) while
   // we're tuned in but not already playing, reconnect immediately instead of

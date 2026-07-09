@@ -73,14 +73,21 @@ export function getLastLiveMeta(): LiveTrackMeta | null {
   return lastLiveMeta;
 }
 
-/** Load (or reload) the live stream onto the queue and start it. A cache-buster
- *  is appended so a reconnect doesn't replay a dead buffered segment (mirrors
- *  the web watchdog's `?t=`). */
+/** Load (or reload) the live stream and start it. A cache-buster is appended
+ *  so a reconnect doesn't replay a dead buffered segment (mirrors the web
+ *  watchdog's `?t=`).
+ *
+ *  Uses `load()` (in-place item swap), NOT `reset()`+`add()`: reset tears the
+ *  player down and deactivates the iOS audio session, and a deactivated
+ *  session reverts an active AirPlay route to the built-in speaker — the
+ *  watchdog's quick retry after the route-change hiccup was knocking
+ *  listeners off their HomePod ~2s after they picked it. `load()` keeps the
+ *  session — and the listener's chosen output — alive (it also loads-as-first
+ *  when the queue is empty, so fresh tune-ins take the same path). */
 export async function loadAndPlay(meta: LiveTrackMeta): Promise<void> {
   await setupPlayer();
-  await TrackPlayer.reset();
   const bust = `${meta.url}${meta.url.includes('?') ? '&' : '?'}t=${Date.now()}`;
-  await TrackPlayer.add({
+  await TrackPlayer.load({
     id: STREAM_TRACK_ID,
     url: bust,
     title: meta.title || 'SUB/WAVE',
