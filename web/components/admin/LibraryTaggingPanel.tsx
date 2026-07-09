@@ -43,6 +43,10 @@ export interface Coverage {
   // is up but on an image without the CLAP stack (an older tts-heavy) — drives
   // the active "pull the latest image" warning. null = unknown / still probing.
   audioAnalysisAvailable?: boolean | null;
+  // Whether the natural-language "sounds like…" search can serve right now
+  // (audio vectors stored + CLAP text tower not reported absent). Gates the
+  // Search tab's mode toggle in LibraryPanel. Absent on old controllers.
+  soundSearchAvailable?: boolean;
   // Whether the backend can emit Demucs vocal-activity ranges. false = engine
   // up but built without the Demucs stack (sidecar WITH_DEMUCS=0) — drives the
   // "rebuild with WITH_DEMUCS=1" warning when vocal activity is enabled.

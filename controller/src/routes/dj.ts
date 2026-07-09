@@ -690,37 +690,53 @@ router.post('/dj/skip', requireAdmin, async (req, res) => {
   }
 });
 
+// Shape a Subsonic song into the queue-ready row the admin track tabs render,
+// merging the library index's stored tags AND acoustic-analysis columns so
+// search/recent rows carry the same mood/energy + BPM/key/LUFS badges as
+// browse rows (the index is the only source of either — Subsonic metadata
+// carries none).
+function toAdminRow(s: any) {
+  const tag = library.get(s.id);
+  return {
+    id: s.id,
+    title: s.title,
+    artist: s.artist,
+    album: s.album,
+    year: s.year ?? null,
+    genre: s.genre ?? null,
+    duration: s.duration ?? null,
+    // path lets getLocalPath() use the on-disk file when MUSIC_LIBRARY_PATH
+    // is mounted, matching how listener-requested tracks are queued.
+    path: s.path ?? null,
+    moods: tag?.moods ?? [],
+    energy: tag?.energy ?? null,
+    source: tag?.source ?? null,
+    bpm: tag?.bpm ?? null,
+    musicalKey: tag?.musicalKey ?? null,
+    loudnessLufs: tag?.loudnessLufs ?? null,
+    paceMean: tag?.paceMean ?? null,
+    // Same derivation as /library/browse: [] = analysed, no vocals detected.
+    instrumental: tag?.vocalRanges == null ? null : tag.vocalRanges.length === 0,
+  };
+}
+
 // ---------------------------------------------------------------------------
-// GET /dj/search?q=<terms> — library search for the manual queue UI
+// GET /dj/search?q=<terms>&limit=&offset= — library search for the manual
+// queue UI. limit/offset page through Subsonic's search3 (songOffset), so the
+// admin Search tab can "Load more" past the first page.
 // ---------------------------------------------------------------------------
 router.get('/dj/search', requireAdmin, async (req, res) => {
   const q = (typeof req.query?.q === 'string' ? req.query.q : '').trim();
   if (!q) return res.status(400).json({ error: 'q is required' });
+  const limit = Math.min(Math.max(parseInt(String(req.query?.limit || ''), 10) || 30, 1), 100);
+  const offset = Math.max(parseInt(String(req.query?.offset || ''), 10) || 0, 0);
   try {
     await library.load();
-    const songs = await subsonic.search(q, { songCount: 12 });
-    const results = songs.map(s => {
-      const tag = library.get(s.id);
-      return {
-        id: s.id,
-        title: s.title,
-        artist: s.artist,
-        album: s.album,
-        year: s.year ?? null,
-        genre: s.genre ?? null,
-        duration: s.duration ?? null,
-        // path lets getLocalPath() use the on-disk file when MUSIC_LIBRARY_PATH
-        // is mounted, matching how listener-requested tracks are queued.
-        path: s.path ?? null,
-        // Merge stored tags so the admin table shows real mood/energy status
-        // instead of "needs tags" for every row (the index is the only other
-        // source of tags — Subsonic metadata carries none).
-        moods: tag?.moods ?? [],
-        energy: tag?.energy ?? null,
-        source: tag?.source ?? null,
-      };
-    });
-    res.json({ results });
+    const songs = await subsonic.search(q, { songCount: limit, songOffset: offset });
+    const results = songs.map(toAdminRow);
+    // A full page means there may be more — the UI shows Load more on this
+    // rather than a total (search3 doesn't return one).
+    res.json({ results, hasMore: results.length === limit });
   } catch (err) {
     queue.log('error', `/dj/search failed: ${err.message}`);
     res.status(500).json({ error: err.message });
@@ -763,24 +779,7 @@ router.get('/dj/recent', requireAdmin, async (req, res) => {
     const songLists = await mapPool(albums, 5, (a: any) =>
       subsonic.getAlbum(a.id).catch(() => []),
     );
-    const results = songLists.flat().slice(0, limit).map((s: any) => {
-      const tag = library.get(s.id);
-      return {
-        id: s.id,
-        title: s.title,
-        artist: s.artist,
-        album: s.album,
-        year: s.year ?? null,
-        genre: s.genre ?? null,
-        duration: s.duration ?? null,
-        path: s.path ?? null,
-        // Merge stored tags so recently-added tracks that are already tagged
-        // show their mood/energy instead of a misleading "needs tags".
-        moods: tag?.moods ?? [],
-        energy: tag?.energy ?? null,
-        source: tag?.source ?? null,
-      };
-    });
+    const results = songLists.flat().slice(0, limit).map(toAdminRow);
     res.json({ results });
   } catch (err) {
     queue.log('error', `/dj/recent failed: ${err.message}`);

@@ -174,6 +174,11 @@ export async function get() {
     // with sounds-like enabled means the sidecar was built without CLAP — the
     // UI turns this into a "rebuild with WITH_CLAP=1" warning. null = unknown.
     audioAnalysisAvailable: analysisAvail ? analysisAvail.audioCapable : null,
+    // Whether the natural-language "sounds like…" search (/library/search-sound)
+    // can serve right now: stored audio vectors exist AND the backend hasn't
+    // reported the CLAP text tower absent. Same optimistic-on-null gate as the
+    // picker's searchBySound tool — the route itself 503s cleanly if wrong.
+    soundSearchAvailable: audioEmbedded > 0 && analyzer.textEmbeddingAvailable() !== false,
     // Whether the backend can emit Demucs vocal-activity ranges. false here with
     // vocal activity enabled means the sidecar was built without Demucs — the UI
     // turns this into a "rebuild with WITH_DEMUCS=1" warning, and the analysis
