@@ -41,3 +41,6 @@ docs/screenshots/
 # Local host-specific compose overrides (CPU caps, etc.)
 docker-compose.override.yml
 scripts/.fx-render/
+
+# llm-bench reports (local benchmark artifacts)
+controller/scripts/llm-bench/reports/

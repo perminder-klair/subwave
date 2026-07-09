@@ -591,7 +591,8 @@ function TtsCallList({ calls }: { calls: TtsCall[] }) {
           </FilterChip>
         ))}
       </div>
-      <div className="grid max-h-[420px] gap-1.5 overflow-y-auto">
+      <ScrollArea className="max-h-[420px]">
+        <div className="grid gap-1.5">
         {shown.length === 0 && (
           <span className="field-hint italic">
             {calls.length === 0 ? 'no spoken segments yet' : 'no calls match this filter'}
@@ -641,7 +642,8 @@ function TtsCallList({ calls }: { calls: TtsCall[] }) {
             </div>
           </details>
         ))}
-      </div>
+        </div>
+      </ScrollArea>
     </div>
   );
 }
@@ -955,6 +957,29 @@ function oneLine(s: unknown, n = 110): string {
   return t.length > n ? `${t.slice(0, n)}…` : t;
 }
 
+// Structured-output responses and JSON user payloads (pickNextTrack,
+// generateSegment, matchRequest…) are stored as compact JSON strings —
+// pretty-print them for the expanded view. Free text and truncated JSON
+// (older ring entries capped mid-string) fall through unchanged.
+function prettyMaybeJson(s: string): string {
+  const t = s.trim();
+  if (!t.startsWith('{') && !t.startsWith('[')) return s;
+  try {
+    return JSON.stringify(JSON.parse(t), null, 2);
+  } catch {
+    return s;
+  }
+}
+
+// Body text for a call section: JSON gets pretty-printed in monospace, prose
+// renders as-is.
+function JsonOrText({ text }: { text: string }) {
+  const pretty = prettyMaybeJson(text);
+  return pretty !== text
+    ? <span className="font-mono text-[10.5px]">{pretty}</span>
+    : <>{text}</>;
+}
+
 interface CallSectionProps {
   label: string;
   count?: number;
@@ -1178,7 +1203,9 @@ function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                   </CallSection>
                 )}
                 {c.user && (
-                  <CallSection label="user" preview={oneLine(c.user)}>{c.user}</CallSection>
+                  <CallSection label="user" preview={oneLine(c.user)}>
+                    <JsonOrText text={c.user} />
+                  </CallSection>
                 )}
                 {(c.system || c.systemPreview) && (
                   <CallSection label="system" preview={oneLine(c.system || c.systemPreview)}>
@@ -1205,7 +1232,7 @@ function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                 )}
                 {c.response && (
                   <CallSection label="response" preview={oneLine(c.response)}>
-                    {c.response}
+                    <JsonOrText text={c.response} />
                   </CallSection>
                 )}
               </div>

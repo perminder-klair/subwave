@@ -85,16 +85,24 @@ export async function matchRequest(
     ctxLines.length ? `\n[Context for resolving references like "similar", "more like this", "match this vibe":\n${ctxLines.join('\n')}]` : '',
   ].filter(Boolean).join(' ');
 
+  const persona = settings.getEffectivePersona();
+  // The `ack` is the one field here that AIRS — without this clause it was
+  // the only spoken line in the system written with no persona voice at all
+  // (the librarian framing above owns every other field).
+  const personaSuffix = persona?.name
+    ? `\n\nThe "ack" line is read on air by ${persona.name}, the station's DJ${persona.soul ? ` — ${persona.soul}` : ''}. Write the ack in their voice; every other field stays plain and functional.`
+    : '';
   // When the on-air persona speaks another language, only the spoken `ack`
   // follows it — every search-facing field must stay in English / canonical
-  // names so it still matches an English-tagged library.
-  const lang = String(settings.getEffectivePersona()?.language || '').trim();
+  // names so it still matches an English-tagged library. Language comes LAST
+  // (after the persona clause) — repeating it last is what makes it stick.
+  const lang = String(persona?.language || '').trim();
   const langSuffix = lang
     ? `\n\nThe on-air DJ speaks ${lang}: write the "ack" field in ${lang}. Every OTHER field (search_terms, artist, genre, mood, sort, intent, language) stays in English / canonical names exactly as the library is tagged — translate nothing there, even when the listener wrote in ${lang}.`
     : '';
 
   return djObject({
-    system: REQUEST_SYSTEM + langSuffix,
+    system: REQUEST_SYSTEM + personaSuffix + langSuffix,
     prompt: userPrompt,
     schema: REQUEST_SCHEMA,
     temperature: 0.4,

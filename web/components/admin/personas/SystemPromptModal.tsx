@@ -175,8 +175,10 @@ export function SystemPromptModal({
         {editing === null ? (
           <>
             <p className="mb-3 max-w-[70ch] text-[12px] leading-[1.6] text-muted">
-              One template is wrapped around every DJ generation, shared by all personas.
-              Keep several saved and switch which one is in use. Placeholders:{' '}
+              One template is wrapped around the DJ&rsquo;s scripted talk — intros, links, idents,
+              time checks, programme beats — shared by all personas. The tool-using agents (track
+              picker, requests, skill segments) use each persona&rsquo;s name and soul directly rather
+              than this template. Keep several saved and switch which one is in use. Placeholders:{' '}
               <code>{'{name}'}</code> · <code>{'{soul}'}</code> · <code>{'{station}'}</code> ·{' '}
               <code>{'{location}'}</code> · <code>{'{language}'}</code>. Most stations stay on the built-in default.
             </p>

@@ -2117,6 +2117,130 @@ html.lite .sw-ripple-circle {
     color: var(--ink);
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   MANUAL · LLM — the living model-results table (LlmBenchTable.tsx).
+   Bars are single-hue (ink) magnitude marks on a recessive track; identity
+   lives in the row header, verdicts in labelled chips, values also as text.
+   ───────────────────────────────────────────────────────────────────────── */
+.bs-bench {
+    margin: 8px 0 0;
+}
+.bs-bench-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--separator-strong);
+}
+.bs-bench table {
+    width: 100%;
+    min-width: 980px;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    line-height: 1.35;
+}
+.bs-bench thead th {
+    text-align: left;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 700;
+    padding: 10px 12px 8px;
+    border-bottom: 1px solid var(--separator-strong);
+    white-space: nowrap;
+}
+.bs-bench tbody th,
+.bs-bench tbody td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--separator-soft);
+    vertical-align: middle;
+    white-space: nowrap;
+}
+.bs-bench tbody tr:last-child th,
+.bs-bench tbody tr:last-child td {
+    border-bottom: none;
+}
+.bs-bench tbody th {
+    text-align: left;
+    font-weight: 700;
+}
+.bs-bench-model {
+    display: block;
+    font-weight: 800;
+}
+.bs-bench-route {
+    display: block;
+    font-weight: 500;
+    font-size: 11px;
+    color: var(--muted);
+}
+.bs-bench-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+}
+.bs-bench-bar {
+    display: inline-block;
+    width: 52px;
+    height: 8px;
+    background: var(--separator-soft);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.bs-bench-bar-fill {
+    display: block;
+    height: 100%;
+    background: var(--ink);
+    border-radius: 2px;
+}
+.bs-bench-pct,
+.bs-bench-num {
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+}
+.bs-bench-na {
+    color: var(--muted);
+}
+.bs-bench-chip {
+    display: inline-block;
+    border: 1px solid var(--separator-strong);
+    border-radius: 999px;
+    padding: 2px 9px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink);
+}
+.bs-bench-chip--agent-capable {
+    border-color: var(--ink);
+}
+.bs-bench-chip--avoid {
+    color: var(--muted);
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
+}
+.bs-bench figcaption {
+    margin-top: 10px;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--muted);
+    max-width: 70ch;
+}
+.bs-bench-notes {
+    margin: 12px 0 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--muted);
+    max-width: 74ch;
+}
+.bs-bench-notes strong {
+    color: var(--ink);
+}
+
 .bs-rebuild-table {
     width: 100%;
     border-collapse: collapse;
