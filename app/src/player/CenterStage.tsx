@@ -32,7 +32,7 @@ function buildMoodPhrase(t: NowPlayingTrack | null): string {
   const parts: string[] = [];
   if (Array.isArray(t.moods)) parts.push(...t.moods.slice(0, 2));
   if (t.energy) parts.push(`${t.energy} energy`);
-  return parts.join('  ·  ').toUpperCase();
+  return parts.join(' · ').toUpperCase();
 }
 
 export interface CenterStageProps {
@@ -148,10 +148,10 @@ export default function CenterStage({
               className="font-mono mt-2"
               style={{ fontSize: 11, letterSpacing: 1.5, color: colors.muted }}
             >
-              {metaTokens.join('  ·  ')}
+              {metaTokens.join(' · ')}
               {moodPhrase ? (
                 <Text style={{ color: colors.accent }}>
-                  {metaTokens.length > 0 ? '  ·  ' : ''}↳ {moodPhrase}
+                  {metaTokens.length > 0 ? ' · ' : ''}↳ {moodPhrase}
                 </Text>
               ) : null}
             </Text>
