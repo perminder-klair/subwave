@@ -55,12 +55,32 @@ against the claims above. Reports in `controller/scripts/llm-bench/reports/`.
 | --- | --- |
 | Qwen3.5-9B "could handle agent picking with only one timeout" | **Mostly confirmed** (via OpenRouter): pool cells 100% at 0.6–3.5s; agent short-context 100%, long-context 67% with 2 timeouts. Agent mode is borderline — livable because the pool fallback catches every miss, which matches what operators experience. Characteristic quirks: over-long request acks (9×), occasional stage directions. |
 | Gemma4:31b-cloud "regularly throws done-tool errors" | **Refuted on the current build**: 94/96 via the exact `ollama` cloud routing, ALL agent cells 100% at 1–4s. The reports likely predate the done-tool recovery fixes and the pick prompt diet. Best model tested — its one weak cell is the 3-hour programme plan (picked unoffered feature kinds 2/3 runs). |
-| "Gemma is still a no" (12b local) | **Not testable here** — no OpenRouter listing, bench host can't run it locally. Community evidence stands. The MoE sibling `gemma-4-26b-a4b-it` is being benched as the testable middle option. |
+| "Gemma is still a no" (12b local) | **Agent-mode-only verdict.** Via locca with the exact community quant (`gemma-4-12b-it-Q4_K_M`), the 12b scored **38/44 on the structured/pool kinds** — pool picks, request matching, plans, banter all fine (CPU latency excluded from the verdict). Its misses mirror the 31b: variety-trap (family trait), 3-hour plans, two "coming up next" slips. For a pool-mode station the 12b remains a fine local pick. |
 | GPT-4/5 Mini as the cloud reference worth paying for | **Weaker than assumed**: 91/96 — it ignores the VARIETY criterion under same-artist pressure (0% on that cell, worse than gemma-cloud) and picked the wrong track on 2/3 exact-title requests. The quality gap driving the cost isn't there on this workload. |
 | deepseek-v4-flash routing tale (0/4 direct vs 4/4 OpenRouter) | Third routing (`ollama` cloud): **82/96, mid-tier** — clean pool picks/segments but 2 hallucinated track ids (the dangerous failure), 4 stage directions, weak agent long-context (33%) and programme plans (0–33%). Fine as a fallback leg, not a primary. |
 | "Agent picking is too heavy for local models" | **Needs nuance**: too heavy for ~9B models on the native path; gemma-31b-cloud on Ollama's forced-tool path is 100% across agent cells. Small-model operators get the pool-mode path (segments included) instead. |
 | "Failures cluster in big structured/agent calls, not scripts" | **Confirmed across every model**: misses concentrate in `djAgentRequest`, agent long-context, and multi-hour programme plans; the free-text script kinds are near-perfect everywhere. |
 
+### Full seven-model table (full matrix ×3 unless noted)
+
+| Model / routing | Score | One-line verdict |
+| --- | --- | --- |
+| `ollama:gemma4:31b-cloud` | **94/96** | Best overall; agent mode viable again (1–4s everywhere). Weakness: 3-hour plans. |
+| `openrouter:openai/gpt-5-mini` | 91/96 | Strong, but ignores VARIETY under pressure and mis-picks exact-title requests. |
+| `ollama:minimax-m2.7:cloud` | 90/96 | The other agent-capable option. Glacial programme plans (2–4 min each); misses `mood` on vibe requests. |
+| `ollama:deepseek-v4-flash:cloud` | 82/96 | Pool-only fallback leg — 2 hallucinated ids, stage directions, weak plans. |
+| `openrouter:google/gemma-4-26b-a4b-it` | 79/96 | Pool-clean but 37.8s median pool picks as served — too slow to recommend over qwen. All throws are agent cells. |
+| `ollama:kimi-k2.6:cloud` | 79/96 | Scattered flakiness (11 throws across unrelated kinds) + high latency. Avoid. |
+| `openrouter:qwen/qwen3.5-9b` | 75/96 | The small floor: pool cells 100% at 0.6–3.5s. Rambles request acks; agent long-context 67%. Needs the Qwen thinking fix (in the same PR). |
+| `locca:gemma-4-12b-it-Q4_K_M` | 38/44¹ | Pool-mode fine locally. ¹Structured/pool kinds only, ×2, latency excluded (CPU bench host). |
+
 Bench-backed recommendation as of this snapshot: **`ollama:gemma4:31b-cloud` primary (agent
-mode viable again)**, local fallback leg per credits; **qwen3.5-9b in pool mode** as the
-small floor; deepseek-v4-flash as a fallback leg only.
+mode viable again)**, local fallback leg per credits; **qwen3.5-9b (or gemma-12b locally) in
+pool mode** as the small floor; `minimax-m2.7:cloud` if you want agent mode without gemma;
+deepseek-v4-flash as a fallback leg only; skip kimi-k2.6 and the 26b MoE for now.
+
+Cross-model patterns the bench surfaced: the **Gemma family** shares two signatures at every
+size (falls for the same-artist trap; picks unoffered feature kinds on 3-hour plans), and the
+**multi-hour programme plan is the hardest call in the system** — the only kind that dented
+every model tested. Reasoning axis note: all rows above measured reasoning **off**; the
+`--reasoning both` axis + thinking-leak forensics landed after these runs.
