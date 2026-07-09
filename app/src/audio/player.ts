@@ -9,6 +9,7 @@
 import TrackPlayer, {
   AppKilledPlaybackBehavior,
   Capability,
+  type PlayerOptions,
   RatingType,
 } from 'react-native-track-player';
 
@@ -21,10 +22,21 @@ export function setupPlayer(): Promise<void> {
   if (setupPromise) return setupPromise;
   setupPromise = (async () => {
     try {
-      await TrackPlayer.setupPlayer({
+      // iosCategoryPolicy is read by the native module (SessionCategories.swift)
+      // but missing from the lib's PlayerOptions type — extend it locally.
+      const options: PlayerOptions & { iosCategoryPolicy?: 'longFormAudio' } = {
         // A live stream needs a small buffer; keep defaults otherwise.
         autoHandleInterruptions: true,
-      });
+        // The long-form-audio route-sharing policy (what Apple Music/Podcasts
+        // use): iOS remembers the listener's chosen AirPlay device for this
+        // app and keeps routing to it through audio-session churn. Without
+        // it, the stream hiccup at an AirPlay handoff — plus the player
+        // re-asserting its session under the DEFAULT policy (SwiftAudioEx
+        // even recreates the whole AVPlayer on item failure) — yanked audio
+        // back to the built-in speaker ~2s after picking a HomePod.
+        iosCategoryPolicy: 'longFormAudio',
+      };
+      await TrackPlayer.setupPlayer(options);
     } catch (e) {
       // "player already initialized" throws on fast refresh — benign.
       const msg = e instanceof Error ? e.message : String(e);
