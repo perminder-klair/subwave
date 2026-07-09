@@ -140,7 +140,12 @@ export function buildContextLines(
       : `Period: ${context.time.period} (${context.time.vibe})`);
   }
   if (on('weather') && context?.weather && context.weather.condition && context.weather.condition !== 'unknown') {
-    lines.push(`Weather in ${context.weather.location}: ${context.weather.condition}${context.weather.temp != null ? `, ${context.weather.temp}°${context.weather.tempUnit || 'C'}` : ''}`);
+    // Spoken form ("24 degrees Celsius"), not display form ("24°C") — the
+    // model echoes whatever unit shape the prompt uses, and a °F/°C echo
+    // reaches TTS as "seventy-six F" (issue #963). The speech-text normalizer
+    // is the backstop; this stops the most common case at the source.
+    const unitWord = (context.weather.tempUnit || 'C') === 'F' ? 'Fahrenheit' : 'Celsius';
+    lines.push(`Weather in ${context.weather.location}: ${context.weather.condition}${context.weather.temp != null ? `, ${context.weather.temp} degrees ${unitWord}` : ''}`);
   }
   if (on('festival') && context?.festival) {
     const note = context.festival.description ? ` — ${context.festival.description}` : '';

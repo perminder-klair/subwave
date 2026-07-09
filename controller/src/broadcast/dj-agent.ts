@@ -26,6 +26,7 @@ import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
 import { buildPickerTools } from '../llm/tools.js';
 import { recordPick } from '../llm/log.js';
 import * as budget from './dj-budget.js';
+import { speechPaceScale } from '../audio/tts.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { recencyWindowsForLibrary, effectiveNoRepeatWindow } from '../music/recency.js';
 import { hasEraBound } from '../music/show-filter.js';
@@ -619,11 +620,16 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   }
 
   const rawSay = typeof object.say === 'string' ? object.say.trim() : '';
-  // Talk-within-the-intro (feature 3a): in DJ mode, hard-trim the link to the
+  // Talk-within-the-intro (feature 3a): in DJ mode, trim the link to the
   // pick's measured intro runway so the DJ lands before the vocals instead of
-  // talking over them. No-op when the pick is un-analysed or not in DJ mode.
+  // talking over them — sentence/clause-complete or dropped, never an
+  // ellipsis fragment (#962). speechPaceScale('link') maps the word ceiling
+  // to the rate the line will actually be spoken at (engine × persona ×
+  // daypart). No-op when the pick is un-analysed or not in DJ mode.
   const djMode = !!settings.getEffectivePersona()?.djMode;
-  const say = (djMode && rawSay) ? dj.enforceIntroBudget(rawSay, introMsOf(song)) : rawSay;
+  const say = (djMode && rawSay)
+    ? dj.enforceIntroBudget(rawSay, introMsOf(song), speechPaceScale('link'))
+    : rawSay;
   // Transition effects on this pick (persona djMode via settings.effectsActive),
   // independent of whether a link airs.
   const link = (wantLink && say) ? say : null;
@@ -690,6 +696,14 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
     } catch (err) {
       queue.log('error', `DJ link failed: ${err.message}`);
     }
+  }
+  // Talk-within-the-intro applies to the pool path too (#962 follow-up): the
+  // generateLink prompt carries the advisory budget phrase, but enforcement
+  // previously only ran on the agent path, so a pool link could still talk
+  // over the vocals — and would have aired an ellipsis fragment if trimmed.
+  // Same DJ-mode gate and pace scale as the agent path; '' → no spoken intro.
+  if (link && settings.getEffectivePersona()?.djMode) {
+    link = dj.enforceIntroBudget(link, introMsOf(result.song), speechPaceScale('link')) || null;
   }
   // Transition effects ride the pool path too (pickNextTrack only offers the
   // field when settings.effectsActive()), so a DJ-mode persona keeps its craft
