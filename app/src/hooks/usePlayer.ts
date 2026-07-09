@@ -13,6 +13,7 @@ import TrackPlayer, {
 } from 'react-native-track-player';
 import { loadAndPlay, setupPlayer, teardown } from '@/audio/player';
 import type { StationApi } from '@/lib/api';
+import { loadVolumePref, saveVolumePref } from '@/lib/volume';
 
 export type PlayerStatus = 'idle' | 'connecting' | 'playing';
 
@@ -29,6 +30,13 @@ export interface Player {
 
 const WATCHDOG_MS = 6000;
 
+// Reconnect backoff for the error path, mirroring the web player. The first
+// retry stays quick (a blip mid-broadcast should recover in half a second),
+// but repeated failures double the delay up to a minute — a phone left tuned
+// to a downed station must not hammer reconnects twice a second all night.
+const RECONNECT_BASE_MS = 500;
+const RECONNECT_MAX_MS = 60_000;
+
 export function usePlayer(
   api: StationApi | null,
   initialVolume = 1,
@@ -44,6 +52,9 @@ export function usePlayer(
   const tunedInRef = useRef(tunedIn);
   const apiRef = useRef(api);
   const watchdog = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Consecutive failed reconnects since the last successful 'playing' — drives
+  // the exponential backoff below.
+  const retryCount = useRef(0);
   useEffect(() => { tunedInRef.current = tunedIn; }, [tunedIn]);
   useEffect(() => { apiRef.current = api; }, [api]);
 
@@ -54,12 +65,49 @@ export function usePlayer(
     TrackPlayer.setVolume(volume).catch(() => {});
   }, [volume]);
 
+  // Restore the listener's last-used volume (#828). AsyncStorage is async, so
+  // the knob renders at the default first and snaps to the stored level once
+  // the read lands. Persistence is gated on `hydrated` so the restoring
+  // setVolume can't race the persist effect and write the default back.
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    let alive = true;
+    loadVolumePref().then((stored) => {
+      if (!alive) return;
+      if (stored !== null) {
+        setVolumeState(stored);
+        if (stored > 0) preMuteVolume.current = stored;
+      }
+      hydratedRef.current = true;
+    });
+    return () => { alive = false; };
+  }, []);
+
+  // Persist volume on change, debounced so a knob drag (dozens of setVolume
+  // calls) collapses to one write.
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    const id = setTimeout(() => { void saveVolumePref(volume); }, 300);
+    return () => clearTimeout(id);
+  }, [volume]);
+
+  // Next error-path reconnect delay: 500ms doubling to a 60s ceiling, reset on
+  // the next successful 'playing' (and on a fresh tune / regained link).
+  const nextRetryDelay = useCallback(() => {
+    const delay = Math.min(RECONNECT_BASE_MS * 2 ** retryCount.current, RECONNECT_MAX_MS);
+    retryCount.current += 1;
+    return delay;
+  }, []);
+
   const clearWatchdog = useCallback(() => {
     if (watchdog.current) {
       clearTimeout(watchdog.current);
       watchdog.current = null;
     }
   }, []);
+
+  // reconnect() needs armWatchdog, which needs reconnect — bridge with a ref.
+  const armWatchdogRef = useRef<(delay: number) => void>(() => {});
 
   const reconnect = useCallback(async () => {
     clearWatchdog();
@@ -70,9 +118,11 @@ export function usePlayer(
       await loadAndPlay({ url: a.streamUrl(), headers: a.streamHeaders() });
       await TrackPlayer.setVolume(volume);
     } catch {
-      /* the next error event will re-arm */
+      // A throw here may not surface as a PlaybackError event — re-arm
+      // ourselves, with backoff, so a dead origin keeps retrying (slowly).
+      if (tunedInRef.current) armWatchdogRef.current(nextRetryDelay());
     }
-  }, [clearWatchdog, volume]);
+  }, [clearWatchdog, volume, nextRetryDelay]);
 
   const armWatchdog = useCallback(
     (delay: number) => {
@@ -82,13 +132,14 @@ export function usePlayer(
     },
     [clearWatchdog, reconnect],
   );
+  useEffect(() => { armWatchdogRef.current = armWatchdog; }, [armWatchdog]);
 
   // Drive `status` from RNTP playback state + reconnect on error/stall.
   useTrackPlayerEvents([Event.PlaybackState, Event.PlaybackError], (event) => {
     if (event.type === Event.PlaybackError) {
       if (tunedInRef.current) {
         setStatus('connecting');
-        armWatchdog(500);
+        armWatchdog(nextRetryDelay());
       }
       return;
     }
@@ -96,15 +147,16 @@ export function usePlayer(
     const state = event.state;
     if (state === State.Playing) {
       clearWatchdog();
+      retryCount.current = 0;
       setStatus('playing');
     } else if (state === State.Buffering || state === State.Loading) {
       setStatus((s) => (s === 'playing' ? 'connecting' : s));
       armWatchdog(WATCHDOG_MS);
     } else if (state === State.Error) {
-      if (tunedInRef.current) armWatchdog(500);
+      if (tunedInRef.current) armWatchdog(nextRetryDelay());
     } else if (state === State.Ended || state === State.Stopped) {
       // A live stream shouldn't "end" — if it does while tuned in, reconnect.
-      if (tunedInRef.current) armWatchdog(500);
+      if (tunedInRef.current) armWatchdog(nextRetryDelay());
     }
   });
 
@@ -118,6 +170,8 @@ export function usePlayer(
     const prev = prevConnectedRef.current;
     prevConnectedRef.current = isConnected;
     if (prev === false && isConnected === true && tunedInRef.current && status !== 'playing') {
+      // Fresh network — let the backoff start small again.
+      retryCount.current = 0;
       reconnect();
     }
   }, [isConnected, status, reconnect]);
@@ -150,12 +204,14 @@ export function usePlayer(
     }
     const a = apiRef.current;
     if (!a) return;
+    // A fresh tune-in restarts the backoff ladder.
+    retryCount.current = 0;
     setTunedIn(true);
     setStatus('connecting');
     loadAndPlay({ url: a.streamUrl(), headers: a.streamHeaders() })
       .then(() => TrackPlayer.setVolume(volume))
-      .catch(() => { if (tunedInRef.current) armWatchdog(500); });
-  }, [stop, volume, armWatchdog]);
+      .catch(() => { if (tunedInRef.current) armWatchdog(nextRetryDelay()); });
+  }, [stop, volume, armWatchdog, nextRetryDelay]);
 
   const setVolume = useCallback((v: number) => {
     setVolumeState(Math.max(0, Math.min(1, v)));

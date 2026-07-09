@@ -5,12 +5,12 @@ Native iOS + Android player for [SUB/WAVE](../README.md) — built with Expo + r
 ## Stack
 
 - **Expo SDK 56** (RN 0.85, React 19, New Architecture) · **expo-router** (file-based)
-- **react-native-track-player** — background audio + lock-screen / CarPlay / Android Auto controls
+- **react-native-track-player** — background audio + lock-screen / CarPlay controls (Android Auto is intentionally not declared — Google Play rejected it under the Auto content policy, #477)
 - **NativeWind 4** (Tailwind for RN) — reuses the web's class names + the 7 theme tokens
-- **@shopify/react-native-skia** — the 120-bar waveform · **@gorhom/bottom-sheet** — drawers
+- **@shopify/react-native-skia** — the 120-bar waveform · sheets are core `<Modal>` (`src/components/ui/Sheet.tsx`)
 - **react-native-image-colors** — cover-art ambient wash · **lucide-react-native** — icons
 
-Native modules (track-player, skia, image-colors, bottom-sheet) ship native code, so **Expo Go won't work** — you must build a dev client.
+Native modules (track-player, skia, image-colors) ship native code, so **Expo Go won't work** — you must build a dev client.
 
 ## Develop
 
@@ -57,12 +57,12 @@ The structural difference from the web player: the web bakes its base URL in at 
 - `src/theme/ThemeContext.tsx` — station theme via NativeWind `vars()`; per-listener override
 - `src/audio/player.ts` + `src/hooks/usePlayer.ts` + `service.ts` — the RNTP audio layer (isolated so it's swappable)
 - `src/hooks/*` — ports of the web hooks (`useStationFeed`, `useSignal`, `useNowPlayingInfo`, `useCoverColors`, `useSpectrum`)
-- `src/player/*` — the player UI (TopBar, CenterStage, Waveform, TransportBar, DotRail, drawers)
+- `src/player/*` — the player UI (TopBar, CenterStage, Waveform, TransportBar, FreqBand, drawers)
 - `src/lib/{types,format,sessionFeed,tagline}.ts` — copied verbatim from `../web/lib` (source of truth noted in each file header)
 
 ## Known risks (validate in the device spike — M0)
 
-- **react-native-track-player + New Architecture.** RN 0.85 mandates the New Architecture on **both** platforms (the `newArchEnabled=false` flags in `gradle.properties`/`app.json` are ignored no-ops since RN 0.82). Reanimated 4.3.1 requires it. RNTP 4.1.2 isn't natively new-arch-compatible, so `patches/react-native-track-player+4.1.2.patch` carries the fix (2 source files: a Unit-returning `launch` helper in `MusicModule.kt`, and `currentReactContextCompat()` in `MusicService.kt` — without it Android crashes on the first playback event). Validated: iOS live playback on the simulator + Android `BUILD SUCCESSFUL`. See `docs/TESTING.md` → "Architecture-critical facts". The audio layer is still isolated behind `src/audio/player.ts` + `usePlayer` + `service.ts` should a swap to `expo-audio` ever be needed. (The doctor warning for this package is intentionally excluded in `package.json`.)
+- **react-native-track-player + New Architecture.** RN 0.85 mandates the New Architecture on **both** platforms (`app.json` no longer carries a `newArchEnabled` flag; a leftover `newArchEnabled=false` in a generated `gradle.properties` is an ignored no-op since RN 0.82). Reanimated 4.3.1 requires it. RNTP 4.1.2 isn't natively new-arch-compatible, so `patches/react-native-track-player+4.1.2.patch` carries the fix (2 source files: a Unit-returning `launch` helper in `MusicModule.kt`, and `currentReactContextCompat()` in `MusicService.kt` — without it Android crashes on the first playback event). Validated: iOS live playback on the simulator + Android `BUILD SUCCESSFUL`. See `docs/TESTING.md` → "Architecture-critical facts". The audio layer is still isolated behind `src/audio/player.ts` + `usePlayer` + `service.ts` should a swap to `expo-audio` ever be needed. (The doctor warning for this package is intentionally excluded in `package.json`.)
 - **HTTP-only stations.** iOS App Transport Security blocks plain HTTP. Stations should be HTTPS; `NSAllowsLocalNetworking` is on for LAN dev against a local controller. For a non-HTTPS dev controller over Wi-Fi, add a temporary ATS exception in `app.json` → `ios.infoPlist`.
 - **Background-audio review.** iOS declares `UIBackgroundModes: ["audio"]` (legitimate — live radio). Android uses RNTP's foreground service (`FOREGROUND_SERVICE_MEDIA_PLAYBACK`).
 

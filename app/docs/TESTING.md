@@ -15,14 +15,14 @@ platforms run it ON, and this is required (Reanimated 4.3.1 only works under new
 arch):
 
 - **iOS** — `Info.plist RCTNewArchEnabled = true`, Pods built `-DRCT_NEW_ARCH_ENABLED=1`.
-- **Android** — `android/gradle.properties` still has a leftover
+- **Android** — a generated `android/gradle.properties` may carry a leftover
   `newArchEnabled=false`, but **Gradle ignores it** and prints:
   `Setting newArchEnabled=false … is not supported anymore since React Native 0.82
   … The application will run with the New Architecture enabled by default.`
   The line is a harmless no-op; you can delete it.
 
-`app.json` also still declares `newArchEnabled: false` — equally a no-op. Don't
-rely on these flags; they do nothing on this RN version.
+`app.json` no longer declares `newArchEnabled` (it used to say `false` — equally
+a no-op). Don't rely on such flags anywhere; they do nothing on this RN version.
 
 ### Why `react-native-track-player` still works under new arch
 
@@ -186,18 +186,17 @@ stream in the phone app first, then connect the car. RNTP feeds the iOS surface
 ## EAS cloud builds (for distributing to testers)
 
 Use EAS when testers can't build locally — TestFlight (iOS) or a shareable
-internal APK (Android). `eas.json` already defines the profiles; what's missing
-is **account linking and auth**, which are interactive and must be done by the
-project owner.
+internal APK (Android). `eas.json` already defines the profiles, and the
+project is already linked (`extra.eas.projectId` is set in `app.json`); the only
+interactive piece left is **auth**, which must be done by the project owner.
 
 ### One-time setup (owner runs these)
 
 ```bash
 npm i -g eas-cli
 eas login                 # your Expo account
-cd app
-eas init                  # links the project: writes owner + extra.eas.projectId
-                          # into app.json (currently absent)
+cd app                    # project is already linked — `eas init` is only
+                          # needed again if the owner/projectId ever changes
 ```
 
 `eas.json` uses `appVersionSource: remote`, so build/version numbers are managed

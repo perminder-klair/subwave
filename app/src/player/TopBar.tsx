@@ -4,7 +4,7 @@
 // TopBar for a phone-width single column.
 
 import { router } from 'expo-router';
-import { Palette } from 'lucide-react-native';
+import { MoonStar, Palette } from 'lucide-react-native';
 import { useMemo } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,6 +20,9 @@ export interface TopBarProps {
   djName?: string;
   activeShow: ActiveShow | null;
   onOpenThemes: () => void;
+  onOpenSleep: () => void;
+  /** Accent-tints the moon while a sleep timer is armed. */
+  sleepActive: boolean;
 }
 
 export default function TopBar({
@@ -29,6 +32,8 @@ export default function TopBar({
   djName,
   activeShow,
   onOpenThemes,
+  onOpenSleep,
+  sleepActive,
 }: TopBarProps) {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
@@ -68,6 +73,15 @@ export default function TopBar({
           ) : null}
         </Pressable>
         <View className="flex-row items-center" style={{ gap: 18, paddingLeft: 12 }}>
+          <Pressable
+            onPress={onOpenSleep}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel={sleepActive ? 'Sleep timer (armed)' : 'Sleep timer'}
+            accessibilityState={{ selected: sleepActive }}
+          >
+            <MoonStar size={18} color={sleepActive ? colors.accent : colors.muted} />
+          </Pressable>
           <Pressable onPress={onOpenThemes} hitSlop={10} accessibilityRole="button" accessibilityLabel="Theme">
             <Palette size={18} color={colors.muted} />
           </Pressable>

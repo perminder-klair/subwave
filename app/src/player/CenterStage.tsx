@@ -3,6 +3,7 @@
 // phone column. The cover glitches + shows corner ticks during a ~3s `burst`
 // opened by a track change or a new DJ turn (the web's `.v3-cover-live`).
 
+import { Coins } from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
 import { Text, View } from 'react-native';
 import CoverArt from './CoverArt';
@@ -38,6 +39,9 @@ export interface CenterStageProps {
   nowPlaying: NowPlayingTrack | null;
   coverSrc: string | null;
   elapsed: number;
+  /** Cumulative since-boot LLM token total — the quiet "cost of the DJ" ticker
+   *  by the now-playing time (web #449). null hides it. */
+  llmTokens: number | null;
   feed: SessionTurn[];
   djLineOn: boolean;
   live: boolean;
@@ -49,6 +53,7 @@ export default function CenterStage({
   nowPlaying,
   coverSrc,
   elapsed,
+  llmTokens,
   feed,
   djLineOn,
   live,
@@ -108,12 +113,25 @@ export default function CenterStage({
         </View>
       ) : null}
 
-      <Text
-        className="font-mono text-muted"
-        style={{ fontSize: 11, letterSpacing: 2, marginBottom: 12 }}
-      >
-        NOW PLAYING{elapsedLabel}
-      </Text>
+      <View className="flex-row items-center" style={{ marginBottom: 12, gap: 5 }}>
+        <Text className="font-mono text-muted" style={{ fontSize: 11, letterSpacing: 2 }}>
+          NOW PLAYING{elapsedLabel}
+        </Text>
+        {llmTokens != null ? (
+          <View
+            className="flex-row items-center"
+            style={{ gap: 3 }}
+            accessible
+            accessibilityLabel={`${llmTokens.toLocaleString('en-US')} AI tokens generated`}
+          >
+            <Text className="font-mono text-muted" style={{ fontSize: 11 }}>·</Text>
+            <Coins size={11} color={colors.muted} strokeWidth={1.75} />
+            <Text className="font-mono text-muted" style={{ fontSize: 11 }}>
+              {llmTokens.toLocaleString('en-US')}
+            </Text>
+          </View>
+        ) : null}
+      </View>
 
       {has ? (
         <>

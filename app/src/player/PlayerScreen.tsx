@@ -23,6 +23,7 @@ import {
   type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  Platform,
   type ScrollView,
   StyleSheet,
   View,
@@ -35,8 +36,10 @@ import { useCoverColors } from '@/hooks/useCoverColors';
 import { useNowPlayingInfo } from '@/hooks/useNowPlayingInfo';
 import { usePlayer } from '@/hooks/usePlayer';
 import { useSignal } from '@/hooks/useSignal';
+import { useSleepTimer } from '@/hooks/useSleepTimer';
 import { useStationFeed } from '@/hooks/useStationFeed';
 import type { StationApi } from '@/lib/api';
+import type { StationLocale } from '@/lib/format';
 import type {
   ActiveShow,
   NowPlayingTrack,
@@ -55,8 +58,13 @@ import Waveform from './Waveform';
 import BoothDrawer from './drawers/BoothDrawer';
 import RequestDrawer from './drawers/RequestDrawer';
 import ScheduleDrawer from './drawers/ScheduleDrawer';
+import SleepDrawer from './drawers/SleepDrawer';
 import ThemesDrawer from './drawers/ThemesDrawer';
 import TimelineDrawer from './drawers/TimelineDrawer';
+
+// Stations this app run has already beaconed — remounts/station round-trips
+// must not double count (the controller additionally dedupes by IP).
+const beaconedBases = new Set<string>();
 
 // FM-dial band: the swipeable pager sections, LIVE in the centre.
 const PAGES: readonly BandStop[] = [
@@ -119,17 +127,19 @@ const TimelinePage = memo(function TimelinePage({
 const BoothPage = memo(function BoothPage({
   items,
   timezone,
+  locale,
   topInset,
   bottomInset,
 }: {
   items: SessionPayload['messages'];
   timezone?: string | null;
+  locale?: StationLocale;
   topInset: number;
   bottomInset: number;
 }) {
   return (
     <PagePanel title="The booth" sub="DJ on the mic" topInset={topInset} bottomInset={bottomInset}>
-      <BoothDrawer items={items} timezone={timezone} />
+      <BoothDrawer items={items} timezone={timezone} locale={locale} />
     </PagePanel>
   );
 });
@@ -179,11 +189,13 @@ export default function PlayerScreen() {
     dj,
     listeners,
     streamOnline,
+    llmTokens,
     state,
     session,
     elapsed,
     progress,
     timezone,
+    locale,
     // While tuned in, keep a slow background poll alive so the lock screen
     // (useNowPlayingInfo) tracks the broadcast; idle + backgrounded polls
     // nothing at all.
@@ -192,6 +204,28 @@ export default function PlayerScreen() {
 
   const offline = streamOnline === false;
   const signal = useSignal({ api, tunedIn, status, offline });
+
+  // Sleep timer: tune out when it lapses. An explicit tune-out (or a station
+  // switch tearing playback down) also disarms it — a timer armed for one
+  // listen must not ambush the next one.
+  const sleep = useSleepTimer(stop);
+  const cancelSleep = sleep.cancel;
+  const prevTunedInRef = useRef(tunedIn);
+  useEffect(() => {
+    const was = prevTunedInRef.current;
+    prevTunedInRef.current = tunedIn;
+    if (was && !tunedIn) cancelSleep();
+  }, [tunedIn, cancelSleep]);
+
+  // One-shot audience beacon per station per app run — the native analog of
+  // the web PlayerApp's referrer beacon. An app has no document.referrer or
+  // UTM query, so report the platform as the source; that's how native
+  // listeners become visible in the admin Stats audience rollup at all.
+  useEffect(() => {
+    if (!api || beaconedBases.has(api.base)) return;
+    beaconedBases.add(api.base);
+    void api.postBeacon({ path: '/app', utmSource: `app-${Platform.OS}` });
+  }, [api]);
 
   const listenerCount =
     listeners == null ? null : typeof listeners === 'number' ? listeners : listeners.current ?? null;
@@ -208,7 +242,10 @@ export default function PlayerScreen() {
   // Push lock-screen / CarPlay metadata from the feed.
   useNowPlayingInfo({ api, tunedIn, nowPlaying, boothFeed, activeShow });
 
-  // Tear down playback if the station drops off air mid-listen.
+  // Tear down playback if the station drops off air mid-listen. `offline` is
+  // debounced upstream (useStationFeed needs OFFLINE_CONFIRM_POLLS consecutive
+  // offline polls) so a transient controller blip can't kill live audio
+  // (#463/#466).
   useEffect(() => {
     if (offline && tunedIn) stop();
   }, [offline, tunedIn, stop]);
@@ -275,6 +312,7 @@ export default function PlayerScreen() {
   const goHome = useCallback(() => goToPage(HOME_INDEX), [goToPage]);
 
   const [themesOpen, setThemesOpen] = useState(false);
+  const [sleepOpen, setSleepOpen] = useState(false);
 
   // Footprints of the two frosted overlays (masthead/dial header at the top,
   // transport bar at the bottom). The pager fills the full height behind both,
@@ -352,6 +390,7 @@ export default function PlayerScreen() {
                     nowPlaying={nowPlaying}
                     coverSrc={coverSrc}
                     elapsed={elapsed}
+                    llmTokens={llmTokens}
                     feed={boothFeed}
                     djLineOn
                     live={tunedIn}
@@ -362,7 +401,7 @@ export default function PlayerScreen() {
                 </View>
               </View>
               <View style={{ width: pagerW }}>
-                <BoothPage items={boothFeed} timezone={timezone} topInset={headerInset} bottomInset={barInset} />
+                <BoothPage items={boothFeed} timezone={timezone} locale={locale} topInset={headerInset} bottomInset={barInset} />
               </View>
               <View style={{ width: pagerW }}>
                 {api ? (
@@ -400,6 +439,8 @@ export default function PlayerScreen() {
             djName={djName}
             activeShow={activeShow}
             onOpenThemes={() => setThemesOpen(true)}
+            onOpenSleep={() => setSleepOpen(true)}
+            sleepActive={sleep.active}
           />
           <ConnectionBanner
             isConnected={isConnected}
@@ -441,6 +482,18 @@ export default function PlayerScreen() {
 
       <Sheet open={themesOpen} onClose={() => setThemesOpen(false)} title="Theme">
         {themesOpen ? <ThemesDrawer /> : null}
+      </Sheet>
+
+      <Sheet open={sleepOpen} onClose={() => setSleepOpen(false)} title="Sleep timer">
+        {sleepOpen ? (
+          <SleepDrawer
+            active={sleep.active}
+            armedMinutes={sleep.armedMinutes}
+            remainingSec={sleep.remainingSec}
+            onStart={sleep.start}
+            onCancel={sleep.cancel}
+          />
+        ) : null}
       </Sheet>
     </View>
   );
