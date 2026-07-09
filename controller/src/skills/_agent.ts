@@ -306,7 +306,7 @@ export function buildSituation(ctx: any, { forced = false, contextFields, recent
   // reworded). Surface the recent aired curiosity lines so it steers clear.
   if (recentCuriosity && recentCuriosity.length) {
     const list = recentCuriosity.map(t => `- ${t}`).join('\n');
-    lines.push(`\nCuriosity facts already aired in the last few days (if you air a curiosity segment, pick something genuinely different — do NOT repeat any of these, even reworded):\n${list}`);
+    lines.push(`\nCuriosity topics already aired in the last few days (openings shown; if you air a curiosity segment, pick a genuinely different subject — do NOT revisit any of these, even reworded):\n${list}`);
   }
   lines.push(forced
     ? '\nWrite the segment the operator has asked for now.'
@@ -389,6 +389,27 @@ Your job: decide whether to air ONE between-track "${cap.kind}" segment, or stay
 ${cap.desc}${sfxBlock(sfxCatalog)}${settings.agentLanguageReminder(persona, 'the "text" line')}`;
 }
 
+// Wall-clock guard for the simple path's single djObject call. The director
+// AGENT runs under segmentDeadline() via defineAgent's timeoutMs; djObject
+// has no deadline of its own, and a grammar-constrained model can legally
+// ramble inside an unbounded string field all the way to the output-token
+// cap — observed on gemma-4-31b's dull-weather bench cell: ~380s crawling to
+// 8000 tokens on attempt 1 before the prompt-embedded retry rescued it in
+// seconds. The abort turns that into a bounded failure; the tick already
+// treats a throw as silence.
+async function deadlinedSegmentObject(args: any) {
+  const ac = new AbortController();
+  const timer = setTimeout(
+    () => ac.abort(new Error(`segment call exceeded ${segmentDeadline()}ms deadline`)),
+    segmentDeadline(),
+  );
+  try {
+    return await djObject({ ...args, signal: ac.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Runs the simple path for one tick: choose, fetch, one djObject call.
 // Returns { seg, reason } in the same shape agenticTick consumes from the
 // agent — seg is null for silence. A failed data fetch is silence without a
@@ -399,7 +420,7 @@ async function runSimpleDirector(ctx: any, { caps, speaker, freq, sfxCatalog }: 
   const data = await fetchSegmentData(cap, ctx, segmentState);
   if (data?.error) return { seg: null, reason: `${cap.kind} data fetch failed (${data.error})` };
   const recentCuriosity = cap.kind === 'curiosity' ? recentAiredCuriosity() : undefined;
-  const out = await djObject({
+  const out = await deadlinedSegmentObject({
     system: simpleSystem(speaker, cap, freq, sfxCatalog),
     prompt: buildSituation(ctx, { contextFields: effectiveContextFields(cap), recentCuriosity }) + dataBlock(data),
     schema: simpleSegmentSchema(),
@@ -634,7 +655,7 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
     // capability brief and the moment alone, the same "straight talk"
     // degradation the programme feature uses for a stale kind.
     const data = await fetchSegmentData(cap, ctx, segmentState);
-    object = await djObject({
+    object = await deadlinedSegmentObject({
       system: forcedSystem(speaker, cap, sfxCatalog),
       prompt: situation + (data && !data.error ? dataBlock(data) : ''),
       schema: forcedSchema(),
