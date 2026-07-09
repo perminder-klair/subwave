@@ -31,9 +31,11 @@ export function setupPlayer(): Promise<void> {
         // fine on the built-in speaker, but AirPlay needs a real timing
         // cushion and collapsed the route ~6s after a HomePod handoff when
         // the cushion drained (instrumented trail: route reverts FIRST, then
-        // the player errors). Icecast keeps the buffer fed; the cost is a few
-        // extra seconds behind the live edge, which a shared radio absorbs.
-        minBuffer: 12,
+        // the player errors). Sized to the Icecast connect burst (~4s at
+        // 128kbps) so it fills INSTANTLY: 12s proved unfillable at 1× on a
+        // live stream — AVPlayer waited forever in silence (rate 0,
+        // automaticallyWaitsToMinimizeStalling never satisfied).
+        minBuffer: 4,
         // The long-form-audio route-sharing policy (what Apple Music/Podcasts
         // use): iOS remembers the listener's chosen AirPlay device for this
         // app and keeps routing to it through audio-session churn. Without
