@@ -169,8 +169,26 @@ async function main() {
             }
           }
           // recentCalls is the live ring buffer (newest first, unshift on record).
-          if (recentCalls.length > callsBefore) {
+          const newCalls = recentCalls.length - callsBefore;
+          if (newCalls > 0) {
             base.tokens = (recentCalls[0] as any)?.usage?.total ?? null;
+            // Reasoning-state forensics, single-call cells only (an agent run
+            // spans several calls, so last-call usage can't be compared to the
+            // scenario's whole output). Hidden tokens = provider-billed output
+            // minus the visible text's rough worth: thinking gaps are
+            // order-of-magnitude (qwen: 4000 billed, 0 visible), so chars/4 is
+            // plenty precise.
+            const outTokens = (recentCalls[0] as any)?.usage?.output;
+            if (newCalls === 1 && typeof outTokens === 'number') {
+              const visibleEst = Math.ceil((base.response?.length ?? 0) / 4);
+              base.hiddenTokens = Math.max(0, outTokens - visibleEst);
+              if (!reasoning && base.hiddenTokens > Math.max(300, visibleEst * 2)) {
+                // Suppression asked for, thinking happened anyway — the exact
+                // bug class the Qwen/OpenRouter effort-minimal no-op was.
+                base.violations.push('thinking-leak');
+                if (base.outcome === 'ok') base.outcome = 'violation';
+              }
+            }
           }
           reporter.add(base);
           const tag = base.outcome === 'ok' ? ' ok ' : base.outcome === 'violation' ? 'VIOL' : 'FAIL';
@@ -178,6 +196,18 @@ async function main() {
             + (base.violations.length ? `  [${base.violations.join(', ')}]` : '')
             + (base.bucket ? `  (${base.bucket}: ${base.error})` : ''));
         }
+      }
+    }
+    // The inverse check: reasoning requested ON but no cell ever showed hidden
+    // thinking tokens — either the knob isn't reaching the provider, or this
+    // isn't a thinking model (both worth knowing before trusting r:on numbers).
+    if (reasoning) {
+      const mine = reporter.records.filter(r => r.model === label && r.outcome !== 'skipped' && r.hiddenTokens != null);
+      const thinking = mine.filter(r => (r.hiddenTokens ?? 0) > 300).length;
+      if (mine.length >= 5 && thinking === 0) {
+        console.log(`   !! ${label}: reasoning ON but zero cells showed hidden thinking tokens — toggle not reaching the provider, or not a thinking model`);
+      } else if (mine.length) {
+        console.log(`   ·· ${label}: hidden thinking on ${thinking}/${mine.length} measurable cells`);
       }
     }
     }

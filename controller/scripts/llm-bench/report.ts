@@ -19,6 +19,10 @@ export interface RunRecord {
   error?: string;
   ms: number;
   tokens?: number | null;
+  /** Provider-reported output tokens minus the visible text's estimated worth
+   *  (~chars/4) — single-call cells only. Order-of-magnitude gaps mean hidden
+   *  thinking; the reasoning-state checks in cli.ts key off this. */
+  hiddenTokens?: number | null;
   response?: string;      // short preview for eyeballing the JSON later
 }
 
