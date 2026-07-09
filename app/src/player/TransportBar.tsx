@@ -151,7 +151,7 @@ export default function TransportBar({
         >
           <View className="flex-row items-baseline justify-between" style={{ gap: 6 }}>
             <Text className="font-mono text-ink" style={{ fontSize: 10, flexShrink: 1 }} numberOfLines={1}>
-              {castingTo ? 'Cast · ' : 'Signal · '}
+              {castingTo ? 'Cast · ' : ''}
               <Text
                 style={{
                   color: castingTo || qualityActive ? colors.accent : colors.muted,
