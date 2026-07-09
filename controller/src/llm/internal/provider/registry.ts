@@ -308,18 +308,24 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       // includes both the reasoning flag and the no-think flag, so each variant is
       // built once.
       const suppressReasoning = cfg.reasoning !== true || constructionNoThink;
-      // effort:'minimal' is NOT a real off-switch for the enable_thinking
-      // model families (Qwen, GLM) — their only native knob is the boolean,
-      // and OpenRouter only maps `enabled:false` onto it. Observed live on
-      // qwen/qwen3.5-9b with minimal set: free-text calls thought through the
-      // FULL 4000-token output cap and returned zero visible text (31-101s,
-      // empty reply, truncation guard refused to air it). Those families
-      // don't mandate reasoning, so `enabled:false` can't 400 the way
-      // gpt-5/o-series does — which is the whole reason minimal stays the
-      // default for everyone else.
-      const enableThinkingFamily = /(^|\/)(qwen|glm)/i.test(id);
+      // `enabled:false` is the DEFAULT off-switch. effort:'minimal' — the old
+      // default — is not an off-switch at all for most families, and for two
+      // of them it's actively wrong, both caught by llm-bench's thinking-leak
+      // forensics:
+      //   - enable_thinking families (Qwen, GLM): effort is a no-op, the
+      //     model thinks to the output cap (qwen3.5-9b: empty replies at
+      //     4000 billed tokens, 31-101s).
+      //   - Anthropic: OpenRouter maps ANY effort onto a thinking BUDGET, so
+      //     'minimal' turned thinking ON for claude-haiku-4.5 (81 leaked
+      //     cells) — the suppression knob was the thing enabling it.
+      // effort:'minimal' survives ONLY for the reasoning-MANDATORY families,
+      // which 400 on enabled:false ("Reasoning is mandatory"): OpenAI's
+      // gpt-5/o-series (kept broad at openai/* — harmlessly dropped on their
+      // non-reasoning models, e.g. gpt-4o-mini benched clean with it) and
+      // reasoning-only DeepSeek R1 variants.
+      const reasoningMandatory = /^openai\//i.test(id) || /(^|\/)deepseek-r1/i.test(id);
       model = suppressReasoning
-        ? provider(id, { extraBody: { reasoning: enableThinkingFamily ? { enabled: false } : { effort: 'minimal' } } })
+        ? provider(id, { extraBody: { reasoning: reasoningMandatory ? { effort: 'minimal' } : { enabled: false } } })
         : provider(id);
       break;
     }
