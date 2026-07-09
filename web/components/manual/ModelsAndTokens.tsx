@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import ManualPage from './ManualPage';
+import LlmBenchTable from './LlmBenchTable';
 
 export default function ModelsAndTokens() {
   return (
@@ -63,42 +64,20 @@ export default function ModelsAndTokens() {
           SUB/WAVE ships a benchmark that drives every kind of call the DJ makes — track
           picks, talk segments, listener requests, scripts, banter, programme plans — against
           any model, in both picker modes, and scores the output against the station&rsquo;s own
-          rules. The table below is from a full run across the models the community actually
-          uses (station configured lean, reasoning off):
+          rules. The table below is the running record — it grows as more models and
+          providers get benched (station configured lean unless noted):
         </p>
-        <ul className="bs-list">
-          <li>
-            <strong>Gemma 4 31B</strong> (Ollama cloud) — the best result on record: near-perfect
-            across the board, <em>including the full picker agent</em>, at one-to-four seconds a
-            call. If you want the richest station without a per-token bill, this is it.
-          </li>
-          <li>
-            <strong>MiniMax M2.7</strong> (Ollama cloud) — the other agent-capable option.
-            Excellent everywhere except multi-hour programme plans, which it writes correctly
-            but slowly (minutes, not seconds — tolerable for a once-per-episode call).
-          </li>
-          <li>
-            <strong>GPT-5 Mini</strong> (hosted) — strong, but no longer clearly better than the
-            free options above: under pressure it repeats artists back-to-back more than any
-            local Gemma, and it occasionally serves the wrong track on an exact-title request.
-            If cost is why you&rsquo;re leaving it, the bench says you lose little.
-          </li>
-          <li>
-            <strong>Qwen3.5 9B</strong> — the small-model floor. On the pool picker it&rsquo;s
-            fast and flawless; its quirks are cosmetic (wordy request replies). Run it lean and
-            it runs the whole station.
-          </li>
-          <li>
-            <strong>Gemma 4 12B</strong> (local, e.g. <code>locca serve gemma4</code>) — fine for
-            a pool-mode station: picks, requests, scripts and plans all pass. Just don&rsquo;t
-            give it the picker agent — that&rsquo;s the one job it genuinely can&rsquo;t do.
-          </li>
-          <li>
-            <strong>Skip for now:</strong> Kimi K2.6 (fails unpredictably across unrelated call
-            types) and DeepSeek V4 Flash as a primary (it invents track ids under pressure —
-            fine as a fallback leg, not as the DJ).
-          </li>
-        </ul>
+        <LlmBenchTable />
+        <p>
+          Reading it for a recommendation: pick an <strong>agent-capable</strong> row if you
+          want the full conversational picker (Gemma 4 31B on Ollama cloud is the best free
+          option; MiniMax M2.7 the alternative); pick any healthy <strong>pool-mode</strong>{' '}
+          row for a lean station (<strong>Qwen3.5 9B</strong> is the small floor, and a local{' '}
+          <strong>Gemma 4 12B</strong> — <code>locca serve gemma4</code> — does the same job
+          keylessly on your own box). Remember the route in the second line of each model
+          cell is part of the result — the same model through a different provider can score
+          differently.
+        </p>
         <p>
           Two patterns worth knowing whatever you run: the Gemma family at every size shares
           the same habits (it can repeat an artist when the shortlist pressures it to, and it
