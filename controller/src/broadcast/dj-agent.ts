@@ -464,7 +464,8 @@ function trimLinkToIntro(text: string | null | undefined, song: any): string | n
   const raw = (text || '').trim();
   if (!raw) return null;
   if (!settings.getEffectivePersona()?.djMode) return raw;
-  const spoken = normalizeForSpeech(stripThinking(raw));
+  // Same corrections as speak() so the word count matches the aired text.
+  const spoken = normalizeForSpeech(stripThinking(raw), settings.get().tts?.corrections);
   return dj.enforceIntroBudget(spoken, introMsOf(song), speechPaceScale('link')) || null;
 }
 

@@ -214,6 +214,58 @@ function normalizeTtsSpeedMap(raw: any): Record<string, number> {
   return out;
 }
 
+// Operator speech corrections (tts.corrections) — find→replace pairs applied
+// to every booth-bound line in audio/speech-text.ts before the engines see it
+// (the operator-extensible sibling of the built-in SUB/WAVE → "Subwave" rule).
+// `from` is a literal phrase (regex-escaped at apply time), `to` its spoken
+// form ('' = drop the phrase entirely).
+export const TTS_CORRECTIONS_LIMIT = 100;
+const TTS_CORRECTION_FROM_MAX = 80;
+const TTS_CORRECTION_TO_MAX = 160;
+
+// Lenient on-load pass: never throws, drops malformed entries so a
+// hand-edited settings.json can't wedge boot.
+function normalizeTtsCorrections(raw: any): Array<{ from: string; to: string }> {
+  if (!Array.isArray(raw)) return [];
+  const out: Array<{ from: string; to: string }> = [];
+  for (const item of raw) {
+    if (out.length >= TTS_CORRECTIONS_LIMIT) break;
+    if (!item || typeof item !== 'object') continue;
+    const from = typeof item.from === 'string'
+      ? item.from.trim().slice(0, TTS_CORRECTION_FROM_MAX)
+      : '';
+    if (!from) continue;
+    const to = typeof item.to === 'string'
+      ? item.to.trim().slice(0, TTS_CORRECTION_TO_MAX)
+      : '';
+    out.push({ from, to });
+  }
+  return out;
+}
+
+// Strict update() validator — whole-array replace, indexed throws, rebuilt
+// objects so unknown keys are stripped (the validateFestivalsStrict shape).
+function validateTtsCorrectionsStrict(raw: any): Array<{ from: string; to: string }> {
+  if (!Array.isArray(raw)) throw new Error('tts.corrections must be an array');
+  if (raw.length > TTS_CORRECTIONS_LIMIT) {
+    throw new Error(`tts.corrections must be at most ${TTS_CORRECTIONS_LIMIT} entries`);
+  }
+  return raw.map((item, i) => {
+    if (!item || typeof item !== 'object') {
+      throw new Error(`tts.corrections[${i}] must be an object`);
+    }
+    const from = String(item.from ?? '').trim();
+    if (from.length < 1 || from.length > TTS_CORRECTION_FROM_MAX) {
+      throw new Error(`tts.corrections[${i}].from must be 1-${TTS_CORRECTION_FROM_MAX} chars`);
+    }
+    const to = String(item.to ?? '').trim();
+    if (to.length > TTS_CORRECTION_TO_MAX) {
+      throw new Error(`tts.corrections[${i}].to must be at most ${TTS_CORRECTION_TO_MAX} chars`);
+    }
+    return { from, to };
+  });
+}
+
 // LLM provider abstraction. `ollama` is the homelab default; the cloud
 // providers are opt-in and resolved by llm/provider.js. `openrouter` and
 // `gateway` are aggregators — one key, any vendor's models. `openai-compatible`
@@ -1039,6 +1091,10 @@ const DEFAULTS = {
     // audio/tts.ts:speak(). Only Piper/Kokoro/cloud honour it; chatterbox/
     // pocket-tts/remote ignore speed so their entries are inert. See clampTtsSpeed().
     speed: { piper: 1, kokoro: 1, chatterbox: 1, 'pocket-tts': 1, cloud: 1, remote: 1 },
+    // Operator speech corrections — find→replace pairs applied to every
+    // booth-bound line before any TTS engine sees it (audio/speech-text.ts).
+    // Each entry: { from: 'GHz', to: 'gigahertz' }. Empty by default.
+    corrections: [],
   },
   llm: {
     provider: 'ollama',
@@ -1860,6 +1916,9 @@ export async function load() {
       // Per-engine speed map — one clean multiplier per known engine, missing
       // keys → 1.0, unknown keys dropped. An older save (no speed) loads at unity.
       speed: normalizeTtsSpeedMap(stored.tts?.speed),
+      // Operator speech corrections — malformed entries dropped, list capped.
+      // An older save (no corrections) loads as [].
+      corrections: normalizeTtsCorrections(stored.tts?.corrections),
     },
     llm: {
       provider: LLM_PROVIDERS.includes(stored.llm?.provider)
@@ -3154,6 +3213,11 @@ export async function update(patch) {
         }
         next.tts.speed[key] = clampTtsSpeed(t.speed[key]);
       }
+    }
+    // Whole-array replace, like festivals — the admin UI always sends the
+    // full edited list. No restart: read live on every speak() call.
+    if (t.corrections !== undefined) {
+      next.tts.corrections = validateTtsCorrectionsStrict(t.corrections);
     }
   }
   if ('llm' in patch) {

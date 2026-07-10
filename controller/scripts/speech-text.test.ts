@@ -119,6 +119,51 @@ async function main() {
     assert.equal(normalizeForSpeech(''), '');
   });
 
+  console.log('operator corrections (settings.tts.corrections):');
+  await test('basic replace, case-insensitive', () => {
+    const rules = [{ from: 'Hozier', to: 'Ho-zeer' }];
+    assert.equal(normalizeForSpeech('that was Hozier with Take Me to Church', rules),
+      'that was Ho-zeer with Take Me to Church');
+    assert.equal(normalizeForSpeech('HOZIER again', rules), 'Ho-zeer again');
+  });
+  await test('word-bounded: never fires inside a longer word', () => {
+    const rules = [{ from: 'live', to: 'lyve' }];
+    assert.equal(normalizeForSpeech('live at the delivery depot', rules),
+      'lyve at the delivery depot');
+  });
+  await test('symbol-edged rules match without a word boundary (Ke$ha)', () => {
+    const rules = [{ from: 'Ke$ha', to: 'Kesha' }];
+    assert.equal(normalizeForSpeech('Ke$ha on deck', rules), 'Kesha on deck');
+  });
+  await test('regex specials in `from` are literal, $ in `to` is literal', () => {
+    const rules = [{ from: 'A+ (deluxe)', to: 'A-plus $pecial' }];
+    assert.equal(normalizeForSpeech('the A+ (deluxe) cut', rules), 'the A-plus $pecial cut');
+  });
+  await test('runs before symbol rules, so a rule can pre-empt an expansion', () => {
+    const rules = [{ from: '$5', to: 'five bucks' }];
+    assert.equal(normalizeForSpeech('$5 at the door', rules), 'five bucks at the door');
+  });
+  await test('matches through markdown emphasis (applied after de-markup)', () => {
+    const rules = [{ from: 'Hozier', to: 'Ho-zeer' }];
+    assert.equal(normalizeForSpeech('**Hozier** up next', rules), 'Ho-zeer up next');
+  });
+  await test('empty `to` drops the phrase, whitespace collapses', () => {
+    const rules = [{ from: 'literally', to: '' }];
+    assert.equal(normalizeForSpeech('it was literally the best set', rules),
+      'it was the best set');
+  });
+  await test('blank/malformed rules are skipped, no rules is a no-op', () => {
+    const rules = [{ from: '   ', to: 'x' }, { from: 'GHz', to: 'gigahertz' }];
+    assert.equal(normalizeForSpeech('a 3 GHz chip', rules), 'a 3 gigahertz chip');
+    assert.equal(normalizeForSpeech('unchanged text', []), 'unchanged text');
+    assert.equal(normalizeForSpeech('unchanged text'), 'unchanged text');
+  });
+  await test('multi-word phrases replace as a unit', () => {
+    const rules = [{ from: 'drum and bass', to: 'drum n bass' }];
+    assert.equal(normalizeForSpeech('classic drum and bass hour', rules),
+      'classic drum n bass hour');
+  });
+
   console.log(failures ? `\n${failures} failing` : '\nall passing');
   process.exit(failures ? 1 : 0);
 }

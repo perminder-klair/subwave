@@ -151,6 +151,10 @@ interface TtsForm {
   // Per-engine speech-rate multiplier, keyed by engine id. Always carries all 6
   // known engines, 1.0 = unity = no change. Inert for chatterbox/pocket-tts/remote.
   speed: Record<string, number>;
+  // Operator speech corrections — find→replace pairs applied to every spoken
+  // line before any TTS engine reads it (the editable sibling of the built-in
+  // SUB/WAVE → "Subwave" rule).
+  corrections: { from: string; to: string }[];
 }
 
 interface LlmFallbackForm {
@@ -332,6 +336,7 @@ interface SettingsData {
       remote?: { url?: string };
       gainDb?: Record<string, number>;
       speed?: Record<string, number>;
+      corrections?: { from?: string; to?: string }[];
     };
     llm?: Partial<LlmForm>;
     search?: Partial<SearchForm>;
@@ -527,6 +532,8 @@ export default function SettingsPanel() {
           remote: 1,
           ...(v.tts?.speed || {}),
         },
+        // Operator speech corrections — hydrate to clean {from, to} rows.
+        corrections: (v.tts?.corrections || []).map(c => ({ from: c.from ?? '', to: c.to ?? '' })),
       },
       llm: {
         provider: v.llm?.provider ?? 'ollama',
@@ -2073,6 +2080,11 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         // Per-engine speech speed (×). Same contract as gainDb; inert for the
         // engines whose workers ignore speed (chatterbox/pocket-tts).
         speed: form.tts.speed,
+        // Whole-list replace. Rows with an empty "text on air" are drafts the
+        // operator never filled in — dropped, not an error.
+        corrections: form.tts.corrections
+          .map(c => ({ from: c.from.trim(), to: c.to.trim() }))
+          .filter(c => c.from),
       },
     });
     // Save cloud API key if typed -- goes to secrets.env, not settings.json
@@ -2122,6 +2134,7 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     remote?: { url?: string };
     gainDb?: Record<string, number>;
     speed?: Record<string, number>;
+    corrections?: { from?: string; to?: string }[];
   } = data.values?.tts || {};
   const savedEngine: string = savedTts.defaultEngine || 'piper';
   const savedKokoroVoice: string = savedTts.kokoro?.voice || '';
@@ -2145,6 +2158,16 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     e => (form.tts.speed?.[e] ?? 1) !== (savedSpeed[e] ?? 1),
   );
 
+  // Compare what save() would actually send (trimmed, draft rows dropped)
+  // against the saved list, so an untouched empty draft row isn't "unsaved".
+  const effectiveCorrections = (form.tts.corrections || [])
+    .map(c => ({ from: (c.from || '').trim(), to: (c.to || '').trim() }))
+    .filter(c => c.from);
+  const savedCorrections = (savedTts.corrections || [])
+    .map(c => ({ from: c.from ?? '', to: c.to ?? '' }));
+  const correctionsDirty =
+    JSON.stringify(effectiveCorrections) !== JSON.stringify(savedCorrections);
+
   const ttsDirty =
     form.tts.defaultEngine !== savedEngine
     || (form.tts.kokoro?.voice || '') !== savedKokoroVoice
@@ -2161,7 +2184,8 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
     || form.tts.cloud.voiceUseSpeakerBoost !== (savedCloud.voiceUseSpeakerBoost ?? ELEVENLABS_VS_DEFAULTS.voiceUseSpeakerBoost)
     || (form.tts.remote.url || '').trim() !== savedRemoteUrl
     || gainDirty
-    || speedDirty;
+    || speedDirty
+    || correctionsDirty;
 
   let activeDetail: ReactNode = null;
   if (savedEngine === 'piper') {
@@ -2718,6 +2742,79 @@ function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
               </div>
             );
           })()}
+        </div>
+      </Card>
+
+      <Card title="Speech corrections" sub="pronunciation fixes">
+        <div className="field">
+          <div className="field-hint">
+            Find→replace rules applied to every spoken line before the voice engine
+            reads it — for names and terms the engines mispronounce (<em>GHz</em> →
+            <em> gigahertz</em>, <em>Hozier</em> → <em>Ho-zeer</em>). Case-insensitive,
+            matches whole words and phrases; leave the spoken form empty to drop the
+            phrase entirely. Saved rules apply from the next spoken line — no restart.
+          </div>
+          {form.tts.corrections.map((c, idx) => (
+            <div key={idx} className="flex flex-wrap items-center gap-2">
+              <Input
+                value={c.from}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({
+                    ...f,
+                    tts: {
+                      ...f.tts,
+                      corrections: f.tts.corrections.map((row, i) =>
+                        i === idx ? { ...row, from: e.target.value } : row),
+                    },
+                  }))
+                }
+                placeholder="text on air (e.g. GHz)"
+                maxLength={80}
+                className="max-w-[220px]"
+              />
+              <span className="text-[11px] text-muted">reads as</span>
+              <Input
+                value={c.to}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({
+                    ...f,
+                    tts: {
+                      ...f.tts,
+                      corrections: f.tts.corrections.map((row, i) =>
+                        i === idx ? { ...row, to: e.target.value } : row),
+                    },
+                  }))
+                }
+                placeholder="spoken form (e.g. gigahertz)"
+                maxLength={160}
+                className="max-w-[260px]"
+              />
+              <Btn
+                onClick={() =>
+                  setForm(f => ({
+                    ...f,
+                    tts: { ...f.tts, corrections: f.tts.corrections.filter((_, i) => i !== idx) },
+                  }))
+                }
+              >
+                Remove
+              </Btn>
+            </div>
+          ))}
+          <div>
+            <Btn
+              // 100 mirrors the server-side TTS_CORRECTIONS_LIMIT.
+              disabled={form.tts.corrections.length >= 100}
+              onClick={() =>
+                setForm(f => ({
+                  ...f,
+                  tts: { ...f.tts, corrections: [...f.tts.corrections, { from: '', to: '' }] },
+                }))
+              }
+            >
+              Add correction
+            </Btn>
+          </div>
         </div>
       </Card>
 
