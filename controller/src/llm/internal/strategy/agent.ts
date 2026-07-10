@@ -40,6 +40,16 @@ import { resolveMaxOutputTokens } from '../../../settings.js';
 // ToolLoopAgent, so the cap is uniform across the agent's sub-paths.
 const MAX_TOKENS_AGENT = 8000;
 
+// Per-tool execution timeout (AI SDK `timeout.toolMs`) on the tool-running
+// agents. A hung discovery call — Navidrome mid-restart, a stalled web search —
+// otherwise burns the WHOLE shared deadline before the model gets a say. The
+// SDK aborts the tool and feeds the model a tool-error result instead, so the
+// loop keeps moving (no throw — deliberately invisible to the transient/failover
+// classifiers, unlike stepMs/totalMs; see withDeadline's comment in
+// core/retry.ts). Segment tools keep their own graceful 8s internal timeout;
+// this is the backstop above it.
+const TOOL_TIMEOUT_MS = 10_000;
+
 // prepareStep pins activeTools so EVERY step is a cornered single-purpose
 // request — step 0 = discovery only, step >= COMMIT_AFTER_STEPS = `done` only.
 // Both restrict activeTools at the request level, the only lever cloud Ollama
@@ -210,6 +220,7 @@ export async function djAgent({
               stopWhen: [isStepCount(maxSteps)],
               temperature,
               maxOutputTokens,
+              timeout: { toolMs: TOOL_TIMEOUT_MS },
               // Thinking off: makes deepseek reliable (5/5 vs 1/5) and is harmless
               // elsewhere — the pick is structured extraction; the DJ's free-text
               // (djText) still reasons.
@@ -273,6 +284,7 @@ export async function djAgent({
           stopWhen: [isStepCount(maxSteps), hasToolCall('done')],
           temperature,
           maxOutputTokens,
+          timeout: { toolMs: TOOL_TIMEOUT_MS },
           // useDoneTool forces tool calls every step — suppress thinking on the
           // providers that reject forced tools mid-reasoning (Anthropic/DeepSeek).
           reasoning: reasoningFor(leg.cfg, { forceNoThink: useDoneTool }),
