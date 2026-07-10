@@ -31,7 +31,7 @@ export interface DotRailProps {
 export default memo(function DotRail({ counts, active, onSelect }: DotRailProps) {
   return (
     <div
-      className="absolute top-16 right-0 bottom-20 z-20 flex w-24 flex-col items-center justify-start gap-1 pt-2 sm:top-20 sm:pt-4"
+      className="v3-dot-rail absolute top-16 right-0 bottom-20 z-20 flex w-24 flex-col items-center justify-start gap-1 pt-2 sm:top-20 sm:pt-4"
     >
       {ITEMS.map(item => {
         const isActive = active === item.k;
@@ -43,7 +43,7 @@ export default memo(function DotRail({ counts, active, onSelect }: DotRailProps)
             key={item.k}
             onClick={() => onSelect(isActive ? null : item.k)}
             className={cn(
-              'v3-focus relative flex w-full cursor-pointer flex-col items-center gap-[6px] border-0 px-2 py-[14px] font-[inherit]',
+              'v3-dot-rail-item v3-focus relative flex w-full cursor-pointer flex-col items-center gap-[6px] border-0 px-2 py-[14px] font-[inherit]',
               isActive ? 'text-bg' : 'bg-transparent text-ink',
               isRequest && !isActive && 'bg-[rgba(197,48,42,0.08)] shadow-[inset_2px_0_0_var(--accent)]',
             )}

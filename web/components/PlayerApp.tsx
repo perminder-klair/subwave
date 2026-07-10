@@ -325,7 +325,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
   return (
     <div
       ref={rootRef}
-      className={cn(contained ? 'absolute' : 'fixed', 'inset-0 overflow-hidden bg-bg text-ink')}
+      className={cn(contained ? 'absolute' : 'fixed', 'v3-player-shell inset-0 overflow-hidden bg-bg text-ink')}
     >
       <div
         ref={ambientRef}
