@@ -13,6 +13,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
+import { transcodeAudio, hasFfmpeg } from '../../../audio/audio-import.js';
 import { isElevenLabsV3, snapV3Stability } from '../core/pure.js';
 
 // Default TTS model per cloud provider. A model id is provider-specific — an
@@ -235,14 +236,18 @@ export async function speak(
   // Speech rate — the per-call speedScale (daypart energy) composes on top of
   // CLOUD_TTS_SPEED / TTS_SPEED, then clamped to the provider's range. Only
   // sent when it differs from default so default stations are unaffected and
-  // providers that ignore the field never see it. openai-compatible servers
-  // get it too (issue: the admin speed slider was silently inert for them):
-  // the common self-hosted /v1/audio/speech servers (Kokoro-FastAPI,
-  // openedai-speech, Chatterbox shims) honour `speed`, the rest ignore the
-  // extra field, and the non-unity guard keeps untouched stations sending
-  // exactly the request they always did.
+  // providers that ignore the field never see it.
+  //
+  // openai-compatible servers NEVER receive `speed` — their implementations
+  // are wildly uneven (issue #942: a Chatterbox shim behind LiteLLM produced
+  // comb-filtered "echo chamber" audio with broken mp3 frame timestamps
+  // whenever `speed` was present, and daypart energy makes it non-unity most
+  // of the day). Instead the server renders at its natural 1x and the rate is
+  // applied locally below via ffmpeg atempo — the slider/persona/daypart knobs
+  // still work (the point of #897), but the fragile server-side path is gone.
   const isCompat = c.provider === 'openai-compatible';
   const speed = clampSpeed(config.tts.cloudSpeed * (speedScale != null ? speedScale : 1), c.provider);
+  const stretchLocally = isCompat && speed !== 1.0;
 
   // ElevenLabs voice_settings — expressive knobs the operator tunes in the
   // Cloud TTS section of admin → Settings (issue #696). Only spread when the
@@ -274,7 +279,7 @@ export async function speak(
     model: speechModel(c),
     text,
     voice: c.voice || undefined,
-    ...(speed !== 1.0 ? { speed } : {}),
+    ...(speed !== 1.0 && !isCompat ? { speed } : {}),
     // Persona character (soul) + language → provider-native delivery hint
     // (issues #579 / #558).
     ...deliveryHint({ language, soul }, c.provider, c.model),
@@ -287,10 +292,33 @@ export async function speak(
     ...(elevenlabsOpts ? { providerOptions: elevenlabsOpts } : {}),
   });
 
+  const audio = Buffer.from(result.audio.uint8Array);
+
+  // Local speed for openai-compatible: transcode to WAV with an atempo chain
+  // (pitch-preserving, and WAV output means applyEdgeFades works on the result
+  // too). Best-effort — if ffmpeg is missing or chokes, air the 1x render
+  // rather than throwing into the Piper fallback (a rate miss is inaudible
+  // next to a voice change). The fallback writes the server's original bytes
+  // under the .wav name; Liquidsoap decodes by content, not extension.
+  if (stretchLocally) {
+    const wavPath = outPath
+      || path.join(config.piper.outDir, `${crypto.randomBytes(6).toString('hex')}.wav`);
+    try {
+      if (!(await hasFfmpeg())) throw new Error('ffmpeg unavailable');
+      await transcodeAudio(audio, { outPath: wavPath, format: 'wav', atempo: speed });
+      return wavPath;
+    } catch (err: any) {
+      console.warn(`[cloud-tts] local speed ${speed}x skipped (${err?.message || err}); airing 1x render`);
+      await mkdir(path.dirname(wavPath), { recursive: true });
+      await writeFile(wavPath, audio);
+      return wavPath;
+    }
+  }
+
   const fmt = result.audio.format || 'mp3';
   const finalPath = outPath
     || path.join(config.piper.outDir, `${crypto.randomBytes(6).toString('hex')}.${fmt}`);
   await mkdir(path.dirname(finalPath), { recursive: true });
-  await writeFile(finalPath, Buffer.from(result.audio.uint8Array));
+  await writeFile(finalPath, audio);
   return finalPath;
 }

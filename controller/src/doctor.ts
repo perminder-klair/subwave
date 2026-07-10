@@ -11,6 +11,7 @@
 // here adds new probing infrastructure.
 
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import { z } from 'zod';
 import { config, STATE_DIR } from './config.js';
 import * as settings from './settings.js';
@@ -91,6 +92,34 @@ export interface DoctorReview {
   priorities?: ReviewPriority[];
 }
 
+// The performance-affecting slice of settings.get() the doctor inspects. All
+// optional — settings.get() is untyped and any field may be absent — so every
+// read is a safe `?.` access. Widened over time as new checks reference more.
+interface StationSettings {
+  llm?: {
+    pickerAgent?: boolean;
+    reasoning?: boolean;
+    agentTimeoutMs?: number;
+    provider?: string;
+    numCtx?: number;
+    maxOutputTokens?: number;
+    requestWebResolve?: boolean;
+    toolChoice?: string;
+    exemptRequests?: boolean;
+    pauseWhenEmpty?: boolean;
+    noRepeatWindow?: number;
+  };
+  tts?: { defaultEngine?: string; byKind?: Record<string, string | undefined> };
+  search?: { provider?: string };
+  audio?: { embeddings?: boolean; vocalActivity?: boolean };
+  stream?: { opusEnabled?: boolean; flacEnabled?: boolean; aacEnabled?: boolean };
+  archive?: { enabled?: boolean };
+  crossfadeDuration?: number;
+  jingleRatio?: number;
+  maxTrackSeconds?: number;
+  loudness?: { targetLufs?: number };
+}
+
 // ---------------------------------------------------------------------------
 // runDoctor — assemble all sections.
 // ---------------------------------------------------------------------------
@@ -99,7 +128,7 @@ export interface DoctorReview {
 // degrades to a 'skip'/'fail' finding (via `safe`), so one failing subsystem
 // never blanks the whole report. Kept as data so both the batch runner and the
 // streaming generator drive the same list.
-const SECTION_CHECKS: Array<{ name: string; run: (s: any) => Promise<Finding[]> }> = [
+const SECTION_CHECKS: Array<{ name: string; run: (s: StationSettings | null) => Promise<Finding[]> }> = [
   { name: 'LLM', run: (s) => checkLlm(s) },
   { name: 'Navidrome & library', run: () => checkNavidrome() },
   { name: 'Broadcast', run: () => checkBroadcast() },
@@ -112,7 +141,7 @@ const SECTION_CHECKS: Array<{ name: string; run: (s: any) => Promise<Finding[]> 
   { name: 'Setup', run: () => checkSetup() },
 ];
 
-function loadSettingsSafe(): any {
+function loadSettingsSafe(): StationSettings | null {
   try { return settings.get(); } catch { return null; }
 }
 
@@ -232,7 +261,7 @@ export async function lastRun(): Promise<DoctorCache> {
 async function safe(fn: () => Promise<Finding[]>): Promise<Finding[]> {
   try {
     return await fn();
-  } catch (err: any) {
+  } catch (err) {
     return [{ label: 'check failed', status: 'fail', detail: err?.message || String(err) }];
   }
 }
@@ -241,7 +270,7 @@ async function safe(fn: () => Promise<Finding[]>): Promise<Finding[]> {
 // Sections
 // ---------------------------------------------------------------------------
 
-async function checkLlm(s: any): Promise<Finding[]> {
+async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
   const out: Finding[] = [];
 
   // Primary leg. probeLegReachable returns true for cloud providers (no cheap
@@ -257,7 +286,7 @@ async function checkLlm(s: any): Promise<Finding[]> {
         ? undefined
         : 'Without the LLM the DJ falls back to a stateless picker and skips spoken links. Check the provider, model and host in Settings → LLM.',
     });
-  } catch (err: any) {
+  } catch (err) {
     out.push({
       label: 'provider',
       status: 'fail',
@@ -284,7 +313,7 @@ async function checkLlm(s: any): Promise<Finding[]> {
   // Recent error rate from the in-memory ring.
   const recent = recentCalls.slice(0, 20);
   if (recent.length) {
-    const fails = recent.filter((c: any) => c && c.ok === false).length;
+    const fails = recent.filter((c) => c && c.ok === false).length;
     const rate = Math.round((fails / recent.length) * 100);
     out.push({
       label: 'recent calls',
@@ -308,7 +337,7 @@ async function checkLlm(s: any): Promise<Finding[]> {
   // breaks the AI review that would otherwise explain it to the operator.
   const schemaFails = recentCalls.filter(isSchemaFailure);
   if (schemaFails.length) {
-    const kinds = [...new Set(schemaFails.map((c: any) => c.kind).filter(Boolean))];
+    const kinds = [...new Set(schemaFails.map((c) => c.kind).filter(Boolean))];
     out.push({
       label: 'structured output',
       status: schemaFails.length >= 3 ? 'fail' : 'warn',
@@ -388,8 +417,8 @@ async function checkNavidrome(): Promise<Finding[]> {
   // Recent call error rate across all endpoints.
   try {
     const snap = subsonicLog.snapshot();
-    const calls = snap.endpoints.reduce((n: number, e: any) => n + e.calls, 0);
-    const errs = snap.endpoints.reduce((n: number, e: any) => n + e.errors, 0);
+    const calls = snap.endpoints.reduce((n: number, e) => n + e.calls, 0);
+    const errs = snap.endpoints.reduce((n: number, e) => n + e.errors, 0);
     if (calls > 0) {
       const rate = Math.round((errs / calls) * 100);
       out.push({
@@ -420,7 +449,7 @@ async function checkNavidrome(): Promise<Finding[]> {
           : 'The picker matches tracks to the time-of-day / weather mood via these tags. Tag the library so it has something to work with.',
       fix: st.total === 0 ? { id: 'tag-library', label: 'Tag library' } : undefined,
     });
-  } catch (err: any) {
+  } catch (err) {
     out.push({ label: 'mood-tag coverage', status: 'skip', detail: err?.message || 'library unavailable' });
   }
 
@@ -460,7 +489,7 @@ async function checkBroadcast(): Promise<Finding[]> {
         : 'Liquidsoap may have dropped its Icecast connection. A mixer restart reconnects it.',
       fix: st.online ? undefined : { id: 'restart-mixer', label: 'Restart mixer' },
     });
-  } catch (err: any) {
+  } catch (err) {
     out.push({ label: 'Icecast stream', status: 'skip', detail: err?.message || 'status unavailable' });
   }
 
@@ -473,7 +502,7 @@ async function checkBroadcast(): Promise<Finding[]> {
       detail: on ? 'telnet reachable · stream on' : 'telnet reachable · stream off',
       fix: on ? undefined : { id: 'restart-mixer', label: 'Restart mixer' },
     });
-  } catch (err: any) {
+  } catch (err) {
     out.push({
       label: 'mixer (Liquidsoap)',
       status: 'fail',
@@ -486,10 +515,10 @@ async function checkBroadcast(): Promise<Finding[]> {
   return out;
 }
 
-async function checkTts(s: any): Promise<Finding[]> {
+async function checkTts(s: StationSettings | null): Promise<Finding[]> {
   const out: Finding[] = [];
 
-  let avail: any = {};
+  let avail: Record<string, unknown> = {};
   try { avail = tts.availableEngines(); } catch { avail = {}; }
 
   // Which engines the operator wants vs. which are actually available. A
@@ -518,21 +547,20 @@ async function checkTts(s: any): Promise<Finding[]> {
 
   // Is the current persona's voice silently routing through a fallback?
   try {
-    const routing: any = tts.describeRouting();
-    const fellBack = routing?.fellBack || routing?.fallback || routing?.requested !== routing?.effective;
+    const { spoken } = tts.describeRouting();
     out.push({
       label: 'active routing',
-      status: fellBack ? 'warn' : 'ok',
-      detail: fellBack
-        ? `requested ${routing?.requested ?? '?'} → using ${routing?.effective ?? '?'}`
-        : `${routing?.effective ?? routing?.engine ?? 'piper'}`,
+      status: spoken.fellBack ? 'warn' : 'ok',
+      detail: spoken.fellBack
+        ? `requested ${spoken.requested ?? '?'} → using ${spoken.engine ?? '?'}`
+        : `${spoken.engine ?? 'piper'}`,
     });
   } catch { /* routing snapshot is best-effort */ }
 
   return out;
 }
 
-async function checkCapabilities(s: any): Promise<Finding[]> {
+async function checkCapabilities(s: StationSettings | null): Promise<Finding[]> {
   const out: Finding[] = [];
 
   // Web search — backs the DJ's artist-news segments. DuckDuckGo is keyless;
@@ -560,7 +588,7 @@ async function checkCapabilities(s: any): Promise<Finding[]> {
       searchWeb('SUB-WAVE radio diagnostic ping').then(() => { okLive = true; }),
       new Promise((_, rej) => setTimeout(() => rej(new Error('timed out')), 5000)),
     ]);
-  } catch (err: any) {
+  } catch (err) {
     reason = err?.message || 'unreachable';
   }
   out.push({
@@ -606,7 +634,7 @@ async function checkResources(): Promise<Finding[]> {
           : `${sys.containers.length} running`,
       });
     }
-  } catch (err: any) {
+  } catch (err) {
     out.push({ label: 'host resources', status: 'skip', detail: err?.message || 'unavailable' });
   }
   return out;
@@ -617,9 +645,9 @@ async function checkResources(): Promise<Finding[]> {
 // OTHER settings, the live LLM telemetry, or the host resources — the stuff an
 // operator can't eyeball. Findings are advisory (no one-click fix): the remedy
 // is a settings change, which DJ Doc's review then narrates the trade-off for.
-async function checkTuning(s: any): Promise<Finding[]> {
+async function checkTuning(s: StationSettings | null): Promise<Finding[]> {
   const out: Finding[] = [];
-  const llm = s?.llm || {};
+  const llm: NonNullable<StationSettings['llm']> = s?.llm || {};
 
   // --- Daily token budget: cliff detection + burn-rate projection ---
   // Uses the live tally (broadcast/dj-budget), not just the configured number,
@@ -670,8 +698,8 @@ async function checkTuning(s: any): Promise<Finding[]> {
   // agentic picker is silently timing out into the pool on most tracks.
   if (llm.pickerAgent !== false) {
     const lat = recentCalls
-      .filter((c: any) => c && c.ok !== false && Number.isFinite(c.ms) && c.ms > 0)
-      .map((c: any) => c.ms as number)
+      .filter((c) => c && c.ok !== false && Number.isFinite(c.ms) && c.ms > 0)
+      .map((c) => c.ms as number)
       .sort((a, b) => a - b);
     const deadlineMs = Number(llm.agentTimeoutMs);
     if (lat.length >= 5 && Number.isFinite(deadlineMs) && deadlineMs > 0) {
@@ -752,12 +780,20 @@ async function checkTuning(s: any): Promise<Finding[]> {
     const wantVocal = !!s?.audio?.vocalActivity;
     if (wantEmb || wantVocal) {
       try { await analyzer.refreshCapabilities(); } catch { /* best-effort probe */ }
+      // The upgrade path depends on which backend is running: 'sidecar' is the
+      // split stack's analyzer service; 'local' is the in-process venv — the
+      // AIO image (or a dev ANALYZE_PYTHON venv). Pointing an AIO operator at
+      // the analyzer image replaces their whole station with a bare analyzer
+      // micro-service (issue #966), so the hint has to name the right image.
+      const upgradeHint = analyzer.backendLabel() === 'local'
+        ? 'On the all-in-one image, switch the container to ghcr.io/perminder-klair/subwave-aio-heavy (NOT subwave-analyzer-heavy — that’s the bare analyzer service, not a station image); on a dev venv, install the heavy Python deps.'
+        : 'With docker compose, set ANALYZER_HEAVY=1 in .env and re-pull; without compose (Unraid, Portainer, plain docker) switch the analyzer container’s image to ghcr.io/perminder-klair/subwave-analyzer-heavy.';
       if (wantEmb && analyzer.audioEmbeddingAvailable() === false) {
         out.push({
           label: 'audio embeddings',
           status: 'warn',
           detail: 'enabled, but the analyzer can’t produce them',
-          hint: 'The “sounds-like” audio embeddings need the heavy analyzer (CLAP). You’re on the lean image, so this setting silently does nothing. Set ANALYZER_HEAVY=1 in .env and re-pull/rebuild the analyzer, or turn the setting off.',
+          hint: `The “sounds-like” audio embeddings need the heavy analyzer (CLAP). You’re on the lean build, so this setting silently does nothing. ${upgradeHint} Or turn the setting off.`,
         });
       }
       if (wantVocal && analyzer.vocalActivityAvailable() === false) {
@@ -765,7 +801,7 @@ async function checkTuning(s: any): Promise<Finding[]> {
           label: 'vocal activity',
           status: 'warn',
           detail: 'enabled, but the analyzer can’t produce it',
-          hint: 'Vocal-range / talk-timing analysis needs the heavy analyzer (Demucs). The lean image can’t, so this setting no-ops. Set ANALYZER_HEAVY=1 in .env and rebuild the analyzer, or turn the setting off.',
+          hint: `Vocal-range / talk-timing analysis needs the heavy analyzer (Demucs). The lean build can’t, so this setting no-ops. ${upgradeHint} Or turn the setting off.`,
         });
       }
     }
@@ -775,7 +811,7 @@ async function checkTuning(s: any): Promise<Finding[]> {
   // Every extra mount and the hourly archive is a continuous encoder — real CPU.
   // Flag it only when several are on AND the host is already under pressure.
   try {
-    const st = s?.stream || {};
+    const st: NonNullable<StationSettings['stream']> = s?.stream || {};
     const extra: string[] = [];
     if (st.opusEnabled) extra.push('opus');
     if (st.flacEnabled) extra.push('flac');
@@ -876,7 +912,7 @@ async function checkSetup(): Promise<Finding[]> {
       detail: st.needsSetup ? 'incomplete — Navidrome not configured' : `complete (${st.navidromeSource})`,
       hint: st.needsSetup ? 'Finish the wizard at /onboarding (or run `subwave setup`).' : undefined,
     });
-  } catch (err: any) {
+  } catch (err) {
     out.push({ label: 'configuration', status: 'skip', detail: err?.message || 'unknown' });
   }
 
@@ -884,7 +920,7 @@ async function checkSetup(): Promise<Finding[]> {
   try {
     settings.get();
     out.push({ label: 'settings', status: 'ok', detail: 'loaded' });
-  } catch (err: any) {
+  } catch (err) {
     out.push({ label: 'settings', status: 'fail', detail: err?.message || 'not loaded' });
   }
 
@@ -959,7 +995,7 @@ export async function reviewReport(report: DoctorReport): Promise<DoctorReview> 
     if (!reachable) {
       return { available: false, reason: `LLM host unreachable (${providerName()} · ${activeModelLabel()})` };
     }
-  } catch (err: any) {
+  } catch (err) {
     return { available: false, reason: err?.message || 'LLM not configured' };
   }
 
@@ -989,7 +1025,7 @@ export async function reviewReport(report: DoctorReport): Promise<DoctorReview> 
     const result: DoctorReview = { available: true, ...review };
     rememberReview(result);
     return result;
-  } catch (err: any) {
+  } catch (err) {
     // A schema/shape mismatch here is itself a diagnosis: the review model can't
     // do structured output. Say so plainly instead of dumping the Zod error, and
     // point at the deterministic finding that survives a broken model.
@@ -1003,13 +1039,13 @@ export async function reviewReport(report: DoctorReport): Promise<DoctorReview> 
 // A failed LLM call whose error is a schema/shape mismatch (Zod) rather than a
 // host being unreachable — the fingerprint of a model that can't reliably produce
 // structured output. Matched on message text so it works across providers.
-function isSchemaFailure(c: any): boolean {
+function isSchemaFailure(c: { ok?: unknown; error?: unknown } | null | undefined): boolean {
   return !!c && c.ok === false && isSchemaErrorMessage(c.error);
 }
 
-function isSchemaErrorMessage(err: any): boolean {
+function isSchemaErrorMessage(err: unknown): boolean {
   if (!err) return false;
-  const s = typeof err === 'string' ? err : err.message || JSON.stringify(err);
+  const s = typeof err === 'string' ? err : (err as { message?: string }).message || JSON.stringify(err);
   return /invalid_type|invalid_value|invalid_enum|unrecognized_keys|Invalid (option|input)|received undefined|No object generated|did not match (the )?schema|Type validation failed/i.test(s);
 }
 
@@ -1028,10 +1064,10 @@ function classifyModel(label: string): { code: boolean; sizeB: number | null } {
 // can reason about the actual knob values + trade-offs (not just the findings
 // that fired). Pairs with the "Tuning" section and the knowledge base.
 function renderSettingsSnapshot(): string {
-  let s: any = null;
+  let s: StationSettings | null = null;
   try { s = settings.get(); } catch { return ''; }
-  const llm = s?.llm || {};
-  const st = s?.stream || {};
+  const llm: NonNullable<StationSettings['llm']> = s?.llm || {};
+  const st: NonNullable<StationSettings['stream']> = s?.stream || {};
   const mounts = ['mp3'];
   if (st.opusEnabled) mounts.push('opus');
   if (st.flacEnabled) mounts.push('flac');
@@ -1046,7 +1082,13 @@ function renderSettingsSnapshot(): string {
   } catch { /* budget best-effort */ }
 
   let analyzerLabel = 'unknown';
-  try { analyzerLabel = analyzer.backendLabel(); } catch { /* best-effort */ }
+  try {
+    analyzerLabel = analyzer.backendLabel();
+    // Append the definitive CLAP capability so the AI review reasons from fact,
+    // not from "local probably means lean" (issue #966's false warning).
+    const clap = analyzer.audioEmbeddingAvailable();
+    analyzerLabel += clap === null ? ' (CLAP unknown)' : clap ? ' (heavy: CLAP yes)' : ' (lean: no CLAP)';
+  } catch { /* best-effort */ }
 
   return [
     '## Current settings (tune these against the findings + host resources)',
@@ -1110,7 +1152,7 @@ async function dirSize(path: string, cap = 5000): Promise<{ bytes: number; files
   let files = 0;
   async function walk(dir: string): Promise<void> {
     if (files >= cap) return;
-    let entries: any[];
+    let entries: Dirent[];
     try {
       entries = await readdir(dir, { withFileTypes: true });
     } catch {

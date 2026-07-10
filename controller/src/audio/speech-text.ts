@@ -14,6 +14,43 @@
 //
 // No imports — pure module, unit-pinned by scripts/speech-text.test.ts.
 
+// Operator-defined speech correction: replace `from` with `to` wherever it
+// appears in booth-bound text (settings.tts.corrections, admin → Settings →
+// TTS voice). The operator-extensible sibling of the built-in SUB/WAVE →
+// "Subwave" rule below, for names and terms the engines mispronounce
+// ("Hozier" → "Ho-zeer", "GHz" → "gigahertz"). Passed in as an argument —
+// never read from settings here — so this module stays pure.
+export interface SpeechCorrection {
+  from: string;
+  to: string;
+}
+
+// Matching is case-insensitive and word-bounded — but a \b anchor only where
+// the rule's own edge is a word character, mirroring the SUB/WAVE rule's
+// anchors: a rule for "live" must not fire inside "delivery", while a rule
+// whose edge is a symbol ("Ke$ha") has no word boundary there to anchor on.
+const REGEX_SPECIALS_RE = /[.*+?^${}()|[\]\\]/g;
+
+function correctionPattern(from: string): RegExp {
+  const escaped = from.replace(REGEX_SPECIALS_RE, '\\$&');
+  const lead = /^\w/.test(from) ? '\\b' : '';
+  const trail = /\w$/.test(from) ? '\\b' : '';
+  return new RegExp(`${lead}${escaped}${trail}`, 'gi');
+}
+
+function applyCorrections(text: string, corrections: readonly SpeechCorrection[]): string {
+  let t = text;
+  for (const c of corrections) {
+    const from = typeof c?.from === 'string' ? c.from.trim() : '';
+    if (!from) continue;
+    const to = typeof c?.to === 'string' ? c.to : '';
+    // Function replacement so a "$" in the spoken form is literal text, never
+    // a capture-group reference.
+    t = t.replace(correctionPattern(from), () => to);
+  }
+  return t;
+}
+
 // Magnitude words that ride between a $ amount and the spoken "dollars":
 // "$5 million" must become "5 million dollars", not "5 dollars million".
 // The \b keeps "millionaire" from prefix-matching ("5 million dollarsaire").
@@ -21,7 +58,10 @@ const DOLLAR_MAGNITUDE = '(?:\\s+(?:thousand|million|billion|trillion)\\b)?';
 // The $ amount itself: digits with their own formatting ("1,200", "12.50").
 const DOLLAR_AMOUNT = '\\d[\\d,]*(?:\\.\\d+)?';
 
-export function normalizeForSpeech(text: string): string {
+export function normalizeForSpeech(
+  text: string,
+  corrections?: readonly SpeechCorrection[],
+): string {
   if (!text) return text;
   let t = text;
 
@@ -49,6 +89,12 @@ export function normalizeForSpeech(text: string): string {
   t = t.replace(/&(?:#0*39|apos|#0*8217|rsquo);/gi, "'");
   t = t.replace(/&(?:#0*34|quot|#0*8220|ldquo|#0*8221|rdquo);/gi, '"');
   t = t.replace(/&nbsp;/gi, ' ');
+
+  // --- operator corrections (settings.tts.corrections) ---
+  // After markdown/entity cleanup so a rule matches the readable text the
+  // operator sees ("**Hozier**" still matches a "Hozier" rule), and BEFORE
+  // the symbol rules so a correction can pre-empt a built-in expansion.
+  if (corrections?.length) t = applyCorrections(t, corrections);
 
   // --- units and symbols (all keyed on an adjacent digit — conservative) ---
   t = t.replace(/(\d)\s*°\s*F\b/g, '$1 degrees Fahrenheit');

@@ -126,10 +126,22 @@ init_secrets() {
 	# radio.liq reads ICECAST_HOST (default "icecast").
 	export ICECAST_HOST=localhost
 
+	# Concurrent-listener ceiling (<limits><clients>). Empty/unset → the stock 100.
+	# A non-numeric value would render invalid XML and fail icecast at boot,
+	# so fall back to the default with a warning instead.
+	ICECAST_MAX_CLIENTS="${ICECAST_MAX_CLIENTS:-100}"
+	case "$ICECAST_MAX_CLIENTS" in
+		*[!0-9]*|'')
+			log "ICECAST_MAX_CLIENTS='$ICECAST_MAX_CLIENTS' is not a number — using 100"
+			ICECAST_MAX_CLIENTS=100
+			;;
+	esac
+
 	sed \
 		-e "s|\${ICECAST_SOURCE_PASSWORD}|$ICECAST_SOURCE_PASSWORD|g" \
 		-e "s|\${ICECAST_ADMIN_PASSWORD}|$ICECAST_ADMIN_PASSWORD|g" \
 		-e "s|\${ICECAST_RELAY_PASSWORD}|$ICECAST_RELAY_PASSWORD|g" \
+		-e "s|\${ICECAST_MAX_CLIENTS}|$ICECAST_MAX_CLIENTS|g" \
 		"$TEMPLATE" > "$RENDERED"
 	chown icecast2 "$RENDERED" 2>/dev/null || true
 }

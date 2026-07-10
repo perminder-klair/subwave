@@ -2,7 +2,7 @@
 // segment-tools.js). There is no standalone "web-search skill" object — the
 // segment-director agent (skills/_agent.js) decides when artist news airs.
 //
-// Two backends, chosen via settings.search.provider:
+// Four backends, chosen via settings.search.provider:
 //   - duckduckgo (default) — DuckDuckGo's Instant Answer API. Free, no key,
 //     officially documented. Returns useful results only for entity / definition
 //     queries; for most artist queries it returns nothing, which the segment
@@ -10,17 +10,23 @@
 //   - tavily — paid API for richer web results. Reads its key from
 //     settings.search.apiKey, falling back to config.search.apiKey
 //     (SEARCH_API_KEY env var) for back-compat with earlier installs.
+//   - brave — Brave Search API. Real web results for artist-name queries
+//     (issue #623). Same key resolution as Tavily; metered billing with $5/mo
+//     of free credits (~1,000 queries), so the 30-min memo matters here too.
+//   - searxng — self-hosted meta-search, keyless, needs settings.search.baseUrl.
 //
-// Both backends return the same shape — { answer, results: [{ title, content }] }
+// All backends return the same shape — { answer, results: [{ title, content }] }
 // — so callers don't have to branch. searchWeb() wraps every call in a 30-min
 // memo to keep the homelab polite under DDG's unofficial fair-use limits and
-// to avoid burning Tavily credits on duplicate ticks.
+// to avoid burning Tavily/Brave credits on duplicate ticks.
 
 import { config } from '../config.js';
 import * as settings from '../settings.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
 const TAVILY_ENDPOINT = 'https://api.tavily.com/search';
 const DDG_ENDPOINT = 'https://api.duckduckgo.com/';
+const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
 
 type SearchResult = { title: string; content: string };
 type SearchResponse = { answer: string; results: SearchResult[] };
@@ -138,19 +144,12 @@ export async function searxngSearch(
   url.searchParams.set('format', 'json');
   if (recency) url.searchParams.set('time_range', recency);
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      headers: {
-        'User-Agent': 'SUB-WAVE radio controller (https://github.com/perminder-klair/subwave)',
-      },
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
+  const res = await fetchWithTimeout(url, {
+    headers: {
+      'User-Agent': 'SUB-WAVE radio controller (https://github.com/perminder-klair/subwave)',
+    },
+    timeoutMs: 30_000,
+  });
   if (!res.ok) throw new Error(`SearXNG HTTP ${res.status}`);
   const data = await res.json();
   return parseSearxngResponse(data);
@@ -188,6 +187,95 @@ export function parseSearxngResponse(data: unknown): SearchResponse {
   return { answer, results };
 }
 
+// Brave Search API backend (issue #623). Keyed like Tavily — the key lives in
+// settings.search.apiKey with SEARCH_API_KEY as the env fallback. Threads
+// optional recency through Brave's `freshness` param (pd/pw/pm), and asks for
+// undecorated snippets (text_decorations=0) so descriptions arrive as plain
+// text instead of <strong>-highlighted HTML.
+export async function braveSearch(
+  query: string,
+  recency?: 'day' | 'week' | 'month',
+): Promise<SearchResponse> {
+  const apiKey = settings.get().search?.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey;
+  if (!apiKey) throw new Error('Brave Search API key not configured');
+
+  const url = new URL(BRAVE_ENDPOINT);
+  url.searchParams.set('q', query);
+  url.searchParams.set('count', '10');
+  url.searchParams.set('text_decorations', '0');
+  if (recency) {
+    url.searchParams.set('freshness', { day: 'pd', week: 'pw', month: 'pm' }[recency]);
+  }
+
+  const res = await fetchWithTimeout(url, {
+    headers: {
+      Accept: 'application/json',
+      'X-Subscription-Token': apiKey,
+    },
+    timeoutMs: 30_000,
+  });
+  if (!res.ok) throw new Error(`Brave Search HTTP ${res.status}`);
+  const data = await res.json();
+  return parseBraveResponse(data);
+}
+
+// Strips residual markup from Brave snippets. text_decorations=0 removes the
+// highlighting, but descriptions can still carry entities (&#x27; etc.) and
+// the occasional stray tag depending on the source page.
+function braveText(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  return raw
+    .replace(/<[^>]+>/g, '')
+    .replace(/&#(x?)([0-9a-fA-F]+);/g, (whole, x: string, digits: string) => {
+      const code = parseInt(digits, x ? 16 : 10);
+      return Number.isFinite(code) && code > 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : whole;
+    })
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .trim();
+}
+
+// Pure parser for Brave's web-search JSON. Maps the Brave shape (web.results[],
+// news.results[], infobox) onto SubWave's SearchResponse contract. News results
+// lead — the artist-news callsite is the whole point of this provider — then
+// web results fill the remainder. Exported separately from braveSearch() so
+// fixture-based tests can pin the mapping without mocking fetch. Tolerant of
+// malformed input — any shape mismatch yields { answer: '', results: [] }.
+export function parseBraveResponse(data: unknown): SearchResponse {
+  if (!data || typeof data !== 'object') return { answer: '', results: [] };
+  const d = data as Record<string, unknown>;
+  const sub = (v: unknown, key: string): unknown =>
+    v && typeof v === 'object' ? (v as Record<string, unknown>)[key] : undefined;
+
+  // answer slot: the infobox's long description when Brave recognises the
+  // entity. `infobox.results` has been observed as both an object and a
+  // one-element array — accept either.
+  const ibRaw = sub(d.infobox, 'results');
+  const ib = Array.isArray(ibRaw) ? ibRaw[0] : ibRaw;
+  const answer = braveText(sub(ib, 'long_desc') || sub(ib, 'description'));
+
+  const results: SearchResult[] = [];
+  const push = (r: unknown) => {
+    if (!r || typeof r !== 'object' || results.length >= 10) return;
+    const rec = r as Record<string, unknown>;
+    const title = braveText(rec.title);
+    const content = braveText(rec.description).slice(0, 300);
+    if (!title || !content) return;
+    results.push({ title, content });
+  };
+  const newsResults = sub(d.news, 'results');
+  const webResults = sub(d.web, 'results');
+  for (const r of Array.isArray(newsResults) ? newsResults : []) push(r);
+  for (const r of Array.isArray(webResults) ? webResults : []) push(r);
+
+  return { answer, results };
+}
+
 // Provider dispatcher — reads the active provider from live settings on every
 // call so admin-UI changes take effect immediately. Wraps the backend in a
 // 30-min memo. Cache key includes recency so two callsites with different
@@ -202,19 +290,20 @@ export async function searchWeb(
   return memo(key, CACHE_TTL_MS, () => {
     if (provider === 'searxng') return searxngSearch(query, recency);
     if (provider === 'tavily') return tavilySearch(query);
+    if (provider === 'brave') return braveSearch(query, recency);
     return duckduckgoSearch(query);
   });
 }
 
 // True when the active search provider is usable right now.
-//   duckduckgo: always ready (no key, no URL)
-//   tavily:     needs settings.search.apiKey, or SEARCH_API_KEY env
-//   searxng:    needs settings.search.baseUrl (no env fallback by design)
+//   duckduckgo:   always ready (no key, no URL)
+//   tavily/brave: needs settings.search.apiKey, or SEARCH_API_KEY env
+//   searxng:      needs settings.search.baseUrl (no env fallback by design)
 export function searchReady(): boolean {
   const s = settings.get().search;
   const provider = s?.provider || 'duckduckgo';
   if (provider === 'duckduckgo') return true;
   if (provider === 'searxng') return !!(s?.baseUrl && s.baseUrl.trim());
-  // tavily (and any future keyed provider)
+  // tavily / brave (and any future keyed provider)
   return !!(s?.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey);
 }

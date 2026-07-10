@@ -10,6 +10,68 @@
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
+// Shared duck-typed shapes
+// ---------------------------------------------------------------------------
+//
+// These helpers inspect dynamic runtime values — provider error objects, the
+// AI SDK's usage block, tool-call trails — whose fields vary by provider and
+// aren't cleanly captured by a single SDK type. `ErrorLike` is the union of an
+// Error, an AI SDK APICallError, and the AI_RetryError wrapper around them:
+// every field is optional and read defensively (narrowed before use).
+interface ErrorLike {
+  message?: unknown;
+  statusCode?: unknown;
+  status?: unknown;
+  code?: unknown;
+  name?: unknown;
+  cause?: ErrorLike;
+  responseHeaders?: Record<string, string | undefined>;
+  // AI_RetryError wrapper — the real APICallError lives here (see unwrapSdkError).
+  lastError?: ErrorLike;
+  errors?: ErrorLike[];
+  // Diagnostics fields truncationError attaches / failureDiagnostics reads.
+  text?: unknown;
+  finishReason?: unknown;
+  usage?: unknown;
+  steps?: unknown;
+  response?: { steps?: unknown; messages?: unknown };
+}
+
+// The AI SDK usage block, normalised by usageOf. Providers populate different
+// subsets (and a local Ollama box often omits them entirely), so every field
+// is optional.
+export interface TokenUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+}
+
+// A single step's tool call / result, as read off an AI SDK agent result. The
+// provider-varying `input`/`args` and `output`/`result` aliases stay `unknown`.
+export interface ToolCallLike {
+  toolName?: string;
+  input?: unknown;
+  args?: unknown;
+}
+export interface ToolResultLike {
+  output?: unknown;
+  result?: unknown;
+}
+export interface StepLike {
+  toolCalls?: ToolCallLike[];
+  toolResults?: ToolResultLike[];
+}
+
+// The flattened discovery-tool entry surfaced to /debug.
+export interface ToolCallSummary {
+  name: string | undefined;
+  args: unknown;
+  result: unknown;
+}
+
+// ---------------------------------------------------------------------------
 // Thinking-block stripping
 // ---------------------------------------------------------------------------
 //
@@ -44,7 +106,7 @@ const FINAL_CHANNEL_RE = /<\|channel\|?>\s*final\s*<\|message\|?>/gi;
 const ANY_CHANNEL_OPEN_RE = /<\|channel\|?>/i;
 const HARMONY_TOKENS_RE = /<\|(?:start|end|return|message|channel)\|?>/gi;
 
-export function stripThinking(s: any): any {
+export function stripThinking(s: string): string {
   if (!s || typeof s !== 'string') return s;
   // 1. Well-formed <think>…</think> blocks.
   let t = s.replace(THINK_TAG_RE, '');
@@ -101,9 +163,14 @@ export function stripThinking(s: any): any {
 // normally. The message deliberately carries no digits so no transient/
 // failover classifier mistakes it for a network status (pinned in
 // llm-pure.test.ts). Pure so the guard itself is unit-testable.
-export function truncationError(result: { finishReason?: string; text?: string; usage?: any }): any | null {
+export interface TruncationError extends Error {
+  text?: string;
+  finishReason: 'length';
+  usage?: unknown;
+}
+export function truncationError(result: { finishReason?: string; text?: string; usage?: unknown }): TruncationError | null {
   if (result?.finishReason !== 'length') return null;
-  const err: any = new Error('reply truncated at the output-token cap — refusing to air a runaway generation');
+  const err = new Error('reply truncated at the output-token cap — refusing to air a runaway generation') as TruncationError;
   err.text = result.text;
   err.finishReason = 'length';
   err.usage = result.usage;
@@ -113,7 +180,7 @@ export function truncationError(result: { finishReason?: string; text?: string; 
 // Pull a JSON object out of a free-text reply: drop ```json fences and any
 // prose around it, then take the outermost { … }. Used by djObject's recovery
 // path when native structured output fails to parse.
-export function extractJson(s: any): string {
+export function extractJson(s: string): string {
   if (!s) throw new Error('empty model response');
   const t = s.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
   const start = t.indexOf('{');
@@ -127,8 +194,10 @@ export function extractJson(s: any): string {
 // entirely — token stats then read as 0 for that call). In AI SDK 7 `usage`
 // already sums across all steps (`totalUsage` is its deprecated alias); the
 // alias stays as a fallback so pre-v7-shaped fixtures/results keep working.
-export function usageOf(result: any): { input: number; output: number; total: number } {
-  const u = result?.usage || result?.totalUsage || {};
+export function usageOf(
+  result: { totalUsage?: TokenUsage; usage?: TokenUsage } | null | undefined,
+): { input: number; output: number; total: number } {
+  const u: TokenUsage = result?.usage || result?.totalUsage || {};
   const input = u.inputTokens ?? u.promptTokens ?? 0;
   const output = u.outputTokens ?? u.completionTokens ?? 0;
   const total = u.totalTokens ?? (input + output);
@@ -255,7 +324,9 @@ export function budgetMode(
 // call that the SDK already retried would classify as nothing at all and
 // never fail over (PR #751 review). Duck-typed on the wrapper's fields, not
 // RetryError.isInstance, so this file keeps its no-`ai`-import purity.
-export function unwrapSdkError(err: any): any {
+export function unwrapSdkError(err: ErrorLike): ErrorLike;
+export function unwrapSdkError(err: ErrorLike | null | undefined): ErrorLike | null | undefined;
+export function unwrapSdkError(err: ErrorLike | null | undefined): ErrorLike | null | undefined {
   if (!err) return err;
   const inner = err.lastError
     ?? (Array.isArray(err.errors) && err.errors.length ? err.errors[err.errors.length - 1] : undefined);
@@ -268,7 +339,7 @@ const TRANSIENT_CODE = new Set([
   'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT',
 ]);
 
-export function isTransient(err: any): boolean {
+export function isTransient(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
   // A quota/usage-limit/auth rejection is permanent for THIS leg this call —
@@ -299,7 +370,7 @@ const UNREACHABLE_CODE = new Set([
   'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT',
 ]);
 
-export function isUnreachable(err: any): boolean {
+export function isUnreachable(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
   const code = err.code ?? err.cause?.code;
@@ -327,7 +398,7 @@ export function isUnreachable(err: any): boolean {
 const QUOTA_RE = /usage limit|quota|exceeded your current|insufficient[ _]?(quota|funds|credit|balance)|requires more credits|can only afford|upgrade for higher|out of credit|payment required/i;
 const AUTH_RE = /invalid[ _]?api[ _]?key|incorrect[ _]?api[ _]?key|unauthorized|authentication (failed|error)|forbidden|api key (not|is|was) /i;
 
-export function isQuotaOrAuthError(err: any): boolean {
+export function isQuotaOrAuthError(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
   const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
@@ -360,7 +431,7 @@ export function isQuotaOrAuthError(err: any): boolean {
 // 529 qualifies — a bare 503 or "rate limit exceeded, slow down" does not.
 const UPSTREAM_OVERLOAD_RE = /upstream error|resource[ _]?exhausted|overloaded|no instances?\b.*\bavailable|worker local total request limit/i;
 
-export function isUpstreamOverloaded(err: any): boolean {
+export function isUpstreamOverloaded(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
   const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
@@ -387,7 +458,7 @@ export function isUpstreamOverloaded(err: any): boolean {
 // names does send the wording and/or the header.
 const RATE_LIMIT_RE = /rate.?limit|too many requests|requests? per (?:minute|day|hour)|\b[rt]p[mdh]\b/i;
 
-export function isRateLimited(err: any): boolean {
+export function isRateLimited(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
   const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
@@ -406,7 +477,7 @@ export function isRateLimited(err: any): boolean {
 // exactly the case an operator most needs to see (a request that never reached
 // the provider — Discord: "it's not even seeing requests"). Digs into the cause
 // and appends the errno/status to the message when it adds something.
-export function errReason(err: any): string {
+export function errReason(err: ErrorLike | null | undefined): string {
   if (!err) return 'unknown';
   err = unwrapSdkError(err);
   const msg = String(err.message || err.cause?.message || '').trim();
@@ -424,12 +495,12 @@ export function errReason(err: any): string {
 // Flatten a tool-loop result's discovery-tool trail for /debug. Excludes the
 // synthetic `done` tool — it's the schema-emit signal, not a real discovery
 // action. Shared by the native-output and done-tool branches of djAgent.
-export function flattenToolCalls(result: any): any[] {
-  return ((result?.steps as any) || []).flatMap((s: any) => {
+export function flattenToolCalls(result: { steps?: StepLike[] } | null | undefined): ToolCallSummary[] {
+  return (result?.steps || []).flatMap((s) => {
     const results = s.toolResults || [];
     return (s.toolCalls || [])
-      .filter((c: any) => c.toolName !== 'done')
-      .map((c: any, i: number) => ({
+      .filter((c) => c.toolName !== 'done')
+      .map((c, i) => ({
         name: c.toolName,
         args: c.input ?? c.args ?? null,
         result: results[i]?.output ?? results[i]?.result ?? null,
@@ -442,11 +513,11 @@ export function flattenToolCalls(result: any): any[] {
 // lives on err.text (and the original cause on err.cause). Without this, the
 // failure record only carries err.message — useless for "WHY didn't it parse?"
 // triage. Best-effort: every field is optional, missing ones are skipped.
-export function failureDiagnostics(err: any): any {
-  const out: any = {};
+export function failureDiagnostics(err: ErrorLike | null | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
   if (typeof err?.text === 'string') out.responseText = err.text;
   if (err?.finishReason) out.finishReason = err.finishReason;
-  if (err?.usage) out.usage = usageOf({ usage: err.usage });
+  if (err?.usage) out.usage = usageOf({ usage: err.usage as TokenUsage });
   if (err?.cause?.message && err.cause.message !== err.message) {
     out.causeMessage = err.cause.message;
   }
@@ -455,12 +526,12 @@ export function failureDiagnostics(err: any): any {
   // results truncated: these entries live in the 120-entry /debug ring buffer
   // for the process lifetime, and a discovery tool's result (a full candidate
   // list) can run to tens of KB per step. The head is what triage needs.
-  const clip = (v: any) => (typeof v === 'string' && v.length > 2000 ? `${v.slice(0, 2000)}… [truncated ${v.length - 2000} chars]` : v);
+  const clip = (v: unknown) => (typeof v === 'string' && v.length > 2000 ? `${v.slice(0, 2000)}… [truncated ${v.length - 2000} chars]` : v);
   const steps = err?.response?.steps || err?.steps;
   if (Array.isArray(steps) && steps.length) {
-    out.toolCalls = steps.flatMap((s: any) => {
+    out.toolCalls = steps.flatMap((s) => {
       const results = s.toolResults || [];
-      return (s.toolCalls || []).map((c: any, i: number) => ({
+      return (s.toolCalls || []).map((c: ToolCallLike, i: number) => ({
         name: c.toolName,
         args: c.input ?? c.args ?? null,
         result: clip(results[i]?.output ?? results[i]?.result ?? null),
@@ -622,9 +693,9 @@ export function snapV3Stability(v: number): number {
 // JSON-string rescue only fires for OBJECT/ARRAY fields: a plain string
 // field's genuine value could coincidentally look like JSON (a bare
 // number/boolean/quoted word), and re-parsing THAT would corrupt it.
-export function coerceModelPayload(raw: unknown, schema: z.ZodObject<any>): unknown {
+export function coerceModelPayload(raw: unknown, schema: z.ZodObject<z.ZodRawShape>): unknown {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
-  const out: any = { ...raw };
+  const out: Record<string, unknown> = { ...raw };
   for (const [key, field] of Object.entries(schema.shape) as [string, z.ZodTypeAny][]) {
     let v = out[key];
     if ((v === 'null' || v === undefined) && field.safeParse(null).success) {
@@ -634,8 +705,8 @@ export function coerceModelPayload(raw: unknown, schema: z.ZodObject<any>): unkn
     if (v === undefined) continue; // missing non-nullable key — modelTolerant's fallbacks handle it
     // See through Nullable/Optional wrappers to the core type (.describe()
     // returns the same class, so it needs no unwrapping).
-    let core: any = field;
-    while (core instanceof z.ZodNullable || core instanceof z.ZodOptional) core = core.unwrap();
+    let core: z.ZodTypeAny = field;
+    while (core instanceof z.ZodNullable || core instanceof z.ZodOptional) core = core.unwrap() as z.ZodTypeAny;
     if ((core instanceof z.ZodObject || core instanceof z.ZodArray) && typeof v === 'string') {
       try {
         const parsed = JSON.parse(v);
@@ -673,7 +744,7 @@ export function coerceModelPayload(raw: unknown, schema: z.ZodObject<any>): unkn
 // undefined/null/"null") — real model output is being thrown away, and the
 // operator should be able to tell that apart from the model choosing silence.
 // Callers pass a logger; this module stays side-effect-free.
-export function modelTolerant<T extends z.ZodObject<any>>(
+export function modelTolerant<T extends z.ZodObject<z.ZodRawShape>>(
   schema: T,
   opts?: {
     objectFallbacks?: Record<string, unknown>;
@@ -681,10 +752,10 @@ export function modelTolerant<T extends z.ZodObject<any>>(
   },
 ) {
   return z.preprocess((raw) => {
-    const coerced: any = coerceModelPayload(raw, schema);
+    const coerced = coerceModelPayload(raw, schema) as Record<string, unknown>;
     if (opts?.objectFallbacks && coerced && typeof coerced === 'object' && !Array.isArray(coerced)) {
       for (const [key, fallback] of Object.entries(opts.objectFallbacks)) {
-        const fieldSchema: z.ZodTypeAny | undefined = (schema.shape as any)[key];
+        const fieldSchema: z.ZodTypeAny | undefined = schema.shape[key] as z.ZodTypeAny | undefined;
         if (!fieldSchema || fieldSchema.safeParse(coerced[key]).success) continue;
         const v = coerced[key];
         if (opts.onDiscard && v !== undefined && v !== null && v !== 'null') opts.onDiscard(key, v);
@@ -706,10 +777,10 @@ export function modelTolerant<T extends z.ZodObject<any>>(
 // STRUCTURE (field names, types, required-ness, enum values) to stop the
 // model guessing at keys; the coaching prose already lives in the original
 // system/prompt text passed alongside it.
-function stripDescriptions(value: any): any {
+function stripDescriptions(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripDescriptions);
   if (value && typeof value === 'object') {
-    const out: any = {};
+    const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
       if (k === 'description') continue;
       out[k] = stripDescriptions(v);

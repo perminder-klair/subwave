@@ -34,8 +34,6 @@
     "express": "^4.21.0",
     "multer": "^2.0.1",
     "node-cron": "^3.0.3",
-    "pino": "^9.5.0",
-    "pino-pretty": "^11.3.0",
     "sqlite-vec": "^0.1.9",
     "tsx": "^4.19.2",
     "umap-js": "^1.4.0",
