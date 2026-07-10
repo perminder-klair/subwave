@@ -270,7 +270,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
                   <h1 className="v3-title m-0 line-clamp-2 text-ink" title={nowPlaying?.title}>
                     {nowPlaying?.title}
                   </h1>
-                  <div className="mt-[12px] text-[clamp(13px,1.4vw,18px)] leading-snug font-medium text-muted">
+                  <div className="mt-[4px] text-[clamp(13px,1.4vw,18px)] leading-snug font-medium text-muted">
                     <span className="text-ink">{nowPlaying?.artist || 'Unknown artist'}</span>
                     {nowPlaying?.album && <span className="ml-[14px]"> · {nowPlaying.album}</span>}
                     {nowPlaying?.year && <span className="ml-[14px]"> · {nowPlaying.year}</span>}
