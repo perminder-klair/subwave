@@ -9,7 +9,9 @@ import * as kokoro from './kokoro.js';
 import { applyEdgeFades } from './wav-edges.js';
 import * as chatterbox from './chatterbox.js';
 import * as pocketTts from './pocketTts.js';
+import { heavyEnabledEngines } from './ttsHeavyClient.js';
 import * as remoteTts from './remoteTts.js';
+import { normalizeForSpeech } from './speech-text.js';
 import * as cloud from '../llm/speech.js';
 import { stripThinking } from '../llm/sdk.js';
 import * as settings from '../settings.js';
@@ -134,6 +136,38 @@ export function voiceGainDb(kind: string, persona?: any): number {
   return settings.clampTtsGain(engineGain + personaGain);
 }
 
+// Effective speech-rate multiplier for a spoken segment of `kind` (1.0 =
+// engine default pace). Three factors multiply — engine base
+// (settings.tts.speed[engine]) × persona (persona.tts.speed) × daypart energy
+// (energyForDaypart().speed) — clamped to [0.5, 2.0]. The engine base applies
+// UNIVERSALLY, including jingles/default, mirroring the env-base
+// PIPER_SPEED/KOKORO_SPEED/CLOUD_TTS_SPEED behaviour; persona × daypart apply
+// only to live, persona-voiced kinds (a jingle cut at 2am must not carry 2am
+// pacing into a noon playout). `liveOverride` (speak()'s explicit `speedScale`)
+// replaces the persona/daypart term but still composes with the engine base.
+// Resolved-engine speed (post availability/key fallback) is used so the rate
+// matches the engine that will actually speak — same approach as voiceGainDb().
+//
+// Exported for the intro-budget word ceiling (issue #962): a persona speaking
+// at 0.8× fits fewer words in the same intro runway, so
+// broadcast/dj-agent.ts feeds this scale into dj.enforceIntroBudget().
+export function speechPaceScale(kind: string, persona?: any, liveOverride?: number | null): number {
+  const personaTts = djPersonaTts(kind, persona);
+  const primary = resolveEngine(kind, personaTts);
+  const ttsCfg: any = settings.get().tts || {};
+  const engineSpeed = settings.clampTtsSpeed(ttsCfg.speed?.[primary]);
+  const live = liveOverride != null
+    ? liveOverride
+    : GLOBAL_VOICE_KINDS.has(kind)
+      ? 1
+      : (personaTts ? settings.clampTtsSpeed(personaTts.speed) : 1) * energyForDaypart().speed;
+  // Bounds-clamp the product but do NOT snap to the 0.05 grid — the daypart
+  // energy is a non-grid value, so at default knobs (all 1.0) the on-air scale
+  // stays exactly today's daypart figure. Snapping happens only on the stored
+  // per-engine / per-persona knobs (clampTtsSpeed above).
+  return Math.min(settings.TTS_SPEED_MAX, Math.max(settings.TTS_SPEED_MIN, engineSpeed * live));
+}
+
 async function speakWith(engine: string, text: string, opts: any, personaTts: any) {
   if (engine === 'kokoro') {
     const voice = (personaTts && personaTts.engine === 'kokoro' && personaTts.voice)
@@ -195,12 +229,10 @@ async function speakWith(engine: string, text: string, opts: any, personaTts: an
   return piper.speak(text, { ...opts, voice });
 }
 
-// TTS engines read "SUB/WAVE" as "sub slash wave". Spell the station name
-// phonetically before synthesis — visual branding keeps the slash, audio doesn't.
-function normalizeForSpeech(text: string) {
-  if (!text) return text;
-  return text.replace(/\bSUB\s*(?:\/|slash)\s*WAVE\b/gi, 'Subwave');
-}
+// Display-text → spoken-text normalization (station branding, weather units,
+// markdown emphasis, display symbols — issue #963) lives in the pure
+// speech-text.ts module so it's unit-testable without this file's heavy deps.
+// Applied at the two synthesis entry points below: speak() and synthesizeSample().
 
 // Admin voice-preview ("Play sample"). Renders a one-off sample WAV with an
 // EXPLICIT engine + voice, deliberately bypassing both the on-air persona
@@ -306,35 +338,24 @@ export async function speak(
   const soul = GLOBAL_VOICE_KINDS.has(kind)
     ? ''
     : String(personaFor(persona)?.soul || '').trim();
-  // Delivery pace — a MULTIPLIER on the engine's configured speech rate (1.0 =
-  // unchanged), composed (not overridden) on top of an operator's global env
-  // base PIPER_SPEED/KOKORO_SPEED/CLOUD_TTS_SPEED. Three factors multiply:
-  //   engine base (settings.tts.speed[engine]) × persona (persona.tts.speed)
-  //   × daypart energy (energyForDaypart().speed)
-  // The engine base applies UNIVERSALLY — including jingles/default — mirroring
-  // how the env base already does; persona × daypart apply only to live,
-  // persona-voiced kinds (jingles are pre-rendered offline, so a jingle cut at
-  // 2am must not carry 2am pacing into a noon playout). An explicit `speedScale`
-  // (e.g. a future talk-up-to-post budget) replaces the persona/daypart live
-  // term but still composes with the engine base. Resolved-engine speed (post
-  // availability/key fallback) is used so the rate matches the engine that
-  // speaks — same approach as voiceGainDb(); the rare runtime-throw fallback
-  // reuses this scale. All factors default to 1.0, so a stock station is
-  // byte-for-byte unchanged. Final product clamped to [0.5, 2.0].
-  const ttsCfg: any = settings.get().tts || {};
-  const engineSpeed = settings.clampTtsSpeed(ttsCfg.speed?.[primary]);
-  const live = speedScale != null
-    ? speedScale
-    : GLOBAL_VOICE_KINDS.has(kind)
-      ? 1
-      : (personaTts ? settings.clampTtsSpeed(personaTts.speed) : 1) * energyForDaypart().speed;
-  // Bounds-clamp the product but do NOT snap to the 0.05 grid — the daypart
-  // energy is a non-grid value, so at default knobs (all 1.0) the on-air scale
-  // stays exactly today's daypart figure. Snapping happens only on the stored
-  // per-engine / per-persona knobs (clampTtsSpeed above).
-  const scale = Math.min(settings.TTS_SPEED_MAX, Math.max(settings.TTS_SPEED_MIN, engineSpeed * live));
+  // Delivery pace — engine base × persona × daypart (or the explicit
+  // `speedScale` override), clamped to [0.5, 2.0]. All the semantics live in
+  // speechPaceScale() above (shared with the intro-budget word ceiling); the
+  // rare runtime-throw fallback below reuses this scale. All factors default
+  // to 1.0, so a stock station is byte-for-byte unchanged.
+  const scale = speechPaceScale(kind, persona, speedScale);
   const started = Date.now();
   const chars = (speakText || '').length;
+  // Shared fields for every recordTts() outcome below. `text` is capped so the
+  // ring buffer stays small (the admin debug panel polls the whole ring every
+  // ~2s); `persona` names who voiced the segment (null for the global
+  // jingle/default kinds), resolved through the same override path as the
+  // engine so a handoff clip attributes to the outgoing DJ.
+  const callBase = {
+    kind, requested, chars,
+    text: (speakText || '').slice(0, 240),
+    persona: GLOBAL_VOICE_KINDS.has(kind) ? null : (personaFor(persona)?.name || null),
+  };
   try {
     const result = await speakWith(primary, speakText, { outPath, speedScale: scale, language, soul }, personaTts);
     // Bake 40ms edge fades into the rendered clip so hard file boundaries
@@ -343,8 +364,8 @@ export async function speak(
     // non-WAV output (cloud mp3) is left as-is.
     if (typeof result === 'string') await applyEdgeFades(result);
     recordTts({
-      kind, engine: primary, requested, fellBack: requested !== primary,
-      ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
+      ...callBase, engine: primary, fellBack: requested !== primary,
+      ok: true, ms: Date.now() - started, t: new Date().toISOString(),
     });
     return result;
   } catch (err) {
@@ -354,8 +375,8 @@ export async function speak(
     const fallback = primary === 'piper' ? 'kokoro' : 'piper';
     if (fallback === 'kokoro' && !kokoro.isAvailable()) {
       recordTts({
-        kind, engine: primary, requested, fellBack: requested !== primary,
-        ok: false, ms: Date.now() - started, chars, error: err.message,
+        ...callBase, engine: primary, fellBack: requested !== primary,
+        ok: false, ms: Date.now() - started, error: err.message,
         t: new Date().toISOString(),
       });
       throw err;
@@ -365,14 +386,14 @@ export async function speak(
       const result = await speakWith(fallback, speakText, { outPath, speedScale: scale, language, soul }, personaTts);
       if (typeof result === 'string') await applyEdgeFades(result);
       recordTts({
-        kind, engine: fallback, requested, fellBack: true,
-        ok: true, ms: Date.now() - started, chars, t: new Date().toISOString(),
+        ...callBase, engine: fallback, fellBack: true,
+        ok: true, ms: Date.now() - started, t: new Date().toISOString(),
       });
       return result;
     } catch (err2) {
       recordTts({
-        kind, engine: fallback, requested, fellBack: true,
-        ok: false, ms: Date.now() - started, chars, error: err2.message,
+        ...callBase, engine: fallback, fellBack: true,
+        ok: false, ms: Date.now() - started, error: err2.message,
         t: new Date().toISOString(),
       });
       throw err2;
@@ -391,6 +412,11 @@ export function availableEngines() {
     kokoro: kokoro.isAvailable(),
     chatterbox: chatterbox.isAvailable(),
     'pocket-tts': pocketTts.isAvailable(),
+    // The tts-heavy sidecar's configured engines (TTS_HEAVY_ENGINES): a
+    // string[] when reachable and reporting it, null otherwise. Lets the admin
+    // badge separate "engine off" (sidecar up, engine disabled) from "sidecar
+    // off" (whole sidecar down). See engineMeta.engineStatus.
+    heavyEnabled: heavyEnabledEngines(),
     // Whether PocketTTS can clone voices (gated weights present). null = not
     // yet known. The admin UI uses this to warn that a cloned .wav voice will
     // silently revert to a built-in when cloning is unavailable (issue #238).

@@ -49,24 +49,42 @@ router.post('/generate/show', requireAdmin, async (req, res) => {
     } catch {}
 
     const out = await dj.generateShow(description, { personas, themes, genres });
-    const draft = { ...out };
+    const raw: any = { ...out };
 
     // Soft-normalise against the real lists — a near-miss from a weaker model
     // becomes null/default rather than an invalid id the Save would reject.
     const personaIds = new Set(personas.map(p => p.id));
-    if (!draft.personaId || !personaIds.has(draft.personaId)) {
-      draft.personaId = personas[0]?.id ?? null;
+    if (!raw.personaId || !personaIds.has(raw.personaId)) {
+      raw.personaId = personas[0]?.id ?? null;
     }
     const themeIds = new Set(themes.map(t => t.id));
-    if (!draft.themeId || !themeIds.has(draft.themeId)) draft.themeId = null;
-    // An unknown/missing mood becomes '' (Any — the autonomous mood applies)
+    if (!raw.themeId || !themeIds.has(raw.themeId)) raw.themeId = null;
+    // The LLM schema stays singular (kinder to weak local models); the client
+    // form is multi-value (#929), so lift each field into a one-element list.
+    // An unknown/missing mood becomes [] (Any — the autonomous mood applies)
     // rather than an arbitrary vocabulary entry the operator didn't ask for.
-    if (!draft.mood || !settings.SHOW_MOODS.includes(draft.mood)) draft.mood = '';
-    if (draft.energy && !settings.SHOW_ENERGY.includes(draft.energy)) draft.energy = '';
+    const moods = raw.mood && settings.SHOW_MOODS.includes(raw.mood) ? [raw.mood] : [];
+    const genreDraft = typeof raw.genre === 'string' ? raw.genre.trim() : '';
+    const showGenres = genreDraft ? [genreDraft] : [];
+    const energies = raw.energy && settings.SHOW_ENERGY.includes(raw.energy) ? [raw.energy] : [];
+    const eras = raw.fromYear != null || raw.toYear != null
+      ? [{ fromYear: raw.fromYear ?? null, toYear: raw.toYear ?? null }]
+      : [];
     // Strict only makes sense with at least one music filter to lock to.
-    if (draft.filtersStrict && !(draft.genre || draft.mood || draft.energy || draft.fromYear != null || draft.toYear != null)) {
-      draft.filtersStrict = false;
-    }
+    const filtersStrict = raw.filtersStrict === true
+      && !!(showGenres.length || moods.length || energies.length || eras.length);
+
+    const draft = {
+      name: raw.name,
+      topic: raw.topic,
+      personaId: raw.personaId,
+      themeId: raw.themeId,
+      moods,
+      genres: showGenres,
+      energies,
+      eras,
+      filtersStrict,
+    };
 
     res.json({ ok: true, show: draft });
   } catch (err: any) {

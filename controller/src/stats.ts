@@ -13,7 +13,10 @@ export const ttsCalls: any[] = [];
 
 // Recorded by audio/tts.js on every speak(): one entry per spoken segment,
 // success or failure, including whether the engine fell back to a local one.
-// Shape: { kind, engine, requested, fellBack, ok, ms, chars, error?, t }
+// Shape: { kind, engine, requested, fellBack, ok, ms, chars, text, persona, error?, t }
+// The raw ring is also exposed on /debug (tts.recentCalls) for the admin
+// debug panel's per-call TTS log; summarizeTts() below only reads the
+// original aggregate fields.
 export function recordTts(call: any) {
   ttsCalls.unshift(call);
   if (ttsCalls.length > MAX_TTS_CALLS) ttsCalls.length = MAX_TTS_CALLS;

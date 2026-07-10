@@ -2,4 +2,4 @@
 // Implementation in internal/tools/segment-tools.ts. Barrel so call sites keep
 // importing from `llm/segment-tools.js` unchanged.
 
-export { buildSegmentTools } from './internal/tools/segment-tools.js';
+export { buildSegmentTools, fetchSegmentData } from './internal/tools/segment-tools.js';

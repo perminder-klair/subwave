@@ -6,6 +6,7 @@ import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import * as library from '../music/library.js';
 import * as db from '../music/library-db.js';
+import * as analyzer from '../music/analyzer.js';
 import * as coverage from '../music/library-coverage.js';
 import * as source from '../music/source.js';
 import * as lastfm from '../music/lastfm.js';
@@ -18,6 +19,7 @@ import { activeModelLabel } from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
 import { tagger, taggerView, startAnalyzer, startReconcile } from '../broadcast/tagger.js';
 import * as localScanner from '../music/sources/local/scanner.js';
+import * as mapProjection from '../music/map-projection.js';
 
 export const router = express.Router();
 
@@ -70,6 +72,58 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
         updatedAt: stats.updatedAt,
       },
     });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /library/search-sound?q=<description>&limit=N — natural-language
+// "sounds like" search for the admin Search tab. Embeds the description
+// through the CLAP text tower (analyzer /embed-text) and KNNs it against the
+// stored track audio vectors — the same path as the picker's searchBySound
+// tool, exposed to operators. The UI gates the mode on
+// coverage.soundSearchAvailable; the 503 here is the belt-and-suspenders
+// answer when the capability drops between polls.
+// ---------------------------------------------------------------------------
+router.get('/library/search-sound', requireAdmin, async (req, res) => {
+  const q = (typeof req.query?.q === 'string' ? req.query.q : '').trim();
+  if (!q) return res.status(400).json({ error: 'q is required' });
+  const limit = Math.min(Math.max(parseIntSafe(req.query?.limit, 30), 1), 60);
+  try {
+    await library.load();
+    // Interactive call — same short deadline rationale as the picker tool: a
+    // bulk analysis pass may hold the backend's single-threaded worker, and
+    // "unavailable right now" beats hanging the admin UI behind it.
+    const vecs = await analyzer.embedTexts([q], { timeoutMs: 20_000 });
+    if (!vecs || !vecs[0]) {
+      return res.status(503).json({
+        error: 'sound search unavailable — needs the heavy analyzer (CLAP text tower) and audio-analysed tracks',
+      });
+    }
+    // Wide KNN, capped after the archive filter so junk rows don't eat slots.
+    const hits = library.tracksByAudioVector(vecs[0], Math.max(limit * 2, 60));
+    const results = hits
+      .filter((t: any) => !source.isStationArchive(t))
+      .slice(0, limit)
+      .map((t: any) => ({
+        id: t.id,
+        title: t.title ?? null,
+        artist: t.artist ?? null,
+        album: t.album ?? null,
+        year: t.year ?? null,
+        genre: t.genre ?? null,
+        duration: t.durationSec ?? null,
+        moods: t.moods ?? [],
+        energy: t.energy ?? null,
+        source: t.source ?? null,
+        bpm: t.bpm ?? null,
+        musicalKey: t.musicalKey ?? null,
+        loudnessLufs: t.loudnessLufs ?? null,
+        instrumental: t.vocalRanges == null ? null : t.vocalRanges.length === 0,
+        similarity: typeof t._similarity === 'number' ? t._similarity : null,
+      }));
+    res.json({ results });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -138,12 +192,17 @@ router.get('/library/genres/related', requireAdmin, async (_req, res) => {
 // (Libraries above ~3k render on the canvas renderer; only small ones keep the
 // animated SVG path.)
 const OBSERVATORY_DEFAULT_MAX = Math.max(500, Number(process.env.OBSERVATORY_MAX) || 25000);
-const OBSERVATORY_HARD_MAX = Math.max(OBSERVATORY_DEFAULT_MAX, Number(process.env.OBSERVATORY_HARD_MAX) || 100000);
+// The 500k ceiling is stress-verified (scripts/observatory-scale.test.ts + the
+// browser harness, both run at 200k/400k/500k): lean sampled reads stay ~1–4 s,
+// zoom holds 60 fps with a one-time geometry stall on load (~2 s at 200k,
+// ~6 s at 500k, plus brief pan hitches just after). Payloads get big past
+// 200k (500k ≈ 190 MB raw / ~26 MB gzipped), so the DEFAULT stays 25k — the
+// ceiling is opt-in headroom via the MAP SIZE control. OBSERVATORY_HARD_MAX
+// still overrides both ways.
+const OBSERVATORY_HARD_MAX = Math.max(OBSERVATORY_DEFAULT_MAX, Number(process.env.OBSERVATORY_HARD_MAX) || 500000);
 router.get('/library/observatory', requireAdmin, async (req, res) => {
   try {
     await library.load();
-    const stats = library.stats();
-    const total = stats.total;
     const requested = Number(req.query.max);
     const max = Math.min(
       OBSERVATORY_HARD_MAX,
@@ -153,7 +212,11 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
     // Revalidation: the payload is a pure function of library rows + max, so a
     // token that changes on any library write is a sound ETag. Matching lets us
     // skip the (multi-MB at high caps) body AND the row scan that builds it.
-    const etag = `W/"obs-${db.changeToken()}-${max}"`;
+    // The projection-running flag rides in the token too — it flips without a
+    // DB write, and a 304 must not hide "job in flight" from the UI.
+    // Checked BEFORE stats(): computeStats() is itself a multi-second scan on
+    // a very large library, and a revalidation hit must not pay for it.
+    const etag = `W/"obs-${db.changeToken()}-${max}-${mapProjection.projectionStatus().running ? 1 : 0}"`;
     res.set('ETag', etag);
     res.set('Cache-Control', 'private, no-cache');
     const inm = req.headers['if-none-match'];
@@ -161,6 +224,8 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
       return res.status(304).end();
     }
 
+    const stats = library.stats();
+    const total = stats.total;
     const sampled = total > max;
     const all = sampled ? db.allTaggedSampled(max, total) : db.allTagged();
     const truncated = sampled;
@@ -185,9 +250,14 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
         // Cheap acoustic scalars for the Observatory's colour-by + aggregate
         // panels. The full curves/ranges stay on the per-track dossier endpoint.
         loudnessLufs: t.loudnessLufs,
-        paceMean: library.paceMeanOf(t.pace),
-        // Tri-state: 'vocal' | 'instrumental' | null (not analysed for vocals).
-        vocal: t.vocalRanges == null ? null : t.vocalRanges.length ? 'vocal' : 'instrumental',
+        // paceMean + tri-state vocal are computed in the lean bulk read
+        // (rowToObservatory) — the fat acoustic blobs never leave SQLite.
+        paceMean: t.paceMean,
+        vocal: t.vocal,
+        // Sound-map coordinates (UMAP of the CLAP vector, [0,1] per axis).
+        // null → the client falls back to its genre-cluster layout.
+        mapX: t.mapX,
+        mapY: t.mapY,
       }));
     res.json({
       tracks,
@@ -196,6 +266,9 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
       max,
       defaultMax: OBSERVATORY_DEFAULT_MAX,
       hardMax: OBSERVATORY_HARD_MAX,
+      // Sound-map provenance — lets the UI say whether nodes sit by sound
+      // (projection done) or by genre (fallback), and show job progress.
+      mapProjection: mapProjection.projectionStatus(),
       moodVocab: settings.SHOW_MOODS,
       stats: {
         total: stats.total,
@@ -292,6 +365,22 @@ router.get('/library/observatory/track/:id', requireAdmin, async (req, res) => {
       audioEmbedding: audioVec ? Array.from(audioVec) : null,
       mixNext,
     });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /library/observatory/project — force a sound-map projection pass now
+// (the boot hook only fires when the map is stale). Spawns the standalone
+// UMAP child; 409 when one is already running. Minutes-long at library scale —
+// the client polls the bulk endpoint's `mapProjection` status for completion.
+// ---------------------------------------------------------------------------
+router.post('/library/observatory/project', requireAdmin, async (_req, res) => {
+  try {
+    await library.load();
+    const started = mapProjection.startProjection();
+    res.status(started ? 202 : 409).json({ started, status: mapProjection.projectionStatus() });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

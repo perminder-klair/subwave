@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.39.0](https://github.com/perminder-klair/subwave/compare/v0.38.1...v0.39.0) (2026-07-08)
+
+
+### Features
+
+* **archive:** disable hourly archives by default ([#933](https://github.com/perminder-klair/subwave/issues/933)) ([e619e77](https://github.com/perminder-klair/subwave/commit/e619e776482a34a7cc5515e4f5a674218ed0572f))
+* **personas:** add Cliff community persona ([#913](https://github.com/perminder-klair/subwave/issues/913)) ([7561658](https://github.com/perminder-klair/subwave/commit/75616589c9918dc40db733233468b49db015b6eb))
+* **personas:** stepped-fader behaviour controls with wider frequency + length ladders ([#922](https://github.com/perminder-klair/subwave/issues/922)) ([15736f3](https://github.com/perminder-klair/subwave/commit/15736f3a15a9ae49a73f4cb4d8ee50796589a73e))
+* **stations:** add Brisflix Radio ([#925](https://github.com/perminder-klair/subwave/issues/925)) ([789d600](https://github.com/perminder-klair/subwave/commit/789d60048d2742ad7b3f7e24dabcf0a70480a1b5))
+* **stations:** add Klair Radio; flagship genre → various ([#931](https://github.com/perminder-klair/subwave/issues/931)) ([48e237d](https://github.com/perminder-klair/subwave/commit/48e237d8a193357c7ef88e8a92de239829dc2b28))
+* **web:** resolve GA Measurement ID at runtime (no rebuild needed) ([#932](https://github.com/perminder-klair/subwave/issues/932)) ([48d9b9b](https://github.com/perminder-klair/subwave/commit/48d9b9b9cd52e022a697ee9f656bcfd6f789c431))
+
+
+### Bug Fixes
+
+* **aio:** warn at boot when /var/sub-wave isn't mounted ([#902](https://github.com/perminder-klair/subwave/issues/902)) ([#921](https://github.com/perminder-klair/subwave/issues/921)) ([d304549](https://github.com/perminder-klair/subwave/commit/d304549a40405ae6a6113c41e0aa416ccc6ef418))
+* **backup:** restore custom-theme media before validating settings ([#917](https://github.com/perminder-klair/subwave/issues/917)) ([#920](https://github.com/perminder-klair/subwave/issues/920)) ([2897fcd](https://github.com/perminder-klair/subwave/commit/2897fcdf01853029c0b278226c81e01ef99d9565))
+* **llm:** forward repeat_penalty + reasoning_format on the openai-compatible path ([#918](https://github.com/perminder-klair/subwave/issues/918)) ([adc1ede](https://github.com/perminder-klair/subwave/commit/adc1edeeb314308c0de3d89f607744999190f872))
+* **llm:** stop runaway &lt;/think&gt; repetition loops leaking to air ([#914](https://github.com/perminder-klair/subwave/issues/914)) ([4ff4b54](https://github.com/perminder-klair/subwave/commit/4ff4b54deebdaa503a9633c6d90d742bc54c4576))
+* **skills:** drop nullable on segment object so Gemma-4 keeps its schema ([#906](https://github.com/perminder-klair/subwave/issues/906)) ([#919](https://github.com/perminder-klair/subwave/issues/919)) ([14907dd](https://github.com/perminder-klair/subwave/commit/14907dd471aad69033c266d3abbc3f021aaadd2f))
+
 ## [0.38.1](https://github.com/perminder-klair/subwave/compare/v0.38.0...v0.38.1) (2026-07-07)
 
 

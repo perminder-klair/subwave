@@ -26,6 +26,16 @@ export interface RequestBody {
   name?: string;
 }
 
+/** POST /beacon payload — audience-source analytics (see the web PlayerApp's
+ *  one-shot beacon). An app has no document.referrer or UTM query; callers
+ *  report the platform via `utmSource` instead so native listeners show up in
+ *  the admin Stats rollup. */
+export interface BeaconBody {
+  referrer?: string;
+  path?: string;
+  utmSource?: string;
+}
+
 /** Why a controller health probe failed. `network` is the catch-all for DNS,
  *  refused connections, and TLS/certificate errors — RN's fetch collapses all
  *  of these into a single rejected promise with no detail, so we can't tell
@@ -54,6 +64,9 @@ export interface StationApi {
   probeHealth(signal?: AbortSignal): Promise<HealthResult>;
   postRequest(body: RequestBody): Promise<RequestResult>;
   pollRequest(id: string): Promise<RequestResult>;
+  /** Fire-and-forget audience beacon. Analytics must never break a listener —
+   *  all failures are swallowed. */
+  postBeacon(body: BeaconBody): Promise<void>;
   /** Absolute URL for an album cover (for <Image source>). */
   cover(subsonicId: string): string;
   /** Absolute URL for a persona avatar. `path` is the value from
@@ -222,6 +235,17 @@ export function createApi(rawBase: string): StationApi {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       }).then((r) => r.json() as Promise<RequestResult>),
+    postBeacon: async (body) => {
+      try {
+        await fetchWithTimeout(api('/beacon'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      } catch {
+        /* best-effort analytics */
+      }
+    },
     pollRequest: async (id) => {
       const res = await fetchWithTimeout(api(`/request/${encodeURIComponent(id)}`));
       if (res.status === 404) return { success: false, status: 'unknown' };

@@ -9,6 +9,7 @@
 import TrackPlayer, {
   AppKilledPlaybackBehavior,
   Capability,
+  type PlayerOptions,
   RatingType,
 } from 'react-native-track-player';
 
@@ -21,10 +22,26 @@ export function setupPlayer(): Promise<void> {
   if (setupPromise) return setupPromise;
   setupPromise = (async () => {
     try {
-      await TrackPlayer.setupPlayer({
-        // A live stream needs a small buffer; keep defaults otherwise.
+      // iosCategoryPolicy is read by the native module (SessionCategories.swift)
+      // but missing from the lib's PlayerOptions type — extend it locally.
+      const options: PlayerOptions & { iosCategoryPolicy?: 'longFormAudio' } = {
         autoHandleInterruptions: true,
-      });
+        // Do NOT set minBuffer here. Any non-zero preferredForwardBufferDuration
+        // on this infinite live stream silences AVPlayer entirely — its
+        // "safe to play" heuristic never satisfies on a duration-∞ item no
+        // matter how much data is buffered (4s behaved identically to 12s,
+        // with the station's ~11s Icecast burst fully available). Verified on
+        // device via the route-change/event trail, 2026-07-09.
+        // The long-form-audio route-sharing policy (what Apple Music/Podcasts
+        // use): iOS remembers the listener's chosen AirPlay device for this
+        // app and keeps routing to it through audio-session churn. Without
+        // it, the stream hiccup at an AirPlay handoff — plus the player
+        // re-asserting its session under the DEFAULT policy (SwiftAudioEx
+        // even recreates the whole AVPlayer on item failure) — yanked audio
+        // back to the built-in speaker ~2s after picking a HomePod.
+        iosCategoryPolicy: 'longFormAudio',
+      };
+      await TrackPlayer.setupPlayer(options);
     } catch (e) {
       // "player already initialized" throws on fast refresh — benign.
       const msg = e instanceof Error ? e.message : String(e);
@@ -73,14 +90,21 @@ export function getLastLiveMeta(): LiveTrackMeta | null {
   return lastLiveMeta;
 }
 
-/** Load (or reload) the live stream onto the queue and start it. A cache-buster
- *  is appended so a reconnect doesn't replay a dead buffered segment (mirrors
- *  the web watchdog's `?t=`). */
+/** Load (or reload) the live stream and start it. A cache-buster is appended
+ *  so a reconnect doesn't replay a dead buffered segment (mirrors the web
+ *  watchdog's `?t=`).
+ *
+ *  Uses `load()` (in-place item swap), NOT `reset()`+`add()`: reset tears the
+ *  player down and deactivates the iOS audio session, and a deactivated
+ *  session reverts an active AirPlay route to the built-in speaker — the
+ *  watchdog's quick retry after the route-change hiccup was knocking
+ *  listeners off their HomePod ~2s after they picked it. `load()` keeps the
+ *  session — and the listener's chosen output — alive (it also loads-as-first
+ *  when the queue is empty, so fresh tune-ins take the same path). */
 export async function loadAndPlay(meta: LiveTrackMeta): Promise<void> {
   await setupPlayer();
-  await TrackPlayer.reset();
   const bust = `${meta.url}${meta.url.includes('?') ? '&' : '?'}t=${Date.now()}`;
-  await TrackPlayer.add({
+  await TrackPlayer.load({
     id: STREAM_TRACK_ID,
     url: bust,
     title: meta.title || 'SUB/WAVE',

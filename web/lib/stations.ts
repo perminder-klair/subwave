@@ -43,6 +43,17 @@ function fileToSlug(file: string): string {
   return file.replace(/\.json$/i, '');
 }
 
+// `url` must be the bare site origin — StationCard probes `‹url›/api/now-playing`
+// and originForStation appends `/api` + `/stream.mp3`, so a submitted path like
+// `https://radio.example.com/listen` would 404 every consumer (#925 follow-up).
+function toOrigin(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url.replace(/\/$/, '');
+  }
+}
+
 // Coerce whatever the JSON carries into a clean Station. Unknown/missing fields
 // fall back to undefined so a sparse submission (just name + url + location)
 // still renders. lat/lon are only kept when both parse to finite numbers.
@@ -64,7 +75,7 @@ function parseStation(slug: string, raw: string): Station | null {
   return {
     slug: (typeof data.slug === 'string' && data.slug) || slug,
     name,
-    url: url.replace(/\/$/, ''),
+    url: toOrigin(url),
     location: data.location ? String(data.location) : undefined,
     country: data.country ? String(data.country) : undefined,
     operator: data.operator ? String(data.operator) : undefined,

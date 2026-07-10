@@ -110,6 +110,19 @@ docker compose up -d`}</CodeBlock>
           Until the sidecar is started, selecting either engine silently falls back to
           Piper.
         </p>
+        <p>
+          Both engines load when the sidecar starts, but each is a separate PyTorch
+          model that costs memory and a first-boot weight download. If you only use one,
+          name it in <code className="bs-code-inline">.env</code> and the other never
+          loads &mdash; comma-separated, defaulting to both:
+        </p>
+        <CodeBlock>{`TTS_HEAVY_ENGINES=pocket-tts       # PocketTTS only (no Chatterbox)
+# TTS_HEAVY_ENGINES=chatterbox     # Chatterbox only
+# TTS_HEAVY_ENGINES=chatterbox,pocket-tts   # default — both`}</CodeBlock>
+        <p>
+          Bring the sidecar back up after changing it. If a persona is still pointed at
+          the disabled engine, its speech falls back to Piper rather than failing.
+        </p>
         <p className="text-muted">
           For backwards compatibility, the older{' '}
           <code className="bs-code-inline">--build-arg WITH_CHATTERBOX=1</code> /{' '}

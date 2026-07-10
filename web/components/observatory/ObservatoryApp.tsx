@@ -8,12 +8,22 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useObservatory, useTrackDetail } from '../../lib/observatory';
-import ConstellationMap from './ConstellationMap';
-import ConstellationCanvas from './ConstellationCanvas';
 import { StatsView, Dossier } from './panels';
 import Tooltip, { type TipState } from './Tooltip';
 import { nearest, sourceStyle, tally, type ColorBy, type ObsTrack } from './data';
+
+// The galaxy renderer pulls in three.js + the bloom pipeline — client-only and
+// heavy, so it's split out and never server-rendered.
+const ConstellationGalaxy = dynamic(() => import('./ConstellationGalaxy'), {
+  ssr: false,
+  loading: () => (
+    <div className="cmap cmap-galaxy" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <span className="t-caption ad-muted">warming the telescope…</span>
+    </div>
+  ),
+});
 
 type AdminFetch = (path: string, init?: RequestInit) => Promise<Response>;
 
@@ -55,10 +65,11 @@ function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; c
   );
 }
 
-// Node-cap ladder offered in the MAP SIZE control. Values above ~3k render on
-// the canvas renderer (see CANVAS_THRESHOLD). Clamped to the server's hardMax.
-const MAX_LADDER = [2000, 4000, 8000, 10000, 16000, 25000, 50000, 100000];
-const CANVAS_THRESHOLD = 3000; // node count above which the canvas renderer wins
+// Node-cap ladder offered in the MAP SIZE control, clamped to the server's
+// hardMax. The WebGL galaxy renderer draws the whole ladder comfortably —
+// stress-measured at 60 fps up to 500k (one-time geometry stall on load:
+// ~2 s at 200k, ~6 s at 500k).
+const MAX_LADDER = [2000, 4000, 8000, 10000, 16000, 25000, 50000, 100000, 200000, 500000];
 // Display fallback for the MAP SIZE selector before the first load resolves.
 // The real default lives on the server (OBSERVATORY_MAX): with nothing stored
 // we fetch without ?max= and adopt the cap the response reports, so an
@@ -98,15 +109,6 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const [analysedOnly, setAnalysedOnly] = useState(false);
   const [selected, setSelected] = useState<ObsTrack | null>(null);
   const [tip, setTip] = useState<TipState | null>(null);
-
-  // Renderer override: `?renderer=canvas|svg` forces a renderer; otherwise it
-  // auto-switches to canvas above CANVAS_THRESHOLD nodes (small libraries keep
-  // the animated, accessible SVG path; big ones get the fast canvas one).
-  const [rendererOverride] = useState<'svg' | 'canvas' | null>(() => {
-    if (typeof window === 'undefined') return null;
-    const r = new URLSearchParams(window.location.search).get('renderer');
-    return r === 'canvas' || r === 'svg' ? r : null;
-  });
 
   const setMax = (n: number) => {
     setMaxNodes(n);
@@ -177,9 +179,8 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     setAnalysedOnly(false);
   };
 
-  // Stable identities so ConstellationMap's memoised node layer survives the
-  // parent re-render that a hover (tip state) triggers — otherwise new callback
-  // refs would invalidate the memo and reconcile every node on each hover.
+  // Stable identities so the galaxy's attribute-refresh effects don't re-run
+  // on the parent re-render a hover (tip state) triggers.
   const onHover = useCallback((t: ObsTrack | null, e?: React.MouseEvent) => {
     if (!t || !e) {
       setTip(null);
@@ -190,7 +191,6 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const onSelect = useCallback((t: ObsTrack | null) => setSelected(t), []);
 
   const total = lib?.tracks.length ?? 0;
-  const useCanvas = rendererOverride === 'canvas' || (rendererOverride !== 'svg' && total > CANVAS_THRESHOLD);
 
   // Cap options: the ladder up to the server's hardMax, plus the current value
   // (which, with nothing stored, is whatever cap the server applied).
@@ -348,7 +348,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
                 </select>
               </div>
               <div className="ad-muted t-caption">
-                {total > CANVAS_THRESHOLD ? 'CANVAS RENDERER' : 'VECTOR RENDERER'}
+                GALAXY RENDERER · {lib?.soundMap ? 'PLACED BY SOUND' : 'PLACED BY GENRE'}
               </div>
             </div>
           )}
@@ -373,29 +373,16 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
             <div className="stage-hint t-caption ad-muted">SCROLL TO ZOOM · DRAG TO PAN · CLICK A NODE</div>
           </div>
           {lib ? (
-            useCanvas ? (
-              <ConstellationCanvas
-                lib={lib}
-                matchSet={matchSet}
-                colorBy={colorBy}
-                selected={selected}
-                neighbours={mixNodes}
-                hovered={tip ? tip.track : null}
-                onHover={onHover}
-                onSelect={onSelect}
-              />
-            ) : (
-              <ConstellationMap
-                lib={lib}
-                matchSet={matchSet}
-                colorBy={colorBy}
-                selected={selected}
-                neighbours={mixNodes}
-                hovered={tip ? tip.track : null}
-                onHover={onHover}
-                onSelect={onSelect}
-              />
-            )
+            <ConstellationGalaxy
+              lib={lib}
+              matchSet={matchSet}
+              colorBy={colorBy}
+              selected={selected}
+              neighbours={mixNodes}
+              hovered={tip ? tip.track : null}
+              onHover={onHover}
+              onSelect={onSelect}
+            />
           ) : (
             <div className="cmap" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <span className="t-caption ad-muted">{loading ? 'mapping the library…' : error || 'no data'}</span>

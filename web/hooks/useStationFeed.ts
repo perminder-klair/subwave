@@ -80,9 +80,27 @@ export function useStationFeed(): StationFeed {
         ])) as [NowPlayingResponse, StationState, SessionPayload];
         const np = npRes.nowPlaying;
         const trackKey = np ? `${np.title}\u0000${np.artist}` : null;
+        // Prefer the queue's authoritative start time over "first seen by this
+        // client": a tab that was hidden at the transition (or a poll that hit
+        // a torn now-playing.json read and flipped through null) would stamp
+        // Date.now() mid-track, dragging elapsed/remaining/progress minutes
+        // behind the broadcast. Guarded to the matching track and to plausible
+        // values (a skewed server clock in the future falls back to first-seen).
+        const cur = (stRes as StationState & { current?: { title?: string; startedAt?: string } }).current;
+        let serverStart = NaN;
+        if (np?.title && cur && cur.title === np.title && cur.startedAt) {
+          const t = Date.parse(cur.startedAt);
+          if (Number.isFinite(t) && t <= Date.now()) serverStart = t;
+        }
         if (trackKey !== lastTrackKeyRef.current) {
           lastTrackKeyRef.current = trackKey;
-          setTrackStartedAt(trackKey != null ? Date.now() : null);
+          setTrackStartedAt(trackKey != null ? (Number.isFinite(serverStart) ? serverStart : Date.now()) : null);
+        } else if (Number.isFinite(serverStart)) {
+          // Same track, better information — converge on the server stamp (and
+          // repair any mid-track reset) without re-render noise inside ±2.5s.
+          setTrackStartedAt(prev =>
+            prev != null && Math.abs(serverStart - prev) <= 2500 ? prev : serverStart,
+          );
         }
         setIfChanged(setNowPlaying, np);
         setIfChanged(setContext, npRes.context);

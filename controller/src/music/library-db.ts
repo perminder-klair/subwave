@@ -118,6 +118,12 @@ export interface TrackRecord {
   // Outro (tail) features — the track's measured ending (fade vs cold, tail
   // loudness/tempo/bar grid). null → no outro signal, today's transitions.
   outro: TrackOutro | null;
+  // Sound-map coordinates — a 2D UMAP projection of the CLAP audio vector,
+  // normalised to [0,1] per axis (music/map-projection.ts). The Observatory
+  // places nodes by these when present, so tracks that SOUND alike sit close.
+  // null → not projected (no audio vector, or the projection hasn't run).
+  mapX: number | null;
+  mapY: number | null;
 }
 
 // The measured ending of a track — what the crossfade seam actually lands on.
@@ -511,6 +517,26 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     d.pragma('user_version = 12');
   }
 
+  if (userVersion < 13) {
+    // Sound-map coordinates (music/map-projection.ts) — 2D UMAP of the CLAP
+    // audio vectors, normalised to [0,1] per axis. Nullable; NULL → the
+    // Observatory falls back to its genre-cluster layout for that track.
+    // map_projection_meta records provenance (algo/space/row count/timestamp)
+    // so staleness is a cheap count comparison, not a vector diff.
+    runDdl(d, `
+      ALTER TABLE tracks ADD COLUMN map_x REAL;
+      ALTER TABLE tracks ADD COLUMN map_y REAL;
+      CREATE TABLE IF NOT EXISTS map_projection_meta (
+        pk      INTEGER PRIMARY KEY CHECK (pk = 1),
+        algo    TEXT NOT NULL,
+        space   TEXT NOT NULL,
+        count   INTEGER NOT NULL,
+        set_at  TEXT NOT NULL
+      );
+    `);
+    d.pragma('user_version = 13');
+  }
+
   // Reconcile the requested embedding dim against what physically exists.
   //
   // The vec0 table's `FLOAT[N]` schema is the authority for what inserts accept —
@@ -775,6 +801,7 @@ export interface TrackLite {
   moods: string[];
   energy: string | null;
   year: number | null;
+  durationSec: number | null;
 }
 
 // Lean read for the /now-playing hot path (polled every ~5s by every listener).
@@ -786,7 +813,7 @@ export interface TrackLite {
 // concurrent HTTP response, making the whole UI sluggish (#723).
 export function getTrackLite(id: string): TrackLite | null {
   const row = requireDb()
-    .prepare(`SELECT genre, bpm, musical_key, moods, energy, year FROM tracks WHERE id = ?`)
+    .prepare(`SELECT genre, bpm, musical_key, moods, energy, year, duration_sec FROM tracks WHERE id = ?`)
     .get(id) as any;
   if (!row) return null;
   return {
@@ -796,6 +823,7 @@ export function getTrackLite(id: string): TrackLite | null {
     moods: row.moods ? safeParseArray(row.moods) : [],
     energy: row.energy ?? null,
     year: row.year ?? null,
+    durationSec: row.duration_sec ?? null,
   };
 }
 
@@ -1176,6 +1204,64 @@ export function audioVectorCount(): number {
   return (requireDb().prepare('SELECT COUNT(*) AS n FROM track_audio_vectors').get() as {
     n: number;
   }).n;
+}
+
+// Every stored CLAP vector in one pass — the sound-map projection's input.
+// Each entry is a copy (not a view into the DB page), safe to hold across
+// further DB work. ~18MB at 9k×512, well within a one-shot job's budget.
+export function allAudioVectors(): { id: string; vector: Float32Array }[] {
+  const rows = requireDb()
+    .prepare('SELECT id, embedding FROM track_audio_vectors')
+    .all() as { id: string; embedding: Buffer }[];
+  return rows.map((r) => ({
+    id: r.id,
+    vector: new Float32Array(
+      r.embedding.buffer,
+      r.embedding.byteOffset,
+      Math.floor(r.embedding.byteLength / 4),
+    ).slice(),
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Sound-map projection coordinates (music/map-projection.ts)
+// ---------------------------------------------------------------------------
+
+export function setMapCoordsBulk(coords: { id: string; x: number; y: number }[]): void {
+  const d = requireDb();
+  const clear = d.prepare('UPDATE tracks SET map_x = NULL, map_y = NULL WHERE map_x IS NOT NULL');
+  const stmt = d.prepare('UPDATE tracks SET map_x = ?, map_y = ? WHERE id = ?');
+  // Clear-then-set in one transaction so coords always reflect exactly the
+  // last projection — a track whose audio vector was since deleted can't keep
+  // a stale position on the map.
+  const tx = d.transaction((list: { id: string; x: number; y: number }[]) => {
+    clear.run();
+    for (const c of list) stmt.run(c.x, c.y, c.id);
+  });
+  tx(coords);
+}
+
+export function mapCoordsCount(): number {
+  return (requireDb().prepare('SELECT COUNT(*) AS n FROM tracks WHERE map_x IS NOT NULL').get() as {
+    n: number;
+  }).n;
+}
+
+export function getMapProjectionMeta(): { algo: string; space: string; count: number; setAt: string } | null {
+  const row = requireDb()
+    .prepare('SELECT algo, space, count, set_at FROM map_projection_meta WHERE pk = 1')
+    .get() as { algo: string; space: string; count: number; set_at: string } | undefined;
+  return row ? { algo: row.algo, space: row.space, count: row.count, setAt: row.set_at } : null;
+}
+
+export function setMapProjectionMeta(algo: string, space: string, count: number): void {
+  requireDb()
+    .prepare(
+      `INSERT INTO map_projection_meta (pk, algo, space, count, set_at) VALUES (1, ?, ?, ?, ?)
+       ON CONFLICT(pk) DO UPDATE SET algo = excluded.algo, space = excluded.space,
+         count = excluded.count, set_at = excluded.set_at`,
+    )
+    .run(algo, space, count, new Date().toISOString());
 }
 
 // ---------------------------------------------------------------------------
@@ -1689,17 +1775,84 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   return { total, rows: rows.map(rowToTrack) };
 }
 
-// Every tagged track, full record, in one read — the bulk source for the
-// Library Observatory map (which needs all nodes at once, not a paged window
-// like filter()). Ordered by id for a stable layout seed across loads. `limit`
-// caps a pathologically large library; the route stamps a `truncated` flag when
-// it's hit. Deliberately separate from filter() so the observatory's "load
-// everything" contract can't be confused with the admin browse pager's 200 cap.
-export function allTagged(limit?: number): TrackRecord[] {
+// Lean row shape for the Library Observatory bulk endpoint — exactly the
+// fields the map / tooltip / filters / stat panels consume, and nothing else.
+// The full TrackRecord parse (rowToTrack) JSON-parses every acoustic blob —
+// beats_json alone is hundreds of floats per analysed row — which at 200k
+// tracks turned the bulk read into a ~15 s synchronous event-loop stall for a
+// payload that only needs a pace MEAN and a vocal PRESENCE flag. Same lesson
+// as getTrackLite (#723), applied to the bulk path.
+export interface ObservatoryTrackRow {
+  id: string;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  year: number | null;
+  genre: string | null;
+  durationSec: number | null;
+  moods: string[];
+  energy: string | null;
+  source: string | null;
+  confidence: number | null;
+  bpm: number | null;
+  musicalKey: string | null;
+  analysisConfidence: number | null;
+  loudnessLufs: number | null;
+  paceMean: number | null;
+  vocal: 'vocal' | 'instrumental' | null;
+  mapX: number | null;
+  mapY: number | null;
+}
+
+const OBSERVATORY_COLS = `id, title, artist, album, year, genre, duration_sec,
+  moods, energy, source, confidence, bpm, musical_key, analysis_confidence,
+  loudness_lufs, pace_json, vocal_ranges_json, map_x, map_y`;
+
+function rowToObservatory(row: any): ObservatoryTrackRow {
+  // pace_json is a short array (~14 spans) — the mean is cheap. The fat blobs
+  // (beats/bars/structure/key ranges) are never selected, let alone parsed.
+  let paceMean: number | null = null;
+  if (row.pace_json) {
+    const spans = parsePaceSpans(row.pace_json);
+    if (spans && spans.length) paceMean = spans.reduce((a, s) => a + s.value, 0) / spans.length;
+  }
+  return {
+    id: row.id,
+    title: row.title,
+    artist: row.artist,
+    album: row.album,
+    year: row.year,
+    genre: row.genre,
+    durationSec: row.duration_sec,
+    moods: row.moods ? safeParseArray(row.moods) : [],
+    energy: row.energy ?? null,
+    source: row.source ?? null,
+    confidence: row.confidence,
+    bpm: row.bpm ?? null,
+    musicalKey: row.musical_key ?? null,
+    analysisConfidence: row.analysis_confidence ?? null,
+    loudnessLufs: row.loudness_lufs ?? null,
+    paceMean,
+    // Tri-state without parsing the spans: NULL column = vocals not analysed,
+    // '[]' = analysed instrumental, anything else = vocal ranges present.
+    vocal: row.vocal_ranges_json == null ? null : row.vocal_ranges_json === '[]' ? 'instrumental' : 'vocal',
+    mapX: row.map_x ?? null,
+    mapY: row.map_y ?? null,
+  };
+}
+
+// Every tagged track, lean observatory row, in one read — the bulk source for
+// the Library Observatory map (which needs all nodes at once, not a paged
+// window like filter()). Ordered by id for a stable layout seed across loads.
+// `limit` caps a pathologically large library; the route stamps a `truncated`
+// flag when it's hit. Deliberately separate from filter() so the observatory's
+// "load everything" contract can't be confused with the admin browse pager's
+// 200 cap.
+export function allTagged(limit?: number): ObservatoryTrackRow[] {
   const sql =
-    `SELECT * FROM tracks WHERE ${SQL_HAS_MOODS} ORDER BY id` +
+    `SELECT ${OBSERVATORY_COLS} FROM tracks WHERE ${SQL_HAS_MOODS} ORDER BY id` +
     (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
-  return (requireDb().prepare(sql).all() as any[]).map(rowToTrack);
+  return (requireDb().prepare(sql).all() as any[]).map(rowToObservatory);
 }
 
 // A *stratified* sample of the tagged library, ~`max` rows, proportional per
@@ -1710,22 +1863,30 @@ export function allTagged(limit?: number): TrackRecord[] {
 // rows of that genre by id are taken. Stable across loads (ordered by id), so
 // the map layout doesn't reshuffle on refresh. The +1-min-per-genre means the
 // total can drift a little over `max`; the caller slices to `max`.
-export function allTaggedSampled(max: number, totalTagged: number): TrackRecord[] {
+//
+// The window functions deliberately run over (id, genre) ONLY, with the full
+// rows joined back afterwards: windowing over `t.*` pushes every fat acoustic
+// blob through SQLite's partition sorter — at 200k tracks that was ~98 s of
+// synchronous scan for a 25k sample; the thin-window + join-back form is ~1 s.
+export function allTaggedSampled(max: number, totalTagged: number): ObservatoryTrackRow[] {
   const m = Math.floor(max);
   const total = Math.floor(totalTagged);
   if (m <= 0 || total <= 0) return [];
   const sql = `
-    SELECT * FROM (
-      SELECT t.*,
-        ROW_NUMBER() OVER (PARTITION BY genre ORDER BY id) AS __rn,
-        COUNT(*)     OVER (PARTITION BY genre)             AS __gc
-      FROM tracks t
-      WHERE ${SQL_HAS_MOODS}
+    WITH picked(id) AS (
+      SELECT id FROM (
+        SELECT id, genre,
+          ROW_NUMBER() OVER (PARTITION BY genre ORDER BY id) AS __rn,
+          COUNT(*)     OVER (PARTITION BY genre)             AS __gc
+        FROM tracks
+        WHERE ${SQL_HAS_MOODS}
+      )
+      WHERE __rn <= MAX(1, CAST(ROUND(__gc * 1.0 * ? / ?) AS INTEGER))
     )
-    WHERE __rn <= MAX(1, CAST(ROUND(__gc * 1.0 * ? / ?) AS INTEGER))
+    SELECT ${OBSERVATORY_COLS} FROM tracks JOIN picked USING (id)
     ORDER BY id
   `;
-  return (requireDb().prepare(sql).all(m, total) as any[]).map(rowToTrack);
+  return (requireDb().prepare(sql).all(m, total) as any[]).map(rowToObservatory);
 }
 
 // ---------------------------------------------------------------------------
@@ -1753,7 +1914,11 @@ export function stats(): LibraryStats {
   const now = Date.now();
   if (statsCache && now - statsCache.at < STATS_TTL_MS) return statsCache.value;
   const value = computeStats();
-  statsCache = { at: now, value };
+  // Stamp AFTER the compute: computeStats() itself can exceed the TTL on a
+  // very large library (≈15 s at 200k tracks), and a start-of-compute stamp
+  // would mean the entry is already expired the moment it's stored — every
+  // call recomputes, which is exactly what the cache exists to prevent.
+  statsCache = { at: Date.now(), value };
   return value;
 }
 
@@ -1877,6 +2042,8 @@ function rowToTrack(row: any): TrackRecord {
     keyRanges: row.key_ranges_json ? parseKeyRanges(row.key_ranges_json) : null,
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     outro: row.outro_json ? parseOutroJson(row.outro_json) : null,
+    mapX: row.map_x ?? null,
+    mapY: row.map_y ?? null,
   };
 }
 

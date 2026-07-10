@@ -3,6 +3,7 @@
 // phone column. The cover glitches + shows corner ticks during a ~3s `burst`
 // opened by a track change or a new DJ turn (the web's `.v3-cover-live`).
 
+import { Coins } from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
 import { Text, View } from 'react-native';
 import CoverArt from './CoverArt';
@@ -31,13 +32,16 @@ function buildMoodPhrase(t: NowPlayingTrack | null): string {
   const parts: string[] = [];
   if (Array.isArray(t.moods)) parts.push(...t.moods.slice(0, 2));
   if (t.energy) parts.push(`${t.energy} energy`);
-  return parts.join('  ·  ').toUpperCase();
+  return parts.join(' · ').toUpperCase();
 }
 
 export interface CenterStageProps {
   nowPlaying: NowPlayingTrack | null;
   coverSrc: string | null;
   elapsed: number;
+  /** Cumulative since-boot LLM token total — the quiet "cost of the DJ" ticker
+   *  by the now-playing time (web #449). null hides it. */
+  llmTokens: number | null;
   feed: SessionTurn[];
   djLineOn: boolean;
   live: boolean;
@@ -49,6 +53,7 @@ export default function CenterStage({
   nowPlaying,
   coverSrc,
   elapsed,
+  llmTokens,
   feed,
   djLineOn,
   live,
@@ -108,19 +113,32 @@ export default function CenterStage({
         </View>
       ) : null}
 
-      <Text
-        className="font-mono text-muted"
-        style={{ fontSize: 11, letterSpacing: 2, marginBottom: 12 }}
-      >
-        NOW PLAYING{elapsedLabel}
-      </Text>
+      <View className="flex-row items-center" style={{ marginBottom: 12, gap: 5 }}>
+        <Text className="font-mono text-muted" style={{ fontSize: 11, letterSpacing: 2 }}>
+          NOW PLAYING{elapsedLabel}
+        </Text>
+        {llmTokens != null ? (
+          <View
+            className="flex-row items-center"
+            style={{ gap: 3 }}
+            accessible
+            accessibilityLabel={`${llmTokens.toLocaleString('en-US')} AI tokens generated`}
+          >
+            <Text className="font-mono text-muted" style={{ fontSize: 11 }}>·</Text>
+            <Coins size={11} color={colors.muted} strokeWidth={1.75} />
+            <Text className="font-mono text-muted" style={{ fontSize: 11 }}>
+              {llmTokens.toLocaleString('en-US')}
+            </Text>
+          </View>
+        ) : null}
+      </View>
 
       {has ? (
         <>
           <Text className="font-display text-ink" style={{ fontSize: 26, lineHeight: 30 }}>
             {nowPlaying?.title}
           </Text>
-          <Text className="font-body-medium mt-3" style={{ fontSize: 15, color: colors.muted }}>
+          <Text className="font-body-medium mt-1" style={{ fontSize: 15, color: colors.muted }}>
             <Text style={{ color: colors.ink }}>{nowPlaying?.artist || 'Unknown artist'}</Text>
             {nowPlaying?.album ? `  ·  ${nowPlaying.album}` : ''}
             {nowPlaying?.year ? `  ·  ${nowPlaying.year}` : ''}
@@ -130,10 +148,10 @@ export default function CenterStage({
               className="font-mono mt-2"
               style={{ fontSize: 11, letterSpacing: 1.5, color: colors.muted }}
             >
-              {metaTokens.join('  ·  ')}
+              {metaTokens.join(' · ')}
               {moodPhrase ? (
                 <Text style={{ color: colors.accent }}>
-                  {metaTokens.length > 0 ? '  ·  ' : ''}↳ {moodPhrase}
+                  {metaTokens.length > 0 ? ' · ' : ''}↳ {moodPhrase}
                 </Text>
               ) : null}
             </Text>

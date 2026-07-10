@@ -189,6 +189,19 @@ router.get('/now-playing', async (req, res) => {
         nowPlaying.energy = rec.energy ?? null;
         if (nowPlaying.year == null && rec.year != null) nowPlaying.year = rec.year;
       }
+      // Duration isn't in the annotate metadata Liquidsoap reports, so the
+      // player's track clock / up-next tease would never fire without help.
+      // The queue's record of the airing track carries the full Subsonic song
+      // (requests + DJ picks); auto-playlist plays fall back to the library
+      // DB's duration_sec. Tracks known to neither just omit it — the player
+      // degrades to an elapsed-only readout, same as the metadata strip.
+      if (nowPlaying.duration == null) {
+        const cur = queue.current;
+        const queueDuration =
+          cur?.track?.id === nowPlaying.subsonic_id ? cur.track.duration : null;
+        const duration = queueDuration ?? rec?.durationSec ?? null;
+        if (typeof duration === 'number' && duration > 0) nowPlaying.duration = duration;
+      }
     }
     // Served from the 15s listener-monitor cache — no per-request Icecast hit.
     const stream = getStreamStatus();
@@ -360,7 +373,10 @@ router.get('/schedule', async (req, res) => {
       id: show.id,
       name: show.name,
       topic: show.topic,
-      mood: show.mood,
+      // Multi-value moods (#929). `mood` stays as the lead entry for older
+      // clients (the native app reads this endpoint) — derived, never stored.
+      moods: Array.isArray(show.moods) ? show.moods : [],
+      mood: Array.isArray(show.moods) && show.moods.length ? show.moods[0] : '',
       personaId: show.personaId,
     }));
     res.json({

@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppActive } from '@/hooks/useAppActive';
 import type { StationApi } from '@/lib/api';
+import { DEFAULT_STATION_LOCALE, type StationLocale } from '@/lib/format';
 import type {
   ActiveShow,
   DjState,
@@ -32,6 +33,8 @@ export interface StationFeed {
   activeShow: ActiveShow | null;
   listeners: ListenerCount | number | null;
   streamOnline: boolean | null;
+  /** Cumulative since-boot LLM token total, or null before the first poll. */
+  llmTokens: number | null;
   state: StationState;
   session: SessionPayload;
   elapsed: number;
@@ -39,10 +42,18 @@ export interface StationFeed {
   /** Station IANA timezone, or null before first poll. Render on-air
    *  timestamps in this zone so they match what the DJ speaks (issue #418). */
   timezone: string | null;
+  locale: StationLocale;
 }
 
 const EMPTY_STATE: StationState = { upcoming: [], history: [], djLog: [] };
 const EMPTY_SESSION: SessionPayload = { session: null, messages: [] };
+// A single "offline" poll can be a transient controller blip; flipping to
+// offline on it would tear playback down mid-song (PlayerScreen stops on
+// offline). Require this many consecutive offline polls before believing it —
+// same debounce as the web player (#463/#466). At the foreground 5s cadence
+// that's ~20s; on the 30s background poll it's slower, which errs toward
+// keeping the music playing.
+const OFFLINE_CONFIRM_POLLS = 4;
 
 export function useStationFeed(
   api: StationApi | null,
@@ -55,11 +66,14 @@ export function useStationFeed(
   const [activeShow, setActiveShow] = useState<ActiveShow | null>(null);
   const [listeners, setListeners] = useState<ListenerCount | number | null>(null);
   const [streamOnline, setStreamOnline] = useState<boolean | null>(null);
+  const [llmTokens, setLlmTokens] = useState<number | null>(null);
   const [state, setState] = useState<StationState>(EMPTY_STATE);
   const [session, setSession] = useState<SessionPayload>(EMPTY_SESSION);
   const [timezone, setTimezone] = useState<string | null>(null);
+  const [locale, setLocale] = useState<StationLocale>(DEFAULT_STATION_LOCALE);
   const [elapsed, setElapsed] = useState(0);
   const trackStartRef = useRef<number | null>(null);
+  const offlinePollsRef = useRef(0);
   const appActive = useAppActive();
 
   // Per-field payload signatures: skip the setState (keeping the previous
@@ -82,15 +96,18 @@ export function useStationFeed(
     prevApiRef.current = api;
     sigRef.current = {};
     trackStartRef.current = null;
+    offlinePollsRef.current = 0;
     setNowPlaying(null);
     setContext(null);
     setDj(null);
     setActiveShow(null);
     setListeners(null);
     setStreamOnline(null);
+    setLlmTokens(null);
     setState(EMPTY_STATE);
     setSession(EMPTY_SESSION);
     setTimezone(null);
+    setLocale(DEFAULT_STATION_LOCALE);
     setElapsed(0);
   }, [api]);
 
@@ -116,8 +133,18 @@ export function useStationFeed(
       if (npRes.dj) setIfChanged('dj', npRes.dj, setDj);
       setIfChanged('activeShow', npRes.activeShow ?? npRes.context?.activeShow ?? null, setActiveShow);
       if (npRes.listeners != null) setIfChanged('listeners', npRes.listeners, setListeners);
-      if (typeof npRes.streamOnline === 'boolean') setStreamOnline(npRes.streamOnline);
+      if (typeof npRes.streamOnline === 'boolean') {
+        if (npRes.streamOnline) {
+          offlinePollsRef.current = 0;
+          setStreamOnline(true);
+        } else {
+          offlinePollsRef.current += 1;
+          if (offlinePollsRef.current >= OFFLINE_CONFIRM_POLLS) setStreamOnline(false);
+        }
+      }
+      if (typeof npRes.llmTokens === 'number') setIfChanged('llmTokens', npRes.llmTokens, setLlmTokens);
       if (typeof npRes.timezone === 'string' && npRes.timezone) setTimezone(npRes.timezone);
+      if (npRes.locale === 'en-US' || npRes.locale === 'en-GB') setLocale(npRes.locale);
     };
 
     const tick = async () => {
@@ -175,10 +202,12 @@ export function useStationFeed(
     activeShow,
     listeners,
     streamOnline,
+    llmTokens,
     state,
     session,
     elapsed,
     progress,
     timezone,
+    locale,
   };
 }

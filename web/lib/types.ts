@@ -75,7 +75,10 @@ export interface ScheduleShow {
   id: string;
   name: string;
   topic: string;
+  /** Lead mood — derived from moods[0] server-side (back-compat). */
   mood: string;
+  /** Full multi-value mood list (#929). */
+  moods?: string[];
   personaId: string;
 }
 /** 7 entries (Sun=0..Sat=6), each a 24-slot array of showId|null. */

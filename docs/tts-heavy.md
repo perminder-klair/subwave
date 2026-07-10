@@ -136,6 +136,30 @@ Compose itself, so the sidecar starts without any CLI flag. See
 [`unraid.md`](unraid.md#acoustic-analysis--expressive-voices-the-tts-heavy-sidecar)
 for the Unraid-specific walkthrough.
 
+### Run just one engine (Chatterbox *or* PocketTTS)
+
+Both engines are baked into the `tts-heavy` image, and by default the sidecar
+loads **both** on boot. But each one is a separate PyTorch model: loading it
+costs RAM, a multi-gigabyte weight download the first time, and 30–60 s of
+startup. If your personas only use one engine, tell the sidecar to skip the
+other — one line in `.env`, no rebuild:
+
+```ini
+# root .env — comma-separated; default is "chatterbox,pocket-tts" (both)
+TTS_HEAVY_ENGINES=pocket-tts       # PocketTTS only — Chatterbox never loads
+# TTS_HEAVY_ENGINES=chatterbox     # Chatterbox only
+```
+
+Then `docker compose --profile tts-heavy up -d` (recreates the sidecar). The
+skipped engine's worker never starts, so you reclaim its memory and its cold
+load. If a persona is still pointed at the disabled engine, its `/speak` calls
+return a clean `503` and the DJ falls back to Piper — nothing goes silent.
+
+`GET /health` on the sidecar reports `enabled: [...]` (what it was told to load)
+alongside `engines: [...]` (what's currently ready), so you can confirm the
+selection took. An empty or all-typo value falls back to loading both, so a bad
+entry never silently disables all heavy TTS.
+
 ---
 
 ## Verify it's running

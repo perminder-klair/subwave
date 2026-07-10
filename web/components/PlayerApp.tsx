@@ -28,7 +28,7 @@ import { useCoverColors } from '@/hooks/useCoverColors';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import { cn } from '@/lib/cn';
 import { useStationOrigin } from '@/lib/stationOrigin';
-import type { RequestResult } from '@/lib/types';
+import type { QueueEntry, RequestResult } from '@/lib/types';
 
 const DRAWER_TITLES: Record<PlayerDrawer, string> = {
   timeline: 'Timeline',
@@ -177,6 +177,15 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
       schedule: SCHEDULE_ICON,
     }),
     [upcomingCount],
+  );
+  // Queue head for CenterStage's "up next" tease. Reduced to the two fields it
+  // renders and memoized on them, so the fresh array every /state poll doesn't
+  // re-render the memoized stage.
+  const nextTitle = state.upcoming?.[0]?.title;
+  const nextArtist = state.upcoming?.[0]?.artist;
+  const upNext = useMemo<QueueEntry | null>(
+    () => (nextTitle ? { title: nextTitle, artist: nextArtist } : null),
+    [nextTitle, nextArtist],
   );
   const [tickerOn, setTickerOn] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -329,6 +338,8 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
         feed={boothFeed}
         djLineOn={tickerOn}
         boothBuddyOn={state.ui?.boothBuddy === true}
+        offline={offline}
+        upNext={upNext}
         onOpenBooth={openBooth}
         onOpenTimeline={openTimeline}
       />
@@ -355,8 +366,6 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
         latencyMs={signal.latencyMs}
         signalQuality={signal.quality}
         listeners={listenerCount}
-        nowPlaying={nowPlaying}
-        trackStartedAt={trackStartedAt}
       />
 
       <Sheet

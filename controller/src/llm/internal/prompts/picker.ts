@@ -23,30 +23,53 @@ export const PICKER_CRITERIA = `Selection criteria, in order:
 // DJ mode — settings.effectsActive), so callers append it unconditionally.
 // Lives here rather than in broadcast/dj-agent.ts because llm/ must not
 // import from broadcast/.
+// Compact by design (~250 words, was ~600): this block rides on EVERY DJ-mode
+// pick on both paths, and the agent path pays for it alongside the schema
+// description. The station validates every ask against the audio analysis
+// (queue.applyMixTransition), so the prompt only needs to teach WHEN to reach
+// for each effect — trigger + counter-indication — not how the audio works.
 export function effectsGuidance(): string {
   if (!settings.effectsActive()) return '';
-  return `\n\nTRANSITION EFFECTS ("transition") — part of your craft, not a gimmick: a working DJ fires one every few songs when the moment earns it. Actively look for the moment on every pick; when you spot one, flag it — the station validates your choice against the audio analysis and skips ones that don't land. The PACING is entirely yours: there is no rate limit, so be the taste — an effect hits hardest coming out of a stretch of clean blends, so let a few ordinary transitions breathe between them. VARY THEM: they are equals in your kit, and if your recent picks leaned on one, reach for another.\n- "washout": your pick dissolves into a pulsing, tempo-synced echo tail as it ENDS, ringing out into whatever follows. Fire it whenever your pick is the natural END of something: the last track of a run of similar songs, a song with a big or atmospheric ending, anything dreamy/hazy/anthemic, or when the NEXT stretch will change direction. In a normal set several tracks qualify — this is your workhorse exit move, not a rarity.\n- "sweep": the track playing before your pick sinks under a slowly closing filter across the blend while your pick rises clean underneath. Use it on a genuine gear-change — a clear jump in energy, tempo, or mood (it only fires when the tracks measurably clash).\n- "blend": spectral handover — across a long crossfade the outgoing track hands its bass, then its mids, to your pick, keeping only its highs to the end, while your pick arrives lows-first underneath. The two feel like ONE continuous piece of music. Reserve it for the EXCEPTIONAL pair, not the merely similar — your picks already flow, and the plain crossfade handles an ordinary same-lane transition on its own. Flag blend only when the two tracks are properly locked (near-identical tempo, harmonically close key) — roughly one pick in five, or it stops meaning anything (it only fires when the tracks measurably fit).\n- "dissolve": the track playing before your pick melts into a diffuse, beatless ambient wash while your pick rises clean through it — the reverb throw. The SMOOTH way across a clash where the sweep is the dramatic way: choose it when the tempo or mood jump should be hidden rather than announced (into a talk break's aftermath, easing between worlds late at night). Like the sweep it only fires when the tracks measurably clash.\n- "chop": the track playing before your pick is CUT rhythmically on its own beat — the crossfader cut: full-level stabs on the beat, thinning and sparsening out while your pick rises clean through the gaps. The PERCUSSIVE way across a clash: choose it to jump the energy UP off a beat-driven, percussive track (a takeover moment, kicking a set up a gear) — never out of anything ambient or beatless, where there is no beat to cut on. Like the sweep it only fires when the tracks measurably clash.\n- "loop": your pick\'s last bar is caught in a tempo-synced loop as it ENDS — the exit loop: the song is cut on the beat and its final bar repeats hypnotically under the next track before it filters away. Choose it to leave a groove-driven track with intent: a great riff, a locked drum pattern, the close of a rhythmic run. It needs the track\'s measured tempo (the station drops it on un-analysed tracks), and it reads best off percussive material — never out of something ambient.\nUse "normal" or null only when nothing above applies.`;
+  return `\n\nTRANSITION EFFECTS ("transition") — part of your craft: a working DJ fires one every few songs when the moment earns it. Flag the moment when you see it — the station validates each choice against the audio analysis and silently drops one that doesn't land, so a bold call is safe. Pacing is yours: let a few plain crossfades breathe between effects, and VARY them — if your recent picks leaned on one, reach for another.
+Exit moves (how YOUR PICK will end):
+- "washout": the pick dissolves into a tempo-synced echo tail as it ends — the workhorse exit; fire on any natural ending (last of a themed run, a big/dreamy/atmospheric closer, a direction change coming next).
+- "loop": the pick's final bar repeats hypnotically under the next track — the groove exit for a great riff or locked drum pattern; needs the track's measured tempo, never out of ambient.
+Clash moves (carry the PREVIOUS track into your pick; these only fire when the tracks measurably clash):
+- "sweep": previous sinks under a closing filter while yours rises clean — the DRAMATIC gear-change.
+- "dissolve": previous melts into a beatless ambient wash — the SMOOTH way, when the jump should be hidden (late night, easing out of a talk break).
+- "chop": previous is cut on its own beat, stabs thinning as yours rises — the PERCUSSIVE way to jump energy UP; only out of beat-driven material.
+Pair move:
+- "blend": spectral handover — the two tracks read as ONE continuous piece; only for an exceptionally locked pair (near-identical tempo, close key), roughly one pick in five at most.
+Use "normal" or null when nothing above applies — an ordinary same-lane pick needs no effect.`;
 }
 
-export type ShowMusic = { name: string; topic: string; mood?: string; genre?: string; fromYear?: number | null; toYear?: number | null; energy?: string; filtersStrict?: boolean };
+export type ShowEra = { fromYear?: number | null; toYear?: number | null };
+export type ShowMusic = { name: string; topic: string; moods?: string[]; genres?: string[]; eras?: ShowEra[]; energies?: string[]; filtersStrict?: boolean };
 
-// A show can pin a mood, genre, decade and/or energy band on track selection.
-// All are SOFT leans by default, or HARD constraints when `filtersStrict` is on
-// (one toggle governs every set filter). Render it as one prompt line shared by
-// both pick paths (the pool picker here and the conversational agent in
-// broadcast/dj-agent.ts). Returns '' when the show pins nothing, so callers can
-// append it unconditionally.
+// One era window as prose ("1990–1999", "1970 onward", "up to 1989").
+function eraWindowText(e: ShowEra): string {
+  const from = e.fromYear != null ? String(e.fromYear) : '';
+  const to = e.toYear != null ? String(e.toYear) : '';
+  return from && to ? `${from}–${to}` : from ? `${from} onward` : to ? `up to ${to}` : '';
+}
+
+// A show can pin moods, genres, decades and/or energy bands on track selection
+// — each a multi-value list (#929): any entry satisfies the attribute, all
+// entries weighted equally. All are SOFT leans by default, or HARD constraints
+// when `filtersStrict` is on (one toggle governs every set filter). Render it
+// as one prompt line shared by both pick paths (the pool picker here and the
+// conversational agent in broadcast/dj-agent.ts). Returns '' when the show
+// pins nothing, so callers can append it unconditionally.
 export function showMusicLean(show?: ShowMusic | null): string {
   if (!show) return '';
-  const eraText = (() => {
-    if (show.fromYear == null && show.toYear == null) return '';
-    const from = show.fromYear != null ? String(show.fromYear) : '';
-    const to = show.toYear != null ? String(show.toYear) : '';
-    return from && to ? `${from}–${to}` : from ? `${from} onward` : `up to ${to}`;
-  })();
+  const genres = show.genres ?? [];
+  const moods = show.moods ?? [];
+  const energies = show.energies ?? [];
+  const eraText = (show.eras ?? []).map(eraWindowText).filter(Boolean).join(' or ');
   // Strict only bites when there's actually a filter to lock to.
-  const hasFilter = !!(show.genre || show.mood || show.energy || eraText);
+  const hasFilter = !!(genres.length || moods.length || energies.length || eraText);
   const strict = !!(show.filtersStrict && hasFilter);
+  const or = (xs: string[]) => xs.join(' / ');
 
   if (strict) {
     // The hard rule. Track selection is code-enforced for strict shows (the
@@ -55,19 +78,19 @@ export function showMusicLean(show?: ShowMusic | null): string {
     // still surface), not the candidate list. Mood joins the lock here — soft
     // shows carry mood through the room-context prompt instead.
     const locks: string[] = [];
-    if (show.genre) locks.push(`${show.genre} tracks`);
-    if (eraText) locks.push(`the ${eraText} era`);
-    if (show.mood) locks.push(`the ${show.mood} mood`);
-    if (show.energy) locks.push(`${show.energy}-energy tracks`);
+    if (genres.length) locks.push(`${or(genres)} tracks`);
+    if (eraText) locks.push(`the ${eraText} era${(show.eras?.length ?? 0) > 1 ? 's' : ''}`);
+    if (moods.length) locks.push(`the ${or(moods)} mood${moods.length > 1 ? 's' : ''}`);
+    if (energies.length) locks.push(`${or(energies)}-energy tracks`);
     return `\n\nThis show's music filters are STRICT — every pick must fit: ${locks.join('; ')}. Keep your talk inside them too; only step outside if there is genuinely nothing left that fits (never leave dead air).`;
   }
 
   // Soft preferences. Mood is deliberately absent — it steers the room context
   // (dominantMood) rather than reading as a per-track preference.
   const parts: string[] = [];
-  if (show.genre) parts.push(`lean toward ${show.genre}`);
+  if (genres.length) parts.push(`lean toward ${or(genres)}`);
   if (eraText) parts.push(`prefer tracks from ${eraText}`);
-  if (show.energy) parts.push(`favour ${show.energy}-energy tracks`);
+  if (energies.length) parts.push(`favour ${or(energies)}-energy tracks`);
   return parts.length
     ? `\n\nMusic steer for this show — ${parts.join('; ')}. These are preferences, not hard filters: break them only when the flow genuinely demands it.`
     : '';
@@ -96,23 +119,33 @@ Use it to balance familiarity against discovery. The two *-similar sources may
 carry a "similarity" (0–1, higher = closer) — a high value means a very tight
 match you can lean on for a smooth segue.
 
-recentPlays is context for judging flow — every candidate is already guaranteed
-unplayed, so you never need to reject one for being recent.
+recentPlays is context for judging flow (most recent first; now.current is the
+track on air right now) — every candidate is already guaranteed unplayed, so
+you never need to reject one for being recent.
 
 Pick exactly one candidate.`;
 }
 
-export async function pickNextTrack({ candidates, recentPlays, context, show = null, recentTransitions = [] }: {
+export async function pickNextTrack({ candidates, recentPlays, context, show = null, current = null, recentTransitions = [] }: {
   candidates: any[];
   recentPlays: any;
   context: any;
   show?: ShowMusic | null;
+  // The track on air right now, with its measured facts when analysed
+  // ({ title, artist, bpm?, key?, pace? }). This is the anchor FLOW judges
+  // against — without it the criteria said "prefer a tempo near the current
+  // one" while the payload never stated the current tempo.
+  current?: any;
   // The model's recent transition asks (oldest first), for the same deliberate-
   // variety nudge the agent path gets — the queue's monoculture guard strips a
   // third identical choice either way, this just keeps the model from wasting
   // picks on choices that will be stripped. Only used when effects are active.
   recentTransitions?: string[];
 }) {
+  // Compact serialization on purpose: the old 2-space pretty-print spent a
+  // few hundred tokens on whitespace per pick, and models read dense JSON
+  // fine (the agent path's tool results arrive compact already). undefined
+  // fields drop out entirely — the projection upstream leans on that.
   const user = JSON.stringify({
     now: {
       time: context.time?.period,
@@ -120,10 +153,11 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
       mood: context.dominantMood,
       weather: context.weather?.condition,
       festival: context.festival?.name,
+      current: current || undefined,
     },
     recentPlays,
     candidates,
-  }, null, 2);
+  });
 
   // The id is a plain string, NOT z.enum(candidateIds), deliberately (#939):
   // the tool-strategy providers this path was meant to protect (llama.cpp via
@@ -154,8 +188,10 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
       id: idSchema,
       reason: z.string().describe('one short sentence on why this one'),
       ...(fxActive ? {
+        // One-line pointer only — the full coaching lives in effectsGuidance()
+        // in the system prompt; duplicating it here doubled the token bill.
         transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop']).nullable()
-          .describe('transition treatment for this pick — "blend" only when the pair is exceptionally locked (near-identical tempo, close key; a plain crossfade already handles ordinary same-lane picks), "sweep" for a genuine gear-change, "washout" to ring this pick out as it ends, "dissolve" to melt the previous track into ambience under this pick, "chop" to cut the previous track out on the beat for an energy jump, "loop" to catch this pick\'s last bar in a repeating loop as it ends; "normal" or null for a plain crossfade. The TRANSITION EFFECTS guidance above explains each.'),
+          .describe('transition treatment per the TRANSITION EFFECTS guidance: "washout"/"loop" end THIS pick (loop needs measured tempo), "sweep"/"dissolve"/"chop" carry the previous track across a clash (chop only out of beat-driven material), "blend" only for an exceptionally locked pair; "normal" or null for a plain crossfade.'),
       } : {}),
     }),
     temperature: 0.5,

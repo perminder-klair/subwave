@@ -13,6 +13,7 @@
 // "segment sheet" — the list here is just the roster + quick actions.
 import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
+import { cn } from '../../lib/cn';
 import { notify, errorMessage } from '../../lib/notify';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { RefreshCw, Plus, Users, Upload } from 'lucide-react';
@@ -383,13 +384,17 @@ export default function SkillsPanel() {
               </div>
             </div>
             <div className="flex flex-col gap-2">
-              <Btn
-                tone="accent"
+              {/* Same cart-pad language as the dash DJ segment pads, slimmed
+                  to one line — LED arms on hover, blinks while running. */}
+              <button
+                type="button"
                 onClick={() => runNow(s.name)}
                 disabled={busy === s.name}
+                className={cn('seg-pad seg-pad--slim', busy === s.name && 'is-firing')}
               >
-                {busy === s.name ? 'Working…' : 'Run now'}
-              </Btn>
+                <span className="seg-led" aria-hidden />
+                <span className="seg-label">{busy === s.name ? 'Working…' : 'Run now'}</span>
+              </button>
               {/* Edit opens the segment-sheet modal for both built-in and custom
                   skills; Run now / Delete live inside the sheet. */}
               <Btn onClick={() => setModal({ mode: 'edit', skill: s })}>Edit</Btn>

@@ -80,6 +80,10 @@ export const SOUL_MAX = 1000;
 export const LANGUAGE_MAX = 60;
 export const PROMPT_MIN = 50;
 export const PROMPT_MAX = 4000;
+// Prompt-template library caps — keep in lockstep with the controller's
+// DJ_PROMPT_LIMIT / DJ_PROMPT_NAME_MAX (settings.ts).
+export const PROMPT_PRESET_MAX = 20;
+export const PROMPT_NAME_MAX = 60;
 export const PERSONA_MAX = 48;
 
 // 512×512 output target. The controller hard-caps the decoded image at 300 KB

@@ -35,25 +35,59 @@ export function introBudgetPhrase(introMs: number | null | undefined): string {
 
 // Hard backstop for talk-within-the-intro (Stage A.3 phase 2): the budget PHRASE
 // above is advisory — a small model will still occasionally overrun. This
-// enforces it deterministically. Speaking pace is ~2.5 words/sec, so a known
-// intro runway maps to a word ceiling; over-long lines are trimmed to the last
-// sentence that fits, and only hard-cut mid-sentence if even one sentence won't
-// fit. Returns the text unchanged when there's no usable runway (null, very
-// short, or a long ≥18s intro) — symmetric with introBudgetPhrase's guards.
-export function enforceIntroBudget(text: string, introMs: number | null | undefined): string {
+// enforces it deterministically. Base speaking pace is ~2.5 words/sec, scaled
+// by `paceScale` — the live speech-rate multiplier from
+// audio/tts.speechPaceScale() (engine × persona × daypart) — so a persona
+// speaking at 0.8× gets a proportionally smaller word ceiling; 1 (the
+// default) is the historical fixed-pace assumption.
+//
+// A spoken fragment sounds like a station failure, so this NEVER hard-cuts
+// mid-thought (#962): over-long lines trim to the last complete sentence that
+// fits, else the last clause boundary (closed with a period so it still
+// sounds intentional), else the line is DROPPED — callers treat '' as "no
+// spoken intro" and the track just plays. Returns the text unchanged when
+// there's no usable runway (null, very short, or a long ≥18s intro) —
+// symmetric with introBudgetPhrase's guards.
+export function enforceIntroBudget(text: string, introMs: number | null | undefined, paceScale = 1): string {
   const t = (text || '').trim();
   if (!t || !introMs || introMs < 2500 || introMs >= 18000) return t;
-  const WORDS_PER_SEC = 2.5;
-  const maxWords = Math.max(3, Math.floor((introMs / 1000) * WORDS_PER_SEC));
+  const BASE_WORDS_PER_SEC = 2.5;
+  const pace = (Number.isFinite(paceScale) && paceScale > 0) ? paceScale : 1;
+  const maxWords = Math.max(3, Math.floor((introMs / 1000) * BASE_WORDS_PER_SEC * pace));
   const words = t.split(/\s+/);
   if (words.length <= maxWords) return t;
 
-  // Trim to the last sentence boundary that fits the budget.
   const capped = words.slice(0, maxWords).join(' ');
-  const lastStop = Math.max(capped.lastIndexOf('.'), capped.lastIndexOf('!'), capped.lastIndexOf('?'));
-  if (lastStop >= Math.floor(capped.length * 0.4)) {
-    return capped.slice(0, lastStop + 1).trim();
+  // Last index of a boundary character that ends a word (followed by space or
+  // end-of-string) — so a decimal ("3.5") or a thousands comma ("1,200")
+  // never counts as a cut point. `skip` vetoes individual matches.
+  const lastBoundary = (re: RegExp, skip?: (m: RegExpExecArray) => boolean): number => {
+    let at = -1;
+    for (let m = re.exec(capped); m; m = re.exec(capped)) {
+      if (!skip || !skip(m)) at = m.index;
+    }
+    return at;
+  };
+  // A period after an abbreviation or a lone initial ("Dr.", "St.", "feat.",
+  // "E. Street") is not a sentence end — without this veto the cut lands right
+  // after it and the DJ airs "Dr." alone, the exact fragment this cascade
+  // exists to prevent. Vetoing too eagerly is safe (the line falls through to
+  // the clause/drop steps); accepting wrongly is not. Applies to '.' only —
+  // '!' and '?' never end abbreviations.
+  const ABBREV_BEFORE_STOP = /(?:^|\s)(?:[A-Za-z]|Dr|Mr|Mrs|Ms|St|Jr|Sr|Prof|Rev|Sgt|Capt|Lt|Gen|Col|Mt|No|vs|feat|ft)$/i;
+  // Prefer the last complete sentence, however short — a one-word "Nice."
+  // sounds intentional; a fragment never does.
+  const lastStop = lastBoundary(
+    /[.!?](?=\s|$)/g,
+    (m) => m[0] === '.' && ABBREV_BEFORE_STOP.test(capped.slice(0, m.index)),
+  );
+  if (lastStop > 0) return capped.slice(0, lastStop + 1).trim();
+  // No full sentence fits — keep the longest clause if it carries enough of
+  // the line to stand alone, closed with a period.
+  const lastClause = lastBoundary(/[,;:—](?=\s|$)/g);
+  if (lastClause >= Math.floor(capped.length * 0.4)) {
+    return capped.slice(0, lastClause).trim() + '.';
   }
-  // No sentence boundary worth keeping — hard cut and punctuate cleanly.
-  return capped.replace(/[,;:\-—\s]+$/, '') + '…';
+  // Nothing complete fits the runway — silence beats an ellipsis fragment.
+  return '';
 }

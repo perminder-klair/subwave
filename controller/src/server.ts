@@ -272,4 +272,13 @@ app.listen(config.server.port, async () => {
     .ensureDefaultIdent()
     .catch(err => console.error('[jingles] ident generation failed:', err.message));
   sfx.ensureDefaults().catch(err => console.error('[sfx] default generation failed:', err.message));
+
+  // Kick the Observatory sound-map projection when it's stale (library grew
+  // since the last one, or never ran). Spawns a child — never blocks this loop.
+  try {
+    const { maybeProjectOnBoot } = await import('./music/map-projection.js');
+    maybeProjectOnBoot();
+  } catch (err: any) {
+    console.error('[map-projection] boot hook failed:', err.message);
+  }
 });

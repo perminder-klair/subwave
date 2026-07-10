@@ -3781,7 +3781,8 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
               When on, the next-track picker is a tool-using agent that explores the library
               itself. Needs a model that handles multi-step tool calls well. Leave off for
-              small local models.
+              small local models &mdash; skill segments (weather, news, &hellip;) then also run as a
+              single call instead of a tool loop.
             </div>
           </div>
           <Seg

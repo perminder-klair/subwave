@@ -191,6 +191,11 @@ export interface RawTrack {
   loudnessLufs: number | null;
   paceMean: number | null;
   vocal: Vocal;
+  // Sound-map coordinates — server-side UMAP of the CLAP audio vector,
+  // normalised to [0,1] per axis. null → not projected; the layout falls back
+  // to the genre-cluster placement for that track.
+  mapX: number | null;
+  mapY: number | null;
 }
 
 // A track after layout — what the map / panels / tooltip consume.
@@ -220,6 +225,7 @@ export interface LibraryData {
   tracks: ObsTrack[];
   genres: string[];
   centers: Record<string, { x: number; y: number; angle: number }>;
+  soundMap: boolean; // true → nodes sit by UMAP sound coordinates, not genre clusters
   stats: ObservatoryStats;
   moodVocab: string[];
   truncated: boolean;
@@ -308,12 +314,25 @@ function energyToVal(energy: Energy, id: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// Layout — place every track on a 1000×1000 disc, clustered by genre.
+// Layout — place every track on a 1000×1000 disc.
+//
+// Two placements, chosen by data coverage:
+//  · SOUND MAP — when enough tracks carry server-side UMAP coordinates
+//    (mapX/mapY, projected from the CLAP audio vectors), nodes sit where they
+//    SOUND: [0,1] coords scaled into the disc's inscribed square. Genre
+//    "centers" become the centroid of each genre's mapped members (they only
+//    anchor the constellation labels + the rare unmapped track).
+//  · GENRE CLUSTERS — the original synthetic layout (genre ring + gaussian
+//    spread), used for unprojected libraries and the mock showcase.
 // ---------------------------------------------------------------------------
+const SOUND_MAP_MIN = 50; // absolute floor of mapped tracks
+const SOUND_MAP_COVERAGE = 0.6; // fraction of tracks that must be mapped
+
 export function layoutTracks(raw: RawTrack[]): {
   tracks: ObsTrack[];
   genres: string[];
   centers: Record<string, { x: number; y: number; angle: number }>;
+  soundMap: boolean;
 } {
   // Distinct genres, most-populous first, for a stable angular assignment.
   const counts: Record<string, number> = {};
@@ -323,6 +342,61 @@ export function layoutTracks(raw: RawTrack[]): {
   });
   const genres = Object.keys(counts).sort((a, b) => (counts[b] ?? 0) - (counts[a] ?? 0) || a.localeCompare(b));
   const n = Math.max(1, genres.length);
+
+  const mappedCount = raw.reduce((acc, t) => acc + (t.mapX != null && t.mapY != null ? 1 : 0), 0);
+  const soundMap = mappedCount >= SOUND_MAP_MIN && mappedCount >= raw.length * SOUND_MAP_COVERAGE;
+
+  if (soundMap) {
+    // [0,1] → the disc's inscribed square, with a margin for labels/halo.
+    const M = 70;
+    const S = 1000 - 2 * M;
+    const px = (v: number) => M + v * S;
+
+    // Genre centroids over the mapped members — the constellation-label
+    // anchors, and the drop point for the rare unmapped track.
+    const sums: Record<string, { x: number; y: number; c: number }> = {};
+    raw.forEach((t) => {
+      if (t.mapX == null || t.mapY == null) return;
+      const g = t.genre || NO_GENRE;
+      (sums[g] ||= { x: 0, y: 0, c: 0 });
+      sums[g]!.x += px(t.mapX);
+      sums[g]!.y += px(t.mapY);
+      sums[g]!.c++;
+    });
+    const centers: Record<string, { x: number; y: number; angle: number }> = {};
+    genres.forEach((g) => {
+      const s = sums[g];
+      const x = s ? s.x / s.c : 500;
+      const y = s ? s.y / s.c : 500;
+      centers[g] = { x, y, angle: Math.atan2(y - 500, x - 500) };
+    });
+
+    const tracks: ObsTrack[] = raw.map((t, idx) => {
+      let x: number;
+      let y: number;
+      if (t.mapX != null && t.mapY != null) {
+        x = px(t.mapX);
+        y = px(t.mapY);
+      } else {
+        // unmapped (no audio vector yet) → hover its genre's neighbourhood
+        const c = centers[t.genre || NO_GENRE]!;
+        const rng = mulberry32(hashStr(t.id) ^ 0xc0ffee);
+        x = c.x + gauss(rng) * 45;
+        y = c.y + gauss(rng) * 45;
+      }
+      return {
+        ...t,
+        idx,
+        energyVal: energyToVal(t.energy, t.id),
+        analysed: t.bpm != null,
+        x,
+        y,
+        _eseed: hashStr(t.id),
+        searchText: searchTextOf(t),
+      };
+    });
+    return { tracks, genres, centers, soundMap: true };
+  }
 
   const centers: Record<string, { x: number; y: number; angle: number }> = {};
   genres.forEach((g, i) => {
@@ -353,7 +427,7 @@ export function layoutTracks(raw: RawTrack[]): {
     };
   });
 
-  return { tracks, genres, centers };
+  return { tracks, genres, centers, soundMap: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -384,10 +458,30 @@ export function sourceStyle(source: string | null): SourceStyle {
 }
 
 // ---------------------------------------------------------------------------
-// Synapse links — 1 nearest same-genre neighbour per node, found via a uniform
-// spatial grid (O(n)) instead of the O(n²) scan the SVG layer uses. Returns
-// index pairs into `tracks`. Used by the canvas renderer, where n can be large.
+// Synapse links — 1 nearby same-genre neighbour per node (the nearest within a
+// bounded probe), found via a uniform spatial grid so the whole pass stays
+// O(n) at ANY density. Returns index pairs into `tracks`. Feeds the galaxy's
+// filament LineSegments, where n can be very large.
 // ---------------------------------------------------------------------------
+// Per-track distance-check budget across the 9-cell probe. The grid keeps the
+// scan LOCAL, but not SMALL: when a genre packs thousands of tracks into one
+// cluster the probe degenerates toward O(n·clusterSize) — measured ~18 s of
+// main-thread stall at 400k sound-mapped tracks and ~65 s at 400k on the
+// genre-cluster layout. The links are cosmetic (a hair-thin line to A nearby
+// same-genre node), so past the budget we keep the nearest seen so far:
+// candidates share the track's own ≤64-unit cell neighbourhood, and "nearest
+// of 96 local candidates" is indistinguishable from the true nearest at any
+// density where the budget even engages. Sparse cells never hit it, so small
+// and mid-size libraries link exactly as before.
+const LINK_SCAN_BUDGET = 96;
+// 3×3 probe offsets, own cell first (see the budget note inside the loop).
+const PROBE_ORDER: [number, number][] = [
+  [0, 0],
+  [-1, -1], [-1, 0], [-1, 1],
+  [0, -1], [0, 1],
+  [1, -1], [1, 0], [1, 1],
+];
+
 export function buildSynapseLinks(tracks: ObsTrack[]): [number, number][] {
   const CELL = 64; // ~ the gaussian cluster spread in layoutTracks
   const grid = new Map<string, number[]>();
@@ -408,20 +502,25 @@ export function buildSynapseLinks(tracks: ObsTrack[]): [number, number][] {
     const gy = Math.floor(t.y / CELL);
     let best = -1;
     let bd = Infinity;
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        const cell = grid.get(`${g}|${gx + dx}|${gy + dy}`);
-        if (!cell) continue;
-        for (const j of cell) {
-          if (j === i) continue;
-          const ddx = t.x - tracks[j]!.x;
-          const ddy = t.y - tracks[j]!.y;
-          const d = ddx * ddx + ddy * ddy;
-          if (d < bd) {
-            bd = d;
-            best = j;
-          }
+    let budget = LINK_SCAN_BUDGET;
+    // Own cell first, ring after: when the budget engages the candidates must
+    // come from the track's immediate neighbourhood, or every link in a dense
+    // cluster spans a whole cell diagonal (measured p95 8u → 76u when the
+    // probe started at the corner cell). Own-cell-first also keeps picks
+    // mutual, so the a<b dedup below still collapses most pairs.
+    probe: for (const [dx, dy] of PROBE_ORDER) {
+      const cell = grid.get(`${g}|${gx + dx}|${gy + dy}`);
+      if (!cell) continue;
+      for (const j of cell) {
+        if (j === i) continue;
+        const ddx = t.x - tracks[j]!.x;
+        const ddy = t.y - tracks[j]!.y;
+        const d = ddx * ddx + ddy * ddy;
+        if (d < bd) {
+          bd = d;
+          best = j;
         }
+        if (--budget <= 0) break probe;
       }
     }
     if (best >= 0) {
@@ -592,6 +691,8 @@ export function buildMockLibrary(count = 400): LibraryData {
       loudnessLufs: analysed ? Math.round((-22 + ev * 16 + (rng() - 0.5) * 3) * 10) / 10 : null,
       paceMean: analysed ? Math.max(0.02, Math.min(0.98, Math.round((ev + (rng() - 0.5) * 0.2) * 100) / 100)) : null,
       vocal: analysed ? (rng() < 0.7 ? 'vocal' : 'instrumental') : null,
+      mapX: null,
+      mapY: null,
       energyVal: Math.round(ev * 100) / 100,
       analysed,
       x,
@@ -605,6 +706,7 @@ export function buildMockLibrary(count = 400): LibraryData {
     tracks,
     genres: MOCK_SCENES.map((s) => s.genre),
     centers,
+    soundMap: false,
     stats: {
       total: count,
       distinctArtists: Object.keys(byGenre).length * 6,

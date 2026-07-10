@@ -7,8 +7,13 @@
 // clearer browse/search/untagged experience:
 //   • Recently added — newest album tracks for quick discovery.
 //   • Browse — filters the tagged moods index (mood/energy/genre/year/q).
-//   • Search — Navidrome free-text (the legacy /dj/search path).
+//   • Search — Navidrome free-text (/dj/search, paged) plus, when the heavy
+//     analyzer's CLAP text tower is up, a natural-language "sounds like" mode
+//     (/library/search-sound).
 //   • Untagged — paginates through library tracks that haven't been tagged yet.
+//
+// Tab choice, browse filters, and the search query are mirrored into the URL
+// query string (history.replaceState) so reloads and shared links keep the view.
 //
 // Rows carry album art (via the public /cover/:id proxy, letter-tile fallback)
 // and inline mood/energy tags so operators *see* what tagging produces. Each
@@ -19,7 +24,7 @@
 // so the page renders correctly under every palette — no hardcoded hex.
 
 import type { ChangeEvent, FormEvent, ReactNode } from 'react';
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search, RotateCcw, Sparkles, RefreshCw, ListPlus, ListMusic, X, Pencil,
 } from 'lucide-react';
@@ -59,6 +64,8 @@ interface Track {
   loudnessLufs?: number | null;
   paceMean?: number | null;
   instrumental?: boolean | null;
+  // Cosine match vs the query — only on sounds-like search results.
+  similarity?: number | null;
 }
 
 interface BrowseResponse {
@@ -93,12 +100,28 @@ type Tab = 'recent' | 'browse' | 'search' | 'untagged' | 'playlists';
 type Sort = 'artist' | 'title' | 'year' | 'taggedAt' | 'bpm' | 'loudness' | 'pace';
 type Energy = 'any' | 'low' | 'medium' | 'high';
 type Vocal = 'any' | 'instrumental' | 'vocal';
+// 'library' = Navidrome metadata search (/dj/search); 'sound' = natural-language
+// CLAP sounds-like search (/library/search-sound), shown only when coverage
+// reports the capability.
+type SearchMode = 'library' | 'sound';
 
 const PAGE_SIZE = 50;
+const SEARCH_PAGE = 30;
+
+const TABS: Tab[] = ['recent', 'browse', 'search', 'untagged', 'playlists'];
+const SORTS: Sort[] = ['artist', 'title', 'year', 'taggedAt', 'bpm', 'loudness', 'pace'];
 
 // ---------------------------------------------------------------------------
 // small shared parts
 // ---------------------------------------------------------------------------
+// Track length as m:ss, or null when unknown/zero (Navidrome omits duration on
+// some rows — don't render "0:00" for those).
+function fmtDuration(sec?: number | null): string | null {
+  if (sec == null || !Number.isFinite(sec) || sec <= 0) return null;
+  const total = Math.round(sec);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
 function EnergyMeter({ level }: { level?: string | null }) {
   const cls = level === 'high' ? 'h' : level === 'medium' ? 'm' : level === 'low' ? 'l' : '';
   return (
@@ -179,8 +202,15 @@ export default function LibraryPanel() {
 
   // search state
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchMode, setSearchMode] = useState<SearchMode>('library');
   const [searchResults, setSearchResults] = useState<Track[] | null>(null);
   const [searching, setSearching] = useState(false);
+  // Library-mode paging: a full page from /dj/search means more may exist.
+  const [searchHasMore, setSearchHasMore] = useState(false);
+  const [searchingMore, setSearchingMore] = useState(false);
+  // The query/mode that produced searchResults — Load more must page THAT
+  // search, not whatever is currently typed in the (maybe edited) input.
+  const lastSearchRef = useRef<{ q: string; mode: SearchMode } | null>(null);
 
   // untagged state
   const [untagged, setUntagged] = useState<Track[]>([]);
@@ -197,6 +227,65 @@ export default function LibraryPanel() {
   const [playlists, setPlaylists] = useState<PlaylistSummary[] | null>(null);
   const [playlistsLoading, setPlaylistsLoading] = useState(false);
   const [plBusy, setPlBusy] = useState(false);
+
+  // -----------------------------------------------------------------------
+  // URL state — tab, browse filters, and the search query live in the query
+  // string so a reload / back-button / shared link lands on the same view.
+  // Restored once on mount (post-hydration, so no SSR mismatch); written back
+  // via history.replaceState (no Next.js navigation, no server round-trip).
+  // -----------------------------------------------------------------------
+  const [urlRestored, setUrlRestored] = useState(false);
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const t = sp.get('tab');
+    if (t && (TABS as string[]).includes(t)) setTab(t as Tab);
+    const m = (sp.get('moods') || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (m.length) setMoods(m);
+    const en = sp.get('energy');
+    if (en === 'low' || en === 'medium' || en === 'high') setEnergy(en);
+    const vo = sp.get('vocal');
+    if (vo === 'vocal' || vo === 'instrumental') setVocal(vo);
+    const g = sp.get('genre');
+    if (g) setGenre(g);
+    const yf = sp.get('from');
+    if (yf) setYearFrom(yf);
+    const yt = sp.get('to');
+    if (yt) setYearTo(yt);
+    const bq = sp.get('q');
+    if (bq) setQ(bq);
+    const so = sp.get('sort');
+    if (so && (SORTS as string[]).includes(so)) setSort(so as Sort);
+    const sq = sp.get('sq');
+    if (sq) setSearchQuery(sq);
+    if (sp.get('smode') === 'sound') setSearchMode('sound');
+    setUrlRestored(true);
+  }, []);
+
+  useEffect(() => {
+    if (!urlRestored) return;
+    const sp = new URLSearchParams();
+    if (tab !== 'recent') sp.set('tab', tab);
+    if (moods.length) sp.set('moods', moods.join(','));
+    if (energy !== 'any') sp.set('energy', energy);
+    if (vocal !== 'any') sp.set('vocal', vocal);
+    if (genre) sp.set('genre', genre);
+    if (yearFrom) sp.set('from', yearFrom);
+    if (yearTo) sp.set('to', yearTo);
+    if (q.trim()) sp.set('q', q.trim());
+    if (sort !== 'artist') sp.set('sort', sort);
+    if (searchQuery.trim()) sp.set('sq', searchQuery.trim());
+    if (searchMode === 'sound') sp.set('smode', 'sound');
+    const qs = sp.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`);
+  }, [urlRestored, tab, moods, energy, vocal, genre, yearFrom, yearTo, q, sort, searchQuery, searchMode]);
+
+  // If coverage says the sound search can't serve (lean analyzer, no audio
+  // index), drop back to the metadata mode the toggle would otherwise hide.
+  useEffect(() => {
+    if (coverage && coverage.soundSearchAvailable !== true && searchMode === 'sound') {
+      setSearchMode('library');
+    }
+  }, [coverage, searchMode]);
 
   // -----------------------------------------------------------------------
   // polling — coverage (60 s) + tagger status (3 s while running, 10 s idle)
@@ -273,10 +362,16 @@ export default function LibraryPanel() {
   }, [ready, tagger?.running, loadCoverage]);
 
   // -----------------------------------------------------------------------
-  // browse fetch — debounced on filter change
+  // browse fetch — debounced on filter change. Each run aborts the previous
+  // in-flight request: without this, a slow earlier response can land after a
+  // faster later one and overwrite the table with results for stale filters.
   // -----------------------------------------------------------------------
+  const browseAbortRef = useRef<AbortController | null>(null);
   const runBrowse = useCallback(async () => {
     if (!ready) return;
+    browseAbortRef.current?.abort();
+    const ac = new AbortController();
+    browseAbortRef.current = ac;
     setBrowseLoading(true);
     try {
       const params = new URLSearchParams();
@@ -290,14 +385,16 @@ export default function LibraryPanel() {
       params.set('sort', sort);
       params.set('limit', String(PAGE_SIZE));
       params.set('offset', String(page * PAGE_SIZE));
-      const r = await adminFetch(`/library/browse?${params}`);
+      const r = await adminFetch(`/library/browse?${params}`, { signal: ac.signal });
       if (!r.ok) throw new Error(`browse failed (${r.status})`);
       setBrowse((await r.json()) as BrowseResponse);
     } catch (err) {
+      // Superseded by a newer run — that run owns the table and the spinner.
+      if (ac.signal.aborted) return;
       notify.err(errorMessage(err));
       setBrowse(null);
     } finally {
-      setBrowseLoading(false);
+      if (!ac.signal.aborted) setBrowseLoading(false);
     }
   }, [adminFetch, ready, moods, energy, vocal, genre, yearFrom, yearTo, q, sort, page]);
 
@@ -326,25 +423,60 @@ export default function LibraryPanel() {
   useEffect(() => { setPage(0); }, [moods, energy, vocal, genre, yearFrom, yearTo, q, sort]);
 
   // -----------------------------------------------------------------------
-  // search fetch
+  // search fetch — two modes: 'library' pages Navidrome metadata search
+  // (/dj/search, offset appends), 'sound' is the one-shot natural-language
+  // CLAP sounds-like search (/library/search-sound, no paging — fixed KNN).
   // -----------------------------------------------------------------------
-  const runSearch = async (e?: FormEvent<HTMLFormElement>) => {
-    e?.preventDefault();
-    const text = searchQuery.trim();
+  const executeSearch = useCallback(async (text: string, mode: SearchMode, offset: number) => {
     if (!text || !ready) return;
-    setSearching(true);
+    const append = offset > 0;
+    if (append) setSearchingMore(true);
+    else setSearching(true);
     try {
-      const r = await adminFetch(`/dj/search?q=${encodeURIComponent(text)}`);
-      const j = await r.json().catch(() => ({})) as { results?: Track[]; error?: string };
-      if (!r.ok) throw new Error(j.error || `search failed (${r.status})`);
-      setSearchResults(j.results || []);
+      let rows: Track[] = [];
+      let more = false;
+      if (mode === 'sound') {
+        const r = await adminFetch(`/library/search-sound?q=${encodeURIComponent(text)}&limit=${SEARCH_PAGE}`);
+        const j = await r.json().catch(() => ({})) as { results?: Track[]; error?: string };
+        if (!r.ok) throw new Error(j.error || `sound search failed (${r.status})`);
+        rows = j.results || [];
+      } else {
+        const r = await adminFetch(`/dj/search?q=${encodeURIComponent(text)}&limit=${SEARCH_PAGE}&offset=${offset}`);
+        const j = await r.json().catch(() => ({})) as { results?: Track[]; hasMore?: boolean; error?: string };
+        if (!r.ok) throw new Error(j.error || `search failed (${r.status})`);
+        rows = j.results || [];
+        // Absent on an old controller (fixed 12 rows) → no Load more, as before.
+        more = !!j.hasMore;
+      }
+      setSearchResults(prev => (append ? [...(prev || []), ...rows] : rows));
+      setSearchHasMore(more);
+      lastSearchRef.current = { q: text, mode };
     } catch (err) {
       notify.err(errorMessage(err));
-      setSearchResults([]);
+      if (!append) { setSearchResults([]); setSearchHasMore(false); }
     } finally {
-      setSearching(false);
+      if (append) setSearchingMore(false);
+      else setSearching(false);
     }
+  }, [adminFetch, ready]);
+
+  const runSearch = (e?: FormEvent<HTMLFormElement>) => {
+    e?.preventDefault();
+    executeSearch(searchQuery.trim(), searchMode, 0);
   };
+
+  const loadMoreSearch = () => {
+    const last = lastSearchRef.current;
+    if (last) executeSearch(last.q, last.mode, searchResults?.length || 0);
+  };
+
+  // Deep link with a search query (?tab=search&sq=…) — run it once auth is up.
+  const autoSearchedRef = useRef(false);
+  useEffect(() => {
+    if (!ready || !urlRestored || autoSearchedRef.current) return;
+    autoSearchedRef.current = true;
+    if (tab === 'search' && searchQuery.trim()) executeSearch(searchQuery.trim(), searchMode, 0);
+  }, [ready, urlRestored, tab, searchQuery, searchMode, executeSearch]);
 
   // -----------------------------------------------------------------------
   // untagged paging
@@ -516,6 +648,10 @@ export default function LibraryPanel() {
       setTimeout(() => setFlashId(curr => (curr === track.id ? null : curr)), 1100);
       if (tab === 'browse') runBrowse();
       if (tab === 'untagged') setUntagged(prev => prev.filter(t => t.id !== track.id));
+      // Search/recent rows aren't refetched — patch the row so the new tags
+      // show immediately (the server stamps retagged rows source='llm').
+      if (tab === 'search') setSearchResults(prev => patchRows(prev, track, j.moods || [], j.energy ?? null, false, false, 'llm'));
+      if (tab === 'recent') setRecent(prev => patchRows(prev, track, j.moods || [], j.energy ?? null, false, false, 'llm'));
       loadCoverage();
     } catch (err) {
       notify.err(errorMessage(err));
@@ -546,11 +682,14 @@ export default function LibraryPanel() {
     setEditingId(t.id);
   };
 
-  // Patch the visible rows after a manual-tag write so search/recent reflect it
+  // Patch the visible rows after a tag write so search/recent reflect it
   // without a refetch. Album siblings in view update too when applyToAlbum.
+  // `source` mirrors what the server stamped: 'manual' for the inline editor,
+  // 'llm' for single-track retag.
   const patchRows = (
     rows: Track[] | null, track: Track,
     moods: string[], energy: string | null, cleared: boolean, applyToAlbum: boolean,
+    source: string = 'manual',
   ): Track[] | null => {
     if (!rows) return rows;
     return rows.map(r => {
@@ -558,7 +697,7 @@ export default function LibraryPanel() {
       if (!hit) return r;
       return cleared
         ? { ...r, moods: [], energy: null, source: null }
-        : { ...r, moods, energy, source: 'manual' };
+        : { ...r, moods, energy, source };
     });
   };
 
@@ -961,22 +1100,49 @@ export default function LibraryPanel() {
 
       {tab === 'search' && (
         <Card bodyClass="!py-3">
-          <form onSubmit={runSearch} className="grid grid-cols-[1fr_auto_auto] gap-2">
-            <InputGroup>
-              <InputGroupAddon><Search /></InputGroupAddon>
-              <InputGroupInput
-                placeholder="floating points, kingdoms in colour, 2018…"
-                value={searchQuery}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
-              />
-            </InputGroup>
-            <Btn tone="accent" type="submit" disabled={searching || !searchQuery.trim() || !ready}>
-              {searching ? 'Searching…' : 'Search'}
-            </Btn>
-            <Btn type="button" onClick={() => { setSearchQuery(''); setSearchResults(null); }} disabled={searching}>
-              Clear
-            </Btn>
-          </form>
+          <div className="grid gap-2.5">
+            {/* Mode toggle only when the CLAP text tower + audio index exist —
+                on lean installs the tab stays plain metadata search. */}
+            {coverage?.soundSearchAvailable === true && (
+              <div className="flex flex-wrap items-center gap-3">
+                <Seg
+                  value={searchMode}
+                  options={[
+                    { id: 'library', label: 'Library' },
+                    { id: 'sound', label: 'Sounds like' },
+                  ]}
+                  onChange={(v: string) => {
+                    setSearchMode(v as SearchMode);
+                    setSearchResults(null);
+                    setSearchHasMore(false);
+                  }}
+                />
+                {searchMode === 'sound' && (
+                  <span className="text-[11px] text-muted">
+                    describe a sound — matches the audio itself, not titles or tags
+                  </span>
+                )}
+              </div>
+            )}
+            <form onSubmit={runSearch} className="grid grid-cols-[1fr_auto_auto] gap-2">
+              <InputGroup>
+                <InputGroupAddon><Search /></InputGroupAddon>
+                <InputGroupInput
+                  placeholder={searchMode === 'sound'
+                    ? 'dusty late-night jazz with brushed drums, warm acoustic fingerpicking…'
+                    : 'floating points, kingdoms in colour, 2018…'}
+                  value={searchQuery}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
+                />
+              </InputGroup>
+              <Btn tone="accent" type="submit" disabled={searching || !searchQuery.trim() || !ready}>
+                {searching ? 'Searching…' : 'Search'}
+              </Btn>
+              <Btn type="button" onClick={() => { setSearchQuery(''); setSearchResults(null); setSearchHasMore(false); }} disabled={searching}>
+                Clear
+              </Btn>
+            </form>
+          </div>
         </Card>
       )}
 
@@ -1061,6 +1227,14 @@ export default function LibraryPanel() {
             <span className="mono-num">page {page + 1} of {totalPages}</span>
             <Btn sm disabled={page + 1 >= totalPages} onClick={() => setPage(p => p + 1)}>next ›</Btn>
           </span>
+        </div>
+      )}
+
+      {tab === 'search' && searchHasMore && (searchResults?.length || 0) > 0 && (
+        <div className="flex justify-center">
+          <Btn onClick={loadMoreSearch} disabled={searchingMore}>
+            {searchingMore ? 'Loading…' : 'Load more'}
+          </Btn>
         </div>
       )}
 
@@ -1313,7 +1487,9 @@ function TrackTable(p: TrackTableProps) {
   const allSelected = p.rows.length > 0 && p.rows.every(t => p.selected.has(t.id));
 
   return (
-    <div>
+    // Dim (don't blank) stale rows while a refetch is in flight, so filter
+    // changes read as "updating" instead of silently showing old results.
+    <div className={cn(p.loading && 'opacity-60 transition-opacity')}>
       <div className="lib-colhead">
         <span>
           <input
@@ -1332,6 +1508,7 @@ function TrackTable(p: TrackTableProps) {
       {p.rows.map(t => {
         const tagged = !!(t.moods && t.moods.length > 0);
         const editing = p.editingId === t.id;
+        const dur = fmtDuration(t.duration);
         return (
           <Fragment key={t.id}>
           <div className={cn('lib-row', p.flashId === t.id && 'flash')}>
@@ -1344,7 +1521,7 @@ function TrackTable(p: TrackTableProps) {
             <Thumb track={t} />
             <div className="min-w-0">
               <div className="lib-title">{t.title || '—'}</div>
-              <div className="lib-artist">{t.artist || '—'}{t.year ? ` · ${t.year}` : ''}</div>
+              <div className="lib-artist">{t.artist || '—'}{t.year ? ` · ${t.year}` : ''}{dur ? ` · ${dur}` : ''}</div>
             </div>
             <div className="lib-tags">
               {tagged ? (
@@ -1362,6 +1539,9 @@ function TrackTable(p: TrackTableProps) {
               {t.musicalKey && <span className="lib-mtag lib-atag" title="musical key">{t.musicalKey}</span>}
               {t.loudnessLufs != null && <span className="lib-mtag lib-atag" title="integrated loudness (LUFS)">{t.loudnessLufs.toFixed(1)} LUFS</span>}
               {t.instrumental === true && <span className="lib-mtag lib-atag" title="no vocals detected">instrumental</span>}
+              {/* sounds-like results carry their cosine match vs the query —
+                  shows where relevance falls off down the list */}
+              {t.similarity != null && <span className="lib-mtag lib-atag" title="sound match vs your description">≈ {Math.round(t.similarity * 100)}%</span>}
             </div>
             <span className="lib-album">{t.album || '—'}</span>
             <div className="flex items-center justify-end gap-1.5">
@@ -1377,18 +1557,18 @@ function TrackTable(p: TrackTableProps) {
               >
                 {editing ? <X size={12} /> : <Pencil size={12} />}
               </Btn>
-              {(p.tab === 'browse' || p.tab === 'untagged') && (
-                <Btn
-                  sm
-                  tone={p.tab === 'untagged' || !tagged ? 'accent' : 'solid'}
-                  onClick={() => p.onRetag(t)}
-                  disabled={!!p.retagging}
-                >
-                  {p.retagging === t.id ? '…' : tagged
-                    ? <><RotateCcw size={11} /> Retag</>
-                    : <><Sparkles size={11} /> Tag</>}
-                </Btn>
-              )}
+              {/* All track tabs — an untagged track found via search/recent can
+                  be LLM-tagged on the spot (/library/retag takes the row body). */}
+              <Btn
+                sm
+                tone={p.tab === 'untagged' || !tagged ? 'accent' : 'solid'}
+                onClick={() => p.onRetag(t)}
+                disabled={!!p.retagging}
+              >
+                {p.retagging === t.id ? '…' : tagged
+                  ? <><RotateCcw size={11} /> Retag</>
+                  : <><Sparkles size={11} /> Tag</>}
+              </Btn>
             </div>
           </div>
           {editing && (

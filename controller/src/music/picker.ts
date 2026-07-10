@@ -14,7 +14,7 @@ import { logEvent } from '../observability/events.js';
 import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
-import { normGenre, genreMatches, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood } from './show-filter.js';
+import { normGenre, genreMatches, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, hasEraBound, eraSpan, type YearRange } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
 
 const CANDIDATE_CAP = 18;
@@ -70,8 +70,9 @@ function shuffle<T>(arr: T[]): T[] {
 
 // Pull bpm/musical_key for a candidate — library.bpmKeyFor prefers the
 // analyzer's numbers over the candidate's own fields (a Subsonic candidate's
-// bpm is Navidrome's ID3-derived value, 0 on un-tagged files; #862).
-function analysisFor(t: any): { bpm: number | null; key: string | null } {
+// bpm is Navidrome's ID3-derived value, 0 on un-tagged files; #862). Also
+// carries the boundary keys (keyStart/keyEnd, feature: key ranges).
+function analysisFor(t: any): { bpm: number | null; key: string | null; keyStart?: string | null; keyEnd?: string | null } {
   return library.bpmKeyFor(t);
 }
 
@@ -80,13 +81,16 @@ function analysisFor(t: any): { bpm: number | null; key: string | null } {
 
 // Order the pool by a random base nudged up for tempo/harmonic compatibility
 // with the current track. Random stays dominant so the pool keeps its variety
-// and a NULL-analysis pool is indistinguishable from shuffle().
-function softRankByCompat(pool: any[], current: { bpm: number | null; key: string | null }): any[] {
+// and a NULL-analysis pool is indistinguishable from shuffle(). Key compares
+// the pair the transition actually meets — the anchor's ENDING key against
+// each candidate's OPENING key (feature: key ranges) — falling back to the
+// dominant keys (a mini-run rankTarget carries only a dominant key).
+function softRankByCompat(pool: any[], current: { bpm: number | null; key: string | null; keyEnd?: string | null }): any[] {
   if (current.bpm == null && current.key == null) return shuffle(pool);
   return pool
     .map((t: any) => {
       const a = analysisFor(t);
-      const bonus = 0.4 * bpmCompat(current.bpm, a.bpm) + 0.3 * keyCompat(current.key, a.key);
+      const bonus = 0.4 * bpmCompat(current.bpm, a.bpm) + 0.3 * keyCompat(current.keyEnd ?? current.key, a.keyStart ?? a.key);
       return { t, score: Math.random() + bonus };
     })
     .sort((x, y) => y.score - x.score)
@@ -106,10 +110,12 @@ function softRankByCompat(pool: any[], current: { bpm: number | null; key: strin
 // fill the pool degrades to off-filter tracks rather than dead air (logged by
 // the caller for genre).
 
-type ShowFilter = { mood?: string; genre?: string; fromYear?: number | null; toYear?: number | null; energy?: string; strict?: boolean } | null;
+// Multi-value lists (#929): OR within an attribute, AND across attributes.
+// Empty list = no constraint on that attribute.
+type ShowFilter = { moods: string[]; genres: string[]; eras: YearRange[]; energies: string[]; strict?: boolean } | null;
 
 function hasMusicFilter(f: ShowFilter): boolean {
-  return !!f && (!!f.genre || f.fromYear != null || f.toYear != null);
+  return !!f && (f.genres.length > 0 || hasEraBound(f.eras));
 }
 
 // Genre / energy / era helpers (normGenre / genreMatches / preferGenre /
@@ -166,14 +172,19 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // matches), so a thin constraint degrades rather than strands the show.
   // Soft mode leaves the sources untouched (only the nz() shrink applies).
   const strict = !!(showFilter?.strict
-    && (showFilter?.genre || showFilter?.mood || showFilter?.energy
-      || showFilter?.fromYear != null || showFilter?.toYear != null));
-  // Resolve the show's free-text genre to the library's exact tag ONCE, up
-  // front. A resolution failure / absent genre degrades to no genre filter so
-  // a misspelled genre never strands the show (never-starve).
-  let strictGenre: string | null = null;
-  if (strict && showFilter?.genre) {
-    try { strictGenre = await source.resolveGenreName(showFilter.genre); } catch {}
+    && (showFilter.genres.length || showFilter.moods.length || showFilter.energies.length
+      || hasEraBound(showFilter.eras)));
+  // Resolve the show's free-text genres to the library's exact tags ONCE, up
+  // front. A resolution failure drops that entry (never-starve: none resolving
+  // means no genre filter at all, so misspelled genres never strand the show).
+  const strictGenres: string[] = [];
+  if (strict && showFilter?.genres.length) {
+    for (const g of showFilter.genres) {
+      try {
+        const resolved = await source.resolveGenreName(g);
+        if (resolved) strictGenres.push(resolved);
+      } catch {}
+    }
   }
   // Hard-prefer every set filter on a discovery source in strict mode; a no-op
   // otherwise. Each prefer* falls back to the full set when nothing in the
@@ -181,10 +192,10 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   const lean = (items: any[]) => {
     if (!strict) return items;
     let out = items;
-    if (strictGenre) out = preferGenre(out, strictGenre);
-    out = preferEra(out, showFilter!);
-    out = preferMood(out, showFilter!.mood);
-    out = preferEnergyStrict(out, showFilter!.energy);
+    if (strictGenres.length) out = preferGenre(out, strictGenres);
+    out = preferEra(out, showFilter!.eras);
+    out = preferMood(out, showFilter!.moods);
+    out = preferEnergyStrict(out, showFilter!.energies);
     return out;
   };
 
@@ -249,34 +260,50 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     } catch {}
   }
 
-  // 1e. Show genre / decade — the soft-dominant source when a show pins a
-  // genre or a year range. getRandomSongs takes genre + year-range natively in
-  // one call; when a genre is set we also pull the full genre-tagged set
-  // (broader than a random sample) and soft-filter it to the decade. The whole
-  // collection is then energy-preferred. Never a hard filter — see helpers.
+  // 1e. Show genres / decades — the soft-dominant source when a show pins
+  // genres or year windows. getRandomSongs takes ONE genre + ONE contiguous
+  // year range natively, so with multiple values we call per genre (splitting
+  // the size budget) against the eras' coarse envelope (eraSpan), then post-
+  // filter the genre-tagged sets to the exact era union (inYearRange). The
+  // whole collection is then energy-preferred. Never a hard filter — see helpers.
   if (hasMusicFilter(showFilter)) {
     try {
-      // Reuse the strict-resolved tag when we already paid for it above; only
-      // resolve here on the soft path (or if strict resolution came back null).
-      let genreName: string | null = strict ? strictGenre : null;
-      if (!genreName && showFilter!.genre) {
-        genreName = await source.resolveGenreName(showFilter!.genre);
+      // Reuse the strict-resolved tags when we already paid for them above;
+      // only resolve here on the soft path (or if strict resolution came back
+      // empty). Unresolvable genres drop out (never-starve).
+      const genreNames: string[] = strict ? [...strictGenres] : [];
+      if (!genreNames.length && showFilter!.genres.length) {
+        for (const g of showFilter!.genres) {
+          try {
+            const resolved = await source.resolveGenreName(g);
+            if (resolved) genreNames.push(resolved);
+          } catch {}
+        }
       }
+      const span = eraSpan(showFilter!.eras);
       const collected: any[] = [];
-      collected.push(...await source.getRandomSongs({
-        size: strict ? 60 : 40,
-        genre: genreName || undefined,
-        fromYear: showFilter!.fromYear ?? undefined,
-        toYear: showFilter!.toYear ?? undefined,
-      }));
-      if (genreName) {
-        const g = await source.getSongsByGenre(genreName, { count: strict ? 100 : 60 });
-        const ranged = inYearRange(g, showFilter!);
-        collected.push(...(ranged.length ? ranged : g));
+      const randomSize = strict ? 60 : 40;
+      const genreSetSize = strict ? 100 : 60;
+      for (const genreName of genreNames.length ? genreNames : [undefined]) {
+        collected.push(...await source.getRandomSongs({
+          size: Math.ceil(randomSize / Math.max(1, genreNames.length)),
+          genre: genreName,
+          fromYear: span.fromYear ?? undefined,
+          toYear: span.toYear ?? undefined,
+        }));
+        if (genreName) {
+          const g = await source.getSongsByGenre(genreName, { count: Math.ceil(genreSetSize / genreNames.length) });
+          const ranged = inYearRange(g, showFilter!.eras);
+          collected.push(...(ranged.length ? ranged : g));
+        }
       }
+      // The random fetch used the coarse era envelope — tighten to the exact
+      // window union here (never-starve: keep the envelope set if the exact
+      // union would empty the source).
+      const exact = hasEraBound(showFilter!.eras) ? inYearRange(collected, showFilter!.eras) : collected;
       // Genre/era are already native to this source; lean() adds the strict
       // mood/energy filters on top (no-op in soft mode).
-      const leaned = lean(preferEnergy(collected, showFilter!.energy));
+      const leaned = lean(preferEnergy(exact.length ? exact : collected, showFilter!.energies));
       // Strict bumps the cap so this genre-native source dominates the merged pool.
       add('show-genre', sampleWithRecentFallback(shuffle(leaned), recentIds, strict ? CAP_SHOW_GENRE_STRICT : CAP_SHOW_GENRE));
     } catch {}
@@ -290,9 +317,21 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     add('show-playlist', sampleWithRecentFallback(shuffle(playlistPool!.tracks), recentIds, strictPlaylist ? CAP_SHOW_PLAYLIST_STRICT : CAP_SHOW_PLAYLIST));
   }
 
-  // 2. Mood-tagged library (LLM-built tags, may be sparse).
-  if (mood) {
-    const moodHits = shuffle(lean(preferEnergy(library.songsByMood(mood), showFilter?.energy)));
+  // 2. Mood-tagged library (LLM-built tags, may be sparse). A multi-mood show
+  // pools ALL its moods equally (#929); autonomous hours keep the single
+  // dominantMood. Dedup by id across the unioned mood sets.
+  const poolMoods = showFilter?.moods.length ? showFilter.moods : (mood ? [mood] : []);
+  if (poolMoods.length) {
+    const seenMoodIds = new Set<string>();
+    const moodPool: any[] = [];
+    for (const m of poolMoods) {
+      for (const t of library.songsByMood(m)) {
+        if (t?.id && seenMoodIds.has(t.id)) continue;
+        if (t?.id) seenMoodIds.add(t.id);
+        moodPool.push(t);
+      }
+    }
+    const moodHits = shuffle(lean(preferEnergy(moodPool, showFilter?.energies)));
     add('mood-library', sampleWithRecentFallback(moodHits, recentIds, CAP_MOOD_LIBRARY));
   }
 
@@ -301,10 +340,11 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // which playlists to use, so also grabbing every playlist whose name merely
   // contains the mood word would leak other shows' same-mood playlists into the
   // pool (#642). Autonomous hours (no pinned playlists) keep the mood match.
-  if (mood && !hasPlaylist) {
+  if (poolMoods.length && !hasPlaylist) {
     try {
       const playlists = await memo('playlists', CACHE_TTL_MS, () => source.getPlaylists());
-      const matched = playlists.filter((p: any) => p.name?.toLowerCase().includes(mood.toLowerCase()));
+      const matched = playlists.filter((p: any) =>
+        poolMoods.some(m => p.name?.toLowerCase().includes(m.toLowerCase())));
       const plTracks: any[] = [];
       for (const pl of matched.slice(0, 2)) {
         try {
@@ -423,15 +463,15 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   });
 
   // Strict-genre diagnostics for the caller's never-starve log: how much of the
-  // final pool actually landed in-genre. `resolved` is null when the show's
-  // genre didn't map to any library tag (strict silently degraded to soft).
+  // final pool actually landed in-genre. `resolved` is null when NONE of the
+  // show's genres mapped to a library tag (strict silently degraded to soft).
   let strictInfo: { requested: string; resolved: string | null; matched: number; total: number } | null = null;
-  if (strict && showFilter?.genre) {
-    const target = strictGenre ? normGenre(strictGenre) : '';
+  if (strict && showFilter?.genres.length) {
+    const targets = strictGenres.map(normGenre).filter(Boolean);
     strictInfo = {
-      requested: showFilter!.genre!,
-      resolved: strictGenre,
-      matched: target ? final.filter((t: any) => genreMatches(t, target)).length : 0,
+      requested: showFilter.genres.join(', '),
+      resolved: strictGenres.length ? strictGenres.join(', ') : null,
+      matched: targets.length ? final.filter((t: any) => genreMatches(t, targets)).length : 0,
       total: final.length,
     };
   }
@@ -458,13 +498,25 @@ function summariseRecent(queue: any) {
     .filter((i: any) => i?.track?.title)
     .map((i: any) => {
       const tags = i.track.id ? library.get(i.track.id) : null;
+      // Empty fields are omitted, not nulled — `"moods": [], "energy": null`
+      // on every un-tagged entry was pure token spend (the payload is compact
+      // JSON now, and JSON.stringify drops undefined).
       return {
         title: i.track.title,
         artist: i.track.artist,
-        moods: tags?.moods || [],
-        energy: tags?.energy || null,
+        moods: tags?.moods?.length ? tags.moods : undefined,
+        energy: tags?.energy || undefined,
       };
     });
+}
+
+// The album line only earns its tokens when it says something the title
+// doesn't — "Aja - Single" next to the title "Aja" is noise on every single
+// release in the pool.
+function slimAlbum(album: any, title: any): string | undefined {
+  if (!album) return undefined;
+  const stripped = String(album).replace(/\s*-\s*(Single|EP)$/i, '').trim();
+  return stripped.toLowerCase() === String(title || '').trim().toLowerCase() ? undefined : album;
 }
 
 // ---------------------------------------------------------------------------
@@ -493,7 +545,13 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   // (picker-test's stub) fall back to resolving at now.
   const activeShow = ctx?.activeShow !== undefined ? ctx.activeShow : settings.resolveActiveShow();
   const showFilter: ShowFilter = activeShow
-    ? { mood: activeShow.mood, genre: activeShow.genre, fromYear: activeShow.fromYear, toYear: activeShow.toYear, energy: activeShow.energy, strict: activeShow.filtersStrict }
+    ? {
+        moods: activeShow.moods ?? [],
+        genres: activeShow.genres ?? [],
+        eras: activeShow.eras ?? [],
+        energies: activeShow.energies ?? [],
+        strict: activeShow.filtersStrict,
+      }
     : null;
   // Resolve the show's anchored Navidrome playlist(s), if any, into a deduped
   // track pool. Null when the show pins none (the common case → pool unchanged).
@@ -563,11 +621,10 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
         ? {
             name: activeShow.name,
             topic: activeShow.topic,
-            mood: activeShow.mood,
-            genre: activeShow.genre,
-            fromYear: activeShow.fromYear,
-            toYear: activeShow.toYear,
-            energy: activeShow.energy,
+            moods: activeShow.moods,
+            genres: activeShow.genres,
+            eras: activeShow.eras,
+            energies: activeShow.energies,
             filtersStrict: activeShow.filtersStrict,
           }
         : null,
@@ -580,15 +637,24 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
         // criteria PICKER_CRITERIA asks the model to weigh (#862). Same join
         // summariseRecent below already does.
         const rec = c.id ? library.get(c.id) : null;
+        const moods = (Array.isArray(c.moods) && c.moods.length ? c.moods : rec?.moods) || [];
         return {
           id: c.id,
           title: c.title,
           artist: c.artist,
-          album: c.album || null,
-          year: c.year || null,
-          genre: c.genre || null,
-          moods: (Array.isArray(c.moods) && c.moods.length ? c.moods : rec?.moods) || [],
-          energy: c.energy || rec?.energy || null,
+          // Absent-when-empty throughout (undefined drops out of the JSON):
+          // a mostly-untagged pool used to ship `"moods": [], "energy": null,
+          // "album": null…` on every candidate — hundreds of tokens that told
+          // the model nothing.
+          album: slimAlbum(c.album, c.title),
+          year: c.year || undefined,
+          genre: c.genre || undefined,
+          moods: moods.length ? moods : undefined,
+          energy: c.energy || rec?.energy || undefined,
+          // Track length in seconds — lets the pick weigh a 9-minute epic
+          // against the daypart (length is an on-air cut, never a pool filter
+          // — #447 — so the model is the only place it can be weighed).
+          secs: c.duration ?? rec?.duration_sec ?? undefined,
           // Measured acoustic facts — omitted (undefined) when un-analysed so
           // the LLM only sees them when they're real.
           bpm: a.bpm ?? undefined,
@@ -611,6 +677,20 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
       }),
       recentPlays,
       context: ctx,
+      // The on-air anchor for FLOW: title/artist plus measured tempo/key/pace
+      // when the current track is analysed. Without this the criteria asked
+      // the model to match "the current" tempo it was never told.
+      current: currentTrack ? (() => {
+        const ca = analysisFor(currentTrack);
+        const crec = currentTrack.id ? library.get(currentTrack.id) : null;
+        return {
+          title: currentTrack.title,
+          artist: currentTrack.artist,
+          bpm: ca.bpm ?? undefined,
+          key: ca.key ?? undefined,
+          pace: currentTrack.paceMean ?? crec?.paceMean ?? undefined,
+        };
+      })() : null,
       recentTransitions,
     });
   } catch (err) {

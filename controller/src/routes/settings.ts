@@ -102,6 +102,8 @@ router.get('/settings', requireAdmin, async (req, res) => {
         festivals: s.festivals,
         weather: s.weather,
         djPrompt: s.djPrompt,
+        djPrompts: s.djPrompts,
+        activeDjPromptId: s.activeDjPromptId,
         personas: s.personas,
         activePersonaId: s.activePersonaId,
         shows: s.shows,

@@ -16,7 +16,11 @@ const PROBE_INTERVAL_MS = 5000;
 const PROBE_BACKOFF_MS = 15000;
 const PROBE_BACKOFF_AFTER = 3;
 const PROBE_TIMEOUT_MS = 4000;
-const GOOD_MS = 120;
+// One full ruler width. 200–300ms is a normal phone→CDN→origin round trip and
+// irrelevant to a buffered live stream, so "good" spans the whole scale; the
+// original 120ms threshold was LAN-calibrated and read "Poor" on healthy
+// real-world networks.
+const GOOD_MS = SCALE_MAX;
 
 export type SignalQuality =
   | 'offline'
@@ -87,14 +91,18 @@ export function useSignal({ api, tunedIn, status, offline }: UseSignalOptions): 
     };
   }, [api, tunedIn, offline, appActive]);
 
+  // The label grades PLAYBACK health, not raw HTTP latency: audio playing +
+  // station reachable is never worse than "fair" (slow API ≠ bad audio — the
+  // stream is buffered); "poor" is reserved for real distress, i.e. the
+  // station stops answering probes entirely.
   const quality = useMemo<SignalQuality>(() => {
     if (offline) return 'offline';
     if (!tunedIn) return 'idle';
+    if (status === 'connecting') return 'acquiring';
     if (failed) return 'poor';
-    if (status === 'connecting' || latencyMs == null) return 'acquiring';
-    if (latencyMs < GOOD_MS) return 'good';
-    if (latencyMs <= SCALE_MAX) return 'fair';
-    return 'poor';
+    if (latencyMs == null) return 'acquiring';
+    if (latencyMs <= GOOD_MS) return 'good';
+    return 'fair';
   }, [offline, tunedIn, status, failed, latencyMs]);
 
   return { latencyMs, quality };

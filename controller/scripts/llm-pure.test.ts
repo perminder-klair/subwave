@@ -605,8 +605,36 @@ async function main() {
     assert.equal(enforceIntroBudget('text', 20000), 'text');                         // ≥18s
     const sentences = enforceIntroBudget('One. Two. Three. Four. Five. Six. Seven. Eight. Nine. Ten. Eleven. Twelve.', 4000);
     assert.ok(sentences.endsWith('.') && sentences.split(/\s+/).length <= 10);        // last full sentence
-    const hardcut = enforceIntroBudget('a b c d e f g h i j k l m n o p q r s t', 4000);
-    assert.ok(hardcut.endsWith('…') && hardcut.split(/\s+/).length <= 11);            // ellipsis fallback
+  });
+  await test('enforceIntroBudget never airs a fragment: clause, else drop (#962)', () => {
+    // No sentence or clause boundary anywhere — the line is dropped, not "…"-cut.
+    assert.equal(enforceIntroBudget('a b c d e f g h i j k l m n o p q r s t', 4000), '');
+    // A short complete sentence beats silence even when it's well under 40%.
+    const short = enforceIntroBudget('Nice. Then a very long thought that rambles on and on without ever stopping for breath at all', 4000);
+    assert.equal(short, 'Nice.');
+    // No sentence fits but a late clause does — cut at the LAST clause
+    // boundary that fits (the longest complete thought), closed with a period.
+    const clause = enforceIntroBudget('Ever notice how a single chord, held just long enough, can feel like a tiny pause in the day', 4000);
+    assert.equal(clause, 'Ever notice how a single chord, held just long enough.');
+    // A decimal point is not a sentence boundary.
+    const decimal = enforceIntroBudget('Running at 3.5 minutes this one just keeps going and going and going without a stop', 4000);
+    assert.equal(decimal, '');
+    // An abbreviation period is not a sentence end — the DJ never airs "Dr."
+    // alone; the cut falls through to the clause/drop steps instead.
+    assert.equal(enforceIntroBudget('Dr. Dre eases us in with a slow-building intro that takes its sweet time before the beat', 4000), '');
+    assert.equal(enforceIntroBudget('Here is a smooth cut feat. a guest who drifts in over a long patient intro tonight', 4000), '');
+    // …but a real stop later in the same line still wins, abbreviation and all.
+    const abbrev = enforceIntroBudget('St. Vincent is here. Now a very long ramble that goes on and on forever', 4000);
+    assert.equal(abbrev, 'St. Vincent is here.');
+  });
+  await test('enforceIntroBudget word ceiling scales with speech pace', () => {
+    const line = 'One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty.';
+    // 4s × 2.5w/s = 10 words at pace 1 → over budget; at 2× the whole line fits.
+    assert.equal(enforceIntroBudget(line, 4000, 2), line);
+    // At half pace the ceiling halves — still no fragment, so it drops.
+    assert.equal(enforceIntroBudget('a b c d e f g h i j', 4000, 0.5), '');
+    // Garbage pace values fall back to the historical 1.0 assumption.
+    assert.equal(enforceIntroBudget('Short line.', 5000, NaN), 'Short line.');
   });
 
   // ---- persona tone dials (humour / local colour / warmth) ----
@@ -739,14 +767,14 @@ async function main() {
     assert.equal(showMusicLean(null), '');
     assert.equal(showMusicLean(undefined), '');
   });
-  await test('soft genre-only show is byte-for-byte the legacy line', () => {
-    assert.equal(showMusicLean({ name: 'x', topic: 'y', genre: 'Jazz' }), SOFT_GENRE_LINE);
+  await test('soft single-genre show is byte-for-byte the legacy line', () => {
+    assert.equal(showMusicLean({ name: 'x', topic: 'y', genres: ['Jazz'] }), SOFT_GENRE_LINE);
   });
   await test('filtersStrict=false leaves the soft path unchanged', () => {
-    assert.equal(showMusicLean({ name: 'x', topic: 'y', genre: 'Jazz', filtersStrict: false }), SOFT_GENRE_LINE);
+    assert.equal(showMusicLean({ name: 'x', topic: 'y', genres: ['Jazz'], filtersStrict: false }), SOFT_GENRE_LINE);
   });
   await test('strict filters are a hard rule, not a soft lean', () => {
-    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Hip-Hop', filtersStrict: true });
+    const out = showMusicLean({ name: 'x', topic: 'y', genres: ['Hip-Hop'], filtersStrict: true });
     assert.match(out, /music filters are STRICT/);                  // the unified strict lock (#766)
     assert.match(out, /Hip-Hop tracks/);                            // genre carried into the lock
     assert.match(out, /Keep your talk inside them too/);            // stay-in-filter instruction
@@ -755,25 +783,38 @@ async function main() {
     assert.doesNotMatch(out, /Music steer/);     // no soft line when strict is on
   });
   await test('strict carries the never-starve escape hatch', () => {
-    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Metal', filtersStrict: true });
+    const out = showMusicLean({ name: 'x', topic: 'y', genres: ['Metal'], filtersStrict: true });
     assert.match(out, /never leave dead air/i);   // can stray only to avoid dead air
   });
   await test('strict needs a filter — filtersStrict alone is inert', () => {
     assert.equal(showMusicLean({ name: 'x', topic: 'y', filtersStrict: true }), '');
     // energy alone still bites: the unified toggle locks any pinned filter, not just genre
-    const out = showMusicLean({ name: 'x', topic: 'y', energy: 'high', filtersStrict: true });
+    const out = showMusicLean({ name: 'x', topic: 'y', energies: ['high'], filtersStrict: true });
     assert.match(out, /music filters are STRICT/);
     assert.match(out, /high-energy tracks/);
     assert.doesNotMatch(out, /Music steer/);   // strict, so no soft line
   });
   await test('strict locks genre, era and energy together (unified toggle)', () => {
-    const out = showMusicLean({ name: 'x', topic: 'y', genre: 'Soul', filtersStrict: true, fromYear: 1970, toYear: 1979, energy: 'medium' });
+    const out = showMusicLean({ name: 'x', topic: 'y', genres: ['Soul'], filtersStrict: true, eras: [{ fromYear: 1970, toYear: 1979 }], energies: ['medium'] });
     assert.match(out, /music filters are STRICT/);   // unified strict lock (#766)
     assert.match(out, /Soul tracks/);
     assert.match(out, /the 1970–1979 era/);
     assert.match(out, /medium-energy tracks/);
     assert.doesNotMatch(out, /Music steer/);       // era/energy are strict too — no soft line
     assert.doesNotMatch(out, /lean toward Soul/);  // genre is part of the hard lock
+  });
+  await test('multi-value filters render every entry, any-of (#929)', () => {
+    const soft = showMusicLean({ name: 'x', topic: 'y', genres: ['Hard Rock', 'Metal'], eras: [{ fromYear: 1990, toYear: 1999 }, { fromYear: 2010, toYear: 2019 }], energies: ['high', 'medium'] });
+    assert.match(soft, /lean toward Hard Rock \/ Metal/);
+    assert.match(soft, /1990–1999 or 2010–2019/);        // non-adjacent windows both named
+    assert.match(soft, /favour high \/ medium-energy tracks/);
+    const strictOut = showMusicLean({ name: 'x', topic: 'y', genres: ['Hard Rock', 'Metal'], moods: ['energetic', 'driving'], filtersStrict: true });
+    assert.match(strictOut, /Hard Rock \/ Metal tracks/);
+    assert.match(strictOut, /the energetic \/ driving moods/);
+  });
+  await test('open-ended era windows read as prose', () => {
+    const out = showMusicLean({ name: 'x', topic: 'y', eras: [{ fromYear: null, toYear: 2009 }] });
+    assert.match(out, /prefer tracks from up to 2009/);  // "nothing after the 2000s"
   });
 
   // ---- clampMaxOutputTokens / resolveMaxOutputTokens (per-call cap, #712) ----

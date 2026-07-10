@@ -18,6 +18,7 @@ import { useAdminAuth } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { V3Alert } from '../ui/alert';
 import { Card, Btn, Pill, Eyebrow, Seg } from './ui';
+import { ScrollArea } from '../ui/scroll-area';
 import { cn } from '../../lib/cn';
 
 // --- types --------------------------------------------------------------
@@ -375,11 +376,11 @@ function BarList({ rows, max }: { rows: BarRow[]; max: number }) {
 
 // Caps a breakdown list/table to a scrollable area so a long tail (e.g. 40
 // referrers or countries) can't stretch the card down the page. Short lists are
-// untouched — the scrollbar only appears once content exceeds the cap. Uses the
-// house ink-tinted scrollbar (.v3-scroll, globals.css); tables wrapped here keep
-// their header visible via the sticky <thead> in <Table>.
+// untouched — the scrollbar only appears once content exceeds the cap. Tables
+// wrapped here keep their header visible via the sticky <thead> in <Table>
+// (sticky resolves against the ScrollArea viewport).
 function ScrollBox({ children }: { children: ReactNode }) {
-  return <div className="v3-scroll max-h-[260px] overflow-y-auto">{children}</div>;
+  return <ScrollArea className="max-h-[260px]">{children}</ScrollArea>;
 }
 
 // --- listener trend chart ----------------------------------------------

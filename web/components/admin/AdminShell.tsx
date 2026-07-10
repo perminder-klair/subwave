@@ -31,6 +31,7 @@ import OdometerNumber from '../OdometerNumber';
 import BoothBuddy from '../BoothBuddy';
 import ThemeSwitcher from '../ThemeSwitcher';
 import { Toaster } from '../ui/toaster';
+import { V3AlertDialog } from '../ui/alert-dialog';
 import { animate as motionAnimate } from 'motion/react';
 
 interface NavItem {
@@ -402,11 +403,7 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
           >
             <Headphones size={15} strokeWidth={2} aria-hidden="true" />
           </Link>
-          {onSignOut && (
-            <button className="sign-out" onClick={onSignOut}>
-              sign out
-            </button>
-          )}
+          {onSignOut && <SignOutButton onSignOut={onSignOut} />}
         </span>
       )}
       {!signedIn && (
@@ -425,5 +422,27 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
         </span>
       )}
     </header>
+  );
+}
+
+// Sign out drops the cached credentials, so a stray click means re-entering
+// them — worth a confirm, matching the dash's skip-track dialog.
+function SignOutButton({ onSignOut }: { onSignOut: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <>
+      <button className="sign-out" onClick={() => setConfirming(true)}>
+        sign out
+      </button>
+      <V3AlertDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title="Sign out"
+        description="Sign out of the admin console? You'll need the operator credentials to get back in."
+        confirmLabel="sign out"
+        danger
+        onConfirm={onSignOut}
+      />
+    </>
   );
 }

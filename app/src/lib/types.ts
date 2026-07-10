@@ -5,6 +5,10 @@
 // sync — it's duplicated (not shared via a package) because the web hooks that
 // also use it are DOM-coupled and can't be imported here. Pure interfaces only.
 
+import type { StationLocale } from './format';
+
+export type { StationLocale };
+
 /** A track currently airing. `subsonic_id` is present for library tracks and
  *  drives lock-screen artwork via the `/api/cover/:id` proxy. */
 export interface NowPlayingTrack {
@@ -45,6 +49,9 @@ export interface ActiveShow {
   /** `avatar` is the full public path (e.g. `/api/persona-avatar/p_default0`) —
    *  the controller serves a transparent 1×1 placeholder when none is set. */
   persona?: { id?: string; name?: string; avatar?: string };
+  /** Guest co-hosts on the current show (same shape as persona). Empty or
+   *  absent = solo show. */
+  guests?: { id?: string; name?: string; avatar?: string }[];
 }
 
 /** `/dj` response — station identity. */
@@ -56,6 +63,7 @@ export interface DjPublic {
   avatar?: string;
   station?: string;
   location?: string;
+  locale?: StationLocale;
 }
 
 /** `/schedule` response — listener-safe view of the week. */
@@ -68,7 +76,10 @@ export interface ScheduleShow {
   id: string;
   name: string;
   topic: string;
+  /** Lead mood — derived from moods[0] server-side (back-compat). */
   mood: string;
+  /** Full multi-value mood list (#929). */
+  moods?: string[];
   personaId: string;
 }
 /** 7 entries (Sun=0..Sat=6), each a 24-slot array of showId|null. */
@@ -78,6 +89,7 @@ export interface SchedulePayload {
   shows: ScheduleShow[];
   schedule: ScheduleGrid;
   timezone?: string | null;
+  locale?: StationLocale;
 }
 
 /** Context envelope returned by `/now-playing`. Dominant mood priority is
@@ -109,9 +121,15 @@ export interface NowPlayingResponse {
   activeShow?: ActiveShow | null;
   listeners?: ListenerCount | number;
   streamOnline?: boolean;
+  /** kbps of the first attached broadcast mount; null when offline. */
+  streamBitrate?: number | null;
+  /** Cumulative since-boot LLM token total — the player's token ticker. */
+  llmTokens?: number | null;
   /** Station IANA timezone — render on-air timestamps in it so they match what
    *  the DJ speaks, regardless of the device's own timezone (issue #418). */
   timezone?: string;
+  /** Station display locale — UK keeps 24-hour time; US uses AM/PM. */
+  locale?: StationLocale;
 }
 
 export interface QueueEntry {
@@ -159,6 +177,10 @@ export interface StationState {
   upcoming: QueueEntry[];
   history: QueueEntry[];
   djLog: DjLogEntry[];
+  timezone?: string;
+  locale?: StationLocale;
+  /** Station-wide listener-player UI toggles (from GET /state). */
+  ui?: { boothBuddy?: boolean };
 }
 
 /** A single turn in the live DJ session. */

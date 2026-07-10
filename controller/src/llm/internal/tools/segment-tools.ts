@@ -57,6 +57,24 @@ export function buildSegmentTools(ctx: any, state: any, caps: any[]) {
   return tools;
 }
 
+// Direct-call variant for the non-agentic segment path (pool mode, where the
+// operator's model isn't trusted with tool loops): code invokes the chosen
+// capability's data tool itself and inlines the result into a single
+// structured-output prompt. Same timeout and same error-shape degradation as
+// the agent-facing wrapper above, so a slow or throwing skill yields
+// `{ error }` rather than hanging the tick. Inputs are the skill's own
+// defaults ({} — the agent-steerable `inputs` params are a tool-loop nicety).
+export async function fetchSegmentData(cap: any, ctx: any, state: any): Promise<any> {
+  if (typeof cap?.toolFn !== 'function') return null;
+  const services = buildStationServices();
+  try {
+    const p = Promise.resolve(cap.toolFn(ctx, state, services, cap.config, {}));
+    return await withTimeout(p, 8000);
+  } catch (err: any) {
+    return { error: err?.message || String(err) };
+  }
+}
+
 // Resolve `p`, or reject after `ms` — keeps any skill's tool.mjs from stalling
 // the segment tick indefinitely.
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
