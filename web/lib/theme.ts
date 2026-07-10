@@ -8,7 +8,7 @@
 // THEME_INIT_SCRIPT so there's no flash. Once /themes responds, the fresh
 // token map is applied + cached for the next visit.
 
-export const THEME_TOKEN_KEYS = [
+const THEME_TOKEN_KEYS = [
   '--bg',
   '--ink',
   '--muted',
@@ -17,7 +17,6 @@ export const THEME_TOKEN_KEYS = [
   '--soft-border',
   '--field',
 ] as const;
-export type ThemeTokenKey = (typeof THEME_TOKEN_KEYS)[number];
 
 const TOKEN_KEY_SET = new Set<string>(THEME_TOKEN_KEYS);
 const TOKEN_CACHE_KEY = 'subwave-theme-tokens';
