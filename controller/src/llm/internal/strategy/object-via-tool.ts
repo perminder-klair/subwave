@@ -7,13 +7,13 @@
 // branches.
 
 import { generateText, tool, isStepCount } from 'ai';
-import { usageOf } from '../core/pure.js';
+import { usageOf, perfOf, warningsOf } from '../core/pure.js';
 import { reasoningFor, forcedToolChoice } from '../provider/capabilities.js';
 
 export async function objectViaToolCall(
   leg: any,
   { system, prompt, messages, schema, temperature, maxOutputTokens, signal }: any,
-): Promise<{ object: any; usage: any }> {
+): Promise<{ object: any; usage: any; perf?: any; warnings?: string[] }> {
   let captured: any;
   const emit = tool({
     description: 'Return your final answer. Call this tool exactly once, with the complete result — calling it IS how you answer.',
@@ -39,5 +39,5 @@ export async function objectViaToolCall(
     ...(signal ? { abortSignal: signal } : {}),
   } as any);
   if (captured === undefined) throw new Error('model never called the emit tool');
-  return { object: schema.parse(captured), usage: usageOf(result) };
+  return { object: schema.parse(captured), usage: usageOf(result), perf: perfOf(result), warnings: warningsOf(result) };
 }

@@ -29,7 +29,7 @@
 import { Output, isStepCount, hasToolCall, ToolLoopAgent, tool } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
-import { stripThinking, extractJson, usageOf, flattenToolCalls, failureDiagnostics } from '../core/pure.js';
+import { stripThinking, extractJson, usageOf, perfOf, warningsOf, flattenToolCalls, failureDiagnostics } from '../core/pure.js';
 import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, forcedToolChoice } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { agentPlan } from './plan.js';
@@ -191,13 +191,15 @@ export async function djAgent({
         // NoObjectGeneratedError. Get the structured result from a forced tool call.
         if (plan === 'object-via-tool') {
           lastVia = 'ai-sdk:tool';
-          const { object, usage } = await withTransientRetry(kind,
+          const { object, usage, perf, warnings } = await withTransientRetry(kind,
             () => objectViaToolCall(leg, { system, prompt: undefined, messages, schema, temperature, maxOutputTokens }));
           return {
             value: { object, steps: 0, toolCalls: [] },
             via: lastVia,
             sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
             usage,
+            perf,
+            warnings,
             extra: { system, messages, toolCalls: [], steps: 0, response: JSON.stringify(object, null, 2) },
           };
         }
@@ -249,6 +251,8 @@ export async function djAgent({
                 via: lastVia,
                 sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
                 usage: usageOf(nr),
+                perf: perfOf(nr),
+                warnings: warningsOf(nr),
                 extra: { system, messages, toolCalls, steps: nSteps, response: JSON.stringify(nObj, null, 2) },
               };
             }
@@ -401,6 +405,8 @@ export async function djAgent({
           via: lastVia,
           sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
           usage: usageOf(result),
+          perf: perfOf(result),
+          warnings: warningsOf(result),
           // Full, untruncated — the agent's entire input and trail.
           extra: {
             system, messages, toolCalls, steps,

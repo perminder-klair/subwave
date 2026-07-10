@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { z } from 'zod';
 import { generateText, APICallError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { stripThinking, truncationError, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, snapV3Stability, modelTolerant, schemaHint } from '../src/llm/internal/core/pure.js';
+import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, snapV3Stability, modelTolerant, schemaHint } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
 import { reasoningFor, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
@@ -570,6 +570,38 @@ async function main() {
     assert.deepEqual(usageOf({ totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } }), { input: 10, output: 5, total: 15 });
     assert.deepEqual(usageOf({ usage: { promptTokens: 3, completionTokens: 2 } }), { input: 3, output: 2, total: 5 });
     assert.deepEqual(usageOf({}), { input: 0, output: 0, total: 0 });
+  });
+  await test('perfOf aggregates step performance and maps tool-call ids to names', () => {
+    const result = {
+      steps: [
+        {
+          performance: { responseTimeMs: 800.4, stepTimeMs: 1200.2, toolExecutionMs: { call_1: 350.3 } },
+          toolCalls: [{ toolCallId: 'call_1', toolName: 'searchLibrary' }],
+        },
+        { performance: { responseTimeMs: 600, stepTimeMs: 650, toolExecutionMs: {} }, toolCalls: [] },
+      ],
+      finalStep: { performance: { effectiveOutputTokensPerSecond: 42.55 } },
+    };
+    assert.deepEqual(perfOf(result), { modelMs: 1400, stepMs: 1850, toolMs: { searchLibrary: 350 }, tokensPerSec: 42.6 });
+    // An unmapped call id keeps the raw id as the key rather than dropping the timing.
+    assert.deepEqual(
+      perfOf({ steps: [{ performance: { responseTimeMs: 10, stepTimeMs: 20, toolExecutionMs: { call_x: 5 } }, toolCalls: [] }] }),
+      { modelMs: 10, stepMs: 20, toolMs: { call_x: 5 } },
+    );
+    // No performance data (foreign fixtures/mocks) → undefined, never a zero block.
+    assert.equal(perfOf({ steps: [] }), undefined);
+    assert.equal(perfOf({}), undefined);
+    assert.equal(perfOf(null), undefined);
+  });
+  await test('warningsOf flattens provider warnings to strings — the "reasoning param ignored" tripwire', () => {
+    assert.deepEqual(
+      warningsOf({ warnings: [{ type: 'unsupported-setting', setting: 'reasoning', details: 'reasoning is not supported' }] }),
+      ['unsupported-setting:reasoning — reasoning is not supported'],
+    );
+    assert.deepEqual(warningsOf({ warnings: [{ type: 'other', message: 'model fell back' }, 'plain string'] }),
+      ['other — model fell back', 'plain string']);
+    assert.equal(warningsOf({ warnings: [] }), undefined);
+    assert.equal(warningsOf({}), undefined);
   });
 
   // ---- daily token budget mode ----

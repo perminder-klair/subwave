@@ -7,7 +7,7 @@
 import { generateText } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
-import { stripThinking, truncationError, usageOf, failureDiagnostics } from '../core/pure.js';
+import { stripThinking, truncationError, usageOf, perfOf, warningsOf, failureDiagnostics } from '../core/pure.js';
 import { reasoningFor, repeatPenaltyApplies, samplingWithLocalKnobs } from '../provider/capabilities.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
 
@@ -69,6 +69,8 @@ export async function djText({
         via: 'ai-sdk',
         sampling,
         usage: usageOf(result),
+        perf: perfOf(result),
+        warnings: warningsOf(result),
         // Full, untruncated — the /debug surface shows the whole system prompt.
         extra: { system, user: prompt, response: out },
       };

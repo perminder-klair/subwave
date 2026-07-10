@@ -135,6 +135,60 @@ export function usageOf(result: any): { input: number; output: number; total: nu
   return { input, output, total };
 }
 
+// Aggregate AI SDK 7 per-step performance stats into one compact block for the
+// /debug record: total model wait, total step time (model + tool execution),
+// per-tool execution ms (call ids mapped to tool names via each step's
+// toolCalls), and the final step's effective output tokens/sec. Returns
+// undefined when the result carries no performance data (foreign fixtures,
+// mocks) — the record then simply omits the field. Pure: shaped object in, no
+// `ai` import (this file's invariant).
+export function perfOf(result: any): { modelMs: number; stepMs: number; toolMs?: Record<string, number>; tokensPerSec?: number } | undefined {
+  const steps = Array.isArray(result?.steps) ? result.steps : [];
+  let found = false;
+  let modelMs = 0;
+  let stepMs = 0;
+  const toolMs: Record<string, number> = {};
+  for (const s of steps) {
+    const p = s?.performance;
+    if (!p) continue;
+    found = true;
+    if (Number.isFinite(p.responseTimeMs)) modelMs += p.responseTimeMs;
+    if (Number.isFinite(p.stepTimeMs)) stepMs += p.stepTimeMs;
+    for (const [callId, ms] of Object.entries(p.toolExecutionMs || {})) {
+      if (!Number.isFinite(ms)) continue;
+      const name = (s.toolCalls || []).find((c: any) => c?.toolCallId === callId)?.toolName || callId;
+      toolMs[name] = (toolMs[name] || 0) + (ms as number);
+    }
+  }
+  if (!found) return undefined;
+  const out: { modelMs: number; stepMs: number; toolMs?: Record<string, number>; tokensPerSec?: number } = {
+    modelMs: Math.round(modelMs),
+    stepMs: Math.round(stepMs),
+  };
+  if (Object.keys(toolMs).length) {
+    out.toolMs = Object.fromEntries(Object.entries(toolMs).map(([k, v]) => [k, Math.round(v)]));
+  }
+  const tps = result?.finalStep?.performance?.effectiveOutputTokensPerSecond;
+  if (Number.isFinite(tps) && tps > 0) out.tokensPerSec = Math.round(tps * 10) / 10;
+  return out;
+}
+
+// Flatten the AI SDK result's warnings (accumulated across all steps in v7)
+// into short strings for the success record. This is the live tripwire for the
+// reasoning migration: a provider that IGNORES the top-level `reasoning` param
+// emits an unsupported-setting warning here instead of silently thinking.
+// undefined when there are none, so clean calls carry no extra field.
+export function warningsOf(result: any): string[] | undefined {
+  const list = Array.isArray(result?.warnings) ? result.warnings : [];
+  const out = list.map((w: any) => {
+    if (typeof w === 'string') return w;
+    const head = [w?.type, w?.setting].filter(Boolean).join(':');
+    const tail = w?.details || w?.message || '';
+    return tail ? `${head || 'warning'} — ${tail}` : (head || JSON.stringify(w));
+  }).filter(Boolean);
+  return out.length ? out : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Daily LLM token budget
 // ---------------------------------------------------------------------------
