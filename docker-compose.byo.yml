@@ -61,6 +61,9 @@ services:
       - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=${ICECAST_RELAY_PASSWORD:-}
+      # Concurrent-listener ceiling for icecast (<limits><clients>).
+      # Empty/unset → 100 (the historical default).
+      - ICECAST_MAX_CLIENTS=${ICECAST_MAX_CLIENTS:-}
       - TZ=${TZ:-Europe/London}
     ports:
       # BIND_ADDRESS defaults to 0.0.0.0; set 127.0.0.1 in .env for a same-host

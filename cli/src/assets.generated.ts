@@ -85,6 +85,9 @@ services:
       - ICECAST_SOURCE_PASSWORD=\${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=\${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=\${ICECAST_RELAY_PASSWORD:-}
+      # Concurrent-listener ceiling for icecast (<limits><clients>).
+      # Empty/unset → 100 (the historical default).
+      - ICECAST_MAX_CLIENTS=\${ICECAST_MAX_CLIENTS:-}
       # Keeps the hourly archive paths (%Y-%m-%d/%H-00.mp3) on local wall time.
       - TZ=\${TZ:-Europe/London}
     extra_hosts:
@@ -443,6 +446,9 @@ services:
       - ICECAST_SOURCE_PASSWORD=\${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=\${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=\${ICECAST_RELAY_PASSWORD:-}
+      # Concurrent-listener ceiling for icecast (<limits><clients>).
+      # Empty/unset → 100 (the historical default).
+      - ICECAST_MAX_CLIENTS=\${ICECAST_MAX_CLIENTS:-}
       - TZ=\${TZ:-Europe/London}
     ports:
       # BIND_ADDRESS defaults to 0.0.0.0; set 127.0.0.1 in .env for a same-host
@@ -746,6 +752,9 @@ services:
       - ICECAST_SOURCE_PASSWORD=\${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=\${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=\${ICECAST_RELAY_PASSWORD:-}
+      # Concurrent-listener ceiling for icecast (<limits><clients>).
+      # Empty/unset → 100 (the historical default).
+      - ICECAST_MAX_CLIENTS=\${ICECAST_MAX_CLIENTS:-}
       - TZ=\${TZ:-Europe/London}
     extra_hosts:
       # Lets Liquidsoap fetch Subsonic stream URLs that point at host services
@@ -1086,6 +1095,10 @@ SITE_URL=
 # ICECAST_SOURCE_PASSWORD=
 # ICECAST_ADMIN_PASSWORD=
 # ICECAST_RELAY_PASSWORD=
+
+# Max concurrent listeners across all mounts (icecast <limits><clients>).
+# Unset → 100. Lower it to bound bandwidth on a small host.
+# ICECAST_MAX_CLIENTS=
 
 # ───────── Overrides for the wizard's fields ─────────
 # These all live in state/settings.json after the wizard runs. Set them here
