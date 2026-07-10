@@ -9,11 +9,15 @@
 // path (e.g. routes/public.ts, routes/onboarding.ts), leaving a timer armed for
 // the full timeout on a network error; routing them through here fixes that.
 //
-// The caller reads the body (res.json()/.text()/.arrayBuffer()) AFTER this
-// resolves, so the body drain is not itself bounded — exactly as before, since
-// every copy cleared the timer around the fetch, not around the body read. A
-// site that must keep the deadline armed across a streaming body (the capped
-// analyzer download) keeps its own controller and does NOT use this helper.
+// By default the caller reads the body (res.json()/.text()/.arrayBuffer())
+// AFTER this resolves, so the body drain is not itself bounded — matching the
+// copies whose timer only wrapped the fetch() call. Copies whose finally sat at
+// the end of the whole function had a deadline over the body read too; those
+// sites pass `bodyDeadline: true`, which keeps the (unref'd) timer armed past
+// resolution so a body read that outlives the deadline aborts instead of
+// hanging on undici's ~300s default. A site that must stream a large body with
+// its own cap (the capped analyzer download) keeps its own controller and does
+// NOT use this helper.
 //
 // On timeout the underlying fetch rejects with an AbortError (DOMException
 // name 'AbortError'), so call sites that special-case err.name === 'AbortError'
@@ -22,20 +26,27 @@
 
 export interface FetchTimeoutInit extends RequestInit {
   timeoutMs: number;
+  /** Keep the deadline armed over the body read, not just the fetch(). */
+  bodyDeadline?: boolean;
 }
 
 export async function fetchWithTimeout(
   input: string | URL | Request,
-  { timeoutMs, signal, ...init }: FetchTimeoutInit,
+  { timeoutMs, bodyDeadline, signal, ...init }: FetchTimeoutInit,
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  if (bodyDeadline) timer.unref?.();
   try {
-    return await fetch(input, {
+    const res = await fetch(input, {
       ...init,
       signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
     });
-  } finally {
+    if (bodyDeadline) return res; // timer stays armed; no-op once the body is consumed
     clearTimeout(timer);
+    return res;
+  } catch (err) {
+    clearTimeout(timer);
+    throw err;
   }
 }

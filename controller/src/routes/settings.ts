@@ -484,7 +484,7 @@ router.get('/settings/llm/discover', requireAdmin, async (req, res) => {
     String(req.query.baseUrl || '').trim().replace(/\/+$/, '') ||
     llmProvider.DEFAULT_LOCCA_BASE_URL;
   try {
-    const r = await fetchWithTimeout(`${baseUrl}/models`, { timeoutMs: 3000 });
+    const r = await fetchWithTimeout(`${baseUrl}/models`, { timeoutMs: 3000, bodyDeadline: true });
     if (!r.ok) {
       return res.json({ reachable: false, models: [], baseUrl, error: `HTTP ${r.status}` });
     }

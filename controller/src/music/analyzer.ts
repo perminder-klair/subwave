@@ -417,6 +417,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     timeoutMs: config.analyzer.requestTimeoutMs,
+    bodyDeadline: true,
   });
   if (!res.ok) throw new Error(`analyze sidecar ${res.status}: ${await res.text().catch(() => '')}`);
   const resBody = (await res.json()) as WorkerMessage;
@@ -557,6 +558,7 @@ export async function embedTexts(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ texts }),
         timeoutMs,
+        bodyDeadline: true,
       });
       // 404 = pre-text-tower sidecar, 500 = lean build (no torch) — both mean
       // "no text embeddings", not an error worth surfacing per call.

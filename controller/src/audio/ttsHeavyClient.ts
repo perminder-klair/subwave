@@ -60,7 +60,7 @@ async function probeOnce(engine: RemoteEngine): Promise<{ available: boolean; me
   const miss = { available: false, meta: { voiceCloning: null } as ProbeMeta };
   if (!url) return miss;
   try {
-    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: PROBE_TIMEOUT_MS });
+    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: PROBE_TIMEOUT_MS, bodyDeadline: true });
     if (!res.ok) {
       cachedHealth = { up: false, enabled: null };
       return miss;

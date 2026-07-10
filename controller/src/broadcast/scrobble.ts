@@ -160,6 +160,7 @@ async function callLastfm(method: string, baseParams: Record<string, string>, cr
       },
       body,
       timeoutMs: TIMEOUT_MS,
+      bodyDeadline: true,
     });
     if (!r.ok) {
       let detail = '';
@@ -246,6 +247,7 @@ async function callLastfmAuth(
   const r = await fetchWithTimeout(`${LASTFM_API}?${new URLSearchParams(params)}`, {
     headers: { 'User-Agent': 'sub-wave/scrobble' },
     timeoutMs: TIMEOUT_MS,
+    bodyDeadline: true,
   });
   const data: any = await r.json().catch(() => ({}));
   if (!r.ok || data?.error) {
@@ -291,6 +293,7 @@ async function postListenbrainz(payload: Record<string, unknown>, token: string,
       },
       body: JSON.stringify(payload),
       timeoutMs: TIMEOUT_MS,
+      bodyDeadline: true,
     });
     if (!r.ok) {
       let detail = '';

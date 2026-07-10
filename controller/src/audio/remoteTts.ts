@@ -42,7 +42,7 @@ async function probeOnce(): Promise<boolean> {
   const url = getUrl();
   if (!url) return false;
   try {
-    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: PROBE_TIMEOUT_MS });
+    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: PROBE_TIMEOUT_MS, bodyDeadline: true });
     if (!res.ok) return false;
     const body = (await res.json()) as { ok?: boolean };
     return !!body.ok;

@@ -72,6 +72,7 @@ export async function getArtistTopTags(
       method: 'GET',
       headers: { 'User-Agent': 'sub-wave/tags' },
       timeoutMs: TIMEOUT_MS,
+      bodyDeadline: true,
     });
     if (!r.ok) {
       console.warn(`[lastfm] artist.getTopTags → ${r.status} for "${artist}"`);
