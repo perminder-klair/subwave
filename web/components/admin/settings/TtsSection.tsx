@@ -11,6 +11,8 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../../ui/select';
 import { Card, Btn, Pill, Seg } from '../ui';
+import { ScrollArea } from '../../ui/scroll-area';
+import { Trash2 } from 'lucide-react';
 import { EngineSelector } from '../tts/EngineSelector';
 import { VoicePreviewButton } from '../tts/VoicePreviewButton';
 import { ModelCombobox } from '../llm/ModelCombobox';
@@ -1067,53 +1069,62 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
             matches whole words and phrases; leave the spoken form empty to drop the
             phrase entirely. Saved rules apply from the next spoken line — no restart.
           </div>
-          {form.tts.corrections.map((c, idx) => (
-            <div key={idx} className="flex flex-wrap items-center gap-2">
-              <Input
-                value={c.from}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({
-                    ...f,
-                    tts: {
-                      ...f.tts,
-                      corrections: f.tts.corrections.map((row, i) =>
-                        i === idx ? { ...row, from: e.target.value } : row),
-                    },
-                  }))
-                }
-                placeholder="text on air (e.g. GHz)"
-                maxLength={80}
-                className="max-w-[220px]"
-              />
-              <span className="text-[11px] text-muted">reads as</span>
-              <Input
-                value={c.to}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({
-                    ...f,
-                    tts: {
-                      ...f.tts,
-                      corrections: f.tts.corrections.map((row, i) =>
-                        i === idx ? { ...row, to: e.target.value } : row),
-                    },
-                  }))
-                }
-                placeholder="spoken form (e.g. gigahertz)"
-                maxLength={160}
-                className="max-w-[260px]"
-              />
-              <Btn
-                onClick={() =>
-                  setForm(f => ({
-                    ...f,
-                    tts: { ...f.tts, corrections: f.tts.corrections.filter((_, i) => i !== idx) },
-                  }))
-                }
-              >
-                Remove
-              </Btn>
+          {/* Capped so a long rule list scrolls instead of stretching the card;
+              the pr-2 keeps rows clear of the scrollbar. */}
+          <ScrollArea className="max-h-[280px]">
+            <div className="flex flex-col gap-2 pr-2">
+              {form.tts.corrections.map((c, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <Input
+                    value={c.from}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({
+                        ...f,
+                        tts: {
+                          ...f.tts,
+                          corrections: f.tts.corrections.map((row, i) =>
+                            i === idx ? { ...row, from: e.target.value } : row),
+                        },
+                      }))
+                    }
+                    placeholder="text on air (e.g. GHz)"
+                    maxLength={80}
+                    className="max-w-[220px] min-w-0 flex-1"
+                  />
+                  <span className="shrink-0 text-[11px] text-muted">reads as</span>
+                  <Input
+                    value={c.to}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({
+                        ...f,
+                        tts: {
+                          ...f.tts,
+                          corrections: f.tts.corrections.map((row, i) =>
+                            i === idx ? { ...row, to: e.target.value } : row),
+                        },
+                      }))
+                    }
+                    placeholder="spoken form (e.g. gigahertz)"
+                    maxLength={160}
+                    className="max-w-[260px] min-w-0 flex-1"
+                  />
+                  <Btn
+                    sm
+                    title="Remove correction"
+                    className="shrink-0"
+                    onClick={() =>
+                      setForm(f => ({
+                        ...f,
+                        tts: { ...f.tts, corrections: f.tts.corrections.filter((_, i) => i !== idx) },
+                      }))
+                    }
+                  >
+                    <Trash2 size={12} />
+                  </Btn>
+                </div>
+              ))}
             </div>
-          ))}
+          </ScrollArea>
           <div>
             <Btn
               // 100 mirrors the server-side TTS_CORRECTIONS_LIMIT.
