@@ -86,14 +86,14 @@ function tallyCounts(sections: DoctorSection[]): DoctorReport['counts'] {
 }
 
 // Parse one SSE frame ("event: …\ndata: …") into its event name + JSON payload.
-function parseSseFrame(frame: string): { event: string | null; data: any } {
+function parseSseFrame(frame: string): { event: string | null; data: unknown } {
   let event: string | null = null;
   const dataLines: string[] = [];
   for (const line of frame.split('\n')) {
     if (line.startsWith('event:')) event = line.slice(6).trim();
     else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''));
   }
-  let data: any = null;
+  let data: unknown = null;
   if (dataLines.length) {
     try { data = JSON.parse(dataLines.join('\n')); } catch { /* keep null */ }
   }
