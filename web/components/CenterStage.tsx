@@ -19,6 +19,12 @@ import type { NowPlayingTrack, QueueEntry, SessionTurn } from '@/lib/types';
  *  known well before this — the window is about pacing, not data. */
 const UP_NEXT_WINDOW_S = 30;
 
+/** Separator for the v3-caption meta strip. Thin spaces instead of word
+ *  spaces: the caption's 0.16em tracking applies per character, so a plain
+ *  " · " ballooned to ~13px of gap on a 10px font — the items read as
+ *  disconnected fragments rather than one line. */
+const SEP = '\u2009·\u2009';
+
 /** The quiet "music nerd" tokens shown under artist/album: genre · BPM · key.
  *  Returned separately from the mood cluster so the latter can carry the accent
  *  colour. Each token is omitted when its field is absent, so an untagged track
@@ -39,7 +45,7 @@ function buildMoodPhrase(t: NowPlayingTrack | null): string {
   const parts: string[] = [];
   if (Array.isArray(t.moods)) parts.push(...t.moods.slice(0, 2));
   if (t.energy) parts.push(`${t.energy} energy`);
-  return parts.join(' · ');
+  return parts.join(SEP);
 }
 
 export interface CenterStageProps {
@@ -272,15 +278,15 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
                   </h1>
                   <div className="mt-[4px] text-[clamp(13px,1.4vw,18px)] leading-snug font-medium text-muted">
                     <span className="text-ink">{nowPlaying?.artist || 'Unknown artist'}</span>
-                    {nowPlaying?.album && <span className="ml-[14px]"> · {nowPlaying.album}</span>}
-                    {nowPlaying?.year && <span className="ml-[14px]"> · {nowPlaying.year}</span>}
+                    {nowPlaying?.album && <span> · {nowPlaying.album}</span>}
+                    {nowPlaying?.year && <span> · {nowPlaying.year}</span>}
                   </div>
                   {hasMeta && (
                     <div className="v3-caption mt-[10px] text-muted">
-                      {metaTokens.join(' · ')}
+                      {metaTokens.join(SEP)}
                       {moodPhrase && (
                         <span className="text-vermilion">
-                          {metaTokens.length > 0 ? ' · ' : ''}↳ {moodPhrase}
+                          {metaTokens.length > 0 ? SEP : ''}↳ {moodPhrase}
                         </span>
                       )}
                     </div>
