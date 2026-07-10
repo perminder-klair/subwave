@@ -547,14 +547,13 @@ async function checkTts(s: StationSettings | null): Promise<Finding[]> {
 
   // Is the current persona's voice silently routing through a fallback?
   try {
-    const routing: Record<string, unknown> = tts.describeRouting();
-    const fellBack = routing?.fellBack || routing?.fallback || routing?.requested !== routing?.effective;
+    const { spoken } = tts.describeRouting();
     out.push({
       label: 'active routing',
-      status: fellBack ? 'warn' : 'ok',
-      detail: fellBack
-        ? `requested ${routing?.requested ?? '?'} → using ${routing?.effective ?? '?'}`
-        : `${routing?.effective ?? routing?.engine ?? 'piper'}`,
+      status: spoken.fellBack ? 'warn' : 'ok',
+      detail: spoken.fellBack
+        ? `requested ${spoken.requested ?? '?'} → using ${spoken.engine ?? '?'}`
+        : `${spoken.engine ?? 'piper'}`,
     });
   } catch { /* routing snapshot is best-effort */ }
 
