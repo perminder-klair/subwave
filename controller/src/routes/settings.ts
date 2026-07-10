@@ -362,7 +362,12 @@ async function probeKey(
           signal: AbortSignal.timeout(10000),
         });
         if (!r.ok) {
-          return { ok: false, message: r.status === 401 || r.status === 403 ? 'Key rejected — check it\'s correct and active' : `Request failed (${r.status})` };
+          // Brave signals a bad token as 422 SUBSCRIPTION_TOKEN_INVALID
+          // (verified live), not 401/403 — check the error code too.
+          const j = await r.json().catch(() => ({})) as { error?: { code?: string } };
+          const rejected = r.status === 401 || r.status === 403
+            || j?.error?.code === 'SUBSCRIPTION_TOKEN_INVALID';
+          return { ok: false, message: rejected ? 'Key rejected — check it\'s correct and active' : `Request failed (${r.status})` };
         }
         return { ok: true, message: '✓ Brave Search key valid' };
       }
