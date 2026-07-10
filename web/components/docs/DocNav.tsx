@@ -2,16 +2,29 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { SETUP_PAGES } from './pages';
 
-export default function SetupNav() {
+export interface DocNavPage {
+  href: string;
+  label: string;
+}
+
+export interface DocNavProps {
+  pages: DocNavPage[];
+  eyebrow: string;
+  ariaLabel: string;
+}
+
+// Sticky sidebar table of contents shared by the /setup and /manual doc
+// sections. Everything that differs between the two — the page list, the
+// eyebrow heading, and the nav's accessible name — comes in as props.
+export default function DocNav({ pages, eyebrow, ariaLabel }: DocNavProps) {
   const pathname = usePathname();
 
   return (
-    <nav className="bs-manual-nav" aria-label="Setup guide contents">
-      <p className="bs-eyebrow">THE SETUP GUIDE</p>
+    <nav className="bs-manual-nav" aria-label={ariaLabel}>
+      <p className="bs-eyebrow">{eyebrow}</p>
       <ol className="bs-manual-nav-list">
-        {SETUP_PAGES.map((page, i) => {
+        {pages.map((page, i) => {
           const active = pathname === page.href;
           return (
             <li key={page.href}>
