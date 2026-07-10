@@ -30,6 +30,7 @@ import { taggerView } from '../broadcast/tagger.js';
 import { currentMode as budgetCurrentMode } from '../broadcast/dj-budget.js';
 import { skillCatalog } from '../skills/_agent.js';
 import { clearUserThemeCache, loadUserThemes, listThemesAnnotated, saveUserTheme, deleteUserTheme } from '../themes.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
 export const router = express.Router();
 
@@ -482,10 +483,8 @@ router.get('/settings/llm/discover', requireAdmin, async (req, res) => {
   const baseUrl =
     String(req.query.baseUrl || '').trim().replace(/\/+$/, '') ||
     llmProvider.DEFAULT_LOCCA_BASE_URL;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 3000);
   try {
-    const r = await fetch(`${baseUrl}/models`, { signal: ctrl.signal });
+    const r = await fetchWithTimeout(`${baseUrl}/models`, { timeoutMs: 3000 });
     if (!r.ok) {
       return res.json({ reachable: false, models: [], baseUrl, error: `HTTP ${r.status}` });
     }
@@ -496,8 +495,6 @@ router.get('/settings/llm/discover', requireAdmin, async (req, res) => {
     res.json({ reachable: true, models, baseUrl });
   } catch (err: unknown) {
     res.json({ reachable: false, models: [], baseUrl, error: (err as { message?: string })?.message || 'unreachable' });
-  } finally {
-    clearTimeout(timer);
   }
 });
 
@@ -911,17 +908,10 @@ router.post('/settings/search/test-searxng', requireAdmin, async (req, res) => {
     url.searchParams.set('q', 'subwave connectivity probe');
     url.searchParams.set('format', 'json');
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-    let r: Response;
-    try {
-      r = await fetch(url, {
-        headers: { 'User-Agent': 'SUB-WAVE radio controller (probe)' },
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeout);
-    }
+    const r = await fetchWithTimeout(url, {
+      headers: { 'User-Agent': 'SUB-WAVE radio controller (probe)' },
+      timeoutMs: 8000,
+    });
 
     if (!r.ok) return res.json({ ok: false, error: `HTTP ${r.status}` });
     const data = (await r.json()) as { results?: unknown };

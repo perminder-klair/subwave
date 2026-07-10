@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, createWriteStream, readFileSync } from 'node:fs'
 import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
 // A structural span over the track, in milliseconds (span shape). Spans
 // are contiguous and cover the analysed window; the first is the intro/leading
@@ -376,10 +377,7 @@ let _sidecarBase = '';
 // flags + the winning base URL on success.
 async function probeSidecar(url: string): Promise<boolean> {
   try {
-    const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), 5000);
-    const res = await fetch(`${url}/health`, { signal: ac.signal });
-    clearTimeout(t);
+    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: 5000 });
     if (!res.ok) return false;
     const body = (await res.json()) as {
       ok?: boolean;
@@ -414,37 +412,31 @@ async function sidecarReachable(): Promise<boolean> {
 // (a file on the shared volume the controller pre-fetched).
 async function sidecarRequest(body: ({ url: string } | { path: string }) & AnalyzeRequestOpts): Promise<AnalysisResult> {
   const base = _sidecarBase;
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), config.analyzer.requestTimeoutMs);
-  try {
-    const res = await fetch(`${base}/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: ac.signal,
-    });
-    if (!res.ok) throw new Error(`analyze sidecar ${res.status}: ${await res.text().catch(() => '')}`);
-    const resBody = (await res.json()) as WorkerMessage;
-    if (!resBody.ok) throw new Error(resBody.error || 'analysis failed');
-    return {
-      bpm: resBody.bpm ?? null,
-      musicalKey: resBody.key ?? null,
-      introMs: resBody.intro_ms ?? null,
-      confidence: resBody.confidence ?? null,
-      loudnessLufs: parseFinite(resBody.loudness_lufs),
-      peakDb: parseFinite(resBody.peak_db),
-      sections: parseSections(resBody.sections),
-      vocalRanges: parseVocalRanges(resBody.vocal_ranges),
-      paceCurve: parsePaceCurve(resBody.pace_curve),
-      beats: parseMsList(resBody.beats),
-      bars: parseMsList(resBody.bars),
-      keyRanges: parseKeyRanges(resBody.key_ranges),
-      audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
-      outro: parseOutro(resBody.outro),
-    };
-  } finally {
-    clearTimeout(t);
-  }
+  const res = await fetchWithTimeout(`${base}/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    timeoutMs: config.analyzer.requestTimeoutMs,
+  });
+  if (!res.ok) throw new Error(`analyze sidecar ${res.status}: ${await res.text().catch(() => '')}`);
+  const resBody = (await res.json()) as WorkerMessage;
+  if (!resBody.ok) throw new Error(resBody.error || 'analysis failed');
+  return {
+    bpm: resBody.bpm ?? null,
+    musicalKey: resBody.key ?? null,
+    introMs: resBody.intro_ms ?? null,
+    confidence: resBody.confidence ?? null,
+    loudnessLufs: parseFinite(resBody.loudness_lufs),
+    peakDb: parseFinite(resBody.peak_db),
+    sections: parseSections(resBody.sections),
+    vocalRanges: parseVocalRanges(resBody.vocal_ranges),
+    paceCurve: parsePaceCurve(resBody.pace_curve),
+    beats: parseMsList(resBody.beats),
+    bars: parseMsList(resBody.bars),
+    keyRanges: parseKeyRanges(resBody.key_ranges),
+    audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
+    outro: parseOutro(resBody.outro),
+  };
 }
 
 function analyzeViaSidecar(url: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {
@@ -559,14 +551,12 @@ export async function embedTexts(
   if (!backend) return null;
   if (backend === 'sidecar') {
     if (_sidecarTextCapable === false) return null;
-    const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), timeoutMs);
     try {
-      const res = await fetch(`${_sidecarBase}/embed-text`, {
+      const res = await fetchWithTimeout(`${_sidecarBase}/embed-text`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ texts }),
-        signal: ac.signal,
+        timeoutMs,
       });
       // 404 = pre-text-tower sidecar, 500 = lean build (no torch) — both mean
       // "no text embeddings", not an error worth surfacing per call.
@@ -575,8 +565,6 @@ export async function embedTexts(
       return body?.ok ? parseVectors(body.embeddings, texts.length) : null;
     } catch {
       return null;
-    } finally {
-      clearTimeout(t);
     }
   }
   try {

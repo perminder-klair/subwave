@@ -32,6 +32,7 @@ import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { saveSetupConfig, clearSetupConfigCache } from '../setup/config.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../setup/secrets.js';
 import { getSetupStatus } from '../setup/firstRun.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
 export const router = express.Router();
 
@@ -82,10 +83,7 @@ router.post('/onboarding/test-navidrome', requireAdmin, async (req, res) => {
     probeUrl.searchParams.set('c', 'sub-wave-wizard');
     probeUrl.searchParams.set('f', 'json');
 
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
-    const r = await fetch(probeUrl.toString(), { signal: ctrl.signal });
-    clearTimeout(timer);
+    const r = await fetchWithTimeout(probeUrl.toString(), { timeoutMs: 5000 });
 
     if (!r.ok) {
       return res.json({ ok: false, error: `Subsonic ping returned HTTP ${r.status}` });

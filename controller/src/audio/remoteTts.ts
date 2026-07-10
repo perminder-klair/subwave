@@ -24,6 +24,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { cachedHealthProbe } from '../util/health-probe.js';
 
 const PROBE_TIMEOUT_MS = 5_000;
 const PROBE_INTERVAL_MS = 30_000;
@@ -33,69 +35,59 @@ function getUrl(): string {
   return settings.get().tts?.remote?.url || '';
 }
 
-// Cached availability — read synchronously by the dispatcher in tts.ts. The
-// periodic loop, the post-load boot probe, and refresh() on a URL change all
-// update it through runProbe(), the single writer.
-let remoteAvailable = false;
-
 // One /health probe. true iff the endpoint reports ok. No engine-name check —
 // the remote endpoint is a generic bridge; it decides what it supports.
 // Network/timeout/parse failures collapse to unavailable.
 async function probeOnce(): Promise<boolean> {
   const url = getUrl();
   if (!url) return false;
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), PROBE_TIMEOUT_MS);
   try {
-    const res = await fetch(`${url}/health`, { signal: ac.signal });
+    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: PROBE_TIMEOUT_MS });
     if (!res.ok) return false;
     const body = (await res.json()) as { ok?: boolean };
     return !!body.ok;
   } catch {
     return false;
-  } finally {
-    clearTimeout(t);
   }
 }
 
-// Probe once and update the cached availability, logging only on a change.
-// The single writer of remoteAvailable.
-async function runProbe(): Promise<void> {
-  const url = getUrl();
-  const available = url ? await probeOnce() : false;
-  if (available === remoteAvailable) return;
-  remoteAvailable = available;
-  console.log(
-    url
-      ? `[remote] TTS endpoint ${available ? 'available' : 'unavailable'} (${url})`
-      : '[remote] TTS endpoint unavailable (no URL configured)',
-  );
-}
+// Cached availability — read synchronously by the dispatcher in tts.ts. The
+// shared probe runs probeOnce() on an interval (and on demand via refresh()),
+// caches the result, and logs only on a change — re-reading the URL so the
+// "no URL configured" variant stays intact.
+const probe = cachedHealthProbe<boolean>({
+  probe: probeOnce,
+  intervalMs: PROBE_INTERVAL_MS,
+  initial: false,
+  onChange: (available) => {
+    const url = getUrl();
+    console.log(
+      url
+        ? `[remote] TTS endpoint ${available ? 'available' : 'unavailable'} (${url})`
+        : '[remote] TTS endpoint unavailable (no URL configured)',
+    );
+  },
+});
 
 // Start the periodic /health probe loop (idempotent). Called from server.ts
 // AFTER settings.load(): the remote URL lives in settings (not env), so unlike
 // the tts-heavy probe this can't self-start at import time — it would only ever
 // see the empty default and leave the engine unavailable for the first tick.
 // The interval is unref'd so it doesn't keep the event loop alive on its own.
-let loopStarted = false;
 export function start(): void {
-  if (loopStarted) return;
-  loopStarted = true;
-  runProbe();
-  const handle = setInterval(runProbe, PROBE_INTERVAL_MS);
-  handle.unref?.();
+  probe.start();
 }
 
 // Force an immediate probe — called when the URL changes via the admin UI so
 // availability (and the UI badge) reflects the new endpoint without waiting for
 // the next 30s tick.
 export async function refresh(): Promise<void> {
-  await runProbe();
+  await probe.refresh();
 }
 
 export function isAvailable(): boolean {
   if (!getUrl()) return false;
-  return remoteAvailable;
+  return probe.get();
 }
 
 export async function speak(
@@ -109,19 +101,12 @@ export async function speak(
   const outPath = customPath || path.join(config.piper.outDir, `${crypto.randomBytes(6).toString('hex')}.wav`);
   await mkdir(path.dirname(outPath), { recursive: true });
 
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), REQUEST_TIMEOUT_MS);
-  let res: Response;
-  try {
-    res = await fetch(`${url}/speak`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text.trim(), voice: voice ?? '' }),
-      signal: ac.signal,
-    });
-  } finally {
-    clearTimeout(t);
-  }
+  const res = await fetchWithTimeout(`${url}/speak`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: text.trim(), voice: voice ?? '' }),
+    timeoutMs: REQUEST_TIMEOUT_MS,
+  });
   if (!res.ok) {
     const errBody = await res.text().catch(() => '');
     throw new Error(`remote TTS ${res.status}: ${errBody || res.statusText}`);
