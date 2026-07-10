@@ -138,6 +138,9 @@ services:
       # to NULL analysis if neither is reachable. (tts-heavy is TTS-only; it no
       # longer carries the analyzer.) See music/analyzer.ts.
       - ANALYZE_URL=${ANALYZE_URL:-http://analyzer:8080}
+      # Use `url` when ANALYZE_URL points at a remote host that can fetch
+      # Navidrome streams itself; default `auto` keeps shared-volume prefetch.
+      - ANALYZE_HANDOFF=${ANALYZE_HANDOFF:-}
       # Per-container CPU/memory for the admin Stats page (GET /system) is read
       # from the docker-socket-proxy sidecar over TCP — the controller never
       # touches the raw Docker socket. Unset this to disable the panel.

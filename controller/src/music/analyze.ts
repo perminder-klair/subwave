@@ -15,6 +15,7 @@ import * as analyzer from './analyzer.js';
 import * as settings from '../settings.js';
 import { config } from '../config.js';
 import { runAudioMoodPass } from './audio-moods.js';
+import { shouldPrefetchAnalyzerAudio } from './analyzer-handoff.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
 
 // Structured status events for the panel, mirrored to the terse `[analyze] …`
@@ -236,14 +237,15 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   type Prefetch = Promise<{ path: string; complete: boolean } | { err: any }>;
   const prefetch = (songId: string): Prefetch =>
     analyzer.downloadCapped(songId).then((r) => r, (err) => ({ err }));
-  let inflight: Prefetch | null = ids.length > 0 ? prefetch(ids[0]) : null;
+  const prefetchAudio = shouldPrefetchAnalyzerAudio(config.analyzer.handoff);
+  let inflight: Prefetch | null = prefetchAudio && ids.length > 0 ? prefetch(ids[0]) : null;
 
   for (let i = 0; i < ids.length; i++) {
     const id = ids[i];
     const downloadPromise = inflight;
     // Kick off the NEXT download before awaiting this one's analysis so the
     // fetch overlaps the compute.
-    inflight = i + 1 < ids.length ? prefetch(ids[i + 1]) : null;
+    inflight = prefetchAudio && i + 1 < ids.length ? prefetch(ids[i + 1]) : null;
 
     let localPath: string | null = null;
     let localComplete: boolean | undefined;

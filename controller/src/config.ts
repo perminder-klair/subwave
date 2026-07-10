@@ -2,6 +2,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { normalizeAnalyzerHandoff } from './music/analyzer-handoff.js';
 
 // The shared state directory — every file-based IPC channel lives under here.
 // In Docker the compose files mount <repo>/state → /var/sub-wave and pass
@@ -78,6 +79,7 @@ export const config = {
     // engine. tts-heavy no longer carries the analyzer (it's TTS-only), so there
     // is no TTS_HEAVY_URL fallback here anymore.
     urls: [process.env.ANALYZE_URL].filter((u): u is string => !!u),
+    handoff: normalizeAnalyzerHandoff(process.env.ANALYZE_HANDOFF),
     python: process.env.ANALYZE_PYTHON || '',   // empty → no local backend
     workerScript: process.env.ANALYZE_WORKER || '/app/scripts/analyze_worker.py',
     // 40s is enough for stable BPM (beat_track) / key (chroma); intro

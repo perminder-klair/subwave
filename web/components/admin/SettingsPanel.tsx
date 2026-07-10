@@ -160,6 +160,7 @@ interface LlmForm {
   pickerAgent: boolean;
   noRepeatWindow: number;
   requestWebResolve: boolean;
+  strictRequests: boolean;
   agentTimeoutMs: number;
   pauseWhenEmpty: boolean;
   dailyTokenCap: number;
@@ -519,6 +520,7 @@ export default function SettingsPanel() {
         pickerAgent: !!v.llm?.pickerAgent,
         noRepeatWindow: typeof v.llm?.noRepeatWindow === 'number' ? v.llm.noRepeatWindow : 100,
         requestWebResolve: !!v.llm?.requestWebResolve,
+        strictRequests: !!v.llm?.strictRequests,
         agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
         pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
         dailyTokenCap: typeof v.llm?.dailyTokenCap === 'number' ? v.llm.dailyTokenCap : 0,
@@ -2757,6 +2759,7 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
         pickerAgent: form.llm.pickerAgent,
         noRepeatWindow: form.llm.noRepeatWindow,
         requestWebResolve: form.llm.requestWebResolve,
+        strictRequests: form.llm.strictRequests,
         agentTimeoutMs: form.llm.agentTimeoutMs,
         pauseWhenEmpty: form.llm.pauseWhenEmpty,
         dailyTokenCap: form.llm.dailyTokenCap,
@@ -3534,6 +3537,26 @@ function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refre
             />
           </div>
         )}
+
+        <div className="mt-4 grid grid-cols-[1fr_auto] items-center gap-4">
+          <div>
+            <div className="text-[13px] font-bold">Strict song requests</div>
+            <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+              When on, listener requests that name a specific song or artist only
+              queue an exact library match. If the track or artist is missing,
+              the request is declined instead of substituting something similar.
+            </div>
+          </div>
+          <Seg
+            accent
+            value={form.llm.strictRequests ? 'on' : 'off'}
+            options={[
+              { id: 'off', label: 'Off' },
+              { id: 'on', label: 'On' },
+            ]}
+            onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, strictRequests: v === 'on' } }))}
+          />
+        </div>
 
         <div className="field mt-4">
           <Label>No-repeat window (tracks)</Label>

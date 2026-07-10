@@ -991,6 +991,10 @@ const DEFAULTS = {
     // provider (settings.search) and costs a web round-trip + a small extraction
     // call per use. No-op unless searchReady() — see llm/internal/tools/picker-tools.ts.
     requestWebResolve: false,
+    // When on, listener requests that name a specific title or artist must land
+    // on that exact library match. If the station cannot find it, the request
+    // fails honestly instead of falling through to mood/starred filler.
+    strictRequests: false,
     // Hard wall-clock ceiling (ms) on a single DJ-agent generation (track
     // picks and listener requests). Enforced by withDeadline in llm/sdk.ts;
     // the main and recovery runs each get the full budget, so worst case per
@@ -1707,6 +1711,10 @@ export async function load() {
         typeof stored.llm?.requestWebResolve === 'boolean'
           ? stored.llm.requestWebResolve
           : DEFAULTS.llm.requestWebResolve,
+      strictRequests:
+        typeof stored.llm?.strictRequests === 'boolean'
+          ? stored.llm.strictRequests
+          : DEFAULTS.llm.strictRequests,
       // Clamped to [5s, 180s]; settings.json files from before the field
       // existed pick up the default.
       agentTimeoutMs: clampAgentTimeout(stored.llm?.agentTimeoutMs, DEFAULTS.llm.agentTimeoutMs),
@@ -2848,6 +2856,9 @@ export async function update(patch) {
     }
     if (l.requestWebResolve !== undefined) {
       next.llm.requestWebResolve = !!l.requestWebResolve;
+    }
+    if (l.strictRequests !== undefined) {
+      next.llm.strictRequests = !!l.strictRequests;
     }
     if (l.agentTimeoutMs !== undefined) {
       next.llm.agentTimeoutMs = clampAgentTimeout(Number(l.agentTimeoutMs), next.llm.agentTimeoutMs);

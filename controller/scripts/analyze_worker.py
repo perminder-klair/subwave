@@ -568,6 +568,29 @@ def get_embedder(force=False):
 # worker with vocal activity DISABLED never needs them and the librosa-only venv
 # keeps working. Same degrade-never-crash contract as the CLAP embedder.
 # ---------------------------------------------------------------------------
+def ensure_demucs_stereo(audio):
+    """Return channel-first stereo audio shaped (2, samples) for Demucs.
+
+    librosa.load(..., mono=False) preserves source channel count. Demucs models
+    expect mono/stereo; surround concert/video rips can arrive as 5.1 (6, N).
+    Downmix >2 channels to mono and duplicate to stereo so vocal detection can
+    still stamp either ranges or [] instead of failing forever.
+    """
+    import numpy as np
+
+    arr = np.asarray(audio, dtype=np.float32)
+    if arr.ndim == 1:
+        return np.vstack([arr, arr])
+    if arr.ndim != 2:
+        return arr.reshape(1, -1).repeat(2, axis=0)
+    if arr.shape[0] == 1:
+        return np.vstack([arr[0], arr[0]])
+    if arr.shape[0] == 2:
+        return arr
+    mono = np.mean(arr, axis=0, dtype=np.float32)
+    return np.vstack([mono, mono])
+
+
 class VocalActivityDetector:
     def __init__(self):
         self.model = None
@@ -589,6 +612,7 @@ class VocalActivityDetector:
         import numpy as np
         import torch
 
+        stereo = ensure_demucs_stereo(stereo)
         wav = torch.from_numpy(np.ascontiguousarray(stereo, dtype=np.float32))
         if wav.ndim == 1:
             wav = wav.unsqueeze(0).repeat(2, 1)
