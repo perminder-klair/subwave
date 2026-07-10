@@ -17,7 +17,15 @@ import {
 const SEARCH_PROVIDER_LABELS: Record<string, string> = {
   duckduckgo: 'DuckDuckGo (free, no key)',
   tavily: 'Tavily (paid web search)',
+  brave: 'Brave Search (API key, free monthly credits)',
   searxng: 'SearXNG (self-hosted)',
+};
+
+// Providers that authenticate with SEARCH_API_KEY. Both share the key slot —
+// the controller probes the right endpoint based on the provider we send along.
+const KEYED_PROVIDERS: Record<string, { name: string; placeholder: string; keyUrl: string }> = {
+  tavily: { name: 'Tavily', placeholder: 'tvly-…', keyUrl: 'https://app.tavily.com/home' },
+  brave: { name: 'Brave Search', placeholder: 'BSA…', keyUrl: 'https://api-dashboard.search.brave.com/app/keys' },
 };
 
 const searchProviderLabel = (id: string | undefined): string =>
@@ -27,8 +35,8 @@ interface SearchSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 export function SearchSection({ data, form, setForm, busy, saveSettings, adminFetch }: SearchSectionProps) {
-  const [tavilyKeyTest, setTavilyKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
-  const [tavilyKeyTesting, setTavilyKeyTesting] = useState(false);
+  const [keyTest, setKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [keyTesting, setKeyTesting] = useState(false);
   const [testingSearxng, setTestingSearxng] = useState(false);
   const [searxngTestResult, setSearxngTestResult] = useState<{ ok: boolean; results?: number; error?: string } | null>(null);
 
@@ -65,34 +73,37 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
   });
 
   const savedSearch = data.values?.search || {};
-  const providers = data.search?.providers || ['duckduckgo', 'tavily', 'searxng'];
+  const providers = data.search?.providers || ['duckduckgo', 'tavily', 'brave', 'searxng'];
   const provider = form.search.provider;
+  const keyed = KEYED_PROVIDERS[provider];
   const searchDirty = provider !== savedSearch.provider
-    || (provider === 'tavily'
+    || (!!keyed
         && form.search.apiKey
         && form.search.apiKey !== 'set'
         && form.search.apiKey !== (savedSearch.apiKey || ''))
     || (provider === 'searxng'
         && (form.search.baseUrl ?? '') !== (savedSearch.baseUrl || ''));
-  const tavilyKeySet = form.search.apiKey === 'set' || !!data.env?.SEARCH_API_KEY;
+  const apiKeySet = form.search.apiKey === 'set' || !!data.env?.SEARCH_API_KEY;
 
-  const testTavilyKey = async () => {
+  const testApiKey = async () => {
     const value = form.search.apiKey === 'set' ? '' : form.search.apiKey;
     if (!value.trim()) return;
-    setTavilyKeyTesting(true);
-    setTavilyKeyTest(null);
+    setKeyTesting(true);
+    setKeyTest(null);
     try {
       const r = await adminFetch('/settings/secrets/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: 'SEARCH_API_KEY', value: value.trim() }),
+        // `provider` tells the controller which endpoint to probe — the same
+        // SEARCH_API_KEY slot holds a Tavily or a Brave key.
+        body: JSON.stringify({ key: 'SEARCH_API_KEY', value: value.trim(), provider }),
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
-      setTavilyKeyTest(j);
+      setKeyTest(j);
     } catch (e) {
-      setTavilyKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
+      setKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
     } finally {
-      setTavilyKeyTesting(false);
+      setKeyTesting(false);
     }
   };
 
@@ -104,8 +115,9 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
         sub={<>
           The segment director can air a single line of recent artist context between
           tracks, when the active backend returns something worth saying. DuckDuckGo
-          is free and keyless; Tavily is paid but returns full web results. Switching
-          here reroutes the next call, no restart.
+          is free and keyless; Tavily and Brave are keyed but return full web results;
+          SearXNG is keyless if you self-host it. Switching here reroutes the next
+          call, no restart.
         </>}
         metrics={[{ n: String(providers.length), l: 'providers' }]}
       />
@@ -133,7 +145,12 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
             </div>
             <Select
               value={provider}
-              onValueChange={v => setForm(f => ({ ...f, search: { ...f.search, provider: v } }))}
+              onValueChange={v => {
+                // A key-test verdict is per-provider — don't let a green
+                // "Tavily key valid" linger after switching to Brave.
+                setKeyTest(null);
+                setForm(f => ({ ...f, search: { ...f.search, provider: v } }));
+              }}
             >
               <SelectTrigger className="max-w-[360px]"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -149,43 +166,46 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
                 ? 'DuckDuckGo Instant Answer, free and keyless. Useful for definitions and well-known entities; silent otherwise. The segment director treats silence as a valid outcome.'
                 : provider === 'tavily'
                 ? 'Tavily, paid web search with full results and an answer summary. Needs an API key.'
+                : provider === 'brave'
+                ? 'Brave Search API — real web + news results for artist queries. Metered billing with $5/month in free credits (~1,000 queries; a card on file is required). SUB/WAVE caches every search for 30 minutes.'
                 : 'SearXNG, self-hosted meta-search aggregating Google, Brave, DDG and more. No API key needed — just a running SearXNG instance.'}
             </div>
           </div>
 
-          {provider === 'tavily' && (
+          {keyed && (
             <>
               <div className="field">
-                <Label>Tavily API key</Label>
+                <Label>{keyed.name} API key</Label>
                 <div className="flex items-stretch gap-2">
                   <Input
                     type="password"
                     value={form.search.apiKey === 'set' ? '' : form.search.apiKey}
-                    placeholder={form.search.apiKey === 'set' ? '•••••• (key on file)' : 'tvly-…'}
+                    placeholder={form.search.apiKey === 'set' ? '•••••• (key on file)' : keyed.placeholder}
                     onChange={(e: ChangeEvent<HTMLInputElement>) =>
                       setForm(f => ({ ...f, search: { ...f.search, apiKey: e.target.value } }))
                     }
                     className="max-w-[360px]"
                   />
                   <Btn
-                    onClick={testTavilyKey}
+                    onClick={testApiKey}
                     disabled={
-                      tavilyKeyTesting ||
+                      keyTesting ||
                       !form.search.apiKey.trim() ||
                       form.search.apiKey === 'set'
                     }
                   >
-                    {tavilyKeyTesting ? 'Testing…' : 'Test key'}
+                    {keyTesting ? 'Testing…' : 'Test key'}
                   </Btn>
                 </div>
                 <div className="field-hint">
+                  Get one at <a href={keyed.keyUrl} target="_blank" rel="noreferrer" className="underline">{keyed.keyUrl.replace(/^https:\/\//, '')}</a>.
                   Stored alongside the other admin settings. Falls back to
                   <code> SEARCH_API_KEY</code> in <code>.env</code> when blank. Set
                   one or the other, not both.
                 </div>
               </div>
-              <KeyStatus envVar="SEARCH_API_KEY" present={tavilyKeySet} />
-              {tavilyKeyTest && <KeyTestResult result={tavilyKeyTest} />}
+              <KeyStatus envVar="SEARCH_API_KEY" present={apiKeySet} />
+              {keyTest && <KeyTestResult result={keyTest} />}
             </>
           )}
 

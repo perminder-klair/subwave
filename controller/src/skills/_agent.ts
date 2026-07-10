@@ -637,10 +637,12 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
   if (!cap) throw new Error(`unknown skill: ${which}`);
   if (cap.ready && !cap.ready()) {
     // Hint at the missing key when the capability is keyed. web-search is the
-    // only such capability today, and only when Tavily is the active provider.
+    // only such capability today, and only when a keyed provider is active.
     let hint = '';
-    if (cap.kind === 'web-search' && settings.get().search?.provider === 'tavily') {
-      hint = ' — set SEARCH_API_KEY or paste a Tavily key into the admin UI';
+    const searchProvider = settings.get().search?.provider;
+    if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave')) {
+      const name = searchProvider === 'brave' ? 'Brave Search' : 'Tavily';
+      hint = ` — set SEARCH_API_KEY or paste a ${name} key into the admin UI`;
     } else if (cap.requiresKey) {
       hint = ` — set ${cap.requiresKey}`;
     }
@@ -718,8 +720,9 @@ export function skillCatalog() {
   const searchProvider = s.search?.provider || 'duckduckgo';
   return allCapabilities().map(c => {
     // web-search's key requirement depends on the active search provider:
-    // Tavily needs SEARCH_API_KEY, DuckDuckGo needs nothing. Other capabilities
-    // carry their requiresKey/keyUrl statically in CAPABILITIES (none today).
+    // Tavily/Brave need SEARCH_API_KEY, DuckDuckGo needs nothing. Other
+    // capabilities carry their requiresKey/keyUrl statically in CAPABILITIES
+    // (none today).
     let requiresKey = c.requiresKey || null;
     let keyUrl = c.keyUrl || null;
     let hint: string | null = null;
@@ -727,6 +730,9 @@ export function skillCatalog() {
       if (searchProvider === 'tavily') {
         requiresKey = 'SEARCH_API_KEY';
         keyUrl = 'https://app.tavily.com/home';
+      } else if (searchProvider === 'brave') {
+        requiresKey = 'SEARCH_API_KEY';
+        keyUrl = 'https://api-dashboard.search.brave.com/app/keys';
       } else if (searchProvider === 'searxng') {
         requiresKey = null;
         keyUrl = null;

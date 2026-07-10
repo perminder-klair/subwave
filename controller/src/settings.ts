@@ -461,8 +461,10 @@ export const TTS_CLOUD_PROVIDERS = ['openai', 'elevenlabs', 'openai-compatible']
 // and keyless, returns useful results only for entity / definition queries, and
 // silence otherwise (which the segment director already treats as a valid
 // outcome). `tavily` is the paid option for operators who want richer web
-// results; it reads its key from SEARCH_API_KEY.
-export const SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'searxng'] as const;
+// results; `brave` is Brave's Search API (metered, $5/mo free credits) — both
+// read their key from SEARCH_API_KEY. `searxng` is keyless self-hosted
+// meta-search via settings.search.baseUrl.
+export const SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'brave', 'searxng'] as const;
 
 // Canonical mood vocabulary. Shared by the library tagger (music/tag-library.js
 // imports this as MOOD_VOCAB) and the Shows scheduler — a show's `moods` (lead
@@ -1311,9 +1313,9 @@ const DEFAULTS = {
     },
   },
   // Web-search backend for the segment director's web-search capability.
-  // Default `duckduckgo` works out of the box with no key; `tavily` reads its
-  // key from SEARCH_API_KEY (or the optional override below). `apiKey` is
-  // only meaningful for Tavily.
+  // Default `duckduckgo` works out of the box with no key; `tavily` and
+  // `brave` read their key from SEARCH_API_KEY (or the optional override
+  // below). `apiKey` is only meaningful for the keyed providers.
   search: {
     provider: 'duckduckgo',
     apiKey: '',

@@ -280,9 +280,15 @@ function briefLlmError(err: unknown): string {
   return sentence.slice(0, 80) || 'Request failed';
 }
 
+// `hint` disambiguates keys shared by several providers — SEARCH_API_KEY holds
+// a Tavily OR a Brave key depending on the selected search provider, and the
+// admin UI tests the key before saving, so the saved setting can't be trusted
+// mid-edit. The UI passes the provider it's editing; absent a hint we fall
+// back to the saved provider, then Tavily (the original sole owner of the key).
 async function probeKey(
   key: (typeof SECRET_ENV_KEYS)[number],
   value: string,
+  hint?: string,
 ): Promise<{ ok: boolean; message: string }> {
   const cfg = settings.get().llm || {};
   const activeModel = (provider: string) =>
@@ -346,6 +352,20 @@ async function probeKey(
       return { ok: true, message: `✓ ElevenLabs key valid${u.first_name ? ` · account: ${u.first_name}` : ''}` };
     }
     case 'SEARCH_API_KEY': {
+      const provider = hint || settings.get().search?.provider || 'tavily';
+      if (provider === 'brave') {
+        const url = new URL('https://api.search.brave.com/res/v1/web/search');
+        url.searchParams.set('q', 'test');
+        url.searchParams.set('count', '1');
+        const r = await fetch(url, {
+          headers: { Accept: 'application/json', 'X-Subscription-Token': value },
+          signal: AbortSignal.timeout(10000),
+        });
+        if (!r.ok) {
+          return { ok: false, message: r.status === 401 || r.status === 403 ? 'Key rejected — check it\'s correct and active' : `Request failed (${r.status})` };
+        }
+        return { ok: true, message: '✓ Brave Search key valid' };
+      }
       const r = await fetch('https://api.tavily.com/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${value}` },
@@ -400,11 +420,12 @@ async function probeKey(
 
 // ---------------------------------------------------------------------------
 // POST /settings/secrets/test — probe a key against its provider WITHOUT
-// saving. Body: { key: string, value: string }. Always 200s with
+// saving. Body: { key: string, value: string, provider?: string } — provider
+// disambiguates shared keys (SEARCH_API_KEY → tavily | brave). Always 200s with
 // { ok, message, latencyMs } — a bad key is a normal, actionable answer.
 // ---------------------------------------------------------------------------
 router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
-  const { key, value } = req.body || {};
+  const { key, value, provider } = req.body || {};
   if (!key || typeof key !== 'string') {
     return res.status(400).json({ ok: false, message: 'key is required', latencyMs: 0 });
   }
@@ -422,7 +443,11 @@ router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
   }
   const t0 = Date.now();
   try {
-    const result = await probeKey(key as (typeof SECRET_ENV_KEYS)[number], targetValue);
+    const result = await probeKey(
+      key as (typeof SECRET_ENV_KEYS)[number],
+      targetValue,
+      typeof provider === 'string' ? provider : undefined,
+    );
     res.json({ ok: result.ok, message: result.message, latencyMs: Date.now() - t0 });
   } catch (err: unknown) {
     res.json({ ok: false, message: (err as { message?: string })?.message || 'probe failed', latencyMs: Date.now() - t0 });
