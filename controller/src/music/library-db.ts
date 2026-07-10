@@ -45,12 +45,6 @@ export const ANALYSIS_VERSION = 6;
 // metadata/lyric-derived) and live in their own vec0 table.
 export const AUDIO_EMBEDDING_DIM = 512;
 
-// Audio-embedding model+method version. Independent of ANALYSIS_VERSION
-// (bpm/key/intro) so a CLAP model swap can re-target audio vectors without
-// forcing a full bpm/key re-analysis, and vice-versa. Bump when the CLAP model
-// or its preprocessing changes.
-export const AUDIO_EMBEDDING_VERSION = 1;
-
 // A track counts as "tagged" only when it carries at least one mood. An empty
 // array ('[]') is written by the legacy moods.json migration and by the tagger
 // when the LLM returns no moods for a track — and an analysis-only track that
@@ -157,6 +151,50 @@ export interface TrackPaceSpan {
   startMs: number;
   endMs: number;
   value: number;
+}
+
+// The raw `tracks` table row as SQLite hands it back — snake_case columns with
+// the acoustic blobs still JSON strings. rowToTrack / rowToObservatory map it
+// into the camelCase record types above. Reflects the table schema; the write
+// path validates energy/source into their unions, so those read back typed. A
+// partial SELECT (getTrackLite, the observatory columns) yields a subset of
+// this shape and the mapper only touches columns it actually selected.
+interface TrackRow {
+  id: string;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  year: number | null;
+  genre: string | null;
+  duration_sec: number | null;
+  lastfm_tags: string | null;
+  lyric_excerpt: string | null;
+  enriched_at: string | null;
+  moods: string | null;
+  energy: EnergyValue;
+  source: TagSource | null;
+  confidence: number | null;
+  tagger_version: number | null;
+  prompt_hash: string | null;
+  model: string | null;
+  tagged_at: string | null;
+  bpm: number | null;
+  musical_key: string | null;
+  intro_ms: number | null;
+  analysis_confidence: number | null;
+  analysis_version: number | null;
+  loudness_lufs: number | null;
+  peak_db: number | null;
+  structure_json: string | null;
+  vocal_ranges_json: string | null;
+  pace_json: string | null;
+  beats_json: string | null;
+  bars_json: string | null;
+  key_ranges_json: string | null;
+  audio_moods: string | null;
+  outro_json: string | null;
+  map_x: number | null;
+  map_y: number | null;
 }
 
 export interface TrackMeta {
@@ -611,8 +649,8 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
   }
 
   // Audio-vector table — a parallel vec0 index at the fixed CLAP dim. Created
-  // on demand and self-heals if a future audio reseed (dropAudioVectors) drops
-  // it, exactly like track_vectors above. It needs no dim negotiation because
+  // on demand and self-heals if a future audio reseed drops it, exactly like
+  // track_vectors above. It needs no dim negotiation because
   // AUDIO_EMBEDDING_DIM is constant, so it lives outside the reseed branch.
   const hasAudioVecTable = d
     .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='track_audio_vectors'`)
@@ -630,7 +668,7 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
 // security linter that flags exec() as child_process abuse. Functionally
 // identical to db.exec(sql).
 function runDdl(d: Database.Database, sql: string): void {
-  (d as any).exec(sql);
+  d.exec(sql);
 }
 
 // The embedding width baked into the track_vectors vec0 schema — the authority
@@ -656,6 +694,21 @@ function vecCount(d: Database.Database): number {
 // Legacy moods.json → SQLite (one-shot, idempotent)
 // ---------------------------------------------------------------------------
 
+// A single track entry as the legacy state/moods.json carried it. Every field
+// is optional and loosely typed — it's a hand-migrated file — and only the ones
+// the insert below reads are declared.
+interface LegacyMoodsTrack {
+  title?: string;
+  artist?: string;
+  album?: string;
+  year?: number | string;
+  genre?: string;
+  duration?: number;
+  moods?: string[];
+  energy?: string;
+  taggedAt?: string;
+}
+
 async function maybeMigrateFromMoodsJson(): Promise<void> {
   if (!existsSync(LEGACY_MOODS_JSON)) return;
   const d = requireDb();
@@ -663,14 +716,14 @@ async function maybeMigrateFromMoodsJson(): Promise<void> {
   const before = (d.prepare('SELECT COUNT(*) AS n FROM tracks').get() as { n: number }).n;
 
   const raw = await readFile(LEGACY_MOODS_JSON, 'utf8');
-  let parsed: any;
+  let parsed: { tracks?: Record<string, LegacyMoodsTrack> } | null;
   try {
     parsed = JSON.parse(raw);
-  } catch (err: any) {
+  } catch (err) {
     console.error(`[library-db] moods.json parse failed (${err.message}); skipping migration`);
     return;
   }
-  const entries: [string, any][] = parsed?.tracks ? Object.entries(parsed.tracks) : [];
+  const entries: [string, LegacyMoodsTrack][] = parsed?.tracks ? Object.entries(parsed.tracks) : [];
   if (entries.length === 0) {
     console.log('[library-db] moods.json is empty; archiving anyway');
     await archiveMoodsJson();
@@ -683,7 +736,7 @@ async function maybeMigrateFromMoodsJson(): Promise<void> {
       moods, energy, source, tagger_version, tagged_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const tx = d.transaction((rows: [string, any][]) => {
+  const tx = d.transaction((rows: [string, LegacyMoodsTrack][]) => {
     for (const [id, t] of rows) {
       insert.run(
         id,
@@ -694,7 +747,7 @@ async function maybeMigrateFromMoodsJson(): Promise<void> {
         t.genre ?? null,
         Number.isFinite(t.duration) ? t.duration : null,
         Array.isArray(t.moods) ? JSON.stringify(t.moods) : '[]',
-        ['low', 'medium', 'high'].includes(t.energy) ? t.energy : null,
+        ['low', 'medium', 'high'].includes(t.energy!) ? t.energy : null,
         'legacy-v1',
         1,
         typeof t.taggedAt === 'string' ? t.taggedAt : null,
@@ -717,7 +770,7 @@ async function archiveMoodsJson(): Promise<void> {
   try {
     await rename(LEGACY_MOODS_JSON, archived);
     console.log(`[library-db] archived legacy moods.json → ${archived}`);
-  } catch (err: any) {
+  } catch (err) {
     if (err.code !== 'ENOENT') {
       console.error(`[library-db] could not archive moods.json: ${err.message}`);
     }
@@ -766,13 +819,6 @@ export function setEmbeddingMeta(
 // Audio-embedding provenance — which CLAP model wrote the current audio
 // vectors. Distinct table from embedding_meta (text); the two spaces are
 // independent. Null until the first audio vector is written.
-export function getAudioEmbeddingMeta(): { model: string; dim: number } | null {
-  const row = requireDb()
-    .prepare('SELECT model, dim FROM audio_embedding_meta WHERE pk = 1')
-    .get() as { model: string; dim: number } | undefined;
-  return row || null;
-}
-
 export function setAudioEmbeddingMeta(model: string, dim: number): void {
   requireDb()
     .prepare(
@@ -789,7 +835,7 @@ export function setAudioEmbeddingMeta(model: string, dim: number): void {
 export function getTrack(id: string): TrackRecord | null {
   const row = requireDb()
     .prepare(`SELECT * FROM tracks WHERE id = ?`)
-    .get(id) as any;
+    .get(id) as TrackRow | undefined;
   return row ? rowToTrack(row) : null;
 }
 
@@ -813,7 +859,7 @@ export interface TrackLite {
 export function getTrackLite(id: string): TrackLite | null {
   const row = requireDb()
     .prepare(`SELECT genre, bpm, musical_key, moods, energy, year, duration_sec FROM tracks WHERE id = ?`)
-    .get(id) as any;
+    .get(id) as Pick<TrackRow, 'genre' | 'bpm' | 'musical_key' | 'moods' | 'energy' | 'year' | 'duration_sec'> | undefined;
   if (!row) return null;
   return {
     genre: row.genre ?? null,
@@ -1084,17 +1130,6 @@ export function upsertTrackAudioVector(id: string, vector: number[] | Float32Arr
   d.prepare(`INSERT INTO track_audio_vectors (id, embedding) VALUES (?, ?)`).run(id, buf);
 }
 
-// Drop + recreate the audio vec0 table at the fixed CLAP dim — the audio
-// counterpart to dropVectors(), for an AUDIO_EMBEDDING_VERSION / model swap.
-export function dropAudioVectors(): void {
-  const d = requireDb();
-  runDdl(d, 'DROP TABLE IF EXISTS track_audio_vectors');
-  runDdl(d,
-    `CREATE VIRTUAL TABLE track_audio_vectors USING vec0(` +
-      `id TEXT PRIMARY KEY, embedding FLOAT[${AUDIO_EMBEDDING_DIM}] distance_metric=cosine)`,
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Vector queries
 // ---------------------------------------------------------------------------
@@ -1166,10 +1201,6 @@ export function vectorCount(): number {
   return (requireDb().prepare('SELECT COUNT(*) AS n FROM track_vectors').get() as {
     n: number;
   }).n;
-}
-
-export function hasAudioVector(id: string): boolean {
-  return !!requireDb().prepare(`SELECT 1 FROM track_audio_vectors WHERE id = ?`).get(id);
 }
 
 // The raw TEXT embedding vector for a track (a copy, not a view into the DB
@@ -1268,16 +1299,6 @@ export function setMapProjectionMeta(algo: string, space: string, count: number)
 // the vocabulary's CLAP TEXT embeddings against each track's stored audio
 // vector. Sound-derived, so they complement the LLM's metadata-guessed `moods`.
 // ---------------------------------------------------------------------------
-
-export function setTrackAudioMoods(
-  id: string,
-  moods: string[],
-  scores: Record<string, number>,
-): void {
-  requireDb()
-    .prepare(`UPDATE tracks SET audio_moods = ?, audio_mood_scores_json = ? WHERE id = ?`)
-    .run(JSON.stringify(moods), JSON.stringify(scores), id);
-}
 
 // Transactional bulk write for the scoring pass — one commit per batch instead
 // of one per track (the pass touches every vector-carrying row).
@@ -1464,7 +1485,7 @@ export function songsByMood(mood: string): TrackRecord[] {
           OR (audio_moods IS NOT NULL
               AND EXISTS (SELECT 1 FROM json_each(tracks.audio_moods) WHERE value = ?))`,
     )
-    .all(mood, mood) as any[];
+    .all(mood, mood) as TrackRow[];
   return rows.map(rowToTrack);
 }
 
@@ -1472,7 +1493,7 @@ export function songsByEnergy(energy: EnergyValue): TrackRecord[] {
   if (!energy) return [];
   const rows = requireDb()
     .prepare(`SELECT * FROM tracks WHERE energy = ?`)
-    .all(energy) as any[];
+    .all(energy) as TrackRow[];
   return rows.map(rowToTrack);
 }
 
@@ -1688,7 +1709,7 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   ).n;
   const rows = d
     .prepare(`SELECT * FROM tracks ${whereSql} ${orderSql} LIMIT ? OFFSET ?`)
-    .all(...params, limit, offset) as any[];
+    .all(...params, limit, offset) as TrackRow[];
   return { total, rows: rows.map(rowToTrack) };
 }
 
@@ -1725,7 +1746,7 @@ const OBSERVATORY_COLS = `id, title, artist, album, year, genre, duration_sec,
   moods, energy, source, confidence, bpm, musical_key, analysis_confidence,
   loudness_lufs, pace_json, vocal_ranges_json, map_x, map_y`;
 
-function rowToObservatory(row: any): ObservatoryTrackRow {
+function rowToObservatory(row: TrackRow): ObservatoryTrackRow {
   // pace_json is a short array (~14 spans) — the mean is cheap. The fat blobs
   // (beats/bars/structure/key ranges) are never selected, let alone parsed.
   let paceMean: number | null = null;
@@ -1769,7 +1790,7 @@ export function allTagged(limit?: number): ObservatoryTrackRow[] {
   const sql =
     `SELECT ${OBSERVATORY_COLS} FROM tracks WHERE ${SQL_HAS_MOODS} ORDER BY id` +
     (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
-  return (requireDb().prepare(sql).all() as any[]).map(rowToObservatory);
+  return (requireDb().prepare(sql).all() as TrackRow[]).map(rowToObservatory);
 }
 
 // A *stratified* sample of the tagged library, ~`max` rows, proportional per
@@ -1803,7 +1824,7 @@ export function allTaggedSampled(max: number, totalTagged: number): ObservatoryT
     SELECT ${OBSERVATORY_COLS} FROM tracks JOIN picked USING (id)
     ORDER BY id
   `;
-  return (requireDb().prepare(sql).all(m, total) as any[]).map(rowToObservatory);
+  return (requireDb().prepare(sql).all(m, total) as TrackRow[]).map(rowToObservatory);
 }
 
 // ---------------------------------------------------------------------------
@@ -1922,7 +1943,7 @@ function computeStats(): LibraryStats {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-function rowToTrack(row: any): TrackRecord {
+function rowToTrack(row: TrackRow): TrackRecord {
   return {
     id: row.id,
     title: row.title,
@@ -1993,11 +2014,11 @@ function parseKeyRanges(s: string): TrackKeyRange[] | null {
     const v = JSON.parse(s);
     if (!Array.isArray(v)) return null;
     const out: TrackKeyRange[] = [];
-    for (const x of v) {
-      const startMs = Number((x as any)?.startMs);
-      const endMs = Number((x as any)?.endMs);
-      const tonic = (x as any)?.tonic;
-      const mode = (x as any)?.mode;
+    for (const x of v as Record<string, unknown>[]) {
+      const startMs = Number(x?.startMs);
+      const endMs = Number(x?.endMs);
+      const tonic = x?.tonic;
+      const mode = x?.mode;
       if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
       if (typeof tonic !== 'string' || (mode !== 'major' && mode !== 'minor')) continue;
       out.push({ startMs, endMs, tonic, mode });
@@ -2026,10 +2047,10 @@ function parsePaceSpans(s: string): TrackPaceSpan[] | null {
     const v = JSON.parse(s);
     if (!Array.isArray(v)) return null;
     const out: TrackPaceSpan[] = [];
-    for (const x of v) {
-      const startMs = Number((x as any)?.startMs);
-      const endMs = Number((x as any)?.endMs);
-      const value = Number((x as any)?.value);
+    for (const x of v as Record<string, unknown>[]) {
+      const startMs = Number(x?.startMs);
+      const endMs = Number(x?.endMs);
+      const value = Number(x?.value);
       if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || !Number.isFinite(value) || endMs <= startMs) continue;
       out.push({ startMs, endMs, value });
     }
@@ -2046,11 +2067,11 @@ function parseSpans(s: string): TrackSection[] {
     const v = JSON.parse(s);
     if (!Array.isArray(v)) return [];
     const out: TrackSection[] = [];
-    for (const x of v) {
-      const startMs = Number((x as any)?.startMs);
-      const endMs = Number((x as any)?.endMs);
+    for (const x of v as Record<string, unknown>[]) {
+      const startMs = Number(x?.startMs);
+      const endMs = Number(x?.endMs);
       if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
-      const kind = typeof (x as any)?.kind === 'string' ? (x as any).kind : undefined;
+      const kind = typeof x?.kind === 'string' ? x.kind : undefined;
       out.push(kind ? { startMs, endMs, kind } : { startMs, endMs });
     }
     return out;

@@ -27,13 +27,56 @@
 // prepareStep corners the model into discovery-then-done.
 
 import { Output, stepCountIs, hasToolCall, ToolLoopAgent, tool } from 'ai';
+import type { ModelMessage, ToolSet } from 'ai';
+import { z } from 'zod';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
 import { stripThinking, extractJson, usageOf, flattenToolCalls, failureDiagnostics } from '../core/pure.js';
+import type { StepLike, ToolCallLike, ToolCallSummary, TokenUsage } from '../core/pure.js';
 import { needsToolCallObject, providerOptions, samplingWithLocalKnobs, forcedToolChoice } from '../provider/capabilities.js';
+import type { Leg } from '../provider/legs.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { agentPlan } from './plan.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
+
+// Loose views of an AI SDK ToolLoopAgent generate result — only the fields the
+// cascade below reads. The provider-varying tool-call / output shapes stay
+// `unknown`; a real GenerateTextResult is assignable to `AgentGenerateResult`
+// (verified where runDeadlined drives the agent). `AgentLike` is the minimal
+// surface runDeadlined needs, which a ToolLoopAgent satisfies.
+interface AgentGenerateResult {
+  output?: unknown;
+  text: string;
+  finishReason?: unknown;
+  usage?: TokenUsage;
+  totalUsage?: TokenUsage;
+  steps?: StepLike[];
+  staticToolCalls?: ToolCallLike[];
+  response?: { messages?: ModelMessage[] };
+}
+interface AgentLike {
+  generate(options: { messages: ModelMessage[]; abortSignal?: AbortSignal }): Promise<AgentGenerateResult>;
+}
+
+// The synthetic "did not call done" failure and the djAgent options bag.
+interface AgentFailureError extends Error {
+  text?: string;
+  finishReason?: unknown;
+  usage?: unknown;
+  steps?: unknown;
+}
+interface DjAgentOptions {
+  system: string;
+  messages: ModelMessage[];
+  tools?: ToolSet;
+  schema?: z.ZodTypeAny;
+  maxSteps?: number;
+  temperature?: number;
+  maxOutputTokens?: number;
+  kind?: string;
+  timeoutMs?: number;
+  validate?: (object: unknown) => boolean;
+}
 
 // Operator-overridable via settings.llm.maxOutputTokens (issue #712); 0 keeps
 // this default. Resolved here and threaded down to objectViaToolCall and the
@@ -52,7 +95,7 @@ const MAX_TOKENS_AGENT = 8000;
 // unless the provider honours `toolChoice`.
 const COMMIT_AFTER_STEPS = 1;
 
-function buildDoneTool(schema: any) {
+function buildDoneTool(schema: z.ZodTypeAny) {
   return tool({
     description: 'Call this exactly once when you have your final answer. Pass the answer as input. Calling this tool IS how you respond — do not emit text after.',
     inputSchema: schema,
@@ -81,7 +124,7 @@ function gatedDiscoveryPrepareStep(discoveryToolNames: string[], toolChoice: 're
 // Shared shape for the done-only recovery agent — same harness for both the
 // first (trail-carrying) and second (clean-context) recovery attempts below;
 // only the messages they're run against differ.
-function buildRecoveryAgent(leg: any, system: string, allTools: any, temperature: number, maxOutputTokens: number, forcedChoice: 'required' | 'auto') {
+function buildRecoveryAgent(leg: Leg, system: string, allTools: ToolSet | undefined, temperature: number, maxOutputTokens: number, forcedChoice: 'required' | 'auto') {
   return new ToolLoopAgent({
     // Recovery forces done-only every step → no-think model (see above).
     model: leg.noThinkModel ?? leg.model,
@@ -123,13 +166,13 @@ function buildRecoveryAgent(leg: any, system: string, allTools: any, temperature
 // stateless path (Copilot review, PR #923) — a slow main run now correctly
 // leaves less time for recovery instead of resetting the clock. undefined
 // means no deadline at all (unlimited).
-function runDeadlined(deadlineAt: number | undefined, kind: string, label: string, agent: any, messages: any) {
+function runDeadlined(deadlineAt: number | undefined, kind: string, label: string, agent: AgentLike, messages: ModelMessage[]): Promise<AgentGenerateResult> {
   if (deadlineAt == null) {
     return withTransientRetry(kind, () => agent.generate({ messages }));
   }
   const remaining = deadlineAt - Date.now();
   if (remaining <= 0) {
-    const err: any = new Error(`${kind} ${label} — no time left on the shared deadline`);
+    const err = new Error(`${kind} ${label} — no time left on the shared deadline`);
     err.name = 'AgentDeadlineError';
     return Promise.reject(err);
   }
@@ -162,11 +205,11 @@ export async function djAgent({
   // a breaker increment). Not applied to the done-tool/recovery results: the
   // caller repairs those itself with the full `seen` context.
   validate,
-}: any): Promise<{ object: any; steps: number; toolCalls: any[] }> {
+}: DjAgentOptions): Promise<{ object: unknown; steps: number; toolCalls: ToolCallSummary[] }> {
   return withFailover(
     kind,
     (err) => ({ system, messages, ...failureDiagnostics(err) }),
-    async (leg) => {
+    async (leg: Leg) => {
       const toolCount = tools ? Object.keys(tools).length : 0;
       const plan = agentPlan(leg.cfg, schema, toolCount);
       // Default to the agent path; branches override before their await. A
@@ -214,9 +257,9 @@ export async function djAgent({
               // elsewhere — the pick is structured extraction; the DJ's free-text
               // (djText) still reasons.
               providerOptions: providerOptions(leg.cfg, { forceNoThink: true }),
-              output: Output.object({ schema }),
+              output: Output.object({ schema: schema! }),
             } as any);
-            const nr: any = await runDeadlined(deadlineAt, kind, 'native run', nativeAgent, messages);
+            const nr = await runDeadlined(deadlineAt, kind, 'native run', nativeAgent, messages);
             const nObj = nr.output;
             const nSteps = nr.steps?.length ?? 0;
             // The cross-provider failure signature is "emitted the object WITHOUT
@@ -224,7 +267,7 @@ export async function djAgent({
             // real discovery call so a no-explore hallucination can't slip through:
             // the caller resolves the id against `seen`, which only tool calls
             // populate, so an explored pick is also a resolvable one.
-            const explored = (nr.steps || []).some((s: any) => (s.toolCalls || []).length > 0);
+            const explored = (nr.steps || []).some((s) => (s.toolCalls || []).length > 0);
             // Caller acceptance check (see the validate param note). A throwing
             // validator counts as a miss, never as an agent failure.
             let accepted = true;
@@ -242,7 +285,7 @@ export async function djAgent({
               };
             }
             console.log(`[${kind}] native output produced no usable pick (explored=${explored}, accepted=${accepted}) — falling back to done-tool`);
-          } catch (e: any) {
+          } catch (e) {
             console.log(`[${kind}] native output failed (${e?.message}) — falling back to done-tool`);
           }
         }
@@ -251,7 +294,7 @@ export async function djAgent({
         // native-no-tools (schema-only off Ollama → agent-level Output.object), or
         // free-text (no schema). useDoneTool is the original predicate, kept verbatim.
         const useDoneTool = schema != null && (needsToolCallObject(leg.cfg) || toolCount > 0);
-        const allTools = useDoneTool ? { ...tools, done: buildDoneTool(schema) } : tools;
+        const allTools = useDoneTool ? { ...tools, done: buildDoneTool(schema!) } : tools;
         // 'required' by default; 'auto' when the operator downgrades this leg for
         // a server whose forced-tool backend crashes (issue #570). Applies to the
         // agent-level choice, the gated prepareStep, and the recovery run below.
@@ -285,7 +328,7 @@ export async function djAgent({
         // timeoutMs (when set) is a hard ceiling — a slow/looping run throws,
         // flows through the catch below, and the caller falls back to its
         // stateless path rather than blocking on a pathological model call.
-        let result: any = await runDeadlined(deadlineAt, kind, 'agent run', agent, messages);
+        let result = await runDeadlined(deadlineAt, kind, 'agent run', agent, messages);
         let steps = result.steps?.length ?? 0;
 
         // What the model said INSTEAD of calling `done`, one entry per attempt
@@ -297,8 +340,8 @@ export async function djAgent({
         // making it unguessable whether it declined outright, answered in
         // prose, or something else entirely.
         const declinedAttempts: string[] = [];
-        const noteIfDeclined = (label: string, r: any) => {
-          if (!(r.staticToolCalls || []).some((c: any) => c.toolName === 'done')
+        const noteIfDeclined = (label: string, r: AgentGenerateResult) => {
+          if (!(r.staticToolCalls || []).some((c) => c.toolName === 'done')
             && typeof r.text === 'string' && r.text.trim()) {
             declinedAttempts.push(`[${label}] ${r.text.trim()}`);
           }
@@ -315,10 +358,10 @@ export async function djAgent({
         // map; replaying only the bare `messages` strips them, so a cornered agent
         // could only fabricate an id (100% unknown-id). Feeding the trail back lets
         // it commit to a REAL surfaced id. Harmless for free-text recovery.
-        if (useDoneTool && !(result.staticToolCalls || []).some((c: any) => c.toolName === 'done')) {
+        if (useDoneTool && !(result.staticToolCalls || []).some((c) => c.toolName === 'done')) {
           console.log(`[${kind}] agent stopped without calling done — retrying with done-only`);
           lastVia = 'ai-sdk:agent:recovery';
-          const priorMessages = (result as any).response?.messages || [];
+          const priorMessages = result.response?.messages || [];
           const recoveryMessages = priorMessages.length ? [...messages, ...priorMessages] : messages;
           result = await runDeadlined(deadlineAt, kind, 'agent recovery',
             buildRecoveryAgent(leg, system, allTools, temperature, maxOutputTokens, forcedChoice), recoveryMessages);
@@ -338,7 +381,7 @@ export async function djAgent({
           // replay, so it's already populated regardless of what this attempt sees
           // — an id this step fabricates still gets caught by the caller's
           // nearestId/repickFromSeen salvage, same as any other unknown-id miss.
-          if (!(result.staticToolCalls || []).some((c: any) => c.toolName === 'done')) {
+          if (!(result.staticToolCalls || []).some((c) => c.toolName === 'done')) {
             console.log(`[${kind}] recovery also stopped without calling done — retrying once more from a clean context`);
             lastVia = 'ai-sdk:agent:recovery2';
             result = await runDeadlined(deadlineAt, kind, 'agent recovery (clean)',
@@ -352,9 +395,9 @@ export async function djAgent({
         if (useDoneTool) {
           // staticToolCalls carries the FINAL step's tool calls — the SDK surfaces
           // calls that weren't executed (like our no-execute `done`) here.
-          const doneCall = (result.staticToolCalls || []).find((c: any) => c.toolName === 'done');
+          const doneCall = (result.staticToolCalls || []).find((c) => c.toolName === 'done');
           if (doneCall) {
-            object = (doneCall as any).input;
+            object = doneCall.input;
           } else {
             // Salvage: some models (deepseek-v4-flash) end the forced loop emitting
             // the answer as text/JSON instead of a `done` call — even after the
@@ -362,10 +405,10 @@ export async function djAgent({
             // up, mirroring djObject's recovery. Only throw (→ caller's pool
             // fallback) when there's no usable JSON either.
             try {
-              object = schema.parse(JSON.parse(extractJson(stripThinking(result.text || ''))));
+              object = schema!.parse(JSON.parse(extractJson(stripThinking(result.text || ''))));
               lastVia = `${lastVia}:text`;
             } catch {
-              const err: any = new Error('agent did not call the done tool before stopping');
+              const err = new Error('agent did not call the done tool before stopping') as AgentFailureError;
               // See declinedAttempts above — picked up by failureDiagnostics()
               // into the /debug record's responseText/toolCalls, and by
               // failover.ts's logFailurePreview into the container log line.
@@ -398,7 +441,7 @@ export async function djAgent({
       } catch (err) {
         // Attribute to the path actually attempted; withFailover writes the
         // record and decides whether a host-unreachable error tries the backup.
-        (err as any).__via = lastVia;
+        (err as { __via?: string }).__via = lastVia;
         throw err;
       }
     },

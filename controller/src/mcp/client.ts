@@ -18,6 +18,8 @@
  * can recover (wait out a cooldown, supply credentials) instead of guessing.
  */
 
+import { fetchWithTimeout } from "../util/fetch-timeout.js";
+
 /** A failure the agent should be able to read and act on directly. */
 export class SubwaveError extends Error {
   /** Optional seconds-to-wait, surfaced from HTTP 429 Retry-After. */
@@ -125,14 +127,12 @@ export class SubwaveClient {
     init: { method?: string; body?: unknown; admin?: boolean; allowStatuses?: number[] } = {},
   ): Promise<T> {
     const url = `${this.config.baseUrl}${path}`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15_000);
 
     let res: Response;
     try {
-      res = await fetch(url, {
+      res = await fetchWithTimeout(url, {
         method: init.method ?? "GET",
-        signal: controller.signal,
+        timeoutMs: 15_000,
         headers: {
           ...(init.body !== undefined ? { "content-type": "application/json" } : {}),
           ...(this.config.forwardIp ? { "x-forwarded-for": this.config.forwardIp } : {}),
@@ -146,8 +146,6 @@ export class SubwaveClient {
         `Could not reach the SUB/WAVE controller at ${url} (${reason}). ` +
           `Check that the stack is running and reachable.`,
       );
-    } finally {
-      clearTimeout(timer);
     }
 
     let body: unknown;

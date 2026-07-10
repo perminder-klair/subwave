@@ -16,16 +16,16 @@
 // WAV path, isAvailable() returns a boolean, that's the whole contract.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdir, readdir } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { config } from '../config.js';
 import {
   isRemoteEnabled,
   speakRemote,
   startProbeLoop,
 } from './ttsHeavyClient.js';
+import { resolveTtsOutPath } from './tts-out.js';
 
 const READY_TIMEOUT_MS = 120_000;        // first call may include model + weights load
 // Chatterbox is heavier than Kokoro — 350M params vs ~80M — and on CPU a single
@@ -163,6 +163,17 @@ async function ensureWorker(): Promise<ChatterboxWorker> {
   }
 }
 
+// Reap the resident worker on shutdown. Docker tears down the container's whole
+// process group, so this only matters on the bare-process path (npm start / dev)
+// where the spawned Python child would otherwise be orphaned. In sidecar mode no
+// local worker is ever spawned, so this is a no-op. Best-effort: SIGTERM the
+// proc if we hold one and drop the handle.
+export function stop(): void {
+  const w = worker;
+  worker = null;
+  w?.proc?.kill('SIGTERM');
+}
+
 // `voice` here is the reference-WAV filename (not a voice id like Kokoro's
 // `bf_isabella`). The dispatcher passes the persona's `voice` field directly;
 // resolve it against the configured voice directory so the worker gets an
@@ -188,12 +199,7 @@ export async function speak(
   text: string,
   { outPath: customPath, voice }: { outPath?: string; voice?: string } = {},
 ): Promise<string> {
-  if (!text || !text.trim()) throw new Error('Empty TTS text');
-  await mkdir(config.piper.outDir, { recursive: true });
-
-  const id = crypto.randomBytes(6).toString('hex');
-  const outPath = customPath || path.join(config.piper.outDir, `${id}.wav`);
-  if (customPath) await mkdir(path.dirname(customPath), { recursive: true });
+  const { id, outPath } = await resolveTtsOutPath(text, customPath);
 
   if (isRemoteEnabled()) {
     return speakRemote({

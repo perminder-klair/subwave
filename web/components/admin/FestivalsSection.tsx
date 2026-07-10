@@ -73,15 +73,19 @@ export default function FestivalsSection() {
     try {
       const r = await adminFetch('/settings');
       if (!r.ok) throw new Error(`failed (${r.status})`);
-      const j = (await r.json()) as any;
+      const j = (await r.json()) as {
+        values?: { festivals?: unknown };
+        tts?: { moods?: unknown };
+      } | null;
       // The controller validates + normalises festivals on every save
       // (validateFestivalsStrict), so trust the shape as-is here.
       const vals = j?.values?.festivals;
-      const loaded: Festival[] = Array.isArray(vals) ? vals : [];
+      const loaded = Array.isArray(vals) ? (vals as Festival[]) : [];
       setFestivals(sortFestivals(loaded));
       // Mood vocabulary comes from the server (SHOW_MOODS via tts.moods) so
       // the dropdown never drifts from what the controller will accept.
-      setMoods(Array.isArray(j?.tts?.moods) ? j.tts.moods : []);
+      const moodVals = j?.tts?.moods;
+      setMoods(Array.isArray(moodVals) ? (moodVals as string[]) : []);
       setErr(null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));

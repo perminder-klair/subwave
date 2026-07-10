@@ -21,9 +21,15 @@
 import { createHash } from 'node:crypto';
 import * as settings from '../settings.js';
 import { getListenerCount, presentListeners } from './listeners.js';
+import {
+  LASTFM_API,
+  resolveLastfmApiKey,
+  resolveLastfmApiSecret,
+  resolveLastfmSessionKey,
+} from '../music/lastfm-shared.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
 const TIMEOUT_MS = 5000;
-const LASTFM_API = 'https://ws.audioscrobbler.com/2.0/';
 
 // Shared base for submit + validate-token. Env LISTENBRAINZ_API_URL wins, then
 // settings baseUrl (for self-hosted LB-compatible scrobblers), else LB.org. Both
@@ -100,9 +106,9 @@ interface LastfmCreds {
 function lastfmCreds(): LastfmCreds | null {
   const s: any = settings.get()?.scrobble?.lastfm || {};
   if (!s.enabled) return null;
-  const apiKey = process.env.LASTFM_API_KEY || s.apiKey || '';
-  const apiSecret = process.env.LASTFM_API_SECRET || s.apiSecret || '';
-  const sessionKey = process.env.LASTFM_SESSION_KEY || s.sessionKey || '';
+  const apiKey = resolveLastfmApiKey();
+  const apiSecret = resolveLastfmApiSecret();
+  const sessionKey = resolveLastfmSessionKey();
   if (!apiKey || !apiSecret || !sessionKey) return null;
   return { apiKey, apiSecret, sessionKey };
 }
@@ -145,17 +151,16 @@ async function callLastfm(method: string, baseParams: Record<string, string>, cr
   params.format = 'json';
   const body = new URLSearchParams(params).toString();
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
-    const r = await fetch(LASTFM_API, {
+    const r = await fetchWithTimeout(LASTFM_API, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'User-Agent': 'sub-wave/scrobble',
       },
       body,
-      signal: ctrl.signal,
+      timeoutMs: TIMEOUT_MS,
+      bodyDeadline: true,
     });
     if (!r.ok) {
       let detail = '';
@@ -180,8 +185,6 @@ async function callLastfm(method: string, baseParams: Record<string, string>, cr
     const message = err?.name === 'AbortError' ? 'request timed out' : (err?.message || String(err));
     console.warn(`[scrobble] last.fm ${method} failed: ${message}`);
     return { ok: false, message };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -225,9 +228,8 @@ async function lastfmScrobble(
 // Just the api key + secret — no session key yet, no `enabled` gate (the whole
 // point of the flow is to obtain the missing session key).
 function lastfmApiCreds(): { apiKey: string; apiSecret: string } | null {
-  const s: any = settings.get()?.scrobble?.lastfm || {};
-  const apiKey = process.env.LASTFM_API_KEY || s.apiKey || '';
-  const apiSecret = process.env.LASTFM_API_SECRET || s.apiSecret || '';
+  const apiKey = resolveLastfmApiKey();
+  const apiSecret = resolveLastfmApiSecret();
   if (!apiKey || !apiSecret) return null;
   return { apiKey, apiSecret };
 }
@@ -242,21 +244,16 @@ async function callLastfmAuth(
   const params: Record<string, string> = { api_key: creds.apiKey, method, ...extra };
   params.api_sig = signLastfm(params, creds.apiSecret);
   params.format = 'json';
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-  try {
-    const r = await fetch(`${LASTFM_API}?${new URLSearchParams(params)}`, {
-      headers: { 'User-Agent': 'sub-wave/scrobble' },
-      signal: ctrl.signal,
-    });
-    const data: any = await r.json().catch(() => ({}));
-    if (!r.ok || data?.error) {
-      throw new Error(data?.message || `Last.fm ${method} failed (HTTP ${r.status})`);
-    }
-    return data;
-  } finally {
-    clearTimeout(timer);
+  const r = await fetchWithTimeout(`${LASTFM_API}?${new URLSearchParams(params)}`, {
+    headers: { 'User-Agent': 'sub-wave/scrobble' },
+    timeoutMs: TIMEOUT_MS,
+    bodyDeadline: true,
+  });
+  const data: any = await r.json().catch(() => ({}));
+  if (!r.ok || data?.error) {
+    throw new Error(data?.message || `Last.fm ${method} failed (HTTP ${r.status})`);
   }
+  return data;
 }
 
 // Step 1: mint a request token + the URL the operator visits to grant access.
@@ -286,10 +283,8 @@ export async function lastfmCompleteAuth(token: string): Promise<{ sessionKey: s
 // ── ListenBrainz client ─────────────────────────────────────────────────────
 
 async function postListenbrainz(payload: Record<string, unknown>, token: string, label: string): Promise<CallResult> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
-    const r = await fetch(listenbrainzSubmitUrl(), {
+    const r = await fetchWithTimeout(listenbrainzSubmitUrl(), {
       method: 'POST',
       headers: {
         'Authorization': `Token ${token}`,
@@ -297,7 +292,8 @@ async function postListenbrainz(payload: Record<string, unknown>, token: string,
         'User-Agent': 'sub-wave/scrobble',
       },
       body: JSON.stringify(payload),
-      signal: ctrl.signal,
+      timeoutMs: TIMEOUT_MS,
+      bodyDeadline: true,
     });
     if (!r.ok) {
       let detail = '';
@@ -311,8 +307,6 @@ async function postListenbrainz(payload: Record<string, unknown>, token: string,
     const message = err?.name === 'AbortError' ? 'request timed out' : (err?.message || String(err));
     console.warn(`[scrobble] listenbrainz ${label} failed: ${message}`);
     return { ok: false, message };
-  } finally {
-    clearTimeout(timer);
   }
 }
 

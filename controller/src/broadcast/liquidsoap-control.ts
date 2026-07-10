@@ -203,7 +203,3 @@ export async function getDjQueueIds(): Promise<Set<string>> {
   return _djQueueInflight;
 }
 
-export function invalidateDjQueueCache() {
-  _djQueueCache = null;
-}
-

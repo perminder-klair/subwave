@@ -23,6 +23,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
 let lastCount: number | null = null;        // null = unknown (not yet polled, or Icecast down)
 let peakSeen = 0;                            // running max of the deduped count this process run
@@ -106,10 +107,7 @@ async function fetchCount() {
   let channels: number | null = null;
   let rawCount = 0; // un-deduped status sum — the fallback when admin is unreachable
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 1500);
-    const r = await fetch(config.icecast.statusUrl, { signal: ctrl.signal });
-    clearTimeout(timer);
+    const r = await fetchWithTimeout(config.icecast.statusUrl, { timeoutMs: 1500 });
     const ic = ((await r.json()) as any)?.icestats;
     const sources = Array.isArray(ic?.source) ? ic.source : ic?.source ? [ic.source] : [];
     // Only our two broadcast mounts count. Anything else (e.g. an /admin
@@ -420,17 +418,10 @@ export async function getConnections(): Promise<ListenerConnection[]> {
 
   const rows: ListenerConnection[] = [];
   for (const mount of BROADCAST_MOUNTS) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 2000);
-    let r: Response;
-    try {
-      r = await fetch(`${config.icecast.adminUrl}?mount=${encodeURIComponent(mount)}`, {
-        headers: { Authorization: auth },
-        signal: ctrl.signal,
-      });
-    } finally {
-      clearTimeout(timer);
-    }
+    const r = await fetchWithTimeout(`${config.icecast.adminUrl}?mount=${encodeURIComponent(mount)}`, {
+      headers: { Authorization: auth },
+      timeoutMs: 2000,
+    });
     // A wrong password fails the same way on every mount — surface it.
     if (r.status === 401) {
       cachedAdminPassword = null; // re-read the file next time in case it rotated

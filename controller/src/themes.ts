@@ -23,7 +23,6 @@ export const THEME_TOKEN_KEYS = [
   '--soft-border',
   '--field',
 ] as const;
-export type ThemeTokenKey = (typeof THEME_TOKEN_KEYS)[number];
 
 const TOKEN_KEY_SET = new Set<string>(THEME_TOKEN_KEYS);
 

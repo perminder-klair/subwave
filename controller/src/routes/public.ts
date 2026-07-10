@@ -17,6 +17,7 @@ import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
 import { listCommunitySkills } from '../skills/loader.js';
 import { listCommunityPersonas } from '../personas/community.js';
 import { lifetimeTokenCount } from '../llm/log.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
 export const router = express.Router();
 
@@ -92,10 +93,7 @@ router.get('/cover/:id', async (req, res) => {
   }
 
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
-    const r = await fetch(subsonic.getCoverArtUrl(id, 512), { signal: ctrl.signal });
-    clearTimeout(timer);
+    const r = await fetchWithTimeout(subsonic.getCoverArtUrl(id, 512), { timeoutMs: 5000 });
     if (!r.ok) return res.status(502).end();
     const entry = {
       buf: Buffer.from(await r.arrayBuffer()),
@@ -188,7 +186,7 @@ router.get('/now-playing', async (req, res) => {
       if (nowPlaying.duration == null) {
         const cur = queue.current;
         const queueDuration =
-          cur?.track?.id === nowPlaying.subsonic_id ? cur.track.duration : null;
+          cur?.track?.id === nowPlaying.subsonic_id ? cur?.track?.duration : null;
         const duration = queueDuration ?? rec?.durationSec ?? null;
         if (typeof duration === 'number' && duration > 0) nowPlaying.duration = duration;
       }
