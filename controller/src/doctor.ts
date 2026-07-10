@@ -785,7 +785,7 @@ async function checkTuning(s: StationSettings | null): Promise<Finding[]> {
           label: 'audio embeddings',
           status: 'warn',
           detail: 'enabled, but the analyzer can’t produce them',
-          hint: 'The “sounds-like” audio embeddings need the heavy analyzer (CLAP). You’re on the lean image, so this setting silently does nothing. Set ANALYZER_HEAVY=1 in .env and re-pull/rebuild the analyzer, or turn the setting off.',
+          hint: 'The “sounds-like” audio embeddings need the heavy analyzer (CLAP). You’re on the lean image, so this setting silently does nothing. With docker compose, set ANALYZER_HEAVY=1 in .env and re-pull; without compose (Unraid, Portainer, plain docker) switch the analyzer container’s image to ghcr.io/perminder-klair/subwave-analyzer-heavy. Or turn the setting off.',
         });
       }
       if (wantVocal && analyzer.vocalActivityAvailable() === false) {
@@ -793,7 +793,7 @@ async function checkTuning(s: StationSettings | null): Promise<Finding[]> {
           label: 'vocal activity',
           status: 'warn',
           detail: 'enabled, but the analyzer can’t produce it',
-          hint: 'Vocal-range / talk-timing analysis needs the heavy analyzer (Demucs). The lean image can’t, so this setting no-ops. Set ANALYZER_HEAVY=1 in .env and rebuild the analyzer, or turn the setting off.',
+          hint: 'Vocal-range / talk-timing analysis needs the heavy analyzer (Demucs). The lean image can’t, so this setting no-ops. With docker compose, set ANALYZER_HEAVY=1 in .env and re-pull; without compose switch the analyzer container’s image to ghcr.io/perminder-klair/subwave-analyzer-heavy. Or turn the setting off.',
         });
       }
     }
