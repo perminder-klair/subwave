@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   AUDIO_FORMATS,
   availabilityFor,
+  deriveSiblingMounts,
   effectiveFormat,
   loadFormatPreference,
   preferenceKey,
@@ -36,5 +37,18 @@ const available = availabilityFor(enabled, supported);
 assert.equal(effectiveFormat('flac', available), 'flac');
 assert.equal(effectiveFormat('opus', available), 'mp3');
 assert.equal(effectiveFormat(null, available), 'mp3');
+
+assert.deepEqual(deriveSiblingMounts('/stream.mp3'), {
+  mp3: '/stream.mp3',
+  opus: '/stream.opus',
+  aac: '/stream.aac',
+  flac: '/stream.flac',
+});
+assert.deepEqual(deriveSiblingMounts('https://custom.example/live'), {
+  mp3: 'https://custom.example/live',
+  opus: null,
+  aac: null,
+  flac: null,
+});
 
 console.log('audio-format: all assertions passed');

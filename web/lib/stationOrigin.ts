@@ -10,6 +10,7 @@
 // image, NEXT_PUBLIC_* overrides in dev — a PlayerApp rendered without a
 // provider is byte-for-byte the old player.
 import { createContext, useContext } from 'react';
+import { deriveSiblingMounts, type AudioStreamUrls } from '@/lib/audioFormat';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
@@ -20,14 +21,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 // at a non-standard URL that doesn't end in `/stream.mp3` still get it
 // verbatim (opus is null → codec detection off).
 const STREAM_URL_OVERRIDE = process.env.NEXT_PUBLIC_STREAM_URL || '';
-const MP3_PATH = '/stream.mp3';
-const OPUS_PATH = '/stream.opus';
-
-export interface StationStreams {
-  mp3: string;
-  /** null disables the Opus canPlayType upgrade in usePlayer. */
-  opus: string | null;
-}
+export type StationStreams = AudioStreamUrls;
 
 export interface StationOrigin {
   /** Controller API base — `/api`, or `https://radio.example.com/api`. */
@@ -36,12 +30,7 @@ export interface StationOrigin {
 }
 
 function defaultStreams(): StationStreams {
-  if (!STREAM_URL_OVERRIDE) return { mp3: MP3_PATH, opus: OPUS_PATH };
-  const idx = STREAM_URL_OVERRIDE.lastIndexOf(MP3_PATH);
-  if (idx === -1) return { mp3: STREAM_URL_OVERRIDE, opus: null };
-  const before = STREAM_URL_OVERRIDE.slice(0, idx);
-  const after = STREAM_URL_OVERRIDE.slice(idx + MP3_PATH.length);
-  return { mp3: STREAM_URL_OVERRIDE, opus: `${before}${OPUS_PATH}${after}` };
+  return deriveSiblingMounts(STREAM_URL_OVERRIDE || '/stream.mp3');
 }
 
 export const DEFAULT_STATION_ORIGIN: StationOrigin = {
@@ -61,7 +50,7 @@ export function originForStation(siteUrl: string): StationOrigin {
   const base = siteUrl.replace(/\/+$/, '');
   return {
     apiUrl: `${base}/api`,
-    streams: { mp3: `${base}${MP3_PATH}`, opus: `${base}${OPUS_PATH}` },
+    streams: deriveSiblingMounts(`${base}/stream.mp3`),
   };
 }
 
