@@ -429,6 +429,7 @@ async function main() {
     await impl('http://x/v1/chat/completions', { method: 'POST', body: JSON.stringify({ model: 'm', messages: [] }) });
     assert.equal(sent.chat_template_kwargs?.enable_thinking, undefined);
     assert.equal(sent.reasoning_format, undefined);
+    assert.equal(sent.reasoning, undefined);
   });
   await test('reasoning ON + forceNoThink ON: thinking SUPPRESSED (the picker legs — issue: schema-fail-on-picks)', async () => {
     let sent: any = null;
@@ -436,6 +437,7 @@ async function main() {
     await impl('http://x/v1/chat/completions', { method: 'POST', body: JSON.stringify({ model: 'm', messages: [] }) });
     assert.equal(sent.chat_template_kwargs.enable_thinking, false);
     assert.equal(sent.reasoning_format, 'deepseek');
+    assert.deepEqual(sent.reasoning, { enabled: false });
   });
   await test('reasoning OFF: thinking suppressed regardless of forceNoThink (existing behaviour preserved)', async () => {
     let sent: any = null;
@@ -443,6 +445,20 @@ async function main() {
     await impl('http://x/v1/chat/completions', { method: 'POST', body: JSON.stringify({ model: 'm', messages: [] }) });
     assert.equal(sent.chat_template_kwargs.enable_thinking, false);
     assert.equal(sent.reasoning_format, 'deepseek');
+    assert.deepEqual(sent.reasoning, { enabled: false });
+  });
+  await test('aggregator dialect: reasoning-mandatory model ids get effort:minimal, never enabled:false; existing body.reasoning never clobbered', async () => {
+    let sent: any = null;
+    const impl = openAICompatibleFetch({ provider: 'openai-compatible', reasoning: false }, async (_u: any, init: any) => { sent = JSON.parse(init.body); return {} as any; }, false);
+    // gpt-5/o-series behind an aggregator 400 on enabled:false ("Reasoning is mandatory").
+    await impl('http://x/v1/chat/completions', { method: 'POST', body: JSON.stringify({ model: 'openai/gpt-5-mini', messages: [] }) });
+    assert.deepEqual(sent.reasoning, { effort: 'minimal' });
+    // deepseek-r1 variants are reasoning-only too.
+    await impl('http://x/v1/chat/completions', { method: 'POST', body: JSON.stringify({ model: 'deepseek/deepseek-r1-distill', messages: [] }) });
+    assert.deepEqual(sent.reasoning, { effort: 'minimal' });
+    // A caller-set reasoning block wins — same never-clobber rule as every knob here.
+    await impl('http://x/v1/chat/completions', { method: 'POST', body: JSON.stringify({ model: 'm', reasoning: { effort: 'high' }, messages: [] }) });
+    assert.deepEqual(sent.reasoning, { effort: 'high' });
   });
 
   await test('forcedToolChoice: only the literal "auto" downgrades; everything else is "required" (issue #570)', () => {

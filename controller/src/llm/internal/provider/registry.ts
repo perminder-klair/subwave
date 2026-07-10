@@ -101,7 +101,17 @@ export function noThinkFetch(url: any, init: any, baseFetch: any = fetch) {
 //     repeat_penalty through providerOptions. `repeat_penalty` is llama.cpp's
 //     param name (vLLM's is `repetition_penalty`); to opt out, set
 //     llm.repeatPenalty to 1.0. We never clobber a value already on the body.
-//   • reasoning off → enable_thinking:false PLUS reasoning_format. Gemma-4's
+//   • reasoning off → enable_thinking:false PLUS reasoning_format PLUS an
+//     OpenRouter-style `reasoning:{enabled:false}` block (see
+//     reasoningMandatoryModel below for the effort:'minimal' exception).
+//     The chat_template_kwargs family is a llama.cpp dialect — an operator
+//     pointing this provider at a CLOUD aggregator (openrouter.ai/api/v1,
+//     or any hosted /v1 that speaks OpenRouter's reasoning extension) gets
+//     no thinking suppression from it at all: measured 57/96 with 16 leaked
+//     cells for qwen3.5-9b via openrouter.ai, vs 86/96 through the native
+//     openrouter provider whose extraBody sends exactly this block. Servers
+//     that don't know the key ignore it — the same bet as every other knob
+//     here. Gemma-4's
 //     chat template pre-seeds an empty <|channel|>thought block even with
 //     enable_thinking:false, and with reasoning_format unset (defaults to none)
 //     llama.cpp routes that thought to `content`, so it leaks into the visible
@@ -154,6 +164,11 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
           };
           if (body.reasoning_format === undefined) body.reasoning_format = 'deepseek';
           if (body.thinking === undefined) body.thinking = { type: 'disabled' };
+          if (body.reasoning === undefined) {
+            body.reasoning = reasoningMandatoryModel(String(body.model || ''))
+              ? { effort: 'minimal' }
+              : { enabled: false };
+          }
         }
         if (Array.isArray(body.tools) && body.tools.length > 0 &&
             body.parallel_tool_calls === undefined) {
@@ -164,6 +179,18 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
     }
     return baseFetch(url, init);
   };
+}
+
+// Reasoning-MANDATORY model families 400 on a hard reasoning disable
+// (`reasoning:{enabled:false}`): OpenAI's gpt-5/o-series ("Reasoning is
+// mandatory for this endpoint") and reasoning-only DeepSeek R1 variants. Every
+// model accepts `effort:'minimal'`, which satisfies the mandate while dropping
+// thinking low enough that forced tool calls still land. Shared by the
+// openrouter construction wiring and the openai-compatible body injection —
+// kept broad at openai/* (harmlessly dropped on non-reasoning openai models;
+// gpt-4o-mini benched clean with it).
+export function reasoningMandatoryModel(id: string): boolean {
+  return /^openai\//i.test(id) || /(^|\/)deepseek-r1/i.test(id);
 }
 
 // Ollama server URL — from settings (admin UI), falling back to the config
@@ -319,13 +346,11 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       //     'minimal' turned thinking ON for claude-haiku-4.5 (81 leaked
       //     cells) — the suppression knob was the thing enabling it.
       // effort:'minimal' survives ONLY for the reasoning-MANDATORY families,
-      // which 400 on enabled:false ("Reasoning is mandatory"): OpenAI's
-      // gpt-5/o-series (kept broad at openai/* — harmlessly dropped on their
-      // non-reasoning models, e.g. gpt-4o-mini benched clean with it) and
-      // reasoning-only DeepSeek R1 variants.
-      const reasoningMandatory = /^openai\//i.test(id) || /(^|\/)deepseek-r1/i.test(id);
+      // which 400 on enabled:false ("Reasoning is mandatory") — see
+      // reasoningMandatoryModel above (shared with the openai-compatible
+      // body injection).
       model = suppressReasoning
-        ? provider(id, { extraBody: { reasoning: reasoningMandatory ? { effort: 'minimal' } : { enabled: false } } })
+        ? provider(id, { extraBody: { reasoning: reasoningMandatoryModel(id) ? { effort: 'minimal' } : { enabled: false } } })
         : provider(id);
       break;
     }
