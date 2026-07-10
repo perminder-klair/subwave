@@ -19,6 +19,12 @@ import type { NowPlayingTrack, QueueEntry, SessionTurn } from '@/lib/types';
  *  known well before this — the window is about pacing, not data. */
 const UP_NEXT_WINDOW_S = 30;
 
+/** Separator for the v3-caption meta strip. Thin spaces instead of word
+ *  spaces: the caption's 0.16em tracking applies per character, so a plain
+ *  " · " ballooned to ~13px of gap on a 10px font — the items read as
+ *  disconnected fragments rather than one line. */
+const SEP = '\u2009·\u2009';
+
 /** The quiet "music nerd" tokens shown under artist/album: genre · BPM · key.
  *  Returned separately from the mood cluster so the latter can carry the accent
  *  colour. Each token is omitted when its field is absent, so an untagged track
@@ -39,7 +45,7 @@ function buildMoodPhrase(t: NowPlayingTrack | null): string {
   const parts: string[] = [];
   if (Array.isArray(t.moods)) parts.push(...t.moods.slice(0, 2));
   if (t.energy) parts.push(`${t.energy} energy`);
-  return parts.join(' · ');
+  return parts.join(SEP);
 }
 
 export interface CenterStageProps {
@@ -153,10 +159,14 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
     // bottom-pinned Waveform (issue #576). The bottom reserve clears the
     // compact waveform (top ≈ 206px from bottom); on tall desktop windows the
     // waveform grows to its full band, so the reserve grows to match it.
+    // On short/wide windows the content bottom-aligns instead: centring left
+    // the vertical slack as a dead gap between the track info and the band, and
+    // anchoring the bottom edge means long DJ lines grow upward, never over the
+    // waveform. The reserve drops to 212px there to hug the raised 208px band.
     // The right reserve tracks the DotRail width: slimmed on phones (see
     // DotRail's <sm sizing) so the title/DJ-line column keeps ~20px more of a
     // 375px screen, full 96px from sm up.
-    <div className="absolute top-[72px] right-[80px] bottom-[220px] left-4 flex flex-col items-start justify-center sm:right-24 sm:left-8 [@media(min-width:640px)_and_(min-height:760px)]:bottom-[300px]">
+    <div className="absolute top-[72px] right-[80px] bottom-[220px] left-4 flex flex-col items-start justify-center sm:right-24 sm:left-8 [@media(min-width:640px)_and_(max-height:759px)]:bottom-[212px] [@media(min-width:640px)_and_(max-height:759px)]:justify-end [@media(min-width:640px)_and_(min-height:760px)]:bottom-[300px]">
       <div className="isolate flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-6">
         {/* Always rendered — a track without artwork (or an off-air stage) gets
             the disc-mark placeholder instead of collapsing the slot and jumping
@@ -167,7 +177,14 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
           onClick={onOpenTimeline}
           aria-label="Open the timeline"
           className={cn(
-            'v3-cover-frame v3-focus relative h-[clamp(72px,14vw,160px)] w-[clamp(72px,14vw,160px)] shrink-0 appearance-none border-0 bg-transparent p-0',
+            // Art sizes to width but is capped by viewport height (20vh) so a
+            // short/wide window doesn't spend a third of its height on the
+            // cover; roomy viewports resolve to 14vw (a 1440p desktop gets
+            // ~220px, the 240px ceiling only binds on very large displays).
+            // The 96px floor is what phones get (14vw is only ~55px on a
+            // 390px screen — too small a target for the tap-to-timeline it
+            // carries).
+            'v3-cover-frame v3-focus relative h-[clamp(96px,min(14vw,20vh),240px)] w-[clamp(96px,min(14vw,20vh),240px)] shrink-0 appearance-none border-0 bg-transparent p-0',
             // Glitch the art in sync with the ripple waves — track change + DJ speaking.
             rippleActive && 'v3-cover-live',
           )}
@@ -261,17 +278,17 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
                   <h1 className="v3-title m-0 line-clamp-2 text-ink" title={nowPlaying?.title}>
                     {nowPlaying?.title}
                   </h1>
-                  <div className="mt-[12px] text-[clamp(13px,1.4vw,18px)] leading-snug font-medium text-muted">
+                  <div className="mt-[4px] text-[clamp(13px,1.4vw,18px)] leading-snug font-medium text-muted">
                     <span className="text-ink">{nowPlaying?.artist || 'Unknown artist'}</span>
-                    {nowPlaying?.album && <span className="ml-[14px]"> · {nowPlaying.album}</span>}
-                    {nowPlaying?.year && <span className="ml-[14px]"> · {nowPlaying.year}</span>}
+                    {nowPlaying?.album && <span> · {nowPlaying.album}</span>}
+                    {nowPlaying?.year && <span> · {nowPlaying.year}</span>}
                   </div>
                   {hasMeta && (
                     <div className="v3-caption mt-[10px] text-muted">
-                      {metaTokens.join(' · ')}
+                      {metaTokens.join(SEP)}
                       {moodPhrase && (
                         <span className="text-vermilion">
-                          {metaTokens.length > 0 ? ' · ' : ''}↳ {moodPhrase}
+                          {metaTokens.length > 0 ? SEP : ''}↳ {moodPhrase}
                         </span>
                       )}
                     </div>
