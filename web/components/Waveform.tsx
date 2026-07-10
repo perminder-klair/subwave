@@ -231,12 +231,15 @@ export default memo(function Waveform({ audioRef, tunedIn, trackStartedAt, durat
 
   return (
     <div
-      // Horizontal footprint is width-based (sm:). The tall band, however, is
+      // Horizontal footprint is width-based (sm:). The band's vertical shape is
       // gated on viewport HEIGHT too — a short/wide window kept the full-height
       // band and left no room above it, so the now-playing block overlapped it
-      // (issue #576). Below 760px tall we fall back to the compact band so the
-      // CenterStage region has room to clear it.
-      className="pointer-events-none absolute inset-x-3 bottom-24 h-[110px] px-1 opacity-[0.22] sm:right-24 sm:left-0 sm:px-8 [@media(min-width:640px)_and_(min-height:760px)]:bottom-[128px] [@media(min-width:640px)_and_(min-height:760px)]:h-40"
+      // (issue #576). Three shapes: mobile (bottom-24, 110px); short/wide
+      // (bottom-32 so the band clears the ~116px transport deck it used to
+      // slide under, and a shorter 80px strip); tall/wide (the full 160px
+      // band). The two wide variants use mutually exclusive height queries so
+      // neither depends on class order to win.
+      className="pointer-events-none absolute inset-x-3 bottom-24 h-[110px] px-1 opacity-[0.22] sm:right-24 sm:left-0 sm:px-8 [@media(min-width:640px)_and_(max-height:759px)]:bottom-32 [@media(min-width:640px)_and_(max-height:759px)]:h-20 [@media(min-width:640px)_and_(min-height:760px)]:bottom-[128px] [@media(min-width:640px)_and_(min-height:760px)]:h-40"
       aria-hidden="true"
     >
       <canvas ref={canvasRef} className="h-full w-full" />

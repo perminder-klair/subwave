@@ -153,10 +153,14 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
     // bottom-pinned Waveform (issue #576). The bottom reserve clears the
     // compact waveform (top ≈ 206px from bottom); on tall desktop windows the
     // waveform grows to its full band, so the reserve grows to match it.
+    // On short/wide windows the content bottom-aligns instead: centring left
+    // the vertical slack as a dead gap between the track info and the band, and
+    // anchoring the bottom edge means long DJ lines grow upward, never over the
+    // waveform. The reserve drops to 212px there to hug the raised 208px band.
     // The right reserve tracks the DotRail width: slimmed on phones (see
     // DotRail's <sm sizing) so the title/DJ-line column keeps ~20px more of a
     // 375px screen, full 96px from sm up.
-    <div className="absolute top-[72px] right-[80px] bottom-[220px] left-4 flex flex-col items-start justify-center sm:right-24 sm:left-8 [@media(min-width:640px)_and_(min-height:760px)]:bottom-[300px]">
+    <div className="absolute top-[72px] right-[80px] bottom-[220px] left-4 flex flex-col items-start justify-center sm:right-24 sm:left-8 [@media(min-width:640px)_and_(max-height:759px)]:bottom-[212px] [@media(min-width:640px)_and_(max-height:759px)]:justify-end [@media(min-width:640px)_and_(min-height:760px)]:bottom-[300px]">
       <div className="isolate flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-6">
         {/* Always rendered — a track without artwork (or an off-air stage) gets
             the disc-mark placeholder instead of collapsing the slot and jumping
@@ -167,7 +171,12 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
           onClick={onOpenTimeline}
           aria-label="Open the timeline"
           className={cn(
-            'v3-cover-frame v3-focus relative h-[clamp(72px,14vw,160px)] w-[clamp(72px,14vw,160px)] shrink-0 appearance-none border-0 bg-transparent p-0',
+            // Art sizes to width but is capped by viewport height (20vh) so a
+            // short/wide window doesn't spend a third of its height on the
+            // cover; tall viewports resolve min() to 14vw. The 96px floor is
+            // what phones get (14vw is only ~55px on a 390px screen — too
+            // small a target for the tap-to-timeline it carries).
+            'v3-cover-frame v3-focus relative h-[clamp(96px,min(14vw,20vh),160px)] w-[clamp(96px,min(14vw,20vh),160px)] shrink-0 appearance-none border-0 bg-transparent p-0',
             // Glitch the art in sync with the ripple waves — track change + DJ speaking.
             rippleActive && 'v3-cover-live',
           )}
