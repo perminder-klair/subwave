@@ -275,7 +275,7 @@ function briefLlmError(err: unknown): string {
     return 'Timed out — provider may be slow or unreachable';
   }
   // Fallback: first sentence or first 80 chars of the original message
-  const raw: string = (err?.message || '').trim();
+  const raw: string = (e?.message || '').trim();
   const sentence = raw.split(/[.\n]/)[0].trim();
   return sentence.slice(0, 80) || 'Request failed';
 }
@@ -726,7 +726,7 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
         const apiKey = resolveKey('AI_GATEWAY_API_KEY');
         const gw = createGateway({
           ...(apiKey ? { apiKey } : {}),
-          fetch: (u: RequestInfo | URL, init?: RequestInit) => fetch(u, { ...init, signal: ctrl.signal }),
+          fetch: (u: string | URL | Request, init?: RequestInit) => fetch(u, { ...init, signal: ctrl.signal }),
         });
         const { models: gwModels } = await gw.getAvailableModels();
         models = (Array.isArray(gwModels) ? gwModels : [])
