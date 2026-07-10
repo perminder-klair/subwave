@@ -26,9 +26,9 @@
 // the first route a returning visitor landed on after a deploy. Network-first
 // guarantees the document always matches the build whose chunks are live.
 //
-// Bump CACHE on any deploy that changes this file's semantics — the `activate`
-// handler deletes every cache whose key isn't the current CACHE, which is what
-// evicts a previous version's (now-poisoned) HTML.
+// Bump CACHE when a worker change requires evicting the existing shell cache.
+// The `activate` handler deletes every cache whose key isn't the current CACHE;
+// network-only bypass-list changes do not alter cached shell entries.
 
 const CACHE = 'subwave-shell-v2';
 const LIVE_STREAM_PATHS = new Set([

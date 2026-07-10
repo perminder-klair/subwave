@@ -16,10 +16,9 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 // `NEXT_PUBLIC_STREAM_URL` is the build-time host override (dev points the
 // player at `http://localhost:7702/stream.mp3` because Icecast isn't on the
-// web origin there). It pins the *host* and we swap the path between
-// `/stream.mp3` and `/stream.opus` on the same host. Operators who pointed it
-// at a non-standard URL that doesn't end in `/stream.mp3` still get it
-// verbatim (opus is null → codec detection off).
+// web origin there). A standard `/stream.mp3` URL lets us derive the Opus,
+// AAC, and FLAC sibling mounts for explicit listener selection. Operators who
+// use a non-standard URL still get it verbatim, with optional siblings absent.
 const STREAM_URL_OVERRIDE = process.env.NEXT_PUBLIC_STREAM_URL || '';
 export type StationStreams = AudioStreamUrls;
 

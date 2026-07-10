@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import {
   availabilityFor,
   browserSupportFor,
+  currentPlaybackTarget,
   effectiveFormat,
   loadFormatPreference,
   saveFormatPreference,
@@ -16,8 +17,9 @@ import { isIOSDevice } from '@/lib/platform';
 import { useStationOrigin } from '@/lib/stationOrigin';
 import { loadVolumePref, saveVolumePref } from '@/lib/volume';
 
-// We pick MP3 vs Ogg-Opus on the client via canPlayType — Opus is roughly
-// equal-or-better quality at half the bandwidth on browsers that decode it.
+// The listener explicitly chooses among MP3, Opus, AAC, and FLAC. Browser
+// canPlayType results and station mount flags determine which choices are
+// available; MP3 remains the default until a valid preference is restored.
 //
 // The mount URLs come from StationOriginContext (env defaults when no
 // provider; a remote station's host when the landing showcase tabs over).
@@ -77,9 +79,8 @@ const INITIAL_BROWSER_SUPPORT: BrowserSupport = { mp3: true, opus: false, aac: f
 export function usePlayer({ initialVolume = 1, streamEnablement = MP3_ONLY }: UsePlayerOptions = {}): Player {
   const { apiUrl, streams } = useStationOrigin();
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  // Resolved at mount via canPlayType. SSR + first render use the MP3 URL so
-  // server and client markup agree; the useEffect below upgrades to Opus when
-  // the browser confirms it can decode it.
+  // SSR + first render use the MP3 URL so server and client markup agree; the
+  // effect below applies a valid explicit preference after capability checks.
   const [streamUrl, setStreamUrl] = useState<string>(streams.mp3);
   const [format, setFormat] = useState<AudioFormat>('mp3');
   const [formatFailure, setFormatFailure] = useState<AudioFormat | null>(null);
@@ -366,8 +367,12 @@ export function usePlayer({ initialVolume = 1, streamEnablement = MP3_ONLY }: Us
     lastActivityAt.current = Date.now();
     setIdleStopped(false);
     retryCount.current = 0;
-    el.src = `${streamUrl}?t=${Date.now()}`;
-    el.volume = volume;
+    // Preference and volume restoration update these refs synchronously before
+    // React rerenders. Read them here so a first-click tune cannot use stale
+    // render-captured defaults during that window.
+    const target = currentPlaybackTarget(streamUrlRef, volumeRef);
+    el.src = `${target.streamUrl}?t=${Date.now()}`;
+    el.volume = target.volume;
     setTunedIn(true);
     setStatus('connecting');
     const p = el.play();

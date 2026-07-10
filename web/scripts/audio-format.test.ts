@@ -3,6 +3,7 @@ import {
   AUDIO_FORMATS,
   availabilityFor,
   browserSupportFor,
+  currentPlaybackTarget,
   deriveSiblingMounts,
   effectiveFormat,
   loadFormatPreference,
@@ -49,6 +50,19 @@ const available = availabilityFor(enabled, supported);
 assert.equal(effectiveFormat('flac', available), 'flac');
 assert.equal(effectiveFormat('opus', available), 'mp3');
 assert.equal(effectiveFormat(null, available), 'mp3');
+
+// Restoration can update refs before React rerenders. The first tune must use
+// those authoritative values rather than the render-captured defaults.
+const streamUrlRef = { current: '/stream.mp3' };
+const volumeRef = { current: 1 };
+const renderSnapshot = { streamUrl: streamUrlRef.current, volume: volumeRef.current };
+streamUrlRef.current = '/stream.aac';
+volumeRef.current = 0.35;
+assert.deepEqual(currentPlaybackTarget(streamUrlRef, volumeRef), {
+  streamUrl: '/stream.aac',
+  volume: 0.35,
+});
+assert.deepEqual(renderSnapshot, { streamUrl: '/stream.mp3', volume: 1 });
 
 assert.deepEqual(deriveSiblingMounts('/stream.mp3'), {
   mp3: '/stream.mp3',

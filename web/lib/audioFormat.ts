@@ -92,3 +92,10 @@ export function effectiveFormat(
 ): AudioFormat {
   return preferred && availability[preferred].available ? preferred : 'mp3';
 }
+
+export function currentPlaybackTarget(
+  streamUrl: { readonly current: string },
+  volume: { readonly current: number },
+): { streamUrl: string; volume: number } {
+  return { streamUrl: streamUrl.current, volume: volume.current };
+}
