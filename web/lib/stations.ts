@@ -109,11 +109,6 @@ export function getAllStations(): Station[] {
   return _cache;
 }
 
-/** Stations with usable coordinates — the ones the map can plot. */
-export function getMappableStations(): Station[] {
-  return getAllStations().filter((s) => s.lat != null && s.lon != null);
-}
-
 // ── Landing showcase tabs ────────────────────────────────────────────────
 // The landing page's embedded player can tune the demo to any directory
 // station (PlayerShowcase tabs). This is the serialisable subset that crosses

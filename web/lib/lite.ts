@@ -18,7 +18,7 @@
 // kiosk never flashes the heavy build before hydration.
 
 const STORAGE_KEY = 'subwave-lite';
-export const LITE_CLASS = 'lite';
+const LITE_CLASS = 'lite';
 
 /** Toggle the `lite` class on <html>. No-op on the server. */
 export function applyLite(on: boolean): void {

@@ -57,28 +57,6 @@ export function cacheTheme(theme: Theme): void {
   } catch { /* private mode / quota — non-fatal */ }
 }
 
-/** Best-effort read of the cached theme. Returns null if nothing is cached
- *  or the cache is unreadable. Used by callers that want to compare against
- *  a fresh active id before refetching the registry. */
-export function loadCachedTheme(): Theme | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(TOKEN_CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<Theme>;
-    if (
-      typeof parsed?.id !== 'string'
-      || typeof parsed?.mode !== 'string'
-      || !parsed.tokens
-    ) {
-      return null;
-    }
-    return parsed as Theme;
-  } catch {
-    return null;
-  }
-}
-
 /** Read the listener's per-browser theme override id. When set, the
  *  ThemeProvider applies this theme instead of the station's active one — so
  *  a listener can pick a palette they prefer without affecting anyone else.

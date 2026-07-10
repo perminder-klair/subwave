@@ -8,7 +8,7 @@ export function fmtTime(sec: number | null | undefined): string {
 
 export type StationLocale = 'en-GB' | 'en-US';
 
-export const DEFAULT_STATION_LOCALE: StationLocale = 'en-GB';
+const DEFAULT_STATION_LOCALE: StationLocale = 'en-GB';
 
 export function normalizeStationLocale(locale: unknown): StationLocale {
   return locale === 'en-US' ? 'en-US' : DEFAULT_STATION_LOCALE;
