@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import {
   availabilityFor,
   browserSupportFor,
@@ -125,6 +125,29 @@ export function usePlayer({ initialVolume = 1, streamEnablement = MP3_ONLY }: Us
   useEffect(() => { streamsRef.current = streams; }, [streams]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
 
+  const clearWatchdog = useCallback(() => {
+    if (watchdogTimer.current !== null) {
+      clearTimeout(watchdogTimer.current);
+      watchdogTimer.current = null;
+    }
+  }, []);
+
+  const switchLiveStream = useCallback((nextUrl: string, errorLabel: string) => {
+    clearWatchdog();
+    if (!tunedInRef.current || !audioRef.current) return;
+    const audio = audioRef.current;
+    const myGen = ++gen.current;
+    audio.src = `${nextUrl}?t=${Date.now()}`;
+    audio.volume = volumeRef.current;
+    setStatus('connecting');
+    const p = audio.play();
+    playPromise.current = p;
+    Promise.resolve(p).catch((err: unknown) => {
+      const name = err && typeof err === 'object' && 'name' in err ? (err as { name?: string }).name : undefined;
+      if (gen.current === myGen && name !== 'AbortError') console.error(`${errorLabel}:`, err);
+    });
+  }, [clearWatchdog]);
+
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume;
   }, [volume]);
@@ -170,13 +193,18 @@ export function usePlayer({ initialVolume = 1, streamEnablement = MP3_ONLY }: Us
       aac: streamEnablement.aac && streams.aac !== null,
       flac: streamEnablement.flac && streams.flac !== null,
     };
-    const restored = effectiveFormat(loadFormatPreference(localStorage, apiUrl), availabilityFor(enabled, support));
+    const restored = effectiveFormat(
+      loadFormatPreference(localStorage, apiUrl),
+      availabilityFor(enabled, support, failedFormatsRef.current),
+    );
     const restoredUrl = streams[restored] ?? streams.mp3;
+    const liveStreamChanged = activeFormatRef.current !== restored || streamUrlRef.current !== restoredUrl;
     activeFormatRef.current = restored;
     streamUrlRef.current = restoredUrl;
     setFormat(restored);
     setStreamUrl(restoredUrl);
-  }, [apiUrl, streamEnablement, streams]);
+    if (liveStreamChanged) switchLiveStream(restoredUrl, 'Restored format switch failed');
+  }, [apiUrl, streamEnablement, streams, switchLiveStream]);
 
   const effectiveEnablement = useMemo<StreamEnablement>(() => ({
     mp3: streamEnablement.mp3,
@@ -196,18 +224,7 @@ export function usePlayer({ initialVolume = 1, streamEnablement = MP3_ONLY }: Us
     setFormat(next);
     setStreamUrl(nextUrl);
     setFormatFailure(null);
-    if (!tunedInRef.current || !audioRef.current) return;
-    const audio = audioRef.current;
-    const myGen = ++gen.current;
-    audio.src = `${nextUrl}?t=${Date.now()}`;
-    audio.volume = volumeRef.current;
-    setStatus('connecting');
-    const p = audio.play();
-    playPromise.current = p;
-    Promise.resolve(p).catch((err: unknown) => {
-      const name = err && typeof err === 'object' && 'name' in err ? (err as { name?: string }).name : undefined;
-      if (gen.current === myGen && name !== 'AbortError') console.error('Format switch failed:', err);
-    });
+    switchLiveStream(nextUrl, 'Format switch failed');
   };
 
   // Drive `status` from the <audio> element's own events, and reconnect the
@@ -221,13 +238,6 @@ export function usePlayer({ initialVolume = 1, streamEnablement = MP3_ONLY }: Us
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
-
-    const clearWatchdog = () => {
-      if (watchdogTimer.current !== null) {
-        clearTimeout(watchdogTimer.current);
-        watchdogTimer.current = null;
-      }
-    };
 
     const reconnect = () => {
       clearWatchdog();
@@ -289,7 +299,7 @@ export function usePlayer({ initialVolume = 1, streamEnablement = MP3_ONLY }: Us
       el.removeEventListener('stalled', onWaiting);
       el.removeEventListener('error', onError);
     };
-  }, []);
+  }, [clearWatchdog]);
 
   // Idle cutoff (issue #343): a tab left tuned in with no listener activity
   // for IDLE_TUNE_OUT_MS gets tuned out, so an abandoned browser doesn't sit
@@ -328,10 +338,7 @@ export function usePlayer({ initialVolume = 1, streamEnablement = MP3_ONLY }: Us
     if (!audioRef.current) return;
     const el = audioRef.current;
     const myGen = ++gen.current;
-    if (watchdogTimer.current !== null) {
-      clearTimeout(watchdogTimer.current);
-      watchdogTimer.current = null;
-    }
+    clearWatchdog();
     setTunedIn(false);
     setStatus('idle');
     // Let any in-flight play() settle before pausing, then bail if a later
