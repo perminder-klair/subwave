@@ -47,6 +47,51 @@
    "notes": "Best on record. Only weakness: 3-hour programme plans (picks unoffered feature kinds)."
   },
   {
+   "model": "google:gemini-3.1-flash-lite",
+   "route": "google",
+   "benchedAt": "2026-07-10",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 95,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 15,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 21,
+     "total": 21
+    },
+    "shows": {
+     "ok": 23,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 0.7,
+   "verdict": "agent-capable",
+   "notes": "The value pick: matches the 31B-class overall, agent 18/18, and the fastest picks benched (0.7 s median)."
+  },
+  {
    "model": "google:gemini-3.5-flash",
    "route": "google",
    "benchedAt": "2026-07-10",
@@ -90,51 +135,6 @@
    "poolPickP50s": 1.2,
    "verdict": "agent-capable",
    "notes": "Best score on record; agent cells 18/18 at 1–2 s. Single miss: one \"coming up next\" slip."
-  },
-  {
-   "model": "google:gemini-3.1-flash-lite",
-   "route": "google",
-   "benchedAt": "2026-07-09",
-   "iterations": 3,
-   "reasoning": false,
-   "coverage": "full",
-   "overall": {
-    "ok": 94,
-    "total": 96
-   },
-   "groups": {
-    "pickPool": {
-     "ok": 10,
-     "total": 12
-    },
-    "pickAgent": {
-     "ok": 6,
-     "total": 6
-    },
-    "segPool": {
-     "ok": 12,
-     "total": 12
-    },
-    "segAgent": {
-     "ok": 6,
-     "total": 6
-    },
-    "requests": {
-     "ok": 15,
-     "total": 15
-    },
-    "scripts": {
-     "ok": 21,
-     "total": 21
-    },
-    "shows": {
-     "ok": 24,
-     "total": 24
-    }
-   },
-   "poolPickP50s": 0.7,
-   "verdict": "agent-capable",
-   "notes": "The value pick: matches the 31B-class overall, agent 18/18, and the fastest picks benched (0.7 s median)."
   },
   {
    "model": "openrouter:openai/gpt-4o-mini",
@@ -362,6 +362,51 @@
    "notes": "First direct-provider row (early testing was 0/4 direct vs 4/4 via openrouter). Pool cells clean; agent picks 0/6 — emits hallucinated ids instead of exploring. Segments/requests/scripts solid."
   },
   {
+   "model": "ollama:nemotron-3-super:cloud",
+   "route": "ollama",
+   "benchedAt": "2026-07-10",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 83,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 9,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 5,
+     "total": 6
+    },
+    "requests": {
+     "ok": 15,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 20,
+     "total": 21
+    },
+    "shows": {
+     "ok": 16,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 1.8,
+   "verdict": "agent-capable",
+   "notes": "First bench. Agent picks 6/6 and fast (2-4s); score dragged by editorial misses — stage-direction asterisks x3 (TTS-audible), same-artist x3 — and 6 thrown. Fine pick engine, watch the script quality."
+  },
+  {
    "model": "locca:gemma-4-12b-it-Q4_K_M.gguf",
    "route": "locca",
    "benchedAt": "2026-07-09",
@@ -532,21 +577,21 @@
   {
    "model": "ollama:kimi-k2.6:cloud",
    "route": "ollama",
-   "benchedAt": "2026-07-09",
+   "benchedAt": "2026-07-10",
    "iterations": 3,
    "reasoning": false,
    "coverage": "full",
    "overall": {
-    "ok": 79,
+    "ok": 77,
     "total": 96
    },
    "groups": {
     "pickPool": {
-     "ok": 9,
+     "ok": 12,
      "total": 12
     },
     "pickAgent": {
-     "ok": 3,
+     "ok": 0,
      "total": 6
     },
     "segPool": {
@@ -558,21 +603,21 @@
      "total": 6
     },
     "requests": {
-     "ok": 15,
+     "ok": 14,
      "total": 15
     },
     "scripts": {
-     "ok": 18,
+     "ok": 21,
      "total": 21
     },
     "shows": {
-     "ok": 16,
+     "ok": 12,
      "total": 24
     }
    },
-   "poolPickP50s": 52.1,
+   "poolPickP50s": 2.1,
    "verdict": "avoid",
-   "notes": "Fails unpredictably across unrelated call kinds; consistently high latency."
+   "notes": "Re-benched on AI SDK 7 branch: 77/96 (was 79) — same profile, agent picks 0/6 hallucinated ids, verbose scripts. Verdict unchanged."
   },
   {
    "model": "ollama:minimax-m2.7:cloud",
