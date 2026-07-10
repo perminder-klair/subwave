@@ -231,7 +231,7 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
     }
     const patch: Record<string, string> = {};
     for (const [key, value] of Object.entries(body)) {
-      if (!SECRET_ENV_KEYS.includes(key as any)) continue;
+      if (!(SECRET_ENV_KEYS as readonly string[]).includes(key)) continue;
       if (typeof value !== 'string') continue;
       const trimmed = value.trim();
       if (!trimmed) continue;
@@ -243,7 +243,7 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
     }
     await saveSecrets(patch);
     res.json({ saved: Object.keys(patch) });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[settings/secrets]', err);
     res.status(400).json({ error: 'Failed to save secrets' });
   }
@@ -255,8 +255,9 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
 // process.env or secrets.env. Always resolves (never rejects).
 // ---------------------------------------------------------------------------
 // Distill a raw provider/SDK error into a one-line actionable message.
-function briefLlmError(err: any): string {
-  const msg: string = (err?.message || err?.toString() || '').toLowerCase();
+function briefLlmError(err: unknown): string {
+  const e = err as { message?: string; toString(): string } | null | undefined;
+  const msg: string = (e?.message || e?.toString() || '').toLowerCase();
   if (msg.includes('401') || msg.includes('unauthorized') || msg.includes('invalid') && msg.includes('key') || msg.includes('incorrect api key')) {
     return 'Key rejected — check it\'s correct and hasn\'t expired';
   }
@@ -337,7 +338,7 @@ async function probeKey(
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({})) as { detail?: { message?: string } | string };
-        const msg = typeof j?.detail === 'string' ? j.detail : (j?.detail as any)?.message || '';
+        const msg = typeof j?.detail === 'string' ? j.detail : j?.detail?.message || '';
         return { ok: false, message: r.status === 401 ? 'Key rejected — check it\'s correct and active' : (msg || `Request failed (${r.status})`) };
       }
       const u = await r.json() as { first_name?: string };
@@ -406,7 +407,7 @@ router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
   if (!key || typeof key !== 'string') {
     return res.status(400).json({ ok: false, message: 'key is required', latencyMs: 0 });
   }
-  if (!SECRET_ENV_KEYS.includes(key as any)) {
+  if (!(SECRET_ENV_KEYS as readonly string[]).includes(key)) {
     return res.status(400).json({ ok: false, message: `Unknown key: ${key}`, latencyMs: 0 });
   }
   let targetValue = typeof value === 'string' ? value.trim() : '';
@@ -422,8 +423,8 @@ router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
   try {
     const result = await probeKey(key as (typeof SECRET_ENV_KEYS)[number], targetValue);
     res.json({ ok: result.ok, message: result.message, latencyMs: Date.now() - t0 });
-  } catch (err: any) {
-    res.json({ ok: false, message: err?.message || 'probe failed', latencyMs: Date.now() - t0 });
+  } catch (err: unknown) {
+    res.json({ ok: false, message: (err as { message?: string })?.message || 'probe failed', latencyMs: Date.now() - t0 });
   }
 });
 
@@ -462,8 +463,8 @@ router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
     // Local engines render WAV; cloud (ElevenLabs) renders MP3. Set the type
     // from the actual extension so the browser <audio> gets the right MIME.
     res.type(extname(filePath) || '.wav').send(buf);
-  } catch (err: any) {
-    res.status(422).json({ ok: false, message: err?.message || 'Preview synthesis failed' });
+  } catch (err: unknown) {
+    res.status(422).json({ ok: false, message: (err as { message?: string })?.message || 'Preview synthesis failed' });
   } finally {
     if (filePath) unlink(filePath).catch(() => {});
   }
@@ -488,13 +489,13 @@ router.get('/settings/llm/discover', requireAdmin, async (req, res) => {
     if (!r.ok) {
       return res.json({ reachable: false, models: [], baseUrl, error: `HTTP ${r.status}` });
     }
-    const data: any = await r.json();
+    const data = (await r.json()) as { data?: unknown };
     const models = Array.isArray(data?.data)
-      ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string')
+      ? (data.data as { id?: unknown }[]).map((m) => m?.id).filter((id): id is string => typeof id === 'string')
       : [];
     res.json({ reachable: true, models, baseUrl });
-  } catch (err: any) {
-    res.json({ reachable: false, models: [], baseUrl, error: err?.message || 'unreachable' });
+  } catch (err: unknown) {
+    res.json({ reachable: false, models: [], baseUrl, error: (err as { message?: string })?.message || 'unreachable' });
   } finally {
     clearTimeout(timer);
   }
@@ -541,7 +542,7 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
       abortSignal: AbortSignal.timeout(15000),
     });
     res.json({ ok: true, message: '✓ Bearer token accepted · model responded', latencyMs: Date.now() - t0 });
-  } catch (err: any) {
+  } catch (err: unknown) {
     res.json({ ok: false, message: briefLlmError(err), latencyMs: Date.now() - t0 });
   }
 });
@@ -589,9 +590,9 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
         const url = ollamaUrl || config.ollama.url || 'http://localhost:11434';
         const r = await fetch(`${url}/api/tags`, { signal: ctrl.signal });
         if (!r.ok) throw new Error(`Ollama HTTP ${r.status}`);
-        const data: any = await r.json();
+        const data = (await r.json()) as { models?: unknown };
         models = Array.isArray(data?.models)
-          ? data.models.map((m: any) => m?.name).filter((n: any): n is string => typeof n === 'string')
+          ? (data.models as { name?: unknown }[]).map((m) => m?.name).filter((n): n is string => typeof n === 'string')
           : [];
         break;
       }
@@ -610,9 +611,9 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
         if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
         const r = await fetch(`${url}/models`, { signal: ctrl.signal, headers });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data: any = await r.json();
+        const data = (await r.json()) as { data?: unknown };
         models = Array.isArray(data?.data)
-          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string')
+          ? (data.data as { id?: unknown }[]).map((m) => m?.id).filter((id): id is string => typeof id === 'string')
           : [];
         break;
       }
@@ -625,11 +626,11 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
           headers: { 'Authorization': `Bearer ${apiKey}` },
         });
         if (!r.ok) throw new Error(`OpenAI HTTP ${r.status}`);
-        const data: any = await r.json();
+        const data = (await r.json()) as { data?: unknown };
         models = Array.isArray(data?.data)
-          ? data.data
-              .map((m: any) => m?.id)
-              .filter((id: any): id is string => typeof id === 'string')
+          ? (data.data as { id?: unknown }[])
+              .map((m) => m?.id)
+              .filter((id): id is string => typeof id === 'string')
               .filter((id: string) => scope === 'embedding' ? id.startsWith('text-embedding-') : !id.startsWith('text-embedding-'))
               .sort()
           : [];
@@ -647,9 +648,9 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
           },
         });
         if (!r.ok) throw new Error(`Anthropic HTTP ${r.status}`);
-        const data: any = await r.json();
+        const data = (await r.json()) as { data?: unknown };
         models = Array.isArray(data?.data)
-          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
+          ? (data.data as { id?: unknown }[]).map((m) => m?.id).filter((id): id is string => typeof id === 'string').sort()
           : [];
         break;
       }
@@ -661,16 +662,16 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
           signal: ctrl.signal,
         });
         if (!r.ok) throw new Error(`Google HTTP ${r.status}`);
-        const data: any = await r.json();
+        const data = (await r.json()) as { models?: unknown };
         models = Array.isArray(data?.models)
-          ? data.models
-              .filter((m: any) => {
+          ? (data.models as { supportedGenerationMethods?: unknown; name?: unknown }[])
+              .filter((m) => {
                 const methods: string[] = Array.isArray(m?.supportedGenerationMethods) ? m.supportedGenerationMethods : [];
                 return scope === 'embedding'
                   ? methods.includes('embedContent')
                   : methods.includes('generateContent');
               })
-              .map((m: any) => String(m?.name || '').replace(/^models\//, ''))
+              .map((m) => String(m?.name || '').replace(/^models\//, ''))
               .filter(Boolean)
               .sort()
           : [];
@@ -685,9 +686,9 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
           headers: { 'Authorization': `Bearer ${apiKey}` },
         });
         if (!r.ok) throw new Error(`DeepSeek HTTP ${r.status}`);
-        const data: any = await r.json();
+        const data = (await r.json()) as { data?: unknown };
         models = Array.isArray(data?.data)
-          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
+          ? (data.data as { id?: unknown }[]).map((m) => m?.id).filter((id): id is string => typeof id === 'string').sort()
           : [];
         break;
       }
@@ -698,9 +699,9 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
           : 'https://openrouter.ai/api/v1/models';
         const r = await fetch(url, { signal: ctrl.signal });
         if (!r.ok) throw new Error(`OpenRouter HTTP ${r.status}`);
-        const data: any = await r.json();
+        const data = (await r.json()) as { data?: unknown };
         models = Array.isArray(data?.data)
-          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
+          ? (data.data as { id?: unknown }[]).map((m) => m?.id).filter((id): id is string => typeof id === 'string').sort()
           : [];
         break;
       }
@@ -713,9 +714,9 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
           headers: { 'Authorization': `Bearer ${apiKey}` },
         });
         if (!r.ok) throw new Error(`Requesty HTTP ${r.status}`);
-        const data: any = await r.json();
+        const data = (await r.json()) as { data?: unknown };
         models = Array.isArray(data?.data)
-          ? data.data.map((m: any) => m?.id).filter((id: any): id is string => typeof id === 'string').sort()
+          ? (data.data as { id?: unknown }[]).map((m) => m?.id).filter((id): id is string => typeof id === 'string').sort()
           : [];
         break;
       }
@@ -728,17 +729,17 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
         const apiKey = resolveKey('AI_GATEWAY_API_KEY');
         const gw = createGateway({
           ...(apiKey ? { apiKey } : {}),
-          fetch: (u: any, init: any) => fetch(u, { ...init, signal: ctrl.signal }),
+          fetch: (u: RequestInfo | URL, init?: RequestInit) => fetch(u, { ...init, signal: ctrl.signal }),
         });
         const { models: gwModels } = await gw.getAvailableModels();
         models = (Array.isArray(gwModels) ? gwModels : [])
-          .filter((m: any) => {
+          .filter((m: { modelType?: unknown }) => {
             if (!scope) return true;
             const t = m?.modelType;
             return scope === 'embedding' ? t === 'embedding' : t !== 'embedding';
           })
-          .map((m: any) => m?.id)
-          .filter((id: any): id is string => typeof id === 'string')
+          .map((m: { id?: unknown }) => m?.id)
+          .filter((id): id is string => typeof id === 'string')
           .sort();
         break;
       }
@@ -756,8 +757,8 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
     }
 
     res.json({ ok: true, models, provider });
-  } catch (err: any) {
-    res.json({ ok: false, models: [], provider, error: err?.message || 'discovery failed' });
+  } catch (err: unknown) {
+    res.json({ ok: false, models: [], provider, error: (err as { message?: string })?.message || 'discovery failed' });
   } finally {
     clearTimeout(timer);
   }
@@ -789,8 +790,8 @@ router.get('/settings/embedding/probe', requireAdmin, async (req, res) => {
       message += '\n  You can ignore this — the tagger pulls this model automatically when you start a run.';
     }
     res.json({ ok: r.code === 'ok', dim: r.dim ?? null, code: r.code, message });
-  } catch (err: any) {
-    res.json({ ok: false, dim: null, code: 'unknown', message: err?.message || 'probe failed' });
+  } catch (err: unknown) {
+    res.json({ ok: false, dim: null, code: 'unknown', message: (err as { message?: string })?.message || 'probe failed' });
   }
 });
 
@@ -923,11 +924,12 @@ router.post('/settings/search/test-searxng', requireAdmin, async (req, res) => {
     }
 
     if (!r.ok) return res.json({ ok: false, error: `HTTP ${r.status}` });
-    const data: any = await r.json();
-    const count = Array.isArray(data?.results) ? data.results.length : 0;
+    const data = (await r.json()) as { results?: unknown };
+    const count = Array.isArray(data?.results) ? (data.results as unknown[]).length : 0;
     return res.json({ ok: true, results: count });
-  } catch (err: any) {
-    const msg = err?.name === 'AbortError' ? 'request timed out after 8s' : err?.message || 'fetch failed';
+  } catch (err: unknown) {
+    const e = err as { name?: string; message?: string } | null | undefined;
+    const msg = e?.name === 'AbortError' ? 'request timed out after 8s' : e?.message || 'fetch failed';
     return res.json({ ok: false, error: msg });
   }
 });
