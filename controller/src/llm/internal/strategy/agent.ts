@@ -26,14 +26,14 @@
 // discovery tools, `toolChoice:'required'` forces a tool call every step, and
 // prepareStep corners the model into discovery-then-done.
 
-import { Output, stepCountIs, hasToolCall, ToolLoopAgent, tool } from 'ai';
+import { Output, isStepCount, hasToolCall, ToolLoopAgent, tool } from 'ai';
 import type { ModelMessage, ToolSet } from 'ai';
 import { z } from 'zod';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
-import { stripThinking, extractJson, usageOf, flattenToolCalls, failureDiagnostics } from '../core/pure.js';
+import { stripThinking, extractJson, usageOf, perfOf, warningsOf, flattenToolCalls, failureDiagnostics } from '../core/pure.js';
 import type { StepLike, ToolCallLike, ToolCallSummary, TokenUsage } from '../core/pure.js';
-import { needsToolCallObject, providerOptions, samplingWithLocalKnobs, forcedToolChoice } from '../provider/capabilities.js';
+import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, forcedToolChoice } from '../provider/capabilities.js';
 import type { Leg } from '../provider/legs.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { agentPlan } from './plan.js';
@@ -82,6 +82,16 @@ interface DjAgentOptions {
 // this default. Resolved here and threaded down to objectViaToolCall and the
 // ToolLoopAgent, so the cap is uniform across the agent's sub-paths.
 const MAX_TOKENS_AGENT = 8000;
+
+// Per-tool execution timeout (AI SDK `timeout.toolMs`) on the tool-running
+// agents. A hung discovery call — Navidrome mid-restart, a stalled web search —
+// otherwise burns the WHOLE shared deadline before the model gets a say. The
+// SDK aborts the tool and feeds the model a tool-error result instead, so the
+// loop keeps moving (no throw — deliberately invisible to the transient/failover
+// classifiers, unlike stepMs/totalMs; see withDeadline's comment in
+// core/retry.ts). Segment tools keep their own graceful 8s internal timeout;
+// this is the backstop above it.
+const TOOL_TIMEOUT_MS = 10_000;
 
 // prepareStep pins activeTools so EVERY step is a cornered single-purpose
 // request — step 0 = discovery only, step >= COMMIT_AFTER_STEPS = `done` only.
@@ -140,12 +150,12 @@ function buildRecoveryAgent(leg: Leg, system: string, allTools: ToolSet | undefi
     // role alternation (Anthropic). Harmless on the picker path.
     instructions: `${system}\n\nYou now have everything you need. Respond ONLY by calling the \`done\` tool with your final answer — do not write a normal text message.`,
     tools: allTools,
-    stopWhen: [stepCountIs(2), hasToolCall('done')],
+    stopWhen: [isStepCount(2), hasToolCall('done')],
     temperature,
     maxOutputTokens,
     // Recovery forces done-only every step, so it has the same
     // Anthropic/DeepSeek thinking conflict as the main run — suppress here too.
-    providerOptions: providerOptions(leg.cfg, { forceNoThink: true }),
+    reasoning: reasoningFor(leg.cfg, { forceNoThink: true }),
     toolChoice: forcedChoice,
     prepareStep: async () => ({ activeTools: ['done'], toolChoice: forcedChoice }),
   } as any);
@@ -224,13 +234,15 @@ export async function djAgent({
         // NoObjectGeneratedError. Get the structured result from a forced tool call.
         if (plan === 'object-via-tool') {
           lastVia = 'ai-sdk:tool';
-          const { object, usage } = await withTransientRetry(kind,
+          const { object, usage, perf, warnings } = await withTransientRetry(kind,
             () => objectViaToolCall(leg, { system, prompt: undefined, messages, schema, temperature, maxOutputTokens }));
           return {
             value: { object, steps: 0, toolCalls: [] },
             via: lastVia,
             sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
             usage,
+            perf,
+            warnings,
             extra: { system, messages, toolCalls: [], steps: 0, response: JSON.stringify(object, null, 2) },
           };
         }
@@ -250,13 +262,14 @@ export async function djAgent({
               model: leg.noThinkModel ?? leg.model,
               instructions: system,
               tools,
-              stopWhen: [stepCountIs(maxSteps)],
+              stopWhen: [isStepCount(maxSteps)],
               temperature,
               maxOutputTokens,
+              timeout: { toolMs: TOOL_TIMEOUT_MS },
               // Thinking off: makes deepseek reliable (5/5 vs 1/5) and is harmless
               // elsewhere — the pick is structured extraction; the DJ's free-text
               // (djText) still reasons.
-              providerOptions: providerOptions(leg.cfg, { forceNoThink: true }),
+              reasoning: reasoningFor(leg.cfg, { forceNoThink: true }),
               output: Output.object({ schema: schema! }),
             } as any);
             const nr = await runDeadlined(deadlineAt, kind, 'native run', nativeAgent, messages);
@@ -281,6 +294,8 @@ export async function djAgent({
                 via: lastVia,
                 sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
                 usage: usageOf(nr),
+                perf: perfOf(nr),
+                warnings: warningsOf(nr),
                 extra: { system, messages, toolCalls, steps: nSteps, response: JSON.stringify(nObj, null, 2) },
               };
             }
@@ -313,12 +328,13 @@ export async function djAgent({
           // The no-execute `done` tool already terminates the loop when called;
           // hasToolCall('done') is belt-and-suspenders, and inert on the native
           // path where no `done` tool exists.
-          stopWhen: [stepCountIs(maxSteps), hasToolCall('done')],
+          stopWhen: [isStepCount(maxSteps), hasToolCall('done')],
           temperature,
           maxOutputTokens,
+          timeout: { toolMs: TOOL_TIMEOUT_MS },
           // useDoneTool forces tool calls every step — suppress thinking on the
           // providers that reject forced tools mid-reasoning (Anthropic/DeepSeek).
-          providerOptions: providerOptions(leg.cfg, { forceNoThink: useDoneTool }),
+          reasoning: reasoningFor(leg.cfg, { forceNoThink: useDoneTool }),
           ...(useDoneTool ? { toolChoice: forcedChoice } : {}),
           ...(prepareStep ? { prepareStep } : {}),
           // Native path: structured output via Output.object. Done-tool path: the
@@ -432,6 +448,8 @@ export async function djAgent({
           via: lastVia,
           sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
           usage: usageOf(result),
+          perf: perfOf(result),
+          warnings: warningsOf(result),
           // Full, untruncated — the agent's entire input and trail.
           extra: {
             system, messages, toolCalls, steps,

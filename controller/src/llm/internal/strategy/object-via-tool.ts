@@ -6,14 +6,14 @@
 // object plus a token-usage block so callers can log it alongside the other
 // branches.
 
-import { generateText, tool, stepCountIs } from 'ai';
-import { usageOf } from '../core/pure.js';
-import { providerOptions, forcedToolChoice } from '../provider/capabilities.js';
+import { generateText, tool, isStepCount } from 'ai';
+import { usageOf, perfOf, warningsOf } from '../core/pure.js';
+import { reasoningFor, forcedToolChoice } from '../provider/capabilities.js';
 
 export async function objectViaToolCall(
   leg: any,
   { system, prompt, messages, schema, temperature, maxOutputTokens, signal }: any,
-): Promise<{ object: any; usage: any }> {
+): Promise<{ object: any; usage: any; perf?: any; warnings?: string[] }> {
   let captured: any;
   const emit = tool({
     description: 'Return your final answer. Call this tool exactly once, with the complete result — calling it IS how you answer.',
@@ -24,7 +24,7 @@ export async function objectViaToolCall(
     // Forced single-tool call — always no-think (the no-think model is identical
     // to leg.model except for OpenRouter, where reasoning is fixed at build time).
     model: leg.noThinkModel ?? leg.model,
-    system,
+    instructions: system,
     ...(messages ? { messages } : { prompt }),
     temperature,
     maxOutputTokens,
@@ -34,10 +34,10 @@ export async function objectViaToolCall(
     // visible + the "call it exactly once" instruction, a capable model still
     // emits via the tool; a miss throws below → caller's fallback.
     toolChoice: forcedToolChoice(leg.cfg),
-    stopWhen: stepCountIs(1),
-    providerOptions: providerOptions(leg.cfg, { forceNoThink: true }),
+    stopWhen: isStepCount(1),
+    reasoning: reasoningFor(leg.cfg, { forceNoThink: true }),
     ...(signal ? { abortSignal: signal } : {}),
   } as any);
   if (captured === undefined) throw new Error('model never called the emit tool');
-  return { object: schema.parse(captured), usage: usageOf(result) };
+  return { object: schema.parse(captured), usage: usageOf(result), perf: perfOf(result), warnings: warningsOf(result) };
 }

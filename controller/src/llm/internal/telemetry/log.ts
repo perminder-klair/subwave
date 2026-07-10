@@ -42,6 +42,10 @@ export function record(call: any) {
     model: call.model,
     via: call.via,
     usage: call.usage || null,
+    // AI SDK 7 per-step performance (model wait, per-tool ms, tokens/sec) and
+    // provider warnings — e.g. a provider that ignored the reasoning param.
+    perf: call.perf || undefined,
+    warnings: call.warnings || undefined,
     error: call.error || null,
     system: cap(call.system),
     prompt: cap(call.user),

@@ -5,7 +5,7 @@
 // The AI SDK has no provider for Piper or Kokoro (they're local CLIs), so
 // this only covers cloud voices — tts.js still owns the dispatch + fallback.
 
-import { experimental_generateSpeech as generateSpeech } from 'ai';
+import { generateSpeech } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createElevenLabs } from '@ai-sdk/elevenlabs';
 import { writeFile, mkdir } from 'node:fs/promises';
