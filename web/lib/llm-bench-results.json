@@ -485,6 +485,51 @@
    "notes": "Structured/pool kinds only (×2) on a CPU host — latency excluded. Same family habits as the 31B."
   },
   {
+   "model": "openai-compatible:qwen/qwen3.5-9b",
+   "route": "openai-compatible",
+   "benchedAt": "2026-07-10",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 81,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 9,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 3,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 13,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 19,
+     "total": 21
+    },
+    "shows": {
+     "ok": 19,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 1.2,
+   "verdict": "prefer native route",
+   "notes": "Routing A/B, after the aggregator no-think fix: 57 -> 81/96 through the same endpoint (reasoning:{enabled:false} now injected alongside the llama.cpp knobs; leaks 16 -> 5, thrown 22 -> 3). Native openrouter provider still edges it (86/96, zero leaks) via better response-side reasoning handling — use openai-compatible for self-hosted servers, native providers for aggregators."
+  },
+  {
    "model": "openrouter:anthropic/claude-haiku-4.5",
    "route": "openrouter",
    "benchedAt": "2026-07-10",
@@ -708,51 +753,6 @@
    "poolPickP50s": 18,
    "verdict": "avoid (re-test)",
    "notes": "Collapsed 90->86->60: Ollama cloud now IGNORES think:false for this family (raw-API verified: 594ch of thinking on a one-word ask) - thinks on every call, 27 leak cells, plans run 105-178s. Server-side, not routing; re-test after a relay/model update."
-  },
-  {
-   "model": "openai-compatible:qwen/qwen3.5-9b",
-   "route": "openai-compatible",
-   "benchedAt": "2026-07-10",
-   "iterations": 3,
-   "reasoning": false,
-   "coverage": "full",
-   "overall": {
-    "ok": 57,
-    "total": 96
-   },
-   "groups": {
-    "pickPool": {
-     "ok": 0,
-     "total": 12
-    },
-    "pickAgent": {
-     "ok": 2,
-     "total": 6
-    },
-    "segPool": {
-     "ok": 12,
-     "total": 12
-    },
-    "segAgent": {
-     "ok": 6,
-     "total": 6
-    },
-    "requests": {
-     "ok": 15,
-     "total": 15
-    },
-    "scripts": {
-     "ok": 4,
-     "total": 21
-    },
-    "shows": {
-     "ok": 18,
-     "total": 24
-    }
-   },
-   "poolPickP50s": 29,
-   "verdict": "avoid",
-   "notes": "Routing A/B: 86/96 via the NATIVE openrouter provider, 57/96 through openai-compatible at the same endpoint — the no-think knobs (chat_template_kwargs) are llama.cpp-only, aggregators ignore them, so thinking models run uncontrolled (16 leaks, 22 thrown). Use openai-compatible only for true self-hosted servers."
   }
  ]
 }
