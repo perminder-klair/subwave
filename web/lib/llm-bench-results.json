@@ -227,23 +227,23 @@
    "notes": "Repeats artists under shortlist pressure; sometimes serves the wrong track on exact-title requests."
   },
   {
-   "model": "ollama:minimax-m2.7:cloud",
-   "route": "ollama",
-   "benchedAt": "2026-07-09",
+   "model": "openrouter:google/gemma-4-26b-a4b-it",
+   "route": "openrouter",
+   "benchedAt": "2026-07-10",
    "iterations": 3,
    "reasoning": false,
    "coverage": "full",
    "overall": {
-    "ok": 90,
+    "ok": 91,
     "total": 96
    },
    "groups": {
     "pickPool": {
-     "ok": 12,
+     "ok": 9,
      "total": 12
     },
     "pickAgent": {
-     "ok": 5,
+     "ok": 6,
      "total": 6
     },
     "segPool": {
@@ -255,7 +255,7 @@
      "total": 6
     },
     "requests": {
-     "ok": 12,
+     "ok": 15,
      "total": 15
     },
     "scripts": {
@@ -267,9 +267,54 @@
      "total": 24
     }
    },
-   "poolPickP50s": 17.3,
-   "verdict": "agent-capable",
-   "notes": "Programme plans are correct but slow (2–4 min each); misses the mood field on vibe requests."
+   "poolPickP50s": 4.6,
+   "verdict": "pool-mode",
+   "notes": "Structurally clean in pool mode but ~38 s median picks as currently served — too slow to prefer over Qwen."
+  },
+  {
+   "model": "openrouter:qwen/qwen3.5-9b",
+   "route": "openrouter",
+   "benchedAt": "2026-07-10",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 86,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 9,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 3,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 11,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 14,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 21,
+     "total": 21
+    },
+    "shows": {
+     "ok": 22,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 3.8,
+   "verdict": "pool-mode",
+   "notes": "The small floor: fast and flawless on pool cells. Wordy request replies; needs thinking disabled (handled automatically)."
   },
   {
    "model": "deepseek:deepseek-v4-flash",
@@ -530,23 +575,23 @@
    "notes": "Fails unpredictably across unrelated call kinds; consistently high latency."
   },
   {
-   "model": "openrouter:google/gemma-4-26b-a4b-it",
-   "route": "openrouter",
-   "benchedAt": "2026-07-09",
+   "model": "ollama:minimax-m2.7:cloud",
+   "route": "ollama",
+   "benchedAt": "2026-07-10",
    "iterations": 3,
    "reasoning": false,
    "coverage": "full",
    "overall": {
-    "ok": 79,
+    "ok": 60,
     "total": 96
    },
    "groups": {
     "pickPool": {
-     "ok": 9,
+     "ok": 1,
      "total": 12
     },
     "pickAgent": {
-     "ok": 0,
+     "ok": 1,
      "total": 6
     },
     "segPool": {
@@ -554,70 +599,25 @@
      "total": 12
     },
     "segAgent": {
-     "ok": 2,
+     "ok": 5,
      "total": 6
     },
     "requests": {
+     "ok": 12,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 18,
+     "total": 21
+    },
+    "shows": {
      "ok": 11,
-     "total": 15
-    },
-    "scripts": {
-     "ok": 21,
-     "total": 21
-    },
-    "shows": {
-     "ok": 24,
      "total": 24
     }
    },
-   "poolPickP50s": 127.7,
-   "verdict": "pool-mode",
-   "notes": "Structurally clean in pool mode but ~38 s median picks as currently served — too slow to prefer over Qwen."
-  },
-  {
-   "model": "openrouter:qwen/qwen3.5-9b",
-   "route": "openrouter",
-   "benchedAt": "2026-07-09",
-   "iterations": 3,
-   "reasoning": false,
-   "coverage": "full",
-   "overall": {
-    "ok": 75,
-    "total": 96
-   },
-   "groups": {
-    "pickPool": {
-     "ok": 10,
-     "total": 12
-    },
-    "pickAgent": {
-     "ok": 5,
-     "total": 6
-    },
-    "segPool": {
-     "ok": 12,
-     "total": 12
-    },
-    "segAgent": {
-     "ok": 5,
-     "total": 6
-    },
-    "requests": {
-     "ok": 4,
-     "total": 15
-    },
-    "scripts": {
-     "ok": 17,
-     "total": 21
-    },
-    "shows": {
-     "ok": 22,
-     "total": 24
-    }
-   },
-   "poolPickP50s": 2,
-   "verdict": "pool-mode",
-   "notes": "The small floor: fast and flawless on pool cells. Wordy request replies; needs thinking disabled (handled automatically)."
+   "poolPickP50s": 18,
+   "verdict": "avoid (re-test)",
+   "notes": "Collapsed 90->86->60: Ollama cloud now IGNORES think:false for this family (raw-API verified: 594ch of thinking on a one-word ask) - thinks on every call, 27 leak cells, plans run 105-178s. Server-side, not routing; re-test after a relay/model update."
   }
  ]
 }
