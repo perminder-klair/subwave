@@ -25,6 +25,7 @@
 - Create `web/lib/audioFormat.ts`: format types, metadata, station/browser availability, preference key/load/save, and effective-selection helpers.
 - Create `web/scripts/audio-format.test.ts`: dependency-free tests for the pure helper contract.
 - Modify `web/package.json`: add the focused `test:audio-format` command.
+- Modify `web/tsconfig.json`: allow `.ts` extension imports in the dependency-free Node test runner.
 - Modify `web/lib/stationOrigin.ts`: expose optional Opus, AAC, and FLAC mount URLs.
 - Modify `web/lib/types.ts`: type the existing `/now-playing.stream` payload.
 - Modify `web/hooks/useStationFeed.ts`: retain the public stream capability payload.
@@ -43,6 +44,7 @@
 - Create: `web/lib/audioFormat.ts`
 - Create: `web/scripts/audio-format.test.ts`
 - Modify: `web/package.json`
+- Modify: `web/tsconfig.json`
 
 **Interfaces:**
 - Produces: `AudioFormat`, `StreamEnablement`, `BrowserSupport`, `FormatAvailability`, `AUDIO_FORMATS`, `availabilityFor()`, `preferenceKey()`, `loadFormatPreference()`, `saveFormatPreference()`, and `effectiveFormat()`.
@@ -101,6 +103,8 @@ Add this script to `web/package.json`:
 ```json
 "test:audio-format": "node --experimental-strip-types scripts/audio-format.test.ts"
 ```
+
+Add `"allowImportingTsExtensions": true` under `compilerOptions` in `web/tsconfig.json` so the test's explicit `.ts` import is accepted by the normal typecheck as well as Node's type-stripping runner.
 
 Run: `cd web && npm run test:audio-format`
 
@@ -179,7 +183,7 @@ Expected: PASS and `audio-format: all assertions passed`.
 - [ ] **Step 5: Commit the pure model**
 
 ```bash
-git add web/lib/audioFormat.ts web/scripts/audio-format.test.ts web/package.json
+git add web/lib/audioFormat.ts web/scripts/audio-format.test.ts web/package.json web/tsconfig.json
 git commit -m "test(web): define audio format selection model"
 ```
 
