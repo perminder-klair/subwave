@@ -1,0 +1,19 @@
+/* design-sync Tailwind v4 compile entry.
+   The app's globals.css is CSS-first Tailwind — utility classes only exist
+   after a compile pass that scans the sources using them. This entry pulls in
+   the full theme/tokens and scans the ui components plus the authored
+   design-sync previews, so every class either uses is present in the shipped
+   stylesheet. Compile (from web/):
+     npx --yes @tailwindcss/cli -i ../.design-sync/tailwind-entry.css -o .ds-styles.css */
+@import '../web/app/globals.css';
+@source '../web/components/ui';
+@source './previews';
+
+/* next/font sets these variables on <html> at app runtime; the DS bundle
+   ships the same faces via @font-face (fonts/fonts.css → cfg.extraFonts) and
+   pins the variables here so font-sans/font-display/font-mono resolve. */
+:root {
+  --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
