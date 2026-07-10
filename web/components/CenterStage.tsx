@@ -179,10 +179,12 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
           className={cn(
             // Art sizes to width but is capped by viewport height (20vh) so a
             // short/wide window doesn't spend a third of its height on the
-            // cover; tall viewports resolve min() to 14vw. The 96px floor is
-            // what phones get (14vw is only ~55px on a 390px screen — too
-            // small a target for the tap-to-timeline it carries).
-            'v3-cover-frame v3-focus relative h-[clamp(96px,min(14vw,20vh),160px)] w-[clamp(96px,min(14vw,20vh),160px)] shrink-0 appearance-none border-0 bg-transparent p-0',
+            // cover; roomy viewports resolve to 14vw (a 1440p desktop gets
+            // ~220px, the 240px ceiling only binds on very large displays).
+            // The 96px floor is what phones get (14vw is only ~55px on a
+            // 390px screen — too small a target for the tap-to-timeline it
+            // carries).
+            'v3-cover-frame v3-focus relative h-[clamp(96px,min(14vw,20vh),240px)] w-[clamp(96px,min(14vw,20vh),240px)] shrink-0 appearance-none border-0 bg-transparent p-0',
             // Glitch the art in sync with the ripple waves — track change + DJ speaking.
             rippleActive && 'v3-cover-live',
           )}
