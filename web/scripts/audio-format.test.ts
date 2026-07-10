@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  AUDIO_MIME_TYPES,
   AUDIO_FORMATS,
   availabilityFor,
   browserSupportFor,
@@ -19,6 +20,11 @@ assert.deepEqual(browserSupportFor(codecs, { ios: false, firefox: false }), {
 });
 assert.equal(browserSupportFor(codecs, { ios: true, firefox: false }).opus, false);
 assert.equal(browserSupportFor(codecs, { ios: false, firefox: true }).opus, false);
+assert.deepEqual(
+  browserSupportFor({ ...codecs, flac: 'probably' }, { ios: false, firefox: false, safari: true }),
+  { mp3: true, opus: false, aac: true, flac: false },
+);
+assert.equal(AUDIO_MIME_TYPES.flac, 'audio/ogg; codecs=flac');
 
 const enabled = { mp3: true, opus: true, aac: false, flac: true } as const;
 const supported = { mp3: true, opus: false, aac: true, flac: true } as const;

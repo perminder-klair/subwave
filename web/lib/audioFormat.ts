@@ -21,6 +21,13 @@ export const AUDIO_FORMATS = [
   { id: 'flac', label: 'FLAC', description: 'Lossless broadcast audio' },
 ] as const satisfies readonly { id: AudioFormat; label: string; description: string }[];
 
+export const AUDIO_MIME_TYPES: Record<AudioFormat, string> = {
+  mp3: 'audio/mpeg',
+  opus: 'audio/ogg; codecs=opus',
+  aac: 'audio/aac',
+  flac: 'audio/ogg; codecs=flac',
+};
+
 const FORMAT_SET = new Set<AudioFormat>(AUDIO_FORMATS.map(x => x.id));
 
 export function deriveSiblingMounts(mp3: string): AudioStreamUrls {
@@ -56,13 +63,13 @@ export function availabilityFor(
 
 export function browserSupportFor(
   codecs: Record<AudioFormat, CanPlayAnswer>,
-  platform: { ios: boolean; firefox: boolean },
+  platform: { ios: boolean; firefox: boolean; safari?: boolean },
 ): BrowserSupport {
   return {
     mp3: codecs.mp3 !== '',
-    opus: codecs.opus === 'probably' && !platform.ios && !platform.firefox,
+    opus: codecs.opus === 'probably' && !platform.ios && !platform.firefox && !platform.safari,
     aac: codecs.aac !== '',
-    flac: codecs.flac !== '',
+    flac: codecs.flac !== '' && !platform.safari,
   };
 }
 

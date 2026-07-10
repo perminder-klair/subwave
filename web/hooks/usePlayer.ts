@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import {
+  AUDIO_MIME_TYPES,
   availabilityFor,
   browserSupportFor,
   currentPlaybackTarget,
@@ -75,12 +76,14 @@ const INITIAL_BROWSER_SUPPORT: BrowserSupport = { mp3: true, opus: false, aac: f
 
 function detectBrowserSupport(): BrowserSupport {
   const tester = document.createElement('audio');
+  const ua = navigator.userAgent;
+  const safari = /safari/i.test(ua) && !/(?:chrome|chromium|crios|edg|opr|firefox|fxios)/i.test(ua);
   return browserSupportFor({
-    mp3: tester.canPlayType('audio/mpeg'),
-    opus: tester.canPlayType('audio/ogg; codecs=opus'),
-    aac: tester.canPlayType('audio/aac'),
-    flac: tester.canPlayType('audio/flac'),
-  }, { ios: isIOSDevice(), firefox: /firefox/i.test(navigator.userAgent) });
+    mp3: tester.canPlayType(AUDIO_MIME_TYPES.mp3),
+    opus: tester.canPlayType(AUDIO_MIME_TYPES.opus),
+    aac: tester.canPlayType(AUDIO_MIME_TYPES.aac),
+    flac: tester.canPlayType(AUDIO_MIME_TYPES.flac),
+  }, { ios: isIOSDevice(), firefox: /firefox/i.test(ua), safari });
 }
 
 // Owns the <audio> element + tune-in state. The audioRef must be attached to
