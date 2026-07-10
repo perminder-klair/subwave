@@ -37,6 +37,10 @@ Mark each box per platform. Note the device + OS version you tested on.
 - [ ] **iOS** — **CarPlay**: SUB/WAVE appears, shows now-playing, Play/Pause/Stop work.
       _(Android Auto is intentionally **not** declared — rejected by Google Play under the Auto TTS-content policy; nothing to test there.)_
 - [ ] **Android** — **Kill the app** (swipe from recents): the **foreground-service notification is removed** and audio stops (`StopPlaybackAndRemoveNotification`).
+- [ ] **iOS** — **AirPlay**: the route-picker button in the masthead opens the system picker; audio moves to a HomePod/Apple TV and back. Lock-screen metadata still updates while routed.
+- [ ] **iOS** / [ ] **Android** — **Google Cast, connect mid-listen**: tap the cast button while tuned in → audio moves to the Cast device (phone goes silent, deck reads `Cast · <device>`), power/volume/mute now drive the device. First iOS tap shows the **Local Network permission** prompt.
+- [ ] **iOS** / [ ] **Android** — **Google Cast, disconnect**: end the session from the cast dialog → playback **resumes locally** at the live edge. Sleep timer while casting stops the Cast audio when it lapses.
+- [ ] **iOS** / [ ] **Android** — **Google Cast, station switch**: switching stations while casting stops remote playback (matches local behaviour); re-tune casts the new station.
 
 ## Accessibility
 

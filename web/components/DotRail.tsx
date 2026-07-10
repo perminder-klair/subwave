@@ -28,7 +28,9 @@ export interface DotRailProps {
 export default memo(function DotRail({ counts, active, onSelect }: DotRailProps) {
   return (
     <div
-      className="absolute top-20 right-0 bottom-20 z-20 flex w-24 flex-col items-center justify-center gap-1"
+      // Slimmed on phones (76px vs 96px) — the reclaimed width goes to the
+      // CenterStage text column, whose right reserve tracks these values.
+      className="absolute top-20 right-0 bottom-20 z-20 flex w-[76px] flex-col items-center justify-center gap-1 sm:w-24"
     >
       {ITEMS.map(item => {
         const isActive = active === item.k;
@@ -40,7 +42,7 @@ export default memo(function DotRail({ counts, active, onSelect }: DotRailProps)
             key={item.k}
             onClick={() => onSelect(isActive ? null : item.k)}
             className={cn(
-              'v3-focus relative flex w-full cursor-pointer flex-col items-center gap-[6px] border-0 px-2 py-[14px] font-[inherit]',
+              'v3-focus relative flex w-full cursor-pointer flex-col items-center gap-[6px] border-0 px-1 py-[14px] font-[inherit] sm:px-2',
               isActive ? 'text-bg' : 'bg-transparent text-ink',
               isRequest && !isActive && 'bg-[rgba(197,48,42,0.08)] shadow-[inset_2px_0_0_var(--accent)]',
             )}
@@ -70,7 +72,9 @@ export default memo(function DotRail({ counts, active, onSelect }: DotRailProps)
             </span>
             <span
               className={cn(
-                'relative text-[9px] tracking-[0.3em] uppercase',
+                // Tighter tracking in the slim phone rail so "SCHEDULE" /
+                // "TIMELINE" still fit; full spacing from sm up.
+                'relative text-[8px] tracking-[0.2em] uppercase sm:text-[9px] sm:tracking-[0.3em]',
                 isActive ? 'text-bg' : isRequest ? 'font-bold text-vermilion' : 'text-ink',
               )}
             >

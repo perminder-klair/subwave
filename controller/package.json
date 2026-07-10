@@ -13,6 +13,8 @@
     "test:llm": "tsx scripts/llm-pure.test.ts",
     "test:connect": "tsx scripts/connect-catalog.test.ts",
     "test": "tsx scripts/run-tests.ts",
+    "llm-bench": "tsx scripts/llm-bench/cli.ts",
+    "llm-bench:publish": "tsx scripts/llm-bench/publish-manual.ts",
     "lint": "eslint . && tsc --noEmit",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit"

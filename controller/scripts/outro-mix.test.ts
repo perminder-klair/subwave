@@ -58,14 +58,56 @@ assert.equal(
 
 // The operator's crossfade ceiling wins over the fade target.
 assert.equal(
-  endingCrossSecondsFor({ bpm: null, key: null, ending: 'fade' }, 20, 6),
+  endingCrossSecondsFor({ bpm: null, key: null, ending: 'fade' }, 20, { maxSec: 6 }),
   6,
   'admin ceiling caps the fade canvas',
 );
 assert.equal(
-  endingCrossSecondsFor({ bpm: null, key: null, ending: 'cold' }, null, 6),
+  endingCrossSecondsFor({ bpm: null, key: null, ending: 'cold' }, null, { maxSec: 6 }),
   4,
   'cold canvas already under the ceiling is untouched',
+);
+
+// ── Tail-loudness shaping (fade canvases only) ───────────────────────────────
+
+// A deep drop (≥12 dB below the body) is a true fade — the full wind-down ride
+// survives unshaped.
+assert.equal(
+  endingCrossSecondsFor({ bpm: null, key: null, ending: 'fade' }, 20, { tailLufs: -25, bodyLufs: -10 }),
+  12,
+  'deep tail drop keeps the full fade canvas',
+);
+// A shallow drop (≤3 dB) barely recedes — a full-length overlap would double
+// two near-full-level tracks, so the canvas trims to its 8s floor.
+assert.equal(
+  endingCrossSecondsFor({ bpm: null, key: null, ending: 'fade' }, 20, { tailLufs: -12, bodyLufs: -10 }),
+  8,
+  'shallow tail drop trims the canvas to the floor',
+);
+// Halfway between the shallow and deep thresholds (7.5 dB) interpolates
+// linearly: base 12 → 8 + 4·0.5 = 10.
+assert.equal(
+  endingCrossSecondsFor({ bpm: null, key: null, ending: 'fade' }, 20, { tailLufs: -17.5, bodyLufs: -10 }),
+  10,
+  'mid drop interpolates the canvas',
+);
+// Either loudness missing → no shaping (today's value).
+assert.equal(
+  endingCrossSecondsFor({ bpm: null, key: null, ending: 'fade' }, 20, { tailLufs: -25 }),
+  12,
+  'missing body loudness leaves the canvas unshaped',
+);
+// A tail LOUDER than the body (negative drop) clamps to the floor, not below.
+assert.equal(
+  endingCrossSecondsFor({ bpm: null, key: null, ending: 'fade' }, 20, { tailLufs: -8, bodyLufs: -10 }),
+  8,
+  'louder-than-body tail clamps at the floor',
+);
+// Cold endings are never shaped — the tight cut IS the intent.
+assert.equal(
+  endingCrossSecondsFor({ bpm: null, key: null, ending: 'cold' }, null, { tailLufs: -25, bodyLufs: -10 }),
+  4,
+  'cold canvas ignores tail loudness',
 );
 
 // ── effectAllowedFor: chop-over-fade veto ────────────────────────────────────

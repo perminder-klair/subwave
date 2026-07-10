@@ -25,6 +25,10 @@ export interface TransportBarProps {
   latencyMs: number | null;
   signalQuality: SignalQuality;
   listeners: number | null;
+  /** Cast device name while a Google Cast session is active, else null.
+   *  Swaps the Signal label for a "Cast · <device>" read so the deck says
+   *  where the audio actually is. */
+  castingTo?: string | null;
 }
 
 const QUALITY_LABEL: Record<SignalQuality, string> = {
@@ -51,6 +55,7 @@ export default function TransportBar({
   latencyMs,
   signalQuality,
   listeners,
+  castingTo,
 }: TransportBarProps) {
   const insets = useSafeAreaInsets();
   const { colors, mode } = useTheme();
@@ -145,10 +150,15 @@ export default function TransportBar({
           style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 10, borderLeftWidth: 1, borderRightWidth: 1, borderColor: colors.softBorder }}
         >
           <View className="flex-row items-baseline justify-between" style={{ gap: 6 }}>
-            <Text className="font-mono text-ink" style={{ fontSize: 10 }} numberOfLines={1}>
-              Signal ·{' '}
-              <Text style={{ color: qualityActive ? colors.accent : colors.muted, fontWeight: '700' }}>
-                {qualityLabel}
+            <Text className="font-mono text-ink" style={{ fontSize: 10, flexShrink: 1 }} numberOfLines={1}>
+              {castingTo ? 'Cast · ' : ''}
+              <Text
+                style={{
+                  color: castingTo || qualityActive ? colors.accent : colors.muted,
+                  fontWeight: '700',
+                }}
+              >
+                {castingTo || qualityLabel}
               </Text>
             </Text>
             <Text className="font-mono text-muted" style={{ fontSize: 10 }} numberOfLines={1}>

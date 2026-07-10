@@ -11,6 +11,7 @@
 
 import * as db from './library-db.js';
 import { resolveEmbeddingDim } from './embeddings.js';
+import { openingKeyFrom, endingKeyFrom } from './mix.js';
 
 let loaded = false;
 
@@ -122,12 +123,20 @@ export function realBpm(v: any): number | null {
 // first, then whatever the track object itself carries (a Subsonic candidate's
 // bpm is the file's ID3 tag). Single source of truth for the pick/transition
 // paths — per-caller "carries analysis?" guards let Navidrome's bpm 0 skip the
-// DB lookup and mask the analyzed value (#862).
-export function bpmKeyFor(track: any): { bpm: number | null; key: string | null } {
+// DB lookup and mask the analyzed value (#862). Also carries the boundary keys
+// (feature: key ranges) — opening/ending key resolved from the measured
+// per-region ranges, falling back to the dominant key — so the picker re-rank
+// can compare the pair a transition actually meets.
+export function bpmKeyFor(track: any): { bpm: number | null; key: string | null; keyStart: string | null; keyEnd: string | null } {
   const rec = track?.id ? get(track.id) : null;
+  const key = rec?.musicalKey ?? track?.musicalKey ?? null;
+  const durSec = rec?.durationSec ?? (Number(track?.duration) || 0);
+  const durMs = typeof durSec === 'number' && durSec > 0 ? durSec * 1000 : null;
   return {
     bpm: realBpm(rec?.bpm) ?? realBpm(track?.bpm),
-    key: rec?.musicalKey ?? track?.musicalKey ?? null,
+    key,
+    keyStart: openingKeyFrom(rec?.keyRanges, key),
+    keyEnd: endingKeyFrom(rec?.keyRanges, durMs, key),
   };
 }
 

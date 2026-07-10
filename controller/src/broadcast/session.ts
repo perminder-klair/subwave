@@ -376,11 +376,15 @@ export function windowMessages() {
       && m.meta.personaId !== _session.persona?.id)
       ? (m.meta.personaName || 'another host')
       : null;
+    // Model-only coaching clauses ride in meta.promptSuffix so the UI-facing
+    // turn text stays a clean factual line (the /admin/dash booth log renders
+    // turns verbatim). Re-joined here — the model sees the full message.
+    const text = m.meta?.promptSuffix ? `${m.text}${m.meta.promptSuffix}` : m.text;
     const content = (m.role === 'dj' && m.kind === 'pick')
-      ? `(pick note to self — not aired) ${m.text}`
+      ? `(pick note to self — not aired) ${text}`
       : foreignSpeaker
-        ? `(${foreignSpeaker} said this on air — their words, not yours) ${m.text}`
-        : m.text;
+        ? `(${foreignSpeaker} said this on air — their words, not yours) ${text}`
+        : text;
     raw.push({ role, content });
   }
   const out: any[] = [];

@@ -49,6 +49,25 @@ POCKET_TTS_DEFAULT_VOICE = os.environ.get("POCKET_TTS_VOICE", "alba")
 CHATTERBOX_HF_HOME = os.environ.get("CHATTERBOX_HF_HOME", "/opt/chatterbox/hf-cache")
 POCKET_HF_HOME = os.environ.get("POCKET_HF_HOME", "/opt/pocket-tts/hf-cache")
 
+# Which engines this sidecar should actually load. BOTH are baked into the
+# image, but loading a PyTorch model costs RAM + a multi-GB first-boot weight
+# download + 30-60s of startup — so an operator who only uses one engine can
+# skip the other entirely by narrowing this list. Comma-separated; defaults to
+# both for back-compat. e.g. TTS_HEAVY_ENGINES=pocket-tts runs PocketTTS only
+# (no Chatterbox). Unknown/empty entries are ignored; an empty result falls
+# back to loading both so a typo never silently disables all TTS.
+_ALL_ENGINES = ("chatterbox", "pocket-tts")
+ENABLED_ENGINES = [
+    e
+    for e in (
+        s.strip().lower()
+        for s in os.environ.get("TTS_HEAVY_ENGINES", "chatterbox,pocket-tts").split(",")
+    )
+    if e in _ALL_ENGINES
+]
+if not ENABLED_ENGINES:
+    ENABLED_ENGINES = list(_ALL_ENGINES)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
@@ -249,10 +268,12 @@ async def lifespan(_app: FastAPI):
     # the port bind and the controller's probe would see "connection refused"
     # for the entire boot — leading operators to think the sidecar is broken
     # when it's just still loading.
-    tasks = [
-        asyncio.create_task(chatterbox_worker.run(), name="chatterbox-run"),
-        asyncio.create_task(pocket_worker.run(), name="pocket-tts-run"),
-    ]
+    log.info(f"enabled engines: {', '.join(ENABLED_ENGINES)}")
+    tasks = []
+    if "chatterbox" in ENABLED_ENGINES:
+        tasks.append(asyncio.create_task(chatterbox_worker.run(), name="chatterbox-run"))
+    if "pocket-tts" in ENABLED_ENGINES:
+        tasks.append(asyncio.create_task(pocket_worker.run(), name="pocket-tts-run"))
     try:
         yield
     finally:
@@ -292,6 +313,10 @@ async def health():
     return {
         "ok": True,
         "engines": ready_engines,
+        # The engines this sidecar was configured to load (TTS_HEAVY_ENGINES),
+        # regardless of whether they've finished loading yet — for operator
+        # diagnostics. `engines` above is the subset currently *ready*.
+        "enabled": ENABLED_ENGINES,
         "chatterbox_loaded": chatterbox_worker.ready,
         "pocket_loaded": pocket_worker.ready,
         # Whether PocketTTS can do zero-shot voice cloning. False when the
@@ -313,6 +338,16 @@ async def speak(req: SpeakRequest):
     if not req.out:
         raise HTTPException(400, "missing 'out' path")
     Path(req.out).parent.mkdir(parents=True, exist_ok=True)
+
+    # A known engine that this sidecar was told not to load: fail clearly so
+    # the controller's dispatcher falls back to Piper instead of blocking on a
+    # worker that will never become ready.
+    if req.engine in _ALL_ENGINES and req.engine not in ENABLED_ENGINES:
+        raise HTTPException(
+            503,
+            f"engine '{req.engine}' is disabled on this sidecar "
+            f"(TTS_HEAVY_ENGINES={','.join(ENABLED_ENGINES)})",
+        )
 
     if req.engine == "chatterbox":
         msg = await chatterbox_worker.request({

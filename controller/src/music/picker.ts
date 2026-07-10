@@ -70,8 +70,9 @@ function shuffle<T>(arr: T[]): T[] {
 
 // Pull bpm/musical_key for a candidate — library.bpmKeyFor prefers the
 // analyzer's numbers over the candidate's own fields (a Subsonic candidate's
-// bpm is Navidrome's ID3-derived value, 0 on un-tagged files; #862).
-function analysisFor(t: any): { bpm: number | null; key: string | null } {
+// bpm is Navidrome's ID3-derived value, 0 on un-tagged files; #862). Also
+// carries the boundary keys (keyStart/keyEnd, feature: key ranges).
+function analysisFor(t: any): { bpm: number | null; key: string | null; keyStart?: string | null; keyEnd?: string | null } {
   return library.bpmKeyFor(t);
 }
 
@@ -80,13 +81,16 @@ function analysisFor(t: any): { bpm: number | null; key: string | null } {
 
 // Order the pool by a random base nudged up for tempo/harmonic compatibility
 // with the current track. Random stays dominant so the pool keeps its variety
-// and a NULL-analysis pool is indistinguishable from shuffle().
-function softRankByCompat(pool: any[], current: { bpm: number | null; key: string | null }): any[] {
+// and a NULL-analysis pool is indistinguishable from shuffle(). Key compares
+// the pair the transition actually meets — the anchor's ENDING key against
+// each candidate's OPENING key (feature: key ranges) — falling back to the
+// dominant keys (a mini-run rankTarget carries only a dominant key).
+function softRankByCompat(pool: any[], current: { bpm: number | null; key: string | null; keyEnd?: string | null }): any[] {
   if (current.bpm == null && current.key == null) return shuffle(pool);
   return pool
     .map((t: any) => {
       const a = analysisFor(t);
-      const bonus = 0.4 * bpmCompat(current.bpm, a.bpm) + 0.3 * keyCompat(current.key, a.key);
+      const bonus = 0.4 * bpmCompat(current.bpm, a.bpm) + 0.3 * keyCompat(current.keyEnd ?? current.key, a.keyStart ?? a.key);
       return { t, score: Math.random() + bonus };
     })
     .sort((x, y) => y.score - x.score)
@@ -494,13 +498,25 @@ function summariseRecent(queue: any) {
     .filter((i: any) => i?.track?.title)
     .map((i: any) => {
       const tags = i.track.id ? library.get(i.track.id) : null;
+      // Empty fields are omitted, not nulled — `"moods": [], "energy": null`
+      // on every un-tagged entry was pure token spend (the payload is compact
+      // JSON now, and JSON.stringify drops undefined).
       return {
         title: i.track.title,
         artist: i.track.artist,
-        moods: tags?.moods || [],
-        energy: tags?.energy || null,
+        moods: tags?.moods?.length ? tags.moods : undefined,
+        energy: tags?.energy || undefined,
       };
     });
+}
+
+// The album line only earns its tokens when it says something the title
+// doesn't — "Aja - Single" next to the title "Aja" is noise on every single
+// release in the pool.
+function slimAlbum(album: any, title: any): string | undefined {
+  if (!album) return undefined;
+  const stripped = String(album).replace(/\s*-\s*(Single|EP)$/i, '').trim();
+  return stripped.toLowerCase() === String(title || '').trim().toLowerCase() ? undefined : album;
 }
 
 // ---------------------------------------------------------------------------
@@ -621,15 +637,24 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
         // criteria PICKER_CRITERIA asks the model to weigh (#862). Same join
         // summariseRecent below already does.
         const rec = c.id ? library.get(c.id) : null;
+        const moods = (Array.isArray(c.moods) && c.moods.length ? c.moods : rec?.moods) || [];
         return {
           id: c.id,
           title: c.title,
           artist: c.artist,
-          album: c.album || null,
-          year: c.year || null,
-          genre: c.genre || null,
-          moods: (Array.isArray(c.moods) && c.moods.length ? c.moods : rec?.moods) || [],
-          energy: c.energy || rec?.energy || null,
+          // Absent-when-empty throughout (undefined drops out of the JSON):
+          // a mostly-untagged pool used to ship `"moods": [], "energy": null,
+          // "album": null…` on every candidate — hundreds of tokens that told
+          // the model nothing.
+          album: slimAlbum(c.album, c.title),
+          year: c.year || undefined,
+          genre: c.genre || undefined,
+          moods: moods.length ? moods : undefined,
+          energy: c.energy || rec?.energy || undefined,
+          // Track length in seconds — lets the pick weigh a 9-minute epic
+          // against the daypart (length is an on-air cut, never a pool filter
+          // — #447 — so the model is the only place it can be weighed).
+          secs: c.duration ?? rec?.duration_sec ?? undefined,
           // Measured acoustic facts — omitted (undefined) when un-analysed so
           // the LLM only sees them when they're real.
           bpm: a.bpm ?? undefined,
@@ -652,6 +677,20 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
       }),
       recentPlays,
       context: ctx,
+      // The on-air anchor for FLOW: title/artist plus measured tempo/key/pace
+      // when the current track is analysed. Without this the criteria asked
+      // the model to match "the current" tempo it was never told.
+      current: currentTrack ? (() => {
+        const ca = analysisFor(currentTrack);
+        const crec = currentTrack.id ? library.get(currentTrack.id) : null;
+        return {
+          title: currentTrack.title,
+          artist: currentTrack.artist,
+          bpm: ca.bpm ?? undefined,
+          key: ca.key ?? undefined,
+          pace: currentTrack.paceMean ?? crec?.paceMean ?? undefined,
+        };
+      })() : null,
       recentTransitions,
     });
   } catch (err) {

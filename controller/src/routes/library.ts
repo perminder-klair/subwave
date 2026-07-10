@@ -6,6 +6,7 @@ import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import * as library from '../music/library.js';
 import * as db from '../music/library-db.js';
+import * as analyzer from '../music/analyzer.js';
 import * as coverage from '../music/library-coverage.js';
 import * as subsonic from '../music/subsonic.js';
 import * as lastfm from '../music/lastfm.js';
@@ -70,6 +71,58 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
         updatedAt: stats.updatedAt,
       },
     });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /library/search-sound?q=<description>&limit=N — natural-language
+// "sounds like" search for the admin Search tab. Embeds the description
+// through the CLAP text tower (analyzer /embed-text) and KNNs it against the
+// stored track audio vectors — the same path as the picker's searchBySound
+// tool, exposed to operators. The UI gates the mode on
+// coverage.soundSearchAvailable; the 503 here is the belt-and-suspenders
+// answer when the capability drops between polls.
+// ---------------------------------------------------------------------------
+router.get('/library/search-sound', requireAdmin, async (req, res) => {
+  const q = (typeof req.query?.q === 'string' ? req.query.q : '').trim();
+  if (!q) return res.status(400).json({ error: 'q is required' });
+  const limit = Math.min(Math.max(parseIntSafe(req.query?.limit, 30), 1), 60);
+  try {
+    await library.load();
+    // Interactive call — same short deadline rationale as the picker tool: a
+    // bulk analysis pass may hold the backend's single-threaded worker, and
+    // "unavailable right now" beats hanging the admin UI behind it.
+    const vecs = await analyzer.embedTexts([q], { timeoutMs: 20_000 });
+    if (!vecs || !vecs[0]) {
+      return res.status(503).json({
+        error: 'sound search unavailable — needs the heavy analyzer (CLAP text tower) and audio-analysed tracks',
+      });
+    }
+    // Wide KNN, capped after the archive filter so junk rows don't eat slots.
+    const hits = library.tracksByAudioVector(vecs[0], Math.max(limit * 2, 60));
+    const results = hits
+      .filter((t: any) => !subsonic.isStationArchive(t))
+      .slice(0, limit)
+      .map((t: any) => ({
+        id: t.id,
+        title: t.title ?? null,
+        artist: t.artist ?? null,
+        album: t.album ?? null,
+        year: t.year ?? null,
+        genre: t.genre ?? null,
+        duration: t.durationSec ?? null,
+        moods: t.moods ?? [],
+        energy: t.energy ?? null,
+        source: t.source ?? null,
+        bpm: t.bpm ?? null,
+        musicalKey: t.musicalKey ?? null,
+        loudnessLufs: t.loudnessLufs ?? null,
+        instrumental: t.vocalRanges == null ? null : t.vocalRanges.length === 0,
+        similarity: typeof t._similarity === 'number' ? t._similarity : null,
+      }));
+    res.json({ results });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

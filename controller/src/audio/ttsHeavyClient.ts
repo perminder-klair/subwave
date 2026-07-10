@@ -31,6 +31,23 @@ export function isRemoteEnabled(): boolean {
 // once the worker has declared whether the gated cloning weights loaded.
 export type ProbeMeta = { voiceCloning: boolean | null };
 
+// Sidecar-wide health snapshot, refreshed on every /health probe (independent
+// of the per-engine onChange, which only fires on availability/capability
+// changes). Lets the admin UI tell "sidecar down" apart from "sidecar up but
+// this engine disabled via TTS_HEAVY_ENGINES". `enabled` is the sidecar's
+// configured engine list; null when the sidecar is unreachable OR is an older
+// image that doesn't report the field (so callers fall back to old behaviour).
+let cachedHealth: { up: boolean; enabled: string[] | null } = { up: false, enabled: null };
+
+// The tts-heavy sidecar's configured engines (TTS_HEAVY_ENGINES). Returns null
+// when not in sidecar mode, the sidecar is unreachable, or it's too old to
+// report the list — in every "unknown" case, so the UI degrades to the plain
+// "sidecar off" label rather than guessing.
+export function heavyEnabledEngines(): string[] | null {
+  if (!config.ttsHeavy.url) return null;
+  return cachedHealth.up ? cachedHealth.enabled : null;
+}
+
 // One /health probe. `available` is true iff the sidecar reports ok and lists
 // the requested engine. Network/timeout/parse failures collapse to
 // unavailable — the dispatcher reads the result the same way it reads an
@@ -44,11 +61,20 @@ async function probeOnce(engine: RemoteEngine): Promise<{ available: boolean; me
   const t = setTimeout(() => ac.abort(), PROBE_TIMEOUT_MS);
   try {
     const res = await fetch(`${url}/health`, { signal: ac.signal });
-    if (!res.ok) return miss;
+    if (!res.ok) {
+      cachedHealth = { up: false, enabled: null };
+      return miss;
+    }
     const body = (await res.json()) as {
       ok?: boolean;
       engines?: string[];
+      enabled?: string[];
       pocket_voice_cloning?: boolean | null;
+    };
+    // Refresh the sidecar-wide snapshot on every probe (see cachedHealth).
+    cachedHealth = {
+      up: !!body.ok,
+      enabled: Array.isArray(body.enabled) ? body.enabled : null,
     };
     const available =
       !!body.ok && Array.isArray(body.engines) && body.engines.includes(engine);
@@ -58,6 +84,7 @@ async function probeOnce(engine: RemoteEngine): Promise<{ available: boolean; me
         : null;
     return { available, meta: { voiceCloning } };
   } catch {
+    cachedHealth = { up: false, enabled: null };
     return miss;
   } finally {
     clearTimeout(t);

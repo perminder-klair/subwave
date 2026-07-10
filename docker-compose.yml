@@ -277,6 +277,11 @@ services:
       - TTS_HEAVY_DEVICE=${TTS_HEAVY_DEVICE:-cpu}
       # Default voice id used by PocketTTS when a persona doesn't override it.
       - POCKET_TTS_VOICE=${POCKET_TTS_VOICE:-alba}
+      # Which heavy engines to actually load. Both are baked into the image;
+      # each costs RAM + a first-boot weight download + startup time, so set
+      # this to a single engine if you only use one. Comma-separated.
+      # e.g. TTS_HEAVY_ENGINES=pocket-tts runs PocketTTS only (no Chatterbox).
+      - TTS_HEAVY_ENGINES=${TTS_HEAVY_ENGINES:-chatterbox,pocket-tts}
       # Optional — enables PocketTTS zero-shot voice CLONING (issue #238). The
       # cloning weights (kyutai/pocket-tts) are gated on Hugging Face; without a
       # token the engine loads the open weights and cloned .wav voices revert to

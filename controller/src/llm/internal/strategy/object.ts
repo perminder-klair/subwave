@@ -112,8 +112,11 @@ export async function djObject({
             via: lastVia,
             sampling: samplingWithLocalKnobs(l.cfg, { temperature }),
             usage,
-            // Full, untruncated — the /debug surface shows the whole system prompt.
-            extra: { system, user: prompt, response: JSON.stringify(object).slice(0, 500) },
+            // Full, untruncated — the /debug surface shows the whole call, and
+            // the ring buffer holds only 120 entries so size isn't a concern.
+            // (A .slice(0, 500) here used to cut pick reasons mid-sentence in
+            // /admin/debug; the durable events.jsonl still caps via cap().)
+            extra: { system, user: prompt, response: JSON.stringify(object) },
           };
         } catch (err) {
           lastErr = err;

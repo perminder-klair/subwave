@@ -605,8 +605,36 @@ async function main() {
     assert.equal(enforceIntroBudget('text', 20000), 'text');                         // ≥18s
     const sentences = enforceIntroBudget('One. Two. Three. Four. Five. Six. Seven. Eight. Nine. Ten. Eleven. Twelve.', 4000);
     assert.ok(sentences.endsWith('.') && sentences.split(/\s+/).length <= 10);        // last full sentence
-    const hardcut = enforceIntroBudget('a b c d e f g h i j k l m n o p q r s t', 4000);
-    assert.ok(hardcut.endsWith('…') && hardcut.split(/\s+/).length <= 11);            // ellipsis fallback
+  });
+  await test('enforceIntroBudget never airs a fragment: clause, else drop (#962)', () => {
+    // No sentence or clause boundary anywhere — the line is dropped, not "…"-cut.
+    assert.equal(enforceIntroBudget('a b c d e f g h i j k l m n o p q r s t', 4000), '');
+    // A short complete sentence beats silence even when it's well under 40%.
+    const short = enforceIntroBudget('Nice. Then a very long thought that rambles on and on without ever stopping for breath at all', 4000);
+    assert.equal(short, 'Nice.');
+    // No sentence fits but a late clause does — cut at the LAST clause
+    // boundary that fits (the longest complete thought), closed with a period.
+    const clause = enforceIntroBudget('Ever notice how a single chord, held just long enough, can feel like a tiny pause in the day', 4000);
+    assert.equal(clause, 'Ever notice how a single chord, held just long enough.');
+    // A decimal point is not a sentence boundary.
+    const decimal = enforceIntroBudget('Running at 3.5 minutes this one just keeps going and going and going without a stop', 4000);
+    assert.equal(decimal, '');
+    // An abbreviation period is not a sentence end — the DJ never airs "Dr."
+    // alone; the cut falls through to the clause/drop steps instead.
+    assert.equal(enforceIntroBudget('Dr. Dre eases us in with a slow-building intro that takes its sweet time before the beat', 4000), '');
+    assert.equal(enforceIntroBudget('Here is a smooth cut feat. a guest who drifts in over a long patient intro tonight', 4000), '');
+    // …but a real stop later in the same line still wins, abbreviation and all.
+    const abbrev = enforceIntroBudget('St. Vincent is here. Now a very long ramble that goes on and on forever', 4000);
+    assert.equal(abbrev, 'St. Vincent is here.');
+  });
+  await test('enforceIntroBudget word ceiling scales with speech pace', () => {
+    const line = 'One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty.';
+    // 4s × 2.5w/s = 10 words at pace 1 → over budget; at 2× the whole line fits.
+    assert.equal(enforceIntroBudget(line, 4000, 2), line);
+    // At half pace the ceiling halves — still no fragment, so it drops.
+    assert.equal(enforceIntroBudget('a b c d e f g h i j', 4000, 0.5), '');
+    // Garbage pace values fall back to the historical 1.0 assumption.
+    assert.equal(enforceIntroBudget('Short line.', 5000, NaN), 'Short line.');
   });
 
   // ---- persona tone dials (humour / local colour / warmth) ----

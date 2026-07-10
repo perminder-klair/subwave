@@ -12,10 +12,81 @@
 export interface Analysis {
   bpm: number | null;
   key: string | null;
+  // Boundary keys (feature: key ranges) — the key the track OPENS in and the
+  // key it ENDS in, resolved from the measured per-region key ranges via
+  // openingKeyFrom / endingKeyFrom. Optional; consumers fall back to the
+  // whole-window dominant `key`, so un-analysed tracks behave as before.
+  keyStart?: string | null;
+  keyEnd?: string | null;
   // Measured ending of the track (outro analysis): 'fade' = winds down to
   // silence, 'cold' = ends at level. Optional — absent/null means "no outro
   // signal" and every consumer behaves exactly as before.
   ending?: 'fade' | 'cold' | null;
+}
+
+// --- Boundary keys (feature: key ranges) -------------------------------------
+// The analyzer stores per-region keys as {startMs,endMs,tonic,mode} over the
+// ANALYSED WINDOW (the first ANALYZE_SECONDS, ~40s — not the whole file).
+// These helpers turn them into the two keys a transition actually meets: the
+// incoming track's OPENING key (the first range — the window starts at t=0,
+// so this is always a real measurement) and the outgoing track's ENDING key
+// (only trusted when the ranges genuinely reach the track's end, i.e. the
+// track fits inside the window — otherwise the whole-window dominant key is
+// the best available estimate and the fallback wins).
+
+// Duck-typed mirror of library-db's TrackKeyRange, so this module keeps its
+// no-imports invariant.
+export interface KeyRangeLike {
+  startMs: number;
+  endMs: number;
+  tonic: string;
+  mode: string;
+}
+
+// Camelot code for a tonic + mode — indexed by pitch class, mirroring the
+// analyze worker's MAJOR_CAMELOT / MINOR_CAMELOT tables exactly (the worker
+// spells tonics with sharps: C, C#, D, …, B).
+const PITCH_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const MAJOR_CAMELOT = ['8B', '3B', '10B', '5B', '12B', '7B', '2B', '9B', '4B', '11B', '6B', '1B'];
+const MINOR_CAMELOT = ['5A', '12A', '7A', '2A', '9A', '4A', '11A', '6A', '1A', '8A', '3A', '10A'];
+
+export function camelotFor(tonic: string | null | undefined, mode: string | null | undefined): string | null {
+  if (!tonic || !mode) return null;
+  const pc = PITCH_NAMES.indexOf(tonic.trim().toUpperCase());
+  if (pc < 0) return null;
+  const m = mode.trim().toLowerCase();
+  if (m === 'major') return MAJOR_CAMELOT[pc];
+  if (m === 'minor') return MINOR_CAMELOT[pc];
+  return null;
+}
+
+// The key the track opens in — the first measured range, else the fallback.
+export function openingKeyFrom(
+  ranges: KeyRangeLike[] | null | undefined,
+  fallback: string | null,
+): string | null {
+  const first = ranges?.[0];
+  return (first && camelotFor(first.tonic, first.mode)) ?? fallback;
+}
+
+// Slack for "the ranges reach the end": codecs pad/truncate a little and the
+// duration is Subsonic's rounded seconds, so demand coverage only to within
+// this many ms of the reported end.
+const ENDING_KEY_SLACK_MS = 5000;
+
+// The key the track ends in — the last measured range, but ONLY when the
+// ranges actually cover the track's ending (short tracks that fit inside the
+// analysis window). Anything longer falls back: the window is leading-only,
+// so its last range is the key at ~40s, not the ending.
+export function endingKeyFrom(
+  ranges: KeyRangeLike[] | null | undefined,
+  durationMs: number | null,
+  fallback: string | null,
+): string | null {
+  const last = ranges && ranges.length ? ranges[ranges.length - 1] : null;
+  if (!last || durationMs == null || !Number.isFinite(durationMs) || durationMs <= 0) return fallback;
+  if (last.endMs < durationMs - ENDING_KEY_SLACK_MS) return fallback;
+  return camelotFor(last.tonic, last.mode) ?? fallback;
 }
 
 // --- Loudness normalisation ------------------------------------------------
@@ -118,9 +189,11 @@ export function keyCompat(a: string | null, b: string | null): number {
 
 // Overall mix compatibility 0..1 — tempo weighted a touch over key, matching
 // the pool re-rank's intent (a beat that locks matters more to a blend than a
-// key that's merely adjacent).
+// key that's merely adjacent). Key compares the pair the seam actually meets:
+// the outgoing track's ENDING key against the incoming track's OPENING key
+// (feature: key ranges), falling back to the whole-window dominant keys.
 export function mixCompat(cur: Analysis, next: Analysis): number {
-  return 0.6 * bpmCompat(cur.bpm, next.bpm) + 0.4 * keyCompat(cur.key, next.key);
+  return 0.6 * bpmCompat(cur.bpm, next.bpm) + 0.4 * keyCompat(cur.keyEnd ?? cur.key, next.keyStart ?? next.key);
 }
 
 // --- Feature 1: adaptive blend ---------------------------------------------
@@ -210,18 +283,39 @@ export function crossSecondsFor(
 // a fade's canvas spans it (clamped 8..12 so the wash stays broadcast-shaped).
 // Bar-snapped to the track's own tempo like the other canvases — prefer the
 // TAIL tempo (outro.bpm) in `a` when the caller has it; outros drift.
+//
+// Tail-loudness shaping (feature: outro analysis): how far the tail actually
+// drops below the track's body decides how much of the wind-down deserves the
+// overlap. Below this drop the "fade" barely recedes — a full-length overlap
+// doubles two near-full-level tracks — so the canvas trims toward its 8s
+// floor; at or past FADE_DROP_DEEP_DB it's a true fade and keeps the full
+// wind-down ride. Linear in between. Needs BOTH the tail and body LUFS
+// (opts.tailLufs / opts.bodyLufs) — either missing → no shaping.
+export const FADE_DROP_SHALLOW_DB = 3;
+export const FADE_DROP_DEEP_DB = 12;
+
 export function endingCrossSecondsFor(
   a: Analysis,
   windDownSec: number | null,
-  maxSec: number | null = null,
+  opts: { maxSec?: number | null; tailLufs?: number | null; bodyLufs?: number | null } = {},
 ): number | null {
   const ending = a.ending;
   if (ending !== 'fade' && ending !== 'cold') return null;
+  const maxSec = opts.maxSec;
   const ceil = typeof maxSec === 'number' && maxSec > 0 ? Math.min(maxSec, CROSS_MAX_SECONDS) : CROSS_MAX_SECONDS;
   let secs: number;
   if (ending === 'fade') {
     secs = windDownSec != null && windDownSec > 0 ? windDownSec : 10;
     secs = Math.max(8, Math.min(12, secs));
+    const { tailLufs, bodyLufs } = opts;
+    if (
+      typeof tailLufs === 'number' && Number.isFinite(tailLufs) &&
+      typeof bodyLufs === 'number' && Number.isFinite(bodyLufs)
+    ) {
+      const drop = bodyLufs - tailLufs; // dB the tail sits below the body
+      const t = Math.max(0, Math.min(1, (drop - FADE_DROP_SHALLOW_DB) / (FADE_DROP_DEEP_DB - FADE_DROP_SHALLOW_DB)));
+      secs = 8 + (secs - 8) * t;
+    }
   } else {
     secs = 4; // tight, intentional cut — same length as a locked beat-blend
   }

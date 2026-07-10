@@ -699,6 +699,41 @@ body::after {
     transform: scale(1);
 }
 
+/* Artwork placeholder — the station disc mark at cover scale (the .player-mark
+   vocabulary), shown when the track has no artwork, the image failed to load,
+   or the stage is off air. It sits UNDER the art img inside .v3-cover-glitch,
+   so the slot never collapses and the text column never jumps (CenterStage). */
+.v3-cover-placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+.v3-cover-placeholder::before {
+    content: "";
+    width: 52%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    border: 1px solid var(--muted);
+    background: repeating-conic-gradient(
+        from 0deg,
+        var(--muted) 0deg 9deg,
+        transparent 9deg 18deg
+    );
+    opacity: 0.55;
+}
+.v3-cover-placeholder::after {
+    content: "";
+    position: absolute;
+    width: 17%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 1px var(--bg);
+}
+
 @keyframes cover-glitch-r {
     0%,
     100% {
@@ -796,6 +831,12 @@ body::after {
     .v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-scan {
         opacity: 0;
     }
+    /* The ripple rings behind the artwork are pure decoration, and a frozen
+       ring stack reads as broken — hide them outright. */
+    .sw-ripple-circle {
+        animation: none !important;
+        opacity: 0 !important;
+    }
     /* Ambient wash still tints, but snaps in instead of cross-fading. */
     .v3-cover-ambient {
         transition: none;
@@ -820,6 +861,11 @@ html.lite *::after {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
     animation: none !important;
+}
+/* The animation kill above would leave the artwork ripple as a static ring
+   stack for its 3s burst — hide the rings, matching reduced-motion. */
+html.lite .sw-ripple-circle {
+    opacity: 0 !important;
 }
 
 /* Player title — Fraunces display serif (see the type-roles block up top).
@@ -2071,6 +2117,130 @@ html.lite *::after {
     color: var(--ink);
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   MANUAL · LLM — the living model-results table (LlmBenchTable.tsx).
+   Bars are single-hue (ink) magnitude marks on a recessive track; identity
+   lives in the row header, verdicts in labelled chips, values also as text.
+   ───────────────────────────────────────────────────────────────────────── */
+.bs-bench {
+    margin: 8px 0 0;
+}
+.bs-bench-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--separator-strong);
+}
+.bs-bench table {
+    width: 100%;
+    min-width: 980px;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    line-height: 1.35;
+}
+.bs-bench thead th {
+    text-align: left;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 700;
+    padding: 10px 12px 8px;
+    border-bottom: 1px solid var(--separator-strong);
+    white-space: nowrap;
+}
+.bs-bench tbody th,
+.bs-bench tbody td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--separator-soft);
+    vertical-align: middle;
+    white-space: nowrap;
+}
+.bs-bench tbody tr:last-child th,
+.bs-bench tbody tr:last-child td {
+    border-bottom: none;
+}
+.bs-bench tbody th {
+    text-align: left;
+    font-weight: 700;
+}
+.bs-bench-model {
+    display: block;
+    font-weight: 800;
+}
+.bs-bench-route {
+    display: block;
+    font-weight: 500;
+    font-size: 11px;
+    color: var(--muted);
+}
+.bs-bench-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+}
+.bs-bench-bar {
+    display: inline-block;
+    width: 52px;
+    height: 8px;
+    background: var(--separator-soft);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.bs-bench-bar-fill {
+    display: block;
+    height: 100%;
+    background: var(--ink);
+    border-radius: 2px;
+}
+.bs-bench-pct,
+.bs-bench-num {
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+}
+.bs-bench-na {
+    color: var(--muted);
+}
+.bs-bench-chip {
+    display: inline-block;
+    border: 1px solid var(--separator-strong);
+    border-radius: 999px;
+    padding: 2px 9px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink);
+}
+.bs-bench-chip--agent-capable {
+    border-color: var(--ink);
+}
+.bs-bench-chip--avoid {
+    color: var(--muted);
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
+}
+.bs-bench figcaption {
+    margin-top: 10px;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--muted);
+    max-width: 70ch;
+}
+.bs-bench-notes {
+    margin: 12px 0 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--muted);
+    max-width: 74ch;
+}
+.bs-bench-notes strong {
+    color: var(--ink);
+}
+
 .bs-rebuild-table {
     width: 100%;
     border-collapse: collapse;
@@ -2990,6 +3160,157 @@ html.lite *::after {
 }
 .admin-root .card-body.loose {
     padding: 18px;
+}
+/* ── DJ segment fire pads (dash) ─────────────────────────────────────────
+   Styled after studio cart-machine pads: a notched corner, a per-segment
+   glyph, and an LED that arms on hover and blinks while the segment is on
+   air (with a sweep along the base). States: hover = armed, .is-firing =
+   on air, disabled (another pad firing) = dimmed. */
+.admin-root .seg-pad {
+    --seg-line: color-mix(in oklab, var(--accent) 45%, transparent);
+    --seg-glow: color-mix(in oklab, var(--accent) 60%, transparent);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 11px 12px 9px;
+    font: inherit;
+    text-align: left;
+    color: inherit;
+    cursor: pointer;
+    border: 1px solid var(--seg-line);
+    background: linear-gradient(
+        to top,
+        color-mix(in oklab, var(--accent) 9%, transparent),
+        color-mix(in oklab, var(--accent) 3%, transparent) 65%
+    );
+    clip-path: polygon(0 0, calc(100% - 13px) 0, 100% 13px, 100% 100%, 0 100%);
+    transition: border-color 140ms ease, background 140ms ease, transform 90ms ease;
+}
+/* The clip-path eats the border at the cut corner — redraw the diagonal. */
+.admin-root .seg-pad::before {
+    content: '';
+    position: absolute;
+    top: 5.5px;
+    right: -3px;
+    width: 19px;
+    height: 1px;
+    background: var(--seg-line);
+    transform: rotate(45deg);
+    transition: background 140ms ease;
+}
+.admin-root .seg-pad .seg-glyph {
+    width: 18px;
+    height: 18px;
+    color: var(--accent);
+    opacity: 0.85;
+    transition: transform 140ms ease, opacity 140ms ease;
+}
+.admin-root .seg-pad .seg-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    line-height: 1.35;
+}
+.admin-root .seg-pad .seg-cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+.admin-root .seg-pad .seg-cta::after {
+    content: '▸';
+    transition: transform 140ms ease;
+}
+.admin-root .seg-pad .seg-led {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--accent) 35%, transparent);
+    transition: background 140ms ease, box-shadow 140ms ease;
+}
+.admin-root .seg-pad:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: linear-gradient(
+        to top,
+        color-mix(in oklab, var(--accent) 22%, transparent),
+        color-mix(in oklab, var(--accent) 6%, transparent) 70%
+    );
+}
+.admin-root .seg-pad:hover:not(:disabled)::before {
+    background: var(--accent);
+}
+.admin-root .seg-pad:hover:not(:disabled) .seg-led {
+    background: var(--accent);
+    box-shadow: 0 0 8px 1px var(--seg-glow);
+}
+.admin-root .seg-pad:hover:not(:disabled) .seg-glyph {
+    transform: translateY(-1px) rotate(-4deg);
+    opacity: 1;
+}
+.admin-root .seg-pad:hover:not(:disabled) .seg-cta::after {
+    transform: translateX(3px);
+}
+.admin-root .seg-pad:active:not(:disabled) {
+    transform: translateY(1px);
+}
+.admin-root .seg-pad:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.admin-root .seg-pad:disabled {
+    cursor: not-allowed;
+}
+.admin-root .seg-pad:disabled:not(.is-firing) {
+    opacity: 0.35;
+}
+.admin-root .seg-pad.is-firing {
+    border-color: var(--accent);
+}
+.admin-root .seg-pad.is-firing::before {
+    background: var(--accent);
+}
+.admin-root .seg-pad.is-firing .seg-led {
+    background: var(--accent);
+    box-shadow: 0 0 9px 2px var(--seg-glow);
+    animation: seg-led-blink 0.9s steps(1) infinite;
+}
+.admin-root .seg-pad.is-firing::after {
+    content: '';
+    position: absolute;
+    inset: auto 0 0 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    animation: seg-sweep 1.1s linear infinite;
+}
+@keyframes seg-led-blink {
+    50% {
+        opacity: 0.25;
+        box-shadow: none;
+    }
+}
+@keyframes seg-sweep {
+    from {
+        transform: translateX(-100%);
+    }
+    to {
+        transform: translateX(100%);
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .admin-root .seg-pad.is-firing .seg-led,
+    .admin-root .seg-pad.is-firing::after {
+        animation: none;
+    }
 }
 /* Flat — used inside EditorDialog so stacked sections read as one continuous
    modal form separated by hairline dividers, not boxed cards. No border/bg, no
