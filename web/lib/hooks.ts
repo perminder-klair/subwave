@@ -26,6 +26,9 @@ export function useClock(): Date | null {
 export interface Analyser {
   ready: boolean;
   read: () => Uint8Array<ArrayBuffer> | null;
+  /** AudioContext sample rate in Hz — null until the graph exists. Callers
+   *  mapping bins to frequencies need it (44.1k vs 48k shifts every bin). */
+  sampleRate: number | null;
 }
 
 // Older Safari exposes AudioContext as webkitAudioContext.
@@ -36,9 +39,9 @@ interface WebkitWindow {
 
 // Web Audio analyser hook — wires an AnalyserNode to the given <audio> ref
 // the first time `active` flips true, then writes per-frame frequency bytes
-// into an internal ref read via `read()`. Returns `{ ready, read }`. If CORS
-// or anything else blocks attachment, `ready` stays false and `read()` returns
-// null — callers should fall back to `useSpectrum`.
+// into an internal ref read via `read()`. Returns `{ ready, read, sampleRate }`.
+// If CORS or anything else blocks attachment, `ready` stays false and `read()`
+// returns null — the Waveform falls back to its pseudo-random walk.
 //
 // iOS is opted out entirely: createMediaElementSource on a live MP3 stream only
 // ever yields zeros there, and merely routing the element through Web Audio
@@ -55,6 +58,7 @@ export function useAnalyser(
   const binsRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const probedRef = useRef(false);
   const [ready, setReadyState] = useState(false);
+  const [sampleRate, setSampleRate] = useState<number | null>(null);
   // Mirror of `ready` read by the stable `read` callback below — keeping it in
   // a ref means `read`'s identity never changes, so the caller's rAF effect
   // doesn't tear down and restart on every render.
@@ -84,11 +88,18 @@ export function useAnalyser(
         if (!sourceRef.current) {
           sourceRef.current = ctxRef.current.createMediaElementSource(audioEl);
           analyserRef.current = ctxRef.current.createAnalyser();
-          analyserRef.current.fftSize = 256;
-          analyserRef.current.smoothingTimeConstant = 0.78;
+          // 1024-point FFT (512 bins). The Waveform's log-frequency sweep needs
+          // low-end resolution — at 256 the whole bottom two octaves collapsed
+          // into two bins. Reading 512 bins per paint is still trivial.
+          analyserRef.current.fftSize = 1024;
+          // Light smoothing only: the old 0.78 stacked on the spans' 60 ms CSS
+          // transitions left bars trailing the beat by ~100 ms. The canvas
+          // renderer has no second smoothing layer, so this is the whole lag.
+          analyserRef.current.smoothingTimeConstant = 0.7;
           sourceRef.current.connect(analyserRef.current);
           analyserRef.current.connect(ctxRef.current.destination);
           binsRef.current = new Uint8Array(analyserRef.current.frequencyBinCount);
+          setSampleRate(ctxRef.current.sampleRate);
         }
         if (cancelled) return;
         setReady(true);
@@ -96,7 +107,7 @@ export function useAnalyser(
         // Some non-iOS WebKit builds (e.g. desktop Safari on a live MP3 mount)
         // also wire the graph up but only ever return zeros. Probe once after
         // playback starts — if no samples land in ~600 ms, flip ready=false so
-        // the pseudo-random useSpectrum fallback takes over.
+        // the pseudo-random walk fallback takes over.
         if (probedRef.current) return;
         onPlaying = () => {
           if (probedRef.current || cancelled) return;
@@ -121,10 +132,10 @@ export function useAnalyser(
               if (probeInterval) clearInterval(probeInterval);
               probeInterval = null;
               if (max === 0) {
-                // No usable data. Fall back to the pseudo-spectrum, but DON'T
-                // disconnect — the source feeds the speakers through this graph,
-                // so tearing it down would mute playback. An idle analyser in
-                // the chain is transparent.
+                // No usable data. Fall back to the pseudo-random walk, but
+                // DON'T disconnect — the source feeds the speakers through this
+                // graph, so tearing it down would mute playback. An idle
+                // analyser in the chain is transparent.
                 setReady(false);
               }
             }
@@ -149,5 +160,5 @@ export function useAnalyser(
     return binsRef.current;
   }, []);
 
-  return { ready, read };
+  return { ready, read, sampleRate };
 }

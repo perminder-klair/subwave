@@ -5,9 +5,7 @@ import { animate as motionAnimate, m, useAnimate } from 'motion/react';
 import { ChevronDown, ChevronUp, Volume2 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useIsIOS } from '@/lib/hooks';
-import { useElapsed } from '@/hooks/useElapsed';
 import { SCALE_MAX, type SignalQuality } from '@/hooks/useSignal';
-import type { NowPlayingTrack } from '@/lib/types';
 import type { PlayerStatus } from '@/hooks/usePlayer';
 
 export interface TransportBarProps {
@@ -26,9 +24,6 @@ export interface TransportBarProps {
   signalQuality: SignalQuality;
   /** Current station listener count — shown as text in the signal readout. */
   listeners: number | null;
-  nowPlaying: NowPlayingTrack | null;
-  /** Epoch ms when the current track started (from useStationFeed). */
-  trackStartedAt: number | null;
 }
 
 const SCALE_NUMS = [0, 50, 100, 150, 200, 250];
@@ -77,12 +72,7 @@ export default memo(function TransportBar({
   latencyMs,
   signalQuality,
   listeners,
-  nowPlaying,
-  trackStartedAt,
 }: TransportBarProps) {
-  // 1s elapsed tick scoped to this component (see useElapsed) — it drives the
-  // hairline progress along the deck's top edge.
-  const elapsed = useElapsed(trackStartedAt);
   // iOS Safari makes HTMLMediaElement.volume read-only and ignores a Web Audio
   // GainNode inside an installed PWA, so the on-screen knob can't actually
   // attenuate there. Swap it for a hardware-volume hint instead of shipping a
@@ -92,8 +82,6 @@ export default memo(function TransportBar({
   // The window between the tune-in gesture and the first audible frame —
   // surfaced on the power ring so the player doesn't claim to play while silent.
   const connecting = status === 'connecting';
-  const duration = nowPlaying?.duration ?? 0;
-  const progress = duration > 0 ? Math.min(1, elapsed / duration) : 0;
 
   // Knob pointer sweeps the conic tick scale: -135° (silent) → +135° (full),
   // matching the scale's `from -135deg` origin in globals.css.
@@ -233,15 +221,6 @@ export default memo(function TransportBar({
       className="absolute inset-x-0 bottom-0 z-20"
     >
       <div className="fz-deck relative grid grid-cols-[auto_1fr_auto] items-stretch bg-bg pt-3 pr-[env(safe-area-inset-right)] pb-[calc(env(safe-area-inset-bottom)_+_0.75rem)] pl-[env(safe-area-inset-left)] [border-top:1px_solid_var(--fz-edge)]">
-        {/* Hairline progress along the top edge of the deck. */}
-        {duration > 0 && (
-          <div
-            className="pointer-events-none absolute -top-px left-0 z-10 h-0.5 w-[var(--progress)] bg-vermilion"
-            ref={(el) => { if (el) el.style.setProperty('--progress', `${progress * 100}%`); }}
-            aria-hidden="true"
-          />
-        )}
-
         {/* ── POWER ──────────────────────────────────────────────── */}
         <div className="relative flex flex-col items-center justify-center gap-1.5 px-4 pt-1 pb-2 md:px-5 md:pt-1 md:pb-2.5 lg:gap-2 lg:px-6 lg:pt-1.5 lg:pb-3">
           <span className="v3-caption hidden text-muted lg:block">Power</span>

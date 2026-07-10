@@ -366,8 +366,6 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
         latencyMs={signal.latencyMs}
         signalQuality={signal.quality}
         listeners={listenerCount}
-        nowPlaying={nowPlaying}
-        trackStartedAt={trackStartedAt}
       />
 
       <Sheet

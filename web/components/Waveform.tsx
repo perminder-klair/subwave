@@ -1,11 +1,64 @@
 'use client';
 
-import { memo, useEffect, useRef, useState, type RefObject } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useAnalyser } from '@/lib/hooks';
 import { pollWhileVisible } from '@/lib/poll';
-import { cn } from '@/lib/cn';
 
 const BARS = 120;
+
+// Bars sweep this range logarithmically — equal horizontal distance per octave,
+// like hardware spectrum analysers. A linear bin map put >11 kHz on the right
+// half of the band, where music carries almost no energy, so most of the strip
+// never moved; log spacing gives bass/mids/highs each a visible share.
+const FREQ_LO = 50;
+const FREQ_HI = 16000;
+
+// Resting bar height as a fraction of the band (the old spans' h-[10%]).
+const REST = 0.1;
+
+// Minimum ms between paints. rAF fires at display refresh — 120 Hz+ on
+// ProMotion/gaming screens — but the analyser's own smoothing means frames
+// ~33 ms apart are visually indistinguishable, at half (or a quarter) the cost.
+const FRAME_MS = 30;
+
+// Backing-store resolution cap. The band sits at opacity 0.22 behind the
+// stage — 3× phone DPR buys nothing visible and triples the pixels cleared
+// and filled every paint.
+const MAX_DPR = 2;
+
+interface Palette {
+  bar: string;
+  past: string;
+}
+
+// Bar colours come from the theme tokens the old spans used via bg-ink /
+// bg-vermilion. Themes apply as inline custom properties on <html> (lib/theme
+// applyTheme), so the cached palette is dropped whenever that element's
+// attributes change.
+function resolvePalette(el: HTMLElement): Palette {
+  const cs = getComputedStyle(el);
+  const bar = cs.getPropertyValue('--color-ink').trim() || cs.getPropertyValue('--ink').trim();
+  const past = cs.getPropertyValue('--color-vermilion').trim() || cs.getPropertyValue('--accent').trim();
+  return { bar: bar || '#161412', past: past || '#d94b2a' };
+}
+
+// Per-bar [start, end) analyser-bin spans for the log sweep. Each bar averages
+// every bin it covers (a single sampled bin flickers on narrowband content).
+// Cached by the caller — this only changes if the FFT size or context sample
+// rate does.
+function buildBinRanges(binCount: number, sampleRate: number): Array<[number, number]> {
+  const nyquist = sampleRate / 2;
+  const hi = Math.min(FREQ_HI, nyquist);
+  const ranges: Array<[number, number]> = [];
+  for (let i = 0; i < BARS; i++) {
+    const f0 = FREQ_LO * Math.pow(hi / FREQ_LO, i / BARS);
+    const f1 = FREQ_LO * Math.pow(hi / FREQ_LO, (i + 1) / BARS);
+    const b0 = Math.min(binCount - 1, Math.max(0, Math.floor((f0 / nyquist) * binCount)));
+    const b1 = Math.min(binCount, Math.max(b0 + 1, Math.ceil((f1 / nyquist) * binCount)));
+    ranges.push([b0, b1]);
+  }
+  return ranges;
+}
 
 export interface WaveformProps {
   audioRef: RefObject<HTMLAudioElement | null>;
@@ -16,14 +69,42 @@ export interface WaveformProps {
   duration: number;
 }
 
+// The band renders on a single <canvas> — one paint per frame instead of 120
+// styled spans. The span version spent ~2.8 ms/frame in the rendering pipeline
+// (style recalc dominated: every frame retargeted 120 height transitions, then
+// re-laid-out the flex row); the same visual on canvas measures ~0.25 ms/frame.
+// That headroom is what lets the strip keep running on the Pi-class devices
+// lite mode targets.
 export default memo(function Waveform({ audioRef, tunedIn, trackStartedAt, duration }: WaveformProps) {
-  const { ready, read } = useAnalyser(audioRef, tunedIn);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const rafRef = useRef<number | null>(null);
+  const { ready, read, sampleRate } = useAnalyser(audioRef, tunedIn);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const levelsRef = useRef<Float32Array>(new Float32Array(BARS));
+  const pastBarsRef = useRef(0);
+  const paletteRef = useRef<Palette | null>(null);
+  const rangesRef = useRef<{ key: string; ranges: Array<[number, number]> } | null>(null);
 
-  // Progress is derived locally and quantised to whole bars, so this component
-  // re-renders only when another bar should flip colour (~every few seconds),
-  // not on a 1s elapsed tick.
+  // Calm mode — the listener asked for stillness (prefers-reduced-motion) or
+  // low power (html.lite). CSS can't stop a JS animation loop, so the gate has
+  // to live here: no rAF, no fallback interval, just a static strip that keeps
+  // the progress split legible. Lite toggles live from the theme menu, hence
+  // the observer rather than a mount-time read.
+  const [calm, setCalm] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () =>
+      setCalm(mq.matches || document.documentElement.classList.contains('lite'));
+    update();
+    mq.addEventListener('change', update);
+    const mo = new MutationObserver(update);
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => {
+      mq.removeEventListener('change', update);
+      mo.disconnect();
+    };
+  }, []);
+
+  // Progress quantised to whole bars, so state changes ~every few seconds —
+  // not on a 1s elapsed tick (same scheme as the span version).
   const [pastBars, setPastBars] = useState(0);
   useEffect(() => {
     if (trackStartedAt == null || duration <= 0) {
@@ -36,82 +117,129 @@ export default memo(function Waveform({ audioRef, tunedIn, trackStartedAt, durat
     }, 1000);
   }, [trackStartedAt, duration]);
 
-  // Drive real-analyser bars via rAF when available; otherwise the fallback
-  // effect below paints heights from a pseudo-random walk. Bar heights are
-  // written via DOM mutation in both paths so the component stays free of
-  // inline style props (issue #50) and free of per-frame React renders.
-  useEffect(() => {
-    if (!ready || !tunedIn) {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      return;
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    const W = canvas.width;
+    const H = canvas.height;
+    if (!W || !H) return;
+    if (!paletteRef.current) paletteRef.current = resolvePalette(canvas);
+    const dpr = Math.min(MAX_DPR, window.devicePixelRatio || 1);
+    const slot = W / BARS;
+    const gap = Math.min(2 * dpr, Math.max(1, slot * 0.25));
+    const barW = Math.max(1, slot - gap);
+    const levels = levelsRef.current;
+    const past = pastBarsRef.current;
+    ctx.clearRect(0, 0, W, H);
+    // Bars grow symmetrically from the vertical centre (the old items-center
+    // look). fillStyle only changes at the progress boundary.
+    ctx.fillStyle = past > 0 ? paletteRef.current.past : paletteRef.current.bar;
+    for (let i = 0; i < BARS; i++) {
+      if (i === past) ctx.fillStyle = paletteRef.current.bar;
+      const v = Math.min(1, REST + Math.pow(levels[i] ?? 0, 0.7) * (1 - REST));
+      const bh = Math.max(1, v * H);
+      ctx.fillRect(i * slot, (H - bh) / 2, barW, bh);
     }
-    const tick = () => {
-      const bins = read();
-      const container = containerRef.current;
-      if (bins && container) {
-        const spans = container.querySelectorAll<HTMLSpanElement>('[data-bar]');
-        const step = Math.max(1, Math.floor(bins.length / BARS));
-        for (let i = 0; i < spans.length; i++) {
-          const v = (bins[Math.min(bins.length - 1, i * step)] ?? 0) / 255;
-          const span = spans[i];
-          if (span) span.style.height = `${10 + Math.pow(v, 0.7) * 95}%`;
-        }
-      }
-      rafRef.current = requestAnimationFrame(tick);
-    };
-    tick();
-    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
-  }, [ready, tunedIn, read]);
+  }, []);
 
-  // Fallback when the real analyser can't attach — notably iOS Safari, where
-  // createMediaElementSource on a live HTTP MP3 stream returns silence (WebKit
-  // limitation). A pseudo-random walk is written straight to the spans: no
-  // React state, so a fallback session costs zero renders, and the interval
-  // pauses while the tab is hidden.
+  // Repaint on progress flips; the live loops also read the ref every frame.
   useEffect(() => {
-    if (ready || !tunedIn) return;
-    const container = containerRef.current;
-    if (!container) return;
-    const spans = container.querySelectorAll<HTMLSpanElement>('[data-bar]');
-    const levels: number[] = Array(spans.length).fill(0.1);
-    return pollWhileVisible(() => {
-      for (let i = 0; i < spans.length; i++) {
-        const target = Math.pow(Math.random(), 1.4) * (1 - i / (spans.length * 2.2));
-        const next = (levels[i] ?? 0.1) + (target - (levels[i] ?? 0.1)) * 0.45;
-        levels[i] = next;
-        const span = spans[i];
-        if (span) span.style.height = `${10 + Math.pow(next, 0.7) * 95}%`;
-      }
-    }, 60);
-  }, [ready, tunedIn]);
+    pastBarsRef.current = pastBars;
+    draw();
+  }, [pastBars, draw]);
 
-  const usingReal = ready && tunedIn;
+  // Backing store tracks the CSS box (breakpoints swap the band height —
+  // issue #576) at capped DPR.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ro = new ResizeObserver(() => {
+      const dpr = Math.min(MAX_DPR, window.devicePixelRatio || 1);
+      const r = canvas.getBoundingClientRect();
+      const w = Math.max(1, Math.round(r.width * dpr));
+      const h = Math.max(1, Math.round(r.height * dpr));
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+      draw();
+    });
+    ro.observe(canvas);
+    return () => ro.disconnect();
+  }, [draw]);
+
+  // Theme swaps write custom properties onto <html> — drop the cached palette
+  // and repaint. Also repaints on the lite class flip (the calm effect above
+  // handles the loop change).
+  useEffect(() => {
+    const mo = new MutationObserver(() => {
+      paletteRef.current = null;
+      draw();
+    });
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] });
+    return () => mo.disconnect();
+  }, [draw]);
+
+  // The drive loop, by mode:
+  //   calm / not tuned in — one static paint of the resting strip (which is
+  //     also what clears stale bar heights after a tune-out);
+  //   real analyser — rAF, throttled to ~33 paints/s, log-folded bins;
+  //   fallback — pseudo-random walk on a 60 ms interval, for engines where
+  //     the analyser can't attach: iOS + some desktop-Safari builds return
+  //     only zeros from createMediaElementSource on a live MP3 stream
+  //     (issues #298/#302). The interval pauses while the tab is hidden;
+  //     rAF pauses on its own.
+  useEffect(() => {
+    const levels = levelsRef.current;
+    if (calm || !tunedIn || !ready) {
+      levels.fill(0);
+      draw();
+      if (calm || !tunedIn) return;
+      // Fallback walk — same shape as the span version: heavier motion on the
+      // left, easing off toward the right edge.
+      return pollWhileVisible(() => {
+        for (let i = 0; i < BARS; i++) {
+          const target = Math.pow(Math.random(), 1.4) * (1 - i / (BARS * 2.2));
+          levels[i] = (levels[i] ?? 0) + (target - (levels[i] ?? 0)) * 0.45;
+        }
+        draw();
+      }, 60);
+    }
+    let raf = 0;
+    let last = 0;
+    const tick = (now: number) => {
+      raf = requestAnimationFrame(tick);
+      if (now - last < FRAME_MS) return;
+      last = now;
+      const bins = read();
+      if (!bins) return;
+      const key = `${bins.length}:${sampleRate ?? 0}`;
+      if (rangesRef.current?.key !== key) {
+        rangesRef.current = { key, ranges: buildBinRanges(bins.length, sampleRate ?? 48000) };
+      }
+      const ranges = rangesRef.current.ranges;
+      for (let i = 0; i < BARS; i++) {
+        const [b0, b1] = ranges[i] ?? [0, 1];
+        let sum = 0;
+        for (let b = b0; b < b1; b++) sum += bins[b] ?? 0;
+        levels[i] = sum / ((b1 - b0) * 255);
+      }
+      draw();
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [calm, tunedIn, ready, read, sampleRate, draw]);
 
   return (
     <div
-      ref={containerRef}
       // Horizontal footprint is width-based (sm:). The tall band, however, is
       // gated on viewport HEIGHT too — a short/wide window kept the full-height
       // band and left no room above it, so the now-playing block overlapped it
       // (issue #576). Below 760px tall we fall back to the compact band so the
       // CenterStage region has room to clear it.
-      className="pointer-events-none absolute inset-x-3 bottom-24 flex h-[110px] items-center gap-px px-1 opacity-[0.22] sm:right-24 sm:left-0 sm:gap-0.5 sm:px-8 [@media(min-width:640px)_and_(min-height:760px)]:bottom-[128px] [@media(min-width:640px)_and_(min-height:760px)]:h-40"
+      className="pointer-events-none absolute inset-x-3 bottom-24 h-[110px] px-1 opacity-[0.22] sm:right-24 sm:left-0 sm:px-8 [@media(min-width:640px)_and_(min-height:760px)]:bottom-[128px] [@media(min-width:640px)_and_(min-height:760px)]:h-40"
       aria-hidden="true"
     >
-      {Array.from({ length: BARS }).map((_, i) => {
-        const past = i < pastBars;
-        return (
-          <span
-            key={i}
-            data-bar
-            className={cn(
-              'h-[10%] flex-1',
-              past ? 'bg-vermilion' : 'bg-ink',
-              usingReal && '[transition:height_60ms_linear]',
-            )}
-          />
-        );
-      })}
+      <canvas ref={canvasRef} className="h-full w-full" />
     </div>
   );
 });
