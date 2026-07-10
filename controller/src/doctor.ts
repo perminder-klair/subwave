@@ -780,12 +780,20 @@ async function checkTuning(s: StationSettings | null): Promise<Finding[]> {
     const wantVocal = !!s?.audio?.vocalActivity;
     if (wantEmb || wantVocal) {
       try { await analyzer.refreshCapabilities(); } catch { /* best-effort probe */ }
+      // The upgrade path depends on which backend is running: 'sidecar' is the
+      // split stack's analyzer service; 'local' is the in-process venv — the
+      // AIO image (or a dev ANALYZE_PYTHON venv). Pointing an AIO operator at
+      // the analyzer image replaces their whole station with a bare analyzer
+      // micro-service (issue #966), so the hint has to name the right image.
+      const upgradeHint = analyzer.backendLabel() === 'local'
+        ? 'On the all-in-one image, switch the container to ghcr.io/perminder-klair/subwave-aio-heavy (NOT subwave-analyzer-heavy — that’s the bare analyzer service, not a station image); on a dev venv, install the heavy Python deps.'
+        : 'With docker compose, set ANALYZER_HEAVY=1 in .env and re-pull; without compose (Unraid, Portainer, plain docker) switch the analyzer container’s image to ghcr.io/perminder-klair/subwave-analyzer-heavy.';
       if (wantEmb && analyzer.audioEmbeddingAvailable() === false) {
         out.push({
           label: 'audio embeddings',
           status: 'warn',
           detail: 'enabled, but the analyzer can’t produce them',
-          hint: 'The “sounds-like” audio embeddings need the heavy analyzer (CLAP). You’re on the lean image, so this setting silently does nothing. With docker compose, set ANALYZER_HEAVY=1 in .env and re-pull; without compose (Unraid, Portainer, plain docker) switch the analyzer container’s image to ghcr.io/perminder-klair/subwave-analyzer-heavy. Or turn the setting off.',
+          hint: `The “sounds-like” audio embeddings need the heavy analyzer (CLAP). You’re on the lean build, so this setting silently does nothing. ${upgradeHint} Or turn the setting off.`,
         });
       }
       if (wantVocal && analyzer.vocalActivityAvailable() === false) {
@@ -793,7 +801,7 @@ async function checkTuning(s: StationSettings | null): Promise<Finding[]> {
           label: 'vocal activity',
           status: 'warn',
           detail: 'enabled, but the analyzer can’t produce it',
-          hint: 'Vocal-range / talk-timing analysis needs the heavy analyzer (Demucs). The lean image can’t, so this setting no-ops. With docker compose, set ANALYZER_HEAVY=1 in .env and re-pull; without compose switch the analyzer container’s image to ghcr.io/perminder-klair/subwave-analyzer-heavy. Or turn the setting off.',
+          hint: `Vocal-range / talk-timing analysis needs the heavy analyzer (Demucs). The lean build can’t, so this setting no-ops. ${upgradeHint} Or turn the setting off.`,
         });
       }
     }
@@ -1074,7 +1082,13 @@ function renderSettingsSnapshot(): string {
   } catch { /* budget best-effort */ }
 
   let analyzerLabel = 'unknown';
-  try { analyzerLabel = analyzer.backendLabel(); } catch { /* best-effort */ }
+  try {
+    analyzerLabel = analyzer.backendLabel();
+    // Append the definitive CLAP capability so the AI review reasons from fact,
+    // not from "local probably means lean" (issue #966's false warning).
+    const clap = analyzer.audioEmbeddingAvailable();
+    analyzerLabel += clap === null ? ' (CLAP unknown)' : clap ? ' (heavy: CLAP yes)' : ' (lean: no CLAP)';
+  } catch { /* best-effort */ }
 
   return [
     '## Current settings (tune these against the findings + host resources)',

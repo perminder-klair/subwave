@@ -169,7 +169,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       console.log(`[analyze] audio backfill: +${ids.length - bpmIds.length} already-analysed tracks missing an audio vector`);
     }
   } else if (audioWanted && !reAnalyzeScope) {
-    console.log('[analyze] audio backfill skipped — backend has no CLAP (set ANALYZER_HEAVY=1 to enable sounds-like vectors)');
+    console.log('[analyze] audio backfill skipped — backend has no CLAP (switch to the heavy analyzer/AIO image to enable sounds-like vectors)');
   }
 
   // Vocal backfill: same idea for tracks missing vocal-activity ranges. The

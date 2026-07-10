@@ -231,6 +231,11 @@ interface WorkerMessage {
   ready?: boolean;
   fatal?: boolean;
   error?: string;
+  // Capability flags the worker reports on its ready line (find_spec probes —
+  // no model load). The sidecar surfaces the same fields via /health.
+  audio_embedding_capable?: boolean;
+  vocal_activity_capable?: boolean;
+  text_embedding_capable?: boolean;
   bpm?: number | null;
   key?: string | null;
   intro_ms?: number | null;
@@ -257,6 +262,16 @@ let buffer = '';
 let reqSeq = 0;
 const pending = new Map<string, Pending>();
 
+// Local-backend capability flags, mirroring the sidecar's /health fields. Set
+// from the worker's ready line when it boots (authoritative — includes hard
+// load failures), or by the one-shot find_spec probe below when the doctor asks
+// before any analysis has run. null = not yet known. Without this the AIO image
+// (local backend) could never answer "can you do CLAP?" and the doctor guessed
+// — issue #966's false "you're on the lean image" warning on subwave-aio-heavy.
+let _localAudioCapable: boolean | null = null;
+let _localVocalCapable: boolean | null = null;
+let _localTextCapable: boolean | null = null;
+
 function startWorker(): Promise<void> {
   if (booting) return booting;
   booting = new Promise<void>((resolve, reject) => {
@@ -276,7 +291,17 @@ function startWorker(): Promise<void> {
         if (!line) continue;
         let msg: WorkerMessage;
         try { msg = JSON.parse(line); } catch { continue; }
-        if (msg.ready) { ready = true; clearTimeout(readyTimer); resolve(); continue; }
+        if (msg.ready) {
+          ready = true;
+          // The ready line knows about hard load failures the find_spec probe
+          // can't see, so it always overwrites.
+          if (typeof msg.audio_embedding_capable === 'boolean') _localAudioCapable = msg.audio_embedding_capable;
+          if (typeof msg.vocal_activity_capable === 'boolean') _localVocalCapable = msg.vocal_activity_capable;
+          if (typeof msg.text_embedding_capable === 'boolean') _localTextCapable = msg.text_embedding_capable;
+          clearTimeout(readyTimer);
+          resolve();
+          continue;
+        }
         if (msg.fatal) { clearTimeout(readyTimer); reject(new Error(msg.error || 'analyze worker fatal')); continue; }
         const waiter = pending.get(msg.id!);
         if (!waiter) continue;
@@ -346,6 +371,47 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
     });
     proc?.stdin.write(JSON.stringify({ id, ...req }) + '\n');
   });
+}
+
+// One-shot capability probe for the local backend — the same find_spec checks
+// the worker runs before its ready line (keep the module lists in sync with
+// analyze_worker.py), in a throwaway `python -c` so the doctor can get a
+// definitive answer without booting the persistent worker (which imports
+// librosa and stays resident). Fills only still-null flags: a booted worker's
+// ready line is authoritative and must not be overwritten by a fresh process
+// that can't know about hard load failures.
+const LOCAL_CAPABILITY_PROBE = [
+  'import importlib.util as u, json',
+  'h = lambda *m: all(u.find_spec(x) is not None for x in m)',
+  'print(json.dumps({"audio": h("torch", "transformers"), "vocal": h("torch", "demucs"), "text": h("torch", "transformers")}))',
+].join('\n');
+
+let _localProbe: Promise<void> | null = null;
+
+function probeLocalCapabilities(): Promise<void> {
+  if (_localProbe) return _localProbe;
+  _localProbe = new Promise<void>((resolve) => {
+    let out = '';
+    // Only reached when localConfigured() saw the python binary, so a spawn
+    // failure surfaces as the 'error' event, not a sync throw.
+    const p = spawn(config.analyzer.python, ['-c', LOCAL_CAPABILITY_PROBE], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const timer = setTimeout(() => p.kill(), 15_000);
+    p.stdout.on('data', (c: Buffer) => { out += c.toString('utf8'); });
+    p.on('error', () => { clearTimeout(timer); _localProbe = null; resolve(); });
+    p.on('close', () => {
+      clearTimeout(timer);
+      try {
+        const caps = JSON.parse(out.trim()) as { audio?: boolean; vocal?: boolean; text?: boolean };
+        if (_localAudioCapable === null && typeof caps.audio === 'boolean') _localAudioCapable = caps.audio;
+        if (_localVocalCapable === null && typeof caps.vocal === 'boolean') _localVocalCapable = caps.vocal;
+        if (_localTextCapable === null && typeof caps.text === 'boolean') _localTextCapable = caps.text;
+      } catch {
+        _localProbe = null; // bad/empty output — stay unknown, allow retry
+      }
+      resolve();
+    });
+  });
+  return _localProbe;
 }
 
 async function analyzeViaLocal(url: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {
@@ -472,35 +538,45 @@ export function backendLabel(): string {
 }
 
 // Whether the active backend can emit CLAP "sounds-like" audio embeddings right
-// now. null = unknown (local backend — we don't probe its venv; or sidecar not
-// yet reached); false = sidecar reachable but built without the CLAP stack
-// (WITH_CLAP=0) — the signal the admin UI turns into a "rebuild the sidecar"
-// warning. Only meaningful for the sidecar backend.
+// now. null = unknown (backend not yet reached/probed); false = the backend is
+// definitively built without the CLAP stack (sidecar WITH_CLAP=0, or a lean
+// local/AIO venv) — the signal the admin UI turns into a "switch to the heavy
+// image" warning. Sidecar answers come from /health; local answers from the
+// worker's ready line or the find_spec probe (refreshCapabilities).
 export function audioEmbeddingAvailable(): boolean | null {
-  return _backend === 'sidecar' ? _sidecarAudioCapable : null;
+  if (_backend === 'sidecar') return _sidecarAudioCapable;
+  if (_backend === 'local') return _localAudioCapable;
+  return null;
 }
 
 // Whether the active backend can emit Demucs vocal-activity ranges right now.
-// Same semantics as audioEmbeddingAvailable: null = unknown (local, or sidecar
-// not yet reached / old sidecar without the field); false = sidecar built
-// without the demucs stack (WITH_DEMUCS=0). Only meaningful for the sidecar.
+// Same semantics as audioEmbeddingAvailable: null = unknown; false = built
+// without the demucs stack (sidecar WITH_DEMUCS=0, or a lean local/AIO venv).
 export function vocalActivityAvailable(): boolean | null {
-  return _backend === 'sidecar' ? _sidecarVocalCapable : null;
+  if (_backend === 'sidecar') return _sidecarVocalCapable;
+  if (_backend === 'local') return _localVocalCapable;
+  return null;
 }
 
-// Re-read sidecar /health so capability reflects a sidecar rebuilt under a
-// long-lived controller (resolveBackend caches the backend *choice* forever,
-// but CLAP support flips when the operator rebuilds with WITH_CLAP=1). Cheap;
-// driven on the coverage staleness cadence.
+// Refresh capability so it reflects the backend actually running under a
+// long-lived controller. Sidecar: re-read /health (the sidecar can be rebuilt
+// with WITH_CLAP=1 while the controller stays up). Local: run the one-shot
+// find_spec probe unless the persistent worker already reported its ready line
+// (an image/venv swap restarts the whole AIO process, so probe-once is enough).
+// Cheap; driven on the coverage staleness cadence + the doctor checks.
 export async function refreshCapabilities(): Promise<void> {
-  if ((await resolveBackend()) === 'sidecar') await sidecarReachable();
+  const backend = await resolveBackend();
+  if (backend === 'sidecar') { await sidecarReachable(); return; }
+  if (backend === 'local' && !ready) await probeLocalCapabilities();
 }
 
 // Whether the active backend can embed TEXT through the CLAP text tower (same
-// semantics as audioEmbeddingAvailable: null = unknown/local, false = sidecar
-// definitively can't — lean build or pre-text-tower image).
+// semantics as audioEmbeddingAvailable: null = unknown, false = definitively
+// can't — lean build or pre-text-tower image).
 export function textEmbeddingAvailable(): boolean | null {
-  return _backend === 'sidecar' ? _sidecarTextCapable : null;
+  if (_backend === 'sidecar') return _sidecarTextCapable;
+  if (_backend === 'local') return _localTextCapable;
+  return null;
 }
 
 // Coerce a worker text_embeddings payload to clean number[][] or null: one

@@ -148,14 +148,24 @@ regular cadence — it's cheap insurance.
 
 ## Audio analysis features vs analyzer flavour (settings.audio.embeddings / vocalActivity)
 - "Sounds-like" audio embeddings need the **heavy analyzer** (CLAP); vocal-range /
-  talk-timing needs the heavy analyzer (Demucs). The default LEAN analyzer image
-  can't do either, so these toggles **silently no-op** on it. If the report flags
-  this, tell the operator to switch to the heavy analyzer image: with docker compose
-  that's \`ANALYZER_HEAVY=1\` in .env + re-pull; on non-compose installs (Unraid,
-  Portainer, plain \`docker run\`) it's changing the analyzer container's image to
-  \`ghcr.io/perminder-klair/subwave-analyzer-heavy\` — \`ANALYZER_HEAVY\` is a compose
-  interpolation variable, so setting it on the container itself does nothing. Or turn
-  the setting off (it's costing nothing but false expectations).
+  talk-timing needs the heavy analyzer (Demucs). A LEAN build can't do either, so
+  these toggles **silently no-op** on it. The snapshot's \`analyzer\` line states the
+  measured capability: \`(heavy: CLAP yes)\`, \`(lean: no CLAP)\`, or \`(CLAP unknown)\`.
+  ONLY claim the operator is on a lean build when it says \`lean\` or the report's
+  Tuning section flagged it — never infer lean from \`analyzer local\` or from the
+  toggles alone; \`unknown\` means the capability hasn't been probed yet, say so.
+- The upgrade path depends on the deployment shape:
+  - **Split stack** (\`analyzer sidecar\`): with docker compose, \`ANALYZER_HEAVY=1\`
+    in .env + re-pull; on non-compose installs (Unraid, Portainer, plain
+    \`docker run\`) change the analyzer container's image to
+    \`ghcr.io/perminder-klair/subwave-analyzer-heavy\`. \`ANALYZER_HEAVY\` is a compose
+    interpolation variable, so setting it on a container does nothing.
+  - **All-in-one image** (\`analyzer local\` — the AIO bundles the analyzer
+    in-process): switch the single container's image to
+    \`ghcr.io/perminder-klair/subwave-aio-heavy\`. Do NOT point an AIO install at
+    \`subwave-analyzer-heavy\` — that's the bare analyzer micro-service, and swapping
+    the AIO container to it replaces the whole station with just an analyzer.
+  - Or turn the setting off (it's costing nothing but false expectations).
 
 ## Listener-request web-resolve (settings.llm.requestWebResolve)
 - Lets the request agent resolve *described* tracks ("that song from the advert")
