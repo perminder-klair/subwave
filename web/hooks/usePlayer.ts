@@ -5,8 +5,8 @@ import {
   availabilityFor,
   browserSupportFor,
   currentPlaybackTarget,
-  effectiveFormat,
   loadFormatPreference,
+  resolveFormatPreference,
   saveFormatPreference,
   type AudioFormat,
   type BrowserSupport,
@@ -73,6 +73,16 @@ export interface UsePlayerOptions {
 const MP3_ONLY: StreamEnablement = { mp3: true, opus: false, aac: false, flac: false };
 const INITIAL_BROWSER_SUPPORT: BrowserSupport = { mp3: true, opus: false, aac: false, flac: false };
 
+function detectBrowserSupport(): BrowserSupport {
+  const tester = document.createElement('audio');
+  return browserSupportFor({
+    mp3: tester.canPlayType('audio/mpeg'),
+    opus: tester.canPlayType('audio/ogg; codecs=opus'),
+    aac: tester.canPlayType('audio/aac'),
+    flac: tester.canPlayType('audio/flac'),
+  }, { ios: isIOSDevice(), firefox: /firefox/i.test(navigator.userAgent) });
+}
+
 // Owns the <audio> element + tune-in state. The audioRef must be attached to
 // an <audio> tag rendered by the consumer (so the Waveform's Web Audio API
 // can also reach it).
@@ -121,6 +131,7 @@ export function usePlayer({ initialVolume = 1, streamEnablement = MP3_ONLY }: Us
   // below, recreated per render) — bridge with a ref.
   const stopRef = useRef<() => void>(() => {});
   const failedFormatsRef = useRef(new Set<AudioFormat>());
+  const formatHydrationKeyRef = useRef<string | null>(null);
   useEffect(() => { tunedInRef.current = tunedIn; }, [tunedIn]);
   useEffect(() => { streamUrlRef.current = streamUrl; }, [streamUrl]);
   useEffect(() => { streamsRef.current = streams; }, [streams]);
@@ -178,34 +189,33 @@ export function usePlayer({ initialVolume = 1, streamEnablement = MP3_ONLY }: Us
     return () => clearTimeout(id);
   }, [volume]);
 
-  useEffect(() => {
-    const tester = document.createElement('audio');
-    const support = browserSupportFor({
-      mp3: tester.canPlayType('audio/mpeg'),
-      opus: tester.canPlayType('audio/ogg; codecs=opus'),
-      aac: tester.canPlayType('audio/aac'),
-      flac: tester.canPlayType('audio/flac'),
-    }, { ios: isIOSDevice(), firefox: /firefox/i.test(navigator.userAgent) });
-    setBrowserSupport(support);
-
-    const enabled = {
-      mp3: streamEnablement.mp3,
-      opus: streamEnablement.opus && streams.opus !== null,
-      aac: streamEnablement.aac && streams.aac !== null,
-      flac: streamEnablement.flac && streams.flac !== null,
-    };
-    const restored = effectiveFormat(
+  const formatHydrationKey = JSON.stringify([apiUrl, streamEnablement, streams, [...failedFormatsRef.current].sort()]);
+  const hydrateFormatPreference = useCallback(() => {
+    const support = detectBrowserSupport();
+    const resolved = resolveFormatPreference(
       loadFormatPreference(localStorage, apiUrl),
-      availabilityFor(enabled, support, failedFormatsRef.current),
+      streamEnablement,
+      support,
+      streams,
+      failedFormatsRef.current,
     );
-    const restoredUrl = streams[restored] ?? streams.mp3;
-    const liveStreamChanged = activeFormatRef.current !== restored || streamUrlRef.current !== restoredUrl;
-    activeFormatRef.current = restored;
-    streamUrlRef.current = restoredUrl;
-    setFormat(restored);
-    setStreamUrl(restoredUrl);
-    if (liveStreamChanged) switchLiveStream(restoredUrl, 'Restored format switch failed');
-  }, [apiUrl, streamEnablement, streams, switchLiveStream]);
+    setBrowserSupport(support);
+    activeFormatRef.current = resolved.format;
+    streamUrlRef.current = resolved.streamUrl;
+    setFormat(resolved.format);
+    setStreamUrl(resolved.streamUrl);
+    formatHydrationKeyRef.current = formatHydrationKey;
+    return resolved;
+  }, [apiUrl, formatHydrationKey, streamEnablement, streams]);
+
+  useEffect(() => {
+    const previousFormat = activeFormatRef.current;
+    const previousUrl = streamUrlRef.current;
+    const restored = hydrateFormatPreference();
+    if (previousFormat !== restored.format || previousUrl !== restored.streamUrl) {
+      switchLiveStream(restored.streamUrl, 'Restored format switch failed');
+    }
+  }, [hydrateFormatPreference, switchLiveStream]);
 
   const effectiveEnablement = useMemo<StreamEnablement>(() => ({
     mp3: streamEnablement.mp3,
@@ -370,7 +380,13 @@ export function usePlayer({ initialVolume = 1, streamEnablement = MP3_ONLY }: Us
     // Preference and volume restoration update these refs synchronously before
     // React rerenders. Read them here so a first-click tune cannot use stale
     // render-captured defaults during that window.
-    const target = currentPlaybackTarget(streamUrlRef, volumeRef);
+    const resolved = formatHydrationKeyRef.current === formatHydrationKey
+      ? null
+      : hydrateFormatPreference();
+    const target = currentPlaybackTarget(
+      resolved ? { current: resolved.streamUrl } : streamUrlRef,
+      volumeRef,
+    );
     el.src = `${target.streamUrl}?t=${Date.now()}`;
     el.volume = target.volume;
     setTunedIn(true);

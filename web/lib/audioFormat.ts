@@ -93,6 +93,23 @@ export function effectiveFormat(
   return preferred && availability[preferred].available ? preferred : 'mp3';
 }
 
+export function resolveFormatPreference(
+  preferred: AudioFormat | null,
+  enabled: StreamEnablement,
+  supported: BrowserSupport,
+  streams: AudioStreamUrls,
+  failed: ReadonlySet<AudioFormat> = new Set(),
+): { format: AudioFormat; streamUrl: string } {
+  const effectiveEnablement: StreamEnablement = {
+    mp3: enabled.mp3,
+    opus: enabled.opus && streams.opus !== null,
+    aac: enabled.aac && streams.aac !== null,
+    flac: enabled.flac && streams.flac !== null,
+  };
+  const format = effectiveFormat(preferred, availabilityFor(effectiveEnablement, supported, failed));
+  return { format, streamUrl: streams[format] ?? streams.mp3 };
+}
+
 export function currentPlaybackTarget(
   streamUrl: { readonly current: string },
   volume: { readonly current: number },

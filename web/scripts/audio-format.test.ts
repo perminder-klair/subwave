@@ -8,6 +8,7 @@ import {
   effectiveFormat,
   loadFormatPreference,
   preferenceKey,
+  resolveFormatPreference,
   saveFormatPreference,
   type AudioFormat,
 } from '../lib/audioFormat.ts';
@@ -50,6 +51,42 @@ const available = availabilityFor(enabled, supported);
 assert.equal(effectiveFormat('flac', available), 'flac');
 assert.equal(effectiveFormat('opus', available), 'mp3');
 assert.equal(effectiveFormat(null, available), 'mp3');
+
+const allEnabled = { mp3: true, opus: true, aac: true, flac: true } as const;
+const allSupported = { mp3: true, opus: true, aac: true, flac: true } as const;
+const streams = {
+  mp3: '/stream.mp3',
+  opus: '/stream.opus',
+  aac: '/stream.aac',
+  flac: '/stream.flac',
+} as const;
+assert.deepEqual(resolveFormatPreference('flac', allEnabled, allSupported, streams), {
+  format: 'flac',
+  streamUrl: '/stream.flac',
+});
+assert.deepEqual(resolveFormatPreference('aac', allEnabled, allSupported, {
+  ...streams,
+  aac: null,
+}), {
+  format: 'mp3',
+  streamUrl: '/stream.mp3',
+});
+assert.deepEqual(resolveFormatPreference('opus', allEnabled, allSupported, streams, new Set<AudioFormat>(['opus'])), {
+  format: 'mp3',
+  streamUrl: '/stream.mp3',
+});
+assert.deepEqual(resolveFormatPreference('flac', { ...allEnabled, flac: false }, allSupported, streams), {
+  format: 'mp3',
+  streamUrl: '/stream.mp3',
+});
+assert.deepEqual(resolveFormatPreference('flac', allEnabled, { ...allSupported, flac: false }, streams), {
+  format: 'mp3',
+  streamUrl: '/stream.mp3',
+});
+assert.deepEqual(resolveFormatPreference(null, allEnabled, allSupported, streams), {
+  format: 'mp3',
+  streamUrl: '/stream.mp3',
+});
 
 // Restoration can update refs before React rerenders. The first tune must use
 // those authoritative values rather than the render-captured defaults.
