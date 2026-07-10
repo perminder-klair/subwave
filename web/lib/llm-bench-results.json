@@ -1,578 +1,578 @@
 {
-  "updatedAt": "2026-07-10",
-  "models": [
-    {
-      "model": "google:gemini-3.5-flash",
-      "route": "google",
-      "benchedAt": "2026-07-09",
-      "iterations": 3,
-      "reasoning": false,
-      "coverage": "full",
-      "overall": {
-        "ok": 95,
-        "total": 96
-      },
-      "groups": {
-        "pickPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "pickAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "segPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "segAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "requests": {
-          "ok": 15,
-          "total": 15
-        },
-        "scripts": {
-          "ok": 21,
-          "total": 21
-        },
-        "shows": {
-          "ok": 23,
-          "total": 24
-        }
-      },
-      "poolPickP50s": 1.5,
-      "verdict": "agent-capable",
-      "notes": "Best score on record; agent cells 18/18 at 1–2 s. Single miss: one \"coming up next\" slip."
+ "updatedAt": "2026-07-10",
+ "models": [
+  {
+   "model": "google:gemini-3.5-flash",
+   "route": "google",
+   "benchedAt": "2026-07-09",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 95,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 12,
+     "total": 12
     },
-    {
-      "model": "ollama:gemma4:31b-cloud",
-      "route": "ollama",
-      "benchedAt": "2026-07-09",
-      "iterations": 3,
-      "reasoning": false,
-      "coverage": "full",
-      "overall": {
-        "ok": 94,
-        "total": 96
-      },
-      "groups": {
-        "pickPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "pickAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "segPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "segAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "requests": {
-          "ok": 15,
-          "total": 15
-        },
-        "scripts": {
-          "ok": 21,
-          "total": 21
-        },
-        "shows": {
-          "ok": 22,
-          "total": 24
-        }
-      },
-      "poolPickP50s": 1.6,
-      "verdict": "agent-capable",
-      "notes": "Best on record. Only weakness: 3-hour programme plans (picks unoffered feature kinds)."
+    "pickAgent": {
+     "ok": 6,
+     "total": 6
     },
-    {
-      "model": "google:gemini-3.1-flash-lite",
-      "route": "google",
-      "benchedAt": "2026-07-09",
-      "iterations": 3,
-      "reasoning": false,
-      "coverage": "full",
-      "overall": {
-        "ok": 94,
-        "total": 96
-      },
-      "groups": {
-        "pickPool": {
-          "ok": 10,
-          "total": 12
-        },
-        "pickAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "segPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "segAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "requests": {
-          "ok": 15,
-          "total": 15
-        },
-        "scripts": {
-          "ok": 21,
-          "total": 21
-        },
-        "shows": {
-          "ok": 24,
-          "total": 24
-        }
-      },
-      "poolPickP50s": 0.7,
-      "verdict": "agent-capable",
-      "notes": "The value pick: matches the 31B-class overall, agent 18/18, and the fastest picks benched (0.7 s median)."
+    "segPool": {
+     "ok": 12,
+     "total": 12
     },
-    {
-      "model": "openrouter:openai/gpt-5-mini",
-      "route": "openrouter",
-      "benchedAt": "2026-07-09",
-      "iterations": 3,
-      "reasoning": false,
-      "coverage": "full",
-      "overall": {
-        "ok": 91,
-        "total": 96
-      },
-      "groups": {
-        "pickPool": {
-          "ok": 9,
-          "total": 12
-        },
-        "pickAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "segPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "segAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "requests": {
-          "ok": 13,
-          "total": 15
-        },
-        "scripts": {
-          "ok": 21,
-          "total": 21
-        },
-        "shows": {
-          "ok": 24,
-          "total": 24
-        }
-      },
-      "poolPickP50s": 1.5,
-      "verdict": "agent-capable",
-      "notes": "Repeats artists under shortlist pressure; sometimes serves the wrong track on exact-title requests."
+    "segAgent": {
+     "ok": 6,
+     "total": 6
     },
-    {
-      "model": "ollama:minimax-m2.7:cloud",
-      "route": "ollama",
-      "benchedAt": "2026-07-09",
-      "iterations": 3,
-      "reasoning": false,
-      "coverage": "full",
-      "overall": {
-        "ok": 90,
-        "total": 96
-      },
-      "groups": {
-        "pickPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "pickAgent": {
-          "ok": 5,
-          "total": 6
-        },
-        "segPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "segAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "requests": {
-          "ok": 12,
-          "total": 15
-        },
-        "scripts": {
-          "ok": 21,
-          "total": 21
-        },
-        "shows": {
-          "ok": 22,
-          "total": 24
-        }
-      },
-      "poolPickP50s": 17.3,
-      "verdict": "agent-capable",
-      "notes": "Programme plans are correct but slow (2–4 min each); misses the mood field on vibe requests."
+    "requests": {
+     "ok": 15,
+     "total": 15
     },
-    {
-      "model": "openrouter:openai/gpt-4o-mini",
-      "route": "openrouter",
-      "benchedAt": "2026-07-09",
-      "iterations": 3,
-      "reasoning": false,
-      "coverage": "full",
-      "overall": {
-        "ok": 90,
-        "total": 96
-      },
-      "groups": {
-        "pickPool": {
-          "ok": 9,
-          "total": 12
-        },
-        "pickAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "segPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "segAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "requests": {
-          "ok": 15,
-          "total": 15
-        },
-        "scripts": {
-          "ok": 21,
-          "total": 21
-        },
-        "shows": {
-          "ok": 21,
-          "total": 24
-        }
-      },
-      "poolPickP50s": 1,
-      "verdict": "agent-capable",
-      "notes": "Zero structural failures; misses are editorial (variety traps, unoffered feature kinds)."
+    "scripts": {
+     "ok": 21,
+     "total": 21
     },
-    {
-      "model": "locca:gemma-4-12b-it-Q4_K_M.gguf",
-      "route": "locca",
-      "benchedAt": "2026-07-09",
-      "iterations": 2,
-      "reasoning": false,
-      "coverage": "pickPool+requests+scripts+shows",
-      "overall": {
-        "ok": 38,
-        "total": 44
-      },
-      "groups": {
-        "pickPool": {
-          "ok": 6,
-          "total": 8
-        },
-        "requests": {
-          "ok": 6,
-          "total": 6
-        },
-        "scripts": {
-          "ok": 14,
-          "total": 14
-        },
-        "shows": {
-          "ok": 12,
-          "total": 16
-        }
-      },
-      "poolPickP50s": 16.1,
-      "verdict": "pool-mode",
-      "notes": "Structured/pool kinds only (×2) on a CPU host — latency excluded. Same family habits as the 31B."
-    },
-    {
-      "model": "ollama:deepseek-v4-flash:cloud",
-      "route": "ollama",
-      "benchedAt": "2026-07-09",
-      "iterations": 3,
-      "reasoning": false,
-      "coverage": "full",
-      "overall": {
-        "ok": 82,
-        "total": 96
-      },
-      "groups": {
-        "pickPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "pickAgent": {
-          "ok": 4,
-          "total": 6
-        },
-        "segPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "segAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "requests": {
-          "ok": 11,
-          "total": 15
-        },
-        "scripts": {
-          "ok": 20,
-          "total": 21
-        },
-        "shows": {
-          "ok": 17,
-          "total": 24
-        }
-      },
-      "poolPickP50s": 8.4,
-      "verdict": "pool-mode",
-      "notes": "Invented track ids twice under pressure; occasional stage directions. Fallback leg, not a primary."
-    },
-    {
-      "model": "openrouter:anthropic/claude-haiku-4.5",
-      "route": "openrouter",
-      "benchedAt": "2026-07-09",
-      "iterations": 3,
-      "reasoning": false,
-      "coverage": "full",
-      "overall": {
-        "ok": 82,
-        "total": 96
-      },
-      "groups": {
-        "pickPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "pickAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "segPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "segAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "requests": {
-          "ok": 15,
-          "total": 15
-        },
-        "scripts": {
-          "ok": 20,
-          "total": 21
-        },
-        "shows": {
-          "ok": 11,
-          "total": 24
-        }
-      },
-      "poolPickP50s": 2.5,
-      "verdict": "agent-capable",
-      "notes": "Dependable tool discipline; runs wordy (over-length lines are most of its misses). Early runs measured 15/96 against a suppression bug on our side, not the model."
-    },
-    {
-      "model": "ollama:glm-5.2:cloud",
-      "route": "ollama",
-      "benchedAt": "2026-07-10",
-      "iterations": 3,
-      "reasoning": false,
-      "coverage": "full",
-      "overall": {
-        "ok": 80,
-        "total": 96
-      },
-      "groups": {
-        "pickPool": {
-          "ok": 11,
-          "total": 12
-        },
-        "pickAgent": {
-          "ok": 5,
-          "total": 6
-        },
-        "segPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "segAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "requests": {
-          "ok": 12,
-          "total": 15
-        },
-        "scripts": {
-          "ok": 21,
-          "total": 21
-        },
-        "shows": {
-          "ok": 13,
-          "total": 24
-        }
-      },
-      "poolPickP50s": 5.9,
-      "verdict": "pool-mode",
-      "notes": "Re-benched on the AI SDK 7 reasoning param (think:false wire-verified; 1 residual server-side think in 96 calls vs 24 pre-fix). Agent cells solid (11/12). Drop vs 07-09 is programme verbosity — plan introNote >240ch (0/6) + over-length exchange lines — model-side drift, not routing."
-    },
-    {
-      "model": "ollama:kimi-k2.6:cloud",
-      "route": "ollama",
-      "benchedAt": "2026-07-09",
-      "iterations": 3,
-      "reasoning": false,
-      "coverage": "full",
-      "overall": {
-        "ok": 79,
-        "total": 96
-      },
-      "groups": {
-        "pickPool": {
-          "ok": 9,
-          "total": 12
-        },
-        "pickAgent": {
-          "ok": 3,
-          "total": 6
-        },
-        "segPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "segAgent": {
-          "ok": 6,
-          "total": 6
-        },
-        "requests": {
-          "ok": 15,
-          "total": 15
-        },
-        "scripts": {
-          "ok": 18,
-          "total": 21
-        },
-        "shows": {
-          "ok": 16,
-          "total": 24
-        }
-      },
-      "poolPickP50s": 52.1,
-      "verdict": "avoid",
-      "notes": "Fails unpredictably across unrelated call kinds; consistently high latency."
-    },
-    {
-      "model": "openrouter:google/gemma-4-26b-a4b-it",
-      "route": "openrouter",
-      "benchedAt": "2026-07-09",
-      "iterations": 3,
-      "reasoning": false,
-      "coverage": "full",
-      "overall": {
-        "ok": 79,
-        "total": 96
-      },
-      "groups": {
-        "pickPool": {
-          "ok": 9,
-          "total": 12
-        },
-        "pickAgent": {
-          "ok": 0,
-          "total": 6
-        },
-        "segPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "segAgent": {
-          "ok": 2,
-          "total": 6
-        },
-        "requests": {
-          "ok": 11,
-          "total": 15
-        },
-        "scripts": {
-          "ok": 21,
-          "total": 21
-        },
-        "shows": {
-          "ok": 24,
-          "total": 24
-        }
-      },
-      "poolPickP50s": 127.7,
-      "verdict": "pool-mode",
-      "notes": "Structurally clean in pool mode but ~38 s median picks as currently served — too slow to prefer over Qwen."
-    },
-    {
-      "model": "openrouter:qwen/qwen3.5-9b",
-      "route": "openrouter",
-      "benchedAt": "2026-07-09",
-      "iterations": 3,
-      "reasoning": false,
-      "coverage": "full",
-      "overall": {
-        "ok": 75,
-        "total": 96
-      },
-      "groups": {
-        "pickPool": {
-          "ok": 10,
-          "total": 12
-        },
-        "pickAgent": {
-          "ok": 5,
-          "total": 6
-        },
-        "segPool": {
-          "ok": 12,
-          "total": 12
-        },
-        "segAgent": {
-          "ok": 5,
-          "total": 6
-        },
-        "requests": {
-          "ok": 4,
-          "total": 15
-        },
-        "scripts": {
-          "ok": 17,
-          "total": 21
-        },
-        "shows": {
-          "ok": 22,
-          "total": 24
-        }
-      },
-      "poolPickP50s": 2,
-      "verdict": "pool-mode",
-      "notes": "The small floor: fast and flawless on pool cells. Wordy request replies; needs thinking disabled (handled automatically)."
+    "shows": {
+     "ok": 23,
+     "total": 24
     }
-  ]
+   },
+   "poolPickP50s": 1.5,
+   "verdict": "agent-capable",
+   "notes": "Best score on record; agent cells 18/18 at 1–2 s. Single miss: one \"coming up next\" slip."
+  },
+  {
+   "model": "ollama:gemma4:31b-cloud",
+   "route": "ollama",
+   "benchedAt": "2026-07-09",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 94,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 15,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 21,
+     "total": 21
+    },
+    "shows": {
+     "ok": 22,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 1.6,
+   "verdict": "agent-capable",
+   "notes": "Best on record. Only weakness: 3-hour programme plans (picks unoffered feature kinds)."
+  },
+  {
+   "model": "google:gemini-3.1-flash-lite",
+   "route": "google",
+   "benchedAt": "2026-07-09",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 94,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 10,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 15,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 21,
+     "total": 21
+    },
+    "shows": {
+     "ok": 24,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 0.7,
+   "verdict": "agent-capable",
+   "notes": "The value pick: matches the 31B-class overall, agent 18/18, and the fastest picks benched (0.7 s median)."
+  },
+  {
+   "model": "openrouter:openai/gpt-5-mini",
+   "route": "openrouter",
+   "benchedAt": "2026-07-09",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 91,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 9,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 13,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 21,
+     "total": 21
+    },
+    "shows": {
+     "ok": 24,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 1.5,
+   "verdict": "agent-capable",
+   "notes": "Repeats artists under shortlist pressure; sometimes serves the wrong track on exact-title requests."
+  },
+  {
+   "model": "ollama:minimax-m2.7:cloud",
+   "route": "ollama",
+   "benchedAt": "2026-07-09",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 90,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 5,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 12,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 21,
+     "total": 21
+    },
+    "shows": {
+     "ok": 22,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 17.3,
+   "verdict": "agent-capable",
+   "notes": "Programme plans are correct but slow (2–4 min each); misses the mood field on vibe requests."
+  },
+  {
+   "model": "openrouter:openai/gpt-4o-mini",
+   "route": "openrouter",
+   "benchedAt": "2026-07-09",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 90,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 9,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 15,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 21,
+     "total": 21
+    },
+    "shows": {
+     "ok": 21,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 1,
+   "verdict": "agent-capable",
+   "notes": "Zero structural failures; misses are editorial (variety traps, unoffered feature kinds)."
+  },
+  {
+   "model": "locca:gemma-4-12b-it-Q4_K_M.gguf",
+   "route": "locca",
+   "benchedAt": "2026-07-09",
+   "iterations": 2,
+   "reasoning": false,
+   "coverage": "pickPool+requests+scripts+shows",
+   "overall": {
+    "ok": 38,
+    "total": 44
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 6,
+     "total": 8
+    },
+    "requests": {
+     "ok": 6,
+     "total": 6
+    },
+    "scripts": {
+     "ok": 14,
+     "total": 14
+    },
+    "shows": {
+     "ok": 12,
+     "total": 16
+    }
+   },
+   "poolPickP50s": 16.1,
+   "verdict": "pool-mode",
+   "notes": "Structured/pool kinds only (×2) on a CPU host — latency excluded. Same family habits as the 31B."
+  },
+  {
+   "model": "ollama:deepseek-v4-flash:cloud",
+   "route": "ollama",
+   "benchedAt": "2026-07-09",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 82,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 4,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 11,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 20,
+     "total": 21
+    },
+    "shows": {
+     "ok": 17,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 8.4,
+   "verdict": "pool-mode",
+   "notes": "Invented track ids twice under pressure; occasional stage directions. Fallback leg, not a primary."
+  },
+  {
+   "model": "openrouter:anthropic/claude-haiku-4.5",
+   "route": "openrouter",
+   "benchedAt": "2026-07-09",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 82,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 15,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 20,
+     "total": 21
+    },
+    "shows": {
+     "ok": 11,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 2.5,
+   "verdict": "agent-capable",
+   "notes": "Dependable tool discipline; runs wordy (over-length lines are most of its misses). Early runs measured 15/96 against a suppression bug on our side, not the model."
+  },
+  {
+   "model": "ollama:glm-5.2:cloud",
+   "route": "ollama",
+   "benchedAt": "2026-07-10",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 80,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 11,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 5,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 12,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 21,
+     "total": 21
+    },
+    "shows": {
+     "ok": 13,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 5.9,
+   "verdict": "pool-mode",
+   "notes": "Re-benched on the AI SDK 7 reasoning param (think:false wire-verified; 1 residual server-side think in 96 calls vs 24 pre-fix). Agent cells solid (11/12). Drop vs 07-09 is programme verbosity — plan introNote >240ch (0/6) + over-length exchange lines — model-side drift, not routing."
+  },
+  {
+   "model": "ollama:kimi-k2.6:cloud",
+   "route": "ollama",
+   "benchedAt": "2026-07-09",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 79,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 9,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 3,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 15,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 18,
+     "total": 21
+    },
+    "shows": {
+     "ok": 16,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 52.1,
+   "verdict": "avoid",
+   "notes": "Fails unpredictably across unrelated call kinds; consistently high latency."
+  },
+  {
+   "model": "openrouter:google/gemma-4-26b-a4b-it",
+   "route": "openrouter",
+   "benchedAt": "2026-07-09",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 79,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 9,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 0,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 2,
+     "total": 6
+    },
+    "requests": {
+     "ok": 11,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 21,
+     "total": 21
+    },
+    "shows": {
+     "ok": 24,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 127.7,
+   "verdict": "pool-mode",
+   "notes": "Structurally clean in pool mode but ~38 s median picks as currently served — too slow to prefer over Qwen."
+  },
+  {
+   "model": "openrouter:qwen/qwen3.5-9b",
+   "route": "openrouter",
+   "benchedAt": "2026-07-09",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 75,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 10,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 5,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 5,
+     "total": 6
+    },
+    "requests": {
+     "ok": 4,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 17,
+     "total": 21
+    },
+    "shows": {
+     "ok": 22,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 2,
+   "verdict": "pool-mode",
+   "notes": "The small floor: fast and flawless on pool cells. Wordy request replies; needs thinking disabled (handled automatically)."
+  }
+ ]
 }
