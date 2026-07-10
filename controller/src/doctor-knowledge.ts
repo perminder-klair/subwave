@@ -150,8 +150,12 @@ regular cadence — it's cheap insurance.
 - "Sounds-like" audio embeddings need the **heavy analyzer** (CLAP); vocal-range /
   talk-timing needs the heavy analyzer (Demucs). The default LEAN analyzer image
   can't do either, so these toggles **silently no-op** on it. If the report flags
-  this, tell the operator to set \`ANALYZER_HEAVY=1\` in .env and re-pull/rebuild the
-  analyzer, or turn the setting off (it's costing nothing but false expectations).
+  this, tell the operator to switch to the heavy analyzer image: with docker compose
+  that's \`ANALYZER_HEAVY=1\` in .env + re-pull; on non-compose installs (Unraid,
+  Portainer, plain \`docker run\`) it's changing the analyzer container's image to
+  \`ghcr.io/perminder-klair/subwave-analyzer-heavy\` — \`ANALYZER_HEAVY\` is a compose
+  interpolation variable, so setting it on the container itself does nothing. Or turn
+  the setting off (it's costing nothing but false expectations).
 
 ## Listener-request web-resolve (settings.llm.requestWebResolve)
 - Lets the request agent resolve *described* tracks ("that song from the advert")
