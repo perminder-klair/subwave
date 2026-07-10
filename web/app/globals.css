@@ -3312,6 +3312,32 @@ html.lite .sw-ripple-circle {
         animation: none;
     }
 }
+/* Slim variant — the same cart-pad language compressed into a one-line button
+   (skills "Run now"): row layout, LED centred on the right, smaller notch.
+   Hover arm / firing blink+sweep come from the base .seg-pad rules. */
+.admin-root .seg-pad.seg-pad--slim {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 7px 24px 7px 11px;
+    clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 0 100%);
+}
+.admin-root .seg-pad.seg-pad--slim::before {
+    top: 4px;
+    right: -2px;
+    width: 13px;
+}
+.admin-root .seg-pad.seg-pad--slim .seg-label {
+    font-size: 10px;
+}
+.admin-root .seg-pad.seg-pad--slim .seg-led {
+    top: 50%;
+    right: 9px;
+    width: 5px;
+    height: 5px;
+    transform: translateY(-50%);
+}
 /* Flat — used inside EditorDialog so stacked sections read as one continuous
    modal form separated by hairline dividers, not boxed cards. No border/bg, no
    side padding (the dialog supplies the gutter); a top rule divides each section
