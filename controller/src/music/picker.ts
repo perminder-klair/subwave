@@ -13,6 +13,7 @@ import { nearestId } from '../llm/sdk.js';
 import { logEvent } from '../observability/events.js';
 import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
+import { shuffle } from '../util/shuffle.js';
 import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
 import { normGenre, genreMatches, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, hasEraBound, eraSpan, type YearRange } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
@@ -88,10 +89,6 @@ async function memo(key, ttl, fn) {
   const val = await fn();
   cache.set(key, { val, at: Date.now() });
   return val;
-}
-
-function shuffle<T>(arr: T[]): T[] {
-  return [...arr].sort(() => Math.random() - 0.5);
 }
 
 // --- Tempo / harmonic compatibility (Stage B, soft re-rank only) -----------

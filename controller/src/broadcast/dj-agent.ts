@@ -19,6 +19,7 @@ import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/sh
 import * as library from '../music/library.js';
 import * as mix from '../music/mix.js';
 import * as journey from '../music/journey.js';
+import { shuffle } from '../util/shuffle.js';
 import * as dj from '../llm/dj.js';
 import { energyForDaypart } from '../context.js';
 import { defineAgent } from '../llm/agent.js';
@@ -99,10 +100,6 @@ function maybeAttachJourney(rs: RunState, current: any, totalSteps: number): voi
   } catch {
     // Journey is a best-effort enhancement — never let it break a pick.
   }
-}
-
-function shuffle<T>(arr: T[]): T[] {
-  return [...arr].sort(() => Math.random() - 0.5);
 }
 
 // Resolve {bpm, key} for a track via the library DB (queued/agent picks carry
