@@ -188,7 +188,7 @@ router.get('/now-playing', async (req, res) => {
       if (nowPlaying.duration == null) {
         const cur = queue.current;
         const queueDuration =
-          cur?.track?.id === nowPlaying.subsonic_id ? cur.track.duration : null;
+          cur?.track?.id === nowPlaying.subsonic_id ? cur?.track?.duration : null;
         const duration = queueDuration ?? rec?.durationSec ?? null;
         if (typeof duration === 'number' && duration > 0) nowPlaying.duration = duration;
       }
