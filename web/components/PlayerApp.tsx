@@ -19,6 +19,7 @@ import TimelineDrawer from './drawers/TimelineDrawer';
 import BoothDrawer from './drawers/BoothDrawer';
 import RequestDrawer from './drawers/RequestDrawer';
 import ScheduleDrawer from './drawers/ScheduleDrawer';
+import AudioDrawer from './drawers/AudioDrawer';
 import { useStationFeed } from '@/hooks/useStationFeed';
 import { usePlayer } from '@/hooks/usePlayer';
 import { useSignal } from '@/hooks/useSignal';
@@ -35,6 +36,7 @@ const DRAWER_TITLES: Record<PlayerDrawer, string> = {
   booth: 'Booth feed',
   request: 'Make a request',
   schedule: 'Schedule',
+  audio: 'Audio format',
 };
 
 // Hoisted so the DotRail counts memo below keeps stable element references —
@@ -50,9 +52,29 @@ export interface PlayerAppProps {
 export default function PlayerApp({ contained = false }: PlayerAppProps) {
   const router = useRouter();
   const { apiUrl } = useStationOrigin();
-  const { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, timezone, locale } = useStationFeed();
+  const { nowPlaying, context, dj, activeShow, listeners, streamOnline, stream, llmTokens, state, session, trackStartedAt, timezone, locale } = useStationFeed();
   const boothFeed = session.messages;
-  const { audioRef, tunedIn, status, volume, setVolume, tune, toggleMute, muted, idleStopped } = usePlayer();
+  const streamEnablement = useMemo(() => ({
+    mp3: true,
+    opus: stream?.opusEnabled === true,
+    aac: stream?.aacEnabled === true,
+    flac: stream?.flacEnabled === true,
+  }), [stream?.opusEnabled, stream?.aacEnabled, stream?.flacEnabled]);
+  const {
+    audioRef,
+    tunedIn,
+    status,
+    volume,
+    setVolume,
+    tune,
+    toggleMute,
+    muted,
+    idleStopped,
+    format,
+    availability,
+    selectFormat,
+    formatFailure,
+  } = usePlayer({ streamEnablement });
 
   // First-run redirect — if this install hasn't been configured yet (no
   // Navidrome creds), bounce the operator into the wizard instead of dropping
@@ -303,7 +325,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
   return (
     <div
       ref={rootRef}
-      className={cn(contained ? 'absolute' : 'fixed', 'inset-0 overflow-hidden bg-bg text-ink')}
+      className={cn(contained ? 'absolute' : 'fixed', 'v3-player-shell inset-0 overflow-hidden bg-bg text-ink')}
     >
       <div
         ref={ambientRef}
@@ -382,6 +404,14 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
           />
         )}
         {drawer === 'schedule' && <ScheduleDrawer activeShow={activeShow} context={context} />}
+        {drawer === 'audio' && (
+          <AudioDrawer
+            format={format}
+            availability={availability}
+            failure={formatFailure}
+            onSelect={selectFormat}
+          />
+        )}
       </Sheet>
 
       <AnimatePresence>

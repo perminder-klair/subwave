@@ -292,6 +292,21 @@ body::after {
     outline-offset: 2px;
 }
 
+/* The player also lives inside the landing page's 16:10 showcase. Size the
+   rail from that containing player, rather than from the browser viewport, so
+   five ordered controls stay clear of the transport in short embeds. */
+.v3-player-shell {
+    container-name: v3-player;
+    container-type: size;
+}
+
+@container v3-player (max-height: 520px) {
+    .v3-dot-rail-item {
+        gap: 2px;
+        padding-block: 6px;
+    }
+}
+
 /* Drawer + dialog animations. */
 @keyframes v3-slide-in-right {
     from {

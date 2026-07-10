@@ -8,7 +8,8 @@
 //     audio chunks or stale "now playing" state — both worse than failing.
 //
 // Cache strategy:
-//   • /stream.mp3, /stream.opus, /api/*  → bypass entirely (do not even respondWith).
+//   • /stream.mp3, /stream.opus, /stream.aac, /stream.flac, /api/*
+//                                      → bypass entirely (do not even respondWith).
 //   • POST / non-GET       → bypass.
 //   • Cross-origin         → bypass (Next image/font CDNs can self-cache).
 //   • /_next/static/*      → cache-first. These URLs are content-hashed and
@@ -25,11 +26,17 @@
 // the first route a returning visitor landed on after a deploy. Network-first
 // guarantees the document always matches the build whose chunks are live.
 //
-// Bump CACHE on any deploy that changes this file's semantics — the `activate`
-// handler deletes every cache whose key isn't the current CACHE, which is what
-// evicts a previous version's (now-poisoned) HTML.
+// Bump CACHE when a worker change requires evicting the existing shell cache.
+// The `activate` handler deletes every cache whose key isn't the current CACHE;
+// network-only bypass-list changes do not alter cached shell entries.
 
 const CACHE = 'subwave-shell-v2';
+const LIVE_STREAM_PATHS = new Set([
+  '/stream.mp3',
+  '/stream.opus',
+  '/stream.aac',
+  '/stream.flac',
+]);
 
 self.addEventListener('install', (event) => {
   // Take over straight away so a freshly-deployed shell isn't stuck behind
@@ -54,7 +61,7 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  if (url.pathname === '/stream.mp3' || url.pathname === '/stream.opus') return;
+  if (LIVE_STREAM_PATHS.has(url.pathname)) return;
   if (url.pathname.startsWith('/api/')) return;
 
   // Content-hashed, immutable build assets — a cache hit is always correct.

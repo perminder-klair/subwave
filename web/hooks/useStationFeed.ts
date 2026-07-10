@@ -9,6 +9,7 @@ import type {
   ListenerCount,
   NowPlayingResponse,
   NowPlayingTrack,
+  PublicStreamInfo,
   SessionPayload,
   StationContext,
   StationState,
@@ -23,6 +24,7 @@ export interface StationFeed {
   listeners: ListenerCount | number | null;
   /** null until the first poll resolves — distinguishes "not yet known" from "offline". */
   streamOnline: boolean | null;
+  stream: PublicStreamInfo | null;
   /** Cumulative since-boot LLM token total, or null before the first poll. */
   llmTokens: number | null;
   state: StationState;
@@ -61,6 +63,7 @@ export function useStationFeed(): StationFeed {
   const [activeShow, setActiveShow] = useState<ActiveShow | null>(null);
   const [listeners, setListeners] = useState<ListenerCount | number | null>(null);
   const [streamOnline, setStreamOnline] = useState<boolean | null>(null);
+  const [stream, setStream] = useState<PublicStreamInfo | null>(null);
   const [llmTokens, setLlmTokens] = useState<number | null>(null);
   const [state, setState] = useState<StationState>(EMPTY_STATE);
   const [session, setSession] = useState<SessionPayload>(EMPTY_SESSION);
@@ -88,6 +91,7 @@ export function useStationFeed(): StationFeed {
         setIfChanged(setContext, npRes.context);
         if (npRes.dj) setIfChanged<DjState | null>(setDj, npRes.dj);
         setIfChanged(setActiveShow, npRes.activeShow ?? npRes.context?.activeShow ?? null);
+        setIfChanged(setStream, npRes.stream ?? null);
         if (npRes.listeners != null) setIfChanged<ListenerCount | number | null>(setListeners, npRes.listeners);
         if (typeof npRes.streamOnline === 'boolean') {
           if (npRes.streamOnline) {
@@ -108,5 +112,5 @@ export function useStationFeed(): StationFeed {
     return pollWhileVisible(() => { void tick(); }, 5000);
   }, [apiUrl]);
 
-  return { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, timezone, locale };
+  return { nowPlaying, context, dj, activeShow, listeners, streamOnline, stream, llmTokens, state, session, trackStartedAt, timezone, locale };
 }

@@ -27,6 +27,7 @@ state/
 # Claude Code worktrees + local runtime files
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+.worktrees/
 
 # OS / editor
 .DS_Store
