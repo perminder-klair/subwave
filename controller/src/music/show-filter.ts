@@ -11,17 +11,31 @@
 
 import * as library from './library.js';
 
+// The narrow track shape the show filters read: raw Subsonic children and
+// slimTrack library rows both satisfy it structurally. Every field is optional
+// so a source that omits one (e.g. Subsonic tracks carry no energy band) still
+// passes through. The array filters are generic over T extends FilterTrack so
+// they return the caller's own element type unchanged.
+export interface FilterTrack {
+  id?: string;
+  genre?: string | null;
+  year?: number | string | null;
+  energy?: string | null;
+  moods?: string[] | null;
+  audioMoods?: string[] | null;
+}
+
 // ── Genre ──────────────────────────────────────────────────────────────────
 
 // Normalised genre token for fuzzy comparison — mirrors subsonic.resolveGenreName
 // so the show's resolved tag and a track's tag compare the same way.
-export function normGenre(s: any): string {
+export function normGenre(s: unknown): string {
   return String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 // Per-track genre — from the track itself (Subsonic + slimTrack library sources
 // both carry it) or a library lookup. null when the track has no genre tag.
-export function trackGenre(t: any): string | null {
+export function trackGenre(t: FilterTrack | null | undefined): string | null {
   if (t?.genre) return t.genre;
   const rec = t?.id ? library.get(t.id) : null;
   return rec?.genre ?? null;
@@ -30,7 +44,7 @@ export function trackGenre(t: any): string | null {
 // True when a track's genre matches ANY of the (already normalised) target
 // genres. Exact-normalised match, or substring either way — same shape as
 // subsonic.resolveGenreName, so "Hip-Hop" matches a "Hip Hop" tag etc.
-export function genreMatches(t: any, targetNorms: string[]): boolean {
+export function genreMatches(t: FilterTrack | null | undefined, targetNorms: string[]): boolean {
   if (!targetNorms.length) return false;
   const g = trackGenre(t);
   if (!g) return false;
@@ -44,10 +58,10 @@ export function genreMatches(t: any, targetNorms: string[]): boolean {
 // eligible — the whole point of strict is a genre-pure pool. But it FALLS BACK
 // to the unfiltered set when no track matches, so a thin genre degrades to
 // off-genre rather than emptying the source (never-starve, mirrors preferEra).
-export function preferGenre(tracks: any[], genreNames?: string[] | null): any[] {
+export function preferGenre<T extends FilterTrack>(tracks: T[], genreNames?: string[] | null): T[] {
   const targets = (genreNames ?? []).map(normGenre).filter(Boolean);
   if (!targets.length) return tracks;
-  const match = tracks.filter((t: any) => genreMatches(t, targets));
+  const match = tracks.filter((t) => genreMatches(t, targets));
   return match.length ? match : tracks;
 }
 
@@ -93,9 +107,9 @@ function inAnyWindow(year: number, eras: YearRange[]): boolean {
 // Hard-filter to tracks inside ANY of the era windows. Unknown-year tracks are
 // treated as out-of-range (dropped). Callers that must not starve should use
 // preferEra (or fall back to the full set themselves).
-export function inYearRange(tracks: any[], eras: YearRange[]): any[] {
+export function inYearRange<T extends FilterTrack>(tracks: T[], eras: YearRange[]): T[] {
   if (!hasEraBound(eras)) return tracks;
-  return tracks.filter((t: any) => {
+  return tracks.filter((t) => {
     const y = Number(t?.year);
     return Number.isFinite(y) && inAnyWindow(y, eras);
   });
@@ -104,7 +118,7 @@ export function inYearRange(tracks: any[], eras: YearRange[]): any[] {
 // Never-starve era filter: in-range tracks first, falling back to the full set
 // when nothing is in range, so a thin era degrades to off-era rather than
 // emptying the source. Mirrors preferGenre's contract.
-export function preferEra(tracks: any[], eras?: YearRange[] | null): any[] {
+export function preferEra<T extends FilterTrack>(tracks: T[], eras?: YearRange[] | null): T[] {
   if (!hasEraBound(eras)) return tracks;
   const match = inYearRange(tracks, eras!);
   return match.length ? match : tracks;
@@ -114,7 +128,7 @@ export function preferEra(tracks: any[], eras?: YearRange[] | null): any[] {
 
 // Per-track energy band — from the track itself (library sources carry it) or a
 // library lookup (Subsonic sources don't). null when un-analysed.
-export function trackEnergy(t: any): string | null {
+export function trackEnergy(t: FilterTrack | null | undefined): string | null {
   if (t?.energy) return t.energy;
   const rec = t?.id ? library.get(t.id) : null;
   return rec?.energy ?? null;
@@ -124,9 +138,9 @@ export function trackEnergy(t: any): string | null {
 // tracks stay eligible. Falls back to the full set when no track matches
 // (never-starve, mirrors preferEra). This is the soft-lean path; strict shows
 // (show.filtersStrict) use preferEnergyStrict below.
-export function preferEnergy(tracks: any[], energies?: string[] | null): any[] {
+export function preferEnergy<T extends FilterTrack>(tracks: T[], energies?: string[] | null): T[] {
   if (!energies?.length) return tracks;
-  const match = tracks.filter((t: any) => {
+  const match = tracks.filter((t) => {
     const e = trackEnergy(t);
     return e == null || energies.includes(e);
   });
@@ -137,9 +151,9 @@ export function preferEnergy(tracks: any[], energies?: string[] | null): any[] {
 // band matches an entry survive — unknown-energy tracks are dropped too, that's
 // the point of strict. Never-starve: an un-analysed library (everything
 // unknown) falls back to the full set rather than emptying the source.
-export function preferEnergyStrict(tracks: any[], energies?: string[] | null): any[] {
+export function preferEnergyStrict<T extends FilterTrack>(tracks: T[], energies?: string[] | null): T[] {
   if (!energies?.length) return tracks;
-  const match = tracks.filter((t: any) => {
+  const match = tracks.filter((t) => {
     const e = trackEnergy(t);
     return e != null && energies.includes(e);
   });
@@ -153,7 +167,7 @@ export function preferEnergyStrict(tracks: any[], energies?: string[] | null): a
 // editorial LLM moods with the zero-shot audio moods (sound-derived —
 // music/audio-moods.ts), matching the blend songsByMood applies at retrieval,
 // so a track surfaced via its audio mood isn't filtered back out here.
-export function trackMoods(t: any): string[] {
+export function trackMoods(t: FilterTrack | null | undefined): string[] {
   const rec = Array.isArray(t?.moods) && Array.isArray(t?.audioMoods)
     ? t
     : (t?.id ? library.get(t.id) : null) ?? t;
@@ -167,9 +181,9 @@ export function trackMoods(t: any): string[] {
 // un-tagged library falls back to the full set rather than emptying the
 // source. Soft shows don't use this — their mood steering happens through the
 // dominantMood-driven pool sources, not a per-track filter.
-export function preferMood(tracks: any[], moods?: string[] | null): any[] {
+export function preferMood<T extends FilterTrack>(tracks: T[], moods?: string[] | null): T[] {
   if (!moods?.length) return tracks;
   const targets = moods.map(m => String(m).toLowerCase());
-  const match = tracks.filter((t: any) => trackMoods(t).some((x: any) => targets.includes(String(x).toLowerCase())));
+  const match = tracks.filter((t) => trackMoods(t).some((x) => targets.includes(String(x).toLowerCase())));
   return match.length ? match : tracks;
 }

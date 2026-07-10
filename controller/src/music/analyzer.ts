@@ -105,11 +105,11 @@ function parseFinite(v: unknown): number | null {
 function coerceSpans(v: unknown): Section[] {
   if (!Array.isArray(v)) return [];
   const out: Section[] = [];
-  for (const s of v) {
-    const startMs = parseFinite((s as any)?.startMs);
-    const endMs = parseFinite((s as any)?.endMs);
+  for (const s of v as Record<string, unknown>[]) {
+    const startMs = parseFinite(s?.startMs);
+    const endMs = parseFinite(s?.endMs);
     if (startMs == null || endMs == null || endMs <= startMs) continue;
-    const kind = typeof (s as any)?.kind === 'string' ? (s as any).kind : undefined;
+    const kind = typeof s?.kind === 'string' ? s.kind : undefined;
     out.push(kind ? { startMs, endMs, kind } : { startMs, endMs });
   }
   return out;
@@ -134,11 +134,11 @@ function parseVocalRanges(v: unknown): Section[] | null {
 function parseKeyRanges(v: unknown): KeyRange[] | null {
   if (!Array.isArray(v)) return null;
   const out: KeyRange[] = [];
-  for (const s of v) {
-    const startMs = parseFinite((s as any)?.startMs);
-    const endMs = parseFinite((s as any)?.endMs);
-    const tonic = (s as any)?.tonic;
-    const mode = (s as any)?.mode;
+  for (const s of v as Record<string, unknown>[]) {
+    const startMs = parseFinite(s?.startMs);
+    const endMs = parseFinite(s?.endMs);
+    const tonic = s?.tonic;
+    const mode = s?.mode;
     if (startMs == null || endMs == null || endMs <= startMs) continue;
     if (typeof tonic !== 'string' || (mode !== 'major' && mode !== 'minor')) continue;
     out.push({ startMs, endMs, tonic, mode });
@@ -159,10 +159,10 @@ function parseMsList(v: unknown): number[] | null {
 function parsePaceCurve(v: unknown): PaceSpan[] | null {
   if (!Array.isArray(v)) return null;
   const out: PaceSpan[] = [];
-  for (const s of v) {
-    const startMs = parseFinite((s as any)?.startMs);
-    const endMs = parseFinite((s as any)?.endMs);
-    const value = parseFinite((s as any)?.value);
+  for (const s of v as Record<string, unknown>[]) {
+    const startMs = parseFinite(s?.startMs);
+    const endMs = parseFinite(s?.endMs);
+    const value = parseFinite(s?.value);
     if (startMs == null || endMs == null || value == null || endMs <= startMs) continue;
     out.push({ startMs, endMs, value });
   }
@@ -173,16 +173,17 @@ function parsePaceCurve(v: unknown): PaceSpan[] | null {
 // omits it entirely when not computed; startMs + a valid ending are the
 // required core, everything else is optional garnish.
 function parseOutro(v: unknown): OutroInfo | null {
-  const startMs = parseFinite((v as any)?.startMs);
-  const ending = (v as any)?.ending;
+  const o = v as Record<string, unknown>;
+  const startMs = parseFinite(o?.startMs);
+  const ending = o?.ending;
   if (startMs == null || startMs < 0 || (ending !== 'fade' && ending !== 'cold')) return null;
   return {
     startMs: Math.round(startMs),
     ending,
-    lufs: parseFinite((v as any)?.lufs),
-    bpm: parseFinite((v as any)?.bpm),
-    beats: parseMsList((v as any)?.beats),
-    bars: parseMsList((v as any)?.bars),
+    lufs: parseFinite(o?.lufs),
+    bpm: parseFinite(o?.bpm),
+    beats: parseMsList(o?.beats),
+    bars: parseMsList(o?.bars),
   };
 }
 
@@ -218,7 +219,35 @@ function localConfigured(): boolean {
   return !!python && existsSync(python) && existsSync(workerScript);
 }
 
-type Pending = { resolve: (m: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
+// A line of JSON from the stdio worker (or the equivalent sidecar /analyze
+// response body — same analyze payload). Protocol fields (ready/fatal/id) are
+// worker-only; the analyze fields are shared. Everything the parse* helpers
+// consume is `unknown` so they own the coercion; the couple of directly-read
+// scalars are pre-typed. Loose because the payload evolves with the worker.
+interface WorkerMessage {
+  id?: string;
+  ok?: boolean;
+  ready?: boolean;
+  fatal?: boolean;
+  error?: string;
+  bpm?: number | null;
+  key?: string | null;
+  intro_ms?: number | null;
+  confidence?: number | null;
+  loudness_lufs?: unknown;
+  peak_db?: unknown;
+  sections?: unknown;
+  vocal_ranges?: unknown;
+  pace_curve?: unknown;
+  beats?: unknown;
+  bars?: unknown;
+  key_ranges?: unknown;
+  audio_embedding?: unknown;
+  outro?: unknown;
+  text_embeddings?: unknown;
+}
+
+type Pending = { resolve: (m: WorkerMessage) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
 
 let proc: ChildProcessWithoutNullStreams | null = null;
 let ready = false;
@@ -244,14 +273,14 @@ function startWorker(): Promise<void> {
         const line = buffer.slice(0, nl).trim();
         buffer = buffer.slice(nl + 1);
         if (!line) continue;
-        let msg: any;
+        let msg: WorkerMessage;
         try { msg = JSON.parse(line); } catch { continue; }
         if (msg.ready) { ready = true; clearTimeout(readyTimer); resolve(); continue; }
         if (msg.fatal) { clearTimeout(readyTimer); reject(new Error(msg.error || 'analyze worker fatal')); continue; }
-        const waiter = pending.get(msg.id);
+        const waiter = pending.get(msg.id!);
         if (!waiter) continue;
         clearTimeout(waiter.timer);
-        pending.delete(msg.id);
+        pending.delete(msg.id!);
         if (msg.ok) waiter.resolve(msg);
         else waiter.reject(new Error(msg.error || 'analyze failed'));
       }
@@ -294,7 +323,7 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
       reject(new Error('analyze request timed out'));
     }, config.analyzer.requestTimeoutMs);
     pending.set(id, {
-      resolve: (msg: any) =>
+      resolve: (msg: WorkerMessage) =>
         resolve({
           bpm: msg.bpm ?? null,
           musicalKey: msg.key ?? null,
@@ -395,7 +424,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
       signal: ac.signal,
     });
     if (!res.ok) throw new Error(`analyze sidecar ${res.status}: ${await res.text().catch(() => '')}`);
-    const resBody = (await res.json()) as any;
+    const resBody = (await res.json()) as WorkerMessage;
     if (!resBody.ok) throw new Error(resBody.error || 'analysis failed');
     return {
       bpm: resBody.bpm ?? null,
@@ -504,7 +533,7 @@ function localEmbedTexts(texts: string[], timeoutMs: number): Promise<number[][]
       reject(new Error('embed-text request timed out'));
     }, timeoutMs);
     pending.set(id, {
-      resolve: (msg: any) => resolve(parseVectors(msg.text_embeddings, texts.length)),
+      resolve: (msg: WorkerMessage) => resolve(parseVectors(msg.text_embeddings, texts.length)),
       reject,
       timer,
     });
@@ -542,7 +571,7 @@ export async function embedTexts(
       // 404 = pre-text-tower sidecar, 500 = lean build (no torch) — both mean
       // "no text embeddings", not an error worth surfacing per call.
       if (!res.ok) return null;
-      const body = (await res.json()) as any;
+      const body = (await res.json()) as { ok?: boolean; embeddings?: unknown };
       return body?.ok ? parseVectors(body.embeddings, texts.length) : null;
     } catch {
       return null;
@@ -641,7 +670,7 @@ export async function downloadCapped(
     // pipe, so pipeline() never resolves and every download hangs.
     let read = 0;
     async function* capped() {
-      for await (const chunk of res.body as any) {
+      for await (const chunk of res.body as AsyncIterable<Uint8Array>) {
         read += chunk.length;
         yield chunk;
         if (read >= ANALYZE_MAX_BYTES) return; // enough audio for the window
