@@ -19,16 +19,15 @@
 // the built-in ids only.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { config } from '../config.js';
 import {
   isRemoteEnabled,
   speakRemote,
   startProbeLoop,
 } from './ttsHeavyClient.js';
+import { resolveTtsOutPath } from './tts-out.js';
 
 // PocketTTS' 100M-param model is smaller than Chatterbox Turbo but the first
 // call still needs to import torch and warm the Hugging Face cache.
@@ -181,6 +180,17 @@ async function ensureWorker(): Promise<PocketTtsWorker> {
   }
 }
 
+// Reap the resident worker on shutdown. Docker tears down the container's whole
+// process group, so this only matters on the bare-process path (npm start / dev)
+// where the spawned Python child would otherwise be orphaned. In sidecar mode no
+// local worker is ever spawned, so this is a no-op. Best-effort: SIGTERM the
+// proc if we hold one and drop the handle.
+export function stop(): void {
+  const w = worker;
+  worker = null;
+  w?.proc?.kill('SIGTERM');
+}
+
 const WAV_RE = /^[A-Za-z0-9_.-]{1,80}\.wav$/i;
 
 // Split a persona's `tts.voice` into the two fields the worker needs.
@@ -214,12 +224,7 @@ export async function speak(
   text: string,
   { outPath: customPath, voice }: { outPath?: string; voice?: string } = {},
 ): Promise<string> {
-  if (!text || !text.trim()) throw new Error('Empty TTS text');
-  await mkdir(config.piper.outDir, { recursive: true });
-
-  const id = crypto.randomBytes(6).toString('hex');
-  const outPath = customPath || path.join(config.piper.outDir, `${id}.wav`);
-  if (customPath) await mkdir(path.dirname(customPath), { recursive: true });
+  const { id, outPath } = await resolveTtsOutPath(text, customPath);
 
   const { voice: resolvedVoice, referenceWav } = resolveVoice(voice);
 

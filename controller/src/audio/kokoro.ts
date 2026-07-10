@@ -6,11 +6,9 @@
 // on crash, and a small request map keyed by monotonic id.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import path from 'node:path';
-import crypto from 'node:crypto';
 import { config } from '../config.js';
+import { resolveTtsOutPath } from './tts-out.js';
 
 const READY_TIMEOUT_MS = 60_000;        // first call may include model load
 // Generous because Kokoro on Apple Silicon runs under Rosetta (linux/amd64 image
@@ -151,16 +149,21 @@ async function ensureWorker(): Promise<KokoroWorker> {
   }
 }
 
+// Reap the resident worker on shutdown. Docker tears down the container's whole
+// process group, so this only matters on the bare-process path (npm start / dev)
+// where the spawned Python child would otherwise be orphaned. Best-effort:
+// SIGTERM the proc if we hold one and drop the handle.
+export function stop(): void {
+  const w = worker;
+  worker = null;
+  w?.proc?.kill('SIGTERM');
+}
+
 export async function speak(
   text: string,
   { outPath: customPath, voice, lang, speedScale }: { outPath?: string; voice?: string; lang?: string; speedScale?: number } = {},
 ): Promise<string> {
-  if (!text || !text.trim()) throw new Error('Empty TTS text');
-  await mkdir(config.piper.outDir, { recursive: true });
-
-  const id = crypto.randomBytes(6).toString('hex');
-  const outPath = customPath || path.join(config.piper.outDir, `${id}.wav`);
-  if (customPath) await mkdir(path.dirname(customPath), { recursive: true });
+  const { id, outPath } = await resolveTtsOutPath(text, customPath);
 
   const w = await ensureWorker();
   const msg = await w.send(id, {
