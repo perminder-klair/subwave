@@ -604,14 +604,13 @@ function TtsCallList({ calls }: { calls: TtsCall[] }) {
               <span className={cn('font-bold', c.ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
                 {c.ok ? '✓' : '✗'}
               </span>
-              <span className="text-[12px] font-bold">{c.kind}</span>
-              <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-                <Pill
-                  tone={c.fellBack ? undefined : 'accent'}
-                  className={c.fellBack ? 'border-[var(--danger)] text-[var(--danger)]' : undefined}
-                >
+              <span className="grid leading-tight">
+                <span className="text-[12px] font-bold">{c.kind}</span>
+                <span className={cn('text-[10px]', c.fellBack ? 'text-[var(--danger)]' : 'text-muted')}>
                   {c.engine}
-                </Pill>
+                </span>
+              </span>
+              <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
                 {c.fellBack && (
                   <span className="caption flex-none text-[var(--danger)]">↳ from {c.requested}</span>
                 )}
