@@ -124,10 +124,11 @@ export function extractJson(s: any): string {
 
 // Normalise the AI SDK usage block into { input, output, total }. Providers
 // vary in which fields they populate (and a local Ollama box often omits them
-// entirely — token stats then read as 0 for that call). `totalUsage` is the
-// agent-loop sum across steps; prefer it when present.
+// entirely — token stats then read as 0 for that call). In AI SDK 7 `usage`
+// already sums across all steps (`totalUsage` is its deprecated alias); the
+// alias stays as a fallback so pre-v7-shaped fixtures/results keep working.
 export function usageOf(result: any): { input: number; output: number; total: number } {
-  const u = result?.totalUsage || result?.usage || {};
+  const u = result?.usage || result?.totalUsage || {};
   const input = u.inputTokens ?? u.promptTokens ?? 0;
   const output = u.outputTokens ?? u.completionTokens ?? 0;
   const total = u.totalTokens ?? (input + output);

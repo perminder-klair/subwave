@@ -60,7 +60,7 @@ export async function djObject({
             lastVia = 'ai-sdk';
             const result = await withTransientRetry(kind, () => generateText({
               model: l.model,
-              system,
+              instructions: system,
               prompt,
               temperature,
               maxOutputTokens,
@@ -85,7 +85,7 @@ export async function djObject({
             const hint = schemaHint(schema);
             const result = await withTransientRetry(kind, () => generateText({
               model: l.noThinkModel ?? l.model,
-              system,
+              instructions: system,
               prompt: `${prompt}\n\nRespond with a single JSON object only — no prose, no markdown fences.`
                 + (hint ? ` It MUST validate against this JSON Schema — every required key must be present:\n${hint}` : ''),
               temperature,

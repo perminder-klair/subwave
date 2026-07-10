@@ -26,7 +26,7 @@
 // discovery tools, `toolChoice:'required'` forces a tool call every step, and
 // prepareStep corners the model into discovery-then-done.
 
-import { Output, stepCountIs, hasToolCall, ToolLoopAgent, tool } from 'ai';
+import { Output, isStepCount, hasToolCall, ToolLoopAgent, tool } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
 import { stripThinking, extractJson, usageOf, flattenToolCalls, failureDiagnostics } from '../core/pure.js';
@@ -97,7 +97,7 @@ function buildRecoveryAgent(leg: any, system: string, allTools: any, temperature
     // role alternation (Anthropic). Harmless on the picker path.
     instructions: `${system}\n\nYou now have everything you need. Respond ONLY by calling the \`done\` tool with your final answer — do not write a normal text message.`,
     tools: allTools,
-    stopWhen: [stepCountIs(2), hasToolCall('done')],
+    stopWhen: [isStepCount(2), hasToolCall('done')],
     temperature,
     maxOutputTokens,
     // Recovery forces done-only every step, so it has the same
@@ -207,7 +207,7 @@ export async function djAgent({
               model: leg.noThinkModel ?? leg.model,
               instructions: system,
               tools,
-              stopWhen: [stepCountIs(maxSteps)],
+              stopWhen: [isStepCount(maxSteps)],
               temperature,
               maxOutputTokens,
               // Thinking off: makes deepseek reliable (5/5 vs 1/5) and is harmless
@@ -270,7 +270,7 @@ export async function djAgent({
           // The no-execute `done` tool already terminates the loop when called;
           // hasToolCall('done') is belt-and-suspenders, and inert on the native
           // path where no `done` tool exists.
-          stopWhen: [stepCountIs(maxSteps), hasToolCall('done')],
+          stopWhen: [isStepCount(maxSteps), hasToolCall('done')],
           temperature,
           maxOutputTokens,
           // useDoneTool forces tool calls every step — suppress thinking on the

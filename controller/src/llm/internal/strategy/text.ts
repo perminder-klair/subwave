@@ -41,7 +41,7 @@ export async function djText({
     async (leg) => {
       const result = await withTransientRetry(kind, () => generateText({
         model: leg.model,
-        system,
+        instructions: system,
         prompt,
         temperature,
         topP,

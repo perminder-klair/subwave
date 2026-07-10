@@ -5,7 +5,7 @@
 // question; (B) ToolLoopAgent + tools + native Output.object — the #300
 // question for Ollama.
 import { createOllama } from 'ai-sdk-ollama';
-import { ToolLoopAgent, tool, stepCountIs, Output, generateText } from 'ai';
+import { ToolLoopAgent, tool, isStepCount, Output, generateText } from 'ai';
 import { z } from 'zod';
 
 const URL = process.env.OLLAMA_URL || 'http://localhost:11434';
@@ -39,7 +39,7 @@ async function toolLoopNative() {
   try {
     const agent = new ToolLoopAgent({
       model, instructions: SYS + ' First call searchLibrary, then pick.',
-      tools, stopWhen: [stepCountIs(4)],
+      tools, stopWhen: [isStepCount(4)],
       output: Output.object({ schema: SCHEMA }),
       providerOptions: { ollama: { think: false } },
     });
@@ -61,7 +61,7 @@ async function toolLoopDone() {
   try {
     const agent = new ToolLoopAgent({
       model, instructions: SYS + ' First call searchLibrary, then commit via done.',
-      tools: { ...songsTool, done }, stopWhen: [stepCountIs(4)],
+      tools: { ...songsTool, done }, stopWhen: [isStepCount(4)],
       toolChoice: 'required',
       prepareStep: async ({ stepNumber }) => {
         if (stepNumber === 0) return { activeTools: ['searchLibrary'], toolChoice: 'required' };

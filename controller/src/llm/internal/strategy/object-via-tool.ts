@@ -6,7 +6,7 @@
 // object plus a token-usage block so callers can log it alongside the other
 // branches.
 
-import { generateText, tool, stepCountIs } from 'ai';
+import { generateText, tool, isStepCount } from 'ai';
 import { usageOf } from '../core/pure.js';
 import { providerOptions, forcedToolChoice } from '../provider/capabilities.js';
 
@@ -24,7 +24,7 @@ export async function objectViaToolCall(
     // Forced single-tool call — always no-think (the no-think model is identical
     // to leg.model except for OpenRouter, where reasoning is fixed at build time).
     model: leg.noThinkModel ?? leg.model,
-    system,
+    instructions: system,
     ...(messages ? { messages } : { prompt }),
     temperature,
     maxOutputTokens,
@@ -34,7 +34,7 @@ export async function objectViaToolCall(
     // visible + the "call it exactly once" instruction, a capable model still
     // emits via the tool; a miss throws below → caller's fallback.
     toolChoice: forcedToolChoice(leg.cfg),
-    stopWhen: stepCountIs(1),
+    stopWhen: isStepCount(1),
     providerOptions: providerOptions(leg.cfg, { forceNoThink: true }),
     ...(signal ? { abortSignal: signal } : {}),
   } as any);

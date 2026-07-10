@@ -3,7 +3,7 @@
 // reliably EMIT the structured object on deepseek-v4-flash with the current
 // AI SDK? Runs N attempts each with thinking on/off and reports emit rate.
 import { createDeepSeek } from '@ai-sdk/deepseek';
-import { ToolLoopAgent, tool, stepCountIs, Output } from 'ai';
+import { ToolLoopAgent, tool, isStepCount, Output } from 'ai';
 import { z } from 'zod';
 
 const KEY = process.env.DEEPSEEK_API_KEY;
@@ -61,12 +61,12 @@ async function once(thinking, strategy) {
   };
   let agent;
   if (strategy === 'auto') {
-    agent = new ToolLoopAgent({ ...cfg, tools, stopWhen: [stepCountIs(4)], output: Output.object({ schema: SCHEMA }) });
+    agent = new ToolLoopAgent({ ...cfg, tools, stopWhen: [isStepCount(4)], output: Output.object({ schema: SCHEMA }) });
   } else {
     agent = new ToolLoopAgent({
       ...cfg,
       tools: { ...tools, done: doneTool },
-      stopWhen: [stepCountIs(4)],
+      stopWhen: [isStepCount(4)],
       toolChoice: 'required',
       prepareStep: async ({ stepNumber }) => {
         if (stepNumber === 0) return { activeTools: discoveryNames, toolChoice: 'required' };
