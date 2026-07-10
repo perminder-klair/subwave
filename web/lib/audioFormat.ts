@@ -9,8 +9,10 @@ export interface AudioStreamUrls {
 }
 export type FormatAvailability = Record<AudioFormat, {
   available: boolean;
-  reason: 'Not enabled by this station' | 'Not supported by this browser' | null;
+  reason: 'Not enabled by this station' | 'Not supported by this browser' | 'Stream failed; using MP3' | null;
 }>;
+
+type CanPlayAnswer = '' | 'maybe' | 'probably';
 
 export const AUDIO_FORMATS = [
   { id: 'mp3', label: 'MP3', description: 'Universal compatibility' },
@@ -38,15 +40,30 @@ export function deriveSiblingMounts(mp3: string): AudioStreamUrls {
 export function availabilityFor(
   enabled: StreamEnablement,
   supported: BrowserSupport,
+  failed: ReadonlySet<AudioFormat> = new Set(),
 ): FormatAvailability {
   return Object.fromEntries(AUDIO_FORMATS.map(({ id }) => {
     const reason = !enabled[id]
       ? 'Not enabled by this station'
       : !supported[id]
         ? 'Not supported by this browser'
-        : null;
+        : failed.has(id)
+          ? 'Stream failed; using MP3'
+          : null;
     return [id, { available: reason === null, reason }];
   })) as FormatAvailability;
+}
+
+export function browserSupportFor(
+  codecs: Record<AudioFormat, CanPlayAnswer>,
+  platform: { ios: boolean; firefox: boolean },
+): BrowserSupport {
+  return {
+    mp3: codecs.mp3 !== '',
+    opus: codecs.opus === 'probably' && !platform.ios && !platform.firefox,
+    aac: codecs.aac !== '',
+    flac: codecs.flac !== '',
+  };
 }
 
 export function preferenceKey(stationId: string): string {

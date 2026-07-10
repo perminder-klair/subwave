@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   AUDIO_FORMATS,
   availabilityFor,
+  browserSupportFor,
   deriveSiblingMounts,
   effectiveFormat,
   loadFormatPreference,
@@ -9,6 +10,13 @@ import {
   saveFormatPreference,
   type AudioFormat,
 } from '../lib/audioFormat.ts';
+
+const codecs = { mp3: 'probably', opus: 'probably', aac: 'maybe', flac: '' } as const;
+assert.deepEqual(browserSupportFor(codecs, { ios: false, firefox: false }), {
+  mp3: true, opus: true, aac: true, flac: false,
+});
+assert.equal(browserSupportFor(codecs, { ios: true, firefox: false }).opus, false);
+assert.equal(browserSupportFor(codecs, { ios: false, firefox: true }).opus, false);
 
 const enabled = { mp3: true, opus: true, aac: false, flac: true } as const;
 const supported = { mp3: true, opus: false, aac: true, flac: true } as const;
@@ -19,6 +27,10 @@ assert.deepEqual(availabilityFor(enabled, supported), {
   opus: { available: false, reason: 'Not supported by this browser' },
   aac: { available: false, reason: 'Not enabled by this station' },
   flac: { available: true, reason: null },
+});
+assert.deepEqual(availabilityFor(enabled, supported, new Set<AudioFormat>(['flac'])).flac, {
+  available: false,
+  reason: 'Stream failed; using MP3',
 });
 assert.notEqual(preferenceKey('/api'), preferenceKey('https://other.example/api'));
 
